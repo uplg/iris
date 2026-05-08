@@ -214,6 +214,14 @@ impl HlsManager {
         for i in 0..=audio_tracks.len() {
             std::fs::create_dir_all(dir.join(format!("stream_{i}")))?;
         }
+        // Hand-write the master playlist *before* spawning ffmpeg so the
+        // path-based idempotency check (`dir/master.m3u8` exists) works
+        // immediately on the next request. ffmpeg's own `-master_pl_name`
+        // historically writes the master inside the first variant's dir
+        // (`stream_0/master.m3u8`), which our check misses → infinite
+        // respawn loop. Owning the master here also gives us full control
+        // over LANGUAGE / NAME / DEFAULT attributes.
+        std::fs::write(dir.join(MASTER_PLAYLIST), build_master_playlist(audio_tracks))?;
         let child = spawn_ffmpeg(source, &dir, audio_tracks)?;
 
         let key_owned = key.to_string();
@@ -472,8 +480,12 @@ fn spawn_ffmpeg(
     }
     cmd.args(["-var_stream_map", &map]);
 
-    cmd.args(["-master_pl_name", MASTER_PLAYLIST])
-        .args(["-hls_time", "6"])
+    // No `-master_pl_name` here — we write the master playlist ourselves
+    // in [`HlsManager::ensure_job`] *before* spawning ffmpeg. ffmpeg used
+    // to scatter the master inside `stream_0/`, breaking our idempotency
+    // check and causing endless respawns when status polls came in after
+    // ffmpeg's clean exit.
+    cmd.args(["-hls_time", "6"])
         .args(["-hls_list_size", "0"])
         // fMP4 segments: universal container that supports H.264, HEVC,
         // AV1 and VP9 alike. MPEG-TS cannot carry AV1 in a way browsers
@@ -526,6 +538,50 @@ fn sanitize(s: &Option<String>) -> Option<String> {
         .take(32)
         .collect();
     if cleaned.is_empty() { None } else { Some(cleaned) }
+}
+
+/// Build the master playlist content statically. Each audio track in
+/// [`audio_tracks`] gets one `EXT-X-MEDIA:TYPE=AUDIO` rendition pointing
+/// at `stream_{i+1}/playlist.m3u8`; the lone video variant references
+/// the same audio group via `AUDIO="aud"`.
+///
+/// `CODECS=` is approximate (`avc1.640028,mp4a.40.2`). Both hls.js and
+/// ExoPlayer/Media3 accept the manifest with rough codec hints — they
+/// re-probe the actual codec from the segment's `init.mp4` anyway.
+fn build_master_playlist(audio_tracks: &[AudioTrack]) -> String {
+    let mut out = String::from("#EXTM3U\n#EXT-X-VERSION:6\n");
+    for (i, t) in audio_tracks.iter().enumerate() {
+        let stream_idx = i + 1; // stream_0 is the video variant
+        let language = sanitize(&t.language).unwrap_or_else(|| "und".to_string());
+        let name = sanitize(&t.name)
+            .or_else(|| sanitize(&t.language))
+            .unwrap_or_else(|| format!("Track{i}"));
+        let default = if t.default { "YES" } else { "NO" };
+        out.push_str(&format!(
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"{name}\",\
+             LANGUAGE=\"{language}\",DEFAULT={default},AUTOSELECT=YES,\
+             URI=\"stream_{stream_idx}/playlist.m3u8\"\n"
+        ));
+    }
+    let codecs = if audio_tracks.is_empty() {
+        "avc1.640028".to_string()
+    } else {
+        // H.264 High@4.0 + AAC-LC stereo — the lowest-common-denominator
+        // hint that all browsers accept. The actual codec is read from
+        // the `init.mp4`, so even AV1/HEVC sources play.
+        "avc1.640028,mp4a.40.2".to_string()
+    };
+    if audio_tracks.is_empty() {
+        out.push_str(&format!(
+            "#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS=\"{codecs}\"\nstream_0/playlist.m3u8\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS=\"{codecs}\",AUDIO=\"aud\"\n\
+             stream_0/playlist.m3u8\n"
+        ));
+    }
+    out
 }
 
 async fn await_child_exit(mut child: Child) -> std::io::Result<std::process::ExitStatus> {
