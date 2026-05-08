@@ -114,7 +114,13 @@ export function WatchPage() {
     retry: 8,
     retryDelay: 2000,
   });
-  const masterReady = hlsStatusQ.data?.endlist_present === true;
+  // Start playback as soon as ~3 segments (~18s of buffer) are on disk.
+  // ffmpeg keeps writing in the background and hls.js auto-discovers
+  // new segments via the EVENT-type playlist. Waiting for ENDLIST blocked
+  // the player for 5-15 minutes on slow boxes — that's the wrong default.
+  const masterReady =
+    (hlsStatusQ.data?.endlist_present ?? false) ||
+    (hlsStatusQ.data?.segments_produced ?? 0) >= 3;
 
   // All progress for this torrent (powers the "watched %" per episode in the
   // other-files panel).

@@ -103,76 +103,23 @@ impl HlsManager {
         self.inner.base_dir.join(key)
     }
 
-    /// Read the master playlist once the **video variant** has ENDLIST. The
-    /// master playlist itself never carries ENDLIST (it's a manifest of
-    /// variants), but each variant playlist gets one when ffmpeg exits
-    /// cleanly. We poll the video variant because it's the slowest one to
-    /// finish (audio is much smaller).
-    ///
-    /// We wait up to `max_wait`; if ffmpeg dies prematurely the job's
-    /// `finished` notify wakes us up. If everything goes wrong we return
-    /// whatever is on disk best-effort.
+    /// Read the master playlist immediately. We hand-write it at job spawn
+    /// time so it's always on disk before any client request. The variant
+    /// playlists referenced by the master use `#EXT-X-PLAYLIST-TYPE:EVENT`
+    /// — players load them, see whatever segments ffmpeg has produced so
+    /// far, and re-poll as more arrive. ENDLIST is appended on clean exit.
+    /// This means playback can start within seconds of clicking Play
+    /// rather than waiting for the entire pre-segmentation pass.
     pub async fn read_master_playlist(
         &self,
         key: &str,
-        max_wait: Duration,
+        _max_wait: Duration,
     ) -> Result<String, HlsError> {
         let dir = self.segment_dir_for(key);
-        let video_playlist = dir.join(VIDEO_VARIANT_PLAYLIST);
         let master = dir.join(MASTER_PLAYLIST);
-        let job = {
-            let jobs = self.inner.jobs.lock().await;
-            jobs.get(key).cloned()
-        };
-
-        // Quick path: already complete on disk from a prior run.
-        if let Ok(content) = tokio::fs::read_to_string(&video_playlist).await {
-            if content.contains("#EXT-X-ENDLIST") {
-                if let Ok(m) = tokio::fs::read_to_string(&master).await {
-                    return Ok(m);
-                }
-            }
-        }
-
-        let display = master.display().to_string();
-        let res = timeout(max_wait, async {
-            let poll = async {
-                loop {
-                    if let Ok(content) = tokio::fs::read_to_string(&video_playlist).await {
-                        if content.contains("#EXT-X-ENDLIST") {
-                            if let Ok(m) = tokio::fs::read_to_string(&master).await {
-                                return Ok::<String, ()>(m);
-                            }
-                        }
-                    }
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                }
-            };
-            if let Some(job) = job {
-                tokio::select! {
-                    r = poll => r,
-                    _ = job.finished.notified() => {
-                        match (
-                            tokio::fs::read_to_string(&video_playlist).await,
-                            tokio::fs::read_to_string(&master).await,
-                        ) {
-                            (Ok(v), Ok(m)) if v.contains("#EXT-X-ENDLIST") => Ok(m),
-                            _ => Err(()),
-                        }
-                    }
-                }
-            } else {
-                poll.await
-            }
-        })
-        .await;
-
-        match res {
-            Ok(Ok(s)) => Ok(s),
-            _ => tokio::fs::read_to_string(&master)
-                .await
-                .map_err(|_| HlsError::Timeout(max_wait, display)),
-        }
+        tokio::fs::read_to_string(&master)
+            .await
+            .map_err(|_| HlsError::Timeout(Duration::from_secs(0), master.display().to_string()))
     }
 
     /// Ensure an ffmpeg HLS job is running for `key`; returns the directory
@@ -186,33 +133,33 @@ impl HlsManager {
     ) -> Result<PathBuf, HlsError> {
         let dir = self.segment_dir_for(key);
 
+        // Lock-free fast path: when ENDLIST is on disk we KNOW there's
+        // nothing to spawn, so don't even contend the jobs Mutex. This is
+        // critical for serving — hls.js fetches 5-10 segments in parallel
+        // and each segment request used to acquire the Mutex + do sync
+        // I/O inside the lock. Median segment latency went from <5 ms to
+        // hundreds of ms under load.
+        if is_done(&dir).await {
+            return Ok(dir);
+        }
+        // Fast path 2: ffmpeg ran to completion at least once but ENDLIST
+        // somehow didn't land — fix it up & return without locking.
+        if tokio::fs::try_exists(dir.join(".done")).await.unwrap_or(false)
+            && tokio::fs::try_exists(dir.join(MASTER_PLAYLIST)).await.unwrap_or(false)
+        {
+            fixup_endlist(&dir, audio_tracks.len());
+            return Ok(dir);
+        }
+
         let mut jobs = self.inner.jobs.lock().await;
         if let Some(j) = jobs.get(key) {
             return Ok(j.dir.clone());
         }
-        // If a previous job already wrote ENDLIST into the video variant
-        // playlist we're done — segments are static files served straight
-        // from disk and we *must not* re-spawn (would loop forever).
-        // Checking init.mp4 alone isn't reliable across ffmpeg versions
-        // which place it in different paths; ENDLIST is the canonical
-        // "fully done" signal.
-        let done_marker = dir.join(".done");
-        if dir.join(MASTER_PLAYLIST).exists() {
-            if let Ok(content) = std::fs::read_to_string(dir.join(VIDEO_VARIANT_PLAYLIST)) {
-                if content.contains("#EXT-X-ENDLIST") {
-                    return Ok(dir);
-                }
-            }
-            // Belt-and-suspenders: if ffmpeg already ran to clean exit at
-            // least once (the reaper writes `.done`), don't respawn even
-            // when ENDLIST is missing. ffmpeg occasionally exits 0 in
-            // multi-variant mode without flushing ENDLIST to every
-            // sub-playlist; respawning just hits the same wall over and
-            // over. We append ENDLIST manually so the player sees VOD.
-            if done_marker.exists() {
-                fixup_endlist(&dir, audio_tracks.len());
-                return Ok(dir);
-            }
+        // Re-check the same disk-state guards we did lock-free above —
+        // another task may have completed the job between our check and
+        // the lock acquisition.
+        if is_done(&dir).await {
+            return Ok(dir);
         }
 
         let j = Arc::new(JobState {
@@ -450,7 +397,10 @@ fn spawn_ffmpeg(
     let variant_playlist = dir.join("stream_%v").join("playlist.m3u8");
 
     let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-hide_banner", "-loglevel", "warning", "-y"])
+    // `-loglevel error` cuts the chatter — `Packet duration: -16` and
+    // `Could not find codec parameters for stream X (Subtitle: ...)` are
+    // both expected on h264+ass MKVs and not indicative of problems.
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
         .arg("-i")
         .arg(source)
         // Video: copy. We never re-encode video here — that's a different
@@ -549,17 +499,17 @@ fn spawn_ffmpeg(
 
     let mut child = cmd.spawn()?;
     if let Some(mut stderr) = child.stderr.take() {
-        // Mirror ffmpeg's stderr to a log file in the job dir AND to
-        // tracing at info level. Without a persistent log post-mortem of
-        // a `WARN: ffmpeg HLS exited non-zero` is impossible — the actual
-        // ffmpeg error message is otherwise lost.
+        // Persist ffmpeg's stderr to `dir/ffmpeg.log` for post-mortem of
+        // failed runs. Logged to tracing at `debug` only — the live
+        // tracing channel was getting spammed with mux-level warnings
+        // that aren't actionable.
         let log_path = dir.join("ffmpeg.log");
         tokio::spawn(async move {
             use tokio::io::AsyncBufReadExt;
             let mut log = tokio::fs::File::create(&log_path).await.ok();
             let mut reader = tokio::io::BufReader::new(&mut stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                tracing::info!(target: "ffmpeg-hls", "{line}");
+                tracing::debug!(target: "ffmpeg-hls", "{line}");
                 if let Some(f) = log.as_mut() {
                     use tokio::io::AsyncWriteExt;
                     let _ = f.write_all(line.as_bytes()).await;
@@ -630,6 +580,26 @@ fn build_master_playlist(audio_tracks: &[AudioTrack]) -> String {
 
 async fn await_child_exit(mut child: Child) -> std::io::Result<std::process::ExitStatus> {
     child.wait().await
+}
+
+/// True when the video variant playlist exists on disk and already has
+/// `#EXT-X-ENDLIST`. Async, no Mutex needed — the only signal we need to
+/// know it's safe to serve segments without involving the job manager.
+async fn is_done(dir: &Path) -> bool {
+    if !tokio::fs::try_exists(dir.join(MASTER_PLAYLIST)).await.unwrap_or(false) {
+        return false;
+    }
+    let video_pl = dir.join(VIDEO_VARIANT_PLAYLIST);
+    match tokio::fs::read_to_string(&video_pl).await {
+        Ok(c) => c.contains("#EXT-X-ENDLIST"),
+        Err(_) => false,
+    }
+}
+
+/// Public, async sibling of [`is_done`] used by the route layer to decide
+/// whether a segment request can bypass the probe+lock path entirely.
+pub async fn is_master_or_endlist_done(dir: &Path) -> bool {
+    is_done(dir).await
 }
 
 /// Append `#EXT-X-ENDLIST` to every variant playlist that's missing it.

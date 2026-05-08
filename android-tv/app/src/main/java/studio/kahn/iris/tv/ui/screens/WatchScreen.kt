@@ -579,16 +579,15 @@ private fun stepFor(status: HlsStatus?, probeReady: Boolean, torrent: TorrentVie
         return Step("Reading media metadata…", "ffprobe scanning streams.", null)
     }
     val s = status ?: return Step("Starting transcoder…", null, null)
-    if (s.endlistPresent) return Step("Loading first frames…", "Almost there.", null)
-    val total = s.estimatedTotalSegments
+    // Pre-roll: we only show this until ~3 segments are on disk, then
+    // playback starts. This branch covers the very-first-seconds window
+    // (segments_produced 0..2) where ffmpeg is still spinning up.
     val seg = s.segmentsProduced
-    val pct = if (total != null && total > 0) (seg.toFloat() / total).coerceIn(0f, 0.99f) else null
-    val label = if (total != null) {
-        "Pre-segmenting · $seg / ~$total segments"
-    } else {
-        "Pre-segmenting · $seg segments"
-    }
-    return Step(label, "ffmpeg writing the HLS playlist. Seek will be enabled when it finishes.", pct)
+    return Step(
+        "Buffering first frames…",
+        "$seg segment${if (seg > 1) "s" else ""} ready",
+        if (seg > 0) (seg.toFloat() / 3f).coerceIn(0f, 1f) else null,
+    )
 }
 
 private fun formatBytesShort(b: Long): String {

@@ -533,22 +533,34 @@ async fn hls_asset(
     }
 
     let key = format!("{infohash}_{idx}");
+    let dir = state.hls().segment_dir_for(&key);
 
-    // Probe + start the HLS job (idempotent if already running). Probe is
-    // memoized in `ProbeCache` so subsequent segment requests are essentially
-    // free.
-    let probe = state
-        .probes()
-        .get_or_probe(&infohash, idx, &path)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
-    let audio_tracks = audio_tracks_for_hls(&probe);
+    // Hot path: when ffmpeg is already done AND the asset exists on disk,
+    // skip the probe + `ensure_job` (= the jobs Mutex). hls.js fans out
+    // 5-10 segment fetches in parallel; without this fast path each one
+    // would queue on the Mutex and pay a sync `ffprobe` lookup, turning
+    // small segment requests into seconds-long stalls.
+    let asset_path = dir.join(&asset);
+    let hot_serve = asset_path.is_file()
+        && iris_media::hls::is_master_or_endlist_done(&dir).await;
 
-    let dir = state
-        .hls()
-        .ensure_job(&key, &path, &audio_tracks)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?;
+    let dir = if hot_serve {
+        dir
+    } else {
+        // Slow path: ffmpeg may not have produced this segment yet. Pay the
+        // cost of probing + ensuring the job is alive.
+        let probe = state
+            .probes()
+            .get_or_probe(&infohash, idx, &path)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
+        let audio_tracks = audio_tracks_for_hls(&probe);
+        state
+            .hls()
+            .ensure_job(&key, &path, &audio_tracks)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?
+    };
 
     if asset == iris_media::hls::MASTER_PLAYLIST {
         let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
