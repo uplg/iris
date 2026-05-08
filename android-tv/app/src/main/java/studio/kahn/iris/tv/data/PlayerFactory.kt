@@ -28,7 +28,11 @@ fun buildPlayer(
     val dataSourceFactory = OkHttpDataSource.Factory(okHttp).setUserAgent(userAgent)
     val mediaSourceFactory = DefaultMediaSourceFactory(context)
         .setDataSourceFactory(dataSourceFactory)
-        .setLiveTargetOffsetMs(5_000)
+        // Live offset only matters when ExoPlayer mistakes our growing-VOD
+        // (EVENT-type) playlist for true live. We pin it to 0 so any
+        // accidental "live" detection lands at the first segment instead
+        // of "now" (= whatever segment ffmpeg has just written).
+        .setLiveTargetOffsetMs(0)
 
     return ExoPlayer.Builder(context)
         .setMediaSourceFactory(mediaSourceFactory)

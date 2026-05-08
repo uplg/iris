@@ -173,7 +173,12 @@ fun WatchScreen(
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        val ready = hlsStatus?.endlistPresent == true
+        // Start the player as soon as we have ~3 segments on disk. ffmpeg
+        // keeps writing in the background and Media3 / hls.js auto-discover
+        // the new segments via the EVENT-type playlist. Waiting for
+        // ENDLIST blocked the player for minutes on slow boxes.
+        val ready = (hlsStatus?.endlistPresent == true
+            || (hlsStatus?.segmentsProduced ?: 0) >= 3)
             && probe != null
             && serverUrl != null
         if (ready) {

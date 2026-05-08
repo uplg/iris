@@ -410,10 +410,16 @@ export function WatchPage() {
                   levelLoadingMaxRetry: 3,
                   fragLoadingTimeOut: 60_000,
                   fragLoadingMaxRetry: 6,
-                  // Tell hls.js to load straight from the saved position
-                  // instead of starting at 0 and us seeking into mid-buffer.
-                  // Avoids "reprend à 0" + AppleVTDecoder errors on first try.
-                  startPosition: startPosition > 0 ? startPosition : -1,
+                  // Force a deterministic start position. With our EVENT-
+                  // type playlists hls.js's `-1` (= "default") would pick
+                  // the live edge — i.e. drop the user at whatever
+                  // segment ffmpeg has produced last, not at the
+                  // beginning. We always know where to start: saved
+                  // progress if we have one, segment 0 otherwise.
+                  startPosition: startPosition > 0 ? startPosition : 0,
+                  // Don't keep hls.js's live-stream sync — we want full
+                  // VOD-style scrubbing across the loaded range.
+                  liveDurationInfinity: false,
                 };
               }
             }}
