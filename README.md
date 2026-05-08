@@ -1,34 +1,18 @@
 # Iris
 
-Self-hosted "micro-Netflix": aggregate searches across torrent trackers, stream
-the result inside a React video player, seed the rest, and reclaim disk space
-when it runs low.
+Self-hosted "micro-Netflix": aggregate searches across torrent trackers, stream the result inside a React video player, seed the rest, and reclaim disk space when it runs low.
+
+![WatchPage](./screenshots/watchpage.jpg)
 
 ## Stack
 
-- **Backend**: Rust 2024 workspace, Axum, SQLite (sqlx), librqbit (M3+),
-  ffmpeg pipeline (M4+).
+- **Backend**: Rust 2024 workspace, Axum, SQLite (sqlx), librqbit, ffmpeg pipeline.
 - **Frontend**: React 19 + Vite + Tailwind 4 + shadcn/ui, served by bun.
 - **Auth**: invitation-only, JWT in HTTP-only cookies, argon2id passwords.
 
-## Layout
-
-```
-crates/
-  iris-core         shared domain types
-  iris-config       config loader (TOML + env)
-  iris-db           sqlx + repositories
-  iris-auth         password hashing, JWT, invitation tokens
-  iris-providers    SearchProvider trait + tracker impls
-  iris-torrent      librqbit wrapper (M3)
-  iris-media        ffprobe + remux/transcode (M4)
-  iris-api          Axum binary
-web/                React app
-migrations/         SQL migrations
-config/             config + providers TOML examples
-```
-
 ## Local dev
+
+- Via host :
 
 ```sh
 # 1. Backend
@@ -50,8 +34,6 @@ invitation in /admin, and use it from /register.
 
 ```sh
 cp .env.example .env
-# fill IRIS_JWT_SECRET (openssl rand -base64 48)
+# fill everything
 docker compose up --build -d
 ```
-
-Add `--profile proxy` to also run Caddy with TLS.

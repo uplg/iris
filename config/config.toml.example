@@ -13,13 +13,18 @@ cleanup_threshold_pct = 90
 cleanup_target_pct = 75
 
 [auth]
-# Override with IRIS_AUTH__JWT_SECRET in production.
+# Override every value below with IRIS_AUTH__<KEY> environment variables in
+# production. The JWT secret in particular MUST come from the environment.
 jwt_secret = "change-me-in-production"
 access_ttl_secs = 900
 refresh_ttl_secs = 604800
 invitation_ttl_secs = 604800
 
-# Created on first boot if no users exist. Remove or change once you have an admin account.
-[auth.bootstrap_admin]
-email = "admin@iris.local"
-password = "change-me-immediately"
+# The bootstrap admin user — created on first boot if the users table is
+# empty. Prefer setting these via env (IRIS_AUTH__BOOTSTRAP_ADMIN__EMAIL /
+# IRIS_AUTH__BOOTSTRAP_ADMIN__PASSWORD) so credentials don't live in a file
+# you might commit. The block below is left commented out as a reminder.
+#
+# [auth.bootstrap_admin]
+# email = "admin@iris.local"
+# password = "change-me-immediately"
