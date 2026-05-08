@@ -82,8 +82,13 @@ pub async fn revoke_for_user(
 }
 
 pub async fn is_active(pool: &SqlitePool, jti: Uuid) -> Result<bool, sqlx::Error> {
-    let row: Option<RefreshToken> = sqlx::query_as(
-        "SELECT jti, user_id, issued_at, expires_at, revoked_at FROM refresh_tokens \
+    // EXISTS-style probe with `query_scalar` — we don't need to materialise
+    // a full RefreshToken row, and `FromRow` is strict about every column
+    // declared on the struct being present in the SELECT. Selecting a
+    // narrow projection here used to crash with `ColumnNotFound("device_label")`
+    // on every /auth/refresh after migration 0004 added those columns.
+    let row: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM refresh_tokens \
          WHERE jti = ?1 AND revoked_at IS NULL AND expires_at > ?2",
     )
     .bind(jti)

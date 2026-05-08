@@ -81,6 +81,10 @@ fun WatchScreen(
     var selectedAudioIdx by remember { mutableStateOf<Int?>(null) }
     var showAudioPicker by remember { mutableStateOf(false) }
     var probeVersion by remember { mutableStateOf(0) }
+    // Tied to the Media3 PlayerView controller via setControllerVisibilityListener.
+    // When the controller is hidden during playback, our custom audio chip
+    // hides too — full-screen video without a "FRE" tag in the corner.
+    var controllerVisible by remember { mutableStateOf(true) }
 
     // Probe with retry. When the user clicks Play right after ingest, the
     // file isn't on disk yet — librqbit needs a few seconds to fetch the
@@ -183,11 +187,14 @@ fun WatchScreen(
                 startPositionSec = resumePositionSec,
                 onPositionUpdate = { resumePositionSec = it },
                 onAudioPicked = { selectedAudioIdx = it },
+                onControllerVisibilityChanged = { controllerVisible = it },
             )
             // Audio switcher overlay — only shown if there's more than one
-            // audio track to pick from. The dialog sets Media3 track
-            // selection parameters; no player re-build, no segment re-fetch.
-            if ((probe?.audio?.size ?: 0) > 1) {
+            // audio track to pick from AND the player controller is up
+            // (the user pressed something). During real playback the chip
+            // disappears with the rest of the controls so video stays
+            // full-screen.
+            if ((probe?.audio?.size ?: 0) > 1 && controllerVisible) {
                 Surface(
                     onClick = { showAudioPicker = true },
                     modifier = Modifier
@@ -246,6 +253,7 @@ private fun ReadyPlayer(
     startPositionSec: Double,
     onPositionUpdate: (Double) -> Unit,
     onAudioPicked: (Int) -> Unit,
+    onControllerVisibilityChanged: (Boolean) -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -281,17 +289,43 @@ private fun ReadyPlayer(
         }
     }
 
-    // Apply preferred audio whenever the user picks one (or saved progress
-    // surfaces it). We translate `audioIdx` → ISO language preference, which
-    // works because each rendition advertises its language in the master
-    // playlist; ExoPlayer's track selector matches on it.
-    LaunchedEffect(player, preferredAudioIdx) {
+    // Track selection bookkeeping. ExoPlayer announces the available audio
+    // groups asynchronously after the HLS manifest is parsed, so we can't
+    // just apply the override once at mount — we'd usually get there with
+    // an empty `currentTracks`. Instead we listen for `onTracksChanged`
+    // and re-apply whenever either (a) tracks become available, or (b) the
+    // user picks a different audio idx.
+    var tracksTick by remember { mutableStateOf(0) }
+    DisposableEffect(player) {
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                tracksTick++
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+
+    // Apply the preferred audio choice as a hard `TrackSelectionOverride`.
+    // We don't use `setPreferredAudioLanguage` because (a) two tracks could
+    // share the same language tag, (b) ExoPlayer's language matching is
+    // fuzzy and sometimes "fra" != "fr" silently. The override targets the
+    // exact group at the right ordinal — the order in `probe.audio` mirrors
+    // the order ffmpeg emitted in `var_stream_map`, which is the same
+    // order the HLS master playlist exposes.
+    LaunchedEffect(player, preferredAudioIdx, tracksTick) {
         val idx = preferredAudioIdx ?: return@LaunchedEffect
-        val track = probe.audio.firstOrNull { it.index == idx } ?: return@LaunchedEffect
-        val lang = track.language ?: return@LaunchedEffect
+        val ordinal = probe.audio.indexOfFirst { it.index == idx }
+        if (ordinal < 0) return@LaunchedEffect
+        val audioGroups = player.currentTracks.groups.filter {
+            it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO
+        }
+        val target = audioGroups.getOrNull(ordinal) ?: return@LaunchedEffect
         player.trackSelectionParameters = player.trackSelectionParameters
             .buildUpon()
-            .setPreferredAudioLanguage(lang)
+            .setOverrideForType(
+                androidx.media3.common.TrackSelectionOverride(target.mediaTrackGroup, 0)
+            )
             .build()
     }
 
@@ -368,6 +402,14 @@ private fun ReadyPlayer(
                 setShowRewindButton(true)
                 controllerAutoShow = true
                 layoutParams = android.widget.FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                // Mirror the controller's show/hide state into Compose so
+                // our custom audio overlay can fade in & out together with
+                // the rest of the player chrome.
+                setControllerVisibilityListener(
+                    PlayerView.ControllerVisibilityListener { visibility ->
+                        onControllerVisibilityChanged(visibility == android.view.View.VISIBLE)
+                    }
+                )
             }
         },
         update = { it.player = player },
