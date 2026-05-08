@@ -4,7 +4,13 @@ import "@vidstack/react/player/styles/default/layouts/video.css";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { CheckCircle2, Download, Library as LibraryIcon, Play } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  Library as LibraryIcon,
+  Loader2,
+  Play,
+} from "lucide-react";
 import {
   isHLSProvider,
   MediaPlayer,
@@ -289,7 +295,7 @@ export function WatchPage() {
       )}
 
       <div className="aspect-video w-full overflow-hidden rounded-lg border border-border bg-black">
-        {hlsSrc && !progressQ.isPending ? (
+        {hlsSrc && !progressQ.isPending && audioIdx != null ? (
           <MediaPlayer
             // Including startPosition in the key forces a clean re-mount when
             // we navigate to a different saved offset (which never happens
@@ -402,15 +408,13 @@ export function WatchPage() {
             <DefaultVideoLayout icons={defaultLayoutIcons} />
           </MediaPlayer>
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {probeQ.isFetching
-              ? "Probing media…"
-              : probeQ.error
-                ? probeQ.error instanceof Error
-                  ? probeQ.error.message
-                  : "probe failed"
-                : "Waiting for first bytes on disk…"}
-          </div>
+          <PlayerLoadingStatus
+            torrent={data}
+            probeFetching={probeQ.isFetching}
+            probeError={probeQ.error}
+            progressPending={progressQ.isPending}
+            audioReady={audioIdx != null}
+          />
         )}
       </div>
 
@@ -639,6 +643,92 @@ function uniqueSubtitleLabel(s: SubtitleStream, _idx: number, all: SubtitleStrea
 
 function tracingNoop(_: unknown) {
   // Swallowed: seeks can fail mid-buffer; we'll retry on the next interval tick.
+}
+
+function PlayerLoadingStatus({
+  torrent,
+  probeFetching,
+  probeError,
+  progressPending,
+  audioReady,
+}: {
+  torrent: TorrentView;
+  probeFetching: boolean;
+  probeError: unknown;
+  progressPending: boolean;
+  audioReady: boolean;
+}) {
+  const fileOnDisk =
+    probeError == null ||
+    !(probeError instanceof Error) ||
+    !probeError.message.includes("not yet on disk");
+  const downloadPct = Math.min(100, Math.max(0, torrent.progress_pct));
+
+  type Step = { label: string; sub?: string };
+  let step: Step;
+  if (torrent.state === "error") {
+    step = {
+      label: "Torrent error",
+      sub: torrent.error ?? "Engine reported a fault. Try removing and re-adding.",
+    };
+  } else if (torrent.state === "initializing") {
+    step = {
+      label: "Initializing torrent…",
+      sub: "Negotiating with peers and computing piece map.",
+    };
+  } else if (!fileOnDisk) {
+    step = {
+      label: `Buffering first bytes · ${downloadPct.toFixed(0)}%`,
+      sub: `${formatSize(torrent.download_speed_bps)}/s · ${torrent.peers} peer${torrent.peers === 1 ? "" : "s"}`,
+    };
+  } else if (probeFetching) {
+    step = {
+      label: "Reading media metadata…",
+      sub: "ffprobe scanning streams (codec, audio, subtitles).",
+    };
+  } else if (progressPending) {
+    step = {
+      label: "Loading saved position…",
+    };
+  } else if (!audioReady) {
+    step = {
+      label: "Selecting audio track…",
+    };
+  } else {
+    step = {
+      label: "Preparing playback…",
+      sub: "Waiting for ffmpeg to write the first segments.",
+    };
+  }
+
+  const isError = torrent.state === "error";
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+      {isError ? (
+        <span className="text-2xl text-destructive">!</span>
+      ) : (
+        <Loader2 className="size-8 animate-spin text-muted-foreground" />
+      )}
+      <div className="grid gap-1">
+        <span
+          className={`text-sm font-medium ${
+            isError ? "text-destructive" : "text-foreground"
+          }`}
+        >
+          {step.label}
+        </span>
+        {step.sub && (
+          <span className="text-xs text-muted-foreground">{step.sub}</span>
+        )}
+      </div>
+      {!isError && torrent.total_size_bytes > 0 && downloadPct < 100 && (
+        <div className="w-64">
+          <Progress value={downloadPct} className="h-1" />
+        </div>
+      )}
+    </div>
+  );
 }
 
 function formatDuration(sec: number): string {

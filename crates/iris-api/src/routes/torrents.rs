@@ -459,12 +459,17 @@ async fn hls_asset(
 
     if asset == "master.m3u8" {
         let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
-        // Hand back ffmpeg's *real* playlist (not a synthetic one) so EXTINF
-        // entries actually match the segments on disk. Wait for either
-        // ENDLIST or at least 4 segments — enough to start playback.
+        // Hand back ffmpeg's *real* playlist with ENDLIST present, so hls.js
+        // treats it as VOD and enables seeking. Without ENDLIST the player
+        // would lock the timeline at the live edge.
+        //
+        // The wait is bounded at 120s — with `-c copy` ffmpeg processes
+        // multi-GB files in tens of seconds. The prewarm task at ingest
+        // means by the time the user clicks Play this usually short-circuits
+        // immediately because ENDLIST is already on disk.
         let body = state
             .hls()
-            .read_master_playlist(&key, 4, std::time::Duration::from_secs(45))
+            .read_master_playlist(&key, std::time::Duration::from_secs(120))
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("read master: {e}")))?;
         return Ok(Response::builder()

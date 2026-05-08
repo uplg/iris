@@ -73,20 +73,18 @@ impl HlsManager {
             .join(format!("segment_{segment_idx:05}.m4s"))
     }
 
-    /// Read the master playlist that ffmpeg has written so far. This is the
-    /// authoritative source of truth for segment durations — synthesizing
-    /// our own with arbitrary 6-second EXTINF entries breaks playback when
-    /// the source has long GOPs (ffmpeg snaps segments to keyframes, so a
-    /// file with 12s GOPs ends up with 12s segments and our 6s claim makes
-    /// hls.js compute everything wrong).
+    /// Read ffmpeg's master playlist, waiting until it carries
+    /// `#EXT-X-ENDLIST` (i.e. ffmpeg fully finished segmenting) so hls.js
+    /// can treat it as VOD and enable seeking. Without ENDLIST the player
+    /// treats the source as a live stream and blocks the timeline at the
+    /// live edge.
     ///
-    /// Waits up to `max_wait` for the playlist to either complete
-    /// (`#EXT-X-ENDLIST` present) or carry at least `min_segments` so the
-    /// player can start playing. Returns whatever was on disk after the wait.
+    /// We wait up to `max_wait`; if ffmpeg dies prematurely the job's
+    /// `finished` notify wakes us up. If everything goes wrong we return
+    /// whatever is on disk best-effort.
     pub async fn read_master_playlist(
         &self,
         key: &str,
-        min_segments: usize,
         max_wait: Duration,
     ) -> Result<String, HlsError> {
         let dir = self.segment_dir_for(key);
@@ -95,26 +93,36 @@ impl HlsManager {
             let jobs = self.inner.jobs.lock().await;
             jobs.get(key).cloned()
         };
+
+        // Quick path: already complete on disk from a prior run.
+        if let Ok(content) = tokio::fs::read_to_string(&path).await {
+            if content.contains("#EXT-X-ENDLIST") {
+                return Ok(content);
+            }
+        }
+
         let target = path.clone();
         let display = target.display().to_string();
         let res = timeout(max_wait, async {
             let poll = async {
                 loop {
                     if let Ok(content) = tokio::fs::read_to_string(&target).await {
-                        let count = content.matches("#EXTINF").count();
-                        let done = content.contains("#EXT-X-ENDLIST");
-                        if done || count >= min_segments {
+                        if content.contains("#EXT-X-ENDLIST") {
                             return Ok::<String, ()>(content);
                         }
                     }
-                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    tokio::time::sleep(Duration::from_millis(200)).await;
                 }
             };
             if let Some(job) = job {
                 tokio::select! {
                     r = poll => r,
                     _ = job.finished.notified() => {
-                        tokio::fs::read_to_string(&target).await.map_err(|_| ())
+                        // ffmpeg exited (success or not). One last read.
+                        match tokio::fs::read_to_string(&target).await {
+                            Ok(c) if c.contains("#EXT-X-ENDLIST") => Ok(c),
+                            _ => Err(()),
+                        }
                     }
                 }
             } else {
@@ -122,14 +130,12 @@ impl HlsManager {
             }
         })
         .await;
+
         match res {
             Ok(Ok(s)) => Ok(s),
-            _ => {
-                // Last-ditch: return whatever is on disk.
-                tokio::fs::read_to_string(&path).await.map_err(|_| {
-                    HlsError::Timeout(max_wait, display.clone())
-                })
-            }
+            _ => tokio::fs::read_to_string(&path)
+                .await
+                .map_err(|_| HlsError::Timeout(max_wait, display)),
         }
     }
 
@@ -152,7 +158,9 @@ impl HlsManager {
         // If a previous job already finished and segments are on disk, no
         // need to respawn — they'll just be served as static files. We keep
         // the dedupe entry empty in that case; reaper removed it on exit.
-        if dir.join("segment_00000.ts").exists() {
+        // We check for `init.mp4` because it's the first artifact ffmpeg
+        // produces and it stays put even if segments are pruned later.
+        if dir.join("init.mp4").exists() && dir.join("ffmpeg_master.m3u8").exists() {
             return Ok(dir);
         }
 
@@ -300,7 +308,12 @@ fn spawn_ffmpeg(
         .args(["-hls_flags", "temp_file+independent_segments"])
         .arg("-hls_segment_filename")
         .arg(&segment_pattern)
-        .args(["-hls_playlist_type", "vod"])
+        // `event` writes the playlist incrementally, segment-by-segment, and
+        // appends EXT-X-ENDLIST when ffmpeg exits cleanly. Critical for our
+        // flow: on a multi-GB source `vod` buffers the entire playlist until
+        // ffmpeg finishes (30+s), so the very first request for master.m3u8
+        // would time out. With `event` master.m3u8 appears within ~1 second.
+        .args(["-hls_playlist_type", "event"])
         .args(["-f", "hls"])
         .arg(&master)
         .stdin(Stdio::null())
