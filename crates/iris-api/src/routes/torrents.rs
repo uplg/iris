@@ -589,24 +589,26 @@ async fn hls_asset(
         "application/octet-stream"
     };
 
-    // Hot path: read the asset directly; if the read succeeds we serve
-    // it without ever touching ProbeCache or the HLS jobs Mutex. Both
-    // existence-test and read are async so a slow rootless overlayfs
-    // doesn't park the runtime.
-    if let Ok(bytes) = tokio::fs::read(&asset_path).await {
-        tracing::debug!(asset = %asset, size = bytes.len(), "hls_asset hot serve");
-        if asset == iris_media::hls::MASTER_PLAYLIST {
-            let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
+    // Hot path: serve the asset directly when it's on disk and we're
+    // not at a validation entry point. The master.m3u8 is the entry
+    // point — players fetch it once per session and we use that single
+    // request to (re)validate the dir + self-heal corruption.
+    // Segments stay hot because by the time the player requests one
+    // the dir has already been validated (or freshly re-spawned).
+    let is_validation_entry = asset == iris_media::hls::MASTER_PLAYLIST;
+    if !is_validation_entry {
+        if let Ok(bytes) = tokio::fs::read(&asset_path).await {
+            tracing::debug!(asset = %asset, size = bytes.len(), "hls_asset hot serve");
+            return Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime)
+                .header(header::CACHE_CONTROL, "no-store")
+                .header(header::CONTENT_LENGTH, bytes.len())
+                .body(Body::from(bytes))
+                .unwrap());
         }
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, mime)
-            .header(header::CACHE_CONTROL, "no-store")
-            .header(header::CONTENT_LENGTH, bytes.len())
-            .body(Body::from(bytes))
-            .unwrap());
     }
-    tracing::debug!(asset = %asset, "hls_asset cold path (file missing on disk)");
+    tracing::debug!(asset = %asset, "hls_asset cold path (validation/missing)");
 
     // Cold path: file isn't there yet. Kick the ffmpeg job (idempotent if
     // already running) and wait for the asset to appear.
