@@ -617,6 +617,13 @@ enum DirState {
 /// Strict validation of an HLS dir against the expected variant count
 /// (`audio_count + 1` total: `stream_0` for video plus one per audio
 /// rendition). See [`DirState`] for outcomes.
+///
+/// Beyond the ENDLIST presence check we *also* count the `#EXTINF`
+/// entries in each variant playlist and compare against the number of
+/// `seg_*.m4s` files actually on disk. A mismatch (= playlist references
+/// segments that aren't there) marks the dir corrupt — that's the
+/// failure mode you get when ffmpeg ran on a still-downloading torrent
+/// file: it produces a "complete" playlist but truncated segments.
 async fn validate_dir(dir: &Path, audio_count: usize) -> DirState {
     let master_exists = tokio::fs::try_exists(dir.join(MASTER_PLAYLIST))
         .await
@@ -626,44 +633,55 @@ async fn validate_dir(dir: &Path, audio_count: usize) -> DirState {
     }
     let done = tokio::fs::try_exists(dir.join(".done")).await.unwrap_or(false);
 
-    let mut all_endlist = true;
     for i in 0..=audio_count {
-        let pl = dir.join(format!("stream_{i}")).join("playlist.m3u8");
-        match tokio::fs::read_to_string(&pl).await {
-            Ok(c) if c.contains("#EXT-X-ENDLIST") => {} // ok, this variant is done
-            Ok(_) => all_endlist = false,
-            Err(_) => {
-                // Variant playlist missing on disk. If `.done` claimed
-                // the job finished, this means broken output — corrupt.
-                // Otherwise we're just early.
-                return if done { DirState::Corrupt } else { DirState::Partial };
-            }
-        }
-    }
-    if all_endlist {
-        DirState::Clean
-    } else if done {
-        // `.done` says we're finished but a variant playlist is missing
-        // ENDLIST. Try once to patch it before declaring corrupt.
-        fixup_endlist(dir, audio_count);
-        // Re-check after fixup.
-        let mut all_endlist = true;
-        for i in 0..=audio_count {
-            let pl = dir.join(format!("stream_{i}")).join("playlist.m3u8");
-            if let Ok(c) = std::fs::read_to_string(&pl) {
-                if !c.contains("#EXT-X-ENDLIST") {
-                    all_endlist = false;
-                    break;
+        let stream_dir = dir.join(format!("stream_{i}"));
+        let pl = stream_dir.join("playlist.m3u8");
+        let content = match tokio::fs::read_to_string(&pl).await {
+            Ok(c) => c,
+            Err(_) => return if done { DirState::Corrupt } else { DirState::Partial },
+        };
+        if !content.contains("#EXT-X-ENDLIST") {
+            if done {
+                fixup_endlist(dir, audio_count);
+                let patched = std::fs::read_to_string(&pl).unwrap_or_default();
+                if !patched.contains("#EXT-X-ENDLIST") {
+                    return DirState::Corrupt;
                 }
             } else {
-                all_endlist = false;
-                break;
+                return DirState::Partial;
             }
         }
-        if all_endlist { DirState::Clean } else { DirState::Corrupt }
-    } else {
-        DirState::Partial
+        // Cross-check playlist references against actual segments on
+        // disk. We tolerate an off-by-one (very last segment might be
+        // mid-rename via temp_file) but anything bigger means the
+        // playlist is lying about what's available.
+        let extinf_count = content.matches("#EXTINF").count();
+        let actual_count = count_segments(&stream_dir).await;
+        if extinf_count > actual_count + 1 {
+            tracing::warn!(
+                stream_dir = %stream_dir.display(),
+                extinf_count,
+                actual_count,
+                "HLS variant playlist references more segments than exist on disk",
+            );
+            return DirState::Corrupt;
+        }
     }
+    DirState::Clean
+}
+
+/// Count `seg_NNNNN.m4s` files in a single variant directory.
+async fn count_segments(stream_dir: &Path) -> usize {
+    let mut n = 0usize;
+    let Ok(mut rd) = tokio::fs::read_dir(stream_dir).await else { return 0 };
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        if let Some(name) = entry.file_name().to_str() {
+            if name.starts_with("seg_") && name.ends_with(".m4s") {
+                n += 1;
+            }
+        }
+    }
+    n
 }
 
 /// Append `#EXT-X-ENDLIST` to every variant playlist that's missing it.

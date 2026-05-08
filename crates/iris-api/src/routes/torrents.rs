@@ -247,10 +247,19 @@ async fn ingest(
 
 async fn prewarm_default_hls(state: &AppState, infohash: &str) {
     use std::time::Duration;
-    // Wait up to ~2 minutes for the largest video file to appear on disk.
+    // Wait for the *whole torrent* to finish downloading before letting
+    // ffmpeg touch it. Running on a sparse / partial source produces a
+    // truncated HLS pipeline (playlist references segments ffmpeg never
+    // got to write), which then 404s in the player. Up to 30 minutes —
+    // beyond that the user can trigger a manual play and we'll start
+    // ffmpeg synchronously instead.
     let mut chosen_idx: Option<usize> = None;
-    for _ in 0..60 {
+    for _ in 0..900 {
         if let Some(snap) = state.engine().get_by_infohash(infohash) {
+            if !snap.finished {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
             let largest_video = snap
                 .files
                 .iter()
@@ -545,6 +554,19 @@ async fn hls_asset(
             "file not yet on disk: {}",
             path.display()
         )));
+    }
+    // Guard against running ffmpeg on a still-downloading torrent:
+    // sparse files segment into nonsense (playlist references seg_00009
+    // when only 0..7 are actually written on disk → 404 in the player).
+    // We only block the cold path here — if the HLS dir is already
+    // clean, [`hls_asset`]'s hot path skipped this check entirely and
+    // serves segments straight off disk.
+    if let Some(snap) = state.engine().get_by_infohash(&infohash) {
+        if !snap.finished {
+            return Err(ApiError::BadRequest(
+                "torrent still downloading — wait until it's complete to play".into(),
+            ));
+        }
     }
 
     let key = format!("{infohash}_{idx}");
