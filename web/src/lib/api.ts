@@ -108,6 +108,21 @@ export const admin = {
     api.post<void>(`/admin/users/${userId}/password`, { new_password }),
 };
 
+export type DeviceView = {
+  jti: string;
+  label: string | null;
+  kind: string | null;
+  issued_at: string;
+  expires_at: string;
+};
+
+export const devices = {
+  list: () => api.get<DeviceView[]>("/me/devices"),
+  link: (code: string, label?: string) =>
+    api.post<void>("/me/devices", { code, label }),
+  revoke: (jti: string) => api.delete<void>(`/me/devices/${jti}`),
+};
+
 export type SearchResult = {
   provider_id: string;
   external_id: string;
@@ -216,6 +231,7 @@ export type ProgressView = {
 export type ContinueWatchingItem = {
   infohash: string;
   torrent_name: string;
+  tmdb_id: number | null;
   file_idx: number;
   file_path: string | null;
   position_seconds: number;
@@ -300,6 +316,7 @@ export type TorrentView = TorrentSnapshot & {
   last_played_at: string | null;
   source_provider: string | null;
   source_external_id: string | null;
+  tmdb_id: number | null;
 };
 
 export type IngestResponse = {
@@ -311,8 +328,8 @@ export type IngestResponse = {
 export const torrents = {
   preview: (provider_id: string, external_id: string) =>
     api.post<TorrentPreview>("/torrents/preview", { provider_id, external_id }),
-  ingest: (provider_id: string, external_id: string) =>
-    api.post<IngestResponse>("/torrents", { provider_id, external_id }),
+  ingest: (provider_id: string, external_id: string, tmdb_id?: number | null) =>
+    api.post<IngestResponse>("/torrents", { provider_id, external_id, tmdb_id }),
   list: () => api.get<TorrentView[]>("/torrents"),
   get: (infohash: string) => api.get<TorrentView>(`/torrents/${infohash}`),
   remove: (infohash: string) => api.delete<void>(`/torrents/${infohash}`),
@@ -325,12 +342,17 @@ export const torrents = {
    * remuxed stream — prefer `hlsUrl` for full UX.
    */
   playUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/play`,
-  /** HLS master playlist for the given audio track. */
-  hlsUrl: (infohash: string, idx: number, audioIdx: number) =>
-    `/api/torrents/${infohash}/files/${idx}/hls/${audioIdx}/master.m3u8`,
+  /**
+   * HLS master playlist. The master references one video variant +
+   * N audio renditions in a single `EXT-X-MEDIA:TYPE=AUDIO` group, so
+   * switching audio is a player-side toggle (no URL change, no re-download
+   * of video segments).
+   */
+  hlsUrl: (infohash: string, idx: number) =>
+    `/api/torrents/${infohash}/files/${idx}/hls/master.m3u8`,
   /** Non-blocking poll endpoint — kicks the ffmpeg job and reports progress. */
-  hlsStatus: (infohash: string, idx: number, audioIdx: number) =>
-    api.get<HlsStatus>(`/torrents/${infohash}/files/${idx}/hls/${audioIdx}/status`),
+  hlsStatus: (infohash: string, idx: number) =>
+    api.get<HlsStatus>(`/torrents/${infohash}/files/${idx}/hls/status`),
   probe: (infohash: string, idx: number) =>
     api.get<MediaProbe>(`/torrents/${infohash}/files/${idx}/probe`),
   subtitleUrl: (infohash: string, idx: number, streamIdx: number) =>

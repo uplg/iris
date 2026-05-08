@@ -50,6 +50,29 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
     std::fs::create_dir_all(&hls_dir).context("creating hls dir")?;
     let hls = iris_media::HlsManager::new(hls_dir);
 
+    // Background idle-eviction sweep for the HLS cache. Runs hourly; throws
+    // away segments older than `hls_idle_eviction_days`. The torrent itself
+    // is left alone — only the (re-generable) cache is purged.
+    {
+        let hls_evictor = hls.clone();
+        let max_age = std::time::Duration::from_secs(
+            u64::from(cfg.storage.hls_idle_eviction_days) * 24 * 3600,
+        );
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            // Skip the immediate first tick so we don't run during boot.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                let n = hls_evictor.evict_idle(max_age).await;
+                if n > 0 {
+                    tracing::info!(count = n, "hls idle-eviction pass complete");
+                }
+            }
+        });
+    }
+
     let gc = iris_torrent::Gc::new(
         engine.clone(),
         pool.clone(),

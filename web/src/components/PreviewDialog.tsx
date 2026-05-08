@@ -20,9 +20,10 @@ type Props = {
   providerId: string | null;
   externalId: string | null;
   initialTitle?: string;
+  tmdbId?: number | null;
 };
 
-export function PreviewDialog({ open, onOpenChange, providerId, externalId, initialTitle }: Props) {
+export function PreviewDialog({ open, onOpenChange, providerId, externalId, initialTitle, tmdbId }: Props) {
   const navigate = useNavigate();
   const [preview, setPreview] = useState<TorrentPreview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -70,7 +71,7 @@ export function PreviewDialog({ open, onOpenChange, providerId, externalId, init
     setIngesting(true);
     setError(null);
     try {
-      const res = await torrents.ingest(providerId, externalId);
+      const res = await torrents.ingest(providerId, externalId, tmdbId ?? null);
       onOpenChange(false);
       navigate(`/watch/${res.snapshot.infohash}/${pickedIdx}`);
     } catch (e) {

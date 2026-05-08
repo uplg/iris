@@ -100,6 +100,7 @@ pub async fn upsert(pool: &SqlitePool, p: UpsertProgress) -> Result<(), sqlx::Er
 pub struct ContinueWatchingRow {
     pub infohash: String,
     pub torrent_name: String,
+    pub tmdb_id: Option<i64>,
     pub file_idx: i64,
     pub position_seconds: f64,
     pub duration_seconds: Option<f64>,
@@ -110,7 +111,8 @@ pub struct ContinueWatchingRow {
 }
 
 /// Recent in-progress items for the user (excluding completed). Joined with
-/// torrents so we already have a display name.
+/// torrents so we already have a display name and the tmdb_id (when known)
+/// for poster lookups.
 pub async fn continue_watching(
     pool: &SqlitePool,
     user_id: UserId,
@@ -118,7 +120,7 @@ pub async fn continue_watching(
 ) -> Result<Vec<ContinueWatchingRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
     sqlx::query_as::<_, ContinueWatchingRow>(
-        "SELECT p.infohash, t.name as torrent_name, p.file_idx, p.position_seconds, \
+        "SELECT p.infohash, t.name as torrent_name, t.tmdb_id, p.file_idx, p.position_seconds, \
             p.duration_seconds, p.last_watched_at, p.completed, \
             p.audio_track_idx, p.subtitle_track_idx \
          FROM playback_progress p \

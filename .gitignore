@@ -2,6 +2,7 @@
 /web/node_modules
 /web/dist
 /web/.vite
+/web/data/
 /data
 /downloads
 /.env
@@ -15,3 +16,15 @@
 .DS_Store
 .idea/
 .vscode/
+
+# ----- Android (android-tv module) -----
+/android-tv/.gradle/
+/android-tv/build/
+/android-tv/app/build/
+/android-tv/captures/
+/android-tv/local.properties
+*.iml
+*.hprof
+/android-tv/.kotlin/
+/android-tv/app/.cxx/
+/android-tv/.idea/

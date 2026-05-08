@@ -31,11 +31,15 @@ pub fn router() -> Router<AppState> {
         .route("/{infohash}/files/{idx}/play", get(play_file).head(play_file))
         .route("/{infohash}/files/{idx}/probe", get(probe_file))
         .route(
-            "/{infohash}/files/{idx}/hls/{audio_idx}/status",
+            "/{infohash}/files/{idx}/hls/status",
             get(hls_status),
         )
+        // Wildcard so the master, the per-variant playlists
+        // (`stream_0/playlist.m3u8`, `stream_1/playlist.m3u8`, …) and
+        // segments (`stream_0/seg_00001.m4s`) all funnel through the same
+        // handler. Path traversal is guarded inside `hls_asset`.
         .route(
-            "/{infohash}/files/{idx}/hls/{audio_idx}/{asset}",
+            "/{infohash}/files/{idx}/hls/{*asset}",
             get(hls_asset),
         )
         .route(
@@ -146,6 +150,12 @@ async fn put_progress(
 pub struct ResolveBody {
     pub provider_id: String,
     pub external_id: String,
+    /// Optional TMDB id, captured at search time. We persist it on ingest so
+    /// the library/continue-watching endpoints can ship posters without a
+    /// fuzzy title-year lookup. Frontends are expected to pass this through
+    /// from the search hit when available.
+    #[serde(default)]
+    pub tmdb_id: Option<i64>,
 }
 
 async fn preview(
@@ -211,6 +221,7 @@ async fn ingest(
             total_size_bytes: result.snapshot.total_size_bytes,
             source_provider: Some(body.provider_id),
             source_external_id: Some(body.external_id),
+            tmdb_id: body.tmdb_id,
             added_by: user.id,
         },
     )
@@ -280,25 +291,36 @@ async fn prewarm_default_hls(state: &AppState, infohash: &str) {
             return;
         }
     };
-    if probe.audio.is_empty() {
-        return;
-    }
-    let audio = probe
-        .audio
-        .iter()
-        .find(|a| a.default)
-        .or_else(|| probe.audio.first())
-        .unwrap();
-    let key = format!("{infohash}_{idx}_a{}", audio.index);
-    if let Err(e) = state
-        .hls()
-        .ensure_job(&key, &path, audio.index as u32, Some(&audio.codec))
-        .await
-    {
+    let audio_tracks = audio_tracks_for_hls(&probe);
+    let key = format!("{infohash}_{idx}");
+    if let Err(e) = state.hls().ensure_job(&key, &path, &audio_tracks).await {
         tracing::debug!(error = %e, "prewarm: hls ensure_job failed");
         return;
     }
-    tracing::info!(infohash, idx, audio = audio.index, "prewarmed HLS");
+    tracing::info!(
+        infohash,
+        idx,
+        audio_count = audio_tracks.len(),
+        "prewarmed multi-audio HLS"
+    );
+}
+
+/// Convert an ffprobe `audio` list into the `AudioTrack` view that
+/// [`iris_media::hls::HlsManager`] expects. We carry over codec, language,
+/// title, and the source's default flag so the master playlist can label
+/// each rendition correctly.
+fn audio_tracks_for_hls(probe: &iris_media::MediaProbe) -> Vec<iris_media::hls::AudioTrack> {
+    probe
+        .audio
+        .iter()
+        .map(|a| iris_media::hls::AudioTrack {
+            track_idx: a.index as u32,
+            codec: a.codec.clone(),
+            language: a.language.clone(),
+            name: a.title.clone(),
+            default: a.default,
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -309,6 +331,7 @@ pub struct TorrentView {
     pub last_played_at: Option<chrono::DateTime<chrono::Utc>>,
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
+    pub tmdb_id: Option<i64>,
     #[serde(flatten)]
     pub snapshot: TorrentSnapshot,
 }
@@ -328,6 +351,7 @@ async fn list(
                 last_played_at: row.last_played_at,
                 source_provider: row.source_provider,
                 source_external_id: row.source_external_id,
+                tmdb_id: row.tmdb_id,
                 snapshot,
             });
         }
@@ -354,6 +378,7 @@ async fn get_one(
         last_played_at: row.last_played_at,
         source_provider: row.source_provider,
         source_external_id: row.source_external_id,
+        tmdb_id: row.tmdb_id,
         snapshot,
     }))
 }
@@ -426,7 +451,7 @@ pub struct HlsStatus {
 async fn hls_status(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx, audio_idx)): Path<(String, usize, u32)>,
+    Path((infohash, idx)): Path<(String, usize)>,
 ) -> ApiResult<Json<HlsStatus>> {
     let infohash = infohash.to_ascii_lowercase();
     let _row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
@@ -443,51 +468,28 @@ async fn hls_status(
         )));
     }
 
-    // Cached probe powers both the codec selection and the duration estimate.
+    // Cached probe powers both audio mapping and the duration estimate.
     let probe = state
         .probes()
         .get_or_probe(&infohash, idx, &path)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
-    let audio_codec = probe
-        .audio
-        .iter()
-        .find(|a| a.index == audio_idx as usize)
-        .map(|a| a.codec.clone())
-        .ok_or_else(|| ApiError::BadRequest(format!("audio track {audio_idx} not found")))?;
-
-    let key = format!("{infohash}_{idx}_a{audio_idx}");
+    let audio_tracks = audio_tracks_for_hls(&probe);
+    let key = format!("{infohash}_{idx}");
 
     // Idempotent: starts ffmpeg if not yet running, no-op otherwise.
     state
         .hls()
-        .ensure_job(&key, &path, audio_idx, Some(&audio_codec))
+        .ensure_job(&key, &path, &audio_tracks)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?;
 
-    let dir = state.hls().segment_dir_for(&key);
-    let master_path = dir.join("ffmpeg_master.m3u8");
-
-    let mut segments_produced: u32 = 0;
-    if let Ok(mut rd) = tokio::fs::read_dir(&dir).await {
-        while let Ok(Some(entry)) = rd.next_entry().await {
-            if let Some(name) = entry.file_name().to_str() {
-                if name.starts_with("segment_") && name.ends_with(".m4s") {
-                    segments_produced += 1;
-                }
-            }
-        }
-    }
-
-    let (endlist_present, ffmpeg_running) = match tokio::fs::read_to_string(&master_path).await {
-        Ok(c) => {
-            let endlist = c.contains("#EXT-X-ENDLIST");
-            // ffmpeg is "running" if the job is still in our dedupe map.
-            let still_running = state.hls().is_job_active(&key).await;
-            (endlist, !endlist && still_running)
-        }
-        Err(_) => (false, state.hls().is_job_active(&key).await),
-    };
+    // Progress is measured by the **video** variant — audio finishes much
+    // faster (smaller files). The video sub-playlist reaching ENDLIST means
+    // the whole job is done.
+    let segments_produced = state.hls().video_segment_count(&key).await;
+    let endlist_present = state.hls().video_endlist_present(&key).await;
+    let ffmpeg_running = !endlist_present && state.hls().is_job_active(&key).await;
 
     // Rough estimate of total segments based on probed duration. Actual
     // segment durations vary (keyframe-aligned), but as a progress-bar
@@ -509,14 +511,14 @@ async fn hls_status(
 async fn hls_asset(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx, audio_idx, asset)): Path<(String, usize, u32, String)>,
+    Path((infohash, idx, asset)): Path<(String, usize, String)>,
 ) -> ApiResult<Response> {
     let infohash = infohash.to_ascii_lowercase();
     let _row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
         .await?
         .ok_or(ApiError::NotFound)?;
-    if !is_safe_segment_name(&asset) {
-        return Err(ApiError::BadRequest("invalid HLS asset name".into()));
+    if !is_safe_hls_asset(&asset) {
+        return Err(ApiError::BadRequest("invalid HLS asset path".into()));
     }
 
     let path = state
@@ -530,7 +532,7 @@ async fn hls_asset(
         )));
     }
 
-    let key = format!("{infohash}_{idx}_a{audio_idx}");
+    let key = format!("{infohash}_{idx}");
 
     // Probe + start the HLS job (idempotent if already running). Probe is
     // memoized in `ProbeCache` so subsequent segment requests are essentially
@@ -540,33 +542,21 @@ async fn hls_asset(
         .get_or_probe(&infohash, idx, &path)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
-    let audio_codec = probe
-        .audio
-        .iter()
-        .find(|a| a.index == audio_idx as usize)
-        .map(|a| a.codec.clone());
-    if audio_codec.is_none() {
-        return Err(ApiError::BadRequest(format!(
-            "audio track {audio_idx} not found"
-        )));
-    }
+    let audio_tracks = audio_tracks_for_hls(&probe);
 
     let dir = state
         .hls()
-        .ensure_job(&key, &path, audio_idx, audio_codec.as_deref())
+        .ensure_job(&key, &path, &audio_tracks)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?;
 
-    if asset == "master.m3u8" {
+    if asset == iris_media::hls::MASTER_PLAYLIST {
         let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
-        // Hand back ffmpeg's *real* playlist with ENDLIST present, so hls.js
-        // treats it as VOD and enables seeking. Without ENDLIST the player
-        // would lock the timeline at the live edge.
-        //
-        // The wait is bounded at 120s — with `-c copy` ffmpeg processes
-        // multi-GB files in tens of seconds. The prewarm task at ingest
-        // means by the time the user clicks Play this usually short-circuits
-        // immediately because ENDLIST is already on disk.
+        // Hand back ffmpeg's master playlist once the **video variant** has
+        // ENDLIST. Each variant playlist is then VOD and players unlock the
+        // timeline. With `-c:v copy` ffmpeg processes multi-GB sources in
+        // tens of seconds; the prewarm task at ingest usually means this
+        // short-circuits immediately because ENDLIST is already on disk.
         let body = state
             .hls()
             .read_master_playlist(&key, std::time::Duration::from_secs(120))
@@ -594,6 +584,8 @@ async fn hls_asset(
         "video/iso.segment"
     } else if asset.ends_with(".mp4") {
         "video/mp4"
+    } else if asset.ends_with(".m3u8") {
+        "application/vnd.apple.mpegurl"
     } else if asset.ends_with(".ts") {
         "video/mp2t"
     } else {
@@ -602,14 +594,27 @@ async fn hls_asset(
     serve_static_file(&segment_path, mime).await
 }
 
-fn is_safe_segment_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.contains("..")
-        && !name.contains('/')
-        && !name.contains('\\')
-        && name.chars().all(|c| {
-            c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
-        })
+/// Validate the relative HLS asset path. The wildcard route captures things
+/// like `master.m3u8`, `stream_0/playlist.m3u8`, `stream_0/seg_00001.m4s`.
+/// We require:
+///   * non-empty
+///   * no `..` (path traversal)
+///   * no leading `/` (no absolute paths)
+///   * no backslashes (Windows-style traversal)
+///   * each path segment matches `[A-Za-z0-9._-]+`
+///   * at most two path segments deep (master + stream_X dirs)
+fn is_safe_hls_asset(asset: &str) -> bool {
+    if asset.is_empty() || asset.starts_with('/') || asset.contains("..") || asset.contains('\\') {
+        return false;
+    }
+    let parts: Vec<&str> = asset.split('/').collect();
+    if parts.len() > 2 {
+        return false;
+    }
+    parts.iter().all(|seg| {
+        !seg.is_empty()
+            && seg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+    })
 }
 
 async fn serve_static_file(path: &std::path::Path, mime: &str) -> ApiResult<Response> {

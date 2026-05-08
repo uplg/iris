@@ -99,10 +99,13 @@ export function WatchPage() {
   // Poll the HLS prep status while we wait for ffmpeg to write ENDLIST.
   // This is the loading-state telemetry the user actually wants to see —
   // segments-produced counter ticking up so they know things are alive.
+  // The HLS pipeline now produces a single master playlist with all audio
+  // renditions baked in (via #EXT-X-MEDIA), so HLS prep no longer depends
+  // on the audio pick — there's exactly one ffmpeg job per file.
   const hlsStatusQ = useQuery({
-    queryKey: ["hls-status", infohash, fileIdx, audioIdx],
-    queryFn: () => torrents.hlsStatus(infohash!, fileIdx, audioIdx!),
-    enabled: !!infohash && audioIdx != null,
+    queryKey: ["hls-status", infohash, fileIdx],
+    queryFn: () => torrents.hlsStatus(infohash!, fileIdx),
+    enabled: !!infohash,
     refetchInterval: (q) => {
       const data = q.state.data;
       // Stop polling once the playlist is finalized.
@@ -271,7 +274,7 @@ export function WatchPage() {
   const downBps = data.download_speed_bps;
   const upBps = data.upload_speed_bps;
   const pct = Math.min(100, Math.max(0, data.progress_pct));
-  const hlsSrc = audioIdx != null ? torrents.hlsUrl(infohash, fileIdx, audioIdx) : null;
+  const hlsSrc = torrents.hlsUrl(infohash, fileIdx);
 
   return (
     <div className="grid gap-6">
@@ -312,7 +315,7 @@ export function WatchPage() {
       )}
 
       <div className="aspect-video w-full overflow-hidden rounded-lg border border-border bg-black">
-        {hlsSrc && !progressQ.isPending && audioIdx != null && masterReady ? (
+        {hlsSrc && !progressQ.isPending && masterReady ? (
           <MediaPlayer
             // Including startPosition in the key forces a clean re-mount when
             // we navigate to a different saved offset (which never happens
@@ -432,7 +435,7 @@ export function WatchPage() {
             probeFetching={probeQ.isFetching}
             probeError={probeQ.error}
             progressPending={progressQ.isPending}
-            audioReady={audioIdx != null}
+            audioReady={true}
             hlsStatus={hlsStatusQ.data ?? null}
             hlsError={hlsStatusQ.error}
           />
@@ -507,13 +510,21 @@ export function WatchPage() {
 
       {probe && (probe.audio.length > 1 || probe.subtitle.length > 0) && (
         <div className="grid gap-3 rounded-md border border-border bg-card/40 p-4 text-sm">
-          {probe.audio.length > 1 && audioIdx != null && (
+          {probe.audio.length > 1 && (
             <AudioPicker
               audio={probe.audio}
-              current={audioIdx}
+              current={audioIdx ?? probe.audio.find((a) => a.default)?.index ?? probe.audio[0]?.index ?? 0}
               onPick={(i) => {
                 if (i === audioIdx) return;
-                setPendingSeek(lastTimeRef.current);
+                // Master playlist exposes every audio rendition as
+                // EXT-X-MEDIA, so we switch via hls.js's `audioTrack`
+                // property — no URL change, no re-segmentation, no
+                // re-buffering of video. Audio segments swap on the next
+                // fragment boundary.
+                const provider = playerRef.current?.provider;
+                if (provider && isHLSProvider(provider) && provider.instance) {
+                  provider.instance.audioTrack = i;
+                }
                 setAudioIdx(i);
                 setPlayerError(null);
               }}

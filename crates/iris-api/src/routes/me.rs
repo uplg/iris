@@ -70,6 +70,7 @@ async fn me(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<MeR
 struct ContinueWatchingItem {
     infohash: String,
     torrent_name: String,
+    tmdb_id: Option<i64>,
     file_idx: i64,
     file_path: Option<String>,
     position_seconds: f64,
@@ -98,6 +99,7 @@ async fn continue_watching(
             ContinueWatchingItem {
                 infohash: r.infohash,
                 torrent_name: r.torrent_name,
+                tmdb_id: r.tmdb_id,
                 file_idx: r.file_idx,
                 file_path,
                 position_seconds: r.position_seconds,

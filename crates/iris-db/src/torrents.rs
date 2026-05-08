@@ -12,6 +12,7 @@ pub struct TorrentRow {
     pub total_size_bytes: i64,
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
+    pub tmdb_id: Option<i64>,
     pub added_by: Uuid,
     pub added_at: DateTime<Utc>,
     pub last_played_at: Option<DateTime<Utc>>,
@@ -26,14 +27,26 @@ pub struct NewTorrent {
     pub total_size_bytes: u64,
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
+    pub tmdb_id: Option<i64>,
     pub added_by: UserId,
 }
 
-/// Insert if the infohash is new, otherwise return the existing row (un-soft-deleting it).
+/// Insert if the infohash is new, otherwise return the existing row
+/// (un-soft-deleting it). If the existing row lacks `tmdb_id` and the new
+/// payload has one, backfill it — handy for torrents ingested before the
+/// 0005 migration whose tmdb_id is now available because they got
+/// re-resolved through search.
 pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sqlx::Error> {
     if let Some(existing) = find_by_infohash(pool, &new.infohash).await? {
         if existing.deleted_at.is_some() {
             sqlx::query("UPDATE torrents SET deleted_at = NULL WHERE id = ?1")
+                .bind(existing.id)
+                .execute(pool)
+                .await?;
+        }
+        if existing.tmdb_id.is_none() && new.tmdb_id.is_some() {
+            sqlx::query("UPDATE torrents SET tmdb_id = ?1 WHERE id = ?2")
+                .bind(new.tmdb_id)
                 .bind(existing.id)
                 .execute(pool)
                 .await?;
@@ -47,7 +60,8 @@ pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sq
     let added_by: Uuid = new.added_by.into();
     sqlx::query(
         "INSERT INTO torrents (id, infohash, name, total_size_bytes, source_provider, \
-         source_external_id, added_by, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         source_external_id, tmdb_id, added_by, added_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )
     .bind(id)
     .bind(&new.infohash)
@@ -55,6 +69,7 @@ pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sq
     .bind(i64::try_from(new.total_size_bytes).unwrap_or(i64::MAX))
     .bind(&new.source_provider)
     .bind(&new.source_external_id)
+    .bind(new.tmdb_id)
     .bind(added_by)
     .bind(now)
     .execute(pool)
@@ -70,7 +85,7 @@ pub async fn find_by_infohash(
 ) -> Result<Option<TorrentRow>, sqlx::Error> {
     sqlx::query_as::<_, TorrentRow>(
         "SELECT id, infohash, name, total_size_bytes, source_provider, source_external_id, \
-         added_by, added_at, last_played_at, last_seed_activity_at, deleted_at \
+         tmdb_id, added_by, added_at, last_played_at, last_seed_activity_at, deleted_at \
          FROM torrents WHERE infohash = ?1",
     )
     .bind(infohash)
@@ -81,7 +96,7 @@ pub async fn find_by_infohash(
 pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Error> {
     sqlx::query_as::<_, TorrentRow>(
         "SELECT id, infohash, name, total_size_bytes, source_provider, source_external_id, \
-         added_by, added_at, last_played_at, last_seed_activity_at, deleted_at \
+         tmdb_id, added_by, added_at, last_played_at, last_seed_activity_at, deleted_at \
          FROM torrents WHERE deleted_at IS NULL ORDER BY added_at DESC",
     )
     .fetch_all(pool)

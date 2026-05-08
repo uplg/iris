@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder TV banner (320x180dp). Required by Android TV for app
+     surfacing on the home screen. Replace with a real PNG before Play Store
+     submission; this vector keeps the build green for now. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path
+        android:fillColor="#0B0D12"
+        android:pathData="M0,0h320v180h-320z" />
+    <path
+        android:fillColor="#C084FC"
+        android:pathData="M40,90 L60,70 L80,90 L60,110 Z" />
+    <path
+        android:fillColor="#A78BFA"
+        android:pathData="M100,80 L114,80 L114,100 L100,100 Z M120,80 L136,80 L136,100 L120,100 Z M142,75 L158,75 Q166,75 166,85 Q166,95 158,95 L150,95 L150,100 L142,100 Z M172,75 L188,75 L182,85 L188,95 L172,95 L178,85 Z M192,75 L208,75 L208,80 L198,80 L198,85 L206,85 L206,90 L198,90 L198,95 L208,95 L208,100 L192,100 Z" />
+</vector>

@@ -69,6 +69,12 @@ pub struct StorageConfig {
     /// firewall / docker for inbound peer connections.
     #[serde(default = "default_torrent_port")]
     pub torrent_port: u16,
+    /// HLS cache idle threshold in days. Cached segments untouched for this
+    /// long are evicted hourly (the source torrent stays put — segments are
+    /// regenerated on the next Play). Big win on small SSDs because the
+    /// cache effectively duplicates each watched file.
+    #[serde(default = "default_hls_idle_days")]
+    pub hls_idle_eviction_days: u32,
 }
 
 fn default_max_storage() -> u64 {
@@ -82,6 +88,9 @@ fn default_cleanup_target() -> u8 {
 }
 fn default_torrent_port() -> u16 {
     45100
+}
+fn default_hls_idle_days() -> u32 {
+    7
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

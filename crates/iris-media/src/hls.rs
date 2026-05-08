@@ -1,16 +1,24 @@
-//! Persistent ffmpeg HLS muxer + synthetic master playlist.
+//! Persistent ffmpeg HLS muxer with **multi-audio rendition** support.
 //!
-//! For each `(infohash, file_idx, audio_idx)` key we spawn a single ffmpeg
-//! process that writes properly-aligned MPEG-TS segments to disk via the
-//! HLS muxer. The HTTP layer answers `master.m3u8` instantly with a
-//! synthetic VOD playlist derived from probe duration; segment requests
-//! poll the disk and return as soon as ffmpeg writes the corresponding
-//! `segment_NNNNN.ts`.
+//! Each `(infohash, file_idx)` key spawns a single ffmpeg process that
+//! produces:
+//!
+//!   * one **video-only** HLS variant under `stream_0/playlist.m3u8`
+//!   * **N audio-only** variants under `stream_{1..=N}/playlist.m3u8`,
+//!     one per audio track from the source
+//!   * a **master playlist** at `master.m3u8` that wires them together via
+//!     `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud"` rules
+//!
+//! Players (hls.js, ExoPlayer/Media3, Safari) load the master, expose every
+//! audio rendition through their built-in track selector, and switching
+//! happens **without** re-fetching the video segments — they just stop
+//! pulling `stream_1/seg_*.m4s` and start pulling `stream_2/seg_*.m4s`. No
+//! re-segmentation, no re-buffer, no double disk usage.
 //!
 //! On-demand single-segment generation was tried and **abandoned**: with
 //! `-c:v copy` each independent ffmpeg call has slightly off PTS (because
-//! `-ss BEFORE -i` snaps to the previous keyframe), making hls.js see the
-//! timeline rewind on every seek. Letting ffmpeg muxer produce the whole
+//! `-ss BEFORE -i` snaps to the previous keyframe), making players see the
+//! timeline rewind on every seek. Letting the muxer produce the whole
 //! sequence keeps timestamps monotonic across all segments.
 
 use std::collections::HashMap;
@@ -33,7 +41,34 @@ pub enum HlsError {
     Failed(i32, String),
     #[error("timeout waiting for {1}")]
     Timeout(Duration, String),
+    #[error("source has no streams to mux")]
+    NoStreams,
 }
+
+/// One audio rendition in the source. We pass these into [`HlsManager::ensure_job`]
+/// so the muxer knows which `0:a:N` mappings to emit and how to label them in
+/// the master playlist (`LANGUAGE=...,NAME=...,DEFAULT=...`).
+#[derive(Debug, Clone)]
+pub struct AudioTrack {
+    /// Index in ffprobe's `audio` array (the ffmpeg `0:a:N` selector).
+    pub track_idx: u32,
+    /// Codec from ffprobe (`aac`, `eac3`, `dts`…) — used to decide
+    /// `copy` vs transcode-to-AAC.
+    pub codec: String,
+    /// ISO-639 language tag if known.
+    pub language: Option<String>,
+    /// Human-readable name (typically from the source's stream `title`).
+    pub name: Option<String>,
+    /// True for the source's default track. Becomes `DEFAULT=YES` in the
+    /// master playlist.
+    pub default: bool,
+}
+
+/// Names of the artifacts ffmpeg writes. Centralised so the route layer and
+/// the manager agree on filesystem layout.
+pub const MASTER_PLAYLIST: &str = "master.m3u8";
+pub const VIDEO_VARIANT_DIR: &str = "stream_0";
+pub const VIDEO_VARIANT_PLAYLIST: &str = "stream_0/playlist.m3u8";
 
 #[derive(Clone)]
 pub struct HlsManager {
@@ -68,16 +103,11 @@ impl HlsManager {
         self.inner.base_dir.join(key)
     }
 
-    pub fn segment_path(&self, key: &str, segment_idx: u32) -> PathBuf {
-        self.segment_dir_for(key)
-            .join(format!("segment_{segment_idx:05}.m4s"))
-    }
-
-    /// Read ffmpeg's master playlist, waiting until it carries
-    /// `#EXT-X-ENDLIST` (i.e. ffmpeg fully finished segmenting) so hls.js
-    /// can treat it as VOD and enable seeking. Without ENDLIST the player
-    /// treats the source as a live stream and blocks the timeline at the
-    /// live edge.
+    /// Read the master playlist once the **video variant** has ENDLIST. The
+    /// master playlist itself never carries ENDLIST (it's a manifest of
+    /// variants), but each variant playlist gets one when ffmpeg exits
+    /// cleanly. We poll the video variant because it's the slowest one to
+    /// finish (audio is much smaller).
     ///
     /// We wait up to `max_wait`; if ffmpeg dies prematurely the job's
     /// `finished` notify wakes us up. If everything goes wrong we return
@@ -88,27 +118,31 @@ impl HlsManager {
         max_wait: Duration,
     ) -> Result<String, HlsError> {
         let dir = self.segment_dir_for(key);
-        let path = dir.join("ffmpeg_master.m3u8");
+        let video_playlist = dir.join(VIDEO_VARIANT_PLAYLIST);
+        let master = dir.join(MASTER_PLAYLIST);
         let job = {
             let jobs = self.inner.jobs.lock().await;
             jobs.get(key).cloned()
         };
 
         // Quick path: already complete on disk from a prior run.
-        if let Ok(content) = tokio::fs::read_to_string(&path).await {
+        if let Ok(content) = tokio::fs::read_to_string(&video_playlist).await {
             if content.contains("#EXT-X-ENDLIST") {
-                return Ok(content);
+                if let Ok(m) = tokio::fs::read_to_string(&master).await {
+                    return Ok(m);
+                }
             }
         }
 
-        let target = path.clone();
-        let display = target.display().to_string();
+        let display = master.display().to_string();
         let res = timeout(max_wait, async {
             let poll = async {
                 loop {
-                    if let Ok(content) = tokio::fs::read_to_string(&target).await {
+                    if let Ok(content) = tokio::fs::read_to_string(&video_playlist).await {
                         if content.contains("#EXT-X-ENDLIST") {
-                            return Ok::<String, ()>(content);
+                            if let Ok(m) = tokio::fs::read_to_string(&master).await {
+                                return Ok::<String, ()>(m);
+                            }
                         }
                     }
                     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -118,9 +152,11 @@ impl HlsManager {
                 tokio::select! {
                     r = poll => r,
                     _ = job.finished.notified() => {
-                        // ffmpeg exited (success or not). One last read.
-                        match tokio::fs::read_to_string(&target).await {
-                            Ok(c) if c.contains("#EXT-X-ENDLIST") => Ok(c),
+                        match (
+                            tokio::fs::read_to_string(&video_playlist).await,
+                            tokio::fs::read_to_string(&master).await,
+                        ) {
+                            (Ok(v), Ok(m)) if v.contains("#EXT-X-ENDLIST") => Ok(m),
                             _ => Err(()),
                         }
                     }
@@ -133,7 +169,7 @@ impl HlsManager {
 
         match res {
             Ok(Ok(s)) => Ok(s),
-            _ => tokio::fs::read_to_string(&path)
+            _ => tokio::fs::read_to_string(&master)
                 .await
                 .map_err(|_| HlsError::Timeout(max_wait, display)),
         }
@@ -146,8 +182,7 @@ impl HlsManager {
         &self,
         key: &str,
         source: &Path,
-        audio_track: u32,
-        audio_codec_in_source: Option<&str>,
+        audio_tracks: &[AudioTrack],
     ) -> Result<PathBuf, HlsError> {
         let dir = self.segment_dir_for(key);
 
@@ -156,11 +191,11 @@ impl HlsManager {
             return Ok(j.dir.clone());
         }
         // If a previous job already finished and segments are on disk, no
-        // need to respawn — they'll just be served as static files. We keep
-        // the dedupe entry empty in that case; reaper removed it on exit.
-        // We check for `init.mp4` because it's the first artifact ffmpeg
-        // produces and it stays put even if segments are pruned later.
-        if dir.join("init.mp4").exists() && dir.join("ffmpeg_master.m3u8").exists() {
+        // need to respawn — they'll just be served as static files. We check
+        // for the master + the video variant init.mp4 because that's the
+        // first artifact ffmpeg produces and it stays put even if segments
+        // are pruned later.
+        if dir.join(MASTER_PLAYLIST).exists() && dir.join(VIDEO_VARIANT_DIR).join("init.mp4").exists() {
             return Ok(dir);
         }
 
@@ -173,7 +208,13 @@ impl HlsManager {
         drop(jobs);
 
         std::fs::create_dir_all(&dir)?;
-        let child = spawn_ffmpeg(source, &dir, audio_track, audio_codec_in_source)?;
+        // ffmpeg's HLS muxer doesn't create parent directories for the
+        // segment pattern (`stream_%v/seg_%05d.m4s`), so we pre-create them.
+        // One dir for video + one per audio track.
+        for i in 0..=audio_tracks.len() {
+            std::fs::create_dir_all(dir.join(format!("stream_{i}")))?;
+        }
+        let child = spawn_ffmpeg(source, &dir, audio_tracks)?;
 
         let key_owned = key.to_string();
         let jobs_handle = self.inner.jobs.clone();
@@ -256,6 +297,67 @@ impl HlsManager {
         self.inner.jobs.lock().await.contains_key(key)
     }
 
+    /// Sweep `base_dir` and remove HLS directories whose video variant
+    /// playlist hasn't been touched in the last `max_age`. The mtime is
+    /// updated by the temp_file rename every time ffmpeg writes a new
+    /// segment, so it also reflects "last actively watched" — the player
+    /// triggers ffmpeg to generate segments, which bumps mtime.
+    ///
+    /// HLS data is a *cache* (a re-wrap of the source bytes), so throwing
+    /// it away is free: at next Play the master.m3u8 endpoint kicks ffmpeg
+    /// again and segments regenerate. Currently-running jobs are skipped so
+    /// we never pull data out from under a viewer.
+    ///
+    /// Returns the number of directories removed.
+    pub async fn evict_idle(&self, max_age: std::time::Duration) -> usize {
+        let cutoff = match std::time::SystemTime::now().checked_sub(max_age) {
+            Some(c) => c,
+            None => return 0,
+        };
+        let active: std::collections::HashSet<String> = self
+            .inner
+            .jobs
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect();
+        let read = match std::fs::read_dir(&self.inner.base_dir) {
+            Ok(r) => r,
+            Err(_) => return 0,
+        };
+        let mut evicted = 0usize;
+        for entry in read.flatten() {
+            let path = entry.path();
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if active.contains(&name) {
+                continue;
+            }
+            // Prefer the video variant playlist's mtime — it's bumped on
+            // each segment write, so it tracks "last frame served" closely.
+            let candidate_mtime = std::fs::metadata(path.join(VIDEO_VARIANT_PLAYLIST))
+                .and_then(|m| m.modified())
+                .or_else(|_| std::fs::metadata(path.join(MASTER_PLAYLIST)).and_then(|m| m.modified()))
+                .or_else(|_| std::fs::metadata(&path).and_then(|m| m.modified()));
+            let Ok(mtime) = candidate_mtime else { continue };
+            if mtime > cutoff {
+                continue;
+            }
+            match tokio::fs::remove_dir_all(&path).await {
+                Ok(()) => {
+                    evicted += 1;
+                    tracing::info!(key = %name, "hls: evicted idle cache");
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "hls evict_idle failed");
+                }
+            }
+        }
+        evicted
+    }
+
     pub async fn cleanup_for_torrent(&self, infohash: &str) {
         let prefix = format!("{infohash}_");
         let mut to_remove = Vec::new();
@@ -276,53 +378,118 @@ impl HlsManager {
         let mut jobs = self.inner.jobs.lock().await;
         jobs.retain(|k, _| !k.starts_with(infohash));
     }
+
+    /// Count `.m4s` segments in the **video** variant directory. Used by the
+    /// progress UI: we expose this as the numerator of "X / ~Y segments".
+    pub async fn video_segment_count(&self, key: &str) -> u32 {
+        let dir = self.segment_dir_for(key).join(VIDEO_VARIANT_DIR);
+        let mut n = 0u32;
+        if let Ok(mut rd) = tokio::fs::read_dir(&dir).await {
+            while let Ok(Some(e)) = rd.next_entry().await {
+                if let Some(name) = e.file_name().to_str() {
+                    if name.starts_with("seg_") && name.ends_with(".m4s") {
+                        n += 1;
+                    }
+                }
+            }
+        }
+        n
+    }
+
+    /// Read the video variant playlist's ENDLIST flag.
+    pub async fn video_endlist_present(&self, key: &str) -> bool {
+        let path = self.segment_dir_for(key).join(VIDEO_VARIANT_PLAYLIST);
+        tokio::fs::read_to_string(&path)
+            .await
+            .map(|c| c.contains("#EXT-X-ENDLIST"))
+            .unwrap_or(false)
+    }
 }
 
 fn spawn_ffmpeg(
     source: &Path,
     dir: &Path,
-    audio_track: u32,
-    audio_codec_in_source: Option<&str>,
+    audio_tracks: &[AudioTrack],
 ) -> Result<Child, HlsError> {
-    let master = dir.join("ffmpeg_master.m3u8");
-    let segment_pattern = dir.join("segment_%05d.m4s");
-
-    let copy_audio = matches!(
-        audio_codec_in_source.map(|s| s.to_ascii_lowercase()),
-        Some(c) if c == "aac" || c == "mp3"
-    );
+    if audio_tracks.is_empty() {
+        // Some sources are video-only (silent films, screen recordings…);
+        // we still produce a single video variant in that case.
+    }
+    let segment_pattern = dir.join("stream_%v").join("seg_%05d.m4s");
+    let variant_playlist = dir.join("stream_%v").join("playlist.m3u8");
 
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-hide_banner", "-loglevel", "warning", "-y"])
         .arg("-i")
         .arg(source)
-        .args(["-map", "0:v:0", "-c:v", "copy"])
-        .args(["-map", &format!("0:a:{audio_track}")]);
-    if copy_audio {
-        cmd.args(["-c:a", "copy"]);
-    } else {
-        cmd.args(["-c:a", "aac", "-ac", "2", "-b:a", "192k"]);
+        // Video: copy. We never re-encode video here — that's a different
+        // subsystem (transcode jobs) used only when the source codec isn't
+        // browser-compatible.
+        .args(["-map", "0:v:0", "-c:v", "copy"]);
+
+    // Per-audio-track mapping + codec selection. For each input track
+    // index we take the matching `0:a:N` and pick `copy` if it's already
+    // browser-friendly (AAC/MP3), otherwise transcode to stereo AAC.
+    for (i, t) in audio_tracks.iter().enumerate() {
+        cmd.args(["-map", &format!("0:a:{}", t.track_idx)]);
+        let copy = matches!(t.codec.to_ascii_lowercase().as_str(), "aac" | "mp3");
+        if copy {
+            cmd.args([format!("-c:a:{i}").as_str(), "copy"]);
+        } else {
+            cmd.args([format!("-c:a:{i}").as_str(), "aac"])
+                .args([format!("-ac:a:{i}").as_str(), "2"])
+                .args([format!("-b:a:{i}").as_str(), "192k"]);
+        }
     }
-    cmd.args(["-sn"])
+
+    // Drop any other streams (subtitles, data) — subtitles are served via
+    // the dedicated subtitle endpoint as WebVTT.
+    cmd.args(["-sn", "-dn"]);
+
+    // var_stream_map: ffmpeg's syntax for declaring HLS variant streams +
+    // alternate audio renditions. We always have one video variant
+    // (`v:0`) tied to audio group `aud`; each audio track is one rendition
+    // in that group.
+    let mut map = String::from("v:0");
+    if !audio_tracks.is_empty() {
+        map.push_str(",agroup:aud");
+        for (i, t) in audio_tracks.iter().enumerate() {
+            map.push(' ');
+            map.push_str(&format!("a:{i},agroup:aud"));
+            // ffmpeg accepts `language:` + `name:` here; both must be free
+            // of spaces and quotes. Sanitize aggressively.
+            if let Some(lang) = sanitize(&t.language) {
+                map.push_str(&format!(",language:{lang}"));
+            }
+            let label = sanitize(&t.name)
+                .or_else(|| sanitize(&t.language))
+                .unwrap_or_else(|| format!("Track{i}"));
+            map.push_str(&format!(",name:{label}"));
+            if t.default {
+                map.push_str(",default:yes");
+            }
+        }
+    }
+    cmd.args(["-var_stream_map", &map]);
+
+    cmd.args(["-master_pl_name", MASTER_PLAYLIST])
         .args(["-hls_time", "6"])
         .args(["-hls_list_size", "0"])
-        // fMP4 segments: universal container that supports H.264, HEVC, AV1
-        // and VP9 alike. MPEG-TS cannot carry AV1 in a way browsers can
-        // decode, so a `Troie ... AV1` source plays audio-only there.
+        // fMP4 segments: universal container that supports H.264, HEVC,
+        // AV1 and VP9 alike. MPEG-TS cannot carry AV1 in a way browsers
+        // can decode, so a `... AV1` source plays audio-only there.
         .args(["-hls_segment_type", "fmp4"])
-        .arg("-hls_fmp4_init_filename")
-        .arg("init.mp4")
+        .args(["-hls_fmp4_init_filename", "init.mp4"])
         .args(["-hls_flags", "temp_file+independent_segments"])
         .arg("-hls_segment_filename")
         .arg(&segment_pattern)
         // `event` writes the playlist incrementally, segment-by-segment, and
-        // appends EXT-X-ENDLIST when ffmpeg exits cleanly. Critical for our
-        // flow: on a multi-GB source `vod` buffers the entire playlist until
-        // ffmpeg finishes (30+s), so the very first request for master.m3u8
-        // would time out. With `event` master.m3u8 appears within ~1 second.
+        // appends EXT-X-ENDLIST when ffmpeg exits cleanly. With `vod` the
+        // playlist would buffer until the end of the file, which on a
+        // multi-GB source means clients see no playlist for 30+s.
         .args(["-hls_playlist_type", "event"])
         .args(["-f", "hls"])
-        .arg(&master)
+        .arg(&variant_playlist)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -330,9 +497,9 @@ fn spawn_ffmpeg(
     tracing::info!(
         source = %source.display(),
         dir = %dir.display(),
-        audio_track,
-        copy_audio,
-        "spawning persistent ffmpeg HLS job"
+        audio_count = audio_tracks.len(),
+        var_stream_map = %map,
+        "spawning multi-audio ffmpeg HLS job"
     );
 
     let mut child = cmd.spawn()?;
@@ -346,6 +513,19 @@ fn spawn_ffmpeg(
         });
     }
     Ok(child)
+}
+
+/// Strip characters ffmpeg's var_stream_map parser dislikes (whitespace,
+/// commas, quotes, colons) and keep the result short. Returns `None` if the
+/// input is empty/None or sanitises to nothing.
+fn sanitize(s: &Option<String>) -> Option<String> {
+    let raw = s.as_deref()?;
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(32)
+        .collect();
+    if cleaned.is_empty() { None } else { Some(cleaned) }
 }
 
 async fn await_child_exit(mut child: Child) -> std::io::Result<std::process::ExitStatus> {

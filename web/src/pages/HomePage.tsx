@@ -305,6 +305,7 @@ export function HomePage() {
         providerId={picked?.provider_id ?? null}
         externalId={picked?.external_id ?? null}
         initialTitle={picked?.title}
+        tmdbId={picked?.tmdb_id ?? null}
       />
     </div>
   );

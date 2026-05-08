@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Optional but nice on TV — keeps screen on while a video plays. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Declare we're a Leanback (TV) app but don't *require* the leanback
+         hardware feature — that lets the same APK install on phone for quick
+         emulator iteration if you want, without showing up in the phone
+         launcher (no LAUNCHER intent below, only LEANBACK_LAUNCHER). -->
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />
+    <!-- TVs don't have touchscreens. -->
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <application
+        android:name=".IrisApp"
+        android:allowBackup="false"
+        android:banner="@drawable/banner"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@style/Theme.IrisTV"
+        tools:targetApi="34">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.IrisTV">
+
+            <!-- TV launcher entry point. Without this the app doesn't show up
+                 on the Android TV home screen. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+
+            <!-- Voice search hand-off. When the user long-presses the mic and
+                 says "play <X> on Iris", Google Assistant delivers a
+                 MEDIA_PLAY_FROM_SEARCH intent here; MainActivity reads the
+                 query and routes to SearchScreen with auto-play on. -->
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+            <!-- TV Channels deep-link: clicking a poster on the home
+                 launcher fires `iris://watch/INFOHASH/IDX` and we route
+                 straight to WatchScreen. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="iris" android:host="watch" />
+                <data android:scheme="iris" android:host="home" />
+            </intent-filter>
+        </activity>
+
+        <!-- Searchable metadata for android.intent.action.SEARCH. Required
+             for the global search hooks even though we use a single-screen
+             implementation. -->
+        <meta-data
+            android:name="android.app.default_searchable"
+            android:value=".MainActivity" />
+    </application>
+</manifest>

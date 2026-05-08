@@ -11,6 +11,7 @@ max_storage_gb = 500
 cleanup_threshold_pct = 90
 cleanup_target_pct = 75
 torrent_port = 45100
+hls_idle_eviction_days = 7
 
 [auth]
 jwt_secret = "dev-only-secret-do-not-use-in-prod-please-rotate-aaaaaaaaaaaaaaaaa"

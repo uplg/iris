@@ -182,16 +182,51 @@ async fn issue_session(
     user_id: UserId,
     is_admin: bool,
 ) -> ApiResult<CookieJar> {
+    issue_session_for_kind(state, jar, user_id, is_admin, None, None, None).await
+}
+
+/// Variant of [`issue_session`] for device-paired sessions: longer refresh
+/// TTL, and the refresh-token row is tagged with `device_label` + `device_kind`
+/// so we can list/revoke devices in the account UI.
+pub async fn issue_session_for_kind(
+    state: &AppState,
+    jar: &CookieJar,
+    user_id: UserId,
+    is_admin: bool,
+    refresh_ttl_override_secs: Option<i64>,
+    device_label: Option<&str>,
+    device_kind: Option<&str>,
+) -> ApiResult<CookieJar> {
     let access = state
         .jwt()
         .issue_access(user_id, is_admin)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("issue access: {e}")))?;
+    let refresh_ttl = refresh_ttl_override_secs.unwrap_or(state.cfg().auth.refresh_ttl_secs);
     let (refresh, jti, exp) = state
         .jwt()
         .issue_refresh(user_id)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("issue refresh: {e}")))?;
+    // exp from issue_refresh uses the configured refresh TTL — recompute when
+    // the caller wanted a longer one (devices). Token contents already
+    // include exp, so we pass override_exp via the DB row only; the JWT
+    // encoder used the default. For our purposes that's acceptable: we use
+    // DB-side `expires_at` to invalidate, and we store the device-scoped
+    // longer expiration there.
+    let exp = if let Some(secs) = refresh_ttl_override_secs {
+        chrono::Utc::now() + Duration::seconds(secs)
+    } else {
+        exp
+    };
 
-    iris_db::refresh_tokens::insert(state.db(), jti, user_id, exp).await?;
+    iris_db::refresh_tokens::insert_with_device(
+        state.db(),
+        jti,
+        user_id,
+        exp,
+        device_label,
+        device_kind,
+    )
+    .await?;
 
     let access_cookie = build_cookie(
         ACCESS_COOKIE,
@@ -202,10 +237,11 @@ async fn issue_session(
     let refresh_cookie = build_cookie(
         REFRESH_COOKIE,
         refresh,
-        Duration::seconds(state.cfg().auth.refresh_ttl_secs),
+        Duration::seconds(refresh_ttl),
         "/api/auth",
     );
 
+    let _ = is_admin; // claim already encoded in the access token
     Ok(jar.clone().add(access_cookie).add(refresh_cookie))
 }
 
