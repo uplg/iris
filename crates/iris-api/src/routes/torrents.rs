@@ -302,7 +302,11 @@ async fn prewarm_default_hls(state: &AppState, infohash: &str) {
     };
     let audio_tracks = audio_tracks_for_hls(&probe);
     let key = format!("{infohash}_{idx}");
-    if let Err(e) = state.hls().ensure_job(&key, &path, &audio_tracks).await {
+    if let Err(e) = state
+        .hls()
+        .ensure_job(&key, &path, &audio_tracks, probe.duration_seconds)
+        .await
+    {
         tracing::debug!(error = %e, "prewarm: hls ensure_job failed");
         return;
     }
@@ -495,7 +499,7 @@ async fn hls_status(
     // Idempotent: starts ffmpeg if not yet running, no-op otherwise.
     state
         .hls()
-        .ensure_job(&key, &path, &audio_tracks)
+        .ensure_job(&key, &path, &audio_tracks, probe.duration_seconds)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?;
 
@@ -614,7 +618,7 @@ async fn hls_asset(
     let audio_tracks = audio_tracks_for_hls(&probe);
     state
         .hls()
-        .ensure_job(&key, &path, &audio_tracks)
+        .ensure_job(&key, &path, &audio_tracks, probe.duration_seconds)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?;
 

@@ -145,6 +145,7 @@ impl HlsManager {
         key: &str,
         source: &Path,
         audio_tracks: &[AudioTrack],
+        expected_duration_secs: Option<f64>,
     ) -> Result<PathBuf, HlsError> {
         let dir = self.segment_dir_for(key);
 
@@ -168,7 +169,7 @@ impl HlsManager {
                 tracing::warn!(
                     key = %key,
                     dir = %dir.display(),
-                    "HLS dir is corrupt (`.done` present but variants incomplete) — wiping for re-segmentation",
+                    "HLS dir is corrupt — wiping for re-segmentation",
                 );
                 let _ = tokio::fs::remove_dir_all(&dir).await;
             }
@@ -198,6 +199,17 @@ impl HlsManager {
         // respawn loop. Owning the master here also gives us full control
         // over LANGUAGE / NAME / DEFAULT attributes.
         std::fs::write(dir.join(MASTER_PLAYLIST), build_master_playlist(audio_tracks))?;
+        // Sidecar with the source duration — used by `validate_dir` to
+        // detect partial output (ffmpeg ran on a still-downloading source,
+        // got EOF early, wrote a "complete" playlist totalling much less
+        // than the real duration). Written before the spawn so that even
+        // a future stale-process detection has access to it.
+        if let Some(secs) = expected_duration_secs {
+            let _ = std::fs::write(
+                dir.join(".expected_duration"),
+                format!("{secs:.3}"),
+            );
+        }
         let child = spawn_ffmpeg(source, &dir, audio_tracks)?;
 
         let key_owned = key.to_string();
@@ -666,8 +678,72 @@ async fn validate_dir(dir: &Path, audio_count: usize) -> DirState {
             );
             return DirState::Corrupt;
         }
+        // Duration sanity check: sum every #EXTINF and compare against the
+        // expected source duration (written as a `.expected_duration`
+        // sidecar at job spawn time). When ffmpeg ran on a partial,
+        // still-downloading source the resulting playlist totals a
+        // tiny fraction of the real duration even though it's marked
+        // ENDLIST. We allow a 5 % slack — real outputs usually land
+        // within 1 % because every segment is keyframe-aligned.
+        if let Some(expected) = expected_duration(dir).await {
+            let total: f64 = content
+                .lines()
+                .filter_map(|l| l.strip_prefix("#EXTINF:"))
+                .filter_map(|s| s.split(',').next())
+                .filter_map(|n| n.parse::<f64>().ok())
+                .sum();
+            if expected > 0.0 && total < expected * 0.95 {
+                tracing::warn!(
+                    stream_dir = %stream_dir.display(),
+                    expected_secs = expected,
+                    actual_secs = total,
+                    "HLS playlist duration is way under the expected source duration (ffmpeg ran on a partial source)",
+                );
+                return DirState::Corrupt;
+            }
+        }
+        // Last-segment sanity: a video segment of < 4 KB is almost
+        // certainly a truncated tail (real fMP4 frames are tens of KB
+        // minimum). For the audio variants we tolerate small last
+        // segments since they can legitimately end short.
+        if i == 0 {
+            if let Some(last_seg_bytes) = last_segment_size(&stream_dir).await {
+                if last_seg_bytes < 4096 {
+                    tracing::warn!(
+                        stream_dir = %stream_dir.display(),
+                        last_seg_bytes,
+                        "HLS video variant's last segment is suspiciously small — likely truncated",
+                    );
+                    return DirState::Corrupt;
+                }
+            }
+        }
     }
     DirState::Clean
+}
+
+async fn expected_duration(dir: &Path) -> Option<f64> {
+    tokio::fs::read_to_string(dir.join(".expected_duration"))
+        .await
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+}
+
+async fn last_segment_size(stream_dir: &Path) -> Option<u64> {
+    let mut last_idx: Option<u32> = None;
+    let mut entries = tokio::fs::read_dir(stream_dir).await.ok()?;
+    while let Ok(Some(e)) = entries.next_entry().await {
+        if let Some(name) = e.file_name().to_str() {
+            if let Some(stem) = name.strip_prefix("seg_").and_then(|s| s.strip_suffix(".m4s")) {
+                if let Ok(idx) = stem.parse::<u32>() {
+                    last_idx = Some(last_idx.map_or(idx, |prev| prev.max(idx)));
+                }
+            }
+        }
+    }
+    let idx = last_idx?;
+    let path = stream_dir.join(format!("seg_{idx:05}.m4s"));
+    tokio::fs::metadata(&path).await.ok().map(|m| m.len())
 }
 
 /// Count `seg_NNNNN.m4s` files in a single variant directory.
