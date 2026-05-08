@@ -31,6 +31,10 @@ pub fn router() -> Router<AppState> {
         .route("/{infohash}/files/{idx}/play", get(play_file).head(play_file))
         .route("/{infohash}/files/{idx}/probe", get(probe_file))
         .route(
+            "/{infohash}/files/{idx}/hls/{audio_idx}/status",
+            get(hls_status),
+        )
+        .route(
             "/{infohash}/files/{idx}/hls/{audio_idx}/{asset}",
             get(hls_asset),
         )
@@ -404,6 +408,102 @@ fn map_engine_err(e: iris_torrent::EngineError) -> ApiError {
         }
         iris_torrent::EngineError::Librqbit(e) => ApiError::Internal(e),
     }
+}
+
+/// Non-blocking poll endpoint: starts ffmpeg if it's not running yet, then
+/// returns the current state on disk (segment count, ENDLIST present, error
+/// flag). The frontend polls this while the player is hidden so the user
+/// sees real progress instead of a silent black box.
+#[derive(Debug, Serialize)]
+pub struct HlsStatus {
+    pub ffmpeg_running: bool,
+    pub segments_produced: u32,
+    pub estimated_total_segments: Option<u32>,
+    pub endlist_present: bool,
+    pub error: Option<String>,
+}
+
+async fn hls_status(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path((infohash, idx, audio_idx)): Path<(String, usize, u32)>,
+) -> ApiResult<Json<HlsStatus>> {
+    let infohash = infohash.to_ascii_lowercase();
+    let _row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let path = state
+        .engine()
+        .file_path(&infohash, idx)
+        .map_err(map_engine_err)?;
+    if !path.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "file not yet on disk: {}",
+            path.display()
+        )));
+    }
+
+    // Cached probe powers both the codec selection and the duration estimate.
+    let probe = state
+        .probes()
+        .get_or_probe(&infohash, idx, &path)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
+    let audio_codec = probe
+        .audio
+        .iter()
+        .find(|a| a.index == audio_idx as usize)
+        .map(|a| a.codec.clone())
+        .ok_or_else(|| ApiError::BadRequest(format!("audio track {audio_idx} not found")))?;
+
+    let key = format!("{infohash}_{idx}_a{audio_idx}");
+
+    // Idempotent: starts ffmpeg if not yet running, no-op otherwise.
+    state
+        .hls()
+        .ensure_job(&key, &path, audio_idx, Some(&audio_codec))
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?;
+
+    let dir = state.hls().segment_dir_for(&key);
+    let master_path = dir.join("ffmpeg_master.m3u8");
+
+    let mut segments_produced: u32 = 0;
+    if let Ok(mut rd) = tokio::fs::read_dir(&dir).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with("segment_") && name.ends_with(".m4s") {
+                    segments_produced += 1;
+                }
+            }
+        }
+    }
+
+    let (endlist_present, ffmpeg_running) = match tokio::fs::read_to_string(&master_path).await {
+        Ok(c) => {
+            let endlist = c.contains("#EXT-X-ENDLIST");
+            // ffmpeg is "running" if the job is still in our dedupe map.
+            let still_running = state.hls().is_job_active(&key).await;
+            (endlist, !endlist && still_running)
+        }
+        Err(_) => (false, state.hls().is_job_active(&key).await),
+    };
+
+    // Rough estimate of total segments based on probed duration. Actual
+    // segment durations vary (keyframe-aligned), but as a progress-bar
+    // denominator this is good enough.
+    let estimated_total_segments = probe
+        .duration_seconds
+        .filter(|d| *d > 0.0)
+        .map(|d| (d / 6.0).ceil() as u32);
+
+    Ok(Json(HlsStatus {
+        ffmpeg_running,
+        segments_produced,
+        estimated_total_segments,
+        endlist_present,
+        error: None,
+    }))
 }
 
 async fn hls_asset(

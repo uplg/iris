@@ -297,6 +297,9 @@ export const torrents = {
   /** HLS master playlist for the given audio track. */
   hlsUrl: (infohash: string, idx: number, audioIdx: number) =>
     `/api/torrents/${infohash}/files/${idx}/hls/${audioIdx}/master.m3u8`,
+  /** Non-blocking poll endpoint — kicks the ffmpeg job and reports progress. */
+  hlsStatus: (infohash: string, idx: number, audioIdx: number) =>
+    api.get<HlsStatus>(`/torrents/${infohash}/files/${idx}/hls/${audioIdx}/status`),
   probe: (infohash: string, idx: number) =>
     api.get<MediaProbe>(`/torrents/${infohash}/files/${idx}/probe`),
   subtitleUrl: (infohash: string, idx: number, streamIdx: number) =>
@@ -336,6 +339,14 @@ export type AudioStream = {
   default: boolean;
   forced: boolean;
   browser_compatible: boolean;
+};
+
+export type HlsStatus = {
+  ffmpeg_running: boolean;
+  segments_produced: number;
+  estimated_total_segments: number | null;
+  endlist_present: boolean;
+  error: string | null;
 };
 
 export type SubtitleStream = {

@@ -96,6 +96,23 @@ export function WatchPage() {
     enabled: !!infohash,
   });
 
+  // Poll the HLS prep status while we wait for ffmpeg to write ENDLIST.
+  // This is the loading-state telemetry the user actually wants to see —
+  // segments-produced counter ticking up so they know things are alive.
+  const hlsStatusQ = useQuery({
+    queryKey: ["hls-status", infohash, fileIdx, audioIdx],
+    queryFn: () => torrents.hlsStatus(infohash!, fileIdx, audioIdx!),
+    enabled: !!infohash && audioIdx != null,
+    refetchInterval: (q) => {
+      const data = q.state.data;
+      // Stop polling once the playlist is finalized.
+      return data?.endlist_present ? false : 1000;
+    },
+    retry: 8,
+    retryDelay: 2000,
+  });
+  const masterReady = hlsStatusQ.data?.endlist_present === true;
+
   // All progress for this torrent (powers the "watched %" per episode in the
   // other-files panel).
   const torrentProgressQ = useQuery({
@@ -295,7 +312,7 @@ export function WatchPage() {
       )}
 
       <div className="aspect-video w-full overflow-hidden rounded-lg border border-border bg-black">
-        {hlsSrc && !progressQ.isPending && audioIdx != null ? (
+        {hlsSrc && !progressQ.isPending && audioIdx != null && masterReady ? (
           <MediaPlayer
             // Including startPosition in the key forces a clean re-mount when
             // we navigate to a different saved offset (which never happens
@@ -375,11 +392,13 @@ export function WatchPage() {
               if (isHLSProvider(provider)) {
                 provider.config = {
                   ...provider.config,
-                  manifestLoadingTimeOut: 90_000,
-                  manifestLoadingMaxRetry: 4,
+                  // We pre-validated ENDLIST via the status endpoint, so
+                  // these timeouts are pure defense in depth.
+                  manifestLoadingTimeOut: 30_000,
+                  manifestLoadingMaxRetry: 3,
                   manifestLoadingRetryDelay: 1000,
-                  levelLoadingTimeOut: 90_000,
-                  levelLoadingMaxRetry: 4,
+                  levelLoadingTimeOut: 30_000,
+                  levelLoadingMaxRetry: 3,
                   fragLoadingTimeOut: 60_000,
                   fragLoadingMaxRetry: 6,
                   // Tell hls.js to load straight from the saved position
@@ -414,6 +433,8 @@ export function WatchPage() {
             probeError={probeQ.error}
             progressPending={progressQ.isPending}
             audioReady={audioIdx != null}
+            hlsStatus={hlsStatusQ.data ?? null}
+            hlsError={hlsStatusQ.error}
           />
         )}
       </div>
@@ -651,12 +672,16 @@ function PlayerLoadingStatus({
   probeError,
   progressPending,
   audioReady,
+  hlsStatus,
+  hlsError,
 }: {
   torrent: TorrentView;
   probeFetching: boolean;
   probeError: unknown;
   progressPending: boolean;
   audioReady: boolean;
+  hlsStatus: import("@/lib/api").HlsStatus | null;
+  hlsError: unknown;
 }) {
   const fileOnDisk =
     probeError == null ||
@@ -664,8 +689,9 @@ function PlayerLoadingStatus({
     !probeError.message.includes("not yet on disk");
   const downloadPct = Math.min(100, Math.max(0, torrent.progress_pct));
 
-  type Step = { label: string; sub?: string };
+  type Step = { label: string; sub?: string; pct?: number };
   let step: Step;
+  let isError = torrent.state === "error";
   if (torrent.state === "error") {
     step = {
       label: "Torrent error",
@@ -680,6 +706,7 @@ function PlayerLoadingStatus({
     step = {
       label: `Buffering first bytes · ${downloadPct.toFixed(0)}%`,
       sub: `${formatSize(torrent.download_speed_bps)}/s · ${torrent.peers} peer${torrent.peers === 1 ? "" : "s"}`,
+      pct: downloadPct,
     };
   } else if (probeFetching) {
     step = {
@@ -694,14 +721,28 @@ function PlayerLoadingStatus({
     step = {
       label: "Selecting audio track…",
     };
+  } else if (hlsError instanceof Error) {
+    isError = true;
+    step = { label: "Playback prep failed", sub: hlsError.message };
+  } else if (!hlsStatus) {
+    step = { label: "Starting transcoder…" };
+  } else if (!hlsStatus.endlist_present) {
+    const total = hlsStatus.estimated_total_segments;
+    const seg = hlsStatus.segments_produced;
+    const pct = total && total > 0 ? Math.min(99, (seg / total) * 100) : undefined;
+    step = {
+      label: total
+        ? `Pre-segmenting · ${seg} / ~${total} segments`
+        : `Pre-segmenting · ${seg} segments`,
+      sub: "ffmpeg is writing the HLS playlist. Seek will be enabled once it finishes.",
+      pct,
+    };
   } else {
     step = {
-      label: "Preparing playback…",
-      sub: "Waiting for ffmpeg to write the first segments.",
+      label: "Loading first frames…",
+      sub: "Almost there.",
     };
   }
-
-  const isError = torrent.state === "error";
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
@@ -722,9 +763,9 @@ function PlayerLoadingStatus({
           <span className="text-xs text-muted-foreground">{step.sub}</span>
         )}
       </div>
-      {!isError && torrent.total_size_bytes > 0 && downloadPct < 100 && (
+      {!isError && step.pct != null && (
         <div className="w-64">
-          <Progress value={downloadPct} className="h-1" />
+          <Progress value={step.pct} className="h-1" />
         </div>
       )}
     </div>

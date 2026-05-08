@@ -249,6 +249,13 @@ impl HlsManager {
         }
     }
 
+    /// Whether an ffmpeg job is currently registered for `key`. The reaper
+    /// removes the entry on exit, so this returns `false` once ffmpeg is
+    /// done — even if segments are still on disk.
+    pub async fn is_job_active(&self, key: &str) -> bool {
+        self.inner.jobs.lock().await.contains_key(key)
+    }
+
     pub async fn cleanup_for_torrent(&self, infohash: &str) {
         let prefix = format!("{infohash}_");
         let mut to_remove = Vec::new();
