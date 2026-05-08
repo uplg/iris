@@ -7,6 +7,8 @@ use iris_media::{HlsManager, ProbeCache};
 use iris_providers::ProviderRegistry;
 use iris_torrent::{Engine, Gc};
 
+use crate::tmdb::TmdbClient;
+
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Inner>,
@@ -21,6 +23,7 @@ struct Inner {
     pub hls: HlsManager,
     pub gc: Gc,
     pub probes: ProbeCache,
+    pub tmdb: Option<TmdbClient>,
 }
 
 impl AppState {
@@ -32,6 +35,16 @@ impl AppState {
         hls: HlsManager,
         gc: Gc,
     ) -> Self {
+        let tmdb = cfg
+            .tmdb
+            .as_ref()
+            .and_then(|c| match TmdbClient::new(c.api_key.clone()) {
+                Ok(client) => Some(client),
+                Err(e) => {
+                    tracing::warn!(error = %e, "tmdb client init failed; metadata disabled");
+                    None
+                }
+            });
         let jwt = Issuer::new(
             &cfg.auth.jwt_secret,
             cfg.server.public_url.clone(),
@@ -48,6 +61,7 @@ impl AppState {
                 hls,
                 gc,
                 probes: ProbeCache::new(),
+                tmdb,
             }),
         }
     }
@@ -75,6 +89,9 @@ impl AppState {
     }
     pub fn probes(&self) -> &ProbeCache {
         &self.inner.probes
+    }
+    pub fn tmdb(&self) -> Option<&TmdbClient> {
+        self.inner.tmdb.as_ref()
     }
 }
 

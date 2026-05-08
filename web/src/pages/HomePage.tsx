@@ -1,6 +1,6 @@
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Play, Search as SearchIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, Film, Layers, Play, Search as SearchIcon, Tv } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,9 +12,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Poster } from "@/components/Poster";
 import {
   providers as providersApi,
   search,
+  type MediaKind,
   type SearchResult,
   type SortField,
   type SortOrder,
@@ -41,11 +44,12 @@ export function HomePage() {
   const [page, setPage] = useState(1);
   const [sortBy, setSortBy] = useState<SortField>("seeders");
   const [order, setOrder] = useState<SortOrder>("desc");
+  const [kind, setKind] = useState<MediaKind | null>(null);
 
-  // Reset to page 1 when query, sort field or order changes.
+  // Reset to page 1 when query, sort field, order or kind changes.
   useEffect(() => {
     setPage(1);
-  }, [debounced, sortBy, order]);
+  }, [debounced, sortBy, order, kind]);
 
   const providersQ = useQuery({
     queryKey: ["providers"],
@@ -54,13 +58,14 @@ export function HomePage() {
   });
 
   const { data, isFetching, error } = useQuery({
-    queryKey: ["search", debounced, page, sortBy, order],
+    queryKey: ["search", debounced, page, sortBy, order, kind],
     queryFn: () =>
       search.query(debounced, {
         page,
         limit: PAGE_SIZE,
         sort_by: sortBy,
         order,
+        kind: kind ?? undefined,
       }),
     enabled: debounced.length >= 2,
     placeholderData: keepPreviousData,
@@ -114,15 +119,38 @@ export function HomePage() {
                   : "No search providers are configured."}
           </p>
         </div>
-        <div className="relative max-w-2xl">
-          <SearchIcon className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            autoFocus
-            placeholder="Title, year, anything…"
-            className="h-12 pl-9 text-base"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative min-w-0 flex-1">
+            <SearchIcon className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              placeholder="Title, year, anything…"
+              className="h-12 pl-9 text-base"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+          <ToggleGroup
+            type="single"
+            value={kind ?? "all"}
+            onValueChange={(v) =>
+              setKind(v === "movie" || v === "tv" ? v : null)
+            }
+            className="shrink-0"
+          >
+            <ToggleGroupItem value="all" aria-label="All categories">
+              <Layers className="size-4" />
+              All
+            </ToggleGroupItem>
+            <ToggleGroupItem value="movie" aria-label="Movies only">
+              <Film className="size-4" />
+              Movies
+            </ToggleGroupItem>
+            <ToggleGroupItem value="tv" aria-label="TV only">
+              <Tv className="size-4" />
+              TV
+            </ToggleGroupItem>
+          </ToggleGroup>
         </div>
       </section>
 
@@ -144,6 +172,7 @@ export function HomePage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[60px]"></TableHead>
                   <SortableTh
                     label="Title"
                     field="title"
@@ -195,6 +224,14 @@ export function HomePage() {
                     className="cursor-pointer"
                     onClick={() => setPicked(r)}
                   >
+                    <TableCell className="align-top">
+                      <Poster
+                        tmdbId={r.tmdb_id}
+                        kind={r.kind}
+                        size="sm"
+                        alt={r.title}
+                      />
+                    </TableCell>
                     <TableCell className="max-w-0 align-top">
                       <div className="truncate font-medium" title={r.title}>
                         {r.title}

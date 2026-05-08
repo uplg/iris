@@ -21,7 +21,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/me", routes::me::router())
         .nest("/search", routes::search::router())
         .nest("/torrents", routes::torrents::router())
-        .nest("/providers", routes::providers::router());
+        .nest("/providers", routes::providers::router())
+        .nest("/metadata", routes::metadata::router());
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

@@ -123,8 +123,11 @@ export type SearchResult = {
   freeleech: boolean;
   uploader: string | null;
   uploaded_at: string | null;
+  tmdb_id: number | null;
+  kind: MediaKind | null;
 };
 
+export type MediaKind = "movie" | "tv";
 export type SortField = "title" | "size" | "seeders" | "leechers" | "uploaded";
 export type SortOrder = "asc" | "desc";
 
@@ -147,6 +150,7 @@ export type SearchOpts = {
   limit?: number;
   sort_by?: SortField;
   order?: SortOrder;
+  kind?: MediaKind;
 };
 
 export const search = {
@@ -156,9 +160,36 @@ export const search = {
     if (opts.limit) qs.set("limit", String(opts.limit));
     if (opts.sort_by) qs.set("sort_by", opts.sort_by);
     if (opts.order) qs.set("order", opts.order);
+    if (opts.kind) qs.set("kind", opts.kind);
     return api.get<AggregatedResults>(`/search?${qs}`);
   },
 };
+
+export type TmdbMetadata = {
+  kind: "movie" | "tv";
+  tmdb_id: number;
+  title: string;
+  overview: string | null;
+  year: number | null;
+  poster_path: string | null;
+  backdrop_path: string | null;
+  vote_score: number | null;
+  vote_count: number | null;
+  genres: string[];
+};
+
+export const metadata = {
+  tmdb: (id: number) => api.get<TmdbMetadata>(`/metadata/tmdb/${id}`),
+};
+
+/** Build a TMDB image URL. Sizes: w92, w154, w185, w342, w500, original. */
+export function tmdbImage(
+  path: string | null | undefined,
+  size: "w92" | "w154" | "w185" | "w342" | "w500" | "original" = "w185",
+): string | null {
+  if (!path) return null;
+  return `https://image.tmdb.org/t/p/${size}${path}`;
+}
 
 export type ProviderInfo = {
   id: string;

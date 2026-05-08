@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
+import { Play } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { me } from "@/lib/api";
 
@@ -30,26 +31,34 @@ export function ContinueWatching() {
           return (
             <li
               key={`${it.infohash}:${it.file_idx}`}
-              className="rounded-lg border border-border bg-card/40 p-3 transition hover:border-border/60 hover:bg-card/70"
+              className="group overflow-hidden rounded-lg border border-border bg-card/40 transition hover:border-border/60 hover:bg-card/70"
             >
-              <Link to={`/watch/${it.infohash}/${it.file_idx}`} className="grid gap-1.5">
-                <span className="line-clamp-2 break-words text-sm font-medium" title={primary}>
-                  {primary}
-                </span>
-                {secondary && (
-                  <span
-                    className="line-clamp-1 break-words text-[11px] text-muted-foreground"
-                    title={secondary}
-                  >
-                    {secondary}
+              <Link to={`/watch/${it.infohash}/${it.file_idx}`} className="block">
+                <div className="relative flex aspect-video items-center justify-center bg-muted/30 text-muted-foreground/50 transition group-hover:text-foreground">
+                  <Play className="size-10" />
+                  <Progress
+                    value={pct}
+                    className="absolute bottom-0 left-0 right-0 h-1 rounded-none"
+                  />
+                </div>
+                <div className="grid gap-1 p-3">
+                  <span className="line-clamp-2 break-words text-sm font-medium" title={primary}>
+                    {primary}
                   </span>
-                )}
-                <Progress value={pct} className="h-1" />
-                <span className="text-[11px] text-muted-foreground">
-                  {pct > 0
-                    ? `${pct.toFixed(0)}% · ${formatTimecode(it.position_seconds)}`
-                    : "Just started"}
-                </span>
+                  {secondary && (
+                    <span
+                      className="line-clamp-1 break-words text-[11px] text-muted-foreground"
+                      title={secondary}
+                    >
+                      {secondary}
+                    </span>
+                  )}
+                  <span className="text-[11px] text-muted-foreground">
+                    {pct > 0
+                      ? `${pct.toFixed(0)}% · ${formatTimecode(it.position_seconds)}`
+                      : "Just started"}
+                  </span>
+                </div>
               </Link>
             </li>
           );

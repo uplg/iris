@@ -21,7 +21,7 @@ use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::Result;
 use iris_core::search::{
-    ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, SortField, SortOrder,
+    MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, SortField, SortOrder,
     TorrentSource,
 };
 use reqwest::header::{
@@ -230,6 +230,15 @@ impl SearchProvider for Torr9 {
                 .to_string(),
             ));
         }
+        if let Some(kind) = q.kind {
+            qs.push((
+                "category",
+                match kind {
+                    MediaKind::Movie => "film".to_string(),
+                    MediaKind::Tv => "tv".to_string(),
+                },
+            ));
+        }
 
         let resp: SearchResponse = self
             .authed_get(|http| http.get(url.clone()).query(&qs))
@@ -333,17 +342,21 @@ struct Torrent {
     seeders: Option<u32>,
     #[serde(default)]
     leechers: Option<u32>,
+    #[serde(default)]
+    tmdb_id: Option<u64>,
 }
 
 impl Torrent {
     fn into_search_result(self, provider_id: &str) -> SearchResult {
-        let category = match (self.category_name, self.parent_category_name) {
+        let category = match (self.category_name.clone(), self.parent_category_name.clone()) {
             (Some(c), Some(p)) if c != p => Some(format!("{p} / {c}")),
             (Some(c), _) => Some(c),
             (None, Some(p)) => Some(p),
             (None, None) => None,
         };
         let year = extract_year(&self.title);
+        let kind = derive_kind(self.parent_category_name.as_deref(), self.category_name.as_deref());
+        let tmdb_id = self.tmdb_id.filter(|id| *id > 0);
         SearchResult {
             provider_id: provider_id.to_string(),
             external_id: self.id.to_string(),
@@ -359,6 +372,24 @@ impl Torrent {
             freeleech: self.is_freeleech,
             uploader: self.uploader_name,
             uploaded_at: self.upload_date,
+            tmdb_id,
+            kind,
         }
     }
+}
+
+/// Best-effort mapping from torr9's localized category labels to our coarse
+/// `MediaKind`. We look at the parent first (broadest signal) then the leaf.
+fn derive_kind(parent: Option<&str>, leaf: Option<&str>) -> Option<MediaKind> {
+    let test = |s: &str| {
+        let lower = s.to_ascii_lowercase();
+        if lower.contains("films") || lower == "film" || lower.contains("animation") {
+            return Some(MediaKind::Movie);
+        }
+        if lower.contains("séries") || lower.contains("series") || lower.contains("anime") || lower.contains("manga") {
+            return Some(MediaKind::Tv);
+        }
+        None
+    };
+    parent.and_then(test).or_else(|| leaf.and_then(test))
 }

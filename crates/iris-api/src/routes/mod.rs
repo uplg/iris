@@ -3,6 +3,7 @@ pub mod auth;
 pub mod extract;
 pub mod health;
 pub mod me;
+pub mod metadata;
 pub mod providers;
 pub mod search;
 pub mod torrents;

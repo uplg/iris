@@ -13,6 +13,18 @@ pub struct SearchQuery {
     pub sort_by: Option<SortField>,
     #[serde(default)]
     pub order: Option<SortOrder>,
+    /// Filter results to a specific media kind (movies or TV). Provider
+    /// implementations translate this to their native taxonomy. `None`
+    /// means "everything".
+    #[serde(default)]
+    pub kind: Option<MediaKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Movie,
+    Tv,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +81,14 @@ pub struct SearchResult {
     pub uploader: Option<String>,
     #[serde(default)]
     pub uploaded_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// TMDB id (movie or TV), captured from providers that index it. Powers
+    /// poster + metadata enrichment via `/api/metadata/tmdb/:id`.
+    #[serde(default)]
+    pub tmdb_id: Option<u64>,
+    /// Coarse classification (movie / tv / unknown), derived from the
+    /// provider's category taxonomy.
+    #[serde(default)]
+    pub kind: Option<MediaKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

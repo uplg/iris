@@ -2,7 +2,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::routing::get;
-use iris_core::search::{SearchQuery, SortField, SortOrder};
+use iris_core::search::{MediaKind, SearchQuery, SortField, SortOrder};
 use iris_providers::registry::AggregatedResults;
 use serde::Deserialize;
 
@@ -21,6 +21,7 @@ pub struct SearchParams {
     pub limit: Option<u32>,
     pub sort_by: Option<SortField>,
     pub order: Option<SortOrder>,
+    pub kind: Option<MediaKind>,
 }
 
 async fn search(
@@ -34,6 +35,7 @@ async fn search(
         limit: params.limit,
         sort_by: params.sort_by,
         order: params.order,
+        kind: params.kind,
     };
     let agg = state.providers().search_all(&q).await;
     Ok(Json(agg))

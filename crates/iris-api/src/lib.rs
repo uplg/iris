@@ -3,6 +3,7 @@ pub mod error;
 pub mod observability;
 pub mod routes;
 pub mod state;
+pub mod tmdb;
 
 use std::path::PathBuf;
 

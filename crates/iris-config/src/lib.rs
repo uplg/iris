@@ -28,7 +28,14 @@ pub struct AppConfig {
     pub storage: StorageConfig,
     pub auth: AuthConfig,
     #[serde(default)]
+    pub tmdb: Option<TmdbConfig>,
+    #[serde(default)]
     pub providers_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TmdbConfig {
+    pub api_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
