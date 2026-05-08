@@ -514,18 +514,20 @@ async fn hls_asset(
     Path((infohash, idx, asset)): Path<(String, usize, String)>,
 ) -> ApiResult<Response> {
     let infohash = infohash.to_ascii_lowercase();
-    let _row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    tracing::debug!(infohash = %infohash, idx, asset = %asset, "hls_asset enter");
+
     if !is_safe_hls_asset(&asset) {
         return Err(ApiError::BadRequest("invalid HLS asset path".into()));
     }
-
+    let _row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     let path = state
         .engine()
         .file_path(&infohash, idx)
         .map_err(map_engine_err)?;
-    if !path.exists() {
+    let path_exists = tokio::fs::try_exists(&path).await.unwrap_or(false);
+    if !path_exists {
         return Err(ApiError::BadRequest(format!(
             "file not yet on disk: {}",
             path.display()
@@ -548,19 +550,24 @@ async fn hls_asset(
         "application/octet-stream"
     };
 
-    // Hot path: the asset is on disk → serve it now, no probe, no Mutex.
-    // hls.js issues 5-10 parallel segment fetches; routing each through
-    // ensure_job + ProbeCache turns a 1-syscall read into a queued/locked
-    // round-trip. Master.m3u8 is hand-written at spawn time, variant
-    // playlists exist as soon as ffmpeg's first segment lands, and
-    // segment files appear monotonically — there's nothing to coordinate
-    // for any of them once they exist.
-    if asset_path.is_file() {
+    // Hot path: read the asset directly; if the read succeeds we serve
+    // it without ever touching ProbeCache or the HLS jobs Mutex. Both
+    // existence-test and read are async so a slow rootless overlayfs
+    // doesn't park the runtime.
+    if let Ok(bytes) = tokio::fs::read(&asset_path).await {
+        tracing::debug!(asset = %asset, size = bytes.len(), "hls_asset hot serve");
         if asset == iris_media::hls::MASTER_PLAYLIST {
             let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
         }
-        return serve_static_file(&asset_path, mime).await;
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, mime)
+            .header(header::CACHE_CONTROL, "no-store")
+            .header(header::CONTENT_LENGTH, bytes.len())
+            .body(Body::from(bytes))
+            .unwrap());
     }
+    tracing::debug!(asset = %asset, "hls_asset cold path (file missing on disk)");
 
     // Cold path: file isn't there yet. Kick the ffmpeg job (idempotent if
     // already running) and wait for the asset to appear.
