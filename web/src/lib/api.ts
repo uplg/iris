@@ -253,6 +253,11 @@ export type ContinueWatchingItem = {
   infohash: string;
   torrent_name: string;
   tmdb_id: number | null;
+  /** True only if the server matched the TMDB runtime against the file's
+   *  probed duration. Until then frontends should NOT fetch TMDB metadata
+   *  for this entry — the wrong-poster / wrong-title experience is worse
+   *  than no metadata at all. */
+  tmdb_verified: boolean;
   file_idx: number;
   file_path: string | null;
   position_seconds: number;
@@ -333,15 +338,15 @@ export type TorrentSnapshot = {
 export type TorrentView = TorrentSnapshot & {
   id: string;
   added_by: string;
-  /** Public display name of the user that added this torrent. The email
-   *  stays private to the API; this is what gets rendered everywhere
-   *  the UI says "added by …". */
+  /** Public display name of the user that added this torrent. */
   added_by_name: string;
   added_at: string;
   last_played_at: string | null;
   source_provider: string | null;
   source_external_id: string | null;
   tmdb_id: number | null;
+  /** Server-validated TMDB association (runtime matches probed duration ±15 %). */
+  tmdb_verified: boolean;
 };
 
 export type IngestResponse = {

@@ -300,6 +300,7 @@ async fn prewarm_default_hls(state: &AppState, infohash: &str) {
             return;
         }
     };
+    verify_tmdb_match(state, infohash, probe.duration_seconds).await;
     let audio_tracks = audio_tracks_for_hls(&probe);
     let key = format!("{infohash}_{idx}");
     if let Err(e) = state
@@ -315,6 +316,54 @@ async fn prewarm_default_hls(state: &AppState, infohash: &str) {
         idx,
         audio_count = audio_tracks.len(),
         "prewarmed multi-audio HLS"
+    );
+}
+
+/// Tolerance used when matching TMDB's declared runtime against the file's
+/// probed duration. 15 % covers minor encode-to-encode drift, intro/outro
+/// promo additions, and the minute or two of credits that some releases
+/// trim. It does NOT cover director's cuts (often +20-30 %) — those
+/// stay marked unverified, which is correct: a director's cut isn't the
+/// movie TMDB has metadata for.
+const TMDB_RUNTIME_TOLERANCE: f64 = 0.15;
+
+/// Confirm or reject a torrent's `tmdb_id` by matching declared runtime
+/// against the file's probed duration. Idempotent: once verified, never
+/// re-checked. No-op when `tmdb_id` is missing or the runtime is unknown.
+async fn verify_tmdb_match(
+    state: &AppState,
+    infohash: &str,
+    probed_duration_secs: Option<f64>,
+) {
+    let row = match iris_db::torrents::find_by_infohash(state.db(), infohash).await {
+        Ok(Some(r)) => r,
+        _ => return,
+    };
+    if row.tmdb_verified {
+        return;
+    }
+    let Some(tmdb_id) = row.tmdb_id.filter(|id| *id > 0) else { return };
+    let Some(probed) = probed_duration_secs.filter(|d| *d > 0.0) else { return };
+    let Some(tmdb) = state.tmdb() else { return };
+    let Some(meta) = tmdb.lookup(tmdb_id as u64).await else { return };
+    let Some(tmdb_minutes) = meta.runtime_minutes.filter(|m| *m > 0) else { return };
+    let tmdb_secs = f64::from(tmdb_minutes) * 60.0;
+    let diff = (probed - tmdb_secs).abs() / tmdb_secs;
+    let verified = diff < TMDB_RUNTIME_TOLERANCE;
+    if let Err(e) =
+        iris_db::torrents::set_tmdb_verified(state.db(), infohash, verified).await
+    {
+        tracing::warn!(error = %e, infohash, "tmdb verify: db write failed");
+        return;
+    }
+    tracing::info!(
+        infohash,
+        tmdb_id,
+        probed_secs = probed,
+        tmdb_secs,
+        diff_pct = diff * 100.0,
+        verified,
+        "tmdb verification result",
     );
 }
 
@@ -349,6 +398,11 @@ pub struct TorrentView {
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
     pub tmdb_id: Option<i64>,
+    /// True only when we've matched the TMDB runtime against the file's
+    /// probed duration within ±15 %. Frontends use the `(tmdb_id,
+    /// tmdb_verified=true)` pair to decide whether to fetch posters /
+    /// titles from TMDB; otherwise they stick with the filename.
+    pub tmdb_verified: bool,
     #[serde(flatten)]
     pub snapshot: TorrentSnapshot,
 }
@@ -370,6 +424,7 @@ async fn list(
                 source_provider: row.source_provider,
                 source_external_id: row.source_external_id,
                 tmdb_id: row.tmdb_id,
+                tmdb_verified: row.tmdb_verified,
                 snapshot,
             });
         }
@@ -398,6 +453,7 @@ async fn get_one(
         source_provider: row.source_provider,
         source_external_id: row.source_external_id,
         tmdb_id: row.tmdb_id,
+        tmdb_verified: row.tmdb_verified,
         snapshot,
     }))
 }
@@ -509,6 +565,9 @@ async fn hls_status(
         .get_or_probe(&infohash, idx, &path)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
+    // Opportunistic TMDB verification — runs at most once per torrent
+    // (idempotent on `tmdb_verified=true`), so the cost is negligible.
+    verify_tmdb_match(&state, &infohash, probe.duration_seconds).await;
     let audio_tracks = audio_tracks_for_hls(&probe);
     let key = format!("{infohash}_{idx}");
 

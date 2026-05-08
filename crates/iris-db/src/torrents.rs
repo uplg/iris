@@ -13,6 +13,11 @@ pub struct TorrentRow {
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
     pub tmdb_id: Option<i64>,
+    /// Set true by [`set_tmdb_verified`] once we've matched `tmdb_id`'s
+    /// declared runtime against the file's probed duration. Until then
+    /// frontends ignore `tmdb_id` for display purposes — wrong posters
+    /// are worse UX than no posters.
+    pub tmdb_verified: bool,
     pub added_by: Uuid,
     /// Public-facing display name of the user that added this torrent
     /// (denormalised via JOIN in [`find_by_infohash`] / [`list_active`]).
@@ -91,7 +96,7 @@ pub async fn find_by_infohash(
 ) -> Result<Option<TorrentRow>, sqlx::Error> {
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.added_by, u.display_name AS added_by_name, t.added_at, t.last_played_at, \
+         t.tmdb_id, t.tmdb_verified, t.added_by, u.display_name AS added_by_name, t.added_at, t.last_played_at, \
          t.last_seed_activity_at, t.deleted_at \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
@@ -105,7 +110,7 @@ pub async fn find_by_infohash(
 pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Error> {
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.added_by, u.display_name AS added_by_name, t.added_at, t.last_played_at, \
+         t.tmdb_id, t.tmdb_verified, t.added_by, u.display_name AS added_by_name, t.added_at, t.last_played_at, \
          t.last_seed_activity_at, t.deleted_at \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
@@ -126,6 +131,24 @@ pub async fn soft_delete(
         .execute(pool)
         .await?;
     Ok(res.rows_affected() == 1)
+}
+
+/// Flip the `tmdb_verified` bit for a torrent — called once we've matched
+/// the source's probed runtime against TMDB's declared runtime within an
+/// acceptable tolerance. Frontend rendering paths consume only the
+/// `(tmdb_id, tmdb_verified=true)` pair; everything else is treated as
+/// "no metadata, show the filename".
+pub async fn set_tmdb_verified(
+    pool: &SqlitePool,
+    infohash: &str,
+    verified: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE torrents SET tmdb_verified = ?1 WHERE infohash = ?2")
+        .bind(verified)
+        .bind(infohash)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn touch_played(pool: &SqlitePool, infohash: &str) -> Result<(), sqlx::Error> {

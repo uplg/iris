@@ -51,6 +51,11 @@ pub struct MediaMetadata {
     pub vote_score: Option<f32>,
     pub vote_count: Option<u32>,
     pub genres: Vec<String>,
+    /// Movie runtime in minutes (TMDB `runtime`). For TV shows we expose
+    /// the *typical* episode runtime here when one is published; both
+    /// can drift wildly from the actual file's duration so callers do
+    /// the verification themselves.
+    pub runtime_minutes: Option<u32>,
 }
 
 impl TmdbClient {
@@ -131,6 +136,14 @@ impl TmdbClient {
             .into_iter()
             .map(|g| g.name)
             .collect();
+        // For movies TMDB returns a single `runtime` (minutes); for TV
+        // shows it's `episode_run_time: [N, N, …]` — we pick the first
+        // entry as a representative episode length. Either way the
+        // caller is expected to compare against the file's real probed
+        // duration before trusting the metadata.
+        let runtime_minutes = raw
+            .runtime
+            .or_else(|| raw.episode_run_time.as_ref().and_then(|v| v.first().copied()));
         Some(MediaMetadata {
             kind,
             tmdb_id,
@@ -142,6 +155,7 @@ impl TmdbClient {
             vote_score: raw.vote_average.map(|v| (v / 10.0) as f32),
             vote_count: raw.vote_count,
             genres,
+            runtime_minutes,
         })
     }
 }
@@ -158,6 +172,10 @@ struct TmdbRaw {
     vote_average: Option<f64>,
     vote_count: Option<u32>,
     genres: Option<Vec<TmdbGenre>>,
+    /// Movies only.
+    runtime: Option<u32>,
+    /// TV shows only — array of typical episode durations (minutes).
+    episode_run_time: Option<Vec<u32>>,
 }
 
 #[derive(Deserialize)]

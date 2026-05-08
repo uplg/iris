@@ -312,6 +312,7 @@ private fun ContinueWatchingCard(
     PosterCard(
         container = container,
         tmdbId = item.tmdbId,
+        tmdbVerified = item.tmdbVerified,
         title = prettifyFilename(rawTitle),
         subtitle = pct?.let { "${(it * 100).toInt()}% watched" } ?: "Just started",
         progress = pct,
@@ -330,6 +331,7 @@ private fun TorrentCard(
     PosterCard(
         container = container,
         tmdbId = torrent.tmdbId,
+        tmdbVerified = torrent.tmdbVerified,
         title = prettifyFilename(torrent.name ?: torrent.infohash.take(12)),
         subtitle = formatBytes(torrent.totalSizeBytes),
         progress = null,
@@ -364,6 +366,7 @@ private fun DownloadingCard(
     PosterCard(
         container = container,
         tmdbId = torrent.tmdbId,
+        tmdbVerified = torrent.tmdbVerified,
         title = prettifyFilename(torrent.name ?: torrent.infohash.take(12)),
         subtitle = subtitle,
         progress = pct,
@@ -403,6 +406,10 @@ private fun prettifyFilename(raw: String): String {
 private fun PosterCard(
     container: AppContainer,
     tmdbId: Long?,
+    /** Server-validated `(tmdb_id, runtime ≈ probed duration)`. Until this
+     *  is true we never call TMDB — wrong posters / titles were the bigger
+     *  UX hit than no posters. */
+    tmdbVerified: Boolean,
     title: String,
     subtitle: String,
     /** 0..1 — when non-null, draws a thin progress bar across the bottom of the poster. */
@@ -412,14 +419,17 @@ private fun PosterCard(
     progressColor: androidx.compose.ui.graphics.Color?,
     onClick: () -> Unit,
 ) {
-    var meta by remember(tmdbId) { mutableStateOf<TmdbMetadata?>(null) }
-    LaunchedEffect(tmdbId) {
-        if (tmdbId == null) return@LaunchedEffect
+    var meta by remember(tmdbId, tmdbVerified) { mutableStateOf<TmdbMetadata?>(null) }
+    LaunchedEffect(tmdbId, tmdbVerified) {
+        if (!tmdbVerified || tmdbId == null) return@LaunchedEffect
         val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
         meta = runCatching { container.apiFor(url).tmdbMetadata(tmdbId) }.getOrNull()
     }
     val posterUrl = tmdbPosterUrl(meta?.posterPath, "w342")
-    val displayTitle = meta?.title ?: title
+    // Filename always wins for the title — see the rationale on
+    // `tmdbVerified`. Even with a verified match the filename is what
+    // the user dropped on disk and is most likely to recognise.
+    val displayTitle = title
     val barColor = progressColor ?: MaterialTheme.colorScheme.primary
 
     Card(

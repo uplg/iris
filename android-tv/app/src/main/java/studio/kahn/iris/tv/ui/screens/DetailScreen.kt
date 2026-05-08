@@ -76,8 +76,14 @@ fun DetailScreen(
             val t = api.getTorrent(infohash)
             torrent = t
             progresses = runCatching { api.torrentProgress(infohash) }.getOrDefault(emptyList())
-            t.tmdbId?.let { id ->
-                meta = runCatching { api.tmdbMetadata(id) }.getOrNull()
+            // Only call TMDB if the server has confirmed the mapping is
+            // right (runtime ≈ probed duration). Unverified `tmdb_id`s
+            // would happily point us at the wrong movie's poster /
+            // synopsis, which is exactly the bug we're fixing.
+            if (t.tmdbVerified) {
+                t.tmdbId?.let { id ->
+                    meta = runCatching { api.tmdbMetadata(id) }.getOrNull()
+                }
             }
         } catch (e: Exception) {
             error = e.message ?: "Failed to load"
@@ -123,17 +129,18 @@ fun DetailScreen(
                 modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f),
                 shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
             ) {
+                val displayTitle = t.name ?: t.infohash.take(12)
                 if (poster != null) {
                     AsyncImage(
                         model = poster,
-                        contentDescription = meta?.title ?: t.name,
+                        contentDescription = displayTitle,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
                 } else {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            (meta?.title ?: t.name ?: "?").take(2).uppercase(),
+                            displayTitle.take(2).uppercase(),
                             style = MaterialTheme.typography.headlineLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -141,7 +148,11 @@ fun DetailScreen(
                 }
             }
             Text(
-                meta?.title ?: t.name ?: t.infohash.take(12),
+                // We *don't* substitute meta?.title here — TMDB resolution
+                // can be wrong (same year, same family of names) and the
+                // user gets a confidently-displayed title that mismatches
+                // the file. Filename is the source of truth.
+                t.name ?: t.infohash.take(12),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
             )
