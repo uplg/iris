@@ -623,11 +623,16 @@ fn spawn_ffmpeg(
         .args(["-hls_flags", "temp_file+independent_segments"])
         .arg("-hls_segment_filename")
         .arg(&segment_pattern)
-        // `event` writes the playlist incrementally, segment-by-segment, and
-        // appends EXT-X-ENDLIST when ffmpeg exits cleanly. With `vod` the
-        // playlist would buffer until the end of the file, which on a
-        // multi-GB source means clients see no playlist for 30+s.
-        .args(["-hls_playlist_type", "event"])
+        // `vod` makes ffmpeg write the playlist atomically once the run
+        // completes — with `#EXT-X-PLAYLIST-TYPE:VOD` and `ENDLIST`. We
+        // used to use `event` to expose the playlist incrementally for a
+        // "play while segmenting" UX, but Media3 ExoPlayer treats EVENT
+        // as live (duration unknown, position counter scotché à 0:00)
+        // even when ENDLIST is later appended. hls.js is more lenient,
+        // hence the "web OK, Android KO" symptom that drove this
+        // switch. Since we now block the player mount on ENDLIST anyway,
+        // there's no UX downside to atomic write.
+        .args(["-hls_playlist_type", "vod"])
         .args(["-f", "hls"])
         .arg(&variant_playlist)
         .stdin(Stdio::null())
