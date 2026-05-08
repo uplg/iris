@@ -2,7 +2,7 @@
 
 Self-hosted "micro-Netflix": aggregate searches across torrent trackers, stream the result inside a React video player, seed the rest, and reclaim disk space when it runs low.
 
-![WatchPage](./screenshots/watchpage.jpg)
+![Watch Page](./screenshots/watch.jpg)
 
 ## Stack
 
