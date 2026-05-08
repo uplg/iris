@@ -37,9 +37,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             IrisTvTheme {
                 val session by container.sessionStore.session.collectAsState(initial = null)
+                // We pre-seed an empty `IrisSession` while pairing/login are
+                // in flight so the [SessionCookieJar] has somewhere to write
+                // Set-Cookie when the response arrives. That stub must NOT
+                // count as authenticated, otherwise the `startDestination`
+                // flips to HOME mid-pairing and Navigation rebuilds the
+                // graph, dropping the user off the PairingScreen with no
+                // cookies → cascading 401s.
+                val authenticated = session?.cookies?.isNotEmpty() == true
                 IrisRoot(
                     container = container,
-                    isAuthenticated = session != null,
+                    isAuthenticated = authenticated,
                     pendingVoiceQuery = pendingVoiceQuery,
                     pendingWatch = pendingWatch,
                 )

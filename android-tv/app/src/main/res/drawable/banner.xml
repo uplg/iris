@@ -7,13 +7,59 @@
     android:height="180dp"
     android:viewportWidth="320"
     android:viewportHeight="180">
+
+    <!-- Background -->
     <path
         android:fillColor="#0B0D12"
         android:pathData="M0,0h320v180h-320z" />
+
+    <!-- Diamond -->
     <path
         android:fillColor="#C084FC"
         android:pathData="M40,90 L60,70 L80,90 L60,110 Z" />
+
+    <!--
+        "Iris" centré entre x=80 et x=320 (cx=200), centré verticalement (cy=91)
+        Hauteur lettres : 28px (y=77 à y=105)
+        Total largeur : I(8) + gap(5) + r(14) + gap(5) + i(6) + gap(5) + s(14) = 57px
+        Start x = 200 - 57/2 = 171
+    -->
+
+    <!-- I (x=171) -->
     <path
         android:fillColor="#A78BFA"
-        android:pathData="M100,80 L114,80 L114,100 L100,100 Z M120,80 L136,80 L136,100 L120,100 Z M142,75 L158,75 Q166,75 166,85 Q166,95 158,95 L150,95 L150,100 L142,100 Z M172,75 L188,75 L182,85 L188,95 L172,95 L178,85 Z M192,75 L208,75 L208,80 L198,80 L198,85 L206,85 L206,90 L198,90 L198,95 L208,95 L208,100 L192,100 Z" />
+        android:pathData="M171,77 L179,77 L179,105 L171,105 Z" />
+
+    <!-- r (x=184) -->
+    <path
+        android:fillColor="#A78BFA"
+        android:pathData="M184,87 L184,105 L190,105 L190,93 Q190,89 194,89 L198,89 L198,87 Q192,85 190,89 L190,87 Z" />
+
+    <!-- i — point + tige (x=203) -->
+    <path
+        android:fillColor="#A78BFA"
+        android:pathData="M203,77 L209,77 L209,82 L203,82 Z M203,87 L209,87 L209,105 L203,105 Z" />
+
+    <!-- s — 5 rectangles (x=214) -->
+    <!-- barre haut -->
+    <path
+        android:fillColor="#A78BFA"
+        android:pathData="M214,87 L228,87 L228,90 L214,90 Z" />
+    <!-- montant gauche haut -->
+    <path
+        android:fillColor="#A78BFA"
+        android:pathData="M214,87 L217,87 L217,95 L214,95 Z" />
+    <!-- barre milieu -->
+    <path
+        android:fillColor="#A78BFA"
+        android:pathData="M214,93 L228,93 L228,96 L214,96 Z" />
+    <!-- montant droit bas -->
+    <path
+        android:fillColor="#A78BFA"
+        android:pathData="M225,93 L228,93 L228,105 L225,105 Z" />
+    <!-- barre bas -->
+    <path
+        android:fillColor="#A78BFA"
+        android:pathData="M214,102 L228,102 L228,105 L214,105 Z" />
+
 </vector>

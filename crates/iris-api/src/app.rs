@@ -14,11 +14,19 @@ use crate::routes;
 use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
+    // Device-pairing endpoints are merged INTO the auth and me routers
+    // (rather than nested separately) because axum forbids overlapping
+    // nest paths like `/auth` and `/auth/device`.
+    let auth = routes::auth::router()
+        .nest("/device", routes::devices::auth_router());
+    let me = routes::me::router()
+        .nest("/devices", routes::devices::me_router());
+
     let api = Router::new()
         .route("/health", get(routes::health::get))
-        .nest("/auth", routes::auth::router())
+        .nest("/auth", auth)
         .nest("/admin", routes::admin::router())
-        .nest("/me", routes::me::router())
+        .nest("/me", me)
         .nest("/search", routes::search::router())
         .nest("/torrents", routes::torrents::router())
         .nest("/providers", routes::providers::router())

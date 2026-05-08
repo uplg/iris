@@ -16,6 +16,20 @@ android {
         versionName = "0.1.0"
     }
 
+    // We're never publishing this on Play Store — the TV is the only target
+    // and sideloading from a self-signed APK is fine. So `release` reuses
+    // the standard Android debug keystore (~/.android/debug.keystore, which
+    // every Android dev machine has). That gives us R8-optimised builds we
+    // can sideload without juggling a real keystore.
+    signingConfigs {
+        create("releaseDebugSigning") {
+            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
@@ -26,10 +40,15 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            // R8 in full mode: more aggressive shrinking + the optimisation
+            // pass that strips Compose's `$$function-N` indirection layer.
+            // Combined with the rules in `proguard-rules.pro` this is what
+            // gives Compose its release-mode framerate.
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            signingConfig = signingConfigs.getByName("releaseDebugSigning")
         }
     }
 
@@ -94,8 +113,10 @@ dependencies {
     // DataStore (settings: server URL, session cookies)
     implementation(libs.datastore.preferences)
 
-    // Coil (TMDB posters)
+    // Coil 3 (TMDB posters). Coil 3 makes networking opt-in, so we pull in
+    // the OkHttp network module to share our auth-aware client.
     implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
 
     // TV Channels (Library / Continue Watching rows on the Android TV home).
     implementation(libs.tvprovider)

@@ -149,6 +149,9 @@ fun IrisRoot(
                     onPickFile = { infohash, fileIdx ->
                         navController.navigate(Routes.watch(infohash, fileIdx))
                     },
+                    onPickTorrent = { infohash ->
+                        navController.navigate(Routes.detail(infohash))
+                    },
                     onBack = { navController.popBackStack() },
                 )
             }

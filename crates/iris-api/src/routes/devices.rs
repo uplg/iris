@@ -16,7 +16,6 @@ use axum::extract::{Path, State};
 use axum_extra::extract::CookieJar;
 use chrono::{Duration, Utc};
 use iris_core::ids::UserId;
-use rand::RngExt;
 use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -71,10 +70,11 @@ async fn create_code(
     let row = iris_db::device_codes::create(state.db(), &code, expires_at, &req.kind).await?;
 
     let public_url = state.cfg().server.public_url.trim_end_matches('/');
+    let verification_url = format!("{public_url}/account?pair={}", row.code);
     Ok(Json(CreateCodeResponse {
         code: row.code,
         device_id: row.device_id,
-        verification_url: format!("{public_url}/account?pair={}", row.code),
+        verification_url,
         expires_in: DEVICE_CODE_TTL_SECS,
     }))
 }
@@ -221,7 +221,6 @@ fn generate_code() -> String {
             .map(|_| char::from(*ALPHABET.iter().choose(rng).unwrap()))
             .collect::<String>()
     };
-    let _ = (RngExt::random::<u32>(&mut rand::rng()),); // silence "RngExt unused" if formatter trims
     let head = take(&mut rng, 4);
     let tail = take(&mut rng, 4);
     format!("{head}-{tail}")

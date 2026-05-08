@@ -62,6 +62,7 @@ fun SearchScreen(
     initialQuery: String? = null,
     autoPickTop: Boolean = false,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
+    onPickTorrent: (infohash: String) -> Unit,
     onBack: () -> Unit,
 ) {
     var query by remember { mutableStateOf(initialQuery ?: "") }
@@ -131,7 +132,7 @@ fun SearchScreen(
             pending = false
             if (autoPickTop && err == null && res.isNotEmpty()) {
                 val top = res.first()
-                ingestAndPlay(scope, container, top, onPickFile) { msg ->
+                ingestAndPlay(scope, container, top, onPickFile, onPickTorrent) { msg ->
                     error = msg
                     ingestingId = null
                 }
@@ -205,7 +206,7 @@ fun SearchScreen(
                             onClick = {
                                 ingestingId = "${r.providerId}:${r.externalId}"
                                 error = null
-                                ingestAndPlay(scope, container, r, onPickFile) { msg ->
+                                ingestAndPlay(scope, container, r, onPickFile, onPickTorrent) { msg ->
                                     error = msg
                                     ingestingId = null
                                 }
@@ -250,6 +251,7 @@ private fun ingestAndPlay(
     container: AppContainer,
     hit: SearchResult,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
+    onPickTorrent: (infohash: String) -> Unit,
     onError: (String) -> Unit,
 ) {
     scope.launch {
@@ -264,14 +266,17 @@ private fun ingestAndPlay(
                     tmdbId = hit.tmdbId,
                 )
             )
-            // Pick the largest video file as a default — same heuristic as
-            // the prewarm task.
+            // Single-file → straight to play; multi-file (TV box set, anime
+            // season) → DetailScreen so the user picks an episode.
             val videoExts = listOf(".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv")
-            val idx = res.snapshot.files
+            val videos = res.snapshot.files
                 .filter { f -> videoExts.any { f.path.endsWith(it, ignoreCase = true) } }
-                .maxByOrNull { f -> f.sizeBytes }
-                ?.index ?: 0
-            onPickFile(res.snapshot.infohash, idx)
+            if (videos.size <= 1) {
+                val idx = videos.maxByOrNull { f -> f.sizeBytes }?.index ?: 0
+                onPickFile(res.snapshot.infohash, idx)
+            } else {
+                onPickTorrent(res.snapshot.infohash)
+            }
         } catch (e: Exception) {
             onError(e.message ?: "Ingest failed")
         }
@@ -293,29 +298,64 @@ private fun ResultRow(
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Column(Modifier.weight(1f)) {
                 Text(
                     listOfNotNull(result.title, result.year?.toString()).joinToString(" · "),
                     style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
+                    maxLines = 2,
                 )
+                // Provider chip + free-leech badge.
+                Row(
+                    Modifier.padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        result.providerId.uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (result.freeleech) {
+                        Text(
+                            "FREELEECH",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = androidx.compose.ui.graphics.Color(0xFF34D399),
+                        )
+                    }
+                    result.category?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            // Right-rail stats — emphasised so the user can scan from the
+            // sofa without squinting. Seeders are green, leechers red, size
+            // gets the largest text.
+            Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                 Text(
-                    listOfNotNull(
-                        result.providerId,
-                        result.sizeBytes?.let { formatBytesShort(it) },
-                        result.seeders?.let { "S$it" },
-                        result.leechers?.let { "L$it" },
-                        if (result.freeleech) "FL" else null,
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    result.sizeBytes?.let { formatBytesShort(it) } ?: "—",
+                    style = MaterialTheme.typography.titleMedium,
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "↑ ${result.seeders ?: 0}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = androidx.compose.ui.graphics.Color(0xFF34D399),
+                    )
+                    Text(
+                        "↓ ${result.leechers ?: 0}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = androidx.compose.ui.graphics.Color(0xFFF87171),
+                    )
+                }
             }
             Text(
                 if (isIngesting) "…" else "▶",
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.primary,
             )
         }

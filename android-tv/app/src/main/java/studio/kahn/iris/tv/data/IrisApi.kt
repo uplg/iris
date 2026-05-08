@@ -272,11 +272,37 @@ data class IngestRequest(
     @SerialName("tmdb_id") val tmdbId: Long? = null,
 )
 
+/**
+ * The `snapshot` field of `IngestResponse` is a [`TorrentSnapshot`][crates.iris_torrent.engine]
+ * — runtime state from the librqbit engine, *without* the database-side
+ * fields (`id`, `added_by`, `added_at`, `tmdb_id`). Those live next to it on
+ * `TorrentView` (and on the top level of `IngestResponse`).
+ *
+ * Modelling this with a separate type instead of reusing `TorrentView`
+ * avoids the "Field 'id' is required …" deserialization error we'd
+ * otherwise hit on every ingest.
+ */
+@Serializable
+data class TorrentSnapshot(
+    val infohash: String,
+    val name: String? = null,
+    @SerialName("total_size_bytes") val totalSizeBytes: Long,
+    val state: String,
+    @SerialName("progress_bytes") val progressBytes: Long,
+    @SerialName("progress_pct") val progressPct: Float,
+    @SerialName("download_speed_bps") val downloadSpeedBps: Long,
+    @SerialName("upload_speed_bps") val uploadSpeedBps: Long,
+    val peers: Int = 0,
+    val files: List<FileEntry> = emptyList(),
+    val error: String? = null,
+    val finished: Boolean = false,
+)
+
 @Serializable
 data class IngestResponse(
     val id: String,
     @SerialName("already_managed") val alreadyManaged: Boolean,
-    val snapshot: TorrentView,
+    val snapshot: TorrentSnapshot,
 )
 
 @Serializable
@@ -289,4 +315,8 @@ data class DeviceView(
 )
 
 fun tmdbPosterUrl(path: String?, size: String = "w342"): String? =
+    path?.let { "https://image.tmdb.org/t/p/$size$it" }
+
+/** Backdrop sizes: w300, w780, w1280, original. We use w780 for shelf cards. */
+fun tmdbBackdropUrl(path: String?, size: String = "w780"): String? =
     path?.let { "https://image.tmdb.org/t/p/$size$it" }

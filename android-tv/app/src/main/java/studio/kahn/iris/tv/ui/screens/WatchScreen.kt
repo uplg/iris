@@ -48,6 +48,7 @@ import studio.kahn.iris.tv.data.HlsStatus
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.MediaProbe
 import studio.kahn.iris.tv.data.ProgressUpdate
+import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
 
@@ -74,14 +75,23 @@ fun WatchScreen(
     var serverUrl by remember { mutableStateOf<String?>(null) }
     var probe by remember { mutableStateOf<MediaProbe?>(null) }
     var hlsStatus by remember { mutableStateOf<HlsStatus?>(null) }
+    var torrent by remember { mutableStateOf<TorrentView?>(null) }
     var resumePositionSec by remember { mutableStateOf(0.0) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedAudioIdx by remember { mutableStateOf<Int?>(null) }
     var showAudioPicker by remember { mutableStateOf(false) }
     var probeVersion by remember { mutableStateOf(0) }
 
+    // Probe with retry. When the user clicks Play right after ingest, the
+    // file isn't on disk yet — librqbit needs a few seconds to fetch the
+    // first sequential chunks. The server returns 400 "file not yet on
+    // disk: …" in that window. We retry every 2s for up to ~2 min so the
+    // user just sees the LoadingOverlay tick down instead of bouncing
+    // straight to an error screen. 404 / 401 / unknown errors bail
+    // immediately — those are real problems.
     LaunchedEffect(infohash, fileIdx, probeVersion) {
         error = null
+        probe = null
         val url = container.sessionStore.serverUrl.first()
         if (url == null) {
             error = "Not signed in"
@@ -89,17 +99,49 @@ fun WatchScreen(
         }
         serverUrl = url
         val api: IrisApi = container.apiFor(url)
-        try {
-            val p = api.probe(infohash, fileIdx)
-            probe = p
-            if (selectedAudioIdx == null) {
-                selectedAudioIdx = (p.audio.firstOrNull { it.default } ?: p.audio.firstOrNull())?.index ?: 0
+        var attempts = 0
+        val maxAttempts = 60 // ~2 min at 2s each
+        while (attempts < maxAttempts) {
+            try {
+                val p = api.probe(infohash, fileIdx)
+                probe = p
+                if (selectedAudioIdx == null) {
+                    selectedAudioIdx = (p.audio.firstOrNull { it.default } ?: p.audio.firstOrNull())?.index ?: 0
+                }
+                val progresses = runCatching { api.torrentProgress(infohash) }.getOrDefault(emptyList())
+                resumePositionSec = progresses.firstOrNull { it.fileIdx == fileIdx }
+                    ?.takeUnless { it.completed }?.positionSeconds ?: 0.0
+                return@LaunchedEffect
+            } catch (e: retrofit2.HttpException) {
+                if (e.code() == 401 || e.code() == 404) {
+                    error = "Probe failed (HTTP ${e.code()})"
+                    return@LaunchedEffect
+                }
+                // 400 == "file not yet on disk" most of the time, possibly
+                // a 5xx burp — keep waiting.
+                attempts++
+                delay(2_000)
+            } catch (e: Exception) {
+                // Connection blip, parse error — try again briefly.
+                attempts++
+                delay(2_000)
             }
-            val progresses = runCatching { api.torrentProgress(infohash) }.getOrDefault(emptyList())
-            resumePositionSec = progresses.firstOrNull { it.fileIdx == fileIdx }
-                ?.takeUnless { it.completed }?.positionSeconds ?: 0.0
-        } catch (e: Exception) {
-            error = e.message ?: "Failed to load media metadata"
+        }
+        error = "Timed out waiting for the file to download enough to probe"
+    }
+
+    // Live torrent state — drives the "Downloading …" step in the loading
+    // overlay so the user sees real bytes / speed while the ingest is still
+    // pulling sequential chunks. Polls every 2s for as long as the screen
+    // is mounted.
+    LaunchedEffect(infohash) {
+        while (true) {
+            val url = container.sessionStore.serverUrl.first() ?: run {
+                delay(2_000); continue
+            }
+            runCatching { container.apiFor(url).getTorrent(infohash) }
+                .onSuccess { torrent = it }
+            delay(2_000)
         }
     }
 
@@ -167,6 +209,7 @@ fun WatchScreen(
                 error = error,
                 status = hlsStatus,
                 probeReady = probe != null,
+                torrent = torrent,
                 onRetry = {
                     probe = null
                     hlsStatus = null
@@ -337,6 +380,7 @@ private fun LoadingOverlay(
     error: String?,
     status: HlsStatus?,
     probeReady: Boolean,
+    torrent: TorrentView?,
     onRetry: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -373,7 +417,7 @@ private fun LoadingOverlay(
                 }
                 return@Column
             }
-            val (label, sub, pct) = stepFor(status, probeReady)
+            val (label, sub, pct) = stepFor(status, probeReady, torrent)
             Text(label, style = MaterialTheme.typography.titleMedium)
             sub?.let {
                 Text(
@@ -460,8 +504,38 @@ private fun currentAudioLabel(tracks: List<AudioStream>, idx: Int): String {
 
 private data class Step(val label: String, val sub: String?, val pct: Float?)
 
-private fun stepFor(status: HlsStatus?, probeReady: Boolean): Step {
-    if (!probeReady) return Step("Reading media metadata…", "ffprobe scanning streams.", null)
+private fun stepFor(status: HlsStatus?, probeReady: Boolean, torrent: TorrentView?): Step {
+    if (!probeReady) {
+        // The file isn't on disk yet. If we know the torrent's overall
+        // download state, surface that — the user wants "I have 320 MB
+        // out of 4 GB, going at 8 MB/s" not "ffprobe scanning streams".
+        if (torrent != null && torrent.progressPct < 99.9f) {
+            val pct = torrent.progressPct / 100f
+            val sub = buildString {
+                append(formatBytesShort(torrent.progressBytes))
+                append(" / ")
+                append(formatBytesShort(torrent.totalSizeBytes))
+                if (torrent.downloadSpeedBps > 0) {
+                    append(" · ")
+                    append(formatSpeedShort(torrent.downloadSpeedBps))
+                }
+                if (torrent.peers > 0) {
+                    append(" · ${torrent.peers} peers")
+                }
+            }
+            val label = if (torrent.state.equals("paused", ignoreCase = true)) {
+                "Download paused"
+            } else if (torrent.error != null) {
+                "Torrent error"
+            } else if (torrent.downloadSpeedBps > 0 || torrent.peers > 0) {
+                "Downloading…"
+            } else {
+                "Connecting to peers…"
+            }
+            return Step(label, sub, pct.coerceIn(0f, 0.99f))
+        }
+        return Step("Reading media metadata…", "ffprobe scanning streams.", null)
+    }
     val s = status ?: return Step("Starting transcoder…", null, null)
     if (s.endlistPresent) return Step("Loading first frames…", "Almost there.", null)
     val total = s.estimatedTotalSegments
@@ -473,4 +547,19 @@ private fun stepFor(status: HlsStatus?, probeReady: Boolean): Step {
         "Pre-segmenting · $seg segments"
     }
     return Step(label, "ffmpeg writing the HLS playlist. Seek will be enabled when it finishes.", pct)
+}
+
+private fun formatBytesShort(b: Long): String {
+    val gb = b / 1_000_000_000.0
+    if (gb >= 1.0) return String.format("%.1f GB", gb)
+    val mb = b / 1_000_000.0
+    if (mb >= 1.0) return String.format("%.0f MB", mb)
+    return "$b B"
+}
+
+private fun formatSpeedShort(bps: Long): String {
+    val mbs = bps / 1_000_000.0
+    if (mbs >= 1.0) return String.format("%.1f MB/s", mbs)
+    val kbs = bps / 1_000.0
+    return String.format("%.0f KB/s", kbs)
 }
