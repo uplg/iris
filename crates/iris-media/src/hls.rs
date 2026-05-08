@@ -153,7 +153,8 @@ impl HlsManager {
         // contention. hls.js fans out 5-10 segment fetches in parallel
         // and each one used to queue on the jobs lock; this knocks
         // median latency from hundreds of ms back to <5 ms.
-        if validate_dir(&dir, audio_tracks.len()).await == DirState::Clean {
+        if validate_dir(&dir, audio_tracks.len(), expected_duration_secs).await == DirState::Clean
+        {
             return Ok(dir);
         }
 
@@ -163,7 +164,7 @@ impl HlsManager {
         }
         // Re-validate inside the lock — another task may have completed
         // the job between our lock-free check and acquiring the Mutex.
-        match validate_dir(&dir, audio_tracks.len()).await {
+        match validate_dir(&dir, audio_tracks.len(), expected_duration_secs).await {
             DirState::Clean => return Ok(dir),
             DirState::Corrupt => {
                 tracing::warn!(
@@ -636,7 +637,11 @@ enum DirState {
 /// segments that aren't there) marks the dir corrupt — that's the
 /// failure mode you get when ffmpeg ran on a still-downloading torrent
 /// file: it produces a "complete" playlist but truncated segments.
-async fn validate_dir(dir: &Path, audio_count: usize) -> DirState {
+async fn validate_dir(
+    dir: &Path,
+    audio_count: usize,
+    expected_duration_secs: Option<f64>,
+) -> DirState {
     let master_exists = tokio::fs::try_exists(dir.join(MASTER_PLAYLIST))
         .await
         .unwrap_or(false);
@@ -679,13 +684,21 @@ async fn validate_dir(dir: &Path, audio_count: usize) -> DirState {
             return DirState::Corrupt;
         }
         // Duration sanity check: sum every #EXTINF and compare against the
-        // expected source duration (written as a `.expected_duration`
-        // sidecar at job spawn time). When ffmpeg ran on a partial,
-        // still-downloading source the resulting playlist totals a
-        // tiny fraction of the real duration even though it's marked
-        // ENDLIST. We allow a 5 % slack — real outputs usually land
-        // within 1 % because every segment is keyframe-aligned.
-        if let Some(expected) = expected_duration(dir).await {
+        // expected source duration. The caller passes the live probe
+        // value when available (route handlers always do); we fall back
+        // to a `.expected_duration` sidecar written by `ensure_job` at
+        // spawn time. Without either we just skip the check.
+        //
+        // When ffmpeg ran on a partial, still-downloading source the
+        // resulting playlist totals a tiny fraction of the real duration
+        // even though it's marked ENDLIST. We allow a 5 % slack — real
+        // outputs usually land within 1 % because every segment is
+        // keyframe-aligned.
+        let expected = match expected_duration_secs {
+            Some(d) => Some(d),
+            None => sidecar_expected_duration(dir).await,
+        };
+        if let Some(expected) = expected {
             let total: f64 = content
                 .lines()
                 .filter_map(|l| l.strip_prefix("#EXTINF:"))
@@ -722,7 +735,7 @@ async fn validate_dir(dir: &Path, audio_count: usize) -> DirState {
     DirState::Clean
 }
 
-async fn expected_duration(dir: &Path) -> Option<f64> {
+async fn sidecar_expected_duration(dir: &Path) -> Option<f64> {
     tokio::fs::read_to_string(dir.join(".expected_duration"))
         .await
         .ok()
