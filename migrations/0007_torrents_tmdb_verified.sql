@@ -1,0 +1,12 @@
+-- Confidence flag for the `tmdb_id` we captured at search time. torr9 (and
+-- most providers) returns a tmdb_id alongside each search hit, but those
+-- mappings are sometimes wrong (same year, similar name, different release
+-- → end up with a different movie's poster + synopsis). We can't trust
+-- `tmdb_id != NULL` as "we know what this is".
+--
+-- Verification rule (implemented in `prewarm_default_hls`): once the
+-- file has finished downloading and we've ffprobed it, fetch the TMDB
+-- runtime and compare against the probed duration. Within 15 % → trust.
+-- Otherwise leave at FALSE so the frontend falls back to filename-only
+-- display.
+ALTER TABLE torrents ADD COLUMN tmdb_verified BOOLEAN NOT NULL DEFAULT FALSE;
