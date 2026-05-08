@@ -777,6 +777,23 @@ async fn validate_dir(
             Ok(c) => c,
             Err(_) => return if done { DirState::Corrupt } else { DirState::Partial },
         };
+        // One-shot migration of pre-existing dirs that still carry
+        // `#EXT-X-PLAYLIST-TYPE:EVENT` from the old `-hls_playlist_type
+        // event` codepath. Media3 ExoPlayer treats EVENT as a live
+        // source even with ENDLIST present, breaking the duration /
+        // position display (web stays fine — hls.js is more lenient).
+        // The replace is idempotent so future calls are no-ops once the
+        // file is already VOD.
+        let content = if content.contains("#EXT-X-PLAYLIST-TYPE:EVENT") {
+            let patched = content.replace(
+                "#EXT-X-PLAYLIST-TYPE:EVENT",
+                "#EXT-X-PLAYLIST-TYPE:VOD",
+            );
+            let _ = tokio::fs::write(&pl, &patched).await;
+            patched
+        } else {
+            content
+        };
         if !content.contains("#EXT-X-ENDLIST") {
             if done {
                 fixup_endlist(dir, audio_count);
