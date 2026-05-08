@@ -212,11 +212,89 @@ async fn ingest(
     )
     .await?;
 
+    // Pre-warm HLS on a best-effort background task. By the time the user
+    // clicks Play, ffmpeg has already started writing segments — first-frame
+    // latency drops from "wait for ffmpeg cold-start" to "single segment
+    // round-trip". For multi-file torrents we pick the largest video file as
+    // the most likely candidate.
+    let prewarm_state = state.clone();
+    let prewarm_infohash = result.snapshot.infohash.clone();
+    tokio::spawn(async move {
+        prewarm_default_hls(&prewarm_state, &prewarm_infohash).await;
+    });
+
     Ok(Json(IngestResponse {
         id: row.id,
         already_managed: result.already_managed,
         snapshot: result.snapshot,
     }))
+}
+
+async fn prewarm_default_hls(state: &AppState, infohash: &str) {
+    use std::time::Duration;
+    // Wait up to ~2 minutes for the largest video file to appear on disk.
+    let mut chosen_idx: Option<usize> = None;
+    for _ in 0..60 {
+        if let Some(snap) = state.engine().get_by_infohash(infohash) {
+            let largest_video = snap
+                .files
+                .iter()
+                .filter(|f| {
+                    let p = std::path::Path::new(&f.path);
+                    matches!(
+                        p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+                        Some("mkv" | "mp4" | "webm" | "m4v" | "avi" | "mov" | "ts" | "mts" | "m2ts" | "wmv")
+                    )
+                })
+                .max_by_key(|f| f.size_bytes)
+                .map(|f| f.index);
+            if let Some(idx) = largest_video {
+                let path = match state.engine().file_path(infohash, idx) {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                if path.exists() {
+                    chosen_idx = Some(idx);
+                    break;
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    let Some(idx) = chosen_idx else {
+        tracing::debug!(infohash, "prewarm: no video file appeared, skipping");
+        return;
+    };
+    let path = match state.engine().file_path(infohash, idx) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let probe = match state.probes().get_or_probe(infohash, idx, &path).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::debug!(error = %e, "prewarm: probe failed");
+            return;
+        }
+    };
+    if probe.audio.is_empty() {
+        return;
+    }
+    let audio = probe
+        .audio
+        .iter()
+        .find(|a| a.default)
+        .or_else(|| probe.audio.first())
+        .unwrap();
+    let key = format!("{infohash}_{idx}_a{}", audio.index);
+    if let Err(e) = state
+        .hls()
+        .ensure_job(&key, &path, audio.index as u32, Some(&audio.codec))
+        .await
+    {
+        tracing::debug!(error = %e, "prewarm: hls ensure_job failed");
+        return;
+    }
+    tracing::info!(infohash, idx, audio = audio.index, "prewarmed HLS");
 }
 
 #[derive(Debug, Serialize)]
@@ -310,7 +388,9 @@ async fn probe_file(
             path.display()
         )));
     }
-    let probe = iris_media::probe_file(&path)
+    let probe = state
+        .probes()
+        .get_or_probe(&infohash, idx, &path)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
     Ok(Json(probe))
@@ -352,8 +432,12 @@ async fn hls_asset(
 
     let key = format!("{infohash}_{idx}_a{audio_idx}");
 
-    // Probe + start the HLS job (idempotent if already running).
-    let probe = iris_media::probe_file(&path)
+    // Probe + start the HLS job (idempotent if already running). Probe is
+    // memoized in `ProbeCache` so subsequent segment requests are essentially
+    // free.
+    let probe = state
+        .probes()
+        .get_or_probe(&infohash, idx, &path)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
     let audio_codec = probe
@@ -401,7 +485,16 @@ async fn hls_asset(
             ApiError::NotFound
         })?;
 
-    serve_static_file(&segment_path, "video/mp2t").await
+    let mime = if asset.ends_with(".m4s") {
+        "video/iso.segment"
+    } else if asset.ends_with(".mp4") {
+        "video/mp4"
+    } else if asset.ends_with(".ts") {
+        "video/mp2t"
+    } else {
+        "application/octet-stream"
+    };
+    serve_static_file(&segment_path, mime).await
 }
 
 fn is_safe_segment_name(name: &str) -> bool {

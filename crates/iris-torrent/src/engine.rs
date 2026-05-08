@@ -95,7 +95,11 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub async fn new(download_dir: PathBuf, persistence_dir: PathBuf) -> anyhow::Result<Arc<Self>> {
+    pub async fn new(
+        download_dir: PathBuf,
+        persistence_dir: PathBuf,
+        listen_port: u16,
+    ) -> anyhow::Result<Arc<Self>> {
         std::fs::create_dir_all(&download_dir)?;
         std::fs::create_dir_all(&persistence_dir)?;
         let opts = SessionOptions {
@@ -103,6 +107,14 @@ impl Engine {
             persistence: Some(SessionPersistenceConfig::Json {
                 folder: Some(persistence_dir),
             }),
+            // Pin the BitTorrent listen port so docker can forward it and
+            // peers can reach us. Inbound connections roughly double download
+            // speed on private trackers and let us actually upload (= keep
+            // ratio sane).
+            listen_port_range: Some(listen_port..(listen_port + 1)),
+            // Try UPnP on the local router; harmless on a server with a
+            // public IP (the router-side step just no-ops).
+            enable_upnp_port_forwarding: true,
             ..Default::default()
         };
         let session = Session::new_with_opts(download_dir.clone(), opts).await?;

@@ -23,7 +23,7 @@ pub enum PlaybackMode {
 
 pub use hls::{HlsError, HlsManager};
 pub use probe::{
-    AudioStream, MediaProbe, ProbeError, SubtitleStream, VideoStream, probe_file,
+    AudioStream, MediaProbe, ProbeCache, ProbeError, SubtitleStream, VideoStream, probe_file,
 };
 pub use subtitles::SubtitleError;
 pub use subtitles::cache_path as subtitle_cache_path;

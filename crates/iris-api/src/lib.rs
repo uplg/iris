@@ -35,11 +35,13 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
     let engine = iris_torrent::Engine::new(
         cfg.storage.download_dir.clone(),
         cfg.storage.data_dir.join("librqbit"),
+        cfg.storage.torrent_port,
     )
     .await
     .context("starting torrent engine")?;
     tracing::info!(
         download_dir = %cfg.storage.download_dir.display(),
+        torrent_port = cfg.storage.torrent_port,
         "torrent engine ready"
     );
 

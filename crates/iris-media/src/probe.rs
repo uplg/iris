@@ -1,9 +1,12 @@
-//! `ffprobe` JSON wrapper.
+//! `ffprobe` JSON wrapper + in-memory cache.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 #[derive(Debug, Error)]
 pub enum ProbeError {
@@ -72,6 +75,45 @@ pub struct SubtitleStream {
 
 const TEXT_SUB_CODECS: &[&str] = &["subrip", "srt", "ass", "ssa", "mov_text", "webvtt"];
 const BROWSER_AUDIO_CODECS: &[&str] = &["aac", "opus", "vorbis", "mp3"];
+
+/// In-memory probe cache. Keyed by `(infohash, file_idx)`. Probe is
+/// expensive on multi-GB MKVs (ffmpeg has to read the index, which often
+/// lives at the end of the file), so we keep results around for the lifetime
+/// of the process. Invalidate explicitly when the underlying file is
+/// replaced (e.g. after GC eviction + re-ingest).
+#[derive(Clone, Default)]
+pub struct ProbeCache {
+    inner: Arc<RwLock<HashMap<String, MediaProbe>>>,
+}
+
+impl ProbeCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub async fn get_or_probe(
+        &self,
+        infohash: &str,
+        file_idx: usize,
+        path: &Path,
+    ) -> Result<MediaProbe, ProbeError> {
+        let key = format!("{infohash}:{file_idx}");
+        if let Some(hit) = self.inner.read().await.get(&key).cloned() {
+            return Ok(hit);
+        }
+        let probe = probe_file(path).await?;
+        self.inner.write().await.insert(key, probe.clone());
+        Ok(probe)
+    }
+
+    pub async fn invalidate(&self, infohash: &str) {
+        let prefix = format!("{infohash}:");
+        self.inner
+            .write()
+            .await
+            .retain(|k, _| !k.starts_with(&prefix));
+    }
+}
 
 pub async fn probe_file(path: &Path) -> Result<MediaProbe, ProbeError> {
     let output = tokio::process::Command::new("ffprobe")

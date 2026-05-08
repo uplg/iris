@@ -30,6 +30,11 @@ services:
       - iris-data:/data
     ports:
       - "${IRIS_BIND_PORT:-8080}:8080"
+      # Pinned BitTorrent listen port — forwarded so inbound peer connections
+      # actually reach librqbit (matters for download speed AND ratio on
+      # private trackers).
+      - "${IRIS_TORRENT_PORT:-45100}:45100/tcp"
+      - "${IRIS_TORRENT_PORT:-45100}:45100/udp"
     healthcheck:
       test: ["CMD", "/usr/local/bin/iris", "--help"]
       interval: 30s

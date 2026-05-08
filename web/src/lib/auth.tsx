@@ -44,6 +44,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
+  // Keep-alive: while authenticated, periodically rotate the access cookie
+  // by hitting /auth/refresh. Without this, hls.js segment requests silently
+  // 401 once the access token expires mid-stream. Server access TTL is 1h,
+  // we rotate every 25 min so we always have margin.
+  useEffect(() => {
+    if (state.status !== "authenticated") return;
+    const interval = window.setInterval(
+      () => {
+        void authApi
+          .refresh()
+          .then((user) => setState({ status: "authenticated", user }))
+          .catch(() => {
+            // Refresh token expired or revoked → bounce to login.
+            setState({ status: "anonymous" });
+          });
+      },
+      25 * 60_000,
+    );
+    return () => window.clearInterval(interval);
+  }, [state.status]);
+
   const login = useCallback(async (email: string, password: string) => {
     const user = await authApi.login(email, password);
     setState({ status: "authenticated", user });

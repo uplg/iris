@@ -70,7 +70,7 @@ impl HlsManager {
 
     pub fn segment_path(&self, key: &str, segment_idx: u32) -> PathBuf {
         self.segment_dir_for(key)
-            .join(format!("segment_{segment_idx:05}.ts"))
+            .join(format!("segment_{segment_idx:05}.m4s"))
     }
 
     /// Read the master playlist that ffmpeg has written so far. This is the
@@ -269,8 +269,8 @@ fn spawn_ffmpeg(
     audio_track: u32,
     audio_codec_in_source: Option<&str>,
 ) -> Result<Child, HlsError> {
-    let master = dir.join("ffmpeg_master.m3u8"); // not served — we synthesize ours
-    let segment_pattern = dir.join("segment_%05d.ts");
+    let master = dir.join("ffmpeg_master.m3u8");
+    let segment_pattern = dir.join("segment_%05d.m4s");
 
     let copy_audio = matches!(
         audio_codec_in_source.map(|s| s.to_ascii_lowercase()),
@@ -291,7 +291,12 @@ fn spawn_ffmpeg(
     cmd.args(["-sn"])
         .args(["-hls_time", "6"])
         .args(["-hls_list_size", "0"])
-        .args(["-hls_segment_type", "mpegts"])
+        // fMP4 segments: universal container that supports H.264, HEVC, AV1
+        // and VP9 alike. MPEG-TS cannot carry AV1 in a way browsers can
+        // decode, so a `Troie ... AV1` source plays audio-only there.
+        .args(["-hls_segment_type", "fmp4"])
+        .arg("-hls_fmp4_init_filename")
+        .arg("init.mp4")
         .args(["-hls_flags", "temp_file+independent_segments"])
         .arg("-hls_segment_filename")
         .arg(&segment_pattern)

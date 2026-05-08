@@ -11,12 +11,15 @@ download_dir = "./data/downloads"
 max_storage_gb = 500
 cleanup_threshold_pct = 90
 cleanup_target_pct = 75
+# BitTorrent listen port (TCP + UDP). Pin so you can forward it in your
+# router/firewall.
+torrent_port = 45100
 
 [auth]
 # Override every value below with IRIS_AUTH__<KEY> environment variables in
 # production. The JWT secret in particular MUST come from the environment.
 jwt_secret = "change-me-in-production"
-access_ttl_secs = 900
+access_ttl_secs = 3600
 refresh_ttl_secs = 604800
 invitation_ttl_secs = 604800
 

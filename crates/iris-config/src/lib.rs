@@ -58,6 +58,10 @@ pub struct StorageConfig {
     pub cleanup_threshold_pct: u8,
     #[serde(default = "default_cleanup_target")]
     pub cleanup_target_pct: u8,
+    /// Pinned BitTorrent listen port (TCP + UDP). Forward this in your
+    /// firewall / docker for inbound peer connections.
+    #[serde(default = "default_torrent_port")]
+    pub torrent_port: u16,
 }
 
 fn default_max_storage() -> u64 {
@@ -68,6 +72,9 @@ fn default_cleanup_threshold() -> u8 {
 }
 fn default_cleanup_target() -> u8 {
     75
+}
+fn default_torrent_port() -> u16 {
+    45100
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,7 +91,11 @@ pub struct AuthConfig {
 }
 
 fn default_access_ttl() -> i64 {
-    900 // 15 min
+    // Streaming sessions routinely exceed the old 15 min default — the
+    // player would suddenly 401 mid-movie. 1 hour is a sane compromise:
+    // long enough for a typical viewing session, short enough that a
+    // stolen cookie has limited reach.
+    3600 // 1 hour
 }
 fn default_refresh_ttl() -> i64 {
     7 * 24 * 3600

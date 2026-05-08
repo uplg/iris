@@ -3,7 +3,7 @@ use std::sync::Arc;
 use iris_auth::jwt::Issuer;
 use iris_config::{AppConfig, AuthConfig};
 use iris_db::SqlitePool;
-use iris_media::HlsManager;
+use iris_media::{HlsManager, ProbeCache};
 use iris_providers::ProviderRegistry;
 use iris_torrent::{Engine, Gc};
 
@@ -20,6 +20,7 @@ struct Inner {
     pub engine: Arc<Engine>,
     pub hls: HlsManager,
     pub gc: Gc,
+    pub probes: ProbeCache,
 }
 
 impl AppState {
@@ -46,6 +47,7 @@ impl AppState {
                 engine,
                 hls,
                 gc,
+                probes: ProbeCache::new(),
             }),
         }
     }
@@ -70,6 +72,9 @@ impl AppState {
     }
     pub fn gc(&self) -> &Gc {
         &self.inner.gc
+    }
+    pub fn probes(&self) -> &ProbeCache {
+        &self.inner.probes
     }
 }
 
