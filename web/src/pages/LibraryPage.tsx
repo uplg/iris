@@ -99,6 +99,11 @@ function LibraryRow({
             {formatSize(t.download_speed_bps)}/s · ↑ {formatSize(t.upload_speed_bps)}/s · {t.peers}{" "}
             peers
           </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Added by <span className="text-foreground">{t.added_by_name}</span>
+            {" · "}
+            {new Date(t.added_at).toLocaleDateString()}
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {videos.length === 1 && (

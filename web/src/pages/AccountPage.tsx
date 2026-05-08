@@ -63,6 +63,8 @@ export function AccountPage() {
         </p>
       </section>
 
+      <DisplayNameCard />
+
       <DevicesCard />
 
       <Card className="max-w-md">
@@ -128,6 +130,80 @@ export function AccountPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function DisplayNameCard() {
+  const auth = useAuth();
+  const qc = useQueryClient();
+  const [name, setName] = useState(
+    auth.status === "authenticated" ? auth.user.display_name : "",
+  );
+  const [success, setSuccess] = useState(false);
+
+  // Re-sync local input if the auth user changes (e.g. /me refresh).
+  useEffect(() => {
+    if (auth.status === "authenticated") setName(auth.user.display_name);
+  }, [auth.status === "authenticated" ? auth.user.display_name : ""]);
+
+  const save = useMutation({
+    mutationFn: (n: string) => authApi.changeDisplayName(n),
+    onSuccess: () => {
+      setSuccess(true);
+      void qc.invalidateQueries({ queryKey: ["me"] });
+    },
+  });
+
+  if (auth.status !== "authenticated") return null;
+  const trimmed = name.trim();
+  const dirty = trimmed.length > 0 && trimmed !== auth.user.display_name;
+  const errMessage = save.error
+    ? save.error instanceof ApiError
+      ? save.error.message
+      : String(save.error)
+    : null;
+
+  return (
+    <Card className="max-w-md">
+      <CardHeader>
+        <CardTitle>Display name</CardTitle>
+        <CardDescription>
+          Public handle shown wherever Iris credits a user
+          (Library "added by", future comments…). Defaults to the part of
+          your email before the first dot — change it to whatever you like.
+          Your email stays private.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setSuccess(false);
+            if (!dirty) return;
+            save.mutate(trimmed);
+          }}
+        >
+          <div className="grid gap-2">
+            <Label htmlFor="displayName">Name</Label>
+            <Input
+              id="displayName"
+              maxLength={64}
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setSuccess(false);
+              }}
+            />
+          </div>
+          {errMessage && <p className="text-sm text-destructive">{errMessage}</p>}
+          {success && <p className="text-sm text-emerald-300">Saved.</p>}
+          <Button type="submit" disabled={!dirty || save.isPending}>
+            {save.isPending ? "Saving…" : "Save"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 

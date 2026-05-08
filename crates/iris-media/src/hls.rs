@@ -125,6 +125,21 @@ impl HlsManager {
     /// Ensure an ffmpeg HLS job is running for `key`; returns the directory
     /// once spawned (or already running). Segments arrive on disk as ffmpeg
     /// processes the file.
+    ///
+    /// Performs a strict validation of the on-disk state up front. Three
+    /// outcomes:
+    ///
+    ///   * **Clean** — every expected variant playlist (`stream_0`..`N`)
+    ///     contains ENDLIST. Return without acquiring the Mutex; segment
+    ///     requests stream off disk.
+    ///   * **Partial** — ffmpeg is still working (or crashed mid-job and
+    ///     the dir hasn't been claimed yet). Acquire the Mutex; either
+    ///     join the in-flight job or spawn a fresh one.
+    ///   * **Corrupt** — `.done` is on disk but at least one variant
+    ///     playlist is missing or unfinished. Self-heal: wipe the dir
+    ///     and respawn from scratch. This protects against borked output
+    ///     from older buggy ffmpeg invocations (`name:` collisions in
+    ///     `var_stream_map`, status-0-without-output regressions, …).
     pub async fn ensure_job(
         &self,
         key: &str,
@@ -133,21 +148,11 @@ impl HlsManager {
     ) -> Result<PathBuf, HlsError> {
         let dir = self.segment_dir_for(key);
 
-        // Lock-free fast path: when ENDLIST is on disk we KNOW there's
-        // nothing to spawn, so don't even contend the jobs Mutex. This is
-        // critical for serving — hls.js fetches 5-10 segments in parallel
-        // and each segment request used to acquire the Mutex + do sync
-        // I/O inside the lock. Median segment latency went from <5 ms to
-        // hundreds of ms under load.
-        if is_done(&dir).await {
-            return Ok(dir);
-        }
-        // Fast path 2: ffmpeg ran to completion at least once but ENDLIST
-        // somehow didn't land — fix it up & return without locking.
-        if tokio::fs::try_exists(dir.join(".done")).await.unwrap_or(false)
-            && tokio::fs::try_exists(dir.join(MASTER_PLAYLIST)).await.unwrap_or(false)
-        {
-            fixup_endlist(&dir, audio_tracks.len());
+        // Lock-free hot path: clean dirs serve directly with no Mutex
+        // contention. hls.js fans out 5-10 segment fetches in parallel
+        // and each one used to queue on the jobs lock; this knocks
+        // median latency from hundreds of ms back to <5 ms.
+        if validate_dir(&dir, audio_tracks.len()).await == DirState::Clean {
             return Ok(dir);
         }
 
@@ -155,11 +160,19 @@ impl HlsManager {
         if let Some(j) = jobs.get(key) {
             return Ok(j.dir.clone());
         }
-        // Re-check the same disk-state guards we did lock-free above —
-        // another task may have completed the job between our check and
-        // the lock acquisition.
-        if is_done(&dir).await {
-            return Ok(dir);
+        // Re-validate inside the lock — another task may have completed
+        // the job between our lock-free check and acquiring the Mutex.
+        match validate_dir(&dir, audio_tracks.len()).await {
+            DirState::Clean => return Ok(dir),
+            DirState::Corrupt => {
+                tracing::warn!(
+                    key = %key,
+                    dir = %dir.display(),
+                    "HLS dir is corrupt (`.done` present but variants incomplete) — wiping for re-segmentation",
+                );
+                let _ = tokio::fs::remove_dir_all(&dir).await;
+            }
+            DirState::Partial => { /* fall through to spawn */ }
         }
 
         let j = Arc::new(JobState {
@@ -374,13 +387,23 @@ impl HlsManager {
         n
     }
 
-    /// Read the video variant playlist's ENDLIST flag.
-    pub async fn video_endlist_present(&self, key: &str) -> bool {
-        let path = self.segment_dir_for(key).join(VIDEO_VARIANT_PLAYLIST);
-        tokio::fs::read_to_string(&path)
-            .await
-            .map(|c| c.contains("#EXT-X-ENDLIST"))
-            .unwrap_or(false)
+    /// True only when **every** variant playlist (`stream_0..=audio_count`)
+    /// is on disk AND carries `#EXT-X-ENDLIST`. The route layer uses this
+    /// as the "fully done" signal for the UI — checking only `stream_0`
+    /// missed the case where ffmpeg crashed mid-job after the video
+    /// variant finished but before the audio renditions did, which then
+    /// looked "ready" but tanked the player on the first stream_1
+    /// fetch.
+    pub async fn all_endlist_present(&self, key: &str, audio_count: usize) -> bool {
+        let dir = self.segment_dir_for(key);
+        for i in 0..=audio_count {
+            let pl = dir.join(format!("stream_{i}")).join("playlist.m3u8");
+            match tokio::fs::read_to_string(&pl).await {
+                Ok(c) if c.contains("#EXT-X-ENDLIST") => continue,
+                _ => return false,
+            }
+        }
+        true
     }
 }
 
@@ -576,24 +599,71 @@ async fn await_child_exit(mut child: Child) -> std::io::Result<std::process::Exi
     child.wait().await
 }
 
-/// True when the video variant playlist exists on disk and already has
-/// `#EXT-X-ENDLIST`. Async, no Mutex needed — the only signal we need to
-/// know it's safe to serve segments without involving the job manager.
-async fn is_done(dir: &Path) -> bool {
-    if !tokio::fs::try_exists(dir.join(MASTER_PLAYLIST)).await.unwrap_or(false) {
-        return false;
-    }
-    let video_pl = dir.join(VIDEO_VARIANT_PLAYLIST);
-    match tokio::fs::read_to_string(&video_pl).await {
-        Ok(c) => c.contains("#EXT-X-ENDLIST"),
-        Err(_) => false,
-    }
+/// On-disk state of an HLS cache directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirState {
+    /// Every variant playlist has ENDLIST — segments are static, just serve.
+    Clean,
+    /// Either no master.m3u8 yet (cold start) or `.done` is missing
+    /// (= ffmpeg is mid-job, or crashed without writing the sentinel).
+    /// Caller should spawn / join the job.
+    Partial,
+    /// `.done` was written by the reaper but at least one variant
+    /// playlist is missing or unfinished — broken output from an
+    /// earlier buggy run. Caller should wipe the dir and respawn.
+    Corrupt,
 }
 
-/// Public, async sibling of [`is_done`] used by the route layer to decide
-/// whether a segment request can bypass the probe+lock path entirely.
-pub async fn is_master_or_endlist_done(dir: &Path) -> bool {
-    is_done(dir).await
+/// Strict validation of an HLS dir against the expected variant count
+/// (`audio_count + 1` total: `stream_0` for video plus one per audio
+/// rendition). See [`DirState`] for outcomes.
+async fn validate_dir(dir: &Path, audio_count: usize) -> DirState {
+    let master_exists = tokio::fs::try_exists(dir.join(MASTER_PLAYLIST))
+        .await
+        .unwrap_or(false);
+    if !master_exists {
+        return DirState::Partial;
+    }
+    let done = tokio::fs::try_exists(dir.join(".done")).await.unwrap_or(false);
+
+    let mut all_endlist = true;
+    for i in 0..=audio_count {
+        let pl = dir.join(format!("stream_{i}")).join("playlist.m3u8");
+        match tokio::fs::read_to_string(&pl).await {
+            Ok(c) if c.contains("#EXT-X-ENDLIST") => {} // ok, this variant is done
+            Ok(_) => all_endlist = false,
+            Err(_) => {
+                // Variant playlist missing on disk. If `.done` claimed
+                // the job finished, this means broken output — corrupt.
+                // Otherwise we're just early.
+                return if done { DirState::Corrupt } else { DirState::Partial };
+            }
+        }
+    }
+    if all_endlist {
+        DirState::Clean
+    } else if done {
+        // `.done` says we're finished but a variant playlist is missing
+        // ENDLIST. Try once to patch it before declaring corrupt.
+        fixup_endlist(dir, audio_count);
+        // Re-check after fixup.
+        let mut all_endlist = true;
+        for i in 0..=audio_count {
+            let pl = dir.join(format!("stream_{i}")).join("playlist.m3u8");
+            if let Ok(c) = std::fs::read_to_string(&pl) {
+                if !c.contains("#EXT-X-ENDLIST") {
+                    all_endlist = false;
+                    break;
+                }
+            } else {
+                all_endlist = false;
+                break;
+            }
+        }
+        if all_endlist { DirState::Clean } else { DirState::Corrupt }
+    } else {
+        DirState::Partial
+    }
 }
 
 /// Append `#EXT-X-ENDLIST` to every variant playlist that's missing it.

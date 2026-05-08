@@ -327,6 +327,10 @@ fn audio_tracks_for_hls(probe: &iris_media::MediaProbe) -> Vec<iris_media::hls::
 pub struct TorrentView {
     pub id: uuid::Uuid,
     pub added_by: uuid::Uuid,
+    /// Public display name of the uploader (NOT the email — that stays
+    /// private). Backfilled from the email's local-part for accounts
+    /// that pre-date migration 0006; users edit it from /account.
+    pub added_by_name: String,
     pub added_at: chrono::DateTime<chrono::Utc>,
     pub last_played_at: Option<chrono::DateTime<chrono::Utc>>,
     pub source_provider: Option<String>,
@@ -347,6 +351,7 @@ async fn list(
             out.push(TorrentView {
                 id: row.id,
                 added_by: row.added_by,
+                added_by_name: row.added_by_name,
                 added_at: row.added_at,
                 last_played_at: row.last_played_at,
                 source_provider: row.source_provider,
@@ -374,6 +379,7 @@ async fn get_one(
     Ok(Json(TorrentView {
         id: row.id,
         added_by: row.added_by,
+        added_by_name: row.added_by_name,
         added_at: row.added_at,
         last_played_at: row.last_played_at,
         source_provider: row.source_provider,
@@ -488,7 +494,14 @@ async fn hls_status(
     // faster (smaller files). The video sub-playlist reaching ENDLIST means
     // the whole job is done.
     let segments_produced = state.hls().video_segment_count(&key).await;
-    let endlist_present = state.hls().video_endlist_present(&key).await;
+    // Strict ENDLIST check: every variant (video + each audio rendition)
+    // must be done. A previous version only verified `stream_0` and
+    // mounted the player while stream_1/stream_2 were still partial,
+    // producing the dreaded "tank with no errors" symptom.
+    let endlist_present = state
+        .hls()
+        .all_endlist_present(&key, audio_tracks.len())
+        .await;
     let ffmpeg_running = !endlist_present && state.hls().is_job_active(&key).await;
 
     // Rough estimate of total segments based on probed duration. Actual

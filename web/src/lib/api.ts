@@ -1,6 +1,7 @@
 export type User = {
   id: string;
   email: string;
+  display_name: string;
   is_admin: boolean;
 };
 
@@ -63,6 +64,8 @@ export const auth = {
   logout: () => api.post<void>("/auth/logout"),
   changePassword: (old_password: string, new_password: string) =>
     api.post<void>("/me/password", { old_password, new_password }),
+  changeDisplayName: (display_name: string) =>
+    api.post<void>("/me/display-name", { display_name }),
 };
 
 export type StorageStats = {
@@ -92,6 +95,7 @@ export type GcReport = {
 export type UserView = {
   id: string;
   email: string;
+  display_name: string;
   is_admin: boolean;
   created_at: string;
 };
@@ -312,6 +316,10 @@ export type TorrentSnapshot = {
 export type TorrentView = TorrentSnapshot & {
   id: string;
   added_by: string;
+  /** Public display name of the user that added this torrent. The email
+   *  stays private to the API; this is what gets rendered everywhere
+   *  the UI says "added by …". */
+  added_by_name: string;
   added_at: string;
   last_played_at: string | null;
   source_provider: string | null;

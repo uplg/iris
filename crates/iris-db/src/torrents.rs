@@ -14,6 +14,12 @@ pub struct TorrentRow {
     pub source_external_id: Option<String>,
     pub tmdb_id: Option<i64>,
     pub added_by: Uuid,
+    /// Public-facing display name of the user that added this torrent
+    /// (denormalised via JOIN in [`find_by_infohash`] / [`list_active`]).
+    /// Always present — `added_by` is `NOT NULL` with `ON DELETE CASCADE`
+    /// so the row can't outlive its owner. Email is intentionally NOT
+    /// exposed here to avoid leaking PII to non-admin users.
+    pub added_by_name: String,
     pub added_at: DateTime<Utc>,
     pub last_played_at: Option<DateTime<Utc>>,
     pub last_seed_activity_at: Option<DateTime<Utc>>,
@@ -84,9 +90,12 @@ pub async fn find_by_infohash(
     infohash: &str,
 ) -> Result<Option<TorrentRow>, sqlx::Error> {
     sqlx::query_as::<_, TorrentRow>(
-        "SELECT id, infohash, name, total_size_bytes, source_provider, source_external_id, \
-         tmdb_id, added_by, added_at, last_played_at, last_seed_activity_at, deleted_at \
-         FROM torrents WHERE infohash = ?1",
+        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
+         t.tmdb_id, t.added_by, u.display_name AS added_by_name, t.added_at, t.last_played_at, \
+         t.last_seed_activity_at, t.deleted_at \
+         FROM torrents t \
+         JOIN users u ON u.id = t.added_by \
+         WHERE t.infohash = ?1",
     )
     .bind(infohash)
     .fetch_optional(pool)
@@ -95,9 +104,12 @@ pub async fn find_by_infohash(
 
 pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Error> {
     sqlx::query_as::<_, TorrentRow>(
-        "SELECT id, infohash, name, total_size_bytes, source_provider, source_external_id, \
-         tmdb_id, added_by, added_at, last_played_at, last_seed_activity_at, deleted_at \
-         FROM torrents WHERE deleted_at IS NULL ORDER BY added_at DESC",
+        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
+         t.tmdb_id, t.added_by, u.display_name AS added_by_name, t.added_at, t.last_played_at, \
+         t.last_seed_activity_at, t.deleted_at \
+         FROM torrents t \
+         JOIN users u ON u.id = t.added_by \
+         WHERE t.deleted_at IS NULL ORDER BY t.added_at DESC",
     )
     .fetch_all(pool)
     .await

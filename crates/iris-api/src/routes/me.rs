@@ -14,6 +14,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(me))
         .route("/continue-watching", get(continue_watching))
         .route("/password", axum::routing::post(change_password))
+        .route("/display-name", axum::routing::post(change_display_name))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -52,6 +53,7 @@ async fn change_password(
 struct MeResponse {
     id: Uuid,
     email: String,
+    display_name: String,
     is_admin: bool,
 }
 
@@ -62,8 +64,30 @@ async fn me(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<MeR
     Ok(Json(MeResponse {
         id: u.id.into(),
         email: u.email,
+        display_name: u.display_name,
         is_admin: u.is_admin,
     }))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ChangeDisplayNameRequest {
+    pub display_name: String,
+}
+
+async fn change_display_name(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<ChangeDisplayNameRequest>,
+) -> ApiResult<axum::http::StatusCode> {
+    let trimmed = body.display_name.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError::BadRequest("display name cannot be empty".into()));
+    }
+    if trimmed.len() > 64 {
+        return Err(ApiError::BadRequest("display name too long (max 64)".into()));
+    }
+    let _ = iris_db::users::update_display_name(state.db(), user.id, trimmed).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, serde::Serialize)]

@@ -114,6 +114,7 @@ data class DevicePollResponse(
 data class UserResponse(
     val id: String,
     val email: String,
+    @SerialName("display_name") val displayName: String = "",
     @SerialName("is_admin") val isAdmin: Boolean,
 )
 
@@ -143,6 +144,8 @@ data class TorrentView(
     val infohash: String,
     val name: String? = null,
     @SerialName("tmdb_id") val tmdbId: Long? = null,
+    @SerialName("added_by_name") val addedByName: String = "",
+    @SerialName("added_at") val addedAt: String = "",
     @SerialName("total_size_bytes") val totalSizeBytes: Long,
     val state: String,
     @SerialName("progress_bytes") val progressBytes: Long,

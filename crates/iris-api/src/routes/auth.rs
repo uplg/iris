@@ -33,6 +33,7 @@ pub struct RegisterRequest {
 pub struct UserResponse {
     pub id: Uuid,
     pub email: String,
+    pub display_name: String,
     pub is_admin: bool,
 }
 
@@ -88,6 +89,7 @@ async fn register(
         Json(UserResponse {
             id: user.id.into(),
             email: user.email,
+            display_name: user.display_name,
             is_admin: user.is_admin,
         }),
     ))
@@ -120,6 +122,7 @@ async fn login(
         Json(UserResponse {
             id: user.id.into(),
             email: user.email,
+            display_name: user.display_name,
             is_admin: user.is_admin,
         }),
     ))
@@ -156,6 +159,7 @@ async fn refresh(
         Json(UserResponse {
             id: user.id.into(),
             email: user.email,
+            display_name: user.display_name,
             is_admin: user.is_admin,
         }),
     ))

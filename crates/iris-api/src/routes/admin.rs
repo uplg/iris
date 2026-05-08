@@ -29,6 +29,7 @@ pub fn router() -> Router<AppState> {
 struct UserView {
     id: Uuid,
     email: String,
+    display_name: String,
     is_admin: bool,
     created_at: chrono::DateTime<Utc>,
 }
@@ -44,6 +45,7 @@ async fn list_users(
             .map(|u| UserView {
                 id: u.id.into(),
                 email: u.email,
+                display_name: u.display_name,
                 is_admin: u.is_admin,
                 created_at: u.created_at,
             })

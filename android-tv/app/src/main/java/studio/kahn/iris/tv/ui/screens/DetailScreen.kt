@@ -156,6 +156,14 @@ fun DetailScreen(
                     maxLines = 8,
                 )
             }
+            if (t.addedByName.isNotBlank()) {
+                Text(
+                    "Added by ${t.addedByName}" +
+                        if (t.addedAt.length >= 10) " · ${t.addedAt.substring(0, 10)}" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Button(
                 onClick = onBack,
                 shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
