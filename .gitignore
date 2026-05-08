@@ -1,0 +1,17 @@
+/target
+/web/node_modules
+/web/dist
+/web/.vite
+/data
+/downloads
+/.env
+/.env.*
+!/.env.example
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+*.sqlite3
+.DS_Store
+.idea/
+.vscode/

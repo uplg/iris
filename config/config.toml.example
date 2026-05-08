@@ -1,0 +1,25 @@
+providers_file = "./config/providers.toml"
+
+[server]
+bind = "0.0.0.0:8080"
+public_url = "http://localhost:8080"
+# web_dist = "/srv/iris/web"  # path to React build output (set in production)
+
+[storage]
+data_dir = "./data"
+download_dir = "./data/downloads"
+max_storage_gb = 500
+cleanup_threshold_pct = 90
+cleanup_target_pct = 75
+
+[auth]
+# Override with IRIS_AUTH__JWT_SECRET in production.
+jwt_secret = "change-me-in-production"
+access_ttl_secs = 900
+refresh_ttl_secs = 604800
+invitation_ttl_secs = 604800
+
+# Created on first boot if no users exist. Remove or change once you have an admin account.
+[auth.bootstrap_admin]
+email = "admin@iris.local"
+password = "change-me-immediately"

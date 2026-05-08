@@ -1,0 +1,52 @@
+services:
+  iris:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: iris:dev
+    restart: unless-stopped
+    # Pass tracker credentials (TORR9_USERNAME, TORR9_PASSWORD, …) into the container.
+    env_file:
+      - .env
+    environment:
+      IRIS_CONFIG: /srv/iris/config/config.toml
+      # Always bind to all interfaces inside the container so the port forward works,
+      # regardless of what config.toml says.
+      IRIS_SERVER__BIND: "0.0.0.0:8080"
+      # Serve the bundled React build alongside the API.
+      IRIS_SERVER__WEB_DIST: "/srv/iris/web"
+      # Persist all data into the volume mounted at /data, regardless of the
+      # relative paths in config.toml (which target the dev workspace).
+      IRIS_STORAGE__DATA_DIR: "/data"
+      IRIS_STORAGE__DOWNLOAD_DIR: "/data/downloads"
+      IRIS_AUTH__JWT_SECRET: ${IRIS_JWT_SECRET:?set IRIS_JWT_SECRET in .env}
+      RUST_LOG: ${RUST_LOG:-info,iris=debug,tower_http=info}
+    volumes:
+      - ./config:/srv/iris/config:ro
+      - iris-data:/data
+    ports:
+      - "${IRIS_BIND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/iris", "--help"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - iris
+    profiles: ["proxy"]
+
+volumes:
+  iris-data:
+  caddy-data:
+  caddy-config:

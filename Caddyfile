@@ -1,0 +1,8 @@
+{
+    # email you@example.com  # uncomment to enable Let's Encrypt
+}
+
+{$IRIS_DOMAIN:localhost} {
+    encode gzip zstd
+    reverse_proxy iris:8080
+}
