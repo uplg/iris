@@ -190,13 +190,29 @@ impl HlsManager {
         if let Some(j) = jobs.get(key) {
             return Ok(j.dir.clone());
         }
-        // If a previous job already finished and segments are on disk, no
-        // need to respawn — they'll just be served as static files. We check
-        // for the master + the video variant init.mp4 because that's the
-        // first artifact ffmpeg produces and it stays put even if segments
-        // are pruned later.
-        if dir.join(MASTER_PLAYLIST).exists() && dir.join(VIDEO_VARIANT_DIR).join("init.mp4").exists() {
-            return Ok(dir);
+        // If a previous job already wrote ENDLIST into the video variant
+        // playlist we're done — segments are static files served straight
+        // from disk and we *must not* re-spawn (would loop forever).
+        // Checking init.mp4 alone isn't reliable across ffmpeg versions
+        // which place it in different paths; ENDLIST is the canonical
+        // "fully done" signal.
+        let done_marker = dir.join(".done");
+        if dir.join(MASTER_PLAYLIST).exists() {
+            if let Ok(content) = std::fs::read_to_string(dir.join(VIDEO_VARIANT_PLAYLIST)) {
+                if content.contains("#EXT-X-ENDLIST") {
+                    return Ok(dir);
+                }
+            }
+            // Belt-and-suspenders: if ffmpeg already ran to clean exit at
+            // least once (the reaper writes `.done`), don't respawn even
+            // when ENDLIST is missing. ffmpeg occasionally exits 0 in
+            // multi-variant mode without flushing ENDLIST to every
+            // sub-playlist; respawning just hits the same wall over and
+            // over. We append ENDLIST manually so the player sees VOD.
+            if done_marker.exists() {
+                fixup_endlist(&dir, audio_tracks.len());
+                return Ok(dir);
+            }
         }
 
         let j = Arc::new(JobState {
@@ -227,11 +243,18 @@ impl HlsManager {
         let key_owned = key.to_string();
         let jobs_handle = self.inner.jobs.clone();
         let job_for_reaper = j.clone();
+        let audio_count = audio_tracks.len();
         tokio::spawn(async move {
             let exit = await_child_exit(child).await;
             match exit {
                 Ok(status) if status.success() => {
                     tracing::info!(key = %key_owned, "ffmpeg HLS job finished");
+                    // Sentinel: prevents respawn after a clean exit even
+                    // if ffmpeg forgot to write ENDLIST. Without this
+                    // marker `ensure_job` would loop forever on sources
+                    // that trigger that ffmpeg quirk.
+                    let _ = std::fs::write(job_for_reaper.dir.join(".done"), "");
+                    fixup_endlist(&job_for_reaper.dir, audio_count);
                 }
                 Ok(status) => {
                     tracing::warn!(key = %key_owned, ?status, "ffmpeg HLS exited non-zero");
@@ -435,19 +458,26 @@ fn spawn_ffmpeg(
         // browser-compatible.
         .args(["-map", "0:v:0", "-c:v", "copy"]);
 
-    // Per-audio-track mapping + codec selection. For each input track
-    // index we take the matching `0:a:N` and pick `copy` if it's already
-    // browser-friendly (AAC/MP3), otherwise transcode to stereo AAC.
-    for (i, t) in audio_tracks.iter().enumerate() {
+    // Map every audio track in the order we'll declare them in
+    // `var_stream_map`. The output stream index is implicit (0..N).
+    for t in audio_tracks {
         cmd.args(["-map", &format!("0:a:{}", t.track_idx)]);
-        let copy = matches!(t.codec.to_ascii_lowercase().as_str(), "aac" | "mp3");
-        if copy {
-            cmd.args([format!("-c:a:{i}").as_str(), "copy"]);
-        } else {
-            cmd.args([format!("-c:a:{i}").as_str(), "aac"])
-                .args([format!("-ac:a:{i}").as_str(), "2"])
-                .args([format!("-b:a:{i}").as_str(), "192k"]);
-        }
+    }
+
+    // Audio codec is global, not per-stream: stream-spec args like
+    // `-c:a:N copy` proved unreliable across ffmpeg versions when combined
+    // with `var_stream_map` (silent exit with code 254 in 7.x). If every
+    // selected track is already browser-friendly we copy; otherwise we
+    // re-encode all audio to stereo AAC. Mixed-codec sources are rare
+    // enough that always-transcoding the lot is fine.
+    let all_copyable = !audio_tracks.is_empty()
+        && audio_tracks
+            .iter()
+            .all(|t| matches!(t.codec.to_ascii_lowercase().as_str(), "aac" | "mp3"));
+    if all_copyable {
+        cmd.args(["-c:a", "copy"]);
+    } else if !audio_tracks.is_empty() {
+        cmd.args(["-c:a", "aac", "-ac", "2", "-b:a", "192k"]);
     }
 
     // Drop any other streams (subtitles, data) — subtitles are served via
@@ -474,7 +504,10 @@ fn spawn_ffmpeg(
                 .unwrap_or_else(|| format!("Track{i}"));
             map.push_str(&format!(",name:{label}"));
             if t.default {
-                map.push_str(",default:yes");
+                // Capital YES — ffmpeg's var_stream_map parser is
+                // case-sensitive on this token in 7.x, lowercase silently
+                // produces a parse error and ffmpeg exits with status 254.
+                map.push_str(",default:YES");
             }
         }
     }
@@ -516,11 +549,22 @@ fn spawn_ffmpeg(
 
     let mut child = cmd.spawn()?;
     if let Some(mut stderr) = child.stderr.take() {
+        // Mirror ffmpeg's stderr to a log file in the job dir AND to
+        // tracing at info level. Without a persistent log post-mortem of
+        // a `WARN: ffmpeg HLS exited non-zero` is impossible — the actual
+        // ffmpeg error message is otherwise lost.
+        let log_path = dir.join("ffmpeg.log");
         tokio::spawn(async move {
             use tokio::io::AsyncBufReadExt;
+            let mut log = tokio::fs::File::create(&log_path).await.ok();
             let mut reader = tokio::io::BufReader::new(&mut stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                tracing::debug!(target: "ffmpeg-hls", "{line}");
+                tracing::info!(target: "ffmpeg-hls", "{line}");
+                if let Some(f) = log.as_mut() {
+                    use tokio::io::AsyncWriteExt;
+                    let _ = f.write_all(line.as_bytes()).await;
+                    let _ = f.write_all(b"\n").await;
+                }
             }
         });
     }
@@ -586,4 +630,33 @@ fn build_master_playlist(audio_tracks: &[AudioTrack]) -> String {
 
 async fn await_child_exit(mut child: Child) -> std::io::Result<std::process::ExitStatus> {
     child.wait().await
+}
+
+/// Append `#EXT-X-ENDLIST` to every variant playlist that's missing it.
+/// `-hls_playlist_type event` is supposed to add this on clean exit, but
+/// ffmpeg 7.x occasionally skips it for sub-playlists in multi-variant
+/// mode. Without ENDLIST players treat the source as live and lock the
+/// timeline at the live edge — no seeking. The append is idempotent.
+fn fixup_endlist(dir: &Path, audio_count: usize) {
+    for i in 0..=audio_count {
+        let path = dir.join(format!("stream_{i}")).join("playlist.m3u8");
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if content.contains("#EXT-X-ENDLIST") {
+            continue;
+        }
+        let patched = if content.ends_with('\n') {
+            format!("{content}#EXT-X-ENDLIST\n")
+        } else {
+            format!("{content}\n#EXT-X-ENDLIST\n")
+        };
+        if let Err(e) = std::fs::write(&path, patched) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "fixup_endlist: could not patch playlist",
+            );
+        }
+    }
 }
