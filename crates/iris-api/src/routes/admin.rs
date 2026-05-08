@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::routing::get;
 use chrono::{Duration, Utc};
 use iris_auth::new_invitation_token;
@@ -23,6 +24,8 @@ pub fn router() -> Router<AppState> {
             "/users/{id}/password",
             axum::routing::post(reset_user_password),
         )
+        .route("/hls", get(list_hls_jobs))
+        .route("/hls/{key}", axum::routing::delete(wipe_hls_job))
 }
 
 #[derive(Debug, Serialize)]
@@ -230,4 +233,96 @@ async fn revoke_invitation(
     } else {
         Err(ApiError::NotFound)
     }
+}
+
+#[derive(Debug, Serialize)]
+struct HlsJobView {
+    /// `<infohash>_<file_idx>` — the cache directory name.
+    key: String,
+    infohash: Option<String>,
+    file_idx: Option<usize>,
+    /// Display name pulled from the torrents table when we can resolve it.
+    torrent_name: Option<String>,
+    /// True if an ffmpeg child is currently registered for this key.
+    running: bool,
+    /// `master.m3u8` exists on disk.
+    master_present: bool,
+    /// Number of `seg_*.m4s` files in the video variant directory.
+    video_segments: u32,
+    /// `.done` sentinel present (= ffmpeg exited 0 at least once for this dir).
+    done: bool,
+    /// Unix epoch seconds of the most recent ffmpeg failure, when known.
+    last_failed_at: Option<i64>,
+    /// Whether `ffmpeg.log` exists on disk for post-mortem.
+    has_log: bool,
+    /// Source duration in seconds (sidecar written by `ensure_job` at spawn).
+    expected_duration_secs: Option<f64>,
+    /// Total disk usage of the cache directory in bytes.
+    disk_bytes: u64,
+}
+
+async fn list_hls_jobs(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> ApiResult<Json<Vec<HlsJobView>>> {
+    let jobs = state.hls().list_jobs().await;
+    // Resolve `<infohash>_<idx>` → torrent name via a single DB pass.
+    // Cheap because the active library is usually small.
+    let mut out = Vec::with_capacity(jobs.len());
+    for j in jobs {
+        let mut split = j.key.rsplitn(2, '_');
+        let idx_str = split.next();
+        let infohash = split.next().map(|s| s.to_ascii_lowercase());
+        let idx = idx_str.and_then(|s| s.parse::<usize>().ok());
+        let torrent_name = if let Some(ih) = infohash.as_deref() {
+            iris_db::torrents::find_by_infohash(state.db(), ih)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| r.name)
+        } else {
+            None
+        };
+        out.push(HlsJobView {
+            key: j.key,
+            infohash,
+            file_idx: idx,
+            torrent_name,
+            running: j.running,
+            master_present: j.master_present,
+            video_segments: j.video_segments,
+            done: j.done,
+            last_failed_at: j.last_failed_at,
+            has_log: j.has_log,
+            expected_duration_secs: j.expected_duration_secs,
+            disk_bytes: j.disk_bytes,
+        });
+    }
+    Ok(Json(out))
+}
+
+#[derive(Debug, Serialize)]
+struct WipeHlsResponse {
+    /// Bytes freed by removing the cache directory.
+    freed_bytes: u64,
+}
+
+async fn wipe_hls_job(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(key): Path<String>,
+) -> ApiResult<Json<WipeHlsResponse>> {
+    // Defensive: only accept `<32+_hex>_<digits>` to avoid accidentally
+    // letting a path-traversal slip into `remove_dir_all`.
+    if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') || key.is_empty() {
+        return Err(ApiError::BadRequest("invalid HLS job key".into()));
+    }
+    let freed = state
+        .hls()
+        .wipe_job(&key)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls wipe: {e}")))?;
+    Ok(Json(WipeHlsResponse {
+        freed_bytes: freed,
+    }))
 }

@@ -100,6 +100,21 @@ export type UserView = {
   created_at: string;
 };
 
+export type HlsJobView = {
+  key: string;
+  infohash: string | null;
+  file_idx: number | null;
+  torrent_name: string | null;
+  running: boolean;
+  master_present: boolean;
+  video_segments: number;
+  done: boolean;
+  last_failed_at: number | null;
+  has_log: boolean;
+  expected_duration_secs: number | null;
+  disk_bytes: number;
+};
+
 export const admin = {
   listInvitations: () => api.get<Invitation[]>("/admin/invitations"),
   createInvitation: (ttl_secs?: number) =>
@@ -110,6 +125,8 @@ export const admin = {
   listUsers: () => api.get<UserView[]>("/admin/users"),
   resetPassword: (userId: string, new_password: string) =>
     api.post<void>(`/admin/users/${userId}/password`, { new_password }),
+  listHls: () => api.get<HlsJobView[]>("/admin/hls"),
+  wipeHls: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/hls/${key}`),
 };
 
 export type DeviceView = {

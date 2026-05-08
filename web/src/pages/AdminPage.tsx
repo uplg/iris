@@ -182,7 +182,121 @@ export function AdminPage() {
           )}
         </CardContent>
       </Card>
+
+      <HlsCacheCard />
     </div>
+  );
+}
+
+function HlsCacheCard() {
+  const qc = useQueryClient();
+  const jobs = useQuery({
+    queryKey: ["admin", "hls"],
+    queryFn: admin.listHls,
+    refetchInterval: 10_000,
+  });
+  const wipe = useMutation({
+    mutationFn: (key: string) => admin.wipeHls(key),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "hls"] }),
+  });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>HLS cache</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-sm text-muted-foreground">
+          Pre-segmentation jobs. Wipe when a job is stuck failing or produced
+          a truncated playlist (last fail timestamp set, or video segments
+          way under the source duration). Re-segmentation triggers
+          automatically on the next play attempt.
+        </p>
+        {jobs.data && jobs.data.length === 0 && (
+          <p className="text-sm text-muted-foreground">No HLS dirs on disk.</p>
+        )}
+        {jobs.data && jobs.data.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs text-muted-foreground">
+                <tr>
+                  <th className="px-2 py-1">Title</th>
+                  <th className="px-2 py-1">State</th>
+                  <th className="px-2 py-1 text-right">Segments</th>
+                  <th className="px-2 py-1 text-right">Disk</th>
+                  <th className="px-2 py-1">Last fail</th>
+                  <th className="px-2 py-1"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.data.map((j) => {
+                  const broken = j.last_failed_at != null;
+                  const stale =
+                    j.expected_duration_secs != null &&
+                    j.video_segments > 0 &&
+                    j.video_segments < (j.expected_duration_secs / 6) * 0.5;
+                  const stateLabel = j.running
+                    ? "running"
+                    : broken
+                      ? "failed"
+                      : stale
+                        ? "truncated"
+                        : j.done
+                          ? "ready"
+                          : "partial";
+                  const stateClass =
+                    stateLabel === "ready"
+                      ? "bg-emerald-500/10 text-emerald-300"
+                      : stateLabel === "running"
+                        ? "bg-sky-500/10 text-sky-300"
+                        : stateLabel === "failed" || stateLabel === "truncated"
+                          ? "bg-rose-500/10 text-rose-300"
+                          : "bg-zinc-500/10 text-zinc-300";
+                  return (
+                    <tr key={j.key} className="border-t border-border/50">
+                      <td className="max-w-md truncate px-2 py-1.5" title={j.torrent_name ?? j.key}>
+                        {j.torrent_name ?? <span className="font-mono text-xs">{j.key}</span>}
+                        {j.file_idx != null && (
+                          <span className="ml-1 text-xs text-muted-foreground">
+                            (file #{j.file_idx})
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <Badge variant="outline" className={`text-[10px] uppercase ${stateClass}`}>
+                          {stateLabel}
+                        </Badge>
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">
+                        {j.video_segments}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">
+                        {formatSize(j.disk_bytes)}
+                      </td>
+                      <td className="px-2 py-1.5 text-xs text-muted-foreground">
+                        {j.last_failed_at
+                          ? new Date(j.last_failed_at * 1000).toLocaleString()
+                          : "—"}
+                      </td>
+                      <td className="px-2 py-1.5 text-right">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => wipe.mutate(j.key)}
+                          disabled={wipe.isPending}
+                          title="Wipe this HLS cache directory"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

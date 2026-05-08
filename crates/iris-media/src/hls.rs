@@ -177,6 +177,30 @@ impl HlsManager {
             DirState::Partial => { /* fall through to spawn */ }
         }
 
+        // Cooldown: if ffmpeg failed recently for this key, hold off a
+        // bit before respawning. Without this, an unrecoverable error on
+        // the source (a codec ffmpeg doesn't like, a path quirk, …)
+        // turned every status poll + segment fetch into a fresh ffmpeg
+        // launch — burning CPU at one process per second. 60 seconds
+        // gives enough breathing room for the operator to read
+        // `ffmpeg.log` and understand the problem.
+        if let Ok(content) = tokio::fs::read_to_string(dir.join(".last_failed_at")).await {
+            if let Ok(ts) = content.trim().parse::<i64>() {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                if now - ts < 60 {
+                    drop(jobs);
+                    return Err(HlsError::Failed(
+                        0,
+                        format!(
+                            "ffmpeg failed recently (cooldown {}s) — see {}/ffmpeg.log",
+                            60 - (now - ts),
+                            dir.display(),
+                        ),
+                    ));
+                }
+            }
+        }
+
         let j = Arc::new(JobState {
             dir: dir.clone(),
             finished: Notify::new(),
@@ -232,10 +256,23 @@ impl HlsManager {
                 Ok(status) => {
                     tracing::warn!(key = %key_owned, ?status, "ffmpeg HLS exited non-zero");
                     job_for_reaper.failed.store(true, Ordering::Release);
+                    // Stamp `.last_failed_at` so the next `ensure_job`
+                    // hits the cooldown guard above and doesn't relaunch
+                    // ffmpeg straight away.
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                    let _ = std::fs::write(
+                        job_for_reaper.dir.join(".last_failed_at"),
+                        now.to_string(),
+                    );
                 }
                 Err(e) => {
                     tracing::warn!(key = %key_owned, error = %e, "ffmpeg HLS wait failed");
                     job_for_reaper.failed.store(true, Ordering::Release);
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                    let _ = std::fs::write(
+                        job_for_reaper.dir.join(".last_failed_at"),
+                        now.to_string(),
+                    );
                 }
             }
             job_for_reaper.finished.notify_waiters();
@@ -362,6 +399,77 @@ impl HlsManager {
         evicted
     }
 
+    /// Inventory of every HLS cache directory the manager knows about. Used
+    /// by the admin endpoint to surface broken / stuck jobs and let an
+    /// operator wipe them. Includes presence of the `.done` sentinel,
+    /// `.last_failed_at` timestamp, segment count and total disk usage —
+    /// enough to identify "this one ran but is busted" at a glance.
+    pub async fn list_jobs(&self) -> Vec<JobInfo> {
+        let active: std::collections::HashSet<String> = self
+            .inner
+            .jobs
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect();
+        let mut out = Vec::new();
+        let Ok(mut rd) = tokio::fs::read_dir(&self.inner.base_dir).await else {
+            return out;
+        };
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let Ok(ft) = entry.file_type().await else { continue };
+            if !ft.is_dir() {
+                continue;
+            }
+            let key = match entry.file_name().to_str() {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let dir = entry.path();
+            let master_present =
+                tokio::fs::try_exists(dir.join(MASTER_PLAYLIST)).await.unwrap_or(false);
+            let video_segments =
+                count_segments(&dir.join(VIDEO_VARIANT_DIR)).await as u32;
+            let done = tokio::fs::try_exists(dir.join(".done")).await.unwrap_or(false);
+            let last_failed_at = tokio::fs::read_to_string(dir.join(".last_failed_at"))
+                .await
+                .ok()
+                .and_then(|s| s.trim().parse::<i64>().ok());
+            let has_log = tokio::fs::try_exists(dir.join("ffmpeg.log"))
+                .await
+                .unwrap_or(false);
+            let expected_duration_secs =
+                sidecar_expected_duration(&dir).await;
+            let disk_bytes = dir_size(&dir).await;
+            out.push(JobInfo {
+                key: key.clone(),
+                running: active.contains(&key),
+                master_present,
+                video_segments,
+                done,
+                last_failed_at,
+                has_log,
+                expected_duration_secs,
+                disk_bytes,
+            });
+        }
+        out.sort_by(|a, b| b.last_failed_at.cmp(&a.last_failed_at));
+        out
+    }
+
+    /// Nuke a single HLS cache directory. Doesn't bother killing the
+    /// ffmpeg child (if any): rm-rf yanks its output paths, ffmpeg
+    /// notices, exits non-zero, the reaper removes the entry from the
+    /// jobs map within a few seconds. Returns the size in bytes that was
+    /// freed.
+    pub async fn wipe_job(&self, key: &str) -> Result<u64, HlsError> {
+        let dir = self.inner.base_dir.join(key);
+        let freed = dir_size(&dir).await;
+        tokio::fs::remove_dir_all(&dir).await?;
+        Ok(freed)
+    }
+
     pub async fn cleanup_for_torrent(&self, infohash: &str) {
         let prefix = format!("{infohash}_");
         let mut to_remove = Vec::new();
@@ -446,8 +554,15 @@ fn spawn_ffmpeg(
 
     // Map every audio track in the order we'll declare them in
     // `var_stream_map`. The output stream index is implicit (0..N).
+    //
+    // The trailing `?` makes the mapping non-fatal: if ffmpeg's view of
+    // the file disagrees with our cached probe (rare but happens on
+    // anime MKVs where one stream is mis-categorised, or when the
+    // probe was taken on a partial file and the layout has shifted),
+    // ffmpeg silently drops that audio rendition instead of bailing
+    // with `Stream map '0:a:N' matches no streams`.
     for t in audio_tracks {
-        cmd.args(["-map", &format!("0:a:{}", t.track_idx)]);
+        cmd.args(["-map", &format!("0:a:{}?", t.track_idx)]);
     }
 
     // Audio codec is global, not per-stream: stream-spec args like
@@ -757,6 +872,37 @@ async fn last_segment_size(stream_dir: &Path) -> Option<u64> {
     let idx = last_idx?;
     let path = stream_dir.join(format!("seg_{idx:05}.m4s"));
     tokio::fs::metadata(&path).await.ok().map(|m| m.len())
+}
+
+/// Inventory entry for [`HlsManager::list_jobs`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct JobInfo {
+    pub key: String,
+    pub running: bool,
+    pub master_present: bool,
+    pub video_segments: u32,
+    pub done: bool,
+    pub last_failed_at: Option<i64>,
+    pub has_log: bool,
+    pub expected_duration_secs: Option<f64>,
+    pub disk_bytes: u64,
+}
+
+async fn dir_size(path: &Path) -> u64 {
+    let mut total: u64 = 0;
+    let mut stack: Vec<PathBuf> = vec![path.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let Ok(mut rd) = tokio::fs::read_dir(&p).await else { continue };
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let Ok(meta) = entry.metadata().await else { continue };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
 }
 
 /// Count `seg_NNNNN.m4s` files in a single variant directory.
