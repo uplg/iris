@@ -434,34 +434,28 @@ fn spawn_ffmpeg(
     // the dedicated subtitle endpoint as WebVTT.
     cmd.args(["-sn", "-dn"]);
 
-    // var_stream_map: ffmpeg's syntax for declaring HLS variant streams +
-    // alternate audio renditions. We always have one video variant
-    // (`v:0`) tied to audio group `aud`; each audio track is one rendition
-    // in that group.
+    // var_stream_map: declare one variant per output (1 video + N audios)
+    // sharing a single audio group. We deliberately avoid `name:` here —
+    // when set, ffmpeg substitutes `%v` in `-hls_segment_filename` with
+    // that name *instead* of the variant index. Two audio tracks sharing
+    // the same `name:` (common when the MKV titles read "Mono" / "Stereo"
+    // for both) then collide on the same `stream_<name>/` directory and
+    // one overwrites the other. By omitting `name:`, %v stays as the
+    // numeric index → stream_0, stream_1, stream_2 as we expect.
+    //
+    // `language:`, `default:` and the user-facing NAME live in our
+    // hand-rolled master.m3u8 instead, so ffmpeg's view of the streams
+    // is intentionally minimal.
     let mut map = String::from("v:0");
     if !audio_tracks.is_empty() {
         map.push_str(",agroup:aud");
-        for (i, t) in audio_tracks.iter().enumerate() {
+        for i in 0..audio_tracks.len() {
             map.push(' ');
             map.push_str(&format!("a:{i},agroup:aud"));
-            // ffmpeg accepts `language:` + `name:` here; both must be free
-            // of spaces and quotes. Sanitize aggressively.
-            if let Some(lang) = sanitize(&t.language) {
-                map.push_str(&format!(",language:{lang}"));
-            }
-            let label = sanitize(&t.name)
-                .or_else(|| sanitize(&t.language))
-                .unwrap_or_else(|| format!("Track{i}"));
-            map.push_str(&format!(",name:{label}"));
-            if t.default {
-                // Capital YES — ffmpeg's var_stream_map parser is
-                // case-sensitive on this token in 7.x, lowercase silently
-                // produces a parse error and ffmpeg exits with status 254.
-                map.push_str(",default:YES");
-            }
         }
     }
     cmd.args(["-var_stream_map", &map]);
+    let _ = sanitize; // keep the helper around — used by build_master_playlist.
 
     // No `-master_pl_name` here — we write the master playlist ourselves
     // in [`HlsManager::ensure_job`] *before* spawning ffmpeg. ffmpeg used
