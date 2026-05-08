@@ -486,6 +486,22 @@ async fn hls_status(
             path.display()
         )));
     }
+    // Don't kick ffmpeg while the torrent is still downloading — we'd
+    // produce a truncated HLS pipeline (playlist with N segments but
+    // each shrinking to nothing as ffmpeg hits EOF on the sparse file).
+    // The WatchScreen polls this endpoint as soon as it mounts, and
+    // without this guard ffmpeg used to start *during* the download.
+    if let Some(snap) = state.engine().get_by_infohash(&infohash) {
+        if !snap.finished {
+            return Ok(Json(HlsStatus {
+                ffmpeg_running: false,
+                segments_produced: 0,
+                estimated_total_segments: None,
+                endlist_present: false,
+                error: Some("torrent still downloading".into()),
+            }));
+        }
+    }
 
     // Cached probe powers both audio mapping and the duration estimate.
     let probe = state
