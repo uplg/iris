@@ -64,9 +64,7 @@ export function AccountPage() {
       <Card className="max-w-md">
         <CardHeader>
           <CardTitle>Change password</CardTitle>
-          <CardDescription>
-            Other sessions will be signed out automatically.
-          </CardDescription>
+          <CardDescription>Other sessions will be signed out automatically.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit} className="grid gap-4">
@@ -116,11 +114,7 @@ export function AccountPage() {
             <Button
               type="submit"
               disabled={
-                change.isPending ||
-                !oldPwd ||
-                !newPwd ||
-                newPwd !== confirm ||
-                newPwd.length < 8
+                change.isPending || !oldPwd || !newPwd || newPwd !== confirm || newPwd.length < 8
               }
             >
               <KeyRound className="size-4" />

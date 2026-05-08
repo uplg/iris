@@ -289,9 +289,7 @@ function UsersCard() {
                         title="Reset password"
                       >
                         <KeyRound className="size-3.5" />
-                        <span className="sr-only sm:not-sr-only sm:ml-1">
-                          Reset password
-                        </span>
+                        <span className="sr-only sm:not-sr-only sm:ml-1">Reset password</span>
                       </Button>
                     </td>
                   </tr>
@@ -303,10 +301,7 @@ function UsersCard() {
           <p className="text-sm text-muted-foreground">No users yet.</p>
         )}
       </CardContent>
-      <ResetPasswordDialog
-        target={target}
-        onOpenChange={(open) => !open && setTarget(null)}
-      />
+      <ResetPasswordDialog target={target} onOpenChange={(open) => !open && setTarget(null)} />
     </Card>
   );
 }
@@ -322,8 +317,7 @@ function ResetPasswordDialog({
   const [confirm, setConfirm] = useState("");
   const [done, setDone] = useState(false);
   const reset = useMutation({
-    mutationFn: ({ id, p }: { id: string; p: string }) =>
-      admin.resetPassword(id, p),
+    mutationFn: ({ id, p }: { id: string; p: string }) => admin.resetPassword(id, p),
     onSuccess: () => {
       setDone(true);
       setPwd("");
@@ -349,8 +343,7 @@ function ResetPasswordDialog({
       : confirm.length > 0 && pwd !== confirm
         ? "Passwords don't match."
         : null;
-  const submitDisabled =
-    !target || pwd.length < 8 || pwd !== confirm || reset.isPending;
+  const submitDisabled = !target || pwd.length < 8 || pwd !== confirm || reset.isPending;
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -358,8 +351,11 @@ function ResetPasswordDialog({
         <DialogHeader>
           <DialogTitle>Reset password</DialogTitle>
           <DialogDescription>
-            {target ? <>For <span className="font-medium">{target.email}</span>.</> : null}
-            {" "}
+            {target ? (
+              <>
+                For <span className="font-medium">{target.email}</span>.
+              </>
+            ) : null}{" "}
             All their existing sessions will be revoked.
           </DialogDescription>
         </DialogHeader>

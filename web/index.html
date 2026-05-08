@@ -9,14 +9,21 @@
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <title>Iris</title>
     <script>
-      // Apply system theme before React mounts to avoid a flash.
+      // Apply persisted theme preference before React mounts so we never
+      // flash the wrong color scheme. Mirrors the logic in src/lib/theme.tsx;
+      // the React provider takes over after hydration and reacts to changes.
       (function () {
+        const KEY = "iris-theme";
+        let stored = null;
+        try {
+          stored = localStorage.getItem(KEY);
+        } catch (_) {}
+        if (stored !== "light" && stored !== "dark" && stored !== "system") {
+          stored = "system";
+        }
         const mql = window.matchMedia("(prefers-color-scheme: dark)");
-        const apply = (dark) => {
-          document.documentElement.classList.toggle("dark", dark);
-        };
-        apply(mql.matches);
-        mql.addEventListener("change", (e) => apply(e.matches));
+        const dark = stored === "dark" || (stored === "system" && mql.matches);
+        document.documentElement.classList.toggle("dark", dark);
       })();
     </script>
   </head>

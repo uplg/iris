@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router";
 import { Library as LibraryIcon, LogOut, Search as SearchIcon, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Brand } from "@/components/Brand";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { useAuth } from "@/lib/auth";
 
 export function AppShell() {
@@ -34,10 +35,10 @@ export function AppShell() {
             >
               {auth.user.email}
             </Link>
+            <ThemeToggle />
             <Button
               variant="ghost"
               size="sm"
-              className="ml-1"
               onClick={async () => {
                 await auth.logout();
                 navigate("/login", { replace: true });

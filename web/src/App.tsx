@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider } from "@/lib/auth";
+import { ThemeProvider } from "@/lib/theme";
 import { AppShell } from "@/components/AppShell";
 import { RequireAuth } from "@/components/RequireAuth";
 import { LoginPage } from "@/pages/LoginPage";
@@ -19,26 +20,28 @@ const queryClient = new QueryClient({
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
-            <Route element={<RequireAuth />}>
-              <Route element={<AppShell />}>
-                <Route index element={<HomePage />} />
-                <Route path="/library" element={<LibraryPage />} />
-                <Route path="/watch/:infohash/:idx" element={<WatchPage />} />
-                <Route path="/account" element={<AccountPage />} />
-                <Route element={<RequireAuth adminOnly />}>
-                  <Route path="/admin" element={<AdminPage />} />
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<RegisterPage />} />
+              <Route element={<RequireAuth />}>
+                <Route element={<AppShell />}>
+                  <Route index element={<HomePage />} />
+                  <Route path="/library" element={<LibraryPage />} />
+                  <Route path="/watch/:infohash/:idx" element={<WatchPage />} />
+                  <Route path="/account" element={<AccountPage />} />
+                  <Route element={<RequireAuth adminOnly />}>
+                    <Route path="/admin" element={<AdminPage />} />
+                  </Route>
                 </Route>
               </Route>
-            </Route>
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
-    </QueryClientProvider>
+            </Routes>
+          </BrowserRouter>
+        </AuthProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }
