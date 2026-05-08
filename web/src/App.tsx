@@ -9,6 +9,7 @@ import { HomePage } from "@/pages/HomePage";
 import { AdminPage } from "@/pages/AdminPage";
 import { LibraryPage } from "@/pages/LibraryPage";
 import { WatchPage } from "@/pages/WatchPage";
+import { AccountPage } from "@/pages/AccountPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,6 +30,7 @@ export default function App() {
                 <Route index element={<HomePage />} />
                 <Route path="/library" element={<LibraryPage />} />
                 <Route path="/watch/:infohash/:idx" element={<WatchPage />} />
+                <Route path="/account" element={<AccountPage />} />
                 <Route element={<RequireAuth adminOnly />}>
                   <Route path="/admin" element={<AdminPage />} />
                 </Route>

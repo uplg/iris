@@ -1,10 +1,27 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Plus, RotateCcw, Trash2 } from "lucide-react";
+import { KeyRound, Plus, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { admin, type CreatedInvitation, type GcReport, type Invitation } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  admin,
+  type CreatedInvitation,
+  type GcReport,
+  type Invitation,
+  type UserView,
+} from "@/lib/api";
 import { formatSize } from "@/lib/format";
 
 function status(inv: Invitation) {
@@ -84,6 +101,8 @@ export function AdminPage() {
           {lastGc && <GcReportView report={lastGc} />}
         </CardContent>
       </Card>
+
+      <UsersCard />
 
       <Card>
         <CardHeader>
@@ -209,6 +228,190 @@ function StorageView({
         </span>
       </div>
     </div>
+  );
+}
+
+function UsersCard() {
+  const users = useQuery({
+    queryKey: ["admin", "users"],
+    queryFn: admin.listUsers,
+  });
+  const [target, setTarget] = useState<UserView | null>(null);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Users</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {users.isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : users.error ? (
+          <p className="text-sm text-destructive">
+            {users.error instanceof Error ? users.error.message : "failed"}
+          </p>
+        ) : users.data?.length ? (
+          <div className="overflow-hidden rounded-md border border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-2 text-left">Email</th>
+                  <th className="px-4 py-2 text-left">Role</th>
+                  <th className="px-4 py-2 text-left">Joined</th>
+                  <th className="px-4 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.data.map((u) => (
+                  <tr key={u.id} className="border-t border-border">
+                    <td className="break-all px-4 py-2">{u.email}</td>
+                    <td className="px-4 py-2">
+                      {u.is_admin ? (
+                        <Badge
+                          variant="outline"
+                          className="inline-flex items-center gap-1 border-fuchsia-400/50 text-fuchsia-300"
+                        >
+                          <ShieldCheck className="size-3" />
+                          admin
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">user</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-xs text-muted-foreground">
+                      {new Date(u.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setTarget(u)}
+                        title="Reset password"
+                      >
+                        <KeyRound className="size-3.5" />
+                        <span className="sr-only sm:not-sr-only sm:ml-1">
+                          Reset password
+                        </span>
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No users yet.</p>
+        )}
+      </CardContent>
+      <ResetPasswordDialog
+        target={target}
+        onOpenChange={(open) => !open && setTarget(null)}
+      />
+    </Card>
+  );
+}
+
+function ResetPasswordDialog({
+  target,
+  onOpenChange,
+}: {
+  target: UserView | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [pwd, setPwd] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [done, setDone] = useState(false);
+  const reset = useMutation({
+    mutationFn: ({ id, p }: { id: string; p: string }) =>
+      admin.resetPassword(id, p),
+    onSuccess: () => {
+      setDone(true);
+      setPwd("");
+      setConfirm("");
+    },
+  });
+
+  // Reset state whenever the modal opens for a new user.
+  const open = target != null;
+  const onClose = (next: boolean) => {
+    if (!next) {
+      setPwd("");
+      setConfirm("");
+      setDone(false);
+      reset.reset();
+    }
+    onOpenChange(next);
+  };
+
+  const localErr =
+    pwd.length > 0 && pwd.length < 8
+      ? "Password must be at least 8 characters."
+      : confirm.length > 0 && pwd !== confirm
+        ? "Passwords don't match."
+        : null;
+  const submitDisabled =
+    !target || pwd.length < 8 || pwd !== confirm || reset.isPending;
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Reset password</DialogTitle>
+          <DialogDescription>
+            {target ? <>For <span className="font-medium">{target.email}</span>.</> : null}
+            {" "}
+            All their existing sessions will be revoked.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <div className="grid gap-2">
+            <Label htmlFor="adminPwd">New password</Label>
+            <Input
+              id="adminPwd"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              value={pwd}
+              onChange={(e) => setPwd(e.target.value)}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="adminPwd2">Confirm</Label>
+            <Input
+              id="adminPwd2"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+            />
+          </div>
+          {localErr && <p className="text-sm text-destructive">{localErr}</p>}
+          {reset.error && (
+            <p className="text-sm text-destructive">
+              {reset.error instanceof Error ? reset.error.message : "failed"}
+            </p>
+          )}
+          {done && (
+            <p className="text-sm text-emerald-300">
+              Password updated. Hand the new password to {target?.email}.
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onClose(false)}>
+            Close
+          </Button>
+          <Button
+            disabled={submitDisabled}
+            onClick={() => target && reset.mutate({ id: target.id, p: pwd })}
+          >
+            <KeyRound className="size-4" />
+            {reset.isPending ? "Resetting…" : "Reset"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

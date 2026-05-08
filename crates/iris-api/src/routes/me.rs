@@ -13,6 +13,39 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(me))
         .route("/continue-watching", get(continue_watching))
+        .route("/password", axum::routing::post(change_password))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ChangePasswordRequest {
+    pub old_password: String,
+    pub new_password: String,
+}
+
+async fn change_password(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<ChangePasswordRequest>,
+) -> ApiResult<axum::http::StatusCode> {
+    if body.new_password.len() < 8 {
+        return Err(ApiError::BadRequest(
+            "new password too short (min 8 chars)".into(),
+        ));
+    }
+    let current = iris_db::users::get_password_hash(state.db(), user.id)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+    let ok = iris_auth::verify_password(&body.old_password, &current)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("verify: {e}")))?;
+    if !ok {
+        return Err(ApiError::Unauthorized);
+    }
+    let new_hash = iris_auth::hash_password(&body.new_password)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hash: {e}")))?;
+    iris_db::users::update_password_hash(state.db(), user.id, &new_hash).await?;
+    // Force every other session to log back in.
+    iris_db::refresh_tokens::revoke_all_for_user(state.db(), user.id).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Serialize)]

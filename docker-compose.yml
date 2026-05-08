@@ -15,6 +15,10 @@ services:
       IRIS_SERVER__BIND: "0.0.0.0:8080"
       # Serve the bundled React build alongside the API.
       IRIS_SERVER__WEB_DIST: "/srv/iris/web"
+      # Public URL — used as the JWT issuer claim. Should be the URL your
+      # users actually hit (e.g. your Cloudflare-tunneled hostname). Pulled
+      # from .env so changes don't require touching this file.
+      IRIS_SERVER__PUBLIC_URL: ${IRIS_SERVER__PUBLIC_URL:-http://localhost:8080}
       # Persist all data into the volume mounted at /data, regardless of the
       # relative paths in config.toml (which target the dev workspace).
       IRIS_STORAGE__DATA_DIR: "/data"
@@ -45,6 +49,28 @@ services:
     depends_on:
       - iris
     profiles: ["proxy"]
+
+  # Named Cloudflare tunnel — gives Iris a stable public URL on a domain you
+  # control, no port-forwarding required. Set up:
+  #   1. https://one.dash.cloudflare.com/ → Networks → Tunnels → "Create"
+  #   2. Copy the tunnel TOKEN into .env as CLOUDFLARE_TUNNEL_TOKEN
+  #   3. In the tunnel's "Public Hostname" tab, add your hostname pointing at
+  #      service "http://iris:8080" (Cloudflare will resolve `iris` over the
+  #      compose network).
+  #   4. Run with: docker compose --profile cloudflared up -d
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # `--protocol http2` forces HTTP/2 instead of QUIC. QUIC uses UDP/7844
+    # outbound which is often dropped by ISPs, NAT or Docker Desktop on
+    # macOS. Symptom: repeated `failed to dial to edge with quic: timeout`.
+    command: tunnel --no-autoupdate --protocol http2 run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+      TUNNEL_TRANSPORT_PROTOCOL: http2
+    depends_on:
+      - iris
+    profiles: ["cloudflared"]
 
 volumes:
   iris-data:

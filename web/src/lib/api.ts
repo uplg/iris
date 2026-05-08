@@ -61,6 +61,8 @@ export const auth = {
     api.post<User>("/auth/register", { invite_token, email, password }),
   refresh: () => api.post<User>("/auth/refresh"),
   logout: () => api.post<void>("/auth/logout"),
+  changePassword: (old_password: string, new_password: string) =>
+    api.post<void>("/me/password", { old_password, new_password }),
 };
 
 export type StorageStats = {
@@ -87,6 +89,13 @@ export type GcReport = {
   evicted: GcEvictedEntry[];
 };
 
+export type UserView = {
+  id: string;
+  email: string;
+  is_admin: boolean;
+  created_at: string;
+};
+
 export const admin = {
   listInvitations: () => api.get<Invitation[]>("/admin/invitations"),
   createInvitation: (ttl_secs?: number) =>
@@ -94,6 +103,9 @@ export const admin = {
   revokeInvitation: (id: string) => api.delete<void>(`/admin/invitations/${id}`),
   storage: () => api.get<StorageStats>("/admin/storage"),
   triggerGc: () => api.post<GcReport>("/admin/gc"),
+  listUsers: () => api.get<UserView[]>("/admin/users"),
+  resetPassword: (userId: string, new_password: string) =>
+    api.post<void>(`/admin/users/${userId}/password`, { new_password }),
 };
 
 export type SearchResult = {

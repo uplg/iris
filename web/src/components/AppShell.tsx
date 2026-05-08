@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { Link, NavLink, Outlet, useNavigate } from "react-router";
 import { Library as LibraryIcon, LogOut, Search as SearchIcon, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Brand } from "@/components/Brand";
@@ -27,9 +27,13 @@ export function AppShell() {
                 Admin
               </NavItem>
             )}
-            <span className="ml-2 hidden text-xs text-muted-foreground sm:inline">
+            <Link
+              to="/account"
+              className="ml-2 hidden text-xs text-muted-foreground hover:text-foreground sm:inline"
+              title="Account settings"
+            >
               {auth.user.email}
-            </span>
+            </Link>
             <Button
               variant="ghost"
               size="sm"

@@ -18,6 +18,65 @@ pub fn router() -> Router<AppState> {
         .route("/invitations/{id}", axum::routing::delete(revoke_invitation))
         .route("/gc", axum::routing::post(trigger_gc))
         .route("/storage", get(storage_stats))
+        .route("/users", get(list_users))
+        .route(
+            "/users/{id}/password",
+            axum::routing::post(reset_user_password),
+        )
+}
+
+#[derive(Debug, Serialize)]
+struct UserView {
+    id: Uuid,
+    email: String,
+    is_admin: bool,
+    created_at: chrono::DateTime<Utc>,
+}
+
+async fn list_users(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> ApiResult<Json<Vec<UserView>>> {
+    let users = iris_db::users::list(state.db()).await?;
+    Ok(Json(
+        users
+            .into_iter()
+            .map(|u| UserView {
+                id: u.id.into(),
+                email: u.email,
+                is_admin: u.is_admin,
+                created_at: u.created_at,
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct ResetPasswordRequest {
+    new_password: String,
+}
+
+async fn reset_user_password(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ResetPasswordRequest>,
+) -> ApiResult<axum::http::StatusCode> {
+    if body.new_password.len() < 8 {
+        return Err(ApiError::BadRequest(
+            "new password too short (min 8 chars)".into(),
+        ));
+    }
+    let user_id = iris_core::ids::UserId::from(id);
+    let exists = iris_db::users::find_by_id(state.db(), user_id).await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    let hash = iris_auth::hash_password(&body.new_password)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hash: {e}")))?;
+    iris_db::users::update_password_hash(state.db(), user_id, &hash).await?;
+    iris_db::refresh_tokens::revoke_all_for_user(state.db(), user_id).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 async fn trigger_gc(

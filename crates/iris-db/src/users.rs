@@ -84,3 +84,37 @@ pub async fn count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
         .await?;
     Ok(n)
 }
+
+pub async fn list(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
+    let rows: Vec<UserRow> =
+        sqlx::query_as("SELECT id, email, password_hash, is_admin, created_at FROM users ORDER BY created_at ASC")
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().map(|r| r.into_domain().0).collect())
+}
+
+pub async fn get_password_hash(
+    pool: &SqlitePool,
+    id: UserId,
+) -> Result<Option<String>, sqlx::Error> {
+    let uuid: Uuid = id.into();
+    let row: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM users WHERE id = ?1")
+        .bind(uuid)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.0))
+}
+
+pub async fn update_password_hash(
+    pool: &SqlitePool,
+    id: UserId,
+    new_hash: &str,
+) -> Result<bool, sqlx::Error> {
+    let uuid: Uuid = id.into();
+    let res = sqlx::query("UPDATE users SET password_hash = ?1 WHERE id = ?2")
+        .bind(new_hash)
+        .bind(uuid)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() == 1)
+}
