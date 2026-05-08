@@ -534,63 +534,7 @@ async fn hls_asset(
 
     let key = format!("{infohash}_{idx}");
     let dir = state.hls().segment_dir_for(&key);
-
-    // Hot path: when ffmpeg is already done AND the asset exists on disk,
-    // skip the probe + `ensure_job` (= the jobs Mutex). hls.js fans out
-    // 5-10 segment fetches in parallel; without this fast path each one
-    // would queue on the Mutex and pay a sync `ffprobe` lookup, turning
-    // small segment requests into seconds-long stalls.
     let asset_path = dir.join(&asset);
-    let hot_serve = asset_path.is_file()
-        && iris_media::hls::is_master_or_endlist_done(&dir).await;
-
-    let dir = if hot_serve {
-        dir
-    } else {
-        // Slow path: ffmpeg may not have produced this segment yet. Pay the
-        // cost of probing + ensuring the job is alive.
-        let probe = state
-            .probes()
-            .get_or_probe(&infohash, idx, &path)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
-        let audio_tracks = audio_tracks_for_hls(&probe);
-        state
-            .hls()
-            .ensure_job(&key, &path, &audio_tracks)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?
-    };
-
-    if asset == iris_media::hls::MASTER_PLAYLIST {
-        let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
-        // Hand back ffmpeg's master playlist once the **video variant** has
-        // ENDLIST. Each variant playlist is then VOD and players unlock the
-        // timeline. With `-c:v copy` ffmpeg processes multi-GB sources in
-        // tens of seconds; the prewarm task at ingest usually means this
-        // short-circuits immediately because ENDLIST is already on disk.
-        let body = state
-            .hls()
-            .read_master_playlist(&key, std::time::Duration::from_secs(120))
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("read master: {e}")))?;
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
-            .header(header::CACHE_CONTROL, "no-store")
-            .body(Body::from(body))
-            .unwrap());
-    }
-
-    let segment_path = dir.join(&asset);
-    state
-        .hls()
-        .wait_for_segment(&key, &segment_path, std::time::Duration::from_secs(120))
-        .await
-        .map_err(|e| {
-            tracing::warn!(asset = %asset, error = %e, "hls segment unavailable");
-            ApiError::NotFound
-        })?;
 
     let mime = if asset.ends_with(".m4s") {
         "video/iso.segment"
@@ -603,7 +547,51 @@ async fn hls_asset(
     } else {
         "application/octet-stream"
     };
-    serve_static_file(&segment_path, mime).await
+
+    // Hot path: the asset is on disk → serve it now, no probe, no Mutex.
+    // hls.js issues 5-10 parallel segment fetches; routing each through
+    // ensure_job + ProbeCache turns a 1-syscall read into a queued/locked
+    // round-trip. Master.m3u8 is hand-written at spawn time, variant
+    // playlists exist as soon as ffmpeg's first segment lands, and
+    // segment files appear monotonically — there's nothing to coordinate
+    // for any of them once they exist.
+    if asset_path.is_file() {
+        if asset == iris_media::hls::MASTER_PLAYLIST {
+            let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
+        }
+        return serve_static_file(&asset_path, mime).await;
+    }
+
+    // Cold path: file isn't there yet. Kick the ffmpeg job (idempotent if
+    // already running) and wait for the asset to appear.
+    let probe = state
+        .probes()
+        .get_or_probe(&infohash, idx, &path)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
+    let audio_tracks = audio_tracks_for_hls(&probe);
+    state
+        .hls()
+        .ensure_job(&key, &path, &audio_tracks)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?;
+
+    if asset == iris_media::hls::MASTER_PLAYLIST {
+        let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
+        // Master is hand-written by `ensure_job` before ffmpeg spawns,
+        // so by this point it's there.
+        return serve_static_file(&asset_path, mime).await;
+    }
+
+    state
+        .hls()
+        .wait_for_segment(&key, &asset_path, std::time::Duration::from_secs(120))
+        .await
+        .map_err(|e| {
+            tracing::warn!(asset = %asset, error = %e, "hls segment unavailable");
+            ApiError::NotFound
+        })?;
+    serve_static_file(&asset_path, mime).await
 }
 
 /// Validate the relative HLS asset path. The wildcard route captures things
