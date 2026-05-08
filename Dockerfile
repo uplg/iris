@@ -1,15 +1,33 @@
+# syntax=docker/dockerfile:1.7
+# ^ enables BuildKit cache-mounts (`--mount=type=cache`). Default with
+# Docker 23+. Without this directive the cache mounts below are silently
+# ignored and you're back to recompiling everything every time.
+
 ###############################################################################
 # 1) Frontend build (bun + Vite)
 ###############################################################################
 FROM oven/bun:1 AS web-builder
 WORKDIR /app/web
 COPY web/package.json web/bun.lock* ./
-RUN bun install --frozen-lockfile
+RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
+    bun install --frozen-lockfile
 COPY web/ ./
-RUN bun run build
+RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
+    bun run build
 
 ###############################################################################
 # 2) Rust workspace build
+#
+# Three cache mounts:
+#   - cargo registry: index + downloaded crate tarballs from crates.io
+#   - cargo git: cloned git dependencies (none today, future-proof)
+#   - target: the build output directory, where >95% of compile time lives
+#
+# Cache mounts persist across `docker build` invocations on the same host,
+# so a one-line code change recompiles iris-api only (~10 s) instead of
+# the entire dep tree (~2 min). They are NOT layered, so the binary
+# itself must be copied out *before* the RUN finishes — otherwise it
+# vanishes with the cache when the next build runs.
 ###############################################################################
 FROM rust:1.95-trixie AS rust-builder
 WORKDIR /app
@@ -17,7 +35,11 @@ ENV CARGO_TERM_COLOR=never
 COPY rust-toolchain.toml Cargo.toml Cargo.lock* ./
 COPY crates ./crates
 COPY migrations ./migrations
-RUN cargo build --release --bin iris
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release --bin iris \
+    && cp /app/target/release/iris /iris
 
 ###############################################################################
 # 3) Runtime
@@ -34,7 +56,7 @@ RUN useradd --system --create-home --uid 1001 iris
 WORKDIR /srv/iris
 RUN mkdir -p /srv/iris/web /data /data/downloads && chown -R iris:iris /srv/iris /data
 
-COPY --from=rust-builder /app/target/release/iris /usr/local/bin/iris
+COPY --from=rust-builder /iris /usr/local/bin/iris
 COPY --from=web-builder /app/web/dist /srv/iris/web
 COPY config/config.toml.example /srv/iris/config/config.toml.example
 COPY config/providers.toml.example /srv/iris/config/providers.toml.example
