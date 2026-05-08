@@ -173,12 +173,13 @@ fun WatchScreen(
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        // Start the player as soon as we have ~3 segments on disk. ffmpeg
-        // keeps writing in the background and Media3 / hls.js auto-discover
-        // the new segments via the EVENT-type playlist. Waiting for
-        // ENDLIST blocked the player for minutes on slow boxes.
-        val ready = (hlsStatus?.endlistPresent == true
-            || (hlsStatus?.segmentsProduced ?: 0) >= 3)
+        // We wait for ENDLIST (= ffmpeg fully done) before mounting the
+        // player. Tried mid-segmentation playback by relaxing to
+        // "segments >= 3" — but Media3 / hls.js then treat the EVENT
+        // playlist as live, drop the user at the live edge with broken
+        // seek and a duration that keeps growing. Better UX is "wait
+        // for the full pass, show real progress while waiting".
+        val ready = hlsStatus?.endlistPresent == true
             && probe != null
             && serverUrl != null
         if (ready) {
@@ -584,15 +585,16 @@ private fun stepFor(status: HlsStatus?, probeReady: Boolean, torrent: TorrentVie
         return Step("Reading media metadata…", "ffprobe scanning streams.", null)
     }
     val s = status ?: return Step("Starting transcoder…", null, null)
-    // Pre-roll: we only show this until ~3 segments are on disk, then
-    // playback starts. This branch covers the very-first-seconds window
-    // (segments_produced 0..2) where ffmpeg is still spinning up.
+    if (s.endlistPresent) return Step("Loading first frames…", "Almost there.", null)
+    val total = s.estimatedTotalSegments
     val seg = s.segmentsProduced
-    return Step(
-        "Buffering first frames…",
-        "$seg segment${if (seg > 1) "s" else ""} ready",
-        if (seg > 0) (seg.toFloat() / 3f).coerceIn(0f, 1f) else null,
-    )
+    val pct = if (total != null && total > 0) (seg.toFloat() / total).coerceIn(0f, 0.99f) else null
+    val label = if (total != null) {
+        "Pre-segmenting · $seg / ~$total"
+    } else {
+        "Pre-segmenting · $seg"
+    }
+    return Step(label, "ffmpeg writing the HLS playlist · seek unlocks once it's done.", pct)
 }
 
 private fun formatBytesShort(b: Long): String {

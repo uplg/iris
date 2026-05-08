@@ -114,13 +114,13 @@ export function WatchPage() {
     retry: 8,
     retryDelay: 2000,
   });
-  // Start playback as soon as ~3 segments (~18s of buffer) are on disk.
-  // ffmpeg keeps writing in the background and hls.js auto-discovers
-  // new segments via the EVENT-type playlist. Waiting for ENDLIST blocked
-  // the player for 5-15 minutes on slow boxes — that's the wrong default.
-  const masterReady =
-    (hlsStatusQ.data?.endlist_present ?? false) ||
-    (hlsStatusQ.data?.segments_produced ?? 0) >= 3;
+  // We wait for `ENDLIST` (= ffmpeg fully done) before mounting the
+  // player. Tried letting playback start mid-segmentation by relaxing
+  // this to "≥3 segments" — but hls.js then treats the EVENT playlist
+  // as live, drops the user at the live edge with broken seek and a
+  // duration that keeps growing. Cleaner UX is "wait for the full pass,
+  // show real progress while waiting".
+  const masterReady = hlsStatusQ.data?.endlist_present === true;
 
   // All progress for this torrent (powers the "watched %" per episode in the
   // other-files panel).
