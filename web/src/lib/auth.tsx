@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { auth as authApi, type User } from "./api";
+import { AUTH_EXPIRED_EVENT, auth as authApi, type User } from "./api";
 
 type AuthState =
   | { status: "loading" }
@@ -44,24 +44,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
+  // api.ts dispatches this when an authenticated request gets 401 and
+  // the refresh attempt also fails — the user is effectively logged out.
+  // Flip to `anonymous` here so RequireAuth redirects to /login instead
+  // of letting React Query render the raw "Unauthorized" message.
+  useEffect(() => {
+    const handler = () => setState({ status: "anonymous" });
+    window.addEventListener(AUTH_EXPIRED_EVENT, handler);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handler);
+  }, []);
+
   // Keep-alive: while authenticated, periodically rotate the access cookie
-  // by hitting /auth/refresh. Without this, hls.js segment requests silently
-  // 401 once the access token expires mid-stream. Server access TTL is 1h,
-  // we rotate every 25 min so we always have margin.
+  // by hitting /auth/refresh. Without this, byte-range requests for the
+  // playback file silently 401 once the access token expires mid-stream.
+  // Server access TTL is 1h; we rotate every 25 min for margin.
   useEffect(() => {
     if (state.status !== "authenticated") return;
-    const interval = window.setInterval(
-      () => {
-        void authApi
-          .refresh()
-          .then((user) => setState({ status: "authenticated", user }))
-          .catch(() => {
-            // Refresh token expired or revoked → bounce to login.
-            setState({ status: "anonymous" });
-          });
-      },
-      25 * 60_000,
-    );
+    const interval = window.setInterval(() => {
+      void authApi
+        .refresh()
+        .then((user) => setState({ status: "authenticated", user }))
+        .catch(() => {
+          // Refresh token expired or revoked → bounce to login.
+          setState({ status: "anonymous" });
+        });
+    }, 25 * 60_000);
     return () => window.clearInterval(interval);
   }, [state.status]);
 

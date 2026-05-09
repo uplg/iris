@@ -54,8 +54,10 @@ pub struct AudioStream {
     pub title: Option<String>,
     pub default: bool,
     pub forced: bool,
-    /// Whether this stream's codec is browser-friendly (AAC / Opus / Vorbis /
-    /// MP3). Other codecs require transcoding to AAC for HLS.
+    /// Whether this stream's codec is one most browsers can decode natively
+    /// (AAC / Opus / Vorbis / MP3). Other codecs (DTS, AC-3, EAC-3, FLAC)
+    /// are passed through untouched in the remuxed fMP4 — playback works
+    /// where the OS/browser supports them, and stays silent otherwise.
     pub browser_compatible: bool,
 }
 
@@ -68,8 +70,8 @@ pub struct SubtitleStream {
     pub title: Option<String>,
     pub default: bool,
     pub forced: bool,
-    /// Whether this stream can be losslessly converted to WebVTT (text-based
-    /// subtitle codecs only).
+    /// Whether this stream can be losslessly converted to `WebVTT`
+    /// (text-based subtitle codecs only).
     pub text_based: bool,
 }
 
@@ -165,79 +167,11 @@ fn normalize(raw: FfprobeOutput) -> MediaProbe {
     let mut video = Vec::new();
     let mut audio = Vec::new();
     let mut subtitle = Vec::new();
-    let (mut vi, mut ai, mut si) = (0usize, 0usize, 0usize);
     for stream in raw.streams {
         match stream.codec_type.as_str() {
-            "video" => {
-                video.push(VideoStream {
-                    index: vi,
-                    absolute_index: stream.index,
-                    codec: stream.codec_name.unwrap_or_default(),
-                    profile: stream.profile,
-                    width: stream.width,
-                    height: stream.height,
-                    bit_rate: stream
-                        .bit_rate
-                        .as_ref()
-                        .and_then(|s| s.parse::<u64>().ok()),
-                    frame_rate: parse_frame_rate(stream.avg_frame_rate.as_deref()),
-                });
-                vi += 1;
-            }
-            "audio" => {
-                let codec = stream.codec_name.clone().unwrap_or_default();
-                let lang = stream
-                    .tags
-                    .as_ref()
-                    .and_then(|t| t.language.clone())
-                    .or_else(|| {
-                        stream.tags.as_ref().and_then(|t| t.lang.clone())
-                    });
-                let title = stream.tags.as_ref().and_then(|t| t.title.clone());
-                let disp = stream.disposition.unwrap_or_default();
-                audio.push(AudioStream {
-                    index: ai,
-                    absolute_index: stream.index,
-                    browser_compatible: BROWSER_AUDIO_CODECS
-                        .contains(&codec.to_ascii_lowercase().as_str()),
-                    codec,
-                    channels: stream.channels.unwrap_or_default(),
-                    channel_layout: stream.channel_layout,
-                    sample_rate: stream
-                        .sample_rate
-                        .as_ref()
-                        .and_then(|s| s.parse::<u32>().ok()),
-                    language: lang,
-                    title,
-                    default: disp.default == 1,
-                    forced: disp.forced == 1,
-                });
-                ai += 1;
-            }
-            "subtitle" => {
-                let codec = stream.codec_name.clone().unwrap_or_default();
-                let lang = stream
-                    .tags
-                    .as_ref()
-                    .and_then(|t| t.language.clone())
-                    .or_else(|| {
-                        stream.tags.as_ref().and_then(|t| t.lang.clone())
-                    });
-                let title = stream.tags.as_ref().and_then(|t| t.title.clone());
-                let disp = stream.disposition.unwrap_or_default();
-                subtitle.push(SubtitleStream {
-                    index: si,
-                    absolute_index: stream.index,
-                    text_based: TEXT_SUB_CODECS
-                        .contains(&codec.to_ascii_lowercase().as_str()),
-                    codec,
-                    language: lang,
-                    title,
-                    default: disp.default == 1,
-                    forced: disp.forced == 1,
-                });
-                si += 1;
-            }
+            "video" => video.push(normalize_video(stream, video.len())),
+            "audio" => audio.push(normalize_audio(stream, audio.len())),
+            "subtitle" => subtitle.push(normalize_subtitle(stream, subtitle.len())),
             _ => {}
         }
     }
@@ -251,6 +185,68 @@ fn normalize(raw: FfprobeOutput) -> MediaProbe {
         audio,
         subtitle,
     }
+}
+
+fn normalize_video(stream: RawStream, index: usize) -> VideoStream {
+    VideoStream {
+        index,
+        absolute_index: stream.index,
+        codec: stream.codec_name.unwrap_or_default(),
+        profile: stream.profile,
+        width: stream.width,
+        height: stream.height,
+        bit_rate: stream
+            .bit_rate
+            .as_ref()
+            .and_then(|s| s.parse::<u64>().ok()),
+        frame_rate: parse_frame_rate(stream.avg_frame_rate.as_deref()),
+    }
+}
+
+fn normalize_audio(stream: RawStream, index: usize) -> AudioStream {
+    let codec = stream.codec_name.clone().unwrap_or_default();
+    let (lang, title) = lang_and_title(stream.tags.as_ref());
+    let disp = stream.disposition.unwrap_or_default();
+    AudioStream {
+        index,
+        absolute_index: stream.index,
+        browser_compatible: BROWSER_AUDIO_CODECS.contains(&codec.to_ascii_lowercase().as_str()),
+        codec,
+        channels: stream.channels.unwrap_or_default(),
+        channel_layout: stream.channel_layout,
+        sample_rate: stream
+            .sample_rate
+            .as_ref()
+            .and_then(|s| s.parse::<u32>().ok()),
+        language: lang,
+        title,
+        default: disp.default == 1,
+        forced: disp.forced == 1,
+    }
+}
+
+fn normalize_subtitle(stream: RawStream, index: usize) -> SubtitleStream {
+    let codec = stream.codec_name.clone().unwrap_or_default();
+    let (lang, title) = lang_and_title(stream.tags.as_ref());
+    let disp = stream.disposition.unwrap_or_default();
+    SubtitleStream {
+        index,
+        absolute_index: stream.index,
+        text_based: TEXT_SUB_CODECS.contains(&codec.to_ascii_lowercase().as_str()),
+        codec,
+        language: lang,
+        title,
+        default: disp.default == 1,
+        forced: disp.forced == 1,
+    }
+}
+
+fn lang_and_title(tags: Option<&RawTags>) -> (Option<String>, Option<String>) {
+    let lang = tags
+        .and_then(|t| t.language.clone())
+        .or_else(|| tags.and_then(|t| t.lang.clone()));
+    let title = tags.and_then(|t| t.title.clone());
+    (lang, title)
 }
 
 fn parse_frame_rate(s: Option<&str>) -> Option<f64> {

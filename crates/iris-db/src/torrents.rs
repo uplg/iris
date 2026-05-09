@@ -45,7 +45,7 @@ pub struct NewTorrent {
 /// Insert if the infohash is new, otherwise return the existing row
 /// (un-soft-deleting it). If the existing row lacks `tmdb_id` and the new
 /// payload has one, backfill it — handy for torrents ingested before the
-/// 0005 migration whose tmdb_id is now available because they got
+/// 0005 migration whose `tmdb_id` is now available because they got
 /// re-resolved through search.
 pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sqlx::Error> {
     if let Some(existing) = find_by_infohash(pool, &new.infohash).await? {

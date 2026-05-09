@@ -17,7 +17,7 @@ pub enum ConfigError {
     #[error("config file not found: {0}")]
     NotFound(PathBuf),
     #[error("failed to parse config: {0}")]
-    Parse(#[from] figment::Error),
+    Parse(#[from] Box<figment::Error>),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -65,16 +65,10 @@ pub struct StorageConfig {
     pub cleanup_threshold_pct: u8,
     #[serde(default = "default_cleanup_target")]
     pub cleanup_target_pct: u8,
-    /// Pinned BitTorrent listen port (TCP + UDP). Forward this in your
+    /// Pinned `BitTorrent` listen port (TCP + UDP). Forward this in your
     /// firewall / docker for inbound peer connections.
     #[serde(default = "default_torrent_port")]
     pub torrent_port: u16,
-    /// HLS cache idle threshold in days. Cached segments untouched for this
-    /// long are evicted hourly (the source torrent stays put — segments are
-    /// regenerated on the next Play). Big win on small SSDs because the
-    /// cache effectively duplicates each watched file.
-    #[serde(default = "default_hls_idle_days")]
-    pub hls_idle_eviction_days: u32,
 }
 
 fn default_max_storage() -> u64 {
@@ -88,9 +82,6 @@ fn default_cleanup_target() -> u8 {
 }
 fn default_torrent_port() -> u16 {
     45100
-}
-fn default_hls_idle_days() -> u32 {
-    7
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,7 +148,8 @@ impl AppConfig {
         let cfg: Self = Figment::new()
             .merge(Toml::file(path))
             .merge(Env::prefixed("IRIS_").split("__"))
-            .extract()?;
+            .extract()
+            .map_err(Box::new)?;
         Ok(cfg)
     }
 
@@ -174,7 +166,7 @@ impl AppConfig {
         }
         let raw = std::fs::read_to_string(&path)?;
         let parsed: ProvidersConfig = toml::from_str(&raw)
-            .map_err(|e| ConfigError::Parse(figment::Error::from(e.to_string())))?;
+            .map_err(|e| ConfigError::Parse(Box::new(figment::Error::from(e.to_string()))))?;
         Ok(parsed)
     }
 }

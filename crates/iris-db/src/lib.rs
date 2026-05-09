@@ -1,4 +1,4 @@
-//! SQLite persistence layer for Iris.
+//! `SQLite` persistence layer for Iris.
 
 pub mod device_codes;
 pub mod invitations;

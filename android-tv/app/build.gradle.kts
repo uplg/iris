@@ -96,7 +96,7 @@ dependencies {
     // Navigation
     implementation(libs.navigation.compose)
 
-    // Media3 (ExoPlayer + HLS)
+    // Media3 (HLS + CMAF via DefaultMediaSourceFactory)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.ui)

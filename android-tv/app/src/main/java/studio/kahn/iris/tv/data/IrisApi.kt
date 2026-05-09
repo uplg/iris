@@ -51,13 +51,13 @@ interface IrisApi {
         @Path("idx") idx: Int,
     ): MediaProbe
 
-    @GET("api/torrents/{infohash}/files/{idx}/hls/status")
-    suspend fun hlsStatus(
+    @GET("api/torrents/{infohash}/files/{idx}/play/status")
+    suspend fun playStatus(
         @Path("infohash") infohash: String,
         @Path("idx") idx: Int,
-    ): HlsStatus
+    ): PlayStatus
 
-    @POST("api/torrents/{infohash}/files/{idx}/progress")
+    @retrofit2.http.PUT("api/torrents/{infohash}/files/{idx}/progress")
     suspend fun saveProgress(
         @Path("infohash") infohash: String,
         @Path("idx") idx: Int,
@@ -206,12 +206,19 @@ data class MediaProbe(
     val subtitle: List<SubtitleStream>,
 )
 
+/**
+ * Pre-mount loading telemetry for the playback pipeline. Mirrors the
+ * `PlayStatus` shape returned by `/torrents/{ih}/files/{idx}/play/status`.
+ *
+ * `reason` is one of `"downloading"` | `"remuxing"` | `"preparing"` while
+ * the file isn't yet ready, and `null` once `ready == true`. `progress` is
+ * a 0..1 download fraction, only meaningful when `reason == "downloading"`.
+ */
 @Serializable
-data class HlsStatus(
-    @SerialName("ffmpeg_running") val ffmpegRunning: Boolean,
-    @SerialName("segments_produced") val segmentsProduced: Int,
-    @SerialName("estimated_total_segments") val estimatedTotalSegments: Int? = null,
-    @SerialName("endlist_present") val endlistPresent: Boolean,
+data class PlayStatus(
+    val ready: Boolean,
+    val reason: String? = null,
+    val progress: Float? = null,
     val error: String? = null,
 )
 
@@ -219,7 +226,6 @@ data class HlsStatus(
 data class ProgressUpdate(
     @SerialName("position_seconds") val positionSeconds: Double,
     @SerialName("duration_seconds") val durationSeconds: Double? = null,
-    @SerialName("audio_track_idx") val audioTrackIdx: Int? = null,
     @SerialName("subtitle_track_idx") val subtitleTrackIdx: Int? = null,
     val completed: Boolean = false,
 )

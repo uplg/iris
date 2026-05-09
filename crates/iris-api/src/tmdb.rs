@@ -43,12 +43,12 @@ pub struct MediaMetadata {
     pub title: String,
     pub overview: Option<String>,
     pub year: Option<u32>,
-    /// Path component, e.g. "/abc.jpg". Combine with size + base URL to form
-    /// the actual image URL: https://image.tmdb.org/t/p/<size><poster_path>.
+    /// Path component, e.g. `/abc.jpg`. Combine with size + base URL to form
+    /// the actual image URL: `https://image.tmdb.org/t/p/<size><poster_path>`.
     pub poster_path: Option<String>,
     pub backdrop_path: Option<String>,
-    /// 0..1 (TMDB's vote_average is /10, normalized here for the UI).
-    pub vote_score: Option<f32>,
+    /// 0..1 (TMDB's `vote_average` is /10, normalized here for the UI).
+    pub vote_score: Option<f64>,
     pub vote_count: Option<u32>,
     pub genres: Vec<String>,
     /// Movie runtime in minutes (TMDB `runtime`). For TV shows we expose
@@ -152,7 +152,7 @@ impl TmdbClient {
             year,
             poster_path: raw.poster_path,
             backdrop_path: raw.backdrop_path,
-            vote_score: raw.vote_average.map(|v| (v / 10.0) as f32),
+            vote_score: raw.vote_average.map(|v| v / 10.0),
             vote_count: raw.vote_count,
             genres,
             runtime_minutes,

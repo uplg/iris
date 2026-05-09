@@ -1,4 +1,4 @@
-//! Convert text-based subtitle streams to WebVTT.
+//! Convert text-based subtitle streams to `WebVTT`.
 //!
 //! Two flavors:
 //! - [`extract_webvtt`]: blocking (collects all output to memory). Used for
@@ -6,8 +6,8 @@
 //! - [`stream_webvtt`]: spawns ffmpeg, returns a `Stream<Item = Bytes>` that
 //!   yields chunks as ffmpeg writes them, *and* tees them into a cache file.
 //!   This is what the HTTP layer uses so the browser starts receiving bytes
-//!   immediately (otherwise Firefox aborts <track> requests with
-//!   NS_BINDING_ERROR while ffmpeg scans large MKVs).
+//!   immediately (otherwise Firefox aborts `<track>` requests with
+//!   `NS_BINDING_ERROR` while ffmpeg scans large MKVs).
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -59,7 +59,7 @@ pub async fn extract_webvtt(
 pub type SubtitleStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>;
 
-/// Spawn `ffmpeg` to extract a subtitle stream as WebVTT and return a stream
+/// Spawn `ffmpeg` to extract a subtitle stream as `WebVTT` and return a stream
 /// that emits chunks as ffmpeg produces them. Bytes are also tee'd into
 /// `cache_path` so subsequent calls can short-circuit. On clean exit the
 /// `.tmp` cache is renamed atomically; on failure or early client
@@ -154,7 +154,7 @@ pub async fn stream_webvtt(
     Ok(Box::pin(ReceiverStream::new(rx)))
 }
 
-/// Computed cache path for a given (infohash, file_idx, sub_idx).
+/// Computed cache path for a given (`infohash`, `file_idx`, `sub_idx`).
 pub fn cache_path(base_dir: &Path, infohash: &str, file_idx: usize, sub_idx: u32) -> PathBuf {
     base_dir.join(format!("{infohash}_{file_idx}_{sub_idx}.vtt"))
 }

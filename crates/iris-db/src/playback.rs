@@ -112,7 +112,7 @@ pub struct ContinueWatchingRow {
 }
 
 /// Recent in-progress items for the user (excluding completed). Joined with
-/// torrents so we already have a display name and the tmdb_id (when known
+/// torrents so we already have a display name and the `tmdb_id` (when known
 /// AND `tmdb_verified`) for poster lookups.
 pub async fn continue_watching(
     pool: &SqlitePool,

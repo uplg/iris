@@ -3,17 +3,16 @@ package studio.kahn.iris.tv.ui.screens
 import android.net.Uri
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import androidx.compose.foundation.background
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -27,13 +26,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Surface
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -43,26 +39,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.AudioStream
-import studio.kahn.iris.tv.data.HlsStatus
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.MediaProbe
+import studio.kahn.iris.tv.data.PlayStatus
 import studio.kahn.iris.tv.data.ProgressUpdate
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
 
 /**
- * Full-screen Media3 PlayerView. Pre-mount we poll `/hls/.../status` so the
- * user sees actual ffmpeg progression instead of a silent black screen, and
- * we only construct the player when ENDLIST is on disk — same trick as
- * the web client.
+ * Full-screen Media3 PlayerView. Pre-mount we poll `/play/status` so the
+ * user sees real download / remux progress instead of a silent black
+ * screen, and we only construct the player once the cached fragmented
+ * MP4 is ready to be served via HTTP byte-range.
  *
  * D-pad maps to PlayerView's built-in TV controls (play/pause, seek,
- * subtitles via the CC button). Audio-track switching is a custom dialog
- * because each Iris HLS playlist is single-audio (one ffmpeg job per
- * audioIdx) — picking a track means loading a different master URL, and
- * waiting for that pipeline's ENDLIST.
+ * subtitle + audio track selection via the settings menu). Audio
+ * tracks are surfaced natively from the fMP4 — no custom picker.
  */
 @OptIn(ExperimentalTvMaterial3Api::class, UnstableApi::class)
 @Composable
@@ -74,25 +67,18 @@ fun WatchScreen(
 ) {
     var serverUrl by remember { mutableStateOf<String?>(null) }
     var probe by remember { mutableStateOf<MediaProbe?>(null) }
-    var hlsStatus by remember { mutableStateOf<HlsStatus?>(null) }
+    var playStatus by remember { mutableStateOf<PlayStatus?>(null) }
     var torrent by remember { mutableStateOf<TorrentView?>(null) }
     var resumePositionSec by remember { mutableStateOf(0.0) }
     var error by remember { mutableStateOf<String?>(null) }
-    var selectedAudioIdx by remember { mutableStateOf<Int?>(null) }
-    var showAudioPicker by remember { mutableStateOf(false) }
     var probeVersion by remember { mutableStateOf(0) }
-    // Tied to the Media3 PlayerView controller via setControllerVisibilityListener.
-    // When the controller is hidden during playback, our custom audio chip
-    // hides too — full-screen video without a "FRE" tag in the corner.
-    var controllerVisible by remember { mutableStateOf(true) }
 
     // Probe with retry. When the user clicks Play right after ingest, the
     // file isn't on disk yet — librqbit needs a few seconds to fetch the
     // first sequential chunks. The server returns 400 "file not yet on
     // disk: …" in that window. We retry every 2s for up to ~2 min so the
-    // user just sees the LoadingOverlay tick down instead of bouncing
-    // straight to an error screen. 404 / 401 / unknown errors bail
-    // immediately — those are real problems.
+    // user sees the LoadingOverlay tick down instead of bouncing straight
+    // to an error screen. 401 / 404 bail immediately.
     LaunchedEffect(infohash, fileIdx, probeVersion) {
         error = null
         probe = null
@@ -107,11 +93,7 @@ fun WatchScreen(
         val maxAttempts = 60 // ~2 min at 2s each
         while (attempts < maxAttempts) {
             try {
-                val p = api.probe(infohash, fileIdx)
-                probe = p
-                if (selectedAudioIdx == null) {
-                    selectedAudioIdx = (p.audio.firstOrNull { it.default } ?: p.audio.firstOrNull())?.index ?: 0
-                }
+                probe = api.probe(infohash, fileIdx)
                 val progresses = runCatching { api.torrentProgress(infohash) }.getOrDefault(emptyList())
                 resumePositionSec = progresses.firstOrNull { it.fileIdx == fileIdx }
                     ?.takeUnless { it.completed }?.positionSeconds ?: 0.0
@@ -121,12 +103,9 @@ fun WatchScreen(
                     error = "Probe failed (HTTP ${e.code()})"
                     return@LaunchedEffect
                 }
-                // 400 == "file not yet on disk" most of the time, possibly
-                // a 5xx burp — keep waiting.
                 attempts++
                 delay(2_000)
-            } catch (e: Exception) {
-                // Connection blip, parse error — try again briefly.
+            } catch (_: Exception) {
                 attempts++
                 delay(2_000)
             }
@@ -135,9 +114,8 @@ fun WatchScreen(
     }
 
     // Live torrent state — drives the "Downloading …" step in the loading
-    // overlay so the user sees real bytes / speed while the ingest is still
-    // pulling sequential chunks. Polls every 2s for as long as the screen
-    // is mounted.
+    // overlay so the user sees real bytes / speed while the source is
+    // still being pulled. Polls every 2s for as long as the screen lives.
     LaunchedEffect(infohash) {
         while (true) {
             val url = container.sessionStore.serverUrl.first() ?: run {
@@ -149,20 +127,22 @@ fun WatchScreen(
         }
     }
 
-    // HLS status polling. The pipeline now produces a single master playlist
-    // with all audio renditions baked in (#EXT-X-MEDIA), so progress no
-    // longer depends on the audio pick — there's exactly one ffmpeg job per
-    // file. Switching audio is a player-side toggle.
+    // Playback prep status. Polls every second until the cached `.fmp4`
+    // is on disk and ready to be byte-ranged. The endpoint surfaces both
+    // the upstream torrent download and the in-flight ffmpeg remux, so
+    // the loading overlay can show a meaningful step.
     LaunchedEffect(probe, serverUrl) {
         val baseUrl = serverUrl ?: return@LaunchedEffect
         probe ?: return@LaunchedEffect
-        hlsStatus = null
+        playStatus = null
         val api = container.apiFor(baseUrl)
         while (true) {
-            val s = runCatching { api.hlsStatus(infohash, fileIdx) }.getOrNull()
+            val s = runCatching { api.playStatus(infohash, fileIdx) }.getOrNull()
             if (s != null) {
-                hlsStatus = s
-                if (s.endlistPresent) break
+                playStatus = s
+                // Stop polling once the cache is ready OR a sticky failure
+                // is surfaced — both are terminal until the user retries.
+                if (s.ready || s.error != null) break
             }
             delay(1_000)
         }
@@ -173,15 +153,7 @@ fun WatchScreen(
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        // We wait for ENDLIST (= ffmpeg fully done) before mounting the
-        // player. Tried mid-segmentation playback by relaxing to
-        // "segments >= 3" — but Media3 / hls.js then treat the EVENT
-        // playlist as live, drop the user at the live edge with broken
-        // seek and a duration that keeps growing. Better UX is "wait
-        // for the full pass, show real progress while waiting".
-        val ready = hlsStatus?.endlistPresent == true
-            && probe != null
-            && serverUrl != null
+        val ready = playStatus?.ready == true && probe != null && serverUrl != null
         if (ready) {
             ReadyPlayer(
                 container = container,
@@ -189,59 +161,22 @@ fun WatchScreen(
                 infohash = infohash,
                 fileIdx = fileIdx,
                 probe = probe!!,
-                preferredAudioIdx = selectedAudioIdx,
                 startPositionSec = resumePositionSec,
                 onPositionUpdate = { resumePositionSec = it },
-                onAudioPicked = { selectedAudioIdx = it },
-                onControllerVisibilityChanged = { controllerVisible = it },
             )
-            // Audio switcher overlay — only shown if there's more than one
-            // audio track to pick from AND the player controller is up
-            // (the user pressed something). During real playback the chip
-            // disappears with the rest of the controls so video stays
-            // full-screen.
-            if ((probe?.audio?.size ?: 0) > 1 && controllerVisible) {
-                Surface(
-                    onClick = { showAudioPicker = true },
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(24.dp),
-                    shape = RoundedCornerShape(20.dp),
-                    color = Color.Black.copy(alpha = 0.55f),
-                    contentColor = Color.White,
-                ) {
-                    Text(
-                        "Audio · " + currentAudioLabel(probe!!.audio, selectedAudioIdx ?: -1),
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
-                }
-            }
         } else {
             LoadingOverlay(
                 error = error,
-                status = hlsStatus,
+                status = playStatus,
                 probeReady = probe != null,
                 torrent = torrent,
                 onRetry = {
                     probe = null
-                    hlsStatus = null
+                    playStatus = null
                     error = null
                     probeVersion++
                 },
                 onBack = onBack,
-            )
-        }
-
-        if (showAudioPicker && probe != null) {
-            AudioPickerDialog(
-                tracks = probe!!.audio,
-                selected = selectedAudioIdx ?: -1,
-                onSelect = { newIdx ->
-                    showAudioPicker = false
-                    selectedAudioIdx = newIdx
-                },
-                onDismiss = { showAudioPicker = false },
             )
         }
     }
@@ -255,20 +190,15 @@ private fun ReadyPlayer(
     infohash: String,
     fileIdx: Int,
     probe: MediaProbe,
-    preferredAudioIdx: Int?,
     startPositionSec: Double,
     onPositionUpdate: (Double) -> Unit,
-    onAudioPicked: (Int) -> Unit,
-    onControllerVisibilityChanged: (Boolean) -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Single master URL for the whole file — switching audio is a track
-    // selection parameter, not a URL change.
-    val masterUrl = remember(serverUrl, infohash, fileIdx) {
+    val playUrl = remember(serverUrl, infohash, fileIdx) {
         val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
-        "${base}api/torrents/$infohash/files/$fileIdx/hls/master.m3u8"
+        "${base}api/torrents/$infohash/files/$fileIdx/play"
     }
 
     val subtitles = remember(probe, serverUrl, infohash, fileIdx) {
@@ -284,55 +214,15 @@ private fun ReadyPlayer(
         }
     }
 
-    val player = remember(masterUrl) {
+    val player = remember(playUrl) {
         buildPlayer(context, container.okHttpClient).apply {
             setMediaItem(
-                buildMediaItem(masterUrl, subtitles, startPositionSec),
+                buildMediaItem(playUrl, subtitles, startPositionSec),
                 (startPositionSec * 1000).toLong(),
             )
             prepare()
             playWhenReady = true
         }
-    }
-
-    // Track selection bookkeeping. ExoPlayer announces the available audio
-    // groups asynchronously after the HLS manifest is parsed, so we can't
-    // just apply the override once at mount — we'd usually get there with
-    // an empty `currentTracks`. Instead we listen for `onTracksChanged`
-    // and re-apply whenever either (a) tracks become available, or (b) the
-    // user picks a different audio idx.
-    var tracksTick by remember { mutableStateOf(0) }
-    DisposableEffect(player) {
-        val listener = object : androidx.media3.common.Player.Listener {
-            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
-                tracksTick++
-            }
-        }
-        player.addListener(listener)
-        onDispose { player.removeListener(listener) }
-    }
-
-    // Apply the preferred audio choice as a hard `TrackSelectionOverride`.
-    // We don't use `setPreferredAudioLanguage` because (a) two tracks could
-    // share the same language tag, (b) ExoPlayer's language matching is
-    // fuzzy and sometimes "fra" != "fr" silently. The override targets the
-    // exact group at the right ordinal — the order in `probe.audio` mirrors
-    // the order ffmpeg emitted in `var_stream_map`, which is the same
-    // order the HLS master playlist exposes.
-    LaunchedEffect(player, preferredAudioIdx, tracksTick) {
-        val idx = preferredAudioIdx ?: return@LaunchedEffect
-        val ordinal = probe.audio.indexOfFirst { it.index == idx }
-        if (ordinal < 0) return@LaunchedEffect
-        val audioGroups = player.currentTracks.groups.filter {
-            it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO
-        }
-        val target = audioGroups.getOrNull(ordinal) ?: return@LaunchedEffect
-        player.trackSelectionParameters = player.trackSelectionParameters
-            .buildUpon()
-            .setOverrideForType(
-                androidx.media3.common.TrackSelectionOverride(target.mediaTrackGroup, 0)
-            )
-            .build()
     }
 
     DisposableEffect(player) {
@@ -356,7 +246,6 @@ private fun ReadyPlayer(
                                     body = ProgressUpdate(
                                         positionSeconds = pos / 1000.0,
                                         durationSeconds = if (durationMs > 0) durationMs / 1000.0 else null,
-                                        audioTrackIdx = preferredAudioIdx,
                                         completed = completed,
                                     ),
                                 )
@@ -382,7 +271,6 @@ private fun ReadyPlayer(
                         body = ProgressUpdate(
                             positionSeconds = pos / 1000.0,
                             durationSeconds = dur?.div(1000.0),
-                            audioTrackIdx = preferredAudioIdx,
                             completed = dur != null && pos >= dur - 30_000,
                         ),
                     )
@@ -391,11 +279,6 @@ private fun ReadyPlayer(
             player.release()
         }
     }
-
-    // Silences a "lint: unused parameter" — the callback is wired so future
-    // versions can route audio picks to track selection by ID instead of by
-    // language. For now [LaunchedEffect] above does the work.
-    @Suppress("unused") val _onAudioPicked = onAudioPicked
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -408,14 +291,6 @@ private fun ReadyPlayer(
                 setShowRewindButton(true)
                 controllerAutoShow = true
                 layoutParams = android.widget.FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
-                // Mirror the controller's show/hide state into Compose so
-                // our custom audio overlay can fade in & out together with
-                // the rest of the player chrome.
-                setControllerVisibilityListener(
-                    PlayerView.ControllerVisibilityListener { visibility ->
-                        onControllerVisibilityChanged(visibility == android.view.View.VISIBLE)
-                    }
-                )
             }
         },
         update = { it.player = player },
@@ -426,7 +301,7 @@ private fun ReadyPlayer(
 @Composable
 private fun LoadingOverlay(
     error: String?,
-    status: HlsStatus?,
+    status: PlayStatus?,
     probeReady: Boolean,
     torrent: TorrentView?,
     onRetry: () -> Unit,
@@ -486,73 +361,9 @@ private fun LoadingOverlay(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun AudioPickerDialog(
-    tracks: List<AudioStream>,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.width(460.dp),
-        ) {
-            Column(
-                Modifier.padding(24.dp).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    "Audio track",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-                tracks.forEach { track ->
-                    val isSelected = track.index == selected
-                    val parts = listOfNotNull(
-                        track.language?.uppercase(),
-                        track.codec.uppercase(),
-                        "${track.channels} ch",
-                        track.title?.takeIf { it.isNotBlank() },
-                    )
-                    Surface(
-                        onClick = { onSelect(track.index) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant
-                        },
-                        contentColor = if (isSelected) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    ) {
-                        Text(
-                            (if (isSelected) "● " else "○ ") + parts.joinToString(" · "),
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun currentAudioLabel(tracks: List<AudioStream>, idx: Int): String {
-    val t = tracks.firstOrNull { it.index == idx } ?: return "Default"
-    return t.language?.uppercase() ?: t.codec.uppercase()
-}
-
 private data class Step(val label: String, val sub: String?, val pct: Float?)
 
-private fun stepFor(status: HlsStatus?, probeReady: Boolean, torrent: TorrentView?): Step {
+private fun stepFor(status: PlayStatus?, probeReady: Boolean, torrent: TorrentView?): Step {
     if (!probeReady) {
         // The file isn't on disk yet. If we know the torrent's overall
         // download state, surface that — the user wants "I have 320 MB
@@ -584,17 +395,33 @@ private fun stepFor(status: HlsStatus?, probeReady: Boolean, torrent: TorrentVie
         }
         return Step("Reading media metadata…", "ffprobe scanning streams.", null)
     }
-    val s = status ?: return Step("Starting transcoder…", null, null)
-    if (s.endlistPresent) return Step("Loading first frames…", "Almost there.", null)
-    val total = s.estimatedTotalSegments
-    val seg = s.segmentsProduced
-    val pct = if (total != null && total > 0) (seg.toFloat() / total).coerceIn(0f, 0.99f) else null
-    val label = if (total != null) {
-        "Pre-segmenting · $seg / ~$total"
-    } else {
-        "Pre-segmenting · $seg"
+    val s = status ?: return Step("Starting playback prep…", null, null)
+    if (s.error != null) return Step("Playback prep failed", s.error, null)
+    return when (s.reason) {
+        "downloading" -> {
+            val pct = s.progress?.coerceIn(0f, 0.99f)
+                ?: torrent?.let { (it.progressPct / 100f).coerceIn(0f, 0.99f) }
+            val sub = torrent?.let {
+                buildString {
+                    append(formatBytesShort(it.progressBytes))
+                    append(" / ")
+                    append(formatBytesShort(it.totalSizeBytes))
+                    if (it.downloadSpeedBps > 0) {
+                        append(" · ")
+                        append(formatSpeedShort(it.downloadSpeedBps))
+                    }
+                    if (it.peers > 0) append(" · ${it.peers} peers")
+                }
+            }
+            Step("Downloading…", sub, pct)
+        }
+        "remuxing" -> Step(
+            "Remuxing to fragmented MP4…",
+            "ffmpeg producing the playable cache file. Original codecs preserved.",
+            null,
+        )
+        else -> Step("Preparing playback…", "Almost there.", null)
     }
-    return Step(label, "ffmpeg writing the HLS playlist · seek unlocks once it's done.", pct)
 }
 
 private fun formatBytesShort(b: Long): String {

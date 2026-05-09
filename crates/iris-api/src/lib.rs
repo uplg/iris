@@ -5,7 +5,32 @@ pub mod routes;
 pub mod state;
 pub mod tmdb;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Build the remux cache manager and spawn its background size-cap evictor.
+/// Cap at 100 GB (~100 hot movies on a typical 1080p library) — well under
+/// the storage budget on a KS-5 SSD. Tick every 15 min.
+fn setup_remuxer(data_dir: &Path) -> anyhow::Result<iris_media::RemuxManager> {
+    use anyhow::Context;
+    let remux_dir = data_dir.join("remux");
+    std::fs::create_dir_all(&remux_dir).context("creating remux dir")?;
+    let remuxer = iris_media::RemuxManager::new(remux_dir);
+    let evictor = remuxer.clone();
+    let cap_bytes: u64 = 100 * 1_073_741_824;
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(15 * 60));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        ticker.tick().await; // skip immediate boot tick
+        loop {
+            ticker.tick().await;
+            let n = evictor.evict_to(cap_bytes).await;
+            if n > 0 {
+                tracing::info!(count = n, "remuxer cache eviction pass complete");
+            }
+        }
+    });
+    Ok(remuxer)
+}
 
 pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> anyhow::Result<()> {
     use anyhow::Context;
@@ -46,32 +71,7 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         "torrent engine ready"
     );
 
-    let hls_dir = cfg.storage.data_dir.join("hls");
-    std::fs::create_dir_all(&hls_dir).context("creating hls dir")?;
-    let hls = iris_media::HlsManager::new(hls_dir);
-
-    // Background idle-eviction sweep for the HLS cache. Runs hourly; throws
-    // away segments older than `hls_idle_eviction_days`. The torrent itself
-    // is left alone — only the (re-generable) cache is purged.
-    {
-        let hls_evictor = hls.clone();
-        let max_age = std::time::Duration::from_secs(
-            u64::from(cfg.storage.hls_idle_eviction_days) * 24 * 3600,
-        );
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            // Skip the immediate first tick so we don't run during boot.
-            ticker.tick().await;
-            loop {
-                ticker.tick().await;
-                let n = hls_evictor.evict_idle(max_age).await;
-                if n > 0 {
-                    tracing::info!(count = n, "hls idle-eviction pass complete");
-                }
-            }
-        });
-    }
+    let remuxer = setup_remuxer(&cfg.storage.data_dir).context("setting up remuxer")?;
 
     let gc = iris_torrent::Gc::new(
         engine.clone(),
@@ -85,11 +85,27 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         },
         cfg.storage.download_dir.clone(),
         {
-            let hls = hls.clone();
+            let remuxer = remuxer.clone();
             move |infohash| {
-                let hls = hls.clone();
+                // When a torrent is GC'd off disk, drop the matching remux
+                // caches (one per file index). We don't know how many files
+                // there are without going back to the DB — wipe by prefix
+                // match on the cache file names instead.
+                let remuxer = remuxer.clone();
                 let h = infohash.to_string();
-                tokio::spawn(async move { hls.cleanup_for_torrent(&h).await });
+                tokio::spawn(async move {
+                    let cache_dir = remuxer.base_dir().to_path_buf();
+                    let prefix = format!("{h}_");
+                    if let Ok(mut rd) = tokio::fs::read_dir(&cache_dir).await {
+                        while let Ok(Some(e)) = rd.next_entry().await {
+                            if let Some(name) = e.file_name().to_str() {
+                                if name.starts_with(&prefix) {
+                                    let _ = tokio::fs::remove_file(e.path()).await;
+                                }
+                            }
+                        }
+                    }
+                });
             }
         },
     );
@@ -101,7 +117,7 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         "disk gc loop started"
     );
 
-    let app_state = state::AppState::new(cfg.clone(), pool, provider_registry, engine, hls, gc);
+    let app_state = state::AppState::new(cfg.clone(), pool, provider_registry, engine, remuxer, gc);
     let router = app::build_router(app_state);
     let service = app::into_service(router);
 

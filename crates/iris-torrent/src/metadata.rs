@@ -39,7 +39,7 @@ pub fn parse_preview(bytes: &[u8]) -> anyhow::Result<TorrentPreview> {
             announce_urls.push(s.to_string());
         }
     }
-    for tier in parsed.announce_list.iter() {
+    for tier in &parsed.announce_list {
         for url in tier {
             if let Ok(s) = std::str::from_utf8(url.as_ref()) {
                 if !announce_urls.iter().any(|x| x == s) {
@@ -52,12 +52,11 @@ pub fn parse_preview(bytes: &[u8]) -> anyhow::Result<TorrentPreview> {
     let info = &parsed.info;
     let name = match info.name.as_ref() {
         Some(n) => std::str::from_utf8(n.as_ref())
-            .map(str::to_owned)
-            .unwrap_or_else(|_| "<invalid utf-8>".into()),
+            .map_or_else(|_| "<invalid utf-8>".into(), str::to_owned),
         None => "<unnamed>".into(),
     };
     let piece_length: u32 = info.piece_length;
-    let piece_count = (info.pieces.as_ref().len() / 20) as u32;
+    let piece_count = u32::try_from(info.pieces.as_ref().len() / 20).unwrap_or(u32::MAX);
 
     // iter_filenames_and_lengths gives an iterator independent of single/multi-file mode.
     let mut files = Vec::new();
@@ -70,11 +69,10 @@ pub fn parse_preview(bytes: &[u8]) -> anyhow::Result<TorrentPreview> {
         let extension = path_buf
             .extension()
             .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase());
+            .map(str::to_lowercase);
         let is_video = extension
             .as_deref()
-            .map(|e| VIDEO_EXTS.contains(&e))
-            .unwrap_or(false);
+            .is_some_and(|e| VIDEO_EXTS.contains(&e));
         files.push(TorrentFilePreview {
             index: idx,
             path,

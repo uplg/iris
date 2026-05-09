@@ -1,29 +1,21 @@
-//! Media probing + HLS segmentation pipeline.
+//! Media probing + remux pipeline.
 //!
 //! - [`probe`] wraps `ffprobe -show_streams -show_format` and normalizes the
 //!   output into a stable schema the API serves directly.
-//! - [`hls`] manages on-demand HLS segmentation: it spawns `ffmpeg` once per
-//!   `(file, audio_track)` pair, writes fMP4 segments to disk, and lets the
-//!   HTTP layer serve them as static files.
-//! - [`subtitles`] converts text-based subtitle streams to WebVTT on the fly.
+//! - [`remuxer`] runs `ffmpeg -c copy` once per source to produce a single
+//!   CMAF-fragmented MP4 served via HTTP byte-range.
+//! - [`subtitles`] converts text-based subtitle streams to `WebVTT` on the fly.
 
-pub mod hls;
 pub mod probe;
+pub mod remuxer;
 pub mod subtitles;
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PlaybackMode {
-    Direct,
-    Remux,
-    Transcode,
-}
-
-pub use hls::{HlsError, HlsManager};
 pub use probe::{
     AudioStream, MediaProbe, ProbeCache, ProbeError, SubtitleStream, VideoStream, probe_file,
+};
+pub use remuxer::{
+    AudioCodec, AudioRendition, JobInfo as RemuxJobInfo, MASTER_PLAYLIST, RemuxError, RemuxManager,
+    RemuxPlan,
 };
 pub use subtitles::SubtitleError;
 pub use subtitles::cache_path as subtitle_cache_path;

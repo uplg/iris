@@ -23,8 +23,8 @@ pub fn router() -> Router<AppState> {
             "/users/{id}/password",
             axum::routing::post(reset_user_password),
         )
-        .route("/hls", get(list_hls_jobs))
-        .route("/hls/{key}", axum::routing::delete(wipe_hls_job))
+        .route("/remux", get(list_remux_jobs))
+        .route("/remux/{key}", axum::routing::delete(wipe_remux_job))
 }
 
 #[derive(Debug, Serialize)]
@@ -139,9 +139,8 @@ async fn dir_size_async(path: &std::path::Path) -> std::io::Result<u64> {
             Err(e) => return Err(e),
         };
         while let Some(entry) = read.next_entry().await? {
-            let m = match entry.metadata().await {
-                Ok(m) => m,
-                Err(_) => continue,
+            let Ok(m) = entry.metadata().await else {
+                continue;
             };
             if m.is_dir() {
                 stack.push(entry.path());
@@ -234,44 +233,32 @@ async fn revoke_invitation(
     }
 }
 
+/// One entry in the remuxer cache inventory shown in `/admin`.
 #[derive(Debug, Serialize)]
-struct HlsJobView {
-    /// `<infohash>_<file_idx>` — the cache directory name.
+struct RemuxJobView {
+    /// `<infohash>_<file_idx>` — also the cache filename stem.
     key: String,
     infohash: Option<String>,
     file_idx: Option<usize>,
-    /// Display name pulled from the torrents table when we can resolve it.
     torrent_name: Option<String>,
-    /// True if an ffmpeg child is currently registered for this key.
-    running: bool,
-    /// `master.m3u8` exists on disk.
-    master_present: bool,
-    /// Number of `seg_*.m4s` files in the video variant directory.
-    video_segments: u32,
-    /// `.done` sentinel present (= ffmpeg exited 0 at least once for this dir).
-    done: bool,
-    /// Unix epoch seconds of the most recent ffmpeg failure, when known.
-    last_failed_at: Option<i64>,
-    /// Whether `ffmpeg.log` exists on disk for post-mortem.
-    has_log: bool,
-    /// Source duration in seconds (sidecar written by `ensure_job` at spawn).
-    expected_duration_secs: Option<f64>,
-    /// Total disk usage of the cache directory in bytes.
-    disk_bytes: u64,
+    /// True if an ffmpeg run for this key is currently in flight.
+    in_flight: bool,
+    /// Bytes occupied by the cached `.fmp4` (0 when not built yet).
+    size_bytes: u64,
+    /// Last-modified time of the cache file (epoch seconds).
+    mtime: Option<i64>,
 }
 
-async fn list_hls_jobs(
+async fn list_remux_jobs(
     State(state): State<AppState>,
     _admin: AdminUser,
-) -> ApiResult<Json<Vec<HlsJobView>>> {
-    let jobs = state.hls().list_jobs().await;
-    // Resolve `<infohash>_<idx>` → torrent name via a single DB pass.
-    // Cheap because the active library is usually small.
+) -> ApiResult<Json<Vec<RemuxJobView>>> {
+    let jobs = state.remuxer().list_jobs().await;
     let mut out = Vec::with_capacity(jobs.len());
     for j in jobs {
         let mut split = j.key.rsplitn(2, '_');
         let idx_str = split.next();
-        let infohash = split.next().map(|s| s.to_ascii_lowercase());
+        let infohash = split.next().map(str::to_ascii_lowercase);
         let idx = idx_str.and_then(|s| s.parse::<usize>().ok());
         let torrent_name = if let Some(ih) = infohash.as_deref() {
             iris_db::torrents::find_by_infohash(state.db(), ih)
@@ -282,46 +269,40 @@ async fn list_hls_jobs(
         } else {
             None
         };
-        out.push(HlsJobView {
+        out.push(RemuxJobView {
             key: j.key,
             infohash,
             file_idx: idx,
             torrent_name,
-            running: j.running,
-            master_present: j.master_present,
-            video_segments: j.video_segments,
-            done: j.done,
-            last_failed_at: j.last_failed_at,
-            has_log: j.has_log,
-            expected_duration_secs: j.expected_duration_secs,
-            disk_bytes: j.disk_bytes,
+            in_flight: j.in_flight,
+            size_bytes: j.size_bytes,
+            mtime: j.mtime,
         });
     }
     Ok(Json(out))
 }
 
 #[derive(Debug, Serialize)]
-struct WipeHlsResponse {
-    /// Bytes freed by removing the cache directory.
+struct WipeRemuxResponse {
+    /// Bytes freed by removing the cache file.
     freed_bytes: u64,
 }
 
-async fn wipe_hls_job(
+async fn wipe_remux_job(
     State(state): State<AppState>,
     _admin: AdminUser,
     Path(key): Path<String>,
-) -> ApiResult<Json<WipeHlsResponse>> {
-    // Defensive: only accept `<32+_hex>_<digits>` to avoid accidentally
-    // letting a path-traversal slip into `remove_dir_all`.
+) -> ApiResult<Json<WipeRemuxResponse>> {
+    // Defensive: only accept `<hex>_<digits>` to keep this path-traversal-free.
     if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') || key.is_empty() {
-        return Err(ApiError::BadRequest("invalid HLS job key".into()));
+        return Err(ApiError::BadRequest("invalid remux job key".into()));
     }
     let freed = state
-        .hls()
-        .wipe_job(&key)
+        .remuxer()
+        .wipe(&key)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls wipe: {e}")))?;
-    Ok(Json(WipeHlsResponse {
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("remux wipe: {e}")))?;
+    Ok(Json(WipeRemuxResponse {
         freed_bytes: freed,
     }))
 }

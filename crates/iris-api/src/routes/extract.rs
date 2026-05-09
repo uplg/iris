@@ -6,7 +6,6 @@ use axum::http::request::Parts;
 use axum_extra::extract::CookieJar;
 use iris_auth::jwt::AccessClaims;
 use iris_core::ids::UserId;
-use uuid::Uuid;
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -52,7 +51,7 @@ where
         })?;
 
         Ok(Self {
-            id: UserId::from(Uuid::from(claims.sub)),
+            id: UserId::from(claims.sub),
             is_admin: claims.admin,
             claims,
         })

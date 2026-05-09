@@ -45,12 +45,33 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # 3) Runtime
 ###############################################################################
 FROM debian:trixie-slim AS runtime
+ARG TARGETARCH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         ffmpeg \
         tini \
+        curl \
     && rm -rf /var/lib/apt/lists/*
+
+# shaka-packager — used to convert ffmpeg's per-stream MP4 outputs into
+# a proper HLS-CMAF manifest tree (master.m3u8 + per-rendition .m3u8 +
+# init/segment .m4s). ffmpeg's own HLS muxer produces manifests with
+# overly-strict CODECS attributes that browsers reject upfront via
+# `MediaSource.isTypeSupported`; shaka writes correct codec strings.
+ARG SHAKA_VERSION=v3.7.2
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64) shaka_arch=x64 ;; \
+        arm64) shaka_arch=arm64 ;; \
+        *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /usr/local/bin/packager \
+        "https://github.com/shaka-project/shaka-packager/releases/download/${SHAKA_VERSION}/packager-linux-${shaka_arch}"; \
+    chmod +x /usr/local/bin/packager; \
+    /usr/local/bin/packager --version | head -1; \
+    apt-get purge -y --auto-remove curl; \
+    rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --create-home --uid 1001 iris
 WORKDIR /srv/iris

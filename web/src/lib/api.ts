@@ -15,13 +15,47 @@ export class ApiError extends Error {
   }
 }
 
+/** Event fired when a refresh attempt failed and the user must be
+ *  treated as logged out. The AuthProvider listens for this and flips
+ *  the auth state to `anonymous` so the route guards send the user to
+ *  /login instead of leaving stale React Query errors on screen. */
+export const AUTH_EXPIRED_EVENT = "iris:auth-expired";
+
+const NO_RETRY_PATHS = new Set([
+  "/auth/refresh",
+  "/auth/login",
+  "/auth/register",
+  "/auth/logout",
+]);
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method,
-    credentials: "include",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const fire = () =>
+    fetch(`/api${path}`, {
+      method,
+      credentials: "include",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  let res = await fire();
+  // Transparent re-auth on expired access cookie. Without this any in-
+  // flight query that fires after the access cookie expires (but before
+  // the keep-alive timer rotates it) bubbles a 401 up to the component,
+  // which then renders the raw error message ("Unauthorized" / "Forbidden")
+  // instead of the actual content.
+  if (res.status === 401 && !NO_RETRY_PATHS.has(path)) {
+    const refreshed = await fetch("/api/auth/refresh", {
+      method: "POST",
+      credentials: "include",
+    });
+    if (refreshed.ok) {
+      res = await fire();
+    } else {
+      // Refresh token itself dead — bounce the user to login. Done via
+      // a window event so api.ts stays unaware of the auth context's
+      // setState; AuthProvider wires the listener.
+      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    }
+  }
   if (res.status === 204) return undefined as T;
   const data = res.headers.get("content-type")?.includes("application/json")
     ? await res.json()
@@ -64,8 +98,7 @@ export const auth = {
   logout: () => api.post<void>("/auth/logout"),
   changePassword: (old_password: string, new_password: string) =>
     api.post<void>("/me/password", { old_password, new_password }),
-  changeDisplayName: (display_name: string) =>
-    api.post<void>("/me/display-name", { display_name }),
+  changeDisplayName: (display_name: string) => api.post<void>("/me/display-name", { display_name }),
 };
 
 export type StorageStats = {
@@ -100,19 +133,18 @@ export type UserView = {
   created_at: string;
 };
 
-export type HlsJobView = {
+export type RemuxJobView = {
+  /** `<infohash>_<file_idx>` — also the cache filename stem. */
   key: string;
   infohash: string | null;
   file_idx: number | null;
   torrent_name: string | null;
-  running: boolean;
-  master_present: boolean;
-  video_segments: number;
-  done: boolean;
-  last_failed_at: number | null;
-  has_log: boolean;
-  expected_duration_secs: number | null;
-  disk_bytes: number;
+  /** True if an ffmpeg run for this key is currently in flight. */
+  in_flight: boolean;
+  /** Bytes occupied by the cached `.fmp4` (0 when not yet built). */
+  size_bytes: number;
+  /** Last-modified time of the cache file (epoch seconds). */
+  mtime: number | null;
 };
 
 export const admin = {
@@ -125,8 +157,8 @@ export const admin = {
   listUsers: () => api.get<UserView[]>("/admin/users"),
   resetPassword: (userId: string, new_password: string) =>
     api.post<void>(`/admin/users/${userId}/password`, { new_password }),
-  listHls: () => api.get<HlsJobView[]>("/admin/hls"),
-  wipeHls: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/hls/${key}`),
+  listRemux: () => api.get<RemuxJobView[]>("/admin/remux"),
+  wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${key}`),
 };
 
 export type DeviceView = {
@@ -139,8 +171,7 @@ export type DeviceView = {
 
 export const devices = {
   list: () => api.get<DeviceView[]>("/me/devices"),
-  link: (code: string, label?: string) =>
-    api.post<void>("/me/devices", { code, label }),
+  link: (code: string, label?: string) => api.post<void>("/me/devices", { code, label }),
   revoke: (jti: string) => api.delete<void>(`/me/devices/${jti}`),
 };
 
@@ -363,26 +394,23 @@ export const torrents = {
   list: () => api.get<TorrentView[]>("/torrents"),
   get: (infohash: string) => api.get<TorrentView>(`/torrents/${infohash}`),
   remove: (infohash: string) => api.delete<void>(`/torrents/${infohash}`),
-  /** Browser will save the file to disk (filename suggested by content-disposition or attribute). */
+  /** Raw source download (range-supported). Browser saves to disk. */
   downloadUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
   streamUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
   /**
-   * Browser-friendly playback URL: native byte-stream for MP4/WebM, on-the-fly
-   * MKV→fMP4 remux otherwise (same codecs, no re-encode). No seek support on
-   * remuxed stream — prefer `hlsUrl` for full UX.
+   * Universal playback URL — returns the HLS-CMAF master playlist.
+   * Both web (Vidstack via hls.js) and Android (Media3 HlsMediaSource)
+   * consume it the same way; multi-audio renditions are exposed via
+   * EXT-X-MEDIA in the manifest. First request to master.m3u8 blocks
+   * until ffmpeg has built enough of the cache; later asset fetches
+   * hit static files via byte-range.
    */
-  playUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/play`,
-  /**
-   * HLS master playlist. The master references one video variant +
-   * N audio renditions in a single `EXT-X-MEDIA:TYPE=AUDIO` group, so
-   * switching audio is a player-side toggle (no URL change, no re-download
-   * of video segments).
-   */
-  hlsUrl: (infohash: string, idx: number) =>
-    `/api/torrents/${infohash}/files/${idx}/hls/master.m3u8`,
-  /** Non-blocking poll endpoint — kicks the ffmpeg job and reports progress. */
-  hlsStatus: (infohash: string, idx: number) =>
-    api.get<HlsStatus>(`/torrents/${infohash}/files/${idx}/hls/status`),
+  playUrl: (infohash: string, idx: number) =>
+    `/api/torrents/${infohash}/files/${idx}/play/master.m3u8`,
+  /** Polled by the player UI before mounting `<video>`, surfaces the
+   *  download / remux progress so we can render a meaningful loader. */
+  playStatus: (infohash: string, idx: number) =>
+    api.get<PlayStatus>(`/torrents/${infohash}/files/${idx}/play/status`),
   probe: (infohash: string, idx: number) =>
     api.get<MediaProbe>(`/torrents/${infohash}/files/${idx}/probe`),
   subtitleUrl: (infohash: string, idx: number, streamIdx: number) =>
@@ -424,11 +452,12 @@ export type AudioStream = {
   browser_compatible: boolean;
 };
 
-export type HlsStatus = {
-  ffmpeg_running: boolean;
-  segments_produced: number;
-  estimated_total_segments: number | null;
-  endlist_present: boolean;
+export type PlayStatus = {
+  ready: boolean;
+  /** "downloading" | "remuxing" | "preparing" — null when ready. */
+  reason: string | null;
+  /** 0..1 — only meaningful when reason === "downloading". */
+  progress: number | null;
   error: string | null;
 };
 

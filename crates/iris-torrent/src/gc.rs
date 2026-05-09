@@ -48,8 +48,8 @@ struct Inner {
     pool: SqlitePool,
     cfg: GcConfig,
     download_dir: PathBuf,
-    /// Optional callback fired after a torrent is evicted, so external
-    /// caches (e.g. the HLS manager) can clean up too.
+    /// Fired after a torrent is evicted from disk so derived caches keyed
+    /// by infohash (e.g. the remuxer's `.fmp4` files) can clean up too.
     on_evict: Box<dyn Fn(&str) + Send + Sync>,
 }
 
@@ -137,11 +137,12 @@ impl Gc {
             }
             (self.inner.on_evict)(&row.infohash);
             iris_db::torrents::soft_delete(&self.inner.pool, TorrentId::from(row.id)).await?;
-            current = current.saturating_sub(row.total_size_bytes as u64);
+            let freed = u64::try_from(row.total_size_bytes).unwrap_or(0);
+            current = current.saturating_sub(freed);
             report.evicted.push(EvictedEntry {
                 infohash: row.infohash,
                 name: row.name,
-                freed_bytes: row.total_size_bytes as u64,
+                freed_bytes: freed,
             });
         }
 
@@ -182,9 +183,8 @@ async fn dir_size(path: &Path) -> std::io::Result<u64> {
             Err(e) => return Err(e),
         };
         while let Some(entry) = read.next_entry().await? {
-            let m = match entry.metadata().await {
-                Ok(m) => m,
-                Err(_) => continue,
+            let Ok(m) = entry.metadata().await else {
+                continue;
             };
             if m.is_dir() {
                 stack.push(entry.path());

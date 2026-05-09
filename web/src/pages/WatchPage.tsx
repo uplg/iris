@@ -4,20 +4,8 @@ import "@vidstack/react/player/styles/default/layouts/video.css";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import {
-  CheckCircle2,
-  Download,
-  Library as LibraryIcon,
-  Loader2,
-  Play,
-} from "lucide-react";
-import {
-  isHLSProvider,
-  MediaPlayer,
-  MediaProvider,
-  Track,
-  type MediaPlayerInstance,
-} from "@vidstack/react";
+import { CheckCircle2, Download, Library as LibraryIcon, Loader2, Play } from "lucide-react";
+import { MediaPlayer, MediaProvider, Track, type MediaPlayerInstance } from "@vidstack/react";
 import { defaultLayoutIcons, DefaultVideoLayout } from "@vidstack/react/player/layouts/default";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -25,9 +13,9 @@ import { Badge } from "@/components/ui/badge";
 import {
   progress as progressApi,
   torrents,
-  type AudioStream,
   type FileEntry,
   type FileProgressEntry,
+  type PlayStatus,
   type SubtitleStream,
   type TorrentView,
 } from "@/lib/api";
@@ -40,7 +28,6 @@ export function WatchPage() {
   const fileIdx = Number(idx ?? 0);
   const navigate = useNavigate();
 
-  const [audioIdx, setAudioIdx] = useState<number | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
   // Use a ref (not state) for the player instance so callbacks always see
   // the latest value without depending on render-cycle ordering.
@@ -48,12 +35,9 @@ export function WatchPage() {
   const lastTimeRef = useRef(0);
   const lastSavedTimeRef = useRef(0);
   const lastDurationRef = useRef<number | null>(null);
-  const [pendingSeek, setPendingSeek] = useState<number | null>(null);
   const progressLoadedRef = useRef(false);
+  const initialSeekDoneRef = useRef(false);
   const subtitleTrackRef = useRef<number | null>(null);
-  // Mirror to refs so the unmount cleanup save uses fresh values.
-  const audioIdxRef = useRef<number | null>(null);
-  audioIdxRef.current = audioIdx;
 
   const torrentQ = useQuery<TorrentView>({
     queryKey: ["torrent", infohash],
@@ -96,31 +80,25 @@ export function WatchPage() {
     enabled: !!infohash,
   });
 
-  // Poll the HLS prep status while we wait for ffmpeg to write ENDLIST.
-  // This is the loading-state telemetry the user actually wants to see —
-  // segments-produced counter ticking up so they know things are alive.
-  // The HLS pipeline now produces a single master playlist with all audio
-  // renditions baked in (via #EXT-X-MEDIA), so HLS prep no longer depends
-  // on the audio pick — there's exactly one ffmpeg job per file.
-  const hlsStatusQ = useQuery({
-    queryKey: ["hls-status", infohash, fileIdx],
-    queryFn: () => torrents.hlsStatus(infohash!, fileIdx),
+  // Poll the playback-prep status until the .fmp4 cache is on disk and
+  // ready to be served via byte-range. The status endpoint surfaces the
+  // upstream torrent download progress and the in-flight ffmpeg remux so
+  // we can render a meaningful loader instead of a generic spinner.
+  const playStatusQ = useQuery({
+    queryKey: ["play-status", infohash, fileIdx],
+    queryFn: () => torrents.playStatus(infohash!, fileIdx),
     enabled: !!infohash,
     refetchInterval: (q) => {
-      const data = q.state.data;
-      // Stop polling once the playlist is finalized.
-      return data?.endlist_present ? false : 1000;
+      const d = q.state.data;
+      // Stop polling once the cache is ready OR a sticky failure is
+      // surfaced — both are terminal until the user retries.
+      if (!d || d.ready || d.error) return false as const;
+      return 1000;
     },
     retry: 8,
     retryDelay: 2000,
   });
-  // We wait for `ENDLIST` (= ffmpeg fully done) before mounting the
-  // player. Tried letting playback start mid-segmentation by relaxing
-  // this to "≥3 segments" — but hls.js then treats the EVENT playlist
-  // as live, drops the user at the live edge with broken seek and a
-  // duration that keeps growing. Cleaner UX is "wait for the full pass,
-  // show real progress while waiting".
-  const masterReady = hlsStatusQ.data?.endlist_present === true;
+  const playReady = playStatusQ.data?.ready === true;
 
   // All progress for this torrent (powers the "watched %" per episode in the
   // other-files panel).
@@ -138,10 +116,9 @@ export function WatchPage() {
     return map;
   }, [torrentProgressQ.data]);
 
-  // Computed start position for hls.js. We hand this to the HLS provider so
-  // it loads from the right offset natively — no mid-mount currentTime
-  // assignment, which is what triggered AppleVTDecoder errors when the seek
-  // collided with the first segment buffer.
+  // First-load resume position. Applied once via `onCanPlay` (see below) —
+  // we want a single deterministic seek before playback starts, not a
+  // controlled `currentTime` prop that fights every user scrub.
   const startPosition = useMemo(() => {
     if (progressQ.isPending || !progressQ.data) return 0;
     if (progressQ.data.completed) return 0;
@@ -150,36 +127,16 @@ export function WatchPage() {
 
   // Reset all per-file state when we navigate.
   useEffect(() => {
-    setAudioIdx(null);
-    setPendingSeek(null);
     setPlayerError(null);
     lastTimeRef.current = 0;
     lastSavedTimeRef.current = 0;
     lastDurationRef.current = null;
     progressLoadedRef.current = false;
+    initialSeekDoneRef.current = false;
     subtitleTrackRef.current = null;
   }, [fileIdx, infohash]);
 
-  // Pick the audio track: saved one if any (and still present), else default.
-  // Wait for BOTH probe and progress before deciding so we don't lock in the
-  // default audio while saved progress is still loading.
-  useEffect(() => {
-    if (!probe || audioIdx != null) return;
-    if (progressQ.isPending) return;
-    if (probe.audio.length === 0) return;
-    const saved = progressQ.data?.audio_track_idx;
-    let chosen: number;
-    if (saved != null && probe.audio.some((a) => a.index === saved)) {
-      chosen = saved;
-    } else {
-      const def = probe.audio.find((a) => a.default) ?? probe.audio[0]!;
-      chosen = def.index;
-    }
-    setAudioIdx(chosen);
-  }, [probe, audioIdx, progressQ.data, progressQ.isPending]);
-
-  // Capture saved subtitle pick (we don't need the seek anymore — startPosition
-  // handles it).
+  // Capture saved subtitle pick (the actual seek is applied in onCanPlay).
   useEffect(() => {
     if (progressLoadedRef.current) return;
     if (progressQ.isPending) return;
@@ -204,7 +161,6 @@ export function WatchPage() {
       const body = JSON.stringify({
         position_seconds: t,
         duration_seconds: dur,
-        audio_track_idx: audioIdxRef.current ?? null,
         subtitle_track_idx: subtitleTrackRef.current,
         completed,
       });
@@ -233,39 +189,6 @@ export function WatchPage() {
     };
   }, [infohash, fileIdx]);
 
-  // pendingSeek is only used for *runtime* re-positioning (audio track switch).
-  // First-load resume is handled by hls.js startPosition (set in the provider
-  // config below), which avoids the mount→seek glitch that confuses Apple's
-  // VideoToolbox decoder.
-  useEffect(() => {
-    if (pendingSeek == null) return;
-    let cancelled = false;
-    const apply = (): boolean => {
-      const p = playerRef.current;
-      if (!p) return false;
-      const can = p.state?.canPlay ?? false;
-      if (!can) return false;
-      try {
-        p.currentTime = pendingSeek;
-      } catch (e) {
-        tracingNoop(e);
-      }
-      setPendingSeek(null);
-      return true;
-    };
-    if (apply()) return;
-    const id = window.setInterval(() => {
-      if (cancelled) return;
-      if (apply()) {
-        window.clearInterval(id);
-      }
-    }, 200);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [pendingSeek]);
-
   if (!infohash) return <p>Missing infohash.</p>;
   if (torrentQ.isLoading) return <p className="text-muted-foreground">Loading…</p>;
   if (torrentQ.error)
@@ -280,7 +203,7 @@ export function WatchPage() {
   const downBps = data.download_speed_bps;
   const upBps = data.upload_speed_bps;
   const pct = Math.min(100, Math.max(0, data.progress_pct));
-  const hlsSrc = torrents.hlsUrl(infohash, fileIdx);
+  const playSrc = torrents.playUrl(infohash, fileIdx);
 
   return (
     <div className="grid gap-6">
@@ -321,15 +244,26 @@ export function WatchPage() {
       )}
 
       <div className="aspect-video w-full overflow-hidden rounded-lg border border-border bg-black">
-        {hlsSrc && !progressQ.isPending && masterReady ? (
+        {playSrc && !progressQ.isPending && playReady ? (
           <MediaPlayer
             // Including startPosition in the key forces a clean re-mount when
             // we navigate to a different saved offset (which never happens
             // mid-render today, but future-proofs against subtle re-renders).
-            key={`${hlsSrc}#${startPosition.toFixed(0)}`}
+            key={`${playSrc}#${startPosition.toFixed(0)}`}
             title={fileName}
-            src={hlsSrc}
-            autoPlay
+            // Object form with explicit MIME — the URL has no extension so
+            // Vidstack can't sniff the type from the path. `video/mp4` routes
+            // to the progressive (native HTMLVideoElement) provider, which
+            // is what we want for a single-file fragmented MP4 served via
+            // HTTP byte-range.
+            // HLS source — hls.js handles segment loading, manages multi-
+            // audio renditions (player.audioTracks), and avoids Chrome's
+            // parallel byte-range scanning that plagued the progressive
+            // single-file fMP4. Vidstack auto-loads hls.js when the source
+            // type is `application/vnd.apple.mpegurl`.
+            src={{ src: playSrc, type: "application/vnd.apple.mpegurl" }}
+            // No autoPlay — Firefox / Safari block autoplay-with-sound by
+            // default, and the console error is louder than the UX win.
             className="h-full w-full"
             onTimeUpdate={(detail) => {
               if (detail.currentTime > 0) {
@@ -346,7 +280,6 @@ export function WatchPage() {
                 void progressApi.put(infohash, fileIdx, {
                   position_seconds: detail.currentTime,
                   duration_seconds: dur,
-                  audio_track_idx: audioIdx ?? null,
                   subtitle_track_idx: subtitleTrackRef.current,
                   completed,
                 });
@@ -356,8 +289,6 @@ export function WatchPage() {
               if (detail > 0) lastDurationRef.current = detail;
             }}
             onPause={() => {
-              // Pause is the cheap moment to capture the exact position so
-              // the next resume is pixel-precise (not throttled to 7s).
               if (!infohash) return;
               const t = lastTimeRef.current;
               if (t <= 0) return;
@@ -366,7 +297,6 @@ export function WatchPage() {
               void progressApi.put(infohash, fileIdx, {
                 position_seconds: t,
                 duration_seconds: dur,
-                audio_track_idx: audioIdx ?? null,
                 subtitle_track_idx: subtitleTrackRef.current,
                 completed: false,
               });
@@ -376,53 +306,50 @@ export function WatchPage() {
               void progressApi.put(infohash, fileIdx, {
                 position_seconds: lastDurationRef.current ?? lastTimeRef.current,
                 duration_seconds: lastDurationRef.current,
-                audio_track_idx: audioIdx ?? null,
                 subtitle_track_idx: subtitleTrackRef.current,
                 completed: true,
               });
             }}
             onCanPlay={() => {
-              if (pendingSeek != null && playerRef.current) {
+              // One-shot resume seek. Applied exactly once after the first
+              // canplay event so we don't fight subsequent user scrubs.
+              if (initialSeekDoneRef.current) return;
+              initialSeekDoneRef.current = true;
+              if (startPosition > 0 && playerRef.current) {
                 try {
-                  playerRef.current.currentTime = pendingSeek;
+                  playerRef.current.currentTime = startPosition;
                 } catch {
-                  // The interval-driven effect will retry.
+                  /* swallowed: edge case, user can seek manually */
                 }
-                setPendingSeek(null);
               }
             }}
             onError={(detail) => {
+              // eslint-disable-next-line no-console
+              console.error("[Vidstack onError]", detail);
               setPlayerError(
                 `${detail.message ?? "unknown error"}` +
                   (detail.mediaError ? ` (code ${detail.mediaError.code})` : ""),
               );
             }}
+            // Surface the actual provider Vidstack chose AND enable
+            // hls.js debug tracing so we can tell, when something goes
+            // wrong, whether (a) Vidstack didn't pick HLS at all
+            // (provider.type !== "hls"), (b) hls.js was picked but
+            // filtered the variant on codec, or (c) the loading itself
+            // erred. Filter the console with `[HLS]` for hls.js's own
+            // verbose log line, and with `[Vidstack provider]` for the
+            // provider selection.
             onProviderChange={(provider) => {
-              if (isHLSProvider(provider)) {
-                provider.config = {
-                  ...provider.config,
-                  // We pre-validated ENDLIST via the status endpoint, so
-                  // these timeouts are pure defense in depth.
-                  manifestLoadingTimeOut: 30_000,
-                  manifestLoadingMaxRetry: 3,
-                  manifestLoadingRetryDelay: 1000,
-                  levelLoadingTimeOut: 30_000,
-                  levelLoadingMaxRetry: 3,
-                  fragLoadingTimeOut: 60_000,
-                  fragLoadingMaxRetry: 6,
-                  // Force a deterministic start position. With our EVENT-
-                  // type playlists hls.js's `-1` (= "default") would pick
-                  // the live edge — i.e. drop the user at whatever
-                  // segment ffmpeg has produced last, not at the
-                  // beginning. We always know where to start: saved
-                  // progress if we have one, segment 0 otherwise.
-                  startPosition: startPosition > 0 ? startPosition : 0,
-                  // Don't keep hls.js's live-stream sync — we want full
-                  // VOD-style scrubbing across the loaded range.
-                  liveDurationInfinity: false,
+              // eslint-disable-next-line no-console
+              console.log("[Vidstack provider]", provider?.type, provider);
+              if (provider && "config" in provider) {
+                (provider as { config: Record<string, unknown> }).config = {
+                  ...(provider as { config: Record<string, unknown> }).config,
+                  debug: true,
                 };
               }
             }}
+            playsInline
             ref={(p) => {
               playerRef.current = p;
             }}
@@ -447,9 +374,8 @@ export function WatchPage() {
             probeFetching={probeQ.isFetching}
             probeError={probeQ.error}
             progressPending={progressQ.isPending}
-            audioReady={true}
-            hlsStatus={hlsStatusQ.data ?? null}
-            hlsError={hlsStatusQ.error}
+            playStatus={playStatusQ.data ?? null}
+            playError={playStatusQ.error}
           />
         )}
       </div>
@@ -520,55 +446,35 @@ export function WatchPage() {
         </section>
       )}
 
-      {probe && (probe.audio.length > 1 || probe.subtitle.length > 0) && (
+      {probe && probe.subtitle.length > 0 && (
         <div className="grid gap-3 rounded-md border border-border bg-card/40 p-4 text-sm">
-          {probe.audio.length > 1 && (
-            <AudioPicker
-              audio={probe.audio}
-              current={audioIdx ?? probe.audio.find((a) => a.default)?.index ?? probe.audio[0]?.index ?? 0}
-              onPick={(i) => {
-                if (i === audioIdx) return;
-                // Master playlist exposes every audio rendition as
-                // EXT-X-MEDIA, so we switch via hls.js's `audioTrack`
-                // property — no URL change, no re-segmentation, no
-                // re-buffering of video. Audio segments swap on the next
-                // fragment boundary.
-                const provider = playerRef.current?.provider;
-                if (provider && isHLSProvider(provider) && provider.instance) {
-                  provider.instance.audioTrack = i;
-                }
-                setAudioIdx(i);
-                setPlayerError(null);
-              }}
-            />
-          )}
-          {probe.subtitle.length > 0 && (
-            <div className="grid gap-1 text-xs">
-              <span className="uppercase tracking-wide text-muted-foreground">
-                Subtitles ({textSubs.length} loadable / {probe.subtitle.length} detected)
-              </span>
-              <ul className="grid gap-0.5 text-muted-foreground">
-                {probe.subtitle.map((s) => (
-                  <li key={s.index}>
-                    <span className="text-foreground">
-                      {s.title ?? s.language?.toUpperCase() ?? `Sub ${s.index + 1}`}
-                    </span>
-                    <span className="ml-2 text-[11px]">
-                      {s.codec}
-                      {s.forced ? " · forced" : ""}
-                      {s.default ? " · default" : ""}
-                      {!s.text_based && (
-                        <span className="ml-1 text-amber-400">
-                          (image-based, not exposable as WebVTT)
-                        </span>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <span className="text-[11px]">Switch from the player CC menu.</span>
-            </div>
-          )}
+          <div className="grid gap-1 text-xs">
+            <span className="uppercase tracking-wide text-muted-foreground">
+              Subtitles ({textSubs.length} loadable / {probe.subtitle.length} detected)
+            </span>
+            <ul className="grid gap-0.5 text-muted-foreground">
+              {probe.subtitle.map((s) => (
+                <li key={s.index}>
+                  <span className="text-foreground">
+                    {s.title ?? s.language?.toUpperCase() ?? `Sub ${s.index + 1}`}
+                  </span>
+                  <span className="ml-2 text-[11px]">
+                    {s.codec}
+                    {s.forced ? " · forced" : ""}
+                    {s.default ? " · default" : ""}
+                    {!s.text_based && (
+                      <span className="ml-1 text-amber-400">
+                        (image-based, not exposable as WebVTT)
+                      </span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <span className="text-[11px]">
+              Switch subtitles and audio tracks from the player menu.
+            </span>
+          </div>
         </div>
       )}
 
@@ -615,59 +521,6 @@ function StateBadge({ state }: { state: TorrentView["state"] }) {
   );
 }
 
-function AudioPicker({
-  audio,
-  current,
-  onPick,
-}: {
-  audio: AudioStream[];
-  current: number;
-  onPick: (idx: number) => void;
-}) {
-  return (
-    <div className="grid gap-2">
-      <span className="text-xs uppercase tracking-wide text-muted-foreground">Audio</span>
-      <div className="flex flex-wrap gap-2">
-        {audio.map((a) => {
-          const active = a.index === current;
-          return (
-            <button
-              key={a.index}
-              type="button"
-              onClick={() => onPick(a.index)}
-              className={`rounded-md border px-3 py-1.5 text-xs transition ${
-                active
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border hover:border-border/60"
-              }`}
-            >
-              <span className="font-medium">{audioLabel(a)}</span>
-              <span className="ml-2 text-[10px] uppercase opacity-70">
-                {a.codec}
-                {a.channels ? ` · ${a.channels}ch` : ""}
-              </span>
-              {!a.browser_compatible && (
-                <Badge
-                  variant="outline"
-                  className="ml-2 border-amber-500/50 text-[9px] text-amber-300"
-                >
-                  transcode
-                </Badge>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function audioLabel(a: AudioStream): string {
-  if (a.title) return a.title;
-  if (a.language) return a.language.toUpperCase();
-  return `Audio ${a.index + 1}`;
-}
-
 function uniqueSubtitleLabel(s: SubtitleStream, _idx: number, all: SubtitleStream[]): string {
   const baseTitle = s.title?.trim();
   const langCode = s.language?.toUpperCase();
@@ -685,26 +538,20 @@ function uniqueSubtitleLabel(s: SubtitleStream, _idx: number, all: SubtitleStrea
   return label;
 }
 
-function tracingNoop(_: unknown) {
-  // Swallowed: seeks can fail mid-buffer; we'll retry on the next interval tick.
-}
-
 function PlayerLoadingStatus({
   torrent,
   probeFetching,
   probeError,
   progressPending,
-  audioReady,
-  hlsStatus,
-  hlsError,
+  playStatus,
+  playError,
 }: {
   torrent: TorrentView;
   probeFetching: boolean;
   probeError: unknown;
   progressPending: boolean;
-  audioReady: boolean;
-  hlsStatus: import("@/lib/api").HlsStatus | null;
-  hlsError: unknown;
+  playStatus: PlayStatus | null;
+  playError: unknown;
 }) {
   const fileOnDisk =
     probeError == null ||
@@ -740,29 +587,32 @@ function PlayerLoadingStatus({
     step = {
       label: "Loading saved position…",
     };
-  } else if (!audioReady) {
-    step = {
-      label: "Selecting audio track…",
-    };
-  } else if (hlsError instanceof Error) {
+  } else if (playStatus?.error) {
     isError = true;
-    step = { label: "Playback prep failed", sub: hlsError.message };
-  } else if (!hlsStatus) {
-    step = { label: "Starting transcoder…" };
-  } else if (!hlsStatus.endlist_present) {
-    const total = hlsStatus.estimated_total_segments;
-    const seg = hlsStatus.segments_produced;
-    const pct = total && total > 0 ? Math.min(99, (seg / total) * 100) : undefined;
+    step = { label: "Playback prep failed", sub: playStatus.error };
+  } else if (playError instanceof Error) {
+    isError = true;
+    step = { label: "Playback prep failed", sub: playError.message };
+  } else if (!playStatus) {
+    step = { label: "Starting playback prep…" };
+  } else if (playStatus.reason === "downloading") {
+    const pct =
+      playStatus.progress != null
+        ? Math.min(99, Math.max(0, playStatus.progress * 100))
+        : downloadPct;
     step = {
-      label: total
-        ? `Pre-segmenting · ${seg} / ~${total} segments`
-        : `Pre-segmenting · ${seg} segments`,
-      sub: "ffmpeg is writing the HLS playlist. Seek will be enabled once it finishes.",
+      label: `Downloading · ${pct.toFixed(0)}%`,
+      sub: `${formatSize(torrent.download_speed_bps)}/s · ${torrent.peers} peer${torrent.peers === 1 ? "" : "s"}`,
       pct,
+    };
+  } else if (playStatus.reason === "remuxing") {
+    step = {
+      label: "Remuxing to fragmented MP4…",
+      sub: "ffmpeg is producing the playable cache file (no transcoding — original codecs preserved).",
     };
   } else {
     step = {
-      label: "Loading first frames…",
+      label: "Preparing playback…",
       sub: "Almost there.",
     };
   }
@@ -775,16 +625,10 @@ function PlayerLoadingStatus({
         <Loader2 className="size-8 animate-spin text-muted-foreground" />
       )}
       <div className="grid gap-1">
-        <span
-          className={`text-sm font-medium ${
-            isError ? "text-destructive" : "text-foreground"
-          }`}
-        >
+        <span className={`text-sm font-medium ${isError ? "text-destructive" : "text-foreground"}`}>
           {step.label}
         </span>
-        {step.sub && (
-          <span className="text-xs text-muted-foreground">{step.sub}</span>
-        )}
+        {step.sub && <span className="text-xs text-muted-foreground">{step.sub}</span>}
       </div>
       {!isError && step.pct != null && (
         <div className="w-64">

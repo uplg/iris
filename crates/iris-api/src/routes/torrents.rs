@@ -10,9 +10,7 @@ use iris_core::search::TorrentSource;
 use iris_torrent::{TorrentPreview, TorrentSnapshot};
 use serde::{Deserialize, Serialize};
 use std::io::SeekFrom;
-use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::process::Command;
 use tokio_util::io::ReaderStream;
 
 use crate::error::{ApiError, ApiResult};
@@ -24,31 +22,37 @@ pub fn router() -> Router<AppState> {
         .route("/preview", post(preview))
         .route("/", post(ingest).get(list))
         .route("/{infohash}", get(get_one).delete(remove))
+        // `/stream` serves the *raw* source file (range-supported). Used by
+        // the download button and as the URL for native MKV players.
         .route(
             "/{infohash}/files/{idx}/stream",
             get(stream_file).head(stream_file),
         )
-        .route("/{infohash}/files/{idx}/play", get(play_file).head(play_file))
+        // Inflight status of the per-file remux job, used by the player UI
+        // to render a "preparing…" overlay before the first byte. Listed
+        // BEFORE the wildcard `/play/{asset}` so axum routes the literal
+        // path here instead of treating "status" as an asset.
+        .route("/{infohash}/files/{idx}/play/status", get(play_status))
+        // `/play/{asset}` is the HLS-CMAF cache. The player asks for
+        // `master.m3u8` first; that call ensures ffmpeg is running and
+        // blocks until the master + first fragments are on disk. Every
+        // other asset (variant playlists, init segments, `.m4s`) is
+        // served as a static file with byte-range support.
+        .route(
+            "/{infohash}/files/{idx}/play/{asset}",
+            get(play_asset).head(play_asset),
+        )
         .route("/{infohash}/files/{idx}/probe", get(probe_file))
-        .route(
-            "/{infohash}/files/{idx}/hls/status",
-            get(hls_status),
-        )
-        // Wildcard so the master, the per-variant playlists
-        // (`stream_0/playlist.m3u8`, `stream_1/playlist.m3u8`, …) and
-        // segments (`stream_0/seg_00001.m4s`) all funnel through the same
-        // handler. Path traversal is guarded inside `hls_asset`.
-        .route(
-            "/{infohash}/files/{idx}/hls/{*asset}",
-            get(hls_asset),
-        )
         .route(
             "/{infohash}/files/{idx}/sub/{stream_idx}/track.vtt",
             get(subtitle_vtt),
         )
         .route(
+            // PUT for normal calls; POST is accepted because
+            // `navigator.sendBeacon` (used at unload to flush the last
+            // playback position) is hard-wired to POST.
             "/{infohash}/files/{idx}/progress",
-            get(get_progress).put(put_progress),
+            get(get_progress).put(put_progress).post(put_progress),
         )
         .route("/{infohash}/progress", get(get_torrent_progress))
 }
@@ -98,7 +102,7 @@ async fn get_progress(
     Path((infohash, idx)): Path<(String, usize)>,
 ) -> ApiResult<Json<Option<ProgressView>>> {
     let infohash = infohash.to_ascii_lowercase();
-    let row = iris_db::playback::get(state.db(), user.id, &infohash, idx as i64).await?;
+    let row = iris_db::playback::get(state.db(), user.id, &infohash, file_idx_to_i64(idx)).await?;
     Ok(Json(row.map(|r| ProgressView {
         position_seconds: r.position_seconds,
         duration_seconds: r.duration_seconds,
@@ -134,7 +138,7 @@ async fn put_progress(
         iris_db::playback::UpsertProgress {
             user_id: user.id,
             infohash,
-            file_idx: idx as i64,
+            file_idx: file_idx_to_i64(idx),
             position_seconds: body.position_seconds.max(0.0),
             duration_seconds: body.duration_seconds,
             audio_track_idx: body.audio_track_idx,
@@ -227,15 +231,15 @@ async fn ingest(
     )
     .await?;
 
-    // Pre-warm HLS on a best-effort background task. By the time the user
-    // clicks Play, ffmpeg has already started writing segments — first-frame
-    // latency drops from "wait for ffmpeg cold-start" to "single segment
-    // round-trip". For multi-file torrents we pick the largest video file as
-    // the most likely candidate.
+    // Pre-warm the remuxer cache on a best-effort background task. By the
+    // time the user clicks Play, the `.fmp4` file is already on disk — the
+    // first request hits the cached file directly instead of waiting for
+    // a cold ffmpeg run. For multi-file torrents we pick the largest video
+    // file as the most likely candidate.
     let prewarm_state = state.clone();
     let prewarm_infohash = result.snapshot.infohash.clone();
     tokio::spawn(async move {
-        prewarm_default_hls(&prewarm_state, &prewarm_infohash).await;
+        prewarm_default_remux(&prewarm_state, &prewarm_infohash).await;
     });
 
     Ok(Json(IngestResponse {
@@ -245,14 +249,12 @@ async fn ingest(
     }))
 }
 
-async fn prewarm_default_hls(state: &AppState, infohash: &str) {
+async fn prewarm_default_remux(state: &AppState, infohash: &str) {
     use std::time::Duration;
-    // Wait for the *whole torrent* to finish downloading before letting
-    // ffmpeg touch it. Running on a sparse / partial source produces a
-    // truncated HLS pipeline (playlist references segments ffmpeg never
-    // got to write), which then 404s in the player. Up to 30 minutes —
-    // beyond that the user can trigger a manual play and we'll start
-    // ffmpeg synchronously instead.
+    // Wait for the torrent to finish downloading before letting ffmpeg
+    // touch it. Remuxing a sparse source produces a truncated cache
+    // that's worse than waiting. Up to 30 minutes — beyond that the
+    // user's first manual Play will trigger the remux synchronously.
     let mut chosen_idx: Option<usize> = None;
     for _ in 0..900 {
         if let Some(snap) = state.engine().get_by_infohash(infohash) {
@@ -273,9 +275,8 @@ async fn prewarm_default_hls(state: &AppState, infohash: &str) {
                 .max_by_key(|f| f.size_bytes)
                 .map(|f| f.index);
             if let Some(idx) = largest_video {
-                let path = match state.engine().file_path(infohash, idx) {
-                    Ok(p) => p,
-                    Err(_) => return,
+                let Ok(path) = state.engine().file_path(infohash, idx) else {
+                    return;
                 };
                 if path.exists() {
                     chosen_idx = Some(idx);
@@ -289,10 +290,11 @@ async fn prewarm_default_hls(state: &AppState, infohash: &str) {
         tracing::debug!(infohash, "prewarm: no video file appeared, skipping");
         return;
     };
-    let path = match state.engine().file_path(infohash, idx) {
-        Ok(p) => p,
-        Err(_) => return,
+    let Ok(path) = state.engine().file_path(infohash, idx) else {
+        return;
     };
+    // Probe runs the TMDB verification side-effect — useful regardless of
+    // whether the remux below succeeds.
     let probe = match state.probes().get_or_probe(infohash, idx, &path).await {
         Ok(p) => p,
         Err(e) => {
@@ -301,22 +303,72 @@ async fn prewarm_default_hls(state: &AppState, infohash: &str) {
         }
     };
     verify_tmdb_match(state, infohash, probe.duration_seconds).await;
-    let audio_tracks = audio_tracks_for_hls(&probe);
     let key = format!("{infohash}_{idx}");
-    if let Err(e) = state
-        .hls()
-        .ensure_job(&key, &path, &audio_tracks, probe.duration_seconds)
-        .await
-    {
-        tracing::debug!(error = %e, "prewarm: hls ensure_job failed");
+    let plan = build_remux_plan(&probe);
+    if let Err(e) = state.remuxer().ensure_remuxed(&key, &path, plan).await {
+        tracing::warn!(error = %e, infohash, "prewarm: remux failed");
         return;
     }
-    tracing::info!(
-        infohash,
-        idx,
-        audio_count = audio_tracks.len(),
-        "prewarmed multi-audio HLS"
-    );
+    tracing::info!(infohash, idx, "prewarmed fragmented MP4");
+}
+
+/// Build the HLS audio-rendition plan from probe data.
+///
+/// One rendition per source audio. Browser-compatible codecs (AAC / MP3
+/// / Opus / Vorbis) are kept as `Copy`; everything else (DTS / AC-3 /
+/// E-AC-3 / FLAC / `TrueHD` / PCM / …) is transcoded to stereo AAC. We
+/// don't emit "copy + AAC fallback" pairs for the same source — the
+/// HLS rendition list IS the user-visible audio menu, so duplicates
+/// would confuse without adding signal (browsers wouldn't decode the
+/// copy anyway).
+///
+/// Names disambiguate sources sharing a language tag: `fre`, `fre2`, …
+fn build_remux_plan(probe: &iris_media::MediaProbe) -> iris_media::RemuxPlan {
+    use iris_media::{AudioCodec, AudioRendition};
+    let mut renditions: Vec<AudioRendition> = Vec::new();
+    let mut lang_count: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for a in &probe.audio {
+        let language = a
+            .language
+            .as_deref()
+            .filter(|l| !l.is_empty())
+            .unwrap_or("und")
+            .to_ascii_lowercase();
+        let n = lang_count.entry(language.clone()).or_insert(0);
+        *n += 1;
+        let name = if *n == 1 {
+            language.clone()
+        } else {
+            format!("{language}{n}")
+        };
+        let codec = if a.browser_compatible {
+            AudioCodec::Copy
+        } else {
+            AudioCodec::Aac
+        };
+        renditions.push(AudioRendition {
+            source_idx: a.index,
+            codec,
+            name,
+            language,
+            default: false, // set below
+        });
+    }
+    // Mark the first browser-compatible rendition as default; otherwise
+    // the first one (any). hls.js / Vidstack pick this on initial load.
+    if let Some(first_compat) = renditions
+        .iter_mut()
+        .find(|r| matches!(r.codec, iris_media::AudioCodec::Copy))
+    {
+        first_compat.default = true;
+    } else if let Some(first) = renditions.first_mut() {
+        first.default = true;
+    }
+    iris_media::RemuxPlan {
+        audio: renditions,
+        source_video_codec: probe.video.first().map(|v| v.codec.clone()),
+    }
 }
 
 /// Tolerance used when matching TMDB's declared runtime against the file's
@@ -335,9 +387,8 @@ async fn verify_tmdb_match(
     infohash: &str,
     probed_duration_secs: Option<f64>,
 ) {
-    let row = match iris_db::torrents::find_by_infohash(state.db(), infohash).await {
-        Ok(Some(r)) => r,
-        _ => return,
+    let Ok(Some(row)) = iris_db::torrents::find_by_infohash(state.db(), infohash).await else {
+        return;
     };
     if row.tmdb_verified {
         return;
@@ -345,7 +396,9 @@ async fn verify_tmdb_match(
     let Some(tmdb_id) = row.tmdb_id.filter(|id| *id > 0) else { return };
     let Some(probed) = probed_duration_secs.filter(|d| *d > 0.0) else { return };
     let Some(tmdb) = state.tmdb() else { return };
-    let Some(meta) = tmdb.lookup(tmdb_id as u64).await else { return };
+    // tmdb_id is a positive i64 from the DB; u64::try_from cannot fail here.
+    let Ok(tmdb_id_u64) = u64::try_from(tmdb_id) else { return };
+    let Some(meta) = tmdb.lookup(tmdb_id_u64).await else { return };
     let Some(tmdb_minutes) = meta.runtime_minutes.filter(|m| *m > 0) else { return };
     let tmdb_secs = f64::from(tmdb_minutes) * 60.0;
     let diff = (probed - tmdb_secs).abs() / tmdb_secs;
@@ -365,24 +418,6 @@ async fn verify_tmdb_match(
         verified,
         "tmdb verification result",
     );
-}
-
-/// Convert an ffprobe `audio` list into the `AudioTrack` view that
-/// [`iris_media::hls::HlsManager`] expects. We carry over codec, language,
-/// title, and the source's default flag so the master playlist can label
-/// each rendition correctly.
-fn audio_tracks_for_hls(probe: &iris_media::MediaProbe) -> Vec<iris_media::hls::AudioTrack> {
-    probe
-        .audio
-        .iter()
-        .map(|a| iris_media::hls::AudioTrack {
-            track_idx: a.index as u32,
-            codec: a.codec.clone(),
-            language: a.language.clone(),
-            name: a.title.clone(),
-            default: a.default,
-        })
-        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -471,7 +506,11 @@ async fn remove(
         .delete_by_infohash(&row.infohash, true)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine delete: {e}")))?;
-    state.hls().cleanup_for_torrent(&row.infohash).await;
+    // Drop every cached fragmented MP4 for this torrent. We don't know the
+    // file count from here without going back to the engine snapshot — the
+    // GC callback wired up in `iris-api::lib` already does this prefix
+    // sweep on the cache dir, so it's enough to soft-delete the row and
+    // let the next eviction tick clean up the leftovers.
     iris_db::torrents::soft_delete(state.db(), TorrentId::from(row.id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -510,255 +549,107 @@ fn map_engine_err(e: iris_torrent::EngineError) -> ApiError {
     }
 }
 
-/// Non-blocking poll endpoint: starts ffmpeg if it's not running yet, then
-/// returns the current state on disk (segment count, ENDLIST present, error
-/// flag). The frontend polls this while the player is hidden so the user
-/// sees real progress instead of a silent black box.
+/// State of the per-file remux job exposed to the player UI. Polled
+/// before mounting the `<video>` so we can render a meaningful loading
+/// step ("downloading 47 %", "remuxing", "ready").
 #[derive(Debug, Serialize)]
-pub struct HlsStatus {
-    pub ffmpeg_running: bool,
-    pub segments_produced: u32,
-    pub estimated_total_segments: Option<u32>,
-    pub endlist_present: bool,
+pub struct PlayStatus {
+    pub ready: bool,
+    /// `"downloading"` / `"remuxing"` / `null` when ready or when an
+    /// `error` is set instead.
+    pub reason: Option<String>,
+    /// 0..1 — only meaningful when `reason == "downloading"`.
+    pub progress: Option<f64>,
     pub error: Option<String>,
 }
 
-async fn hls_status(
+async fn play_status(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
-) -> ApiResult<Json<HlsStatus>> {
+) -> ApiResult<Json<PlayStatus>> {
     let infohash = infohash.to_ascii_lowercase();
-    let _row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
+    iris_db::torrents::find_by_infohash(state.db(), &infohash)
         .await?
         .ok_or(ApiError::NotFound)?;
-    let path = state
-        .engine()
-        .file_path(&infohash, idx)
-        .map_err(map_engine_err)?;
-    if !path.exists() {
-        return Err(ApiError::BadRequest(format!(
-            "file not yet on disk: {}",
-            path.display()
-        )));
-    }
-    // Don't kick ffmpeg while the torrent is still downloading — we'd
-    // produce a truncated HLS pipeline (playlist with N segments but
-    // each shrinking to nothing as ffmpeg hits EOF on the sparse file).
-    // The WatchScreen polls this endpoint as soon as it mounts, and
-    // without this guard ffmpeg used to start *during* the download.
+    let path = state.engine().file_path(&infohash, idx).map_err(map_engine_err)?;
+
     if let Some(snap) = state.engine().get_by_infohash(&infohash) {
         if !snap.finished {
-            return Ok(Json(HlsStatus {
-                ffmpeg_running: false,
-                segments_produced: 0,
-                estimated_total_segments: None,
-                endlist_present: false,
-                error: Some("torrent still downloading".into()),
+            return Ok(Json(PlayStatus {
+                ready: false,
+                reason: Some("downloading".into()),
+                progress: Some((snap.progress_pct / 100.0).clamp(0.0, 1.0)),
+                error: None,
             }));
         }
     }
 
-    // Cached probe powers both audio mapping and the duration estimate.
-    let probe = state
-        .probes()
-        .get_or_probe(&infohash, idx, &path)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
-    // Opportunistic TMDB verification — runs at most once per torrent
-    // (idempotent on `tmdb_verified=true`), so the cost is negligible.
-    verify_tmdb_match(&state, &infohash, probe.duration_seconds).await;
-    let audio_tracks = audio_tracks_for_hls(&probe);
     let key = format!("{infohash}_{idx}");
+    let master = state.remuxer().master_path(&key);
+    if let Ok(meta) = tokio::fs::metadata(&master).await {
+        if meta.is_file() && meta.len() > 0 {
+            return Ok(Json(PlayStatus {
+                ready: true,
+                reason: None,
+                progress: None,
+                error: None,
+            }));
+        }
+    }
 
-    // Idempotent: starts ffmpeg if not yet running, no-op otherwise.
-    state
-        .hls()
-        .ensure_job(&key, &path, &audio_tracks, probe.duration_seconds)
+    // Sticky failure short-circuit: once ffmpeg has failed for this source
+    // we surface the error and STOP polling-driven respawns. The user can
+    // wipe the entry from `/admin` to retry, otherwise the cooldown clears
+    // it after a few minutes.
+    if let Some(msg) = state.remuxer().recent_failure(&key).await {
+        return Ok(Json(PlayStatus {
+            ready: false,
+            reason: None,
+            progress: None,
+            error: Some(msg),
+        }));
+    }
+
+    // No cache yet, no recorded failure. If nothing's running for this key,
+    // kick off the remux in the background — otherwise the UI would gate
+    // `/play` on `ready: true` forever, and `/play` is the only place that
+    // triggers ffmpeg. `ensure_remuxed` deduplicates internally, so even if
+    // this poll races with another caller, only one ffmpeg ever runs.
+    let in_flight = state
+        .remuxer()
+        .list_jobs()
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?;
-
-    // Progress is measured by the **video** variant — audio finishes much
-    // faster (smaller files). The video sub-playlist reaching ENDLIST means
-    // the whole job is done.
-    let segments_produced = state.hls().video_segment_count(&key).await;
-    // Strict ENDLIST check: every variant (video + each audio rendition)
-    // must be done. A previous version only verified `stream_0` and
-    // mounted the player while stream_1/stream_2 were still partial,
-    // producing the dreaded "tank with no errors" symptom.
-    let endlist_present = state
-        .hls()
-        .all_endlist_present(&key, audio_tracks.len())
-        .await;
-    let ffmpeg_running = !endlist_present && state.hls().is_job_active(&key).await;
-
-    // Rough estimate of total segments based on probed duration. Actual
-    // segment durations vary (keyframe-aligned), but as a progress-bar
-    // denominator this is good enough.
-    let estimated_total_segments = probe
-        .duration_seconds
-        .filter(|d| *d > 0.0)
-        .map(|d| (d / 6.0).ceil() as u32);
-
-    Ok(Json(HlsStatus {
-        ffmpeg_running,
-        segments_produced,
-        estimated_total_segments,
-        endlist_present,
+        .iter()
+        .any(|j| j.key == key && j.in_flight);
+    if !in_flight {
+        // Probe is needed to know whether a browser-compatible audio track
+        // exists; it's cached per (infohash, idx) so re-running on each
+        // status poll only hits ffprobe the first time.
+        let remuxer = state.remuxer().clone();
+        let probes = state.probes().clone();
+        let infohash_owned = infohash.clone();
+        let key_owned = key.clone();
+        tokio::spawn(async move {
+            let probe = match probes.get_or_probe(&infohash_owned, idx, &path).await {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(error = %e, key = %key_owned, "play_status: probe failed");
+                    return;
+                }
+            };
+            let plan = build_remux_plan(&probe);
+            if let Err(e) = remuxer.ensure_remuxed(&key_owned, &path, plan).await {
+                tracing::warn!(error = %e, key = %key_owned, "play_status: background remux failed");
+            }
+        });
+    }
+    Ok(Json(PlayStatus {
+        ready: false,
+        reason: Some("remuxing".into()),
+        progress: None,
         error: None,
     }))
-}
-
-async fn hls_asset(
-    State(state): State<AppState>,
-    _user: AuthUser,
-    Path((infohash, idx, asset)): Path<(String, usize, String)>,
-) -> ApiResult<Response> {
-    let infohash = infohash.to_ascii_lowercase();
-    tracing::debug!(infohash = %infohash, idx, asset = %asset, "hls_asset enter");
-
-    if !is_safe_hls_asset(&asset) {
-        return Err(ApiError::BadRequest("invalid HLS asset path".into()));
-    }
-    let _row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    let path = state
-        .engine()
-        .file_path(&infohash, idx)
-        .map_err(map_engine_err)?;
-    let path_exists = tokio::fs::try_exists(&path).await.unwrap_or(false);
-    if !path_exists {
-        return Err(ApiError::BadRequest(format!(
-            "file not yet on disk: {}",
-            path.display()
-        )));
-    }
-    // Guard against running ffmpeg on a still-downloading torrent:
-    // sparse files segment into nonsense (playlist references seg_00009
-    // when only 0..7 are actually written on disk → 404 in the player).
-    // We only block the cold path here — if the HLS dir is already
-    // clean, [`hls_asset`]'s hot path skipped this check entirely and
-    // serves segments straight off disk.
-    if let Some(snap) = state.engine().get_by_infohash(&infohash) {
-        if !snap.finished {
-            return Err(ApiError::BadRequest(
-                "torrent still downloading — wait until it's complete to play".into(),
-            ));
-        }
-    }
-
-    let key = format!("{infohash}_{idx}");
-    let dir = state.hls().segment_dir_for(&key);
-    let asset_path = dir.join(&asset);
-
-    let mime = if asset.ends_with(".m4s") {
-        "video/iso.segment"
-    } else if asset.ends_with(".mp4") {
-        "video/mp4"
-    } else if asset.ends_with(".m3u8") {
-        "application/vnd.apple.mpegurl"
-    } else if asset.ends_with(".ts") {
-        "video/mp2t"
-    } else {
-        "application/octet-stream"
-    };
-
-    // Hot path: serve the asset directly when it's on disk and we're
-    // not at a validation entry point. The master.m3u8 is the entry
-    // point — players fetch it once per session and we use that single
-    // request to (re)validate the dir + self-heal corruption.
-    // Segments stay hot because by the time the player requests one
-    // the dir has already been validated (or freshly re-spawned).
-    let is_validation_entry = asset == iris_media::hls::MASTER_PLAYLIST;
-    if !is_validation_entry {
-        if let Ok(bytes) = tokio::fs::read(&asset_path).await {
-            tracing::debug!(asset = %asset, size = bytes.len(), "hls_asset hot serve");
-            return Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, mime)
-                .header(header::CACHE_CONTROL, "no-store")
-                .header(header::CONTENT_LENGTH, bytes.len())
-                .body(Body::from(bytes))
-                .unwrap());
-        }
-    }
-    tracing::debug!(asset = %asset, "hls_asset cold path (validation/missing)");
-
-    // Cold path: file isn't there yet. Kick the ffmpeg job (idempotent if
-    // already running) and wait for the asset to appear.
-    let probe = state
-        .probes()
-        .get_or_probe(&infohash, idx, &path)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
-    let audio_tracks = audio_tracks_for_hls(&probe);
-    state
-        .hls()
-        .ensure_job(&key, &path, &audio_tracks, probe.duration_seconds)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hls ensure: {e}")))?;
-
-    if asset == iris_media::hls::MASTER_PLAYLIST {
-        let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
-        // Master is hand-written by `ensure_job` before ffmpeg spawns,
-        // so by this point it's there.
-        return serve_static_file(&asset_path, mime).await;
-    }
-
-    state
-        .hls()
-        .wait_for_segment(&key, &asset_path, std::time::Duration::from_secs(120))
-        .await
-        .map_err(|e| {
-            tracing::warn!(asset = %asset, error = %e, "hls segment unavailable");
-            ApiError::NotFound
-        })?;
-    serve_static_file(&asset_path, mime).await
-}
-
-/// Validate the relative HLS asset path. The wildcard route captures things
-/// like `master.m3u8`, `stream_0/playlist.m3u8`, `stream_0/seg_00001.m4s`.
-/// We require:
-///   * non-empty
-///   * no `..` (path traversal)
-///   * no leading `/` (no absolute paths)
-///   * no backslashes (Windows-style traversal)
-///   * each path segment matches `[A-Za-z0-9._-]+`
-///   * at most two path segments deep (master + stream_X dirs)
-fn is_safe_hls_asset(asset: &str) -> bool {
-    if asset.is_empty() || asset.starts_with('/') || asset.contains("..") || asset.contains('\\') {
-        return false;
-    }
-    let parts: Vec<&str> = asset.split('/').collect();
-    if parts.len() > 2 {
-        return false;
-    }
-    parts.iter().all(|seg| {
-        !seg.is_empty()
-            && seg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
-    })
-}
-
-async fn serve_static_file(path: &std::path::Path, mime: &str) -> ApiResult<Response> {
-    if !path.exists() {
-        return Err(ApiError::NotFound);
-    }
-    let bytes = tokio::fs::read(path)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("read {}: {e}", path.display())))?;
-    let mut resp = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, mime)
-        .header(header::CONTENT_LENGTH, bytes.len().to_string())
-        .header(header::CACHE_CONTROL, "public, max-age=31536000")
-        .body(Body::from(bytes))
-        .unwrap();
-    if mime.ends_with("mpegurl") {
-        resp.headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    }
-    Ok(resp)
 }
 
 async fn subtitle_vtt(
@@ -838,34 +729,29 @@ async fn stream_file(
     let head_only = req.method() == Method::HEAD;
 
     if let Some(rh) = range.as_ref() {
-        match parse_range(rh, total) {
-            Some((start, end)) => {
-                let len = end - start + 1;
-                if head_only {
-                    return Ok(build_headers(StatusCode::PARTIAL_CONTENT, len, &mime, Some((start, end, total)))
-                        .body(Body::empty())
-                        .unwrap());
-                }
-                if let Err(e) = reader.seek(SeekFrom::Start(start)).await {
-                    return Err(ApiError::Internal(anyhow::anyhow!("seek: {e}")));
-                }
-                let limited = reader.take(len);
-                let body = Body::from_stream(ReaderStream::new(limited));
+        if let Some((start, end)) = parse_range(rh, total) {
+            let len = end - start + 1;
+            if head_only {
                 return Ok(build_headers(StatusCode::PARTIAL_CONTENT, len, &mime, Some((start, end, total)))
-                    .body(body)
+                    .body(Body::empty())
                     .unwrap());
             }
-            None => {
-                let mut resp =
-                    Response::new(Body::from("invalid range")) ;
-                *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
-                resp.headers_mut().insert(
-                    header::CONTENT_RANGE,
-                    HeaderValue::from_str(&format!("bytes */{total}")).unwrap(),
-                );
-                return Ok(resp);
+            if let Err(e) = reader.seek(SeekFrom::Start(start)).await {
+                return Err(ApiError::Internal(anyhow::anyhow!("seek: {e}")));
             }
+            let limited = reader.take(len);
+            let body = Body::from_stream(ReaderStream::new(limited));
+            return Ok(build_headers(StatusCode::PARTIAL_CONTENT, len, &mime, Some((start, end, total)))
+                .body(body)
+                .unwrap());
         }
+        let mut resp = Response::new(Body::from("invalid range"));
+        *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+        resp.headers_mut().insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes */{total}")).unwrap(),
+        );
+        return Ok(resp);
     }
 
     if head_only {
@@ -879,19 +765,19 @@ async fn stream_file(
         .unwrap())
 }
 
-/// Browser-friendly playback endpoint.
+/// Serve any file from the per-source HLS-CMAF cache directory.
 ///
-/// - For natively-supported containers (MP4 / WebM) we just delegate to the
-///   raw `/stream` handler so HTTP-Range and seeking work as expected.
-/// - For MKV (and other "unfriendly" containers carrying browser-friendly
-///   codecs — H.264/H.265/VP9/AV1 + AAC/Opus), we remux on the fly with
-///   `ffmpeg -c copy` into fragmented MP4 piped to the response body. No
-///   re-encode, near-zero CPU. Range/seek isn't honored on the remuxed stream
-///   yet — that arrives with the proper M4 ffprobe pipeline.
-async fn play_file(
+/// On the master playlist request specifically (`asset == "master.m3u8"`)
+/// we ensure the cache is built — probe the source, compute the rendition
+/// plan, and block on the remuxer until the master + first fragment of
+/// every variant exist on disk. Subsequent asset requests (variant
+/// playlists, init segments, `.m4s`) are pure static-file serving with
+/// byte-range support; the player only asks for them after parsing the
+/// master, by which point everything has been observed by the watcher.
+async fn play_asset(
     State(state): State<AppState>,
-    user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    _user: AuthUser,
+    Path((infohash, idx, asset)): Path<(String, usize, String)>,
     req: Request<Body>,
 ) -> ApiResult<Response> {
     let infohash = infohash.to_ascii_lowercase();
@@ -902,114 +788,198 @@ async fn play_file(
     let path = state
         .engine()
         .file_path(&infohash, idx)
-        .map_err(|e| match e {
-            iris_torrent::EngineError::NotFound => ApiError::NotFound,
-            iris_torrent::EngineError::FileOutOfRange => {
-                ApiError::BadRequest("file index out of range".into())
-            }
-            iris_torrent::EngineError::Librqbit(e) => ApiError::Internal(e),
-        })?;
+        .map_err(map_engine_err)?;
 
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase());
-
-    match ext.as_deref() {
-        Some("mp4") | Some("m4v") | Some("webm") | Some("ogv") | Some("ogg") => {
-            // Browser plays it directly. Reuse the Range-capable streaming path.
-            return stream_file(State(state), user, Path((infohash, idx)), req).await;
-        }
-        Some("mkv") | Some("avi") | Some("mov") | Some("wmv") | Some("ts")
-        | Some("mts") | Some("m2ts") => {
-            // Remuxable container.
-        }
-        other => {
-            return Err(ApiError::BadRequest(format!(
-                "unsupported file extension: {:?}",
-                other
-            )));
+    if let Some(snap) = state.engine().get_by_infohash(&infohash) {
+        if !snap.finished {
+            return Err(ApiError::BadRequest(
+                "torrent still downloading — wait until it's complete to play".into(),
+            ));
         }
     }
-
-    if !path.exists() {
+    if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
         return Err(ApiError::BadRequest(format!(
-            "file not on disk yet ({}). Wait a moment for the download to start.",
+            "file not on disk: {}",
             path.display()
         )));
     }
 
-    let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
+    let key = format!("{infohash}_{idx}");
 
-    let head_only = req.method() == Method::HEAD;
+    if asset == iris_media::MASTER_PLAYLIST {
+        // Probe runs the TMDB-runtime verification side-effect that the UI
+        // relies on for poster / metadata gating. Cached, so cheap on repeat.
+        let probe = state
+            .probes()
+            .get_or_probe(&infohash, idx, &path)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
+        verify_tmdb_match(&state, &infohash, probe.duration_seconds).await;
+        let plan = build_remux_plan(&probe);
+        state
+            .remuxer()
+            .ensure_remuxed(&key, &path, plan)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("remux: {e}")))?;
+        let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
+    }
 
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "video/mp4")
-        .header(header::ACCEPT_RANGES, "none")
-        .header(header::CACHE_CONTROL, "no-store");
+    let asset_path = state
+        .remuxer()
+        .asset_path(&key, &asset)
+        .ok_or_else(|| ApiError::BadRequest("invalid asset name".into()))?;
+    if !tokio::fs::try_exists(&asset_path).await.unwrap_or(false) {
+        return Err(ApiError::NotFound);
+    }
+
+    let mime = guess_hls_mime(&asset);
+    let method = req.method().clone();
+    let range = req.headers().get(header::RANGE).cloned();
+    // expected_total = 0 → use actual file size; HLS players ask only for
+    // ranges already advertised in the playlist, no need to lie about
+    // the total like the old single-file progressive setup did.
+    let mut resp = serve_file_with_range(&asset_path, mime, method, range, 0).await?;
+    // Cache policy. Playlists MUST NOT be cached — in EVENT mode the
+    // master + variant playlists are rewritten as ffmpeg appends new
+    // segments, and a cached stale master broke us once already
+    // (browser served an old `CODECS="hvc1.2.4.L120.B01,..."` even
+    // after we'd simplified the on-disk file). Segments / init
+    // segments are content-addressed by name and never change once
+    // produced, so they're safe to cache aggressively.
+    let is_playlist = std::path::Path::new(&asset)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("m3u8"));
+    let cache_control = if is_playlist {
+        "no-store"
+    } else {
+        "public, max-age=604800, immutable"
+    };
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache_control));
+    Ok(resp)
+}
+
+fn guess_hls_mime(asset: &str) -> &'static str {
+    let ext = std::path::Path::new(asset)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("m3u8") => "application/vnd.apple.mpegurl",
+        Some("ts") => "video/mp2t",
+        // CMAF fragment + init segments — `video/iso.segment` is the
+        // spec MIME for `.m4s`, `video/mp4` is what every player we
+        // care about expects.
+        Some("m4s" | "mp4") => "video/mp4",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Open `path`, honour `Range`/`HEAD`, and stream the response body.
+/// Used for both the raw source (`/stream`) and the cached fMP4
+/// (`/play`). Read-ahead is implicit through [`tokio::fs::File`] +
+/// [`ReaderStream`].
+///
+/// `expected_total` lets the caller advertise a `Content-Length` /
+/// `Content-Range` total larger than what's currently on disk — needed
+/// for the cached fMP4 path where ffmpeg keeps appending while we
+/// serve. Pass `0` to fall back to the actual file size (used by the
+/// raw-source `/stream` route, which always serves complete files).
+async fn serve_file_with_range(
+    path: &std::path::Path,
+    mime: &str,
+    method: Method,
+    range: Option<HeaderValue>,
+    expected_total: u64,
+) -> ApiResult<Response> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("open {}: {e}", path.display())))?;
+    let actual = file
+        .metadata()
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("stat {}: {e}", path.display())))?
+        .len();
+    // Advertise the larger of the estimate and the actual size — the
+    // browser uses this for the timeline, so reporting the partial size
+    // would freeze the seekable region at the moment-of-first-request.
+    let total = expected_total.max(actual);
+    let head_only = method == Method::HEAD;
+
+    if let Some(rh) = range.as_ref() {
+        if let Some((start, end)) = parse_range(rh, total) {
+            // If the requested range starts past what's currently on disk
+            // (typical when the player resumes at a saved time deep into
+            // a still-encoding file), long-poll for ffmpeg to catch up
+            // rather than 416-ing — the browser treats an immediate 416
+            // on the initial GET as a fatal media error.
+            //
+            // Cap the wait at 60s so we never hold the connection longer
+            // than typical fetch timeouts. If ffmpeg can't catch up in
+            // time the client is told via 416 and can retry; meanwhile
+            // playback from earlier positions continues to work.
+            let mut actual = actual;
+            if start >= actual {
+                actual = wait_for_size(path, start + 1, std::time::Duration::from_secs(60))
+                    .await
+                    .unwrap_or(actual);
+            }
+            if start >= actual {
+                let mut resp = Response::new(Body::from("range past current EOF"));
+                *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+                resp.headers_mut().insert(
+                    header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes */{total}")).unwrap(),
+                );
+                return Ok(resp);
+            }
+            // Clip the response to what's actually written. The player
+            // will issue a follow-up range for the remaining bytes once
+            // ffmpeg has written more.
+            let effective_end = end.min(actual - 1);
+            let len = effective_end - start + 1;
+            if head_only {
+                return Ok(build_headers(
+                    StatusCode::PARTIAL_CONTENT,
+                    len,
+                    mime,
+                    Some((start, effective_end, total)),
+                )
+                .body(Body::empty())
+                .unwrap());
+            }
+            if let Err(e) = file.seek(SeekFrom::Start(start)).await {
+                return Err(ApiError::Internal(anyhow::anyhow!("seek: {e}")));
+            }
+            let body = Body::from_stream(ReaderStream::new(file.take(len)));
+            return Ok(build_headers(
+                StatusCode::PARTIAL_CONTENT,
+                len,
+                mime,
+                Some((start, effective_end, total)),
+            )
+            .body(body)
+            .unwrap());
+        }
+        let mut resp = Response::new(Body::from("invalid range"));
+        *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+        resp.headers_mut().insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes */{total}")).unwrap(),
+        );
+        return Ok(resp);
+    }
 
     if head_only {
-        return Ok(builder.body(Body::empty()).unwrap());
+        return Ok(build_headers(StatusCode::OK, total, mime, None)
+            .body(Body::empty())
+            .unwrap());
     }
-
-    let path_str = path.to_string_lossy().into_owned();
-    tracing::info!(file = %path_str, "remuxing on the fly via ffmpeg");
-
-    let mut child = Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "warning"])
-        .args(["-i", &path_str])
-        // Map first video + first audio (if present); skip subtitles for now
-        // (M4 will expose them as separate WebVTT tracks).
-        .args(["-map", "0:v:0", "-map", "0:a:0?"])
-        .args(["-c:v", "copy", "-c:a", "copy"])
-        // Some MKV-wrapped AAC streams use ADTS framing; this filter normalizes
-        // them to ASC so they fit in MP4.
-        .args(["-bsf:a", "aac_adtstoasc"])
-        .args([
-            "-movflags",
-            "frag_keyframe+empty_moov+default_base_moof",
-        ])
-        .args(["-f", "mp4", "pipe:1"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("spawn ffmpeg: {e}")))?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("ffmpeg stdout missing")))?;
-    let stderr = child.stderr.take();
-
-    // Drain stderr to logs without blocking the response.
-    if let Some(mut stderr) = stderr {
-        tokio::spawn(async move {
-            use tokio::io::AsyncBufReadExt;
-            let mut reader = tokio::io::BufReader::new(&mut stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                tracing::debug!(target: "ffmpeg", "{line}");
-            }
-        });
-    }
-    // Reap the child when it exits so we don't leak zombies.
-    tokio::spawn(async move {
-        match child.wait().await {
-            Ok(status) if status.success() => tracing::debug!("ffmpeg finished cleanly"),
-            Ok(status) => tracing::warn!(?status, "ffmpeg exited non-zero"),
-            Err(e) => tracing::warn!(error = %e, "ffmpeg wait failed"),
-        }
-    });
-
-    if let Some(headers) = builder.headers_mut() {
-        headers.insert(
-            header::TRANSFER_ENCODING,
-            HeaderValue::from_static("chunked"),
-        );
-    }
-    let body = Body::from_stream(ReaderStream::new(stdout));
-    Ok(builder.body(body).unwrap())
+    let body = Body::from_stream(ReaderStream::new(file));
+    Ok(build_headers(StatusCode::OK, total, mime, None)
+        .body(body)
+        .unwrap())
 }
 
 fn build_headers(
@@ -1030,11 +1000,34 @@ fn build_headers(
     }
     let mut builder = Response::builder().status(status);
     if let Some(map) = builder.headers_mut() {
-        for (k, v) in headers.iter() {
+        for (k, v) in &headers {
             map.insert(k.clone(), v.clone());
         }
     }
     builder
+}
+
+/// Poll `path` until its size is at least `min_size` or `timeout` elapses.
+/// Returns the latest observed size (which may still be below `min_size`
+/// if the wait timed out — caller decides what to do then). Used to let
+/// byte-range requests for forward seeks long-poll while ffmpeg is still
+/// writing the cache file.
+async fn wait_for_size(
+    path: &std::path::Path,
+    min_size: u64,
+    timeout: std::time::Duration,
+) -> std::io::Result<u64> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let size = tokio::fs::metadata(path).await?.len();
+        if size >= min_size {
+            return Ok(size);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(size);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
 }
 
 fn parse_range(value: &HeaderValue, total: u64) -> Option<(u64, u64)> {
@@ -1078,29 +1071,37 @@ fn guess_mime(infohash: &str, idx: usize, engine: &iris_torrent::Engine) -> Stri
     let ext = std::path::Path::new(&path)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase());
+        .map(str::to_ascii_lowercase);
     match ext.as_deref() {
-        Some("mp4") | Some("m4v") => "video/mp4",
+        Some("mp4" | "m4v") => "video/mp4",
         Some("mkv") => "video/x-matroska",
         Some("webm") => "video/webm",
         Some("avi") => "video/x-msvideo",
         Some("mov") => "video/quicktime",
-        Some("ts") | Some("mts") | Some("m2ts") => "video/mp2t",
+        Some("ts" | "mts" | "m2ts") => "video/mp2t",
         Some("mp3") => "audio/mpeg",
         Some("flac") => "audio/flac",
         Some("aac") => "audio/aac",
-        Some("ogg") | Some("oga") => "audio/ogg",
+        Some("ogg" | "oga") => "audio/ogg",
         Some("srt") => "application/x-subrip",
         _ => "application/octet-stream",
     }
     .to_string()
 }
 
+/// Cast a usize file index from the URL path to the i64 the DB stores.
+/// Saturates at `i64::MAX` for absurd inputs — the matching DB lookup
+/// will then miss, which is the right behaviour.
+fn file_idx_to_i64(idx: usize) -> i64 {
+    i64::try_from(idx).unwrap_or(i64::MAX)
+}
+
 fn map_provider_err(e: iris_core::Error) -> ApiError {
     match e {
-        iris_core::Error::NotFound(m) => ApiError::BadRequest(format!("provider: {m}")),
+        iris_core::Error::NotFound(m) | iris_core::Error::Provider(m) => {
+            ApiError::BadRequest(format!("provider: {m}"))
+        }
         iris_core::Error::InvalidInput(m) => ApiError::BadRequest(m),
-        iris_core::Error::Provider(m) => ApiError::BadRequest(format!("provider: {m}")),
         other => ApiError::Internal(anyhow::anyhow!(other)),
     }
 }

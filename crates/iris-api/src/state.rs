@@ -3,7 +3,7 @@ use std::sync::Arc;
 use iris_auth::jwt::Issuer;
 use iris_config::{AppConfig, AuthConfig};
 use iris_db::SqlitePool;
-use iris_media::{HlsManager, ProbeCache};
+use iris_media::{ProbeCache, RemuxManager};
 use iris_providers::ProviderRegistry;
 use iris_torrent::{Engine, Gc};
 
@@ -20,7 +20,7 @@ struct Inner {
     pub providers: ProviderRegistry,
     pub jwt: Issuer,
     pub engine: Arc<Engine>,
-    pub hls: HlsManager,
+    pub remuxer: RemuxManager,
     pub gc: Gc,
     pub probes: ProbeCache,
     pub tmdb: Option<TmdbClient>,
@@ -32,7 +32,7 @@ impl AppState {
         db: SqlitePool,
         providers: ProviderRegistry,
         engine: Arc<Engine>,
-        hls: HlsManager,
+        remuxer: RemuxManager,
         gc: Gc,
     ) -> Self {
         let tmdb = cfg
@@ -58,7 +58,7 @@ impl AppState {
                 providers,
                 jwt,
                 engine,
-                hls,
+                remuxer,
                 gc,
                 probes: ProbeCache::new(),
                 tmdb,
@@ -81,8 +81,8 @@ impl AppState {
     pub fn engine(&self) -> &Arc<Engine> {
         &self.inner.engine
     }
-    pub fn hls(&self) -> &HlsManager {
-        &self.inner.hls
+    pub fn remuxer(&self) -> &RemuxManager {
+        &self.inner.remuxer
     }
     pub fn gc(&self) -> &Gc {
         &self.inner.gc

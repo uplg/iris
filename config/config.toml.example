@@ -14,11 +14,6 @@ cleanup_target_pct = 75
 # BitTorrent listen port (TCP + UDP). Pin so you can forward it in your
 # router/firewall.
 torrent_port = 45100
-# HLS cache idle eviction. Cached segments untouched for this many days are
-# pruned hourly (the source torrent is left in place — segments are regenerated
-# on next Play, ~5-30s wait). Halves your effective disk usage on a small SSD.
-# Set to a very large number to disable.
-hls_idle_eviction_days = 7
 
 [auth]
 # Override every value below with IRIS_AUTH__<KEY> environment variables in

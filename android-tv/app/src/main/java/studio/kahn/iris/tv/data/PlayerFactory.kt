@@ -6,18 +6,14 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import okhttp3.OkHttpClient
 
 /**
  * Build an `ExoPlayer` whose HTTP layer reuses our OkHttp client (cookie
  * jar, timeouts, logging). Without this Media3 spins up its own
- * `DefaultHttpDataSource`, which does NOT see our session cookies, so HLS
- * segment requests would 401 immediately.
- *
- * Optional `userAgent` lets the HTTP layer identify itself in iris-api logs
- * — useful when triaging "is this the TV or the web?".
+ * `DefaultHttpDataSource`, which does NOT see our session cookies, so the
+ * HLS manifest + segment requests would 401 immediately.
  */
 @UnstableApi
 fun buildPlayer(
@@ -28,11 +24,6 @@ fun buildPlayer(
     val dataSourceFactory = OkHttpDataSource.Factory(okHttp).setUserAgent(userAgent)
     val mediaSourceFactory = DefaultMediaSourceFactory(context)
         .setDataSourceFactory(dataSourceFactory)
-        // Live offset only matters when ExoPlayer mistakes our growing-VOD
-        // (EVENT-type) playlist for true live. We pin it to 0 so any
-        // accidental "live" detection lands at the first segment instead
-        // of "now" (= whatever segment ffmpeg has just written).
-        .setLiveTargetOffsetMs(0)
 
     return ExoPlayer.Builder(context)
         .setMediaSourceFactory(mediaSourceFactory)
@@ -42,18 +33,21 @@ fun buildPlayer(
 }
 
 /**
- * Build a `MediaItem` for an Iris HLS stream, side-loading every text-based
- * subtitle as an external WebVTT track. Media3's player UI then surfaces
- * them in its CC menu without any extra wiring.
+ * Build a `MediaItem` for the Iris `/play/master.m3u8` endpoint — an
+ * HLS-CMAF master playlist exposing one video variant + N audio
+ * renditions. The `APPLICATION_M3U8` mime hint routes the
+ * `DefaultMediaSourceFactory` to `HlsMediaSource`, which handles
+ * multi-audio rendition switching natively via Media3's track selector.
+ * Text-based subtitles are still side-loaded as external WebVTT tracks.
  */
 @UnstableApi
 fun buildMediaItem(
-    masterUrl: String,
+    playUrl: String,
     subtitles: List<MediaItem.SubtitleConfiguration>,
     startPositionSeconds: Double = 0.0,
 ): MediaItem =
     MediaItem.Builder()
-        .setUri(masterUrl)
+        .setUri(playUrl)
         .setMimeType(MimeTypes.APPLICATION_M3U8)
         .setSubtitleConfigurations(subtitles)
         .setClippingConfiguration(
@@ -62,6 +56,3 @@ fun buildMediaItem(
                 .build()
         )
         .build()
-
-@Suppress("unused")
-private val unused = HlsMediaSource::class  // keep the explicit import to remind humans HLS module is needed

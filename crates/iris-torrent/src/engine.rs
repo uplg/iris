@@ -48,7 +48,7 @@ pub enum TorrentState {
 }
 
 impl TorrentState {
-    fn from_librqbit(s: &TorrentStatsState) -> Self {
+    fn from_librqbit(s: TorrentStatsState) -> Self {
         match s {
             TorrentStatsState::Initializing => Self::Initializing,
             TorrentStatsState::Live => Self::Live,
@@ -72,7 +72,7 @@ pub struct TorrentSnapshot {
     pub total_size_bytes: u64,
     pub state: TorrentState,
     pub progress_bytes: u64,
-    pub progress_pct: f32,
+    pub progress_pct: f64,
     pub download_speed_bps: u64,
     pub upload_speed_bps: u64,
     pub uploaded_bytes: u64,
@@ -290,7 +290,7 @@ fn snapshot_of(handle: &Handle) -> TorrentSnapshot {
         files.iter().map(|f| f.size_bytes).sum()
     };
     let progress_pct = if total > 0 {
-        (stats.progress_bytes as f64 / total as f64 * 100.0) as f32
+        progress_pct(stats.progress_bytes, total)
     } else {
         0.0
     };
@@ -298,7 +298,7 @@ fn snapshot_of(handle: &Handle) -> TorrentSnapshot {
         Some(l) => (
             mbps_to_bps(l.download_speed.mbps),
             mbps_to_bps(l.upload_speed.mbps),
-            l.snapshot.peer_stats.live as u32,
+            u32::try_from(l.snapshot.peer_stats.live).unwrap_or(u32::MAX),
         ),
         None => (0, 0, 0),
     };
@@ -306,7 +306,7 @@ fn snapshot_of(handle: &Handle) -> TorrentSnapshot {
         infohash: hex::encode(handle.info_hash().0),
         name: handle.name(),
         total_size_bytes: total,
-        state: TorrentState::from_librqbit(&stats.state),
+        state: TorrentState::from_librqbit(stats.state),
         progress_bytes: stats.progress_bytes,
         progress_pct,
         download_speed_bps: down_bps,
@@ -320,8 +320,20 @@ fn snapshot_of(handle: &Handle) -> TorrentSnapshot {
     }
 }
 
+#[allow(clippy::cast_precision_loss)]
+fn progress_pct(progress: u64, total: u64) -> f64 {
+    // u64 → f64 only loses precision past 2^53 bytes (~9 PB). No real
+    // torrent gets near that, and the result is rendered as a UI percentage
+    // so a few bytes of imprecision are invisible.
+    progress as f64 / total as f64 * 100.0
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn mbps_to_bps(mbps: f64) -> u64 {
     // Speed is reported in megabits per second; convert to bytes per second.
+    // Bounded above by realistic peer throughput (single-digit GB/s), so the
+    // f64 → u64 cast is safe; max(0.0) covers transient negative readings
+    // from librqbit's smoothing.
     (mbps * 125_000.0).round().max(0.0) as u64
 }
 

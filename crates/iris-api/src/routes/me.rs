@@ -116,10 +116,8 @@ async fn continue_watching(
                 .engine()
                 .get_by_infohash(&r.infohash)
                 .and_then(|s| {
-                    s.files
-                        .into_iter()
-                        .find(|f| f.index == r.file_idx as usize)
-                        .map(|f| f.path)
+                    let file_idx = usize::try_from(r.file_idx).ok()?;
+                    s.files.into_iter().find(|f| f.index == file_idx).map(|f| f.path)
                 });
             ContinueWatchingItem {
                 infohash: r.infohash,

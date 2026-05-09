@@ -183,36 +183,35 @@ export function AdminPage() {
         </CardContent>
       </Card>
 
-      <HlsCacheCard />
+      <RemuxCacheCard />
     </div>
   );
 }
 
-function HlsCacheCard() {
+function RemuxCacheCard() {
   const qc = useQueryClient();
   const jobs = useQuery({
-    queryKey: ["admin", "hls"],
-    queryFn: admin.listHls,
+    queryKey: ["admin", "remux"],
+    queryFn: admin.listRemux,
     refetchInterval: 10_000,
   });
   const wipe = useMutation({
-    mutationFn: (key: string) => admin.wipeHls(key),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "hls"] }),
+    mutationFn: (key: string) => admin.wipeRemux(key),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "remux"] }),
   });
   return (
     <Card>
       <CardHeader>
-        <CardTitle>HLS cache</CardTitle>
+        <CardTitle>Remux cache</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-3">
         <p className="text-sm text-muted-foreground">
-          Pre-segmentation jobs. Wipe when a job is stuck failing or produced
-          a truncated playlist (last fail timestamp set, or video segments
-          way under the source duration). Re-segmentation triggers
-          automatically on the next play attempt.
+          Cached fragmented-MP4 files served via HTTP byte-range. Each entry is one ffmpeg{" "}
+          <code>-c copy</code> pass over a source file. Wipe to reclaim disk or to force a fresh
+          remux on the next play attempt; the size cap evicts oldest-first automatically.
         </p>
         {jobs.data && jobs.data.length === 0 && (
-          <p className="text-sm text-muted-foreground">No HLS dirs on disk.</p>
+          <p className="text-sm text-muted-foreground">No remuxed files on disk.</p>
         )}
         {jobs.data && jobs.data.length > 0 && (
           <div className="overflow-x-auto">
@@ -221,36 +220,24 @@ function HlsCacheCard() {
                 <tr>
                   <th className="px-2 py-1">Title</th>
                   <th className="px-2 py-1">State</th>
-                  <th className="px-2 py-1 text-right">Segments</th>
-                  <th className="px-2 py-1 text-right">Disk</th>
-                  <th className="px-2 py-1">Last fail</th>
+                  <th className="px-2 py-1 text-right">Size</th>
+                  <th className="px-2 py-1">Updated</th>
                   <th className="px-2 py-1"></th>
                 </tr>
               </thead>
               <tbody>
                 {jobs.data.map((j) => {
-                  const broken = j.last_failed_at != null;
-                  const stale =
-                    j.expected_duration_secs != null &&
-                    j.video_segments > 0 &&
-                    j.video_segments < (j.expected_duration_secs / 6) * 0.5;
-                  const stateLabel = j.running
-                    ? "running"
-                    : broken
-                      ? "failed"
-                      : stale
-                        ? "truncated"
-                        : j.done
-                          ? "ready"
-                          : "partial";
+                  const stateLabel = j.in_flight
+                    ? "remuxing"
+                    : j.size_bytes > 0
+                      ? "ready"
+                      : "empty";
                   const stateClass =
                     stateLabel === "ready"
                       ? "bg-emerald-500/10 text-emerald-300"
-                      : stateLabel === "running"
+                      : stateLabel === "remuxing"
                         ? "bg-sky-500/10 text-sky-300"
-                        : stateLabel === "failed" || stateLabel === "truncated"
-                          ? "bg-rose-500/10 text-rose-300"
-                          : "bg-zinc-500/10 text-zinc-300";
+                        : "bg-zinc-500/10 text-zinc-300";
                   return (
                     <tr key={j.key} className="border-t border-border/50">
                       <td className="max-w-md truncate px-2 py-1.5" title={j.torrent_name ?? j.key}>
@@ -267,15 +254,10 @@ function HlsCacheCard() {
                         </Badge>
                       </td>
                       <td className="px-2 py-1.5 text-right tabular-nums">
-                        {j.video_segments}
-                      </td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">
-                        {formatSize(j.disk_bytes)}
+                        {formatSize(j.size_bytes)}
                       </td>
                       <td className="px-2 py-1.5 text-xs text-muted-foreground">
-                        {j.last_failed_at
-                          ? new Date(j.last_failed_at * 1000).toLocaleString()
-                          : "—"}
+                        {j.mtime ? new Date(j.mtime * 1000).toLocaleString() : "—"}
                       </td>
                       <td className="px-2 py-1.5 text-right">
                         <Button
@@ -283,7 +265,7 @@ function HlsCacheCard() {
                           variant="ghost"
                           onClick={() => wipe.mutate(j.key)}
                           disabled={wipe.isPending}
-                          title="Wipe this HLS cache directory"
+                          title="Wipe this remux cache file"
                         >
                           <Trash2 className="size-3.5" />
                         </Button>

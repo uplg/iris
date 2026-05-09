@@ -146,7 +146,7 @@ async fn refresh(
         return Err(ApiError::Unauthorized);
     }
 
-    let user_id = UserId::from(Uuid::from(claims.sub));
+    let user_id = UserId::from(claims.sub);
     let user = iris_db::users::find_by_id(state.db(), user_id)
         .await?
         .ok_or(ApiError::Unauthorized)?;

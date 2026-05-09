@@ -58,12 +58,11 @@ export function AccountPage() {
       <section>
         <h1 className="text-3xl font-semibold tracking-tight">Account</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Signed in as {auth.user.email}
-          {auth.user.is_admin && " · admin"}
+          Manage your identity, paired devices, and password.
         </p>
       </section>
 
-      <DisplayNameCard />
+      <IdentityCard />
 
       <DevicesCard />
 
@@ -133,13 +132,12 @@ export function AccountPage() {
   );
 }
 
-function DisplayNameCard() {
+function IdentityCard() {
   const auth = useAuth();
   const qc = useQueryClient();
-  const [name, setName] = useState(
-    auth.status === "authenticated" ? auth.user.display_name : "",
-  );
-  const [success, setSuccess] = useState(false);
+  const currentName = auth.status === "authenticated" ? auth.user.display_name : "";
+  const [name, setName] = useState(currentName);
+  const [justSaved, setJustSaved] = useState(false);
 
   // Re-sync local input if the auth user changes (e.g. /me refresh).
   useEffect(() => {
@@ -149,62 +147,121 @@ function DisplayNameCard() {
   const save = useMutation({
     mutationFn: (n: string) => authApi.changeDisplayName(n),
     onSuccess: () => {
-      setSuccess(true);
+      setJustSaved(true);
       void qc.invalidateQueries({ queryKey: ["me"] });
     },
   });
 
   if (auth.status !== "authenticated") return null;
+  const user = auth.user;
   const trimmed = name.trim();
-  const dirty = trimmed.length > 0 && trimmed !== auth.user.display_name;
+  const dirty = trimmed.length > 0 && trimmed !== user.display_name;
   const errMessage = save.error
     ? save.error instanceof ApiError
       ? save.error.message
       : String(save.error)
     : null;
+  const initials = initialsFor(user.display_name || user.email);
+  const emailDefault = emailLocalDefault(user.email);
 
   return (
-    <Card className="max-w-md">
-      <CardHeader>
-        <CardTitle>Display name</CardTitle>
-        <CardDescription>
-          Public handle shown wherever Iris credits a user
-          (Library "added by", future comments…). Defaults to the part of
-          your email before the first dot — change it to whatever you like.
-          Your email stays private.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+    <Card className="max-w-2xl">
+      <CardContent className="grid gap-6 p-6">
+        <div className="flex items-center gap-4">
+          <div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-lg font-semibold uppercase text-primary">
+            {initials}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h2 className="truncate text-xl font-semibold leading-tight">{user.display_name}</h2>
+              {user.is_admin && (
+                <Badge
+                  variant="outline"
+                  className="border-fuchsia-400/50 text-[10px] uppercase text-fuchsia-300"
+                >
+                  admin
+                </Badge>
+              )}
+            </div>
+            <p className="truncate text-sm text-muted-foreground">{user.email}</p>
+          </div>
+        </div>
+
+        <div className="border-t border-border" />
+
         <form
-          className="grid gap-4"
+          className="grid gap-3"
           onSubmit={(e) => {
             e.preventDefault();
-            setSuccess(false);
+            setJustSaved(false);
             if (!dirty) return;
             save.mutate(trimmed);
           }}
         >
-          <div className="grid gap-2">
-            <Label htmlFor="displayName">Name</Label>
+          <div className="grid gap-1.5">
+            <Label htmlFor="displayName" className="text-xs uppercase tracking-wide">
+              Display name
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              Shown in attributions like "added by". Your email stays private.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
             <Input
               id="displayName"
               maxLength={64}
               value={name}
               onChange={(e) => {
                 setName(e.target.value);
-                setSuccess(false);
+                setJustSaved(false);
               }}
+              className="sm:flex-1"
             />
+            <Button type="submit" disabled={!dirty || save.isPending} className="sm:w-auto">
+              {save.isPending ? "Saving…" : "Save"}
+            </Button>
           </div>
-          {errMessage && <p className="text-sm text-destructive">{errMessage}</p>}
-          {success && <p className="text-sm text-emerald-300">Saved.</p>}
-          <Button type="submit" disabled={!dirty || save.isPending}>
-            {save.isPending ? "Saving…" : "Save"}
-          </Button>
+          <div className="flex min-h-[1.25rem] items-center gap-2 text-xs">
+            {errMessage ? (
+              <span className="text-destructive">{errMessage}</span>
+            ) : justSaved && !dirty ? (
+              <span className="text-emerald-300">Saved.</span>
+            ) : emailDefault && trimmed !== emailDefault ? (
+              <span className="text-muted-foreground">
+                Default from email:{" "}
+                <button
+                  type="button"
+                  className="font-medium text-foreground hover:underline"
+                  onClick={() => {
+                    setName(emailDefault);
+                    setJustSaved(false);
+                  }}
+                >
+                  {emailDefault}
+                </button>
+              </span>
+            ) : null}
+          </div>
         </form>
       </CardContent>
     </Card>
   );
+}
+
+function initialsFor(source: string): string {
+  const cleaned =
+    source
+      .split("@")[0]
+      ?.replace(/[^a-zA-Z0-9]+/g, " ")
+      .trim() ?? "";
+  if (!cleaned) return "?";
+  const parts = cleaned.split(/\s+/);
+  if (parts.length >= 2) return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
+  return cleaned.slice(0, 2).toUpperCase();
+}
+
+function emailLocalDefault(email: string): string {
+  return email.split("@")[0]?.split(".")[0] ?? "";
 }
 
 function DevicesCard() {
@@ -229,8 +286,7 @@ function DevicesCard() {
   });
 
   const link = useMutation({
-    mutationFn: ({ c, l }: { c: string; l: string }) =>
-      devicesApi.link(c, l.trim() || undefined),
+    mutationFn: ({ c, l }: { c: string; l: string }) => devicesApi.link(c, l.trim() || undefined),
     onSuccess: () => {
       setCode("");
       setLabel("");
@@ -261,8 +317,7 @@ function DevicesCard() {
       <CardHeader>
         <CardTitle>Devices</CardTitle>
         <CardDescription>
-          Pair an Android TV (or any other Iris client) by entering the code it
-          displays.
+          Pair an Android TV (or any other Iris client) by entering the code it displays.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-6">
@@ -317,8 +372,8 @@ function DevicesCard() {
                     )}
                   </div>
                   <span className="text-[11px] text-muted-foreground">
-                    Linked {new Date(d.issued_at).toLocaleDateString()} ·
-                    expires {new Date(d.expires_at).toLocaleDateString()}
+                    Linked {new Date(d.issued_at).toLocaleDateString()} · expires{" "}
+                    {new Date(d.expires_at).toLocaleDateString()}
                   </span>
                 </div>
                 <Button
