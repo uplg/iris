@@ -85,6 +85,29 @@ async fn create(
     let row = iris_db::follows::add(state.db(), user.id, body.tmdb_id, &name, total_seasons)
         .await?;
 
+    // Kick off an immediate background scan so the series page shows
+    // `dispo` chips on first visit instead of waiting up to 4 h for
+    // the scheduler tick. Pre-existing follows still rely on the
+    // periodic scheduler. Best-effort: failures land in the warn log
+    // and the scheduler will retry on its next pass.
+    if let Some(tmdb) = state.tmdb().cloned() {
+        let pool = state.db().clone();
+        let providers = state.providers().clone();
+        let row = row.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::follows_scheduler::scan_follow(&pool, &tmdb, &providers, &row).await
+            {
+                tracing::warn!(
+                    tmdb_id = row.tmdb_id,
+                    name = %row.name,
+                    error = %e,
+                    "follow create: initial scan failed",
+                );
+            }
+        });
+    }
+
     Ok(Json(summarize(&state, &row).await))
 }
 
@@ -515,12 +538,36 @@ async fn grab_episode(
             .ok_or(ApiError::NotFound)?,
     };
 
-    // Add via the existing engine path (mirrors `routes::torrents::ingest`).
-    let result = state
-        .engine()
-        .add_from_magnet(&pick.magnet)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
+    // Resolve the picked source. The cache may carry an empty magnet
+    // when the scheduler couldn't materialise one (provider returns
+    // `.torrent` files, not magnets — torr9's case). In that fallback
+    // we re-resolve through the provider here, which gives us either
+    // a fresh magnet OR the .torrent bytes. Both routes plug into the
+    // engine.
+    let result = if pick.magnet.is_empty() {
+        let provider = state
+            .providers()
+            .get(&pick.indexer_provider)
+            .ok_or_else(|| {
+                ApiError::Internal(anyhow::anyhow!(
+                    "provider `{}` no longer registered",
+                    pick.indexer_provider
+                ))
+            })?;
+        let source = provider
+            .resolve(&pick.indexer_torrent_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("resolve: {e}")))?;
+        match source {
+            iris_core::search::TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,
+            iris_core::search::TorrentSource::TorrentFile(b) => {
+                state.engine().add_from_bytes(b).await
+            }
+        }
+    } else {
+        state.engine().add_from_magnet(&pick.magnet).await
+    }
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
 
     // Mirror the ingest route's DB upsert so the torrent shows up in
     // /api/torrents and benefits from the regular GC + remux pipeline.
@@ -655,7 +702,7 @@ async fn find_via_indexer(
     season: i64,
     episode: i64,
 ) -> Result<Option<PickedAvailability>, ApiError> {
-    use iris_core::search::{SearchQuery, SortField, SortOrder, TorrentSource};
+    use iris_core::search::{SearchQuery, SortField, SortOrder};
     let query = SearchQuery {
         q: format!("{series_name} S{season:02}E{episode:02}"),
         page: Some(1),
@@ -674,32 +721,11 @@ async fn find_via_indexer(
         return Ok(None);
     };
 
-    let provider = state
-        .providers()
-        .get(&best.provider_id)
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("provider gone mid-search")))?;
-    let source = provider
-        .resolve(&best.external_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("resolve: {e}")))?;
-    let magnet = match source {
-        TorrentSource::Magnet(m) => m,
-        // For .torrent file providers, we'd need to add the file to the
-        // engine and then read its computed magnet. Out of scope for
-        // the inline fallback — providers that emit magnets directly
-        // (the common case) work fine. Leaving a clean error for the
-        // edge case.
-        TorrentSource::TorrentFile(_) => {
-            return Err(ApiError::BadRequest(
-                "indexer returned a .torrent file; on-demand grab needs magnet support"
-                    .into(),
-            ));
-        }
-    };
-
-    // Cache for next time so subsequent grabs of the same episode (e.g.,
-    // user clicked "Préparer" on E06 then immediately clicks "Lire") go
-    // through the fast path.
+    // Don't resolve here — same rationale as the scheduler: providers
+    // that hand back `.torrent` files would force us to either store
+    // opaque bytes in the cache or skip them. The grab path already
+    // handles "empty magnet → re-resolve through provider" so we just
+    // record the indexer ref and let the caller resolve.
     let _ = iris_db::available_episodes::upsert(
         state.db(),
         iris_db::available_episodes::UpsertAvailableEpisode {
@@ -708,7 +734,7 @@ async fn find_via_indexer(
             episode,
             indexer_provider: best.provider_id.clone(),
             indexer_torrent_id: best.external_id.clone(),
-            magnet: magnet.clone(),
+            magnet: String::new(),
             quality: None,
             seeders: best.seeders.map(i64::from),
             size_bytes: best.size_bytes.map(|s| s as i64),
@@ -717,7 +743,7 @@ async fn find_via_indexer(
     .await;
 
     Ok(Some(PickedAvailability {
-        magnet,
+        magnet: String::new(),
         indexer_provider: best.provider_id,
         indexer_torrent_id: best.external_id,
     }))

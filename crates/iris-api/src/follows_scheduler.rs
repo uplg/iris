@@ -64,11 +64,16 @@ pub fn spawn(
     };
     let providers = Arc::new(providers);
     tokio::spawn(async move {
+        // Initial pass after a short warm-up so existing follows get
+        // their `available_episodes` populated within seconds of boot,
+        // not at the 4 h mark. Without this, every existing follow
+        // shows zero `dispo` episodes until the first scheduled tick.
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        run_pass(&pool, &tmdb, providers.clone()).await;
+
         let mut ticker = tokio::time::interval(TICK_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // Skip the immediate boot tick — let the rest of the server settle
-        // before doing N TMDB lookups + N indexer searches.
-        ticker.tick().await;
+        ticker.tick().await; // skip the immediate firing
         loop {
             ticker.tick().await;
             run_pass(&pool, &tmdb, providers.clone()).await;
@@ -147,6 +152,20 @@ async fn all_follows_due(
             })
             .collect()
     })
+}
+
+/// Public entry-point — scan one follow's seasons for available
+/// episodes. Used by the scheduler tick AND by the create-follow route
+/// (so a freshly followed series's "Sorties" / featured items appear
+/// as `dispo` on the Series page immediately, instead of waiting up to
+/// 4 hours for the next scheduler tick).
+pub async fn scan_follow(
+    pool: &SqlitePool,
+    tmdb: &TmdbClient,
+    providers: &ProviderRegistry,
+    follow: &iris_db::follows::FollowRow,
+) -> anyhow::Result<()> {
+    check_one(pool, tmdb, providers, follow).await
 }
 
 async fn check_one(
@@ -245,46 +264,29 @@ async fn try_find_and_record(
         return;
     };
 
-    // Provider could disappear mid-pass (config reload). Harmless on
-    // next tick — just skip this episode.
-    let Some(provider) = providers.get(&best.provider_id) else {
+    // We deliberately don't call `provider.resolve()` here. Providers
+    // that hand back `.torrent` files (torr9 does) would either force
+    // us to store opaque bytes in the cache OR get silently skipped —
+    // the latter is what was happening before this fix and meant zero
+    // torr9 results ever made it into `available_episodes`. Caching
+    // the indexer ref is enough to know "this episode is findable";
+    // the actual bytes/magnet get fetched via `provider.resolve()` at
+    // grab time, when the user is already waiting on a redirect.
+    if !providers.ids().iter().any(|id| id == &best.provider_id) {
+        // Provider gone between search and now — config reload mid-pass.
         return;
-    };
-    let source = match provider.resolve(&best.external_id).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(
-                provider = %best.provider_id,
-                external_id = %best.external_id,
-                error = %e,
-                "scheduler: resolve failed",
-            );
-            return;
-        }
-    };
-    let magnet = match source {
-        iris_core::search::TorrentSource::Magnet(m) => m,
-        // The scheduler never adds .torrent files because the cache
-        // wants a stable magnet that the on-demand grab endpoint can
-        // pass to engine.add_from_magnet. Providers that only return
-        // .torrent bytes get skipped here — the grab endpoint will
-        // re-resolve through the indexer anyway when the user clicks.
-        iris_core::search::TorrentSource::TorrentFile(_) => {
-            tracing::debug!(
-                provider = %best.provider_id,
-                "scheduler: provider returned .torrent file, skipping cache",
-            );
-            return;
-        }
-    };
-
+    }
     let upsert = iris_db::available_episodes::UpsertAvailableEpisode {
         tmdb_id,
         season,
         episode,
         indexer_provider: best.provider_id.clone(),
         indexer_torrent_id: best.external_id.clone(),
-        magnet,
+        // Empty magnet = "re-resolve at grab time". The schema requires
+        // a non-null TEXT but the grab endpoint short-circuits when it
+        // sees this sentinel and re-queries the provider for the
+        // current bytes/magnet.
+        magnet: String::new(),
         // Quality hint: pull "1080p" / "720p" out of tags or title best-
         // effort — the frontend doesn't strictly need it but it makes
         // the "Préparer" button copy nicer.

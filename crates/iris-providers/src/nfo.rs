@@ -38,6 +38,14 @@ use iris_core::search::{AudioInfo, MediaInfoSummary, SubInfo, VideoInfo};
 /// Parse a MediaInfo dump into a structured summary. Returns `None` if
 /// the input doesn't look like MediaInfo at all (no recognisable section
 /// headers) so callers can pass arbitrary text without false positives.
+///
+/// Season packs (and movie+extras releases) emit one `General/Video/
+/// Audio/Text` sequence per file in the archive, with `######` divider
+/// lines between them. We only parse the FIRST file's tracks — the
+/// other files' tracks are nearly always identical (same audio langs,
+/// same subtitle layout) and showing 60 audio + 120 subtitle chips
+/// would be unusable. A second `General` header signals a new file
+/// and ends parsing.
 pub fn parse(nfo: &str) -> Option<MediaInfoSummary> {
     let blocks = split_into_blocks(nfo);
     if blocks.is_empty() {
@@ -45,8 +53,18 @@ pub fn parse(nfo: &str) -> Option<MediaInfoSummary> {
     }
 
     let mut out = MediaInfoSummary::default();
+    let mut general_seen = 0u32;
     for (header, body) in blocks {
-        match section_kind(&header) {
+        let section = section_kind(&header);
+        if matches!(section, Section::General) {
+            general_seen += 1;
+            // Hit the next file in a multi-file release — wrap up.
+            if general_seen >= 2 {
+                break;
+            }
+            continue;
+        }
+        match section {
             Section::Video if out.video.is_none() => {
                 out.video = Some(parse_video(&body));
             }
@@ -102,6 +120,7 @@ fn is_section_header(line: &str) -> bool {
 }
 
 enum Section {
+    General,
     Video,
     Audio,
     Text,
@@ -111,6 +130,7 @@ enum Section {
 fn section_kind(header: &str) -> Section {
     let head = header.split('#').next().unwrap_or(header).trim();
     match head {
+        "General" => Section::General,
         "Video" => Section::Video,
         "Audio" => Section::Audio,
         "Text" => Section::Text,
@@ -312,5 +332,36 @@ mod tests {
     #[test]
     fn returns_none_on_arbitrary_text() {
         assert!(parse("Just some random description text without sections.").is_none());
+    }
+
+    #[test]
+    fn season_pack_only_parses_first_file() {
+        // Real-world torr9 season pack shape: each episode appears as
+        // its own General/Video/Audio/Text block separated by ######
+        // dividers. Without the per-file boundary detection we'd
+        // accumulate audio/subs across all 12 episodes (60 audio, 120
+        // subs) and the dialog would be unusable.
+        let nfo = "\
+######################################################################################\r\n\
+Show.S01E01.mkv\r\n\
+######################################################################################\r\n\
+General\r\nFormat : Matroska\r\n\r\n\
+Video\r\nFormat : HEVC\r\nWidth : 1 920 pixels\r\nHeight : 1 080 pixels\r\n\r\n\
+Audio #1\r\nFormat : E-AC-3\r\nLanguage : French\r\nDefault : Yes\r\n\r\n\
+Audio #2\r\nFormat : E-AC-3\r\nLanguage : English\r\nDefault : No\r\n\r\n\
+Text #1\r\nFormat : UTF-8\r\nLanguage : French\r\nDefault : Yes\r\n\r\n\
+######################################################################################\r\n\
+Show.S01E02.mkv\r\n\
+######################################################################################\r\n\
+General\r\nFormat : Matroska\r\n\r\n\
+Video\r\nFormat : HEVC\r\nWidth : 1 920 pixels\r\n\r\n\
+Audio #1\r\nFormat : E-AC-3\r\nLanguage : French\r\n\r\n\
+Audio #2\r\nFormat : E-AC-3\r\nLanguage : English\r\n\r\n\
+Text #1\r\nFormat : UTF-8\r\nLanguage : French\r\n\r\n\
+";
+        let mi = parse(nfo).expect("should parse");
+        assert!(mi.video.is_some());
+        assert_eq!(mi.audio.len(), 2, "second file's audios must be ignored");
+        assert_eq!(mi.subtitles.len(), 1, "second file's subs must be ignored");
     }
 }

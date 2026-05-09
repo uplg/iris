@@ -1,12 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { Link } from "react-router";
-import { Bookmark, Search as SearchIcon } from "lucide-react";
+import { Bookmark } from "lucide-react";
 
 import { MediaCard } from "@/components/MediaCard";
 import { Shelf } from "@/components/Shelf";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   discover,
   follows,
@@ -59,8 +58,6 @@ export function HomePage() {
 
   return (
     <div className="grid gap-10">
-      <Hero />
-
       <Shelf
         title="Continue Watching"
         isEmpty={!continueQ.data || continueQ.data.length === 0}
@@ -124,29 +121,6 @@ export function HomePage() {
         {recentLibrary.map((t) => <LibraryCard key={t.infohash} torrent={t} />)}
       </Shelf>
     </div>
-  );
-}
-
-function Hero() {
-  return (
-    <section className="rounded-xl border border-border bg-gradient-to-br from-primary/10 via-card/50 to-background p-8">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="grid gap-1">
-          <h1 className="text-3xl font-semibold tracking-tight">Bienvenue.</h1>
-          <p className="text-sm text-muted-foreground">
-            Reprends où tu t'es arrêté, ou découvre les dernières sorties.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button asChild size="lg">
-            <Link to="/search">
-              <SearchIcon className="size-4" />
-              Rechercher
-            </Link>
-          </Button>
-        </div>
-      </div>
-    </section>
   );
 }
 

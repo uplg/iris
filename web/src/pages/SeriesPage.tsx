@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import {
   Bookmark,
@@ -67,16 +67,31 @@ export function SeriesPage() {
     setSeason(1);
   }, [id]);
 
+  // Track when this season's query first ran so we can poll briefly
+  // after the user follows — the backend's notify scan is asynchronous
+  // and takes a few seconds to populate `available_episodes`. Without
+  // polling, the user sees "pas dispo" everywhere until they hit
+  // refresh manually.
+  const queryStartRef = useRef<number>(0);
+  useEffect(() => {
+    queryStartRef.current = 0;
+  }, [id, season]);
+
   const episodesQ = useQuery({
     queryKey: ["follow-episodes", id, season],
     queryFn: () => follows.episodes(id, season),
     enabled: Number.isFinite(id) && !!followed, // only useful once the user is following
     refetchInterval: (q) => {
-      // Poll every 30 s if at least one episode is currently being
-      // grabbed (transient state, will flip to "downloaded" soon).
       const data = q.state.data as EpisodesResponse | undefined;
-      const grabbing = data?.items.some((e) => e.status === "available");
-      return grabbing ? 30_000 : false;
+      if (!data) return false;
+      if (queryStartRef.current === 0) queryStartRef.current = Date.now();
+      const hasUnavailable = data.items.some((e) => e.status === "unavailable");
+      const elapsedMs = Date.now() - queryStartRef.current;
+      // Active scan window: poll fast for the first 60 s after the
+      // page opens so the background scan's results show up without
+      // the user having to refresh. After that, settle.
+      if (hasUnavailable && elapsedMs < 60_000) return 3_000;
+      return false;
     },
   });
 

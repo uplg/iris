@@ -380,7 +380,16 @@ type BBNode =
   | { type: "text"; value: string }
   | { type: "tag"; name: string; arg: string | null; children: BBNode[] };
 
-const TAG_RE = /\[(\/?)([a-zA-Z]+)(?:=([^\]]+))?\]/g;
+// Tag forms we accept:
+//   `[b]` / `[/b]`            — bare
+//   `[color=#3d85c6]`         — value attached to name with `=`
+//   `[img scale=30%]URL[/img]`— extra attributes separated by space
+//                                (we don't consume them but mustn't choke)
+//
+// Capture groups: (1) optional `/`, (2) tag name, (3) optional `=value`
+// payload (for `[tag=value]` form). Trailing space-separated attrs are
+// matched non-capturing and discarded.
+const TAG_RE = /\[(\/?)([a-zA-Z]+)(?:=([^\] ]*))?(?:\s+[^\]]*)?\]/g;
 
 function parseBBCode(input: string): BBNode[] {
   // Stack-based parser. Push a frame for each opening tag, pop on
