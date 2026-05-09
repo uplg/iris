@@ -244,7 +244,13 @@ export function WatchPage() {
       )}
 
       <div className="aspect-video w-full overflow-hidden rounded-lg border border-border bg-black">
-        {playSrc && !progressQ.isPending && playReady ? (
+        {/* `probe` is part of the gate: <Track> children are derived from
+            `probe.subtitle` and Vidstack initialises its track menu at mount
+            time. If the HLS cache happens to be ready before the probe
+            (cached from a prior session, or just plain faster), mounting
+            without the probe means subtitles silently miss the first run
+            and only show up after a manual refresh. */}
+        {playSrc && !progressQ.isPending && playReady && probe ? (
           <MediaPlayer
             // Including startPosition in the key forces a clean re-mount when
             // we navigate to a different saved offset (which never happens
