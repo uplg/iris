@@ -176,7 +176,7 @@ async fn check_one(
 ) -> anyhow::Result<()> {
     let total = follow.total_seasons.unwrap_or(1).max(1);
     let today = today_iso();
-    let already = iris_db::episode_files::list_for_series(pool, follow.tmdb_id).await?;
+    let already = iris_db::episode_files::list_for_tmdb(pool, follow.tmdb_id).await?;
     let already_set: std::collections::HashSet<(i64, i64)> = already
         .iter()
         .map(|r| (r.season, r.episode))

@@ -518,7 +518,7 @@ impl FeaturedItem {
             Some("movie") => Some(MediaKind::Movie),
             // torr9 emits "series"; tolerate "tv" if a future variant
             // shows up.
-            Some("series") | Some("tv") => Some(MediaKind::Tv),
+            Some("series" | "tv") => Some(MediaKind::Tv),
             _ => None,
         };
         SearchResult {

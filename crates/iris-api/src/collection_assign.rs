@@ -1,62 +1,91 @@
-// File-index and tmdb-id casts cross between i64 (DB) and usize (engine
-// snapshot). All values bounded — see follows.rs for the same rationale.
+// File-index casts cross between i64 (DB) and usize (engine snapshot).
+// All values bounded by the domain — see follows.rs for the same rationale.
 #![allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 
-//! Collection assignment — runs at ingest time AND as a one-shot
-//! retroactive batch on existing torrents.
+//! Collection assignment — runs after every successful ingest AND as
+//! a one-shot retroactive batch on existing torrents.
 //!
-//! Picks the right `collections` row (or creates one) for a torrent
-//! using this priority:
-//!   1. `tmdb_id` matches an existing collection → attach.
-//!   2. SCENE-parsed series title matches an existing collection's
-//!      `parsed_title_normalized` → attach.
-//!   3. Otherwise create a new collection. With a `tmdb_id` we get the
-//!      "TMDB-identity" path; without, the SCENE-title or standalone
-//!      paths.
+//! Identity is SCENE-parsed: the torrent name (or, failing that, the
+//! first parseable file leaf) yields a normalised key + display title
+//! that anchors the collection. TMDB id is enrichment metadata only —
+//! attached to the collection if known and not already set, but
+//! never trusted to drive grouping or display. Indexers occasionally
+//! mis-tag torrents with the wrong TMDB id; before this rework that
+//! produced collections whose card title disagreed with the actual
+//! file (sometimes a totally unrelated show / movie).
 //!
-//! For TV torrents we ALSO populate `episode_files` from any file whose
-//! name parses to a `(season, episode)` — this is what lets the Series
-//! page render an aggregated view without forcing the user to manually
-//! tag each file.
+//! For TV torrents we also populate `episode_files` from any file
+//! whose name parses to a `(season, episode)` — this is what lets
+//! the Series page render an aggregated view without forcing the
+//! user to manually tag each file. Keyed on `collection_id` (the
+//! SCENE identity), not `tmdb_id`.
 
 use iris_db::SqlitePool;
-use iris_db::collections::{self, Kind};
+use iris_db::collections::{self, CollectionRow, Kind};
 use iris_db::episode_files::{self, DerivedFrom, UpsertEpisodeFile};
 use iris_media::filename;
 
 use crate::tmdb::TmdbClient;
 
-/// Run after every successful ingest. Assigns the torrent to a
-/// collection and (for TV torrents) populates `episode_files` for any
-/// SCENE-parseable file. Best-effort: failures are logged, not
+/// Run after every successful ingest. Picks (or creates) the right
+/// collection from SCENE-parsed identity, attaches the torrent,
+/// optionally enriches the collection with `tmdb_id`, and (for TV)
+/// populates `episode_files`. Best-effort: failures are logged, not
 /// returned, since collection assignment is metadata not playback.
+///
+/// `tmdb` is currently unused — kept in the signature so callers
+/// don't have to change shape if we later re-introduce a TMDB
+/// metadata lookup at this layer (e.g., backfilling a missing
+/// display title from TMDB when SCENE parse came up empty).
 pub async fn assign_after_ingest(
     pool: &SqlitePool,
-    tmdb: Option<&TmdbClient>,
+    _tmdb: Option<&TmdbClient>,
     infohash: &str,
     name: &str,
     tmdb_id: Option<i64>,
     files: &[(usize, String)],
 ) {
+    // Parse the torrent name first — it's the highest-signal SCENE
+    // string we have (indexers consistently SCENE-name top-level
+    // releases). Then parse each file leaf in case the torrent name
+    // didn't carry season/episode info but the files do.
+    //
+    // Filter the file list to playable video files in non-sample
+    // paths: an `Show.S01E02.nfo` parses to the same (S, E) as the
+    // real episode and would steal its `episode_files` slot via the
+    // UNIQUE(infohash, file_idx) write order; samples (`/sample/…`,
+    // `*.sample.mkv`) are also tagged S01E02 by SCENE convention and
+    // would land users on a 50 MB clip if picked first.
+    let parsed_name = filename::parse(name);
     let parsed_files: Vec<(usize, filename::Parsed)> = files
         .iter()
+        .filter(|(_, path)| is_main_video_file(path))
         .filter_map(|(idx, path)| {
-            // The torrent file list ships full paths; the SCENE pattern
-            // lives on the leaf name. `Show.Name.S01E02.../episode.mkv`
-            // would mis-parse otherwise.
             let leaf = path.rsplit('/').next().unwrap_or(path);
             filename::parse(leaf).map(|p| (*idx, p))
         })
         .collect();
 
-    let kind = guess_kind(&parsed_files, tmdb_id, name);
-    let collection = match resolve_collection(pool, tmdb, tmdb_id, kind, name, &parsed_files).await {
+    let kind = guess_kind(parsed_name.as_ref(), &parsed_files);
+    let identity = pick_identity(kind, parsed_name.as_ref(), &parsed_files);
+
+    let collection = match resolve_collection(pool, kind, name, identity).await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, infohash, "collection assign: resolve failed");
             return;
         }
     };
+
+    // Enrichment: stamp tmdb_id on the collection if we have one and
+    // the slot is empty. First writer wins so a later torrent with a
+    // (possibly wrong) tmdb_id can't overwrite a known-good one.
+    if let Some(tid) = tmdb_id {
+        if let Err(e) = collections::set_tmdb_id_if_missing(pool, collection.id, tid).await {
+            tracing::warn!(error = %e, infohash, "collection assign: enrich tmdb failed");
+        }
+    }
+
     if let Err(e) = iris_db::torrents::set_collection(pool, infohash, Some(collection.id)).await {
         tracing::warn!(error = %e, infohash, "collection assign: set_collection failed");
         return;
@@ -69,24 +98,18 @@ pub async fn assign_after_ingest(
         "collection assigned",
     );
 
-    // For TV: turn any SCENE-parseable filename into an episode_files row
-    // so the Series page picks it up. Movies skip this step (we don't
-    // care about per-episode mapping for them).
+    // For TV: turn any SCENE-parseable filename into an episode_files
+    // row so the Series page picks it up. Keyed on collection_id
+    // (the SCENE identity), so a wrong tmdb_id can't poison some
+    // unrelated Watchlist follow.
     if kind == Kind::Tv {
-        let Some(tid) = collection.tmdb_id.or(tmdb_id) else {
-            // No TMDB id at the collection level — episode_files is
-            // keyed on tmdb_id, so we can't store these mappings yet.
-            // Re-runs of the assignment job after a manual TMDB tag
-            // will pick them up.
-            return;
-        };
         for (file_idx, parsed) in &parsed_files {
             let Some(season) = parsed.season else { continue };
             let Some(episode) = parsed.episode else { continue };
             let _ = episode_files::upsert(
                 pool,
                 UpsertEpisodeFile {
-                    tmdb_id: tid,
+                    collection_id: collection.id,
                     season: i64::from(season),
                     episode: i64::from(episode),
                     infohash: infohash.to_string(),
@@ -99,71 +122,99 @@ pub async fn assign_after_ingest(
     }
 }
 
-fn guess_kind(
-    parsed: &[(usize, filename::Parsed)],
-    tmdb_id: Option<i64>,
-    _torrent_name: &str,
-) -> Kind {
-    // Any TV-shaped file inside the torrent → TV. Otherwise default to
-    // Movie. We don't trust the torrent name alone since "Show Name S01"
-    // packs and "Movie Name" releases share the same naming surface area;
-    // the file-level SCENE marker is the high-signal cue.
-    if parsed.iter().any(|(_, p)| p.is_tv()) {
-        Kind::Tv
-    } else {
-        // tmdb_id alone doesn't tell us movie vs. tv (the search
-        // payload's `kind` does, but we'd have to plumb it down here).
-        // Default Movie is safe: a TMDB-tagged movie ends up in a
-        // movie collection of size 1; a TMDB-tagged TV without scene-
-        // parseable files still gets Movie, which is wrong but
-        // recoverable manually.
-        let _ = tmdb_id;
-        Kind::Movie
+/// True when `path` is a real video file we'd want to play —
+/// excludes NFO / SRT / sample subdirectories. Matches the playable
+/// extensions used elsewhere (largest-video picker in
+/// `routes/follows.rs`); kept inline here to avoid pulling that
+/// module into our dependency graph.
+fn is_main_video_file(path: &str) -> bool {
+    const VIDEO_EXTS: [&str; 10] = [
+        "mkv", "mp4", "webm", "m4v", "avi", "mov", "ts", "mts", "m2ts", "wmv",
+    ];
+    let lower = path.to_ascii_lowercase();
+    if lower.contains("/sample/") || lower.contains(".sample.") {
+        return false;
     }
+    let ext = std::path::Path::new(&lower)
+        .extension()
+        .and_then(|e| e.to_str());
+    ext.is_some_and(|e| VIDEO_EXTS.contains(&e))
+}
+
+fn guess_kind(
+    parsed_name: Option<&filename::Parsed>,
+    parsed_files: &[(usize, filename::Parsed)],
+) -> Kind {
+    // Any TV-shaped file inside the torrent → TV. Falls back to the
+    // torrent name when files aren't parseable (rare; fan encodes
+    // with custom names sometimes lose SCENE structure). Default
+    // Movie when nothing tells us otherwise.
+    if parsed_files.iter().any(|(_, p)| p.is_tv()) {
+        return Kind::Tv;
+    }
+    if parsed_name.is_some_and(filename::Parsed::is_tv) {
+        return Kind::Tv;
+    }
+    Kind::Movie
+}
+
+/// Pick the canonical Parsed used to derive collection identity.
+///
+/// For TV: prefer the first SCENE-parseable file leaf. Season packs
+/// name themselves `Show.S02.COMPLETE.1080p…` — `S02` alone (no E)
+/// doesn't satisfy `find_se_marker`, so the parser tail-trims to
+/// "1080p" and the title becomes `Show S02 COMPLETE` (cruft). The
+/// individual files inside the pack each have proper `S02EXX`
+/// markers and parse to a clean title — using one of them keeps
+/// season packs in the same collection as standalone-episode
+/// torrents.
+///
+/// For movies: the torrent name wins when usable (it's the only
+/// thing carrying the year — files are sometimes renamed to
+/// `Movie.mkv` with no year, which would lose Dune-1984 vs Dune-2021
+/// disambiguation). Falls back to the first file leaf if torrent
+/// name didn't parse.
+fn pick_identity<'a>(
+    kind: Kind,
+    parsed_name: Option<&'a filename::Parsed>,
+    parsed_files: &'a [(usize, filename::Parsed)],
+) -> Option<&'a filename::Parsed> {
+    if kind == Kind::Tv {
+        if let Some((_, p)) = parsed_files.first() {
+            if !p.title.is_empty() {
+                return Some(p);
+            }
+        }
+    }
+    if let Some(p) = parsed_name {
+        if !p.title.is_empty() {
+            return Some(p);
+        }
+    }
+    parsed_files.first().map(|(_, p)| p)
 }
 
 async fn resolve_collection(
     pool: &SqlitePool,
-    tmdb: Option<&TmdbClient>,
-    tmdb_id: Option<i64>,
     kind: Kind,
     torrent_name: &str,
-    parsed_files: &[(usize, filename::Parsed)],
-) -> Result<iris_db::collections::CollectionRow, sqlx::Error> {
-    if let Some(tid) = tmdb_id {
-        let display = if let Some(client) = tmdb {
-            client
-                .lookup(tid as u64)
-                .await
-                .map_or_else(|| torrent_name.to_string(), |m| m.title)
-        } else {
-            torrent_name.to_string()
-        };
-        return collections::find_or_create_by_tmdb(pool, tid, kind, &display).await;
-    }
-    // No TMDB id — fall back to SCENE title. Pick the title from the
-    // first parseable file (they should all match within a torrent;
-    // first-wins is a reasonable tiebreaker if not).
-    if let Some((_, p)) = parsed_files.first() {
-        let normalized = p.normalized_key();
-        if !normalized.is_empty() {
-            return collections::find_or_create_by_parsed_title(
-                pool,
-                &normalized,
-                &p.title,
-                kind,
-            )
-            .await;
+    identity: Option<&filename::Parsed>,
+) -> Result<CollectionRow, sqlx::Error> {
+    if let Some(p) = identity {
+        let key = p.collection_key(kind == Kind::Tv);
+        if !key.is_empty() {
+            let display = p.display_with_year(kind == Kind::Tv);
+            return collections::find_or_create(pool, &key, &display, kind).await;
         }
     }
-    // Truly nothing to group on — standalone collection (one entry,
-    // never merged).
+    // Truly nothing parseable — standalone collection (one entry,
+    // never merged) named after the raw torrent.
     collections::create_standalone(pool, torrent_name, kind).await
 }
 
 /// Walk every torrent currently in the library and assign a collection
-/// to any that doesn't have one yet. Run once at boot to backfill the
-/// existing library when the Phase 4.5 migration lands. Idempotent —
+/// to any that doesn't have one yet. Runs at boot to backfill the
+/// existing library after the SCENE-first migration. Idempotent —
 /// safe to call repeatedly.
 pub async fn run_backfill(
     pool: &SqlitePool,

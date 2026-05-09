@@ -1,14 +1,20 @@
 //! Library-side collections — logical grouping of one or more torrents
 //! into a single library entity (typically a TV show, sometimes a movie
-//! plus its extras). Two paths to identity:
+//! plus its extras).
 //!
-//!   * `tmdb_id` — preferred when present, populated by the
-//!     ingest-time matcher.
-//!   * `parsed_title_normalized` — fallback for SCENE-named multi-
-//!     torrent series with no TMDB hit.
+//! Identity comes from the SCENE-parsed filename. The
+//! `parsed_title_normalized` column is the dedup key (lowercase,
+//! punctuation-stripped, year-suffixed for movies). `tmdb_id` is pure
+//! enrichment metadata: stored when known so the UI can pull a poster
+//! / synopsis, but never trusted as identity. Indexers occasionally
+//! mis-tag torrents (wrong TMDB id attached to the wrong file), and
+//! letting that drive grouping produced collections whose display
+//! title disagreed with the actual content. SCENE-first sidesteps that.
 //!
 //! See `migrations/0008_follows_collections_episodes.sql` for the
-//! table layout.
+//! base table layout and `migrations/0009_collections_scene_first.sql`
+//! for the index drop that made multiple collections per `tmdb_id`
+//! legal (necessary fallout of demoting TMDB to enrichment).
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -40,16 +46,21 @@ impl Kind {
     }
 }
 
-pub async fn find_by_tmdb(
+/// Multiple collections may now share a `tmdb_id` (the unique index
+/// was dropped in 0009 — see module docs). Callers that want "any
+/// collection enriched with this id" use this; callers that want
+/// "the canonical one" should use [`find_or_create`] instead and
+/// match on the SCENE-parsed key.
+pub async fn list_by_tmdb(
     pool: &SqlitePool,
     tmdb_id: i64,
-) -> Result<Option<CollectionRow>, sqlx::Error> {
+) -> Result<Vec<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
         "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at \
-         FROM collections WHERE tmdb_id = ?1",
+         FROM collections WHERE tmdb_id = ?1 ORDER BY created_at",
     )
     .bind(tmdb_id)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
 }
 
@@ -79,47 +90,10 @@ pub async fn get(pool: &SqlitePool, id: Uuid) -> Result<Option<CollectionRow>, s
     .await
 }
 
-/// Idempotent: returns the existing row when one already matches by
-/// `tmdb_id`, otherwise inserts and returns the new row. Useful at
-/// ingest time when we know the TMDB id from the search hit.
-pub async fn find_or_create_by_tmdb(
-    pool: &SqlitePool,
-    tmdb_id: i64,
-    kind: Kind,
-    display_title: &str,
-) -> Result<CollectionRow, sqlx::Error> {
-    if let Some(existing) = find_by_tmdb(pool, tmdb_id).await? {
-        return Ok(existing);
-    }
-    let id = Uuid::new_v4();
-    let now = Utc::now();
-    // ON CONFLICT WITHOUT a target — SQLite's targeted form requires the
-    // WHERE clause of the matching unique index, and our `collections_*`
-    // indexes are partial (`WHERE tmdb_id IS NOT NULL` /
-    // `WHERE parsed_title_normalized IS NOT NULL`). Targeting them with
-    // `ON CONFLICT(tmdb_id) DO NOTHING` fails to plan with "ON CONFLICT
-    // clause does not match any PRIMARY KEY or UNIQUE constraint".
-    // The targetless form catches any unique violation, which here can
-    // only be the partial index we care about anyway (find-first happens
-    // above, so this only triggers on a tight race).
-    sqlx::query(
-        "INSERT INTO collections (id, tmdb_id, parsed_title_normalized, display_title, kind, created_at) \
-         VALUES (?1, ?2, NULL, ?3, ?4, ?5) \
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(id)
-    .bind(tmdb_id)
-    .bind(display_title)
-    .bind(kind.as_str())
-    .bind(now)
-    .execute(pool)
-    .await?;
-    find_by_tmdb(pool, tmdb_id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
-}
-
-pub async fn find_or_create_by_parsed_title(
+/// Find or create a collection keyed on the SCENE-parsed identity.
+/// `normalized` is the year-suffixed-for-movies dedup key produced by
+/// [`iris_media::filename::Parsed::collection_key`]. Idempotent.
+pub async fn find_or_create(
     pool: &SqlitePool,
     normalized: &str,
     display_title: &str,
@@ -130,8 +104,11 @@ pub async fn find_or_create_by_parsed_title(
     }
     let id = Uuid::new_v4();
     let now = Utc::now();
-    // Targetless ON CONFLICT — see find_or_create_by_tmdb for the rationale
-    // (partial unique index can't be targeted directly).
+    // Targetless ON CONFLICT — partial unique index on
+    // (parsed_title_normalized, kind) WHERE parsed_title_normalized IS
+    // NOT NULL can't be targeted directly in SQLite, and the targetless
+    // form catches the only unique violation that can fire here (the
+    // tmdb_id partial index was dropped in 0009).
     sqlx::query(
         "INSERT INTO collections (id, tmdb_id, parsed_title_normalized, display_title, kind, created_at) \
          VALUES (?1, NULL, ?2, ?3, ?4, ?5) \
@@ -147,6 +124,25 @@ pub async fn find_or_create_by_parsed_title(
     find_by_parsed_title(pool, normalized, kind)
         .await?
         .ok_or(sqlx::Error::RowNotFound)
+}
+
+/// Attach a `tmdb_id` to a collection for enrichment (poster /
+/// synopsis lookups). No-op if the collection already has one set —
+/// first writer wins so a later torrent with a different (and
+/// possibly wrong) `tmdb_id` can't overwrite a known-good one.
+pub async fn set_tmdb_id_if_missing(
+    pool: &SqlitePool,
+    id: Uuid,
+    tmdb_id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE collections SET tmdb_id = ?1 WHERE id = ?2 AND tmdb_id IS NULL",
+    )
+    .bind(tmdb_id)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Standalone collection — used when neither TMDB id nor a parseable
@@ -201,7 +197,7 @@ pub async fn list_summaries(
             c.id, c.tmdb_id, c.display_title, c.kind, c.created_at, \
             COUNT(DISTINCT t.id) AS torrent_count, \
             COALESCE(SUM(t.total_size_bytes), 0) AS total_size_bytes, \
-            (SELECT COUNT(*) FROM episode_files ef WHERE ef.tmdb_id = c.tmdb_id) AS episode_count, \
+            (SELECT COUNT(*) FROM episode_files ef WHERE ef.collection_id = c.id) AS episode_count, \
             (SELECT t2.infohash FROM torrents t2 \
              WHERE t2.collection_id = c.id AND t2.deleted_at IS NULL \
              ORDER BY COALESCE(t2.last_played_at, t2.added_at) DESC LIMIT 1) AS representative_infohash \

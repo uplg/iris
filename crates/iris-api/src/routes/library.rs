@@ -163,37 +163,23 @@ async fn collection_detail(
     }
 
     let episodes = if collection.kind == "tv" {
-        let tmdb_id = collection.tmdb_id;
-        let infohashes: std::collections::HashSet<String> =
-            torrent_rows.iter().map(|r| r.infohash.clone()).collect();
-        // Pull every episode_files row for this tmdb_id, then keep only
-        // the ones whose infohash is in this collection's torrent set.
-        // Without `tmdb_id` (SCENE-only collection) we walk per-torrent
-        // through the engine's file list — slower but correct.
-        let mut out: Vec<EpisodeEntry> = Vec::new();
-        if let Some(tid) = tmdb_id {
-            let files = iris_db::episode_files::list_for_series(state.db(), tid).await?;
-            for f in files {
-                if !infohashes.contains(&f.infohash) {
-                    continue;
-                }
-                let watched = iris_db::playback::get(
-                    state.db(),
-                    user.id,
-                    &f.infohash,
-                    f.file_idx,
-                )
+        // SCENE-first: episode_files joins on collection_id directly,
+        // no need to bridge through tmdb_id (which may be unset on
+        // SCENE-only collections).
+        let files = iris_db::episode_files::list_for_collection(state.db(), collection.id).await?;
+        let mut out: Vec<EpisodeEntry> = Vec::with_capacity(files.len());
+        for f in files {
+            let watched = iris_db::playback::get(state.db(), user.id, &f.infohash, f.file_idx)
                 .await
                 .unwrap_or(None)
                 .is_some_and(|p| p.completed);
-                out.push(EpisodeEntry {
-                    season: f.season,
-                    episode: f.episode,
-                    infohash: f.infohash,
-                    file_idx: f.file_idx,
-                    watched,
-                });
-            }
+            out.push(EpisodeEntry {
+                season: f.season,
+                episode: f.episode,
+                infohash: f.infohash,
+                file_idx: f.file_idx,
+                watched,
+            });
         }
         out.sort_by_key(|e| (e.season, e.episode));
         out

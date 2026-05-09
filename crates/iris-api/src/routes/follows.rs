@@ -221,9 +221,14 @@ async fn episodes(
         .ok_or_else(|| ApiError::BadRequest("tmdb client not configured".into()))?;
 
     let expected = tmdb.tv_season_episodes(tmdb_id as u64, season).await;
-    let downloaded = iris_db::episode_files::list_for_season(state.db(), tmdb_id, i64::from(season))
-        .await
-        .unwrap_or_default();
+    // SCENE-first: a follow's tmdb_id may map to one or more
+    // collections (enrichment is best-effort and a SCENE-only
+    // collection can coexist with a TMDB-tagged one for the same
+    // show). Union episode_files across all of them.
+    let downloaded =
+        iris_db::episode_files::list_for_tmdb_season(state.db(), tmdb_id, i64::from(season))
+            .await
+            .unwrap_or_default();
     // Future: could filter `available_episodes` to this season too, but
     // the table's small enough that grabbing the whole series and
     // filtering in memory is fine.
@@ -373,15 +378,9 @@ async fn episode_context(
     Query(p): Query<EpisodeContextParams>,
 ) -> ApiResult<Json<EpisodeContext>> {
     // Step 1: which episode IS this file?
-    let candidates: Vec<iris_db::episode_files::EpisodeFileRow> = sqlx::query_as(
-        "SELECT id, tmdb_id, season, episode, infohash, file_idx, derived_from, created_at \
-         FROM episode_files WHERE infohash = ?1 AND file_idx = ?2",
-    )
-    .bind(&p.infohash)
-    .bind(p.file_idx)
-    .fetch_all(state.db())
-    .await?;
-    let Some(current_row) = candidates.into_iter().next() else {
+    let Some(current_row) =
+        iris_db::episode_files::find_by_file(state.db(), &p.infohash, p.file_idx).await?
+    else {
         return Ok(Json(EpisodeContext {
             followed: false,
             current: None,
@@ -389,12 +388,23 @@ async fn episode_context(
         }));
     };
 
-    // Step 2: is the user following this series?
-    let follow = iris_db::follows::get(state.db(), user.id, current_row.tmdb_id).await?;
+    // Step 2: bridge collection → tmdb_id → follow. The collection
+    // holds the enrichment tmdb_id; without one, there's nothing to
+    // resolve a follow against (SCENE-only collection isn't tied to
+    // the Watchlist surface).
+    let collection = iris_db::collections::get(state.db(), current_row.collection_id).await?;
+    let Some(tmdb_id) = collection.and_then(|c| c.tmdb_id) else {
+        return Ok(Json(EpisodeContext {
+            followed: false,
+            current: None,
+            next: None,
+        }));
+    };
+    let follow = iris_db::follows::get(state.db(), user.id, tmdb_id).await?;
     let followed = follow.is_some();
 
     let current = EpisodePoint {
-        tmdb_id: current_row.tmdb_id,
+        tmdb_id,
         season: current_row.season,
         episode: current_row.episode,
         status: EpisodeStatus::Downloaded,
@@ -408,81 +418,93 @@ async fn episode_context(
         }));
     }
 
-    // Step 3: find the "next" episode. Same season + 1; if absent in
-    // TMDB's list, try (season+1, 1). We don't go further than that —
-    // a missing N+2 means the show is over or hasn't aired more.
-    let tmdb = state.tmdb();
-    let same_season_eps = if let Some(t) = tmdb {
-        t.tv_season_episodes(current_row.tmdb_id as u64, current_row.season as u32)
-            .await
-    } else {
-        Vec::new()
-    };
-    let same_season_has_next = same_season_eps
-        .iter()
-        .any(|e| i64::from(e.episode) == current_row.episode + 1);
-
-    let (next_season, next_episode) = if same_season_has_next {
-        (current_row.season, current_row.episode + 1)
-    } else {
-        // End-of-season jump.
-        let next_season_num = current_row.season + 1;
-        let next_eps = if let Some(t) = tmdb {
-            t.tv_season_episodes(current_row.tmdb_id as u64, next_season_num as u32)
-                .await
-        } else {
-            Vec::new()
-        };
-        if next_eps.is_empty() {
-            return Ok(Json(EpisodeContext {
-                followed: true,
-                current: Some(current),
-                next: None,
-            }));
-        }
-        (next_season_num, 1)
+    let Some((next_season, next_episode)) =
+        find_next_episode(state.tmdb(), tmdb_id, current_row.season, current_row.episode).await
+    else {
+        return Ok(Json(EpisodeContext {
+            followed: true,
+            current: Some(current),
+            next: None,
+        }));
     };
 
-    // Compute status of the next: downloaded / available / unavailable.
-    let downloaded = iris_db::episode_files::list_for_season(
-        state.db(),
-        current_row.tmdb_id,
-        next_season,
-    )
-    .await
-    .unwrap_or_default()
-    .into_iter()
-    .any(|r| r.episode == next_episode);
-
-    let status = if downloaded {
-        EpisodeStatus::Downloaded
-    } else {
-        let avail_rows = iris_db::available_episodes::list_best_for_series(
-            state.db(),
-            current_row.tmdb_id,
-        )
-        .await
-        .unwrap_or_default();
-        if avail_rows
-            .iter()
-            .any(|a| a.season == next_season && a.episode == next_episode)
-        {
-            EpisodeStatus::Available
-        } else {
-            EpisodeStatus::Unavailable
-        }
-    };
+    let status = next_episode_status(state.db(), tmdb_id, next_season, next_episode).await;
 
     Ok(Json(EpisodeContext {
         followed: true,
         current: Some(current),
         next: Some(EpisodePoint {
-            tmdb_id: current_row.tmdb_id,
+            tmdb_id,
             season: next_season,
             episode: next_episode,
             status,
         }),
     }))
+}
+
+/// Walk TMDB's season list to find the episode logically after
+/// `(season, episode)`. Returns `(season, episode + 1)` when the
+/// same season has more, otherwise tries `(season + 1, 1)`. We
+/// stop there — a missing N+2 means the show is over or hasn't
+/// aired more.
+async fn find_next_episode(
+    tmdb: Option<&crate::tmdb::TmdbClient>,
+    tmdb_id: i64,
+    season: i64,
+    episode: i64,
+) -> Option<(i64, i64)> {
+    let same_season_eps = if let Some(t) = tmdb {
+        t.tv_season_episodes(tmdb_id as u64, season as u32).await
+    } else {
+        Vec::new()
+    };
+    if same_season_eps
+        .iter()
+        .any(|e| i64::from(e.episode) == episode + 1)
+    {
+        return Some((season, episode + 1));
+    }
+    let next_season_num = season + 1;
+    let next_eps = if let Some(t) = tmdb {
+        t.tv_season_episodes(tmdb_id as u64, next_season_num as u32)
+            .await
+    } else {
+        Vec::new()
+    };
+    if next_eps.is_empty() {
+        return None;
+    }
+    Some((next_season_num, 1))
+}
+
+/// Status of `(season, episode)` for a given show: downloaded if we
+/// have a file, available if the indexer cache has a magnet,
+/// unavailable otherwise.
+async fn next_episode_status(
+    pool: &iris_db::SqlitePool,
+    tmdb_id: i64,
+    season: i64,
+    episode: i64,
+) -> EpisodeStatus {
+    let downloaded = iris_db::episode_files::list_for_tmdb_season(pool, tmdb_id, season)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .any(|r| r.episode == episode);
+    if downloaded {
+        return EpisodeStatus::Downloaded;
+    }
+    let avail_rows = iris_db::available_episodes::list_best_for_series(pool, tmdb_id)
+        .await
+        .unwrap_or_default();
+    if avail_rows
+        .iter()
+        .any(|a| a.season == season && a.episode == episode)
+    {
+        EpisodeStatus::Available
+    } else {
+        EpisodeStatus::Unavailable
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +541,9 @@ async fn grab_episode(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    // Idempotent shortcut: episode already on disk.
+    // Idempotent shortcut: episode already on disk. Cross-collection
+    // join via the follow's tmdb_id (any collection enriched with it
+    // counts).
     if let Some(existing) = find_episode_file(state.db(), tmdb_id, season, episode).await? {
         return Ok(Json(GrabResponse {
             infohash: existing.infohash,
@@ -589,46 +613,52 @@ async fn grab_episode(
     )
     .await?;
 
-    // Pick the file representing the episode. For the on-demand grab
-    // path the magnet was found by searching for "Show SXXEXX" — single-
-    // episode releases dominate, so the largest video file is reliably
-    // the right one. Season packs would need filename-parsing to pick
-    // the right episode (handled in P4.5 collection assignment).
-    let video_exts = [
+    let file_idx = pick_largest_video_file(&result.snapshot.files);
+    finalise_grabbed_episode(
+        state, &result, tmdb_id, season, episode, file_idx,
+    )
+    .await?;
+
+    Ok(Json(GrabResponse {
+        infohash: result.snapshot.infohash,
+        file_idx,
+        already_grabbed: result.already_managed,
+    }))
+}
+
+/// Pick the file representing the episode. For the on-demand grab
+/// path the magnet was found by searching for "Show SXXEXX" —
+/// single-episode releases dominate, so the largest video file is
+/// reliably the right one. Season packs would need filename
+/// parsing to pick the right episode (handled in collection
+/// assignment).
+fn pick_largest_video_file(files: &[iris_torrent::FileEntry]) -> i64 {
+    const VIDEO_EXTS: [&str; 10] = [
         "mkv", "mp4", "webm", "m4v", "avi", "mov", "ts", "mts", "m2ts", "wmv",
     ];
-    let file_idx = result
-        .snapshot
-        .files
+    files
         .iter()
         .filter(|f| {
             std::path::Path::new(&f.path)
                 .extension()
                 .and_then(|e| e.to_str())
-                .is_some_and(|e| video_exts.contains(&e.to_ascii_lowercase().as_str()))
+                .is_some_and(|e| VIDEO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
         })
         .max_by_key(|f| f.size_bytes)
-        .map_or(0, |f| f.index as i64);
+        .map_or(0, |f| f.index as i64)
+}
 
-    // Record the (tmdb_id, season, episode) → (infohash, file_idx)
-    // mapping so the Series page picks it up immediately AND future
-    // grab calls short-circuit through the idempotent path above.
-    let _ = iris_db::episode_files::upsert(
-        state.db(),
-        iris_db::episode_files::UpsertEpisodeFile {
-            tmdb_id,
-            season,
-            episode,
-            infohash: result.snapshot.infohash.clone(),
-            file_idx,
-            derived_from: iris_db::episode_files::DerivedFrom::TmdbMatch,
-        },
-    )
-    .await;
-
-    // Collection assignment — same as the regular ingest route. Done
-    // synchronously here (not spawned) because the Series page relies
-    // on the collection link being there for the next render.
+/// Run the post-ingest plumbing: collection assignment (synchronous —
+/// the Series page relies on the back-reference), then the
+/// `episode_files` upsert keyed on the just-attached collection.
+async fn finalise_grabbed_episode(
+    state: AppState,
+    result: &iris_torrent::IngestResult,
+    tmdb_id: i64,
+    season: i64,
+    episode: i64,
+    file_idx: i64,
+) -> ApiResult<()> {
     let files: Vec<(usize, String)> = result
         .snapshot
         .files
@@ -645,23 +675,42 @@ async fn grab_episode(
     )
     .await;
 
-    Ok(Json(GrabResponse {
-        infohash: result.snapshot.infohash,
-        file_idx,
-        already_grabbed: result.already_managed,
-    }))
+    // The grab params are the truth here (user clicked S2E3), so
+    // derive_from = TmdbMatch — a "we know S/E because the request
+    // said so" marker, distinct from filename-parsed entries.
+    if let Some(t) =
+        iris_db::torrents::find_by_infohash(state.db(), &result.snapshot.infohash).await?
+    {
+        if let Some(collection_id) = t.collection_id {
+            let _ = iris_db::episode_files::upsert(
+                state.db(),
+                iris_db::episode_files::UpsertEpisodeFile {
+                    collection_id,
+                    season,
+                    episode,
+                    infohash: result.snapshot.infohash.clone(),
+                    file_idx,
+                    derived_from: iris_db::episode_files::DerivedFrom::TmdbMatch,
+                },
+            )
+            .await;
+        }
+    }
+    Ok(())
 }
 
-/// Existing `episode_files` row for `(tmdb_id, season, episode)`. We
-/// don't have a query-by-key in the DB module yet, so filter the
-/// `list_for_season` result.
+/// Existing `episode_files` row for `(tmdb_id, season, episode)`,
+/// resolved by joining through every collection enriched with this
+/// `tmdb_id`. Returns the first hit — when the same episode somehow
+/// lives in multiple collections (rare edge of mixed-tag history),
+/// any one of them satisfies the idempotent shortcut.
 async fn find_episode_file(
     pool: &iris_db::SqlitePool,
     tmdb_id: i64,
     season: i64,
     episode: i64,
 ) -> Result<Option<iris_db::episode_files::EpisodeFileRow>, sqlx::Error> {
-    let rows = iris_db::episode_files::list_for_season(pool, tmdb_id, season).await?;
+    let rows = iris_db::episode_files::list_for_tmdb_season(pool, tmdb_id, season).await?;
     Ok(rows.into_iter().find(|r| r.episode == episode))
 }
 

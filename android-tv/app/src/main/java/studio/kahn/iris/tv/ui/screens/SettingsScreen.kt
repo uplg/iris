@@ -31,6 +31,8 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
+import androidx.tv.material3.Surface
+import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -187,14 +189,15 @@ private fun UpdaterCard(container: AppContainer) {
         onDispose { job?.cancel() }
     }
 
-    Card(
-        onClick = {},
+    // NOT a Card here: a clickable Card on TV grabs D-pad focus and swallows
+    // OK presses, so the inner Download Button never fires. Use a passive
+    // Surface so focus traverses straight to the button.
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
-        // Default focus scale (1.1×) is way too punchy on a full-width card —
-        // it makes the whole settings page lurch. Dial it down so focus is
-        // visible without dominating the layout.
-        scale = CardDefaults.scale(focusedScale = 1.02f),
+        shape = RoundedCornerShape(12.dp),
+        colors = SurfaceDefaults.colors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(

@@ -49,6 +49,39 @@ impl Parsed {
     pub fn normalized_key(&self) -> String {
         normalize_title(&self.title)
     }
+
+    /// Identity key for collection grouping. TV uses just the title
+    /// (every season / episode of one show maps to one collection).
+    /// Movies append the year so remakes (Dune 1984 vs Dune 2021)
+    /// stay in distinct collections. The kind is passed in because
+    /// the same `Parsed` can be classified TV-or-movie at the
+    /// collection level (e.g., torrent name has S01E02 but the file
+    /// list is empty / unparseable).
+    pub fn collection_key(&self, is_tv: bool) -> String {
+        let title = normalize_title(&self.title);
+        if is_tv {
+            title
+        } else {
+            match self.year {
+                Some(y) if !title.is_empty() => format!("{title} {y}"),
+                _ => title,
+            }
+        }
+    }
+
+    /// Display variant of [`Self::collection_key`] — preserves casing
+    /// and renders the year as `Title (YYYY)` for movies. Used for
+    /// the `display_title` column on the `collections` table.
+    pub fn display_with_year(&self, is_tv: bool) -> String {
+        if is_tv {
+            self.title.clone()
+        } else {
+            match self.year {
+                Some(y) => format!("{} ({y})", self.title),
+                None => self.title.clone(),
+            }
+        }
+    }
 }
 
 /// `Show.Name.S01E02.1080p...` → `"show name"` (lowercased, no
@@ -333,6 +366,34 @@ mod tests {
     fn returns_none_on_empty_filename() {
         assert!(parse("").is_none());
         assert!(parse(".mkv").is_none());
+    }
+
+    #[test]
+    fn collection_key_includes_year_for_movies() {
+        let dune84 = parse("Dune.1984.1080p.BluRay.x264-XYZ.mkv").unwrap();
+        let dune21 = parse("Dune.2021.2160p.WEB-DL.x265-ABC.mkv").unwrap();
+        assert_ne!(dune84.collection_key(false), dune21.collection_key(false));
+        assert_eq!(dune84.collection_key(false), "dune 1984");
+        assert_eq!(dune21.collection_key(false), "dune 2021");
+    }
+
+    #[test]
+    fn collection_key_drops_year_for_tv() {
+        // Same show, different episodes — should land in one bucket
+        // regardless of any year noise in the filename.
+        let s1 = parse("Squid.Game.S01E02.1080p.NF.WEB-DL-X.mkv").unwrap();
+        let s2 = parse("Squid.Game.S02E03.1080p.NF.WEB-DL-Y.mkv").unwrap();
+        assert_eq!(s1.collection_key(true), s2.collection_key(true));
+        assert_eq!(s1.collection_key(true), "squid game");
+    }
+
+    #[test]
+    fn display_with_year_movie_format() {
+        let p = parse("My.Dearest.Assassin.2026.MULTi.1080p.WEB.H265-X.mkv").unwrap();
+        assert_eq!(p.display_with_year(false), "My Dearest Assassin (2026)");
+        // TV ignores year in the display.
+        let tv = parse("Squid.Game.S02E03.1080p.NF.WEB-DL-X.mkv").unwrap();
+        assert_eq!(tv.display_with_year(true), "Squid Game");
     }
 
     #[test]
