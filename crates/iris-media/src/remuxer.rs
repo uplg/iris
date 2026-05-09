@@ -815,8 +815,21 @@ async fn run_shaka(
         // Quiet by default — we tee stderr into the same log file as
         // ffmpeg, so when something explodes the operator gets one log
         // per cache entry with both stages' output.
-        .args(["--quiet"])
-        .stdin(Stdio::null())
+        .args(["--quiet"]);
+    // Tell shaka which audio rendition is the default. Without this it
+    // writes `DEFAULT=NO` on every `EXT-X-MEDIA` line, and Media3 (the
+    // Android HLS source) refuses to auto-select an audio track when no
+    // rendition advertises DEFAULT=YES — playback ends up with a video
+    // stream and no sound, with the audio menu collapsed.
+    if let Some(default_lang) = plan
+        .audio
+        .iter()
+        .find(|a| a.default)
+        .map(|a| iso639_2to1(&a.language))
+    {
+        cmd.args(["--default_language", &default_lang]);
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 

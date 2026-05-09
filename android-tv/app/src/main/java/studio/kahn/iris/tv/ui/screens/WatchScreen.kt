@@ -197,8 +197,12 @@ private fun ReadyPlayer(
     val scope = rememberCoroutineScope()
 
     val playUrl = remember(serverUrl, infohash, fileIdx) {
+        // HLS-CMAF master playlist — same URL the web client uses.
+        // The bare `/play` path was the old single-file fMP4 endpoint;
+        // the current backend serves the manifest tree under
+        // `/play/{asset}` and the entry point is `master.m3u8`.
         val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
-        "${base}api/torrents/$infohash/files/$fileIdx/play"
+        "${base}api/torrents/$infohash/files/$fileIdx/play/master.m3u8"
     }
 
     val subtitles = remember(probe, serverUrl, infohash, fileIdx) {
