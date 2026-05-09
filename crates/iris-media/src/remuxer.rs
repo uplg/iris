@@ -72,6 +72,46 @@ fn secs_to_ms(secs: f64) -> u64 {
     }
 }
 
+/// Best-effort ISO 639-2 (3-letter) → ISO 639-1 (2-letter) mapping for
+/// the languages that show up in real-world torrent releases. shaka
+/// emits `LANGUAGE="<2-letter>"` in its HLS master, so passing a 3-letter
+/// code to `--default_language` would silently fail to match. Anything
+/// not in the table passes through unchanged — shaka treats unknown
+/// codes as a string match attempt against its emitted LANGUAGE attr.
+fn iso639_2to1(code: &str) -> String {
+    let lower = code.to_ascii_lowercase();
+    let mapped = match lower.as_str() {
+        "fre" | "fra" => "fr",
+        "eng" => "en",
+        "spa" => "es",
+        "ger" | "deu" => "de",
+        "ita" => "it",
+        "por" => "pt",
+        "rus" => "ru",
+        "jpn" => "ja",
+        "kor" => "ko",
+        "chi" | "zho" => "zh",
+        "ara" => "ar",
+        "dut" | "nld" => "nl",
+        "pol" => "pl",
+        "swe" => "sv",
+        "tur" => "tr",
+        "ukr" => "uk",
+        "heb" => "he",
+        "hin" => "hi",
+        "vie" => "vi",
+        "ces" | "cze" => "cs",
+        "dan" => "da",
+        "fin" => "fi",
+        "nor" => "no",
+        "ron" | "rum" => "ro",
+        "gre" | "ell" => "el",
+        "und" => "und",
+        _ => return lower,
+    };
+    mapped.to_string()
+}
+
 /// Encoded fraction in `[0, 1]`. Saturates above 1 to keep the UI
 /// honest if ffmpeg reports past the probed total (rare but happens
 /// with imprecise duration metadata).
