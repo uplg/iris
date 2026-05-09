@@ -710,14 +710,16 @@ async fn run_ffmpeg(
         // — far easier to parse reliably than its human-readable stderr.
         .args(["-progress", "pipe:1"])
         .arg("-i")
-        .arg(source)
-        // Drop chapter tracks. MKVs with chapters make ffmpeg auto-add
-        // a `bin_data` text stream that downstream demuxers trip on.
-        // `-map_chapters` is an OUTPUT option — must come after `-i`.
-        .args(["-map_chapters", "-1"]);
+        .arg(source);
 
     // Video output. `0:V:0?` skips attached pictures (cover art).
-    cmd.args(["-map", "0:V:0?", "-c:v", "copy"]);
+    // `-map_chapters -1` is a per-output option in ffmpeg — it only
+    // applies to the next output that follows it. Without it, MKV
+    // chapters propagate into the per-stream MP4 and the MP4 muxer
+    // synthesises a `bin_data` chapter-text track, which then trips
+    // up downstream demuxers (shaka picks up bogus timing hints).
+    cmd.args(["-map_chapters", "-1"])
+        .args(["-map", "0:V:0?", "-c:v", "copy"]);
     if matches!(
         plan.source_video_codec.as_deref().map(str::to_ascii_lowercase).as_deref(),
         Some("hevc" | "h265")
@@ -728,18 +730,27 @@ async fn run_ffmpeg(
         // live in the `hvcC` box of the sample entry.
         cmd.args(["-tag:v", "hvc1"]);
     }
-    cmd.args(["-an", "-sn", "-dn", "-f", "mp4"]).arg(video_tmp);
+    // `negative_cts_offsets` lets ffmpeg express B-frame composition
+    // offsets without an `elst` edit list — pairs with `-ignore_editlist`
+    // above so the per-stream MP4 we hand to shaka has neither a
+    // dropped-from-input elst nor a regenerated one. ExoPlayer then
+    // computes duration from sample data instead of clamping to elst.
+    cmd.args(["-movflags", "+negative_cts_offsets"])
+        .args(["-an", "-sn", "-dn", "-f", "mp4"])
+        .arg(video_tmp);
 
     // One MP4 per audio rendition.
     for (a, tmp) in plan.audio.iter().zip(audio_tmps.iter()) {
-        cmd.args(["-map", &format!("0:a:{}", a.source_idx)]);
+        // Repeat `-map_chapters -1` per output: it's a per-output
+        // option, so without this the audio MP4s would still inherit
+        // chapters and the parasitic chapter-text track they generate.
+        cmd.args(["-map_chapters", "-1"])
+            .args(["-map", &format!("0:a:{}?", a.source_idx)]);
         match a.codec {
             AudioCodec::Copy => {
                 cmd.args(["-c:a", "copy"]);
             }
             AudioCodec::Aac => {
-                // Stereo AAC 192 k — small enough that we always emit
-                // it for non-AAC sources (DTS / AC-3 / FLAC etc.).
                 cmd.args(["-c:a", "aac", "-b:a", "192k", "-ac", "2"]);
             }
         }
@@ -753,6 +764,11 @@ async fn run_ffmpeg(
             "-dn",
             "-metadata:s:a:0",
             &format!("language={}", a.language),
+            // Same `negative_cts_offsets` rationale as the video
+            // output — keeps the audio MP4 free of any `elst` that
+            // would clamp ExoPlayer's reported duration.
+            "-movflags",
+            "+negative_cts_offsets",
             "-f",
             "mp4",
         ])
