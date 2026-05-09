@@ -176,15 +176,83 @@ fn normalize(raw: FfprobeOutput) -> MediaProbe {
         }
     }
 
+    // Some MKVs in the wild concatenate the same program twice — the
+    // probe ends up with N copies of identical (codec, language, title)
+    // streams. Surfacing them all means the audio menu shows "Japanese"
+    // twice, the subtitle list shows "French" twice, and the remux plan
+    // builds a duplicate audio rendition. Drop dupes here, keeping the
+    // first occurrence (its `absolute_index` is what ffmpeg gets pointed
+    // at) and renumbering the surviving entries densely.
     MediaProbe {
         container: format_name,
         duration_seconds: duration,
         size_bytes: size,
         bit_rate,
-        video,
-        audio,
-        subtitle,
+        video: dedupe_video(video),
+        audio: dedupe_audio(audio),
+        subtitle: dedupe_subtitles(subtitle),
     }
+}
+
+fn dedupe_video(items: Vec<VideoStream>) -> Vec<VideoStream> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(items.len());
+    for mut s in items {
+        let key = (
+            s.codec.clone(),
+            s.profile.clone(),
+            s.width,
+            s.height,
+            s.frame_rate.map(|f| (f * 1000.0).round() as i64),
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        s.index = out.len();
+        out.push(s);
+    }
+    out
+}
+
+fn dedupe_audio(items: Vec<AudioStream>) -> Vec<AudioStream> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(items.len());
+    for mut s in items {
+        let key = (
+            s.codec.clone(),
+            s.language.clone(),
+            s.title.clone(),
+            s.channels,
+            s.default,
+            s.forced,
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        s.index = out.len();
+        out.push(s);
+    }
+    out
+}
+
+fn dedupe_subtitles(items: Vec<SubtitleStream>) -> Vec<SubtitleStream> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(items.len());
+    for mut s in items {
+        let key = (
+            s.codec.clone(),
+            s.language.clone(),
+            s.title.clone(),
+            s.default,
+            s.forced,
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        s.index = out.len();
+        out.push(s);
+    }
+    out
 }
 
 fn normalize_video(stream: RawStream, index: usize) -> VideoStream {
