@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paths exported via androidx FileProvider. Only the in-app updater's
+     download cache needs to be shared (so the system package installer
+     can read the .apk). Everything else stays private to the app. -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>

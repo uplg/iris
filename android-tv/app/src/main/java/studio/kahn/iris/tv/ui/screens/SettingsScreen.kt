@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -22,6 +24,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
@@ -31,9 +34,12 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.DeviceView
 import studio.kahn.iris.tv.data.IrisApi
 
@@ -97,6 +103,8 @@ fun SettingsScreen(
                 Text(serverUrl ?: "—", style = MaterialTheme.typography.bodyLarge)
             }
         }
+
+        UpdaterCard(container = container)
 
         // Devices section.
         Row(
@@ -165,6 +173,142 @@ fun SettingsScreen(
             ) { Text("Sign out") }
         }
     }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun UpdaterCard(container: AppContainer) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var state by remember { mutableStateOf<AppUpdater.Progress?>(null) }
+    var job by remember { mutableStateOf<Job?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose { job?.cancel() }
+    }
+
+    Card(
+        onClick = {},
+        modifier = Modifier.fillMaxWidth(),
+        shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "App update".uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "Installed version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                "Pulls the latest APK from ${AppUpdater.APK_URL} and hands it to the system installer. The TV will ask you to confirm.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            UpdaterStatus(state)
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                val downloading = state is AppUpdater.Progress.Connecting
+                    || state is AppUpdater.Progress.Downloading
+                Button(
+                    onClick = {
+                        if (job?.isActive == true) {
+                            job?.cancel()
+                            state = null
+                            return@Button
+                        }
+                        if (!AppUpdater.canInstallPackages(context)) {
+                            // Punt to the system "install unknown apps"
+                            // settings before even hitting the network.
+                            // The user comes back, hits Download again.
+                            AppUpdater.openInstallPermissionSettings(context)
+                            state = AppUpdater.Progress.Failed(
+                                "grant Install unknown apps for Iris TV, then try again",
+                            )
+                            return@Button
+                        }
+                        state = AppUpdater.Progress.Connecting
+                        job = scope.launch {
+                            AppUpdater.downloadApk(context, container.okHttpClient)
+                                .collect { p ->
+                                    state = p
+                                    if (p is AppUpdater.Progress.Ready) {
+                                        AppUpdater.requestInstall(context, p.file)
+                                    }
+                                }
+                        }
+                    },
+                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+                ) {
+                    Text(if (downloading) "Cancel" else "Download & install")
+                }
+                if (state is AppUpdater.Progress.Ready) {
+                    val ready = state as AppUpdater.Progress.Ready
+                    Button(
+                        onClick = { AppUpdater.requestInstall(context, ready.file) },
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+                    ) { Text("Reopen installer") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdaterStatus(state: AppUpdater.Progress?) {
+    when (state) {
+        null -> Unit
+        is AppUpdater.Progress.Connecting ->
+            Text("Connecting…", style = MaterialTheme.typography.bodyMedium)
+        is AppUpdater.Progress.Downloading -> {
+            val pct = if (state.total > 0) (state.bytes.toFloat() / state.total).coerceIn(0f, 1f) else null
+            val label = if (pct != null) {
+                "Downloading · ${(pct * 100).toInt()}% (${formatBytes(state.bytes)} / ${formatBytes(state.total)})"
+            } else {
+                "Downloading · ${formatBytes(state.bytes)} (size unknown)"
+            }
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            if (pct != null) {
+                LinearProgressIndicator(
+                    progress = { pct },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+            } else {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+            }
+        }
+        is AppUpdater.Progress.Ready ->
+            Text(
+                "Downloaded — opening installer.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        is AppUpdater.Progress.Failed ->
+            Text(
+                state.message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+    }
+}
+
+private fun formatBytes(b: Long): String {
+    if (b < 0) return "?"
+    val mb = b / 1_000_000.0
+    if (mb >= 1.0) return String.format("%.1f MB", mb)
+    val kb = b / 1_000.0
+    if (kb >= 1.0) return String.format("%.0f KB", kb)
+    return "$b B"
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)

@@ -48,14 +48,17 @@ import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
 
 /**
- * Full-screen Media3 PlayerView. Pre-mount we poll `/play/status` so the
- * user sees real download / remux progress instead of a silent black
- * screen, and we only construct the player once the cached fragmented
- * MP4 is ready to be served via HTTP byte-range.
+ * Full-screen Media3 PlayerView. Pre-mount we poll `/play/status` so
+ * the user sees real download / remux progress instead of a silent
+ * black screen, and we only construct the player once the synthetic
+ * HLS master playlist is on disk (the segments themselves are produced
+ * in the background and long-polled by the HTTP layer when missing).
  *
  * D-pad maps to PlayerView's built-in TV controls (play/pause, seek,
- * subtitle + audio track selection via the settings menu). Audio
- * tracks are surfaced natively from the fMP4 — no custom picker.
+ * subtitle + audio track selection via the settings menu). Multi-audio
+ * renditions are exposed natively by `HlsMediaSource` — Media3 picks
+ * up `EXT-X-MEDIA TYPE=AUDIO` entries from the manifest and surfaces
+ * them via the standard track-selection API.
  */
 @OptIn(ExperimentalTvMaterial3Api::class, UnstableApi::class)
 @Composable
@@ -127,10 +130,10 @@ fun WatchScreen(
         }
     }
 
-    // Playback prep status. Polls every second until the cached `.fmp4`
-    // is on disk and ready to be byte-ranged. The endpoint surfaces both
-    // the upstream torrent download and the in-flight ffmpeg remux, so
-    // the loading overlay can show a meaningful step.
+    // Playback prep status. Polls every second until the HLS master
+    // playlist is on disk. The endpoint surfaces both the upstream
+    // torrent download and the in-flight ffmpeg+shaka pipeline so the
+    // loading overlay can show a meaningful step (and the remux %).
     LaunchedEffect(probe, serverUrl) {
         val baseUrl = serverUrl ?: return@LaunchedEffect
         probe ?: return@LaunchedEffect
@@ -163,6 +166,7 @@ fun WatchScreen(
                 probe = probe!!,
                 startPositionSec = resumePositionSec,
                 onPositionUpdate = { resumePositionSec = it },
+                onPlayerError = { error = it },
             )
         } else {
             LoadingOverlay(
@@ -192,6 +196,7 @@ private fun ReadyPlayer(
     probe: MediaProbe,
     startPositionSec: Double,
     onPositionUpdate: (Double) -> Unit,
+    onPlayerError: (String) -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -227,6 +232,20 @@ private fun ReadyPlayer(
             prepare()
             playWhenReady = true
         }
+    }
+
+    // Surface ExoPlayer errors back to the parent so the LoadingOverlay
+    // can show them. Without this any decoder / network failure leaves
+    // the player paused at 00:00 with no indication of what went wrong
+    // (this is exactly how the silent `/play` 404 hid for a session).
+    DisposableEffect(player) {
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                onPlayerError(error.errorCodeName + ": " + (error.message ?: "playback failed"))
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
     }
 
     DisposableEffect(player) {
