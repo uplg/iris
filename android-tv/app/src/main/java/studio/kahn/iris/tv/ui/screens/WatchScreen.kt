@@ -415,11 +415,23 @@ private fun stepFor(status: PlayStatus?, probeReady: Boolean, torrent: TorrentVi
             }
             Step("Downloading…", sub, pct)
         }
-        "remuxing" -> Step(
-            "Remuxing to fragmented MP4…",
-            "ffmpeg producing the playable cache file. Original codecs preserved.",
-            null,
-        )
+        "remuxing" -> {
+            // ffmpeg's encoded-so-far position lands here once the
+            // server has parsed its first `out_time_us` block (~1s
+            // after spawn). Until then `s.progress` is null and we
+            // show an indeterminate bar via the null `pct`.
+            val pct = s.progress?.coerceIn(0f, 0.99f)
+            val label = if (pct != null) {
+                "Remuxing to fragmented MP4 · ${(pct * 100f).toInt()}%"
+            } else {
+                "Remuxing to fragmented MP4…"
+            }
+            Step(
+                label,
+                "Producing the playable cache (video copied as-is, audio re-encoded to AAC where needed).",
+                pct,
+            )
+        }
         else -> Step("Preparing playback…", "Almost there.", null)
     }
 }

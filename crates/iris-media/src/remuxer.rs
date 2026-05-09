@@ -31,7 +31,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use thiserror::Error;
@@ -51,6 +51,38 @@ pub enum RemuxError {
 
 /// Master playlist filename, served as the entry point.
 pub const MASTER_PLAYLIST: &str = "master.m3u8";
+
+/// Convert a non-negative finite seconds value into milliseconds,
+/// saturating instead of wrapping. Used for the progress total.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn secs_to_ms(secs: f64) -> u64 {
+    let ms = (secs * 1000.0).round();
+    if !ms.is_finite() || ms <= 0.0 {
+        0
+    } else if ms >= (u64::MAX as f64) {
+        u64::MAX
+    } else {
+        // Bounded above (~10 h × 1000 = 36 M, well within u64); cast
+        // is safe in the realistic range.
+        ms as u64
+    }
+}
+
+/// Encoded fraction in `[0, 1]`. Saturates above 1 to keep the UI
+/// honest if ffmpeg reports past the probed total (rare but happens
+/// with imprecise duration metadata).
+#[allow(clippy::cast_precision_loss)]
+fn progress_fraction(encoded_ms: u64, total_ms: u64) -> f64 {
+    if total_ms == 0 {
+        return 0.0;
+    }
+    (encoded_ms as f64 / total_ms as f64).clamp(0.0, 1.0)
+}
+
 /// Video variant name (used in URL + filenames inside the cache dir).
 const VIDEO_VARIANT: &str = "v";
 
@@ -73,6 +105,10 @@ pub struct RemuxPlan {
     /// Source video codec name (e.g. `"hevc"`, `"h264"`). Used to decide
     /// whether to force `-tag:v hvc1` (HEVC only).
     pub source_video_codec: Option<String>,
+    /// Source duration in seconds (from ffprobe). Powers the
+    /// remuxing-progress percentage surfaced via `play_status` — we
+    /// divide ffmpeg's `out_time_us` by this to compute 0..1.
+    pub source_duration_secs: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +149,7 @@ impl RemuxPlan {
                 })
                 .collect(),
             source_video_codec: None,
+            source_duration_secs: None,
         }
     }
 }
@@ -153,6 +190,14 @@ struct JobState {
     /// Set by the watcher / reaper when ffmpeg exits non-zero or never
     /// produced a usable manifest.
     failed: AtomicBool,
+    /// Encoded-so-far position in milliseconds, parsed from ffmpeg's
+    /// `-progress pipe:1` stream. Divided by the source duration on
+    /// the API side to surface a 0..1 percentage in `PlayStatus`.
+    encoded_ms: AtomicU64,
+    /// Source duration in milliseconds (from probe). Lets us compute
+    /// the percentage without threading another value through every
+    /// progress query.
+    total_ms: AtomicU64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -204,6 +249,23 @@ impl RemuxManager {
         self.cache_dir(key).join("ffmpeg.log")
     }
 
+    /// Live encoding progress for an in-flight remux, expressed as a
+    /// 0..1 fraction. Returns `None` when the key isn't in flight, when
+    /// the source duration wasn't supplied in the plan, or before
+    /// ffmpeg has reported its first progress tick.
+    pub async fn progress(&self, key: &str) -> Option<f64> {
+        let job = self.inner.jobs.lock().await.get(key).cloned()?;
+        let total = job.total_ms.load(Ordering::Acquire);
+        if total == 0 {
+            return None;
+        }
+        let encoded = job.encoded_ms.load(Ordering::Acquire);
+        if encoded == 0 {
+            return None;
+        }
+        Some(progress_fraction(encoded, total))
+    }
+
     /// Returns the recorded error message for `key` if a recent ffmpeg
     /// run failed and the cooldown hasn't elapsed.
     pub async fn recent_failure(&self, key: &str) -> Option<String> {
@@ -245,10 +307,16 @@ impl RemuxManager {
                 if master_is_ready(&master).await {
                     return Ok(master);
                 }
+                let total_ms = plan
+                    .source_duration_secs
+                    .filter(|d| d.is_finite() && *d > 0.0)
+                    .map_or(0, secs_to_ms);
                 let job = Arc::new(JobState {
                     ready: Notify::new(),
                     signaled: AtomicBool::new(false),
                     failed: AtomicBool::new(false),
+                    encoded_ms: AtomicU64::new(0),
+                    total_ms: AtomicU64::new(total_ms),
                 });
                 jobs.insert(key.to_string(), job.clone());
                 self.spawn_remux(key.to_string(), source.to_path_buf(), plan, job.clone());
@@ -411,7 +479,7 @@ impl RemuxManager {
                 job.failed.store(true, Ordering::Release);
                 failure_message = Some(format!("mkdir {}: {e}", dir.display()));
             } else {
-                match remux_one(&source, &dir, &log_path, &plan).await {
+                match remux_one(&source, &dir, &log_path, &plan, job.clone()).await {
                     Ok(()) => {
                         tracing::info!(
                             key = %key,
@@ -564,6 +632,7 @@ async fn remux_one(
     out_dir: &Path,
     log_path: &Path,
     plan: &RemuxPlan,
+    job: Arc<JobState>,
 ) -> Result<(), RemuxError> {
     let temp_dir = out_dir.join(".tmp");
     if tokio::fs::try_exists(&temp_dir).await.unwrap_or(false) {
@@ -576,7 +645,7 @@ async fn remux_one(
     let audio_tmps: Vec<PathBuf> = (0..plan.audio.len())
         .map(|i| temp_dir.join(format!("audio_{i}.mp4")))
         .collect();
-    run_ffmpeg(source, &video_tmp, &audio_tmps, plan, log_path).await?;
+    run_ffmpeg(source, &video_tmp, &audio_tmps, plan, log_path, job.clone()).await?;
 
     // Stage 2: shaka-packager → HLS-CMAF in out_dir.
     run_shaka(out_dir, &video_tmp, &audio_tmps, plan, log_path).await?;
@@ -592,9 +661,14 @@ async fn run_ffmpeg(
     audio_tmps: &[PathBuf],
     plan: &RemuxPlan,
     log_path: &Path,
+    job: Arc<JobState>,
 ) -> Result<(), RemuxError> {
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
+        // `-progress pipe:1` makes ffmpeg emit a stream of `key=value`
+        // lines on stdout (`out_time_us=…`, `frame=…`, `progress=continue`)
+        // — far easier to parse reliably than its human-readable stderr.
+        .args(["-progress", "pipe:1"])
         .arg("-i")
         .arg(source)
         // Drop chapter tracks. MKVs with chapters make ffmpeg auto-add
@@ -645,7 +719,7 @@ async fn run_ffmpeg(
         .arg(tmp);
     }
 
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
     tracing::info!(
         source = %source.display(),
@@ -658,6 +732,10 @@ async fn run_ffmpeg(
         let log = log_path.to_path_buf();
         tokio::spawn(async move { drain_stderr_to_log(stderr, log).await });
     }
+    if let Some(stdout) = child.stdout.take() {
+        let job = job.clone();
+        tokio::spawn(async move { drain_progress_into_job(stdout, job).await });
+    }
     let status = child.wait().await?;
     if !status.success() {
         return Err(RemuxError::Failed(
@@ -665,7 +743,40 @@ async fn run_ffmpeg(
             log_path.display().to_string(),
         ));
     }
+    // ffmpeg done — pin progress at 100 % so the API returns a clean
+    // `1.0` until the shaka stage flips ready.
+    let total = job.total_ms.load(Ordering::Acquire);
+    if total > 0 {
+        job.encoded_ms.store(total, Ordering::Release);
+    }
     Ok(())
+}
+
+/// Parse ffmpeg's `-progress pipe:1` stream and update `job.encoded_ms`
+/// as new `out_time_us` lines arrive. ffmpeg emits one block of
+/// key=value pairs per second by default, terminated by `progress=continue`
+/// (or `progress=end` on the final block).
+async fn drain_progress_into_job(stdout: tokio::process::ChildStdout, job: Arc<JobState>) {
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+    while let Ok(Some(line)) = reader.next_line().await {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key != "out_time_us" {
+            continue;
+        }
+        // ffmpeg writes `N/A` while initialising the muxers — ignore.
+        let Ok(us) = value.trim().parse::<u64>() else {
+            continue;
+        };
+        let ms = us / 1_000;
+        // Monotonic update — never let the displayed progress regress
+        // (different output muxers can briefly report stale times).
+        let prev = job.encoded_ms.load(Ordering::Acquire);
+        if ms > prev {
+            job.encoded_ms.store(ms, Ordering::Release);
+        }
+    }
 }
 
 async fn run_shaka(

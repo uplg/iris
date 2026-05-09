@@ -606,9 +606,21 @@ function PlayerLoadingStatus({
       pct,
     };
   } else if (playStatus.reason === "remuxing") {
+    // Surface ffmpeg's encoded-so-far / total-duration so the bar
+    // ticks instead of an indeterminate spinner. `progress` is null
+    // until ffmpeg writes its first `out_time_us` block (~1s after
+    // spawn) — fall back to the label-only state in that brief window.
+    const pct =
+      playStatus.progress != null
+        ? Math.min(99, Math.max(0, playStatus.progress * 100))
+        : undefined;
     step = {
-      label: "Remuxing to fragmented MP4…",
-      sub: "ffmpeg is producing the playable cache file (no transcoding — original codecs preserved).",
+      label:
+        pct != null
+          ? `Remuxing to fragmented MP4 · ${pct.toFixed(0)}%`
+          : "Remuxing to fragmented MP4…",
+      sub: "Producing the playable cache (HEVC/H.264 video copied as-is, audio re-encoded to AAC where needed).",
+      pct,
     };
   } else {
     step = {

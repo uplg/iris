@@ -368,6 +368,7 @@ fn build_remux_plan(probe: &iris_media::MediaProbe) -> iris_media::RemuxPlan {
     iris_media::RemuxPlan {
         audio: renditions,
         source_video_codec: probe.video.first().map(|v| v.codec.clone()),
+        source_duration_secs: probe.duration_seconds,
     }
 }
 
@@ -558,7 +559,10 @@ pub struct PlayStatus {
     /// `"downloading"` / `"remuxing"` / `null` when ready or when an
     /// `error` is set instead.
     pub reason: Option<String>,
-    /// 0..1 — only meaningful when `reason == "downloading"`.
+    /// 0..1. Populated when `reason == "downloading"` (torrent
+    /// progress) or when `reason == "remuxing"` (ffmpeg's encoded
+    /// position over total duration). Null until the relevant source
+    /// has produced its first measurement.
     pub progress: Option<f64>,
     pub error: Option<String>,
 }
@@ -644,10 +648,14 @@ async fn play_status(
             }
         });
     }
+    // Surface ffmpeg's encoded-so-far / total-duration as a 0..1
+    // fraction so the loading overlay can show a real progress bar
+    // instead of an indeterminate spinner.
+    let progress = state.remuxer().progress(&key).await;
     Ok(Json(PlayStatus {
         ready: false,
         reason: Some("remuxing".into()),
-        progress: None,
+        progress,
         error: None,
     }))
 }

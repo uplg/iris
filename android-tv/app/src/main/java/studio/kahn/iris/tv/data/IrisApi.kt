@@ -211,8 +211,11 @@ data class MediaProbe(
  * `PlayStatus` shape returned by `/torrents/{ih}/files/{idx}/play/status`.
  *
  * `reason` is one of `"downloading"` | `"remuxing"` | `"preparing"` while
- * the file isn't yet ready, and `null` once `ready == true`. `progress` is
- * a 0..1 download fraction, only meaningful when `reason == "downloading"`.
+ * the file isn't yet ready, and `null` once `ready == true`. `progress`
+ * is a 0..1 fraction populated for both `"downloading"` (torrent
+ * progress) and `"remuxing"` (ffmpeg encoded position over total
+ * duration). May be null briefly while the relevant source is still
+ * publishing its first measurement.
  */
 @Serializable
 data class PlayStatus(
