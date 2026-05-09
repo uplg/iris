@@ -191,6 +191,10 @@ private fun UpdaterCard(container: AppContainer) {
         onClick = {},
         modifier = Modifier.fillMaxWidth(),
         shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
+        // Default focus scale (1.1×) is way too punchy on a full-width card —
+        // it makes the whole settings page lurch. Dial it down so focus is
+        // visible without dominating the layout.
+        scale = CardDefaults.scale(focusedScale = 1.02f),
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(

@@ -434,7 +434,7 @@ private fun PosterCard(
 
     Card(
         onClick = onClick,
-        modifier = Modifier.width(180.dp),
+        modifier = Modifier.width(140.dp),
         shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
     ) {
         Column {
