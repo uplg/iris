@@ -118,10 +118,40 @@ impl ProbeCache {
 }
 
 pub async fn probe_file(path: &Path) -> Result<MediaProbe, ProbeError> {
+    // Pre-flight: surface "file isn't on disk yet" with a recognisable
+    // message instead of letting ffprobe choke on it. The frontend's
+    // probe-retry policy keys on this exact substring to keep polling
+    // while the torrent finishes downloading.
+    match tokio::fs::metadata(path).await {
+        Ok(m) if m.len() == 0 => {
+            return Err(ProbeError::Failed(
+                -1,
+                format!("file not yet on disk (zero bytes at {})", path.display()),
+            ));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ProbeError::Failed(
+                -1,
+                format!("file not yet on disk ({})", path.display()),
+            ));
+        }
+        Err(e) => {
+            return Err(ProbeError::Failed(
+                -1,
+                format!("cannot stat {}: {e}", path.display()),
+            ));
+        }
+    }
+
     let output = tokio::process::Command::new("ffprobe")
         .args([
+            // `-v error` surfaces ffprobe's own error messages on stderr.
+            // The previous `-v quiet` swallowed them, so a failed probe
+            // returned `ffprobe failed (status 1):` with no clue what
+            // went wrong.
             "-v",
-            "quiet",
+            "error",
             "-print_format",
             "json",
             "-show_format",
@@ -132,9 +162,17 @@ pub async fn probe_file(path: &Path) -> Result<MediaProbe, ProbeError> {
         .await?;
 
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("ffprobe exited {} with no stderr (path: {})",
+                output.status.code().unwrap_or(-1),
+                path.display())
+        } else {
+            stderr
+        };
         return Err(ProbeError::Failed(
             output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr).into_owned(),
+            msg,
         ));
     }
 

@@ -68,33 +68,6 @@ export function WatchPage() {
     [data],
   );
 
-  const probeQ = useQuery({
-    queryKey: ["probe", infohash, fileIdx],
-    queryFn: () => torrents.probe(infohash!, fileIdx),
-    enabled: !!infohash && !!file,
-    retry: (failureCount, err) => {
-      const msg = err instanceof Error ? err.message : "";
-      return msg.includes("not yet on disk") && failureCount < 30;
-    },
-    retryDelay: 2000,
-  });
-
-  const probe = probeQ.data;
-  const textSubs = useMemo<SubtitleStream[]>(
-    () => probe?.subtitle.filter((s) => s.text_based) ?? [],
-    [probe],
-  );
-
-  // Saved progress (audio choice + last position) for this user/file.
-  // No `staleTime: Infinity` — we want a fresh read every time the user
-  // mounts the page (otherwise navigating away and back would replay the
-  // cached null/old value as if the user hadn't watched anything).
-  const progressQ = useQuery({
-    queryKey: ["progress", infohash, fileIdx],
-    queryFn: () => progressApi.get(infohash!, fileIdx),
-    enabled: !!infohash,
-  });
-
   // Poll the playback-prep status until the .fmp4 cache is on disk and
   // ready to be served via byte-range. The status endpoint surfaces the
   // upstream torrent download progress and the in-flight ffmpeg remux so
@@ -114,6 +87,53 @@ export function WatchPage() {
     retryDelay: 2000,
   });
   const playReady = playStatusQ.data?.ready === true;
+
+  // Gate probe on "download is finished" via playStatus, NOT on
+  // `!!file`. Two reasons:
+  //   1. `data.files` from /api/torrents can briefly be empty after a
+  //      grab (librqbit metadata race) — gating on it left users stuck
+  //      on "Preparing playback".
+  //   2. ffprobe explodes on librqbit's pre-allocated zero-filled
+  //      sparse files mid-download ("EBML header parsing failed").
+  // playStatus reports `reason="downloading"` while bytes are still
+  // arriving and flips to `"remuxing"` (or `ready: true`) the moment
+  // the file is fully on disk. That's the precise signal we want — and
+  // it lets us probe ONCE without the wasted retries that a fixed
+  // timeout would impose on slow downloads.
+  const downloadFinished =
+    playStatusQ.data != null &&
+    playStatusQ.data.reason !== "downloading" &&
+    playStatusQ.data.error == null;
+  const probeQ = useQuery({
+    queryKey: ["probe", infohash, fileIdx],
+    queryFn: () => torrents.probe(infohash!, fileIdx),
+    enabled: !!infohash && downloadFinished,
+    retry: (failureCount, err) => {
+      // Tight retry budget — by the time we even fire this query the
+      // download is already done per playStatus. The only "not yet on
+      // disk" case left is the brief window between librqbit flushing
+      // the last piece and the file being readable.
+      const msg = err instanceof Error ? err.message : "";
+      return msg.includes("not yet on disk") && failureCount < 5;
+    },
+    retryDelay: 2000,
+  });
+
+  const probe = probeQ.data;
+  const textSubs = useMemo<SubtitleStream[]>(
+    () => probe?.subtitle.filter((s) => s.text_based) ?? [],
+    [probe],
+  );
+
+  // Saved progress (audio choice + last position) for this user/file.
+  // No `staleTime: Infinity` — we want a fresh read every time the user
+  // mounts the page (otherwise navigating away and back would replay the
+  // cached null/old value as if the user hadn't watched anything).
+  const progressQ = useQuery({
+    queryKey: ["progress", infohash, fileIdx],
+    queryFn: () => progressApi.get(infohash!, fileIdx),
+    enabled: !!infohash,
+  });
 
   // All progress for this torrent (powers the "watched %" per episode in the
   // other-files panel).
@@ -708,6 +728,16 @@ function PlayerLoadingStatus({
     step = {
       label: "Reading media metadata…",
       sub: "ffprobe scanning streams (codec, audio, subtitles).",
+    };
+  } else if (probeError instanceof Error) {
+    // Probe finished with a non-disk error (e.g., ffprobe crash, bad
+    // permissions, corrupt file). Without this branch the user would
+    // sit on the "Preparing playback…" fallback indefinitely while
+    // the parent gate's `probe` check stays falsy.
+    isError = true;
+    step = {
+      label: "Playback prep failed",
+      sub: probeError.message,
     };
   } else if (progressPending) {
     step = {

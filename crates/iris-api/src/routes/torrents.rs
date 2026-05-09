@@ -561,6 +561,21 @@ async fn probe_file(
             path.display()
         )));
     }
+    // librqbit pre-allocates the full target size with zeros and fills
+    // in pieces as they arrive. So a freshly added torrent has a path
+    // that exists at full size but contains all-zero bytes — ffprobe
+    // chokes on this with "EBML header parsing failed". Gate the probe
+    // on the engine's `finished` flag so we mirror what `play_status`
+    // already does, and return a "not yet on disk" message so the
+    // frontend's retry loop keeps polling.
+    if let Some(snap) = state.engine().get_by_infohash(&infohash) {
+        if !snap.finished {
+            return Err(ApiError::BadRequest(format!(
+                "file not yet on disk: download in progress ({:.0}%)",
+                snap.progress_pct
+            )));
+        }
+    }
     let probe = state
         .probes()
         .get_or_probe(&infohash, idx, &path)
