@@ -21,6 +21,12 @@ struct Inner {
     api_key: String,
     http: reqwest::Client,
     cache: RwLock<HashMap<u64, CacheEntry>>,
+    /// Separate cache for season episode lists, keyed by `(tmdb_id, season_number)`.
+    /// TMDB rarely retroactively edits aired episodes, so caching forever is fine —
+    /// the only mutation we'd miss is air-date corrections on unaired episodes,
+    /// and the notify scheduler bursts a fresh request anyway when it finds a
+    /// new episode (cache only matters for repeat reads within a single uptime).
+    seasons: RwLock<HashMap<(u64, u32), Vec<EpisodeMetadata>>>,
 }
 
 #[derive(Clone)]
@@ -34,6 +40,30 @@ enum CacheEntry {
 pub enum TmdbKind {
     Movie,
     Tv,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TmdbSuggestion {
+    pub kind: TmdbKind,
+    pub tmdb_id: u64,
+    pub title: String,
+    pub year: Option<u32>,
+    pub overview: Option<String>,
+    pub poster_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EpisodeMetadata {
+    pub season: u32,
+    pub episode: u32,
+    pub name: Option<String>,
+    pub overview: Option<String>,
+    /// `YYYY-MM-DD` per TMDB. Kept as a string — callers rarely need a real
+    /// `Date` and the only branching we do is "in the past?" which is a
+    /// trivial lex-compare against today.
+    pub air_date: Option<String>,
+    pub runtime_minutes: Option<u32>,
+    pub still_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +86,10 @@ pub struct MediaMetadata {
     /// can drift wildly from the actual file's duration so callers do
     /// the verification themselves.
     pub runtime_minutes: Option<u32>,
+    /// TV shows only — total seasons published. Used at follow time to
+    /// snapshot how many seasons we expect, so the Series page can pre-
+    /// render season tabs without waiting on a fresh TMDB lookup.
+    pub number_of_seasons: Option<u32>,
 }
 
 impl TmdbClient {
@@ -68,8 +102,130 @@ impl TmdbClient {
                 api_key,
                 http,
                 cache: RwLock::new(HashMap::new()),
+                seasons: RwLock::new(HashMap::new()),
             }),
         })
+    }
+
+    /// Multi-search across movies + TV shows. Powers the search-page
+    /// typeahead — the user types a few characters, we surface "did you
+    /// mean X (2024)" suggestions tied to a TMDB id so a click runs an
+    /// indexer search with the cleaned title (and optionally remembers
+    /// the tmdb id for the eventual ingest). People results filtered out.
+    /// NOT cached — the typeahead is short-lived and `TanStack` Query
+    /// already debounces / caches client-side.
+    pub async fn multi_search(&self, query: &str) -> Vec<TmdbSuggestion> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        let res = match self
+            .inner
+            .http
+            .get("https://api.themoviedb.org/3/search/multi")
+            .query(&[
+                ("api_key", self.inner.api_key.as_str()),
+                ("query", query),
+                ("include_adult", "false"),
+                ("page", "1"),
+            ])
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, query, "tmdb multi-search failed");
+                return Vec::new();
+            }
+        };
+        if !res.status().is_success() {
+            return Vec::new();
+        }
+        let raw: TmdbMultiRaw = match res.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, query, "tmdb multi-search parse failed");
+                return Vec::new();
+            }
+        };
+        raw.results
+            .into_iter()
+            .filter_map(|r| {
+                let kind = match r.media_type.as_deref() {
+                    Some("movie") => TmdbKind::Movie,
+                    Some("tv") => TmdbKind::Tv,
+                    _ => return None, // skip people + unknowns
+                };
+                let title = r.title.or(r.name)?;
+                let date = r.release_date.or(r.first_air_date);
+                let year = date
+                    .as_deref()
+                    .and_then(|d| d.split('-').next())
+                    .and_then(|y| y.parse().ok());
+                Some(TmdbSuggestion {
+                    kind,
+                    tmdb_id: r.id,
+                    title,
+                    year,
+                    overview: r.overview.filter(|s| !s.is_empty()),
+                    poster_path: r.poster_path,
+                })
+            })
+            .take(10)
+            .collect()
+    }
+
+    /// List the episodes TMDB has on file for a given TV season. Used by the
+    /// notify scheduler to know what episodes to expect (and by the Series
+    /// detail page to render the season layout). Returns an empty Vec on
+    /// any error or for invalid `(tmdb_id, season)` combos — the caller can't
+    /// usefully distinguish "doesn't exist" from "TMDB is down" and treats
+    /// both as "no expected episodes right now".
+    pub async fn tv_season_episodes(
+        &self,
+        tmdb_id: u64,
+        season: u32,
+    ) -> Vec<EpisodeMetadata> {
+        let key = (tmdb_id, season);
+        if let Some(hit) = self.inner.seasons.read().await.get(&key).cloned() {
+            return hit;
+        }
+        let url = format!(
+            "https://api.themoviedb.org/3/tv/{tmdb_id}/season/{season}?api_key={}",
+            self.inner.api_key
+        );
+        let res = match self.inner.http.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, tmdb_id, season, "tmdb season fetch failed");
+                return Vec::new();
+            }
+        };
+        if !res.status().is_success() {
+            return Vec::new();
+        }
+        let raw: TmdbSeasonRaw = match res.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, tmdb_id, season, "tmdb season parse failed");
+                return Vec::new();
+            }
+        };
+        let episodes: Vec<EpisodeMetadata> = raw
+            .episodes
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| EpisodeMetadata {
+                season: e.season_number.unwrap_or(season),
+                episode: e.episode_number,
+                name: e.name.filter(|s| !s.is_empty()),
+                overview: e.overview.filter(|s| !s.is_empty()),
+                air_date: e.air_date.filter(|s| !s.is_empty()),
+                runtime_minutes: e.runtime,
+                still_path: e.still_path,
+            })
+            .collect();
+        self.inner.seasons.write().await.insert(key, episodes.clone());
+        episodes
     }
 
     /// Look up `tmdb_id` as a movie, then as a TV show. Cached.
@@ -156,6 +312,7 @@ impl TmdbClient {
             vote_count: raw.vote_count,
             genres,
             runtime_minutes,
+            number_of_seasons: raw.number_of_seasons,
         })
     }
 }
@@ -176,11 +333,47 @@ struct TmdbRaw {
     runtime: Option<u32>,
     /// TV shows only — array of typical episode durations (minutes).
     episode_run_time: Option<Vec<u32>>,
+    /// TV shows only.
+    number_of_seasons: Option<u32>,
 }
 
 #[derive(Deserialize)]
 struct TmdbGenre {
     name: String,
+}
+
+#[derive(Deserialize)]
+struct TmdbMultiRaw {
+    #[serde(default)]
+    results: Vec<TmdbMultiResult>,
+}
+
+#[derive(Deserialize)]
+struct TmdbMultiResult {
+    id: u64,
+    media_type: Option<String>,
+    title: Option<String>,        // movies
+    name: Option<String>,         // tv
+    release_date: Option<String>, // movies
+    first_air_date: Option<String>, // tv
+    overview: Option<String>,
+    poster_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TmdbSeasonRaw {
+    episodes: Option<Vec<TmdbEpisodeRaw>>,
+}
+
+#[derive(Deserialize)]
+struct TmdbEpisodeRaw {
+    episode_number: u32,
+    season_number: Option<u32>,
+    name: Option<String>,
+    overview: Option<String>,
+    air_date: Option<String>,
+    runtime: Option<u32>,
+    still_path: Option<String>,
 }
 
 impl std::fmt::Debug for TmdbKind {

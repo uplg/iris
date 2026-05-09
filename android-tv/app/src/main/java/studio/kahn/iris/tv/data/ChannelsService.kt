@@ -4,6 +4,7 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.core.net.toUri
 import androidx.tvprovider.media.tv.Channel
 import androidx.tvprovider.media.tv.PreviewProgram
 import androidx.tvprovider.media.tv.TvContractCompat
@@ -93,6 +94,7 @@ class ChannelsService(private val context: Context) {
      * appear on the home — `requestChannelBrowsable` opens the system prompt
      * the first time. Subsequent syncs are no-ops.
      */
+    @android.annotation.SuppressLint("RestrictedApi")
     private fun ensureChannel(): Long {
         val resolver = context.contentResolver
         resolver.query(
@@ -111,7 +113,7 @@ class ChannelsService(private val context: Context) {
         val channel = Channel.Builder()
             .setType(TvContractCompat.Channels.TYPE_PREVIEW)
             .setDisplayName("Iris")
-            .setAppLinkIntentUri(Uri.parse("iris://home"))
+            .setAppLinkIntentUri("iris://home".toUri())
             .build()
         val uri = resolver.insert(
             TvContractCompat.Channels.CONTENT_URI,
@@ -127,6 +129,12 @@ class ChannelsService(private val context: Context) {
         runCatching { context.contentResolver.delete(uri, null, null) }
     }
 
+    // Lint flags `PreviewProgram.Builder` setters as RestrictedApi because
+    // they live in a `@RestrictTo(LIBRARY_GROUP)`-annotated class, but the
+    // Android TV docs explicitly tell apps to use this builder pattern —
+    // there's no public alternative. The runtime call works fine, only
+    // the static analyser is wrong.
+    @android.annotation.SuppressLint("RestrictedApi")
     private fun insertProgram(
         channelId: Long,
         title: String,
@@ -136,7 +144,7 @@ class ChannelsService(private val context: Context) {
         weight: Int,
         type: Int,
     ) {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(deepLink)).apply {
+        val intent = Intent(Intent.ACTION_VIEW, deepLink.toUri()).apply {
             setPackage(context.packageName)
             setClass(context, MainActivity::class.java)
         }
@@ -145,10 +153,10 @@ class ChannelsService(private val context: Context) {
             .setChannelId(channelId)
             .setType(type)
             .setTitle(title)
-            .setIntentUri(Uri.parse(intentUri))
+            .setIntentUri(intentUri.toUri())
             .setWeight(weight)
         description?.let { builder.setDescription(it.take(160)) }
-        posterUri?.let { builder.setPosterArtUri(Uri.parse(it)) }
+        posterUri?.let { builder.setPosterArtUri(it.toUri()) }
         runCatching {
             context.contentResolver.insert(
                 TvContractCompat.PreviewPrograms.CONTENT_URI,

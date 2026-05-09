@@ -13,7 +13,11 @@ mod util;
 
 use async_trait::async_trait;
 use iris_core::Result;
-use iris_core::search::{ProviderCapabilities, ProviderPage, SearchQuery, TorrentSource};
+use iris_core::search::{
+    ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, TorrentDetails, TorrentSource,
+};
+
+pub mod nfo;
 
 #[async_trait]
 pub trait SearchProvider: Send + Sync {
@@ -21,6 +25,25 @@ pub trait SearchProvider: Send + Sync {
     fn capabilities(&self) -> ProviderCapabilities;
     async fn search(&self, q: &SearchQuery) -> Result<ProviderPage>;
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource>;
+
+    /// Curated/featured carousel for the discovery shelves. Default is
+    /// empty — providers without a "featured" concept simply contribute
+    /// nothing. Implementations are encouraged to cache (the discovery
+    /// home will hit this on every page load).
+    async fn featured_movies(&self) -> Result<Vec<SearchResult>> {
+        Ok(Vec::new())
+    }
+    async fn featured_series(&self) -> Result<Vec<SearchResult>> {
+        Ok(Vec::new())
+    }
+
+    /// Rich detail view for one torrent (description / NFO / parsed
+    /// `MediaInfo` / uploader / etc.) — what powers the search-result
+    /// preview dialog. Default `None` means "this provider doesn't expose
+    /// a details endpoint"; the UI falls back to the basic `SearchResult`.
+    async fn details(&self, _external_id: &str) -> Result<Option<TorrentDetails>> {
+        Ok(None)
+    }
 }
 
 pub use registry::ProviderRegistry;

@@ -243,10 +243,93 @@ export type TmdbMetadata = {
   vote_score: number | null;
   vote_count: number | null;
   genres: string[];
+  /** Movies only: TMDB `runtime` minutes. TV: typical episode runtime. */
+  runtime_minutes: number | null;
+  /** TV only — total seasons published. NULL for movies. */
+  number_of_seasons: number | null;
+};
+
+export type TmdbSuggestion = {
+  kind: MediaKind;
+  tmdb_id: number;
+  title: string;
+  year: number | null;
+  overview: string | null;
+  poster_path: string | null;
 };
 
 export const metadata = {
   tmdb: (id: number) => api.get<TmdbMetadata>(`/metadata/tmdb/${id}`),
+  /** Typeahead: TMDB multi-search proxied through the backend. Empty
+   *  array on missing config / network failure (best-effort). */
+  tmdbSearch: (q: string) =>
+    api.get<TmdbSuggestion[]>(`/metadata/tmdb/search?q=${encodeURIComponent(q)}`),
+};
+
+// ---------------------------------------------------------------------------
+// Torrent details (search result preview)
+// ---------------------------------------------------------------------------
+
+export type AudioInfo = {
+  lang: string | null;
+  codec: string | null;
+  channels: number | null;
+  bitrate_kbps: number | null;
+  title: string | null;
+  default: boolean;
+  commercial_name: string | null;
+};
+
+export type SubInfo = {
+  lang: string | null;
+  format: string | null;
+  title: string | null;
+  default: boolean;
+  forced: boolean;
+};
+
+export type VideoInfo = {
+  codec: string | null;
+  resolution: string | null;
+  duration_secs: number | null;
+  fps: number | null;
+  bitrate_kbps: number | null;
+  hdr: string | null;
+};
+
+export type MediaInfoSummary = {
+  video: VideoInfo | null;
+  audio: AudioInfo[];
+  subtitles: SubInfo[];
+};
+
+export type TorrentDetails = {
+  provider_id: string;
+  external_id: string;
+  title: string;
+  description: string | null;
+  nfo: string | null;
+  media_info: MediaInfoSummary | null;
+  tags: string[];
+  category: string | null;
+  uploader: string | null;
+  uploaded_at: string | null;
+  age: string | null;
+  seeders: number | null;
+  leechers: number | null;
+  times_completed: number | null;
+  views: number | null;
+  freeleech: boolean;
+  exclusive: boolean;
+  file_count: number | null;
+  file_size_bytes: number | null;
+};
+
+export const searchDetails = {
+  get: (provider_id: string, external_id: string) =>
+    api.get<TorrentDetails>(
+      `/search/details?provider=${encodeURIComponent(provider_id)}&id=${encodeURIComponent(external_id)}`,
+    ),
 };
 
 /** Build a TMDB image URL. Sizes: w92, w154, w185, w342, w500, original. */
@@ -470,4 +553,148 @@ export type SubtitleStream = {
   default: boolean;
   forced: boolean;
   text_based: boolean;
+};
+
+// ---------------------------------------------------------------------------
+// Discovery: featured carousels (torr9 /featured/{movies,series}, etc.)
+// ---------------------------------------------------------------------------
+
+export type FeaturedResponse = {
+  movies: SearchResult[];
+  series: SearchResult[];
+};
+
+export const discover = {
+  featured: () => api.get<FeaturedResponse>("/discover/featured"),
+};
+
+// ---------------------------------------------------------------------------
+// Library — collections (default) or raw torrents (toggle)
+// ---------------------------------------------------------------------------
+
+export type CollectionListItem = {
+  id: string;
+  tmdb_id: number | null;
+  display_title: string;
+  kind: "tv" | "movie";
+  torrent_count: number;
+  total_size_bytes: number;
+  episode_count: number;
+  representative_infohash: string | null;
+};
+
+export type LibraryResponse =
+  | { view: "collections"; items: CollectionListItem[] }
+  | { view: "torrents"; items: TorrentView[] };
+
+export type CollectionEpisodeEntry = {
+  season: number;
+  episode: number;
+  infohash: string;
+  file_idx: number;
+  watched: boolean;
+};
+
+export type CollectionDetail = {
+  id: string;
+  tmdb_id: number | null;
+  display_title: string;
+  kind: "tv" | "movie";
+  torrents: TorrentView[];
+  episodes: CollectionEpisodeEntry[];
+};
+
+export const library = {
+  list: (view: "collections" | "torrents" = "collections") =>
+    api.get<LibraryResponse>(`/library?view=${view}`),
+  collection: (id: string) => api.get<CollectionDetail>(`/library/collections/${id}`),
+};
+
+// ---------------------------------------------------------------------------
+// Series follows (Watchlist + Series detail page)
+// ---------------------------------------------------------------------------
+
+export type FollowSummary = {
+  tmdb_id: number;
+  name: string;
+  total_seasons: number | null;
+  poster_path: string | null;
+  backdrop_path: string | null;
+  /** Number of episodes the notify scheduler has surfaced as available
+   *  since the user last opened the series page. Drives the "X nouveaux"
+   *  badge on Watchlist cards. */
+  new_count: number;
+  last_visited_at: string | null;
+  created_at: string;
+};
+
+export type EpisodeStatus = "downloaded" | "available" | "unavailable";
+
+export type EpisodeItem = {
+  season: number;
+  episode: number;
+  name: string | null;
+  overview: string | null;
+  air_date: string | null;
+  still_path: string | null;
+  runtime_minutes: number | null;
+  status: EpisodeStatus;
+  /** Per-user `playback_progress.completed` for the underlying file
+   *  (only meaningful when status === "downloaded"). */
+  watched: boolean;
+  /** Set when status === "downloaded": where to play. */
+  infohash: string | null;
+  file_idx: number | null;
+  /** Set when status === "available": ready for the on-demand grab
+   *  endpoint (Phase 4). */
+  indexer_provider: string | null;
+  indexer_torrent_id: string | null;
+};
+
+export type EpisodesResponse = {
+  season: number;
+  total_seasons: number | null;
+  items: EpisodeItem[];
+};
+
+export type EpisodePoint = {
+  tmdb_id: number;
+  season: number;
+  episode: number;
+  status: EpisodeStatus;
+};
+
+export type EpisodeContext = {
+  followed: boolean;
+  current: EpisodePoint | null;
+  next: EpisodePoint | null;
+};
+
+export type GrabEpisodeResponse = {
+  infohash: string;
+  file_idx: number;
+  /** True when the episode was already in the library — the call short-
+   *  circuited through the idempotent path and didn't trigger a fresh
+   *  ingest. */
+  already_grabbed: boolean;
+};
+
+export const follows = {
+  list: () => api.get<FollowSummary[]>("/me/follows"),
+  add: (tmdb_id: number, name?: string, total_seasons?: number) =>
+    api.post<FollowSummary>("/me/follows", { tmdb_id, name, total_seasons }),
+  remove: (tmdb_id: number) => api.delete<void>(`/me/follows/${tmdb_id}`),
+  episodes: (tmdb_id: number, season: number = 1) =>
+    api.get<EpisodesResponse>(`/me/follows/${tmdb_id}/episodes?season=${season}`),
+  grabEpisode: (tmdb_id: number, season: number, episode: number) =>
+    api.post<GrabEpisodeResponse>(
+      `/me/follows/${tmdb_id}/episodes/${season}/${episode}/grab`,
+    ),
+  /** Fetch context for the file currently playing — drives the
+   *  "Préparer le suivant ?" modal at episode end. Returns nulls when
+   *  the file isn't a TV episode or the user doesn't follow the show. */
+  episodeContext: (infohash: string, file_idx: number) =>
+    api.get<EpisodeContext>(
+      `/me/follows/episode-context?infohash=${encodeURIComponent(infohash)}&file_idx=${file_idx}`,
+    ),
 };

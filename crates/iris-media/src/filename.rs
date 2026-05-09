@@ -1,0 +1,348 @@
+//! SCENE-style filename parser.
+//!
+//! Releases on private trackers (and most public ones) follow a tight
+//! convention:
+//!
+//! ```text
+//! Show.Name.S01E02.1080p.WEB-DL.x264-GROUP.mkv
+//! Show.Name.2024.1080p.BluRay.x265-GROUP.mkv
+//! ```
+//!
+//! Parsing this lets us derive `(series_title, season, episode)` for
+//! TV files even when the indexer didn't set `tmdb_id`, and group
+//! single-episode torrents into one library entry per show.
+//!
+//! Anime patterns (`[GROUP] Show Name - 02 [1080p]`) are NOT yet
+//! supported — not bad for an MVP since most anime releases come
+//! season-packed and don't trigger the multi-torrent-grouping path
+//! anyway. Add support when a real-world case demands it.
+
+/// Parsed pieces of a SCENE-style filename. Only `title` is required;
+/// `season`/`episode` are present for TV releases, absent for movies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Parsed {
+    pub title: String,
+    pub year: Option<u16>,
+    /// Set for TV releases. When `season.is_some()`, `episode` is also
+    /// set; the parser never produces one without the other.
+    pub season: Option<u32>,
+    pub episode: Option<u32>,
+    pub quality: Option<String>,
+    pub source: Option<String>,
+    pub group: Option<String>,
+}
+
+impl Parsed {
+    pub fn is_tv(&self) -> bool {
+        self.season.is_some()
+    }
+
+    pub fn is_movie(&self) -> bool {
+        !self.is_tv()
+    }
+
+    /// Lowercased, whitespace-collapsed, punctuation-stripped form of
+    /// the title. Used as the dedup key for SCENE-grouped collections
+    /// (the `parsed_title_normalized` column in the `collections`
+    /// table). Same input from different release groups normalises to
+    /// the same string so they all land in one collection.
+    pub fn normalized_key(&self) -> String {
+        normalize_title(&self.title)
+    }
+}
+
+/// `Show.Name.S01E02.1080p...` → `"show name"` (lowercased, no
+/// punctuation, single spaces).
+pub fn normalize_title(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_was_space = true;
+    for c in s.chars() {
+        if c.is_alphanumeric() {
+            for low in c.to_lowercase() {
+                out.push(low);
+            }
+            last_was_space = false;
+        } else if !last_was_space {
+            out.push(' ');
+            last_was_space = true;
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Parse a SCENE-style filename. Returns `None` only if there's nothing
+/// recognisable — even a bare title produces a `Parsed { title, .. }`
+/// with everything else null.
+pub fn parse(filename: &str) -> Option<Parsed> {
+    let stem = filename
+        .rsplit_once('.')
+        .map_or(filename, |(s, _ext)| s);
+    if stem.trim().is_empty() {
+        return None;
+    }
+
+    // Find the structural boundary that separates the title from the
+    // metadata tail. Priority: SXXEXX > year > quality > end-of-stem.
+    let (title_end_byte, season, episode, year) = find_title_boundary(stem);
+    let title_part = &stem[..title_end_byte];
+    let title = humanise(title_part);
+    if title.is_empty() {
+        return None;
+    }
+
+    let quality = find_quality(stem);
+    let source = find_source(stem);
+    let group = find_group(stem);
+
+    Some(Parsed {
+        title,
+        year,
+        season,
+        episode,
+        quality,
+        source,
+        group,
+    })
+}
+
+/// Locate the byte index in `stem` where the title ends. Priority:
+///   1. SXXEXX marker — TV release; everything before it is the title.
+///   2. 4-digit year (1900–2099) at a word boundary — movie release.
+///   3. Quality tag (1080p / 720p / 2160p) — fallback when no year.
+///   4. End of stem — bare title with no metadata tags.
+///
+/// Returns `(title_end_byte, season, episode, year)`. `season`/`episode`
+/// are populated only when the SE marker matched; `year` only when the
+/// year boundary won (i.e., no SE marker, real year present).
+fn find_title_boundary(stem: &str) -> (usize, Option<u32>, Option<u32>, Option<u16>) {
+    if let Some(se) = find_se_marker(stem) {
+        return (se.title_end, Some(se.season), Some(se.episode), None);
+    }
+    if let Some(yr) = find_year_boundary(stem) {
+        return (yr.title_end, None, None, Some(yr.year));
+    }
+    if let Some(q_idx) = find_quality_index(stem) {
+        return (
+            stem[..q_idx]
+                .trim_end_matches(['.', '_', ' ', '-'])
+                .len(),
+            None,
+            None,
+            None,
+        );
+    }
+    (stem.len(), None, None, None)
+}
+
+struct SeMatch {
+    title_end: usize,
+    season: u32,
+    episode: u32,
+}
+
+fn find_se_marker(stem: &str) -> Option<SeMatch> {
+    let bytes = stem.as_bytes();
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if bytes[i] == b'S' || bytes[i] == b's' {
+            let mut j = i + 1;
+            let mut s_digits = 0;
+            while j < bytes.len() && bytes[j].is_ascii_digit() && s_digits < 4 {
+                j += 1;
+                s_digits += 1;
+            }
+            if s_digits > 0
+                && j < bytes.len()
+                && (bytes[j] == b'E' || bytes[j] == b'e')
+            {
+                let s_end = j;
+                let mut k = j + 1;
+                let mut e_digits = 0;
+                while k < bytes.len() && bytes[k].is_ascii_digit() && e_digits < 4 {
+                    k += 1;
+                    e_digits += 1;
+                }
+                if e_digits > 0 {
+                    if let (Ok(s), Ok(e)) = (
+                        stem[i + 1..s_end].parse::<u32>(),
+                        stem[j + 1..k].parse::<u32>(),
+                    ) {
+                        let title_end = stem[..i]
+                            .trim_end_matches(['.', '_', ' ', '-'])
+                            .len();
+                        return Some(SeMatch {
+                            title_end,
+                            season: s,
+                            episode: e,
+                        });
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+struct YearMatch {
+    title_end: usize,
+    year: u16,
+}
+
+fn find_year_boundary(stem: &str) -> Option<YearMatch> {
+    let bytes = stem.as_bytes();
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if bytes[i..i + 4].iter().all(u8::is_ascii_digit) {
+            let prev_ok = i == 0 || !bytes[i - 1].is_ascii_digit();
+            let next_ok = i + 4 == bytes.len() || !bytes[i + 4].is_ascii_digit();
+            if prev_ok && next_ok {
+                if let Ok(y) = std::str::from_utf8(&bytes[i..i + 4]).unwrap().parse::<u16>() {
+                    if (1900..=2099).contains(&y) {
+                        // Skip leading-position years (e.g., "2024.Show.Name" —
+                        // unlikely, but the year shouldn't eat the title).
+                        if i > 0 {
+                            let title_end = stem[..i]
+                                .trim_end_matches(['.', '_', ' ', '-', '('])
+                                .len();
+                            return Some(YearMatch {
+                                title_end,
+                                year: y,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn find_quality_index(stem: &str) -> Option<usize> {
+    for q in ["2160p", "1080p", "720p", "480p"] {
+        if let Some(idx) = stem.find(q) {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+/// Replace `.`/`_` with spaces, collapse runs of whitespace, trim.
+fn humanise(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_space = true;
+    for c in s.chars() {
+        let is_sep = matches!(c, '.' | '_' | '\t');
+        let is_space = c.is_whitespace() || is_sep;
+        if is_space {
+            if !last_space {
+                out.push(' ');
+                last_space = true;
+            }
+        } else {
+            out.push(c);
+            last_space = false;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn find_quality(s: &str) -> Option<String> {
+    for q in ["2160p", "1080p", "720p", "480p"] {
+        if s.contains(q) {
+            return Some(q.to_string());
+        }
+    }
+    None
+}
+
+fn find_source(s: &str) -> Option<String> {
+    // Order matters — match longer / more specific tags first so
+    // "WEB-DL" doesn't get caught by a "WEB" check.
+    for src in ["WEB-DL", "WEBRip", "BluRay", "BDRip", "HDTV", "DVDRip", "WEB"] {
+        if s.contains(src) {
+            return Some(src.to_string());
+        }
+    }
+    None
+}
+
+fn find_group(stem: &str) -> Option<String> {
+    // Convention: trailing `-GROUP` after the last `-`, group is alnum.
+    // E.g., `Show.S01E02.1080p.WEB-DL.x264-BULiTT` → `BULiTT`.
+    let last = stem.rsplit('-').next()?;
+    if last.is_empty() || last.len() > 30 {
+        return None;
+    }
+    if last.chars().all(|c| c.is_ascii_alphanumeric()) {
+        Some(last.to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_tv_release() {
+        let p = parse("Squid.Game.S02E03.1080p.NF.WEB-DL.DDP5.1.x264-BULiTT.mkv").unwrap();
+        assert_eq!(p.title, "Squid Game");
+        assert_eq!(p.season, Some(2));
+        assert_eq!(p.episode, Some(3));
+        assert_eq!(p.quality.as_deref(), Some("1080p"));
+        assert_eq!(p.source.as_deref(), Some("WEB-DL"));
+        assert_eq!(p.group.as_deref(), Some("BULiTT"));
+        assert_eq!(p.year, None);
+        assert!(p.is_tv());
+    }
+
+    #[test]
+    fn parses_movie_release() {
+        let p = parse("My.Dearest.Assassin.2026.MULTi.1080p.WEB.H265-BULiTT.mkv").unwrap();
+        assert_eq!(p.title, "My Dearest Assassin");
+        assert_eq!(p.year, Some(2026));
+        assert_eq!(p.season, None);
+        assert_eq!(p.episode, None);
+        assert_eq!(p.quality.as_deref(), Some("1080p"));
+        assert_eq!(p.source.as_deref(), Some("WEB"));
+        assert_eq!(p.group.as_deref(), Some("BULiTT"));
+        assert!(p.is_movie());
+    }
+
+    #[test]
+    fn handles_short_marker() {
+        // Some releases skip the leading zero — `S1E2` instead of `S01E02`.
+        let p = parse("Show.Name.S1E2.720p.HDTV.mkv").unwrap();
+        assert_eq!(p.title, "Show Name");
+        assert_eq!(p.season, Some(1));
+        assert_eq!(p.episode, Some(2));
+    }
+
+    #[test]
+    fn normalised_key_dedups_release_variants() {
+        let a = parse("Squid.Game.S02E03.1080p.NF.WEB-DL.x264-BULiTT.mkv").unwrap();
+        let b = parse("Squid_Game_S02E04_2160p_NF_WEB-DL_x265-OTHER.mkv").unwrap();
+        assert_eq!(a.normalized_key(), b.normalized_key());
+        assert_eq!(a.normalized_key(), "squid game");
+    }
+
+    #[test]
+    fn returns_none_on_empty_filename() {
+        assert!(parse("").is_none());
+        assert!(parse(".mkv").is_none());
+    }
+
+    #[test]
+    fn handles_no_se_marker_as_movie() {
+        // A bare title without SXXEXX or year shouldn't crash; we just
+        // get a Parsed with mostly nulls.
+        let p = parse("Some.Random.File.mkv").unwrap();
+        assert_eq!(p.title, "Some Random File");
+        assert_eq!(p.season, None);
+        assert_eq!(p.year, None);
+        assert!(p.is_movie());
+    }
+}

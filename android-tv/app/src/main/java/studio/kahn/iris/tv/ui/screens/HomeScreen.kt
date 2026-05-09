@@ -43,8 +43,13 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
+import studio.kahn.iris.tv.data.FeaturedResponse
+import studio.kahn.iris.tv.data.FollowSummary
 import studio.kahn.iris.tv.data.IrisApi
+import studio.kahn.iris.tv.data.LibraryResponse
+import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.TmdbMetadata
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
@@ -63,7 +68,13 @@ fun HomeScreen(
     onPickTorrent: (infohash: String) -> Unit,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenSearch: () -> Unit,
+    /** Open the search screen. When `query` is non-null the search runs
+     *  immediately with that string pre-filled — used by Featured Movies
+     *  cards (which don't have a dedicated detail page yet). */
+    onOpenSearch: (query: String?) -> Unit,
+    /** Open the SeriesScreen for a TV show. Used by Watchlist cards and
+     *  by Featured Series cards (TMDB id available, no torrent yet). */
+    onOpenSeries: (tmdbId: Long) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var continueWatching by remember { mutableStateOf<List<ContinueWatchingItem>>(emptyList()) }
@@ -72,6 +83,9 @@ fun HomeScreen(
     // those cards stay frozen and skip recomposition entirely.
     var downloading by remember { mutableStateOf<List<TorrentView>>(emptyList()) }
     var library by remember { mutableStateOf<List<TorrentView>>(emptyList()) }
+    var watchlist by remember { mutableStateOf<List<FollowSummary>>(emptyList()) }
+    var featured by remember { mutableStateOf<FeaturedResponse?>(null) }
+    var collections by remember { mutableStateOf<List<CollectionListItem>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var loadVersion by remember { mutableIntStateOf(0) }
@@ -89,16 +103,38 @@ fun HomeScreen(
             val api: IrisApi = container.apiFor(url)
             // Both calls + the JSON parse run on Dispatchers.IO so the main
             // thread stays free to render the UI even on a slow tunnel.
-            val (cw, tor) = withContext(Dispatchers.IO) {
-                val cwResult = runCatching { api.continueWatching() }
-                val torResult = runCatching { api.listTorrents() }
-                cwResult to torResult
+            data class HomeFetch(
+                val cw: Result<List<ContinueWatchingItem>>,
+                val tor: Result<List<TorrentView>>,
+                val follows: Result<List<FollowSummary>>,
+                val featured: Result<FeaturedResponse>,
+                val collections: Result<LibraryResponse>,
+            )
+            val fetch = withContext(Dispatchers.IO) {
+                // Discovery / watchlist / library failures shouldn't
+                // break the rest of the home — surface as empty
+                // shelves, not as the global error banner.
+                HomeFetch(
+                    cw = runCatching { api.continueWatching() },
+                    tor = runCatching { api.listTorrents() },
+                    follows = runCatching { api.listFollows() },
+                    featured = runCatching { api.discoverFeatured() },
+                    collections = runCatching { api.library("collections") },
+                )
             }
+            val cw = fetch.cw
+            val tor = fetch.tor
+            val follows = fetch.follows
+            val feat = fetch.featured
+            val coll = fetch.collections
             continueWatching = cw.getOrDefault(emptyList())
             val fresh = tor.getOrDefault(emptyList())
             val (newDl, newLib) = splitTorrents(fresh)
             downloading = newDl
             library = newLib
+            watchlist = follows.getOrDefault(emptyList())
+            featured = feat.getOrNull()
+            collections = (coll.getOrNull() as? LibraryResponse.Collections)?.items.orEmpty()
             val fail = listOfNotNull(cw.exceptionOrNull(), tor.exceptionOrNull()).firstOrNull()
             if (fail != null && fresh.isEmpty() && continueWatching.isEmpty()) {
                 error = fail.message ?: "Failed to load library"
@@ -164,7 +200,7 @@ fun HomeScreen(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(
-                    onClick = onOpenSearch,
+                    onClick = { onOpenSearch(null) },
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                     contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
                 ) { Text("🔍  Search") }
@@ -212,6 +248,57 @@ fun HomeScreen(
             }
         }
 
+        if (watchlist.isNotEmpty()) {
+            Shelf(title = "Ma Watchlist · ${watchlist.size}") {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    items(watchlist, key = { it.tmdbId }) { f ->
+                        WatchlistCard(
+                            container = container,
+                            follow = f,
+                            onClick = { onOpenSeries(f.tmdbId) },
+                        )
+                    }
+                }
+            }
+        }
+
+        featured?.let { f ->
+            if (f.movies.isNotEmpty()) {
+                Shelf(title = "Sorties Ciné · ${f.movies.size}") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(f.movies, key = { "${it.providerId}:${it.externalId}" }) { r ->
+                            FeaturedCard(
+                                container = container,
+                                result = r,
+                                onClick = { onOpenSearch(r.title) },
+                            )
+                        }
+                    }
+                }
+            }
+            if (f.series.isNotEmpty()) {
+                Shelf(title = "Sorties Séries · ${f.series.size}") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(f.series, key = { "${it.providerId}:${it.externalId}" }) { r ->
+                            FeaturedCard(
+                                container = container,
+                                result = r,
+                                // TV shows with a TMDB id route straight
+                                // to the series page (Follow + episode
+                                // browse). Anything without falls back
+                                // to a pre-filled search.
+                                onClick = {
+                                    val tid = r.tmdbId
+                                    if (tid != null) onOpenSeries(tid)
+                                    else onOpenSearch(r.title)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         if (downloading.isNotEmpty()) {
             Shelf(title = "Downloading · ${downloading.size}") {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -226,14 +313,35 @@ fun HomeScreen(
             }
         }
 
-        if (library.isNotEmpty()) {
-            Shelf(title = "Library · ${library.size}") {
+        if (collections.isNotEmpty()) {
+            Shelf(title = "Bibliothèque · ${collections.size}") {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    items(library, key = { it.infohash }) { t ->
-                        TorrentCard(
+                    items(collections, key = { it.id }) { c ->
+                        CollectionCard(
                             container = container,
-                            torrent = t,
-                            onClick = { routeTorrent(t, onPickFile, onPickTorrent) },
+                            collection = c,
+                            onClick = {
+                                // Routing: TV with TMDB → Series page,
+                                // movie / fallback → /watch on the
+                                // representative torrent's first file.
+                                // (Picking the right file index is handled
+                                // by routeTorrent on the snapshot lookup.)
+                                if (c.kind == "tv" && c.tmdbId != null) {
+                                    onOpenSeries(c.tmdbId)
+                                } else if (c.representativeInfohash != null) {
+                                    val snap = library.firstOrNull {
+                                        it.infohash == c.representativeInfohash
+                                    }
+                                    if (snap != null) {
+                                        routeTorrent(snap, onPickFile, onPickTorrent)
+                                    } else {
+                                        // Engine snapshot not loaded yet —
+                                        // fall back to the detail screen
+                                        // which polls for it.
+                                        onPickTorrent(c.representativeInfohash)
+                                    }
+                                }
+                            },
                         )
                     }
                 }
@@ -323,6 +431,125 @@ private fun ContinueWatchingCard(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
+private fun WatchlistCard(
+    container: AppContainer,
+    follow: FollowSummary,
+    onClick: () -> Unit,
+) {
+    val subtitle = follow.totalSeasons?.let {
+        "$it saison${if (it > 1) "s" else ""}"
+    } ?: "Suivi"
+    PosterCard(
+        container = container,
+        tmdbId = follow.tmdbId,
+        // FollowSummary's poster_path comes from the same TMDB lookup the
+        // server already did at follow time — bypass the per-card metadata
+        // round-trip and pass it directly.
+        tmdbVerified = true,
+        title = follow.name,
+        subtitle = subtitle,
+        progress = null,
+        progressColor = null,
+        onClick = onClick,
+        posterUrlOverride = tmdbPosterUrl(follow.posterPath, "w342"),
+        topBadge = if (follow.newCount > 0) {
+            {
+                androidx.tv.material3.Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    colors = androidx.tv.material3.SurfaceDefaults.colors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                    ),
+                ) {
+                    Text(
+                        "${follow.newCount} nouveau${if (follow.newCount > 1) "x" else ""}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+        } else null,
+    )
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun FeaturedCard(
+    container: AppContainer,
+    result: SearchResult,
+    onClick: () -> Unit,
+) {
+    val subtitle = listOfNotNull(
+        result.year?.toString(),
+        result.seeders?.let { "$it seeders" },
+    ).joinToString(" · ")
+    PosterCard(
+        container = container,
+        tmdbId = result.tmdbId,
+        // Trust torr9's tmdb_id on featured items — they're hand-curated
+        // server-side, the wrong-poster risk that justifies tmdb_verified
+        // gating on library entries doesn't apply here.
+        tmdbVerified = result.tmdbId != null,
+        title = result.title,
+        subtitle = subtitle.ifEmpty { result.providerId },
+        progress = null,
+        progressColor = null,
+        onClick = onClick,
+        topBadge = if (result.freeleech) {
+            {
+                androidx.tv.material3.Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    colors = androidx.tv.material3.SurfaceDefaults.colors(
+                        containerColor = androidx.compose.ui.graphics.Color(0xFF10B981).copy(alpha = 0.85f),
+                    ),
+                ) {
+                    Text(
+                        "FL",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = androidx.compose.ui.graphics.Color.White,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                    )
+                }
+            }
+        } else null,
+    )
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun CollectionCard(
+    container: AppContainer,
+    collection: CollectionListItem,
+    onClick: () -> Unit,
+) {
+    val subtitle = buildString {
+        if (collection.kind == "tv" && collection.episodeCount > 0) {
+            append("${collection.episodeCount} ep")
+        } else {
+            append(formatBytes(collection.totalSizeBytes))
+        }
+        if (collection.torrentCount > 1) {
+            append(" · ${collection.torrentCount} torrents")
+        }
+    }
+    PosterCard(
+        container = container,
+        tmdbId = collection.tmdbId,
+        // The collection's tmdb_id was either captured at ingest from a
+        // verified search hit or matched server-side — trust it for the
+        // poster fetch the same way TV-side WatchlistCard does.
+        tmdbVerified = collection.tmdbId != null,
+        title = prettifyFilename(collection.displayTitle),
+        subtitle = subtitle,
+        progress = null,
+        progressColor = null,
+        onClick = onClick,
+    )
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
 private fun TorrentCard(
     container: AppContainer,
     torrent: TorrentView,
@@ -377,17 +604,17 @@ private fun DownloadingCard(
 
 private fun formatBytes(b: Long): String {
     val gb = b / 1_000_000_000.0
-    if (gb >= 1.0) return String.format("%.1f GB", gb)
+    if (gb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f GB", gb)
     val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format("%.0f MB", mb)
+    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f MB", mb)
     return "$b B"
 }
 
 private fun formatSpeed(bps: Long): String {
     val mbs = bps / 1_000_000.0
-    if (mbs >= 1.0) return String.format("%.1f MB/s", mbs)
+    if (mbs >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f MB/s", mbs)
     val kbs = bps / 1_000.0
-    return String.format("%.0f KB/s", kbs)
+    return String.format(java.util.Locale.ROOT, "%.0f KB/s", kbs)
 }
 
 /**
@@ -418,14 +645,22 @@ private fun PosterCard(
      *  custom color (e.g. blue) to differentiate download from watch. */
     progressColor: androidx.compose.ui.graphics.Color?,
     onClick: () -> Unit,
+    /** Pre-resolved poster URL — skips the TMDB metadata roundtrip. Used by
+     *  the Watchlist shelf where /api/me/follows already returns the poster
+     *  path inline. When `null`, falls back to the regular TMDB lookup. */
+    posterUrlOverride: String? = null,
+    /** Optional top-right overlay (e.g., "X nouveaux" badge). Renders on
+     *  top of the poster. */
+    topBadge: (@Composable () -> Unit)? = null,
 ) {
     var meta by remember(tmdbId, tmdbVerified) { mutableStateOf<TmdbMetadata?>(null) }
-    LaunchedEffect(tmdbId, tmdbVerified) {
+    LaunchedEffect(tmdbId, tmdbVerified, posterUrlOverride) {
+        if (posterUrlOverride != null) return@LaunchedEffect
         if (!tmdbVerified || tmdbId == null) return@LaunchedEffect
         val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
         meta = runCatching { container.apiFor(url).tmdbMetadata(tmdbId) }.getOrNull()
     }
-    val posterUrl = tmdbPosterUrl(meta?.posterPath, "w342")
+    val posterUrl = posterUrlOverride ?: tmdbPosterUrl(meta?.posterPath, "w342")
     // Filename always wins for the title — see the rationale on
     // `tmdbVerified`. Even with a verified match the filename is what
     // the user dropped on disk and is most likely to recognise.
@@ -505,6 +740,15 @@ private fun PosterCard(
                             .height(4.dp)
                             .background(barColor),
                     )
+                }
+                if (topBadge != null) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp),
+                    ) {
+                        topBadge()
+                    }
                 }
             }
             Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

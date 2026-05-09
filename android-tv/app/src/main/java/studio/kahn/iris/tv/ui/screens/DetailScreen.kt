@@ -251,8 +251,8 @@ private fun FileRow(
 
 private fun formatBytes(b: Long): String {
     val gb = b / 1_000_000_000.0
-    if (gb >= 1.0) return String.format("%.1f GB", gb)
+    if (gb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f GB", gb)
     val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format("%.0f MB", mb)
+    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f MB", mb)
     return "$b B"
 }

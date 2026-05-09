@@ -242,6 +242,35 @@ async fn ingest(
         prewarm_default_remux(&prewarm_state, &prewarm_infohash).await;
     });
 
+    // Collection assignment — pick / create the right `collections`
+    // row, attach the torrent, and (for TV) populate `episode_files`
+    // from any SCENE-parseable filename. Best-effort, runs in the
+    // background so the ingest response isn't blocked.
+    {
+        let pool = state.db().clone();
+        let tmdb = state.tmdb().cloned();
+        let infohash = result.snapshot.infohash.clone();
+        let name = result.snapshot.name.clone().unwrap_or_default();
+        let tmdb_id = body.tmdb_id;
+        let files: Vec<(usize, String)> = result
+            .snapshot
+            .files
+            .iter()
+            .map(|f| (f.index, f.path.clone()))
+            .collect();
+        tokio::spawn(async move {
+            crate::collection_assign::assign_after_ingest(
+                &pool,
+                tmdb.as_ref(),
+                &infohash,
+                &name,
+                tmdb_id,
+                &files,
+            )
+            .await;
+        });
+    }
+
     Ok(Json(IngestResponse {
         id: row.id,
         already_managed: result.already_managed,

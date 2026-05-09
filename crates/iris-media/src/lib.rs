@@ -6,6 +6,7 @@
 //!   CMAF-fragmented MP4 served via HTTP byte-range.
 //! - [`subtitles`] converts text-based subtitle streams to `WebVTT` on the fly.
 
+pub mod filename;
 pub mod probe;
 pub mod remuxer;
 pub mod subtitles;

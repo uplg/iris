@@ -18,6 +18,9 @@ pub struct TorrentRow {
     /// frontends ignore `tmdb_id` for display purposes — wrong posters
     /// are worse UX than no posters.
     pub tmdb_verified: bool,
+    /// Set by the collection-assignment job (Phase 4.5) to group multi-
+    /// torrent series under one library entity. NULL until the job runs.
+    pub collection_id: Option<Uuid>,
     pub added_by: Uuid,
     /// Public-facing display name of the user that added this torrent
     /// (denormalised via JOIN in [`find_by_infohash`] / [`list_active`]).
@@ -96,8 +99,8 @@ pub async fn find_by_infohash(
 ) -> Result<Option<TorrentRow>, sqlx::Error> {
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.added_by, u.display_name AS added_by_name, t.added_at, t.last_played_at, \
-         t.last_seed_activity_at, t.deleted_at \
+         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
+         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
          WHERE t.infohash = ?1",
@@ -110,8 +113,8 @@ pub async fn find_by_infohash(
 pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Error> {
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.added_by, u.display_name AS added_by_name, t.added_at, t.last_played_at, \
-         t.last_seed_activity_at, t.deleted_at \
+         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
+         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
          WHERE t.deleted_at IS NULL ORDER BY t.added_at DESC",
@@ -158,4 +161,41 @@ pub async fn touch_played(pool: &SqlitePool, infohash: &str) -> Result<(), sqlx:
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Attach a torrent to a collection. Set `collection_id = None` to
+/// detach (sets the column to NULL). Used by the collection-assignment
+/// job (Phase 4.5) at ingest and during the retroactive batch.
+pub async fn set_collection(
+    pool: &SqlitePool,
+    infohash: &str,
+    collection_id: Option<Uuid>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE torrents SET collection_id = ?1 WHERE infohash = ?2")
+        .bind(collection_id)
+        .bind(infohash)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// All torrents currently attached to a collection. Powers the Series
+/// detail page when it walks "every file across every torrent in the
+/// collection" to build the merged episode list.
+pub async fn list_in_collection(
+    pool: &SqlitePool,
+    collection_id: Uuid,
+) -> Result<Vec<TorrentRow>, sqlx::Error> {
+    sqlx::query_as::<_, TorrentRow>(
+        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
+         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
+         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at \
+         FROM torrents t \
+         JOIN users u ON u.id = t.added_by \
+         WHERE t.collection_id = ?1 AND t.deleted_at IS NULL \
+         ORDER BY t.added_at",
+    )
+    .bind(collection_id)
+    .fetch_all(pool)
+    .await
 }

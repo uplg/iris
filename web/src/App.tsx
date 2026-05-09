@@ -7,6 +7,9 @@ import { RequireAuth } from "@/components/RequireAuth";
 import { LoginPage } from "@/pages/LoginPage";
 import { RegisterPage } from "@/pages/RegisterPage";
 import { HomePage } from "@/pages/HomePage";
+import { SearchPage } from "@/pages/SearchPage";
+import { SeriesPage } from "@/pages/SeriesPage";
+import { CollectionPage } from "@/pages/CollectionPage";
 import { AdminPage } from "@/pages/AdminPage";
 import { LibraryPage } from "@/pages/LibraryPage";
 import { WatchPage } from "@/pages/WatchPage";
@@ -30,6 +33,9 @@ export default function App() {
               <Route element={<RequireAuth />}>
                 <Route element={<AppShell />}>
                   <Route index element={<HomePage />} />
+                  <Route path="/search" element={<SearchPage />} />
+                  <Route path="/series/:tmdbId" element={<SeriesPage />} />
+                  <Route path="/collection/:id" element={<CollectionPage />} />
                   <Route path="/library" element={<LibraryPage />} />
                   <Route path="/watch/:infohash/:idx" element={<WatchPage />} />
                   <Route path="/account" element={<AccountPage />} />

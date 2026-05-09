@@ -18,6 +18,12 @@ body {
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: "Geist Variable", sans-serif;
+  /* Animation timing tokens. Match Material's "small motion" curve so
+     focus / hover transitions feel deliberate without dragging — most
+     interactions stay under 200 ms. */
+  --ease-soft: cubic-bezier(0.2, 0, 0, 1);
+  --duration-quick: 150ms;
+  --duration-medium: 220ms;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -137,4 +143,51 @@ body {
   html {
     @apply font-sans;
   }
+
+  /* Respect reduced-motion across the board — applies to every CSS
+     transition / animation regardless of duration tokens. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Semantic typography utilities.
+ *
+ * Centralising the heading / body / caption combos here keeps callsites
+ * visually noiseless AND makes a future restyle a one-file edit instead of
+ * a global search-replace. Use these in preference to ad-hoc Tailwind
+ * combinations for new code; legacy `text-Nxl font-semibold tracking-tight`
+ * blocks can be migrated opportunistically.
+ * --------------------------------------------------------------------------- */
+
+@utility heading-1 {
+  @apply text-3xl font-semibold tracking-tight;
+}
+@utility heading-2 {
+  @apply text-xl font-semibold tracking-tight;
+}
+@utility heading-3 {
+  @apply text-base font-semibold tracking-tight;
+}
+@utility caption {
+  @apply text-xs text-muted-foreground;
+}
+@utility eyebrow {
+  /* Section-label style — small, uppercase, muted. Used above shelf
+     groups, table headers, etc. */
+  @apply text-[10px] uppercase tracking-wide text-muted-foreground;
+}
+@utility focus-ring {
+  /* Standard focus state: bright primary ring with a 2 px offset, no
+     visible outline by default (mouse use) but visible on keyboard
+     navigation. Pair with `outline-none` on the element. */
+  @apply outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
 }

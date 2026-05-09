@@ -11,6 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  follows,
   progress as progressApi,
   torrents,
   type FileEntry,
@@ -20,6 +21,13 @@ import {
   type TorrentView,
 } from "@/lib/api";
 import { formatSize } from "@/lib/format";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
@@ -37,6 +45,13 @@ export function WatchPage() {
   const lastDurationRef = useRef<number | null>(null);
   const progressLoadedRef = useRef(false);
   const initialSeekDoneRef = useRef(false);
+  // "Préparer le suivant ?" state — gated on a single-shot flip per
+  // mount, plus a dismissal flag so user choosing "Plus tard" doesn't
+  // get re-prompted within the same session.
+  const [nextEpModalOpen, setNextEpModalOpen] = useState(false);
+  const [nextEpGrabbing, setNextEpGrabbing] = useState(false);
+  const nextEpDismissedRef = useRef(false);
+  const nextEpPromptedRef = useRef(false);
   const subtitleTrackRef = useRef<number | null>(null);
 
   const torrentQ = useQuery<TorrentView>({
@@ -134,7 +149,31 @@ export function WatchPage() {
     progressLoadedRef.current = false;
     initialSeekDoneRef.current = false;
     subtitleTrackRef.current = null;
+    nextEpDismissedRef.current = false;
+    nextEpPromptedRef.current = false;
+    setNextEpModalOpen(false);
   }, [fileIdx, infohash]);
+
+  // Episode context drives the "Préparer le suivant ?" modal at episode
+  // end. Returns nulls for non-TV files so the prompt simply never
+  // fires — no need to gate the query.
+  const episodeContextQ = useQuery({
+    queryKey: ["episode-context", infohash, fileIdx],
+    queryFn: () => follows.episodeContext(infohash!, fileIdx),
+    enabled: !!infohash,
+    staleTime: 5 * 60_000,
+  });
+  const nextEp = episodeContextQ.data?.next;
+  const canPromptNext =
+    episodeContextQ.data?.followed === true &&
+    nextEp?.status === "available" &&
+    !nextEpDismissedRef.current;
+
+  function maybePromptNext() {
+    if (!canPromptNext || nextEpPromptedRef.current) return;
+    nextEpPromptedRef.current = true;
+    setNextEpModalOpen(true);
+  }
 
   // Capture saved subtitle pick (the actual seek is applied in onCanPlay).
   useEffect(() => {
@@ -290,6 +329,21 @@ export function WatchPage() {
                   completed,
                 });
               }
+              // Trigger the next-episode prompt at >= 95 % of duration.
+              // Using onEnded alone would miss the case where the user
+              // closes the tab right before credits — the prompt at 95 %
+              // also lets users hit "Préparer" then keep watching the
+              // last few minutes.
+              const totalDur = lastDurationRef.current;
+              if (
+                totalDur != null &&
+                totalDur > 0 &&
+                detail.currentTime / totalDur >= 0.95 &&
+                canPromptNext &&
+                !nextEpPromptedRef.current
+              ) {
+                maybePromptNext();
+              }
             }}
             onDurationChange={(detail) => {
               if (detail > 0) lastDurationRef.current = detail;
@@ -315,6 +369,11 @@ export function WatchPage() {
                 subtitle_track_idx: subtitleTrackRef.current,
                 completed: true,
               });
+              // Belt-and-suspenders: also try the prompt at the actual
+              // end event (covers files where the 95 % heuristic doesn't
+              // fire, e.g., very short episodes where onTimeUpdate
+              // sampling skips the threshold).
+              maybePromptNext();
             }}
             onCanPlay={() => {
               // One-shot resume seek. Applied exactly once after the first
@@ -509,6 +568,67 @@ export function WatchPage() {
           {data.error && <span className="text-destructive">error: {data.error}</span>}
         </div>
       </section>
+
+      {/* "Préparer le suivant ?" — fired when the user is following the
+          current series and the next episode is available but not yet
+          grabbed. One-shot per file mount; "Plus tard" silences it for
+          the rest of the session. */}
+      {nextEp && (
+        <Dialog
+          open={nextEpModalOpen}
+          onOpenChange={(o) => {
+            setNextEpModalOpen(o);
+            if (!o) nextEpDismissedRef.current = true;
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Épisode suivant disponible</DialogTitle>
+              <DialogDescription>
+                S{nextEp.season.toString().padStart(2, "0")}E
+                {nextEp.episode.toString().padStart(2, "0")} est prêt à être
+                téléchargé. Le préparer pour la prochaine session ?
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  nextEpDismissedRef.current = true;
+                  setNextEpModalOpen(false);
+                }}
+              >
+                Plus tard
+              </Button>
+              <Button
+                disabled={nextEpGrabbing}
+                onClick={async () => {
+                  setNextEpGrabbing(true);
+                  try {
+                    await follows.grabEpisode(
+                      nextEp.tmdb_id,
+                      nextEp.season,
+                      nextEp.episode,
+                    );
+                    setNextEpModalOpen(false);
+                  } catch (e) {
+                    console.error("[next-ep grab]", e);
+                  } finally {
+                    setNextEpGrabbing(false);
+                  }
+                }}
+              >
+                {nextEpGrabbing ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+                Préparer
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

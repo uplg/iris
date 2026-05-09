@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ replaces `android:allowBackup` with this rules file.
+  We opt out of cloud backup AND device-to-device transfer for the
+  whole package — there's nothing in the app's data dir worth migrating
+  (the user re-pairs the TV after a reset, and the local SQLite cache
+  is rebuilt from the server on first run). Mirrors the
+  `android:allowBackup="false"` we keep for Android < 12.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

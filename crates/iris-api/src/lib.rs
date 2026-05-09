@@ -1,5 +1,7 @@
 pub mod app;
+pub mod collection_assign;
 pub mod error;
+pub mod follows_scheduler;
 pub mod observability;
 pub mod routes;
 pub mod state;
@@ -30,6 +32,45 @@ fn setup_remuxer(data_dir: &Path) -> anyhow::Result<iris_media::RemuxManager> {
         }
     });
     Ok(remuxer)
+}
+
+/// Background tasks that depend on the live `AppState`. Extracted from
+/// `run` to keep that function under the clippy line-count budget.
+fn spawn_background_jobs(
+    app_state: &state::AppState,
+    pool: iris_db::SqlitePool,
+    provider_registry: iris_providers::ProviderRegistry,
+) {
+    // Notify scheduler walks `series_follows` every 4 h, asks TMDB
+    // what's aired, and pre-caches indexer hits in `available_episodes`
+    // so the user's "Préparer" / "Lire" clicks go through the fast
+    // path. Never ingests on its own.
+    follows_scheduler::spawn(pool.clone(), app_state.tmdb().cloned(), provider_registry);
+
+    // Collection assignment backfill — attaches a `collections` row to
+    // every existing torrent that lacks one. Runs at boot AND every
+    // 5 min after that — the engine's snapshot list isn't fully
+    // populated for several seconds (sometimes minutes for old
+    // torrents whose metadata is still being fetched), and the boot-
+    // only path missed those. The periodic re-run is a no-op when
+    // nothing's left to assign.
+    let bf_pool = pool;
+    let bf_tmdb = app_state.tmdb().cloned();
+    let bf_engine = app_state.engine().clone();
+    tokio::spawn(async move {
+        // First pass: short delay so the engine has at least started
+        // loading. The retry loop catches the slow stragglers.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        collection_assign::run_backfill(&bf_pool, bf_tmdb.as_ref(), &bf_engine).await;
+        let mut ticker =
+            tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        ticker.tick().await; // skip the immediate fire
+        loop {
+            ticker.tick().await;
+            collection_assign::run_backfill(&bf_pool, bf_tmdb.as_ref(), &bf_engine).await;
+        }
+    });
 }
 
 pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> anyhow::Result<()> {
@@ -117,7 +158,17 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         "disk gc loop started"
     );
 
-    let app_state = state::AppState::new(cfg.clone(), pool, provider_registry, engine, remuxer, gc);
+    let app_state = state::AppState::new(
+        cfg.clone(),
+        pool.clone(),
+        provider_registry.clone(),
+        engine,
+        remuxer,
+        gc,
+    );
+
+    spawn_background_jobs(&app_state, pool.clone(), provider_registry);
+
     let router = app::build_router(app_state);
     let service = app::into_service(router);
 

@@ -1,6 +1,18 @@
+// File-level opt-in: every PlayerView / Player.Listener / MediaItem method
+// we touch is gated behind `@RequiresOptIn(UnstableApi)`. Per-function
+// `@OptIn` doesn't propagate into AndroidView lambdas, which is why the
+// `lintDebug` task flagged half the file. We need BOTH annotations:
+// Kotlin's `@OptIn` silences the kotlinc warning; androidx's
+// `@OptIn(markerClass=…)` silences the separate Android lint analyser
+// (`UnsafeOptInUsageError`). Without the second one `lintDebug` fails
+// even when compilation succeeds.
+@file:kotlin.OptIn(androidx.media3.common.util.UnstableApi::class)
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package studio.kahn.iris.tv.ui.screens
 
 import android.net.Uri
+import androidx.core.net.toUri
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -201,6 +213,27 @@ private fun ReadyPlayer(
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
+    // "Préparer le suivant ?" state. Fetched once at mount; the tick
+    // (below) flips `nextEpModalOpen` when playback crosses 95 %.
+    var nextEpisode by remember(infohash, fileIdx) {
+        androidx.compose.runtime.mutableStateOf<studio.kahn.iris.tv.data.EpisodePoint?>(null)
+    }
+    var nextEpModalOpen by remember(infohash, fileIdx) {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+    var nextEpDismissed by remember(infohash, fileIdx) {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+    var nextEpGrabbing by remember { androidx.compose.runtime.mutableStateOf(false) }
+    LaunchedEffect(infohash, fileIdx) {
+        val ctx = runCatching {
+            container.apiFor(serverUrl).episodeContext(infohash, fileIdx)
+        }.getOrNull()
+        nextEpisode = ctx?.next?.takeIf {
+            ctx.followed && it.status == "available"
+        }
+    }
+
     val playUrl = remember(serverUrl, infohash, fileIdx) {
         // HLS-CMAF master playlist — same URL the web client uses.
         // The bare `/play` path was the old single-file fMP4 endpoint;
@@ -214,7 +247,7 @@ private fun ReadyPlayer(
         probe.subtitle.filter { it.textBased }.map { sub ->
             val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
             val url = "${base}api/torrents/$infohash/files/$fileIdx/sub/${sub.index}/track.vtt"
-            MediaItem.SubtitleConfiguration.Builder(Uri.parse(url))
+            MediaItem.SubtitleConfiguration.Builder(url.toUri())
                 .setMimeType(MimeTypes.TEXT_VTT)
                 .setLanguage(sub.language ?: "und")
                 .setLabel(sub.title ?: sub.language?.uppercase() ?: "Sub ${sub.index + 1}")
@@ -252,6 +285,7 @@ private fun ReadyPlayer(
         val handler = android.os.Handler(android.os.Looper.getMainLooper())
         var lastSavedMs: Long = (startPositionSec * 1000).toLong()
         var durationMs: Long = -1
+        var prompted = false
         val tick = object : Runnable {
             override fun run() {
                 if (player.duration > 0) durationMs = player.duration
@@ -274,6 +308,18 @@ private fun ReadyPlayer(
                                 )
                             }
                         }
+                    }
+                    // "Préparer le suivant ?" trigger — at 95 % of
+                    // duration once we know it. Single-shot per mount.
+                    if (
+                        !prompted &&
+                        !nextEpDismissed &&
+                        nextEpisode != null &&
+                        durationMs > 0 &&
+                        pos.toFloat() / durationMs.toFloat() >= 0.95f
+                    ) {
+                        prompted = true
+                        nextEpModalOpen = true
                     }
                 }
                 handler.postDelayed(this, 1_000)
@@ -318,6 +364,58 @@ private fun ReadyPlayer(
         },
         update = { it.player = player },
     )
+
+    val nextEp = nextEpisode
+    if (nextEpModalOpen && nextEp != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = {
+                nextEpModalOpen = false
+                nextEpDismissed = true
+            },
+            title = {
+                androidx.compose.material3.Text("Épisode suivant disponible")
+            },
+            text = {
+                androidx.compose.material3.Text(
+                    "S%02dE%02d est prêt à être téléchargé. Le préparer pour la prochaine session ?"
+                        .format(nextEp.season, nextEp.episode),
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    enabled = !nextEpGrabbing,
+                    onClick = {
+                        nextEpGrabbing = true
+                        scope.launch {
+                            runCatching {
+                                container.apiFor(serverUrl).grabEpisode(
+                                    tmdbId = nextEp.tmdbId,
+                                    season = nextEp.season,
+                                    episode = nextEp.episode,
+                                )
+                            }
+                            nextEpGrabbing = false
+                            nextEpModalOpen = false
+                        }
+                    },
+                ) {
+                    androidx.compose.material3.Text(
+                        if (nextEpGrabbing) "Préparation…" else "Préparer",
+                    )
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        nextEpModalOpen = false
+                        nextEpDismissed = true
+                    },
+                ) {
+                    androidx.compose.material3.Text("Plus tard")
+                }
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -461,15 +559,15 @@ private fun stepFor(status: PlayStatus?, probeReady: Boolean, torrent: TorrentVi
 
 private fun formatBytesShort(b: Long): String {
     val gb = b / 1_000_000_000.0
-    if (gb >= 1.0) return String.format("%.1f GB", gb)
+    if (gb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f GB", gb)
     val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format("%.0f MB", mb)
+    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f MB", mb)
     return "$b B"
 }
 
 private fun formatSpeedShort(bps: Long): String {
     val mbs = bps / 1_000_000.0
-    if (mbs >= 1.0) return String.format("%.1f MB/s", mbs)
+    if (mbs >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f MB/s", mbs)
     val kbs = bps / 1_000.0
-    return String.format("%.0f KB/s", kbs)
+    return String.format(java.util.Locale.ROOT, "%.0f KB/s", kbs)
 }

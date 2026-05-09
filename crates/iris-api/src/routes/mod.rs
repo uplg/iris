@@ -1,8 +1,11 @@
 pub mod admin;
 pub mod auth;
 pub mod devices;
+pub mod discover;
 pub mod extract;
+pub mod follows;
 pub mod health;
+pub mod library;
 pub mod me;
 pub mod metadata;
 pub mod providers;

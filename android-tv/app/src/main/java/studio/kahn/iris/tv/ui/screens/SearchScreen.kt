@@ -11,11 +11,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
@@ -30,6 +33,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
@@ -37,12 +42,14 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.IngestRequest
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.SearchResult
+import studio.kahn.iris.tv.data.tmdbPosterUrl
 
 /**
  * Text + voice search. Voice goes through the system [RecognizerIntent], so
@@ -61,6 +68,11 @@ fun SearchScreen(
     container: AppContainer,
     initialQuery: String? = null,
     autoPickTop: Boolean = false,
+    /** Open the rich detail screen for a search hit. The detail screen
+     *  owns the ingest + navigate-to-watch flow; SearchScreen no longer
+     *  ingests directly, so the user always gets to see what they're
+     *  about to grab (audio / sub / file size) before committing. */
+    onPickResult: (providerId: String, externalId: String, tmdbId: Long?) -> Unit,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onPickTorrent: (infohash: String) -> Unit,
     onBack: () -> Unit,
@@ -198,19 +210,20 @@ fun SearchScreen(
                     "No results.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Fixed(5),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp),
+                ) {
                     items(results, key = { "${it.providerId}:${it.externalId}" }) { r ->
-                        ResultRow(
+                        ResultCard(
+                            container = container,
                             result = r,
-                            isIngesting = ingestingId == "${r.providerId}:${r.externalId}",
-                            onClick = {
-                                ingestingId = "${r.providerId}:${r.externalId}"
-                                error = null
-                                ingestAndPlay(scope, container, r, onPickFile, onPickTorrent) { msg ->
-                                    error = msg
-                                    ingestingId = null
-                                }
-                            },
+                            // Card click → push the rich detail screen
+                            // where the user can read the synopsis,
+                            // check audio/sub langs, then commit. The
+                            // detail screen owns the ingest + navigate.
+                            onClick = { onPickResult(r.providerId, r.externalId, r.tmdbId) },
                         )
                     }
                 }
@@ -285,87 +298,104 @@ private fun ingestAndPlay(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun ResultRow(
+private fun ResultCard(
+    container: AppContainer,
     result: SearchResult,
-    isIngesting: Boolean,
     onClick: () -> Unit,
 ) {
+    // TMDB poster lookup, mirrors PosterCard's behaviour. Search hits
+    // come from the indexer pre-tagged with tmdb_id (when available);
+    // we trust it here even though it's not "verified" — wrong-poster
+    // risk is OK on a one-off card the user is about to inspect anyway.
+    var meta by remember(result.tmdbId) { mutableStateOf<studio.kahn.iris.tv.data.TmdbMetadata?>(null) }
+    LaunchedEffect(result.tmdbId) {
+        if (result.tmdbId == null) return@LaunchedEffect
+        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
+        meta = runCatching { container.apiFor(url).tmdbMetadata(result.tmdbId) }.getOrNull()
+    }
+    val posterUrl = tmdbPosterUrl(meta?.posterPath, "w342")
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
-        shape = CardDefaults.shape(shape = RoundedCornerShape(8.dp)),
+        shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Column(Modifier.weight(1f)) {
+        Column {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(2f / 3f),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (posterUrl != null) {
+                    AsyncImage(
+                        model = posterUrl,
+                        contentDescription = result.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(
+                                androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
+                                        androidx.compose.ui.graphics.Color(0xFF0B0D12),
+                                    ),
+                                ),
+                            ),
+                    )
+                    Text(
+                        "🎬",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.55f),
+                    )
+                }
+                if (result.freeleech) {
+                    androidx.tv.material3.Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        colors = androidx.tv.material3.SurfaceDefaults.colors(
+                            containerColor = androidx.compose.ui.graphics.Color(0xFF10B981).copy(alpha = 0.85f),
+                        ),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp),
+                    ) {
+                        Text(
+                            "FL",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = androidx.compose.ui.graphics.Color.White,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                        )
+                    }
+                }
+            }
+            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    listOfNotNull(result.title, result.year?.toString()).joinToString(" · "),
-                    style = MaterialTheme.typography.bodyLarge,
+                    result.title,
+                    style = MaterialTheme.typography.titleSmall,
                     maxLines = 2,
                 )
-                // Provider chip + free-leech badge.
-                Row(
-                    Modifier.padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        result.providerId.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (result.freeleech) {
-                        Text(
-                            "FREELEECH",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = androidx.compose.ui.graphics.Color(0xFF34D399),
-                        )
-                    }
-                    result.category?.let {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-            // Right-rail stats — emphasised so the user can scan from the
-            // sofa without squinting. Seeders are green, leechers red, size
-            // gets the largest text.
-            Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                 Text(
-                    result.sizeBytes?.let { formatBytesShort(it) } ?: "—",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
+                    listOfNotNull(
+                        result.year?.toString(),
                         "↑ ${result.seeders ?: 0}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = androidx.compose.ui.graphics.Color(0xFF34D399),
-                    )
-                    Text(
-                        "↓ ${result.leechers ?: 0}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = androidx.compose.ui.graphics.Color(0xFFF87171),
-                    )
-                }
+                        result.sizeBytes?.let { formatBytesShort(it) },
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            Text(
-                if (isIngesting) "…" else "▶",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
         }
     }
 }
 
 private fun formatBytesShort(b: Long): String {
     val gb = b / 1_000_000_000.0
-    if (gb >= 1.0) return String.format("%.1fG", gb)
+    if (gb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1fG", gb)
     val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format("%.0fM", mb)
+    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0fM", mb)
     return "${b}B"
 }

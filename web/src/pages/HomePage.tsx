@@ -1,378 +1,257 @@
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Film, Layers, Play, Search as SearchIcon, Tv } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { Link } from "react-router";
+import { Bookmark, Search as SearchIcon } from "lucide-react";
+
+import { MediaCard } from "@/components/MediaCard";
+import { Shelf } from "@/components/Shelf";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Poster } from "@/components/Poster";
-import {
-  providers as providersApi,
-  search,
-  type MediaKind,
+  discover,
+  follows,
+  me as meApi,
+  tmdbImage,
+  torrents,
+  type ContinueWatchingItem,
+  type FollowSummary,
   type SearchResult,
-  type SortField,
-  type SortOrder,
+  type TorrentView,
 } from "@/lib/api";
-import { formatRelative, formatSize } from "@/lib/format";
-import { PreviewDialog } from "@/components/PreviewDialog";
-import { ContinueWatching } from "@/components/ContinueWatching";
+import { formatSize } from "@/lib/format";
 
-const PAGE_SIZE = 25;
+const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
-function useDebounce<T>(value: T, delay = 300): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(id);
-  }, [value, delay]);
-  return debounced;
-}
-
+/**
+ * Discovery-first home. Vertical stack of horizontal shelves — Continue
+ * Watching, Watchlist, Featured movies/series, Library. The actual
+ * search interface moved to its own /search route (kept simple here to
+ * make the home about *picking something to watch*, not querying the
+ * indexer).
+ */
 export function HomePage() {
-  const [q, setQ] = useState("");
-  const debounced = useDebounce(q.trim(), 350);
-  const [picked, setPicked] = useState<SearchResult | null>(null);
-  const [page, setPage] = useState(1);
-  const [sortBy, setSortBy] = useState<SortField>("seeders");
-  const [order, setOrder] = useState<SortOrder>("desc");
-  const [kind, setKind] = useState<MediaKind | null>(null);
-
-  // Reset to page 1 when query, sort field, order or kind changes.
-  useEffect(() => {
-    setPage(1);
-  }, [debounced, sortBy, order, kind]);
-
-  const providersQ = useQuery({
-    queryKey: ["providers"],
-    queryFn: providersApi.list,
+  const continueQ = useQuery({
+    queryKey: ["continue-watching"],
+    queryFn: meApi.continueWatching,
+    staleTime: 30_000,
+  });
+  const watchlistQ = useQuery({
+    queryKey: ["follows"],
+    queryFn: follows.list,
+    staleTime: 60_000,
+  });
+  const featuredQ = useQuery({
+    queryKey: ["discover-featured"],
+    queryFn: discover.featured,
     staleTime: 5 * 60_000,
   });
-
-  const { data, isFetching, error } = useQuery({
-    queryKey: ["search", debounced, page, sortBy, order, kind],
-    queryFn: () =>
-      search.query(debounced, {
-        page,
-        limit: PAGE_SIZE,
-        sort_by: sortBy,
-        order,
-        kind: kind ?? undefined,
-      }),
-    enabled: debounced.length >= 2,
-    placeholderData: keepPreviousData,
+  const libraryQ = useQuery({
+    queryKey: ["torrents"],
+    queryFn: torrents.list,
+    refetchInterval: 5_000,
   });
 
-  const results = data?.results ?? [];
-  // The server-side sort is what we trust; in case of multi-provider fan-out
-  // future-proof a stable client-side tiebreaker by seeders desc when sort_by
-  // doesn't match the resulting column.
-  const rows = results;
-
-  const meta = data?.providers ?? [];
-  const totals = useMemo(() => {
-    let count = 0;
-    let pages = 0;
-    for (const p of meta) {
-      if (p.total_count) count += p.total_count;
-      if (p.total_pages && p.total_pages > pages) pages = p.total_pages;
-    }
-    return { count, pages };
-  }, [meta]);
-
-  const onSort = (field: SortField) => {
-    if (sortBy === field) {
-      setOrder(order === "asc" ? "desc" : "asc");
-    } else {
-      setSortBy(field);
-      setOrder(field === "title" ? "asc" : "desc");
-    }
-  };
+  // Library shelf only shows the recent N — full grid lives at /library.
+  const recentLibrary = useMemo(
+    () => (libraryQ.data ?? []).slice(0, 12),
+    [libraryQ.data],
+  );
 
   return (
-    <div className="grid gap-6">
-      <ContinueWatching />
-      <section className="grid gap-4">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Search</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {meta.length > 0
-              ? meta
-                  .map((p) =>
-                    p.error
-                      ? `${p.id} (unavailable)`
-                      : `${p.id}${p.total_count != null ? ` (${p.total_count.toLocaleString()})` : ""}`,
-                  )
-                  .join(" · ")
-              : providersQ.isLoading
-                ? "Loading providers…"
-                : providersQ.data && providersQ.data.length > 0
-                  ? `${providersQ.data.length} provider${providersQ.data.length > 1 ? "s" : ""} ready: ${providersQ.data.map((p) => p.id).join(", ")}`
-                  : "No search providers are configured."}
+    <div className="grid gap-10">
+      <Hero />
+
+      <Shelf
+        title="Continue Watching"
+        isEmpty={!continueQ.data || continueQ.data.length === 0}
+        emptyState={
+          <span>
+            Once you start watching something, you'll find it here ready to
+            resume.
+          </span>
+        }
+      >
+        {continueQ.data?.map((item) => (
+          <ContinueCard key={`${item.infohash}:${item.file_idx}`} item={item} />
+        ))}
+      </Shelf>
+
+      <Shelf
+        title="Ma Watchlist"
+        isEmpty={!watchlistQ.data || watchlistQ.data.length === 0}
+        emptyState={
+          <div className="grid gap-2">
+            <span>Aucune série suivie pour l'instant.</span>
+            <span className="text-xs">
+              Trouve une série dans la <Link to="/search" className="underline">recherche</Link> et clique sur "Suivre" pour l'ajouter ici.
+            </span>
+          </div>
+        }
+      >
+        {watchlistQ.data?.map((f) => <WatchlistCard key={f.tmdb_id} follow={f} />)}
+      </Shelf>
+
+      <Shelf
+        title="Sorties Ciné"
+        isEmpty={!featuredQ.data || featuredQ.data.movies.length === 0}
+        emptyState={<span>Aucune sortie cinéma trouvée pour l'instant.</span>}
+      >
+        {featuredQ.data?.movies.map((r) => (
+          <FeaturedCard key={`${r.provider_id}:${r.external_id}`} result={r} />
+        ))}
+      </Shelf>
+
+      <Shelf
+        title="Sorties Séries"
+        isEmpty={!featuredQ.data || featuredQ.data.series.length === 0}
+        emptyState={<span>Aucune sortie série trouvée pour l'instant.</span>}
+      >
+        {featuredQ.data?.series.map((r) => (
+          <FeaturedCard key={`${r.provider_id}:${r.external_id}`} result={r} />
+        ))}
+      </Shelf>
+
+      <Shelf
+        title="Ma Bibliothèque"
+        href="/library"
+        isEmpty={recentLibrary.length === 0}
+        emptyState={
+          <span>
+            Rien encore en bibliothèque. Lance une <Link to="/search" className="underline">recherche</Link> pour ajouter ton premier titre.
+          </span>
+        }
+      >
+        {recentLibrary.map((t) => <LibraryCard key={t.infohash} torrent={t} />)}
+      </Shelf>
+    </div>
+  );
+}
+
+function Hero() {
+  return (
+    <section className="rounded-xl border border-border bg-gradient-to-br from-primary/10 via-card/50 to-background p-8">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="grid gap-1">
+          <h1 className="text-3xl font-semibold tracking-tight">Bienvenue.</h1>
+          <p className="text-sm text-muted-foreground">
+            Reprends où tu t'es arrêté, ou découvre les dernières sorties.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative min-w-0 flex-1">
-            <SearchIcon className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              autoFocus
-              placeholder="Title, year, anything…"
-              className="h-12 pl-9 text-base"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-          </div>
-          <ToggleGroup
-            type="single"
-            value={kind ?? "all"}
-            onValueChange={(v) =>
-              setKind(v === "movie" || v === "tv" ? v : null)
-            }
-            className="shrink-0"
-          >
-            <ToggleGroupItem value="all" aria-label="All categories">
-              <Layers className="size-4" />
-              All
-            </ToggleGroupItem>
-            <ToggleGroupItem value="movie" aria-label="Movies only">
-              <Film className="size-4" />
-              Movies
-            </ToggleGroupItem>
-            <ToggleGroupItem value="tv" aria-label="TV only">
-              <Tv className="size-4" />
-              TV
-            </ToggleGroupItem>
-          </ToggleGroup>
+        <div className="flex items-center gap-2">
+          <Button asChild size="lg">
+            <Link to="/search">
+              <SearchIcon className="size-4" />
+              Rechercher
+            </Link>
+          </Button>
         </div>
-      </section>
-
-      {error && (
-        <p className="text-sm text-destructive">
-          Search failed: {error instanceof Error ? error.message : String(error)}
-        </p>
-      )}
-
-      {debounced.length < 2 ? (
-        <p className="text-sm text-muted-foreground">Type at least 2 characters.</p>
-      ) : isFetching && rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Searching…</p>
-      ) : rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No results.</p>
-      ) : (
-        <>
-          <div className="overflow-hidden rounded-lg border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[60px]"></TableHead>
-                  <SortableTh
-                    label="Title"
-                    field="title"
-                    sortBy={sortBy}
-                    order={order}
-                    onSort={onSort}
-                    className="w-full"
-                  />
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Category</TableHead>
-                  <SortableTh
-                    label="Size"
-                    field="size"
-                    sortBy={sortBy}
-                    order={order}
-                    onSort={onSort}
-                    className="text-right"
-                  />
-                  <SortableTh
-                    label="S"
-                    field="seeders"
-                    sortBy={sortBy}
-                    order={order}
-                    onSort={onSort}
-                    className="text-right"
-                  />
-                  <SortableTh
-                    label="L"
-                    field="leechers"
-                    sortBy={sortBy}
-                    order={order}
-                    onSort={onSort}
-                    className="text-right"
-                  />
-                  <SortableTh
-                    label="Uploaded"
-                    field="uploaded"
-                    sortBy={sortBy}
-                    order={order}
-                    onSort={onSort}
-                  />
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((r) => (
-                  <TableRow
-                    key={`${r.provider_id}:${r.external_id}`}
-                    className="cursor-pointer"
-                    onClick={() => setPicked(r)}
-                  >
-                    <TableCell className="align-top">
-                      <Poster
-                        tmdbId={r.tmdb_id}
-                        kind={r.kind}
-                        size="sm"
-                        alt={r.title}
-                      />
-                    </TableCell>
-                    <TableCell className="max-w-0 align-top">
-                      <div className="truncate font-medium" title={r.title}>
-                        {r.title}
-                      </div>
-                      {(r.year || r.freeleech || r.tags.length > 0) && (
-                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                          {r.year && <span>{r.year}</span>}
-                          {r.freeleech && (
-                            <Badge
-                              variant="secondary"
-                              className="bg-emerald-500/10 text-[10px] uppercase text-emerald-400"
-                            >
-                              FL
-                            </Badge>
-                          )}
-                          {r.tags.slice(0, 4).map((t) => (
-                            <span key={t} className="rounded bg-muted/40 px-1 py-0.5 text-[10px]">
-                              {t}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="align-top">
-                      <Badge variant="outline" className="text-[10px] uppercase">
-                        {r.provider_id}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="align-top text-xs text-muted-foreground">
-                      {r.category ?? "—"}
-                    </TableCell>
-                    <TableCell className="align-top text-right tabular-nums">
-                      {formatSize(r.size_bytes)}
-                    </TableCell>
-                    <TableCell className="align-top text-right tabular-nums text-emerald-400">
-                      {r.seeders ?? 0}
-                    </TableCell>
-                    <TableCell className="align-top text-right tabular-nums text-rose-400">
-                      {r.leechers ?? 0}
-                    </TableCell>
-                    <TableCell className="align-top whitespace-nowrap text-xs text-muted-foreground">
-                      {r.uploaded_at ? formatRelative(r.uploaded_at) : "—"}
-                    </TableCell>
-                    <TableCell
-                      className="align-top text-right"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Button size="sm" onClick={() => setPicked(r)}>
-                        <Play className="size-3.5" />
-                        Play
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-
-          <Pagination
-            page={page}
-            totalPages={totals.pages || 1}
-            onPage={setPage}
-            isFetching={isFetching}
-          />
-        </>
-      )}
-
-      <PreviewDialog
-        open={picked != null}
-        onOpenChange={(o) => !o && setPicked(null)}
-        providerId={picked?.provider_id ?? null}
-        externalId={picked?.external_id ?? null}
-        initialTitle={picked?.title}
-        tmdbId={picked?.tmdb_id ?? null}
-      />
-    </div>
-  );
-}
-
-type SortableThProps = {
-  label: string;
-  field: SortField;
-  sortBy: SortField;
-  order: SortOrder;
-  onSort: (f: SortField) => void;
-  className?: string;
-};
-
-function SortableTh({ label, field, sortBy, order, onSort, className }: SortableThProps) {
-  const active = sortBy === field;
-  const indicator = !active ? "" : order === "asc" ? "▲" : "▼";
-  return (
-    <TableHead className={className}>
-      <button
-        type="button"
-        className={`flex items-center gap-1 ${active ? "text-foreground" : "text-muted-foreground hover:text-foreground"} ${
-          className?.includes("text-right") ? "ml-auto" : ""
-        }`}
-        onClick={() => onSort(field)}
-      >
-        {label}
-        <span className="text-[10px]">{indicator}</span>
-      </button>
-    </TableHead>
-  );
-}
-
-type PaginationProps = {
-  page: number;
-  totalPages: number;
-  onPage: (n: number) => void;
-  isFetching: boolean;
-};
-
-function Pagination({ page, totalPages, onPage, isFetching }: PaginationProps) {
-  return (
-    <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
-      <span>
-        Page {page} of {totalPages || 1}
-        {isFetching && <span className="ml-2 text-xs">(loading…)</span>}
-      </span>
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onPage(Math.max(1, page - 1))}
-          disabled={page <= 1 || isFetching}
-        >
-          <ChevronLeft className="size-3.5" />
-          Prev
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onPage(page + 1)}
-          disabled={page >= totalPages || isFetching}
-        >
-          Next
-          <ChevronRight className="size-3.5" />
-        </Button>
       </div>
-    </div>
+    </section>
+  );
+}
+
+function ContinueCard({ item }: { item: ContinueWatchingItem }) {
+  const fileName = item.file_path?.split("/").pop();
+  const primary = fileName ?? item.torrent_name;
+  const subtitle = fileName && fileName !== item.torrent_name ? item.torrent_name : undefined;
+  const progress =
+    item.duration_seconds && item.duration_seconds > 0
+      ? Math.min(1, item.position_seconds / item.duration_seconds)
+      : 0;
+
+  return (
+    <MediaCard
+      href={`/watch/${item.infohash}/${item.file_idx}`}
+      title={primary}
+      subtitle={subtitle}
+      tmdbId={item.tmdb_verified ? item.tmdb_id : null}
+      kind={null}
+      progress={progress}
+      progressColor="bg-primary"
+    />
+  );
+}
+
+function WatchlistCard({ follow }: { follow: FollowSummary }) {
+  const href = `/series/${follow.tmdb_id}`;
+  return (
+    <MediaCard
+      href={href}
+      title={follow.name}
+      subtitle={
+        follow.total_seasons
+          ? `${follow.total_seasons} saison${follow.total_seasons > 1 ? "s" : ""}`
+          : undefined
+      }
+      posterUrl={tmdbImage(follow.poster_path, "w342")}
+      kind="tv"
+      badge={
+        follow.new_count > 0 ? (
+          <Badge className="bg-primary text-primary-foreground shadow-md">
+            {follow.new_count} nouveau{follow.new_count > 1 ? "x" : ""}
+          </Badge>
+        ) : (
+          <Bookmark className="size-3.5 text-white/80 drop-shadow" />
+        )
+      }
+    />
+  );
+}
+
+function FeaturedCard({ result }: { result: SearchResult }) {
+  // TV shows with a TMDB id can route straight to the series page —
+  // there the user can Follow + browse episodes. Movies (or TV shows
+  // with no tmdb_id) fall back to a prefilled search so the indexer
+  // results show up immediately.
+  const href =
+    result.kind === "tv" && result.tmdb_id != null
+      ? `/series/${result.tmdb_id}`
+      : `/search?q=${encodeURIComponent(result.title)}`;
+  const subtitle = [
+    result.year,
+    result.seeders != null ? `${result.seeders} seeders` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <MediaCard
+      href={href}
+      title={result.title}
+      subtitle={subtitle || undefined}
+      tmdbId={result.tmdb_id}
+      kind={result.kind}
+      badge={
+        result.freeleech ? (
+          <Badge
+            variant="secondary"
+            className="bg-emerald-500/20 text-[10px] uppercase text-emerald-300 shadow-md"
+          >
+            FL
+          </Badge>
+        ) : undefined
+      }
+    />
+  );
+}
+
+function LibraryCard({ torrent }: { torrent: TorrentView }) {
+  const videos = torrent.files.filter((f) => VIDEO_RE.test(f.path));
+  const href =
+    videos.length === 1
+      ? `/watch/${torrent.infohash}/${videos[0].index}`
+      : "/library";
+  const subtitle = formatSize(torrent.total_size_bytes);
+  const downloading = torrent.progress_pct < 99.9;
+  const progress = downloading ? torrent.progress_pct / 100 : undefined;
+  return (
+    <MediaCard
+      href={href}
+      title={torrent.name ?? torrent.infohash.slice(0, 12)}
+      subtitle={subtitle}
+      tmdbId={torrent.tmdb_verified ? torrent.tmdb_id : null}
+      kind={null}
+      progress={progress}
+      progressColor="bg-sky-500"
+    />
   );
 }

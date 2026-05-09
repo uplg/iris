@@ -27,6 +27,7 @@
     <application
         android:name=".IrisApp"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:banner="@drawable/banner"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -64,13 +65,17 @@
 
             <!-- TV Channels deep-link: clicking a poster on the home
                  launcher fires `iris://watch/INFOHASH/IDX` and we route
-                 straight to WatchScreen. -->
+                 straight to WatchScreen. Each <data> tag carries one
+                 attribute so lint can verify the (scheme, host) cross-
+                 product unambiguously (combined attributes get flagged
+                 as IntentFilterUniqueDataAttributes). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="iris" android:host="watch" />
-                <data android:scheme="iris" android:host="home" />
+                <data android:scheme="iris" />
+                <data android:host="watch" />
+                <data android:host="home" />
             </intent-filter>
         </activity>
 

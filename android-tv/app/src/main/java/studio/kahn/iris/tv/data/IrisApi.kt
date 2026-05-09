@@ -77,6 +77,12 @@ interface IrisApi {
         @Query("kind") kind: String? = null,
     ): AggregatedResults
 
+    @GET("api/search/details")
+    suspend fun torrentDetails(
+        @Query("provider") provider: String,
+        @Query("id") id: String,
+    ): TorrentDetails
+
     /** Add a torrent to Iris from a search hit. Returns the snapshot + id. */
     @POST("api/torrents")
     suspend fun ingest(@Body body: IngestRequest): IngestResponse
@@ -86,6 +92,42 @@ interface IrisApi {
 
     @retrofit2.http.DELETE("api/me/devices/{jti}")
     suspend fun revokeDevice(@Path("jti") jti: String)
+
+    // ----------- Discovery + series follows (Phase 2 / Phase 4) -----------
+
+    @GET("api/discover/featured")
+    suspend fun discoverFeatured(): FeaturedResponse
+
+    @GET("api/me/follows")
+    suspend fun listFollows(): List<FollowSummary>
+
+    @POST("api/me/follows")
+    suspend fun addFollow(@Body body: AddFollowRequest): FollowSummary
+
+    @retrofit2.http.DELETE("api/me/follows/{tmdbId}")
+    suspend fun removeFollow(@Path("tmdbId") tmdbId: Long)
+
+    @GET("api/me/follows/{tmdbId}/episodes")
+    suspend fun followEpisodes(
+        @Path("tmdbId") tmdbId: Long,
+        @Query("season") season: Int = 1,
+    ): EpisodesResponse
+
+    @POST("api/me/follows/{tmdbId}/episodes/{season}/{episode}/grab")
+    suspend fun grabEpisode(
+        @Path("tmdbId") tmdbId: Long,
+        @Path("season") season: Int,
+        @Path("episode") episode: Int,
+    ): GrabEpisodeResponse
+
+    @GET("api/me/follows/episode-context")
+    suspend fun episodeContext(
+        @Query("infohash") infohash: String,
+        @Query("file_idx") fileIdx: Int,
+    ): EpisodeContext
+
+    @GET("api/library")
+    suspend fun library(@Query("view") view: String = "collections"): LibraryResponse
 }
 
 // ============================== DTOs ====================================
@@ -244,6 +286,8 @@ data class TmdbMetadata(
     @SerialName("backdrop_path") val backdropPath: String? = null,
     @SerialName("vote_score") val voteScore: Float? = null,
     val genres: List<String> = emptyList(),
+    @SerialName("runtime_minutes") val runtimeMinutes: Int? = null,
+    @SerialName("number_of_seasons") val numberOfSeasons: Int? = null,
 )
 
 @Serializable
@@ -326,6 +370,171 @@ data class DeviceView(
     val kind: String? = null,
     @SerialName("issued_at") val issuedAt: String,
     @SerialName("expires_at") val expiresAt: String,
+)
+
+@Serializable
+data class FeaturedResponse(
+    val movies: List<SearchResult> = emptyList(),
+    val series: List<SearchResult> = emptyList(),
+)
+
+@Serializable
+data class FollowSummary(
+    @SerialName("tmdb_id") val tmdbId: Long,
+    val name: String,
+    @SerialName("total_seasons") val totalSeasons: Int? = null,
+    @SerialName("poster_path") val posterPath: String? = null,
+    @SerialName("backdrop_path") val backdropPath: String? = null,
+    /** Number of newly-available episodes since the last visit. Drives the
+     *  "X nouveaux" badge on Watchlist cards. */
+    @SerialName("new_count") val newCount: Long = 0,
+    @SerialName("last_visited_at") val lastVisitedAt: String? = null,
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class TorrentDetails(
+    @SerialName("provider_id") val providerId: String,
+    @SerialName("external_id") val externalId: String,
+    val title: String,
+    val description: String? = null,
+    val nfo: String? = null,
+    @SerialName("media_info") val mediaInfo: MediaInfoSummary? = null,
+    val tags: List<String> = emptyList(),
+    val category: String? = null,
+    val uploader: String? = null,
+    @SerialName("uploaded_at") val uploadedAt: String? = null,
+    val age: String? = null,
+    val seeders: Int? = null,
+    val leechers: Int? = null,
+    @SerialName("times_completed") val timesCompleted: Long? = null,
+    val views: Long? = null,
+    val freeleech: Boolean = false,
+    val exclusive: Boolean = false,
+    @SerialName("file_count") val fileCount: Int? = null,
+    @SerialName("file_size_bytes") val fileSizeBytes: Long? = null,
+)
+
+@Serializable
+data class MediaInfoSummary(
+    val video: VideoInfoDetails? = null,
+    val audio: List<AudioInfoDetails> = emptyList(),
+    val subtitles: List<SubInfoDetails> = emptyList(),
+)
+
+@Serializable
+data class VideoInfoDetails(
+    val codec: String? = null,
+    val resolution: String? = null,
+    @SerialName("duration_secs") val durationSecs: Int? = null,
+    val fps: Float? = null,
+    @SerialName("bitrate_kbps") val bitrateKbps: Int? = null,
+    val hdr: String? = null,
+)
+
+@Serializable
+data class AudioInfoDetails(
+    val lang: String? = null,
+    val codec: String? = null,
+    val channels: Int? = null,
+    @SerialName("bitrate_kbps") val bitrateKbps: Int? = null,
+    val title: String? = null,
+    val default: Boolean = false,
+    @SerialName("commercial_name") val commercialName: String? = null,
+)
+
+@Serializable
+data class SubInfoDetails(
+    val lang: String? = null,
+    val format: String? = null,
+    val title: String? = null,
+    val default: Boolean = false,
+    val forced: Boolean = false,
+)
+
+@Serializable
+data class AddFollowRequest(
+    @SerialName("tmdb_id") val tmdbId: Long,
+    val name: String? = null,
+    @SerialName("total_seasons") val totalSeasons: Int? = null,
+)
+
+@Serializable
+data class EpisodesResponse(
+    val season: Int,
+    @SerialName("total_seasons") val totalSeasons: Int? = null,
+    val items: List<EpisodeItem> = emptyList(),
+)
+
+@Serializable
+data class EpisodeItem(
+    val season: Int,
+    val episode: Int,
+    val name: String? = null,
+    val overview: String? = null,
+    @SerialName("air_date") val airDate: String? = null,
+    @SerialName("still_path") val stillPath: String? = null,
+    @SerialName("runtime_minutes") val runtimeMinutes: Int? = null,
+    /** "downloaded" | "available" | "unavailable" */
+    val status: String,
+    val watched: Boolean = false,
+    val infohash: String? = null,
+    @SerialName("file_idx") val fileIdx: Int? = null,
+    @SerialName("indexer_provider") val indexerProvider: String? = null,
+    @SerialName("indexer_torrent_id") val indexerTorrentId: String? = null,
+)
+
+@Serializable
+data class GrabEpisodeResponse(
+    val infohash: String,
+    @SerialName("file_idx") val fileIdx: Int,
+    @SerialName("already_grabbed") val alreadyGrabbed: Boolean,
+)
+
+@Serializable
+data class EpisodeContext(
+    val followed: Boolean,
+    val current: EpisodePoint? = null,
+    val next: EpisodePoint? = null,
+)
+
+@Serializable
+data class EpisodePoint(
+    @SerialName("tmdb_id") val tmdbId: Long,
+    val season: Int,
+    val episode: Int,
+    /** "downloaded" | "available" | "unavailable" */
+    val status: String,
+)
+
+/**
+ * Polymorphic response from `/api/library?view=...`. The backend
+ * tags each variant with the `view` field so kotlinx.serialization
+ * can route to the right shape. We only consume `Collections` from TV
+ * (the raw torrent view stays on the web admin panel) but the type
+ * still models both for forward-compat.
+ */
+@Serializable
+sealed class LibraryResponse {
+    @Serializable
+    @SerialName("collections")
+    data class Collections(val items: List<CollectionListItem> = emptyList()) : LibraryResponse()
+
+    @Serializable
+    @SerialName("torrents")
+    data class Torrents(val items: List<TorrentView> = emptyList()) : LibraryResponse()
+}
+
+@Serializable
+data class CollectionListItem(
+    val id: String,
+    @SerialName("tmdb_id") val tmdbId: Long? = null,
+    @SerialName("display_title") val displayTitle: String,
+    val kind: String,
+    @SerialName("torrent_count") val torrentCount: Long = 0,
+    @SerialName("total_size_bytes") val totalSizeBytes: Long = 0,
+    @SerialName("episode_count") val episodeCount: Long = 0,
+    @SerialName("representative_infohash") val representativeInfohash: String? = null,
 )
 
 fun tmdbPosterUrl(path: String?, size: String = "w342"): String? =

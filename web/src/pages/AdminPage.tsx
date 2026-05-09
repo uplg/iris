@@ -1,6 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { KeyRound, Plus, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import { Link } from "react-router";
+import {
+  ArrowLeft,
+  KeyRound,
+  List,
+  Plus,
+  RotateCcw,
+  ShieldCheck,
+  Terminal,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -72,9 +82,40 @@ export function AdminPage() {
 
   return (
     <div className="grid gap-8">
-      <section>
-        <h1 className="text-3xl font-semibold tracking-tight">Admin</h1>
-        <p className="mt-1 text-muted-foreground">Invitations and account management.</p>
+      {/* Admin banner — visually distinct from the family-facing UI so
+          it's always clear this isn't where chérie / mom should be.
+          Amber border + monospace font for the "this is the engine
+          room" effect. */}
+      <section className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="rounded-md bg-amber-500/15 p-2 text-amber-400">
+              <Terminal className="size-5" />
+            </div>
+            <div>
+              <h1 className="font-mono text-2xl font-semibold tracking-tight">
+                Admin · Seedbox
+              </h1>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Pannel technique. La vue famille vit sur la page d'accueil.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link to="/library?view=torrents">
+                <List className="size-3.5" />
+                Vue torrents brute
+              </Link>
+            </Button>
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/">
+                <ArrowLeft className="size-3.5" />
+                Retour à l'accueil
+              </Link>
+            </Button>
+          </div>
+        </div>
       </section>
 
       <Card>

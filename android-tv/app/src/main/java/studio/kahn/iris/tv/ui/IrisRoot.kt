@@ -16,7 +16,9 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.screens.DetailScreen
 import studio.kahn.iris.tv.ui.screens.HomeScreen
 import studio.kahn.iris.tv.ui.screens.PairingScreen
+import studio.kahn.iris.tv.ui.screens.SearchDetailScreen
 import studio.kahn.iris.tv.ui.screens.SearchScreen
+import studio.kahn.iris.tv.ui.screens.SeriesScreen
 import studio.kahn.iris.tv.ui.screens.SettingsScreen
 import studio.kahn.iris.tv.ui.screens.SetupScreen
 import studio.kahn.iris.tv.ui.screens.WatchScreen
@@ -28,13 +30,24 @@ object Routes {
     const val DETAIL = "detail/{infohash}"
     const val SETTINGS = "settings"
     const val SEARCH = "search?q={q}&autoPlay={autoPlay}"
+    const val SEARCH_DETAIL = "search-detail/{provider}/{externalId}?tmdbId={tmdbId}"
+    const val SERIES = "series/{tmdbId}"
     const val WATCH = "watch/{infohash}/{fileIdx}"
     fun detail(infohash: String) = "detail/$infohash"
     fun search(q: String? = null, autoPlay: Boolean = false): String {
         val qPart = q?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
         return "search?q=$qPart&autoPlay=$autoPlay"
     }
+    fun searchDetail(provider: String, externalId: String, tmdbId: Long?): String {
+        val p = java.net.URLEncoder.encode(provider, "UTF-8")
+        val e = java.net.URLEncoder.encode(externalId, "UTF-8")
+        // Pass `0` to mean "no tmdb id" — NavType.LongType doesn't accept null
+        // and treating 0 as "absent" is fine since TMDB ids start at 1.
+        val t = tmdbId ?: 0L
+        return "search-detail/$p/$e?tmdbId=$t"
+    }
     fun watch(infohash: String, fileIdx: Int) = "watch/$infohash/$fileIdx"
+    fun series(tmdbId: Long) = "series/$tmdbId"
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -96,8 +109,11 @@ fun IrisRoot(
                     onOpenSettings = {
                         navController.navigate(Routes.SETTINGS)
                     },
-                    onOpenSearch = {
-                        navController.navigate(Routes.search())
+                    onOpenSearch = { query ->
+                        navController.navigate(Routes.search(query))
+                    },
+                    onOpenSeries = { tmdbId ->
+                        navController.navigate(Routes.series(tmdbId))
                     },
                 )
             }
@@ -146,11 +162,66 @@ fun IrisRoot(
                     container = container,
                     initialQuery = q,
                     autoPickTop = autoPlay,
+                    onPickResult = { providerId, externalId, tmdbId ->
+                        navController.navigate(Routes.searchDetail(providerId, externalId, tmdbId))
+                    },
                     onPickFile = { infohash, fileIdx ->
                         navController.navigate(Routes.watch(infohash, fileIdx))
                     },
                     onPickTorrent = { infohash ->
                         navController.navigate(Routes.detail(infohash))
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(
+                Routes.SEARCH_DETAIL,
+                arguments = listOf(
+                    navArgument("provider") { type = NavType.StringType },
+                    navArgument("externalId") { type = NavType.StringType },
+                    navArgument("tmdbId") {
+                        type = NavType.LongType
+                        defaultValue = 0L
+                    },
+                ),
+            ) { backStackEntry ->
+                val provider = java.net.URLDecoder.decode(
+                    backStackEntry.arguments!!.getString("provider")!!, "UTF-8",
+                )
+                val externalId = java.net.URLDecoder.decode(
+                    backStackEntry.arguments!!.getString("externalId")!!, "UTF-8",
+                )
+                val tmdbId = backStackEntry.arguments!!.getLong("tmdbId").takeIf { it > 0L }
+                SearchDetailScreen(
+                    container = container,
+                    providerId = provider,
+                    externalId = externalId,
+                    tmdbId = tmdbId,
+                    onPickFile = { infohash, fileIdx ->
+                        navController.navigate(Routes.watch(infohash, fileIdx)) {
+                            // Don't leave the detail screen on the back
+                            // stack — user lands at /watch and Back from
+                            // there should go to search.
+                            popUpTo(Routes.SEARCH_DETAIL) { inclusive = true }
+                        }
+                    },
+                    onPickTorrent = { infohash ->
+                        navController.navigate(Routes.detail(infohash)) {
+                            popUpTo(Routes.SEARCH_DETAIL) { inclusive = true }
+                        }
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(
+                Routes.SERIES,
+                arguments = listOf(navArgument("tmdbId") { type = NavType.LongType }),
+            ) { backStackEntry ->
+                SeriesScreen(
+                    container = container,
+                    tmdbId = backStackEntry.arguments!!.getLong("tmdbId"),
+                    onPickFile = { infohash, fileIdx ->
+                        navController.navigate(Routes.watch(infohash, fileIdx))
                     },
                     onBack = { navController.popBackStack() },
                 )

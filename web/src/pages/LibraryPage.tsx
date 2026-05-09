@@ -1,21 +1,204 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router";
-import { CheckCircle2, ChevronDown, ChevronUp, Download, Play, Trash2 } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router";
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Download,
+  LayoutGrid,
+  List,
+  Play,
+  Trash2,
+} from "lucide-react";
+
+import { MediaCard } from "@/components/MediaCard";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
-import { me, torrents, type ContinueWatchingItem, type TorrentView } from "@/lib/api";
+import { EmptyState, ErrorState, SkeletonCard } from "@/components/State";
+import {
+  library,
+  me,
+  torrents,
+  type CollectionListItem,
+  type ContinueWatchingItem,
+  type TorrentView,
+} from "@/lib/api";
 import { formatSize } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
+/**
+ * Library page with two views:
+ *
+ *   * Collections (default): Netflix-style poster grid, one card per
+ *     logical entity. Click a TV show → its Series page; click a movie
+ *     → straight to /watch.
+ *   * Torrents: the legacy flat list — kept for power users / debug,
+ *     reachable via the toggle in the top-right.
+ *
+ * The toggle is mirrored into `?view=torrents` so a refresh keeps the
+ * user's pick.
+ */
 export function LibraryPage() {
+  const [params, setParams] = useSearchParams();
+  const view = params.get("view") === "torrents" ? "torrents" : "collections";
+
+  return (
+    <div className="grid gap-6">
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">Bibliothèque</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {view === "collections"
+              ? "Films et séries regroupés."
+              : "Tous les torrents (vue brute)."}
+          </p>
+        </div>
+        <div className="flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5">
+          <ViewToggleButton
+            active={view === "collections"}
+            onClick={() => setParams({}, { replace: true })}
+            icon={<LayoutGrid className="size-3.5" />}
+            label="Collections"
+          />
+          <ViewToggleButton
+            active={view === "torrents"}
+            onClick={() => setParams({ view: "torrents" }, { replace: true })}
+            icon={<List className="size-3.5" />}
+            label="Torrents"
+          />
+        </div>
+      </header>
+
+      {view === "collections" ? <CollectionsView /> : <TorrentsView />}
+    </div>
+  );
+}
+
+function ViewToggleButton({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex items-center gap-1.5 rounded px-3 py-1 text-xs transition",
+        active
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+      )}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Collections view
+// ---------------------------------------------------------------------------
+
+function CollectionsView() {
+  const navigate = useNavigate();
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["library", "collections"],
+    queryFn: () => library.list("collections"),
+    refetchInterval: 5_000,
+  });
+
+  if (isLoading) {
+    return <SkeletonCard count={5} />;
+  }
+  if (error) {
+    return <ErrorState error={error} />;
+  }
+  const items: CollectionListItem[] =
+    data && data.view === "collections" ? data.items : [];
+  if (items.length === 0) {
+    return (
+      <EmptyState
+        title="Bibliothèque vide"
+        body={
+          <>
+            Lance une{" "}
+            <Link to="/search" className="underline">
+              recherche
+            </Link>{" "}
+            pour ajouter ton premier titre.
+          </>
+        }
+      />
+    );
+  }
+  return (
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+      {items.map((c) => (
+        <MediaCard
+          key={c.id}
+          title={c.display_title}
+          subtitle={collectionSubtitle(c)}
+          tmdbId={c.tmdb_id}
+          kind={c.kind}
+          onClick={() => routeCollection(c, navigate)}
+          badge={
+            c.kind === "tv" && c.episode_count > 0 ? (
+              <Badge variant="secondary" className="text-[10px] shadow-md">
+                {c.episode_count} ep
+              </Badge>
+            ) : undefined
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
+function collectionSubtitle(c: CollectionListItem): string {
+  const parts: string[] = [];
+  if (c.kind === "tv" && c.torrent_count > 1) {
+    parts.push(`${c.torrent_count} torrents`);
+  }
+  parts.push(formatSize(c.total_size_bytes));
+  return parts.join(" · ");
+}
+
+function routeCollection(
+  c: CollectionListItem,
+  navigate: ReturnType<typeof useNavigate>,
+) {
+  // Movies with a TMDB id are still single-torrent in practice; route
+  // straight to /watch. Movies without TMDB → also /watch on the
+  // first torrent we have (fetched via collection detail). For
+  // simplicity, fall through to /collection/:id which handles both.
+  if (c.kind === "tv" && c.tmdb_id) {
+    navigate(`/series/${c.tmdb_id}`);
+    return;
+  }
+  navigate(`/collection/${c.id}`);
+}
+
+// ---------------------------------------------------------------------------
+// Torrents view (legacy)
+// ---------------------------------------------------------------------------
+
+function TorrentsView() {
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
-    queryKey: ["torrents"],
-    queryFn: torrents.list,
-    refetchInterval: 3000,
+    queryKey: ["library", "torrents"],
+    queryFn: () => library.list("torrents"),
+    refetchInterval: 3_000,
   });
   const cwQ = useQuery({
     queryKey: ["continue-watching"],
@@ -26,45 +209,37 @@ export function LibraryPage() {
   const remove = useMutation({
     mutationFn: (infohash: string) => torrents.remove(infohash),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["torrents"] });
+      void qc.invalidateQueries({ queryKey: ["library"] });
       void qc.invalidateQueries({ queryKey: ["continue-watching"] });
     },
   });
 
+  if (isLoading) return <SkeletonCard count={3} />;
+  if (error) return <ErrorState error={error} />;
+  const items: TorrentView[] = data && data.view === "torrents" ? data.items : [];
+  if (items.length === 0)
+    return (
+      <EmptyState
+        title="Aucun torrent"
+        body="La bibliothèque est vide pour l'instant."
+      />
+    );
   return (
-    <div className="grid gap-6">
-      <section>
-        <h1 className="text-3xl font-semibold tracking-tight">Library</h1>
-        <p className="mt-1 text-muted-foreground">Active downloads and seeded torrents.</p>
-      </section>
-
-      {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
-      {error && (
-        <p className="text-sm text-destructive">
-          {error instanceof Error ? error.message : "failed to load"}
-        </p>
-      )}
-      {data && data.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          Nothing yet. Search for something on the home page.
-        </p>
-      )}
-      <div className="grid gap-3">
-        {data?.map((t) => (
-          <LibraryRow
-            key={t.infohash}
-            t={t}
-            progress={cwQ.data ?? []}
-            onRemove={() => remove.mutate(t.infohash)}
-            removing={remove.isPending}
-          />
-        ))}
-      </div>
+    <div className="grid gap-3">
+      {items.map((t) => (
+        <TorrentRow
+          key={t.infohash}
+          t={t}
+          progress={cwQ.data ?? []}
+          onRemove={() => remove.mutate(t.infohash)}
+          removing={remove.isPending}
+        />
+      ))}
     </div>
   );
 }
 
-function LibraryRow({
+function TorrentRow({
   t,
   progress,
   onRemove,

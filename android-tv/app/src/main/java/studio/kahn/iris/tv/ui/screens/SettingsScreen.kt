@@ -309,9 +309,9 @@ private fun UpdaterStatus(state: AppUpdater.Progress?) {
 private fun formatBytes(b: Long): String {
     if (b < 0) return "?"
     val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format("%.1f MB", mb)
+    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f MB", mb)
     val kb = b / 1_000.0
-    if (kb >= 1.0) return String.format("%.0f KB", kb)
+    if (kb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f KB", kb)
     return "$b B"
 }
 

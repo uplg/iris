@@ -20,7 +20,8 @@ pub fn build_router(state: AppState) -> Router {
     let auth = routes::auth::router()
         .nest("/device", routes::devices::auth_router());
     let me = routes::me::router()
-        .nest("/devices", routes::devices::me_router());
+        .nest("/devices", routes::devices::me_router())
+        .nest("/follows", routes::follows::router());
 
     let api = Router::new()
         .route("/health", get(routes::health::get))
@@ -28,6 +29,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/admin", routes::admin::router())
         .nest("/me", me)
         .nest("/search", routes::search::router())
+        .nest("/discover", routes::discover::router())
+        .nest("/library", routes::library::router())
         .nest("/torrents", routes::torrents::router())
         .nest("/providers", routes::providers::router())
         .nest("/metadata", routes::metadata::router());

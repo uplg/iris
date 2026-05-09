@@ -203,6 +203,10 @@ fn dedupe_video(items: Vec<VideoStream>) -> Vec<VideoStream> {
             s.profile.clone(),
             s.width,
             s.height,
+            // Quantise the frame rate to mil­li-fps (24.0 → 24000) so the
+            // tuple's `Eq` works on `f64` indirectly via i64. Real frame
+            // rates are 12–120 fps, can't overflow i64.
+            #[allow(clippy::cast_possible_truncation)]
             s.frame_rate.map(|f| (f * 1000.0).round() as i64),
         );
         if !seen.insert(key) {

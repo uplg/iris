@@ -22,8 +22,10 @@ use iris_core::Error;
 use iris_core::Result;
 use iris_core::search::{
     MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, SortField, SortOrder,
-    TorrentSource,
+    TorrentDetails, TorrentSource,
 };
+
+use crate::nfo;
 use reqwest::header::{
     ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, HeaderMap, HeaderValue, ORIGIN, REFERER, USER_AGENT,
 };
@@ -43,6 +45,15 @@ const DEFAULT_ORIGIN: &str = "https://torr9.net";
 const TOKEN_REFRESH_AFTER: Duration = Duration::from_secs(25 * 24 * 60 * 60);
 /// Bencoded torrent files start with a dictionary marker.
 const BENCODE_DICT_MARKER: u8 = b'd';
+/// Featured carousels are curated server-side and refresh slowly. Caching
+/// 30 min keeps the discovery home cheap without going stale on the
+/// daily-ish editorial cadence.
+const FEATURED_TTL: Duration = Duration::from_secs(30 * 60);
+/// Torrent details get re-opened when the user shops around the search
+/// results. 60s avoids hammering the indexer when they bounce between
+/// 5 torrents in 30 seconds, but stays fresh enough for seeders/leechers
+/// to be representative.
+const DETAILS_TTL: Duration = Duration::from_secs(60);
 
 pub struct Torr9 {
     id: String,
@@ -51,10 +62,23 @@ pub struct Torr9 {
     password: String,
     http: Client,
     token: Mutex<Option<CachedToken>>,
+    featured_movies_cache: Mutex<Option<CachedFeatured>>,
+    featured_series_cache: Mutex<Option<CachedFeatured>>,
+    details_cache: Mutex<std::collections::HashMap<String, CachedDetails>>,
 }
 
 struct CachedToken {
     bearer: String,
+    fetched_at: Instant,
+}
+
+struct CachedFeatured {
+    items: Vec<SearchResult>,
+    fetched_at: Instant,
+}
+
+struct CachedDetails {
+    details: TorrentDetails,
     fetched_at: Instant,
 }
 
@@ -104,7 +128,75 @@ impl Torr9 {
             password,
             http,
             token: Mutex::new(None),
+            featured_movies_cache: Mutex::new(None),
+            featured_series_cache: Mutex::new(None),
+            details_cache: Mutex::new(std::collections::HashMap::new()),
         }))
+    }
+
+    /// Shared body for `featured_movies` / `featured_series`. The torr9
+    /// endpoint returns the same shape on both routes (a list of torrents)
+    /// — only the path differs.
+    async fn featured(&self, kind: FeaturedKind) -> Result<Vec<SearchResult>> {
+        let cache_slot = match kind {
+            FeaturedKind::Movies => &self.featured_movies_cache,
+            FeaturedKind::Series => &self.featured_series_cache,
+        };
+        if let Some(c) = cache_slot.lock().await.as_ref() {
+            if c.fetched_at.elapsed() < FEATURED_TTL {
+                return Ok(c.items.clone());
+            }
+        }
+
+        let path = match kind {
+            FeaturedKind::Movies => "/api/v1/featured/movies",
+            FeaturedKind::Series => "/api/v1/featured/series",
+        };
+        let url = self
+            .base_url
+            .join(path)
+            .map_err(|e| Error::Provider(format!("torr9 join featured url: {e}")))?;
+
+        // Buffer the body so we can log it on a deserialise failure —
+        // the torr9 featured endpoints aren't documented and the shape
+        // can change without warning.
+        let body = self
+            .authed_get(|http| http.get(url.clone()))
+            .await?
+            .text()
+            .await
+            .map_err(|e| Error::Provider(format!("torr9 featured body: {e}")))?;
+
+        let resp: FeaturedResponse = serde_json::from_str(&body).map_err(|e| {
+            tracing::warn!(
+                provider = %self.id,
+                ?kind,
+                body_preview = %body.chars().take(300).collect::<String>(),
+                error = %e,
+                "torr9 featured decode failed — unexpected shape",
+            );
+            Error::Provider(format!("torr9 featured decode: {e}"))
+        })?;
+
+        let id = self.id.clone();
+        let items: Vec<SearchResult> = resp
+            .items
+            .into_iter()
+            .map(|t| t.into_search_result(&id))
+            .collect();
+
+        tracing::info!(
+            provider = %self.id,
+            ?kind,
+            count = items.len(),
+            "torr9 featured fetched",
+        );
+
+        *cache_slot.lock().await = Some(CachedFeatured {
+            items: items.clone(),
+            fetched_at: Instant::now(),
+        });
+        Ok(items)
     }
 
     async fn login(&self) -> Result<String> {
@@ -263,6 +355,85 @@ impl SearchProvider for Torr9 {
         })
     }
 
+    async fn featured_movies(&self) -> Result<Vec<SearchResult>> {
+        self.featured(FeaturedKind::Movies).await
+    }
+
+    async fn featured_series(&self) -> Result<Vec<SearchResult>> {
+        self.featured(FeaturedKind::Series).await
+    }
+
+    async fn details(&self, external_id: &str) -> Result<Option<TorrentDetails>> {
+        if external_id.is_empty() || !external_id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(Error::InvalidInput(format!(
+                "torr9 external_id must be a numeric id, got `{external_id}`"
+            )));
+        }
+
+        // Cache hit?
+        {
+            let cache = self.details_cache.lock().await;
+            if let Some(c) = cache.get(external_id) {
+                if c.fetched_at.elapsed() < DETAILS_TTL {
+                    return Ok(Some(c.details.clone()));
+                }
+            }
+        }
+
+        let url = self
+            .base_url
+            .join(&format!("/api/v1/torrents/{external_id}"))
+            .map_err(|e| Error::Provider(format!("torr9 join details url: {e}")))?;
+        let raw: TorrentDetailsRaw = self
+            .authed_get(|http| http.get(url.clone()))
+            .await?
+            .json()
+            .await
+            .map_err(|e| Error::Provider(format!("torr9 details decode: {e}")))?;
+
+        let category = match (raw.category_name.clone(), raw.parent_category_name.clone()) {
+            (Some(c), Some(p)) if c != p => Some(format!("{p} / {c}")),
+            (Some(c), _) => Some(c),
+            (None, Some(p)) => Some(p),
+            (None, None) => None,
+        };
+
+        let media_info = raw.nfo.as_deref().and_then(nfo::parse);
+
+        let details = TorrentDetails {
+            provider_id: self.id.clone(),
+            external_id: external_id.to_string(),
+            title: raw.title,
+            description: raw.description.filter(|s| !s.is_empty()),
+            nfo: raw.nfo.filter(|s| !s.is_empty()),
+            media_info,
+            tags: raw.tags,
+            category,
+            uploader: raw.uploader_name,
+            uploaded_at: raw.upload_date,
+            age: raw.age,
+            seeders: raw.seeders,
+            leechers: raw.leechers,
+            times_completed: raw.times_completed,
+            views: raw.views,
+            freeleech: raw.is_freeleech,
+            exclusive: raw.is_exclu,
+            file_count: raw.file_count,
+            file_size_bytes: raw.file_size_bytes,
+        };
+
+        // Store in cache for the next click.
+        self.details_cache.lock().await.insert(
+            external_id.to_string(),
+            CachedDetails {
+                details: details.clone(),
+                fetched_at: Instant::now(),
+            },
+        );
+
+        Ok(Some(details))
+    }
+
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource> {
         if external_id.is_empty() || !external_id.chars().all(|c| c.is_ascii_digit()) {
             return Err(Error::InvalidInput(format!(
@@ -291,9 +462,131 @@ impl SearchProvider for Torr9 {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum FeaturedKind {
+    Movies,
+    Series,
+}
+
+/// torr9's `/featured/{movies,series}` returns a different shape than
+/// the search endpoint — it's editorial-curated entries that POINT at
+/// torrents rather than torrent rows themselves:
+///
+/// ```json
+/// {"items": [
+///   {"id":96,"type":"movie","tmdb_id":1159559,"torrent_id":210100,
+///    "title":"Scream 7","poster_url":"https://image.tmdb.org/..."},
+///   ...
+/// ]}
+/// ```
+///
+/// The `torrent_id` is what we need to feed back into the ingest path
+/// (it's the `external_id` for `provider.resolve()`). `info_hash` /
+/// `file_size_bytes` / seeders aren't in the featured payload — they
+/// come back through `resolve()` if the user actually grabs.
+#[derive(Debug, Deserialize)]
+struct FeaturedResponse {
+    #[serde(default)]
+    items: Vec<FeaturedItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeaturedItem {
+    /// Editorial entry id (NOT the torrent id). Kept around for logs
+    /// / future debugging only.
+    #[allow(dead_code)]
+    id: u64,
+    /// `"movie"` / `"series"` — drives the home shelf split.
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    tmdb_id: Option<u64>,
+    /// torr9 torrent id — what we pass to `Torr9::resolve` when the
+    /// user clicks Préparer.
+    torrent_id: u64,
+    title: String,
+    /// Pre-resolved TMDB poster URL. Frontend can use it directly to
+    /// skip a TMDB metadata lookup on the discovery shelf.
+    #[allow(dead_code)]
+    #[serde(default)]
+    poster_url: Option<String>,
+}
+
+impl FeaturedItem {
+    fn into_search_result(self, provider_id: &str) -> SearchResult {
+        let kind = match self.kind.as_deref() {
+            Some("movie") => Some(MediaKind::Movie),
+            // torr9 emits "series"; tolerate "tv" if a future variant
+            // shows up.
+            Some("series") | Some("tv") => Some(MediaKind::Tv),
+            _ => None,
+        };
+        SearchResult {
+            provider_id: provider_id.to_string(),
+            external_id: self.torrent_id.to_string(),
+            title: self.title,
+            year: None,
+            size_bytes: None,
+            seeders: None,
+            leechers: None,
+            infohash: None,
+            magnet: None,
+            category: None,
+            tags: Vec::new(),
+            freeleech: false,
+            uploader: None,
+            uploaded_at: None,
+            tmdb_id: self.tmdb_id.filter(|id| *id > 0),
+            kind,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct LoginResponse {
     token: String,
+}
+
+/// Single-torrent detail payload from `GET /api/v1/torrents/:id`. Shape
+/// matches torr9 v1 closely; everything optional so a future field
+/// rename / removal doesn't break existing builds.
+#[derive(Debug, Deserialize)]
+struct TorrentDetailsRaw {
+    #[allow(dead_code)]
+    id: u64,
+    title: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    nfo: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    category_name: Option<String>,
+    #[serde(default)]
+    parent_category_name: Option<String>,
+    #[serde(default)]
+    uploader_name: Option<String>,
+    #[serde(default)]
+    upload_date: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    age: Option<String>,
+    #[serde(default)]
+    seeders: Option<u32>,
+    #[serde(default)]
+    leechers: Option<u32>,
+    #[serde(default)]
+    times_completed: Option<u64>,
+    #[serde(default)]
+    views: Option<u64>,
+    #[serde(default)]
+    is_freeleech: bool,
+    #[serde(default)]
+    is_exclu: bool,
+    #[serde(default)]
+    file_count: Option<u32>,
+    #[serde(default)]
+    file_size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
