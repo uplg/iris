@@ -39,20 +39,21 @@ fun buildPlayer(
  * `DefaultMediaSourceFactory` to `HlsMediaSource`, which handles
  * multi-audio rendition switching natively via Media3's track selector.
  * Text-based subtitles are still side-loaded as external WebVTT tracks.
+ *
+ * Resume position is intentionally NOT applied here via
+ * `ClippingConfiguration` — that would re-window the timeline so
+ * `player.duration` reports `(end - resume)` instead of the full file
+ * duration (a 23-min episode came back as a 6-min one after resuming).
+ * The caller seeks via `Player.setMediaItem(item, startPositionMs)`
+ * which positions the playhead without touching the timeline.
  */
 @UnstableApi
 fun buildMediaItem(
     playUrl: String,
     subtitles: List<MediaItem.SubtitleConfiguration>,
-    startPositionSeconds: Double = 0.0,
 ): MediaItem =
     MediaItem.Builder()
         .setUri(playUrl)
         .setMimeType(MimeTypes.APPLICATION_M3U8)
         .setSubtitleConfigurations(subtitles)
-        .setClippingConfiguration(
-            MediaItem.ClippingConfiguration.Builder()
-                .setStartPositionMs((startPositionSeconds * 1000).toLong().coerceAtLeast(0))
-                .build()
-        )
         .build()

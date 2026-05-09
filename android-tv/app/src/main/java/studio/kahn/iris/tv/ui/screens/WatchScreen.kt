@@ -226,8 +226,8 @@ private fun ReadyPlayer(
     val player = remember(playUrl) {
         buildPlayer(context, container.okHttpClient).apply {
             setMediaItem(
-                buildMediaItem(playUrl, subtitles, startPositionSec),
-                (startPositionSec * 1000).toLong(),
+                buildMediaItem(playUrl, subtitles),
+                (startPositionSec * 1000).toLong().coerceAtLeast(0),
             )
             prepare()
             playWhenReady = true
