@@ -37,7 +37,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -255,50 +259,39 @@ fun SearchScreen(
         }
     }
 
+    val focusManager: FocusManager = LocalFocusManager.current
+    val keyboard: SoftwareKeyboardController? = LocalSoftwareKeyboardController.current
     Column(
         Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = layout.gutterHorizontal, vertical = layout.gutterVertical),
-        verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+            .padding(horizontal = layout.gutterHorizontal, vertical = Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
-        // --- Header ---
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Search",
-                style = MaterialTheme.typography.headlineLarge,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Button(
-                onClick = onBack,
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-            ) { Text("← Back") }
-        }
+        // No "Search" header and no Back button — the remote already
+        // has a Back button and the screen's purpose is obvious from
+        // the focused input. Every dp saved here is a poster row
+        // the user can see above the fold.
 
-        // --- Input + Voice row ---
+        // --- Input + chips on a single dense row ---
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Local helper so the input + the IME's "Search" key on
-            // Android TV's leanback keyboard run the same handler. The
-            // bare `imeAction = ImeAction.Search` flag wasn't enough —
-            // it advertises the action to the IME but without a
-            // `keyboardActions` callback the keypress was a no-op,
-            // which is why the user had to dismiss the keyboard and
-            // hit our app-side Search button.
+            // Submitting fires the search AND drops focus / dismisses
+            // the IME so the user lands directly on the result grid
+            // instead of having to D-pad-back through the keyboard.
+            // Without this drop, hitting the IME's Search key (or our
+            // Search button) re-focused the field and the keyboard
+            // stayed up.
             val submit = {
                 if (!pending && query.trim().length >= 2) {
                     submittedQuery = query.trim()
                     page = 1
                 }
+                focusManager.clearFocus(force = true)
+                keyboard?.hide()
             }
             OutlinedTextField(
                 value = query,
@@ -331,27 +324,25 @@ fun SearchScreen(
                     unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                     cursorColor = MaterialTheme.colorScheme.primary,
                 ),
-                modifier = Modifier.weight(1f).height(60.dp),
+                // Input keeps its own column at a sensible width, NOT
+                // stretching to fill — leaves room for the Type chips
+                // on the same row.
+                modifier = Modifier.width(420.dp).height(48.dp),
             )
             Button(
                 onClick = { submit() },
                 enabled = !pending && query.trim().length >= 2,
                 shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
-            ) { Text(if (pending) "Searching…" else "Search") }
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+            ) { Text(if (pending) "…" else "Search") }
             Button(
                 onClick = { launchVoice() },
                 shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-            ) { Text("🎤  Voice") }
-        }
-
-        // --- Filter + Sort chips ---
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+            ) { Text("🎤") }
+            Box(Modifier.width(Spacing.lg))
+            // Type chips share the input row to save a vertical line.
+            // Sort gets its own thin row below.
             ChipGroup(
                 label = "Type",
                 options = KindFilter.values().toList(),
@@ -359,7 +350,14 @@ fun SearchScreen(
                 labelOf = { it.label },
                 onChange = { kind = it; page = 1 },
             )
-            Box(Modifier.width(Spacing.lg))
+        }
+
+        // --- Sort chips alone on a thin row ---
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             ChipGroup(
                 label = "Sort",
                 options = SortMode.values().toList(),
@@ -380,24 +378,24 @@ fun SearchScreen(
                 submittedQuery = query.trim().ifEmpty { submittedQuery }
                 page = 1
             }
-            pending && rows.isEmpty() -> SkeletonGrid(layout.gridPosterMin)
+            pending && rows.isEmpty() -> SkeletonGrid(110.dp)
             !pending && rows.isEmpty() -> EmptyHint(
                 title = "No results",
                 body = "Try a different title or switch the kind / sort filters.",
             )
             else -> {
-                ResultsHeader(
-                    submittedQuery = submittedQuery,
-                    totals = totals,
-                    pending = pending,
-                    providers = data?.providers.orEmpty().map { it.id },
-                )
+                // No results-header bar. Pagination at the bottom
+                // already shows "Page X of Y" — that's enough; the
+                // big "Results for X" / "N hits" line was eating a
+                // poster row's worth of vertical space.
+                // Compact poster minSize: smaller cards = more rows
+                // visible at a glance.
                 Box(Modifier.weight(1f)) {
                     LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = layout.gridPosterMin),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.xl),
-                        contentPadding = PaddingValues(vertical = Spacing.sm),
+                        columns = GridCells.Adaptive(minSize = 110.dp),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        contentPadding = PaddingValues(vertical = Spacing.xs),
                     ) {
                         items(rows, key = { "${it.providerId}:${it.externalId}" }) { r ->
                             val cleaned = remember(r.title) { extractSceneTitle(r.title) }

@@ -127,7 +127,9 @@ pub async fn continue_watching(
 ) -> Result<Vec<ContinueWatchingRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
     sqlx::query_as::<_, ContinueWatchingRow>(
-        "SELECT p.infohash, t.name as torrent_name, t.tmdb_id, t.tmdb_verified, p.file_idx, \
+        "SELECT p.infohash, t.name as torrent_name, \
+            COALESCE(c.tmdb_id, t.tmdb_id) as tmdb_id, \
+            t.tmdb_verified, p.file_idx, \
             p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
             p.audio_track_idx, p.subtitle_track_idx, c.kind as kind \
          FROM playback_progress p \

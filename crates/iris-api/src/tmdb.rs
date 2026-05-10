@@ -299,11 +299,15 @@ impl TmdbClient {
                 CacheEntry::NotFound => None,
             };
         }
-        // Try the hinted kind first, fall back to the other only when
-        // unhinted lookups (legacy callers) ask for it.
+        // Try the hinted kind first, fall back to the other one if
+        // nothing comes back. The fallback matters because some
+        // collections were misclassified by an older parser
+        // (`Silicon.Valley.S01.MULTI` → kind=movie, but the actual
+        // tmdb_id points at the TV show), and a strict-only lookup
+        // would 404 in that case and serve no poster at all.
         let order: &[TmdbKind] = match kind_hint {
-            Some(TmdbKind::Tv) => &[TmdbKind::Tv],
-            Some(TmdbKind::Movie) => &[TmdbKind::Movie],
+            Some(TmdbKind::Tv) => &[TmdbKind::Tv, TmdbKind::Movie],
+            Some(TmdbKind::Movie) => &[TmdbKind::Movie, TmdbKind::Tv],
             None => &[TmdbKind::Movie, TmdbKind::Tv],
         };
         for &k in order {

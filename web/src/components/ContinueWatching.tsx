@@ -46,7 +46,12 @@ export function ContinueWatching() {
           return (
             <MediaCard
               key={`${it.infohash}:${it.file_idx}`}
-              tmdbId={it.tmdb_verified ? it.tmdb_id : null}
+              // Trust the indexer-supplied tmdb_id without gating on
+              // verified — the lookup endpoint already does a kind
+              // namespace fallback so a wrong-kind id still resolves
+              // to *something*. A wrong poster is rare, missing
+              // posters were the loud regression.
+              tmdbId={it.tmdb_id}
               kind={it.kind}
               title={prettifyFilename(primary)}
               subtitle={subtitle}

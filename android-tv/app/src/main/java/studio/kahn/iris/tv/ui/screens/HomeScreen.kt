@@ -3,18 +3,21 @@ package studio.kahn.iris.tv.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.lazy.LazyColumn
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -200,11 +203,6 @@ fun HomeScreen(
         }
     }
 
-    // LazyColumn (not Column + verticalScroll) so D-pad focus moving
-    // down to a shelf the user hasn't scrolled to yet auto-brings it
-    // into view. The plain `verticalScroll` modifier doesn't react to
-    // focus events, which is why the Library row at the bottom was
-    // unreachable on TV remotes.
     val layout = LocalTvLayout.current
     LazyColumn(
         modifier = Modifier
@@ -288,6 +286,34 @@ fun HomeScreen(
             }
         }
 
+        // Library lives right after Continue Watching — it's the
+        // user's actual content and the most-visited shelf, so it
+        // needs to be in easy D-pad reach instead of buried below
+        // discovery shelves.
+        if (collections.isNotEmpty()) {
+            item(key = "shelf-library") {
+                Shelf(title = "Library · ${collections.size}") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(collections, key = { it.id }) { c ->
+                            CollectionCard(
+                                container = container,
+                                collection = c,
+                                onClick = {
+                                    val infohash = c.representativeInfohash ?: return@CollectionCard
+                                    val snap = library.firstOrNull { it.infohash == infohash }
+                                    if (snap != null) {
+                                        routeTorrent(snap, onPickFile, onPickTorrent)
+                                    } else {
+                                        onPickTorrent(infohash)
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         if (watchlist.isNotEmpty()) {
             item(key = "shelf-watchlist") {
                 Shelf(title = "My Watchlist · ${watchlist.size}") {
@@ -364,29 +390,6 @@ fun HomeScreen(
             }
         }
 
-        if (collections.isNotEmpty()) {
-            item(key = "shelf-library") {
-                Shelf(title = "Library · ${collections.size}") {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(collections, key = { it.id }) { c ->
-                            CollectionCard(
-                                container = container,
-                                collection = c,
-                                onClick = {
-                                    val infohash = c.representativeInfohash ?: return@CollectionCard
-                                    val snap = library.firstOrNull { it.infohash == infohash }
-                                    if (snap != null) {
-                                        routeTorrent(snap, onPickFile, onPickTorrent)
-                                    } else {
-                                        onPickTorrent(infohash)
-                                    }
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        }
     }
 
     @Suppress("UNUSED_EXPRESSION") scope
@@ -432,10 +435,33 @@ private fun routeTorrent(
     }
 }
 
+/**
+ * Vertical shelf with title + horizontal row of cards.
+ *
+ * The `bringIntoViewRequester` + `onFocusEvent` plumbing is what
+ * makes the parent `LazyColumn` actually scroll on D-pad. Compose's
+ * default focus handling moves focus to off-canvas items but doesn't
+ * move the viewport with it on TV — without this, you'd D-pad-down
+ * past the third visible row, focus would land somewhere invisible,
+ * and the screen would look frozen. Whenever any descendant gains
+ * focus we ask the surrounding lazy column to scroll the whole
+ * shelf into view.
+ */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun Shelf(title: String, content: @Composable () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val requester = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+    Column(
+        modifier = Modifier
+            .bringIntoViewRequester(requester)
+            .onFocusEvent { state ->
+                if (state.hasFocus) {
+                    scope.launch { requester.bringIntoView() }
+                }
+            },
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         Text(
             title.uppercase(),
             style = MaterialTheme.typography.labelLarge,
