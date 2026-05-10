@@ -1,9 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
-import { Link, useNavigate } from "react-router";
-import { Bookmark, Plus } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { Link } from "react-router";
+import { Bookmark } from "lucide-react";
 
 import { MediaCard } from "@/components/MediaCard";
+import { PreviewDialog } from "@/components/PreviewDialog";
 import { Shelf } from "@/components/Shelf";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -170,31 +171,22 @@ function WatchlistCard({ follow }: { follow: FollowSummary }) {
 }
 
 function FeaturedCard({ result }: { result: SearchResult }) {
-  const navigate = useNavigate();
-  const qc = useQueryClient();
+  // Detect whether the user already follows this series — only TV
+  // results matter for the Watchlist bookmark badge. We DON'T
+  // auto-follow on click anymore (was a usability foot-gun); the
+  // explicit Follow action lives inside PreviewDialog.
   const watchlistQ = useQuery({
     queryKey: ["follows"],
     queryFn: follows.list,
     staleTime: 60_000,
   });
-  // Find an existing follow whose normalized name matches this
-  // result's title — if so, the card jumps straight into it on
-  // click.
   const existing = useMemo(() => {
+    if (result.kind !== "tv") return undefined;
     const norm = normalizeForMatch(result.title);
     return watchlistQ.data?.find((f) => f.normalized_name === norm);
-  }, [watchlistQ.data, result.title]);
+  }, [watchlistQ.data, result.title, result.kind]);
 
-  const followMutation = useMutation({
-    mutationFn: () =>
-      follows.add(result.title, result.tmdb_id ?? null),
-    onSuccess: (created) => {
-      void qc.invalidateQueries({ queryKey: ["follows"] });
-      if (result.kind === "tv") {
-        navigate(`/series/${created.id}`);
-      }
-    },
-  });
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const subtitle = [
     result.year,
@@ -203,72 +195,55 @@ function FeaturedCard({ result }: { result: SearchResult }) {
     .filter(Boolean)
     .join(" · ");
 
-  // For TV: route to /series if already followed; otherwise the
-  // primary CTA is a Follow button (which adds + navigates).
-  // For movies: prefilled search (no follow concept for movies).
-  const movieHref = `/search?q=${encodeURIComponent(result.title)}`;
+  // If the user already follows this series, the card body links
+  // straight to the Series page (skips the dialog round-trip).
+  // Otherwise the click opens PreviewDialog where the explicit
+  // Follow / Play actions live.
+  const cardOnClick = existing ? undefined : () => setPreviewOpen(true);
+  const cardHref = existing ? `/series/${existing.id}` : undefined;
 
-  if (result.kind === "tv") {
-    return (
-      <div className="relative">
-        <MediaCard
-          href={existing ? `/series/${existing.id}` : undefined}
-          onClick={
-            existing
-              ? undefined
-              : () => {
-                  if (!followMutation.isPending) followMutation.mutate();
-                }
-          }
-          title={result.title}
-          subtitle={subtitle || undefined}
-          // torr9 ships an editorially-curated poster URL on featured
-          // items — trust it directly. Skips the strict tmdb_verified
-          // gate that would hide every poster on this shelf.
-          posterUrl={result.poster_url}
-          kind="tv"
-          badge={
-            existing ? (
-              <Bookmark className="size-3.5 text-white/80 drop-shadow" />
-            ) : (
-              <Badge
-                variant="secondary"
-                className="bg-primary/80 text-[10px] uppercase text-primary-foreground shadow-md"
-              >
-                <Plus className="mr-0.5 size-3" /> Follow
-              </Badge>
-            )
-          }
-        />
-      </div>
-    );
-  }
   return (
-    <MediaCard
-      href={movieHref}
-      title={result.title}
-      subtitle={subtitle || undefined}
-      posterUrl={result.poster_url}
-      kind="movie"
-      badge={
-        result.freeleech ? (
-          <Badge
-            variant="secondary"
-            className="bg-emerald-500/20 text-[10px] uppercase text-emerald-300 shadow-md"
-          >
-            FL
-          </Badge>
-        ) : undefined
-      }
-    />
+    <>
+      <MediaCard
+        href={cardHref}
+        onClick={cardOnClick}
+        title={result.title}
+        subtitle={subtitle || undefined}
+        posterUrl={result.poster_url}
+        kind={result.kind}
+        badge={
+          existing ? (
+            <Bookmark className="size-3.5 text-white/80 drop-shadow" />
+          ) : result.freeleech ? (
+            <Badge
+              variant="secondary"
+              className="bg-emerald-500/20 text-[10px] uppercase text-emerald-300 shadow-md"
+            >
+              FL
+            </Badge>
+          ) : undefined
+        }
+      />
+      <PreviewDialog
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        providerId={result.provider_id}
+        externalId={result.external_id}
+        initialTitle={result.title}
+        tmdbId={result.tmdb_id}
+        kind={result.kind}
+      />
+    </>
   );
 }
 
-/// SCENE normalisation kept in sync with iris-media's normalize_title.
-/// Used for client-side "do I already follow this?" lookups so we
-/// don't double-follow the same series with different surface
-/// titles. Match order of operations: lowercase → keep alnum →
-/// collapse runs of non-alnum into single spaces → trim.
+/// SCENE normalisation kept in sync with iris-media's
+/// `normalize_title` + the TV-side trailing-year strip from
+/// `Parsed::collection_key(true)`. Used for client-side "do I
+/// already follow this?" lookups so we don't double-follow the
+/// same series with different surface titles, and so a card
+/// titled "Lucky Luke" matches a follow whose underlying SCENE
+/// torrents normalise to "lucky luke 1991".
 function normalizeForMatch(s: string): string {
   let out = "";
   let lastSpace = true;
@@ -281,7 +256,15 @@ function normalizeForMatch(s: string): string {
       lastSpace = true;
     }
   }
-  return out.trim();
+  return stripTrailingYear(out.trim());
+}
+
+function stripTrailingYear(s: string): string {
+  const m = /^(.*) (\d{4})$/.exec(s);
+  if (!m) return s;
+  const y = parseInt(m[2], 10);
+  if (y < 1900 || y > 2099) return s;
+  return m[1];
 }
 
 

@@ -50,17 +50,20 @@ impl Parsed {
         normalize_title(&self.title)
     }
 
-    /// Identity key for collection grouping. TV uses just the title
-    /// (every season / episode of one show maps to one collection).
-    /// Movies append the year so remakes (Dune 1984 vs Dune 2021)
-    /// stay in distinct collections. The kind is passed in because
-    /// the same `Parsed` can be classified TV-or-movie at the
-    /// collection level (e.g., torrent name has S01E02 but the file
-    /// list is empty / unparseable).
+    /// Identity key for collection grouping. TV uses just the
+    /// title with a trailing year stripped — TV releases sometimes
+    /// inline the show's premiere year before the SE marker
+    /// (`Lucky.Luke.1991.S01E01.…`), which would otherwise produce
+    /// "lucky luke 1991" and prevent it from joining a follow whose
+    /// user-typed name is just "Lucky Luke". Movies append the
+    /// year so remakes (Dune 1984 vs Dune 2021) stay in distinct
+    /// collections. The kind is passed in because the same
+    /// `Parsed` can be classified TV-or-movie at the collection
+    /// level.
     pub fn collection_key(&self, is_tv: bool) -> String {
         let title = normalize_title(&self.title);
         if is_tv {
-            title
+            strip_trailing_year(&title)
         } else {
             match self.year {
                 Some(y) if !title.is_empty() => format!("{title} {y}"),
@@ -81,6 +84,42 @@ impl Parsed {
                 None => self.title.clone(),
             }
         }
+    }
+}
+
+/// Canonical SCENE identity for a series — `normalize_title` plus
+/// trailing-year strip. Same shape as
+/// `Parsed::collection_key(true)` so a follow's `normalized_name`
+/// (computed from the user-facing display title) collides cleanly
+/// with the SCENE-derived `parsed_title_normalized` on
+/// `collections`. Idempotent.
+pub fn series_key(s: &str) -> String {
+    strip_trailing_year(&normalize_title(s))
+}
+
+/// Strip a trailing 4-digit year (1900-2099) from an already-
+/// normalised title — `"lucky luke 1991"` → `"lucky luke"`. No-op
+/// when no year is present. Used for TV identity so a show that
+/// inlines its premiere year in SCENE filenames groups with a
+/// follow whose user-facing title omits it.
+pub fn strip_trailing_year(s: &str) -> String {
+    let bytes = s.as_bytes();
+    if bytes.len() < 5 {
+        return s.to_string();
+    }
+    let n = bytes.len();
+    if bytes[n - 5] != b' ' {
+        return s.to_string();
+    }
+    let tail = &bytes[n - 4..];
+    if !tail.iter().all(u8::is_ascii_digit) {
+        return s.to_string();
+    }
+    let year: u16 = std::str::from_utf8(tail).unwrap().parse().unwrap_or(0);
+    if (1900..=2099).contains(&year) {
+        s[..n - 5].to_string()
+    } else {
+        s.to_string()
     }
 }
 
@@ -385,6 +424,48 @@ mod tests {
         let s2 = parse("Squid.Game.S02E03.1080p.NF.WEB-DL-Y.mkv").unwrap();
         assert_eq!(s1.collection_key(true), s2.collection_key(true));
         assert_eq!(s1.collection_key(true), "squid game");
+    }
+
+    #[test]
+    fn collection_key_strips_inlined_year_on_tv() {
+        // Real-world case: SCENE filename inlines the show's
+        // premiere year before the SE marker. The user's follow
+        // is just "Lucky Luke" → key "lucky luke". The torrent
+        // SCENE name "Lucky.Luke.1991.S01E01" parses to title
+        // "Lucky Luke 1991" → key MUST collapse to "lucky luke"
+        // for the join to match.
+        let p = parse("Lucky.Luke.1991.S01E01.FRENCH.HDTV.x264-XYZ.mkv").unwrap();
+        assert_eq!(p.collection_key(true), "lucky luke");
+    }
+
+    #[test]
+    fn series_key_aligns_user_input_and_scene() {
+        // Public helper used by follows.rs::create. A user-typed
+        // "Lucky Luke" must canonicalise to the same string the
+        // SCENE-derived collection key produces.
+        assert_eq!(series_key("Lucky Luke"), "lucky luke");
+        assert_eq!(series_key("Lucky.Luke.1991"), "lucky luke");
+        assert_eq!(series_key("LUCKY  LUKE  1991"), "lucky luke");
+        assert_eq!(
+            series_key("Lucky Luke 1991"),
+            parse("Lucky.Luke.1991.S01E01.FRENCH.HDTV.x264-XYZ.mkv")
+                .unwrap()
+                .collection_key(true),
+        );
+    }
+
+    #[test]
+    fn strip_trailing_year_handles_edges() {
+        assert_eq!(strip_trailing_year("squid game"), "squid game");
+        assert_eq!(strip_trailing_year("squid game 2021"), "squid game");
+        // Not a year — out of range.
+        assert_eq!(strip_trailing_year("squid game 1234"), "squid game");
+        assert_eq!(strip_trailing_year("show 2099"), "show");
+        assert_eq!(strip_trailing_year("show 2100"), "show 2100");
+        // No leading space — not a year suffix.
+        assert_eq!(strip_trailing_year("show2024"), "show2024");
+        assert_eq!(strip_trailing_year(""), "");
+        assert_eq!(strip_trailing_year("a"), "a");
     }
 
     #[test]

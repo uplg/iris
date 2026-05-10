@@ -27,7 +27,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use chrono::{DateTime, Utc};
-use iris_media::filename::normalize_title;
+use iris_media::filename::series_key;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -72,7 +72,7 @@ async fn create(
     if trimmed.is_empty() {
         return Err(ApiError::BadRequest("name is required".into()));
     }
-    let normalized = normalize_title(trimmed);
+    let normalized = series_key(trimmed);
     if normalized.is_empty() {
         return Err(ApiError::BadRequest("name does not normalise".into()));
     }

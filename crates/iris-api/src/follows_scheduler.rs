@@ -148,7 +148,12 @@ async fn check_one(
         let Some(parsed) = filename::parse(&r.title) else {
             continue;
         };
-        if parsed.normalized_key() != follow.normalized_name {
+        // Use the TV-side `collection_key` so a SCENE name like
+        // `Lucky.Luke.1991.S01E01...` (which normalises to
+        // `"lucky luke 1991"`) still matches a follow whose
+        // `normalized_name` was derived from the user-typed
+        // `"Lucky Luke"` (= `"lucky luke"`).
+        if parsed.collection_key(true) != follow.normalized_name {
             continue;
         }
         let Some(s) = parsed.season else { continue };

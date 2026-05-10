@@ -77,6 +77,12 @@ export function SeriesPage() {
   const unfollowMutation = useMutation({
     mutationFn: () => follows.remove(id),
     onSuccess: () => {
+      // Update the cache synchronously so the home Watchlist
+      // tile is gone before we navigate — invalidate alone is
+      // async and would briefly render the stale follow.
+      qc.setQueryData<FollowSummary[]>(["follows"], (old) =>
+        (old ?? []).filter((f) => f.id !== id),
+      );
       void qc.invalidateQueries({ queryKey: ["follows"] });
       navigate("/", { replace: true });
     },

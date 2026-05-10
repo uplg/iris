@@ -305,6 +305,11 @@ data class SearchResult(
     val freeleech: Boolean = false,
     @SerialName("tmdb_id") val tmdbId: Long? = null,
     val kind: String? = null,
+    /** Pre-resolved poster URL when the indexer ships one (torr9
+     *  includes it on featured items). Use directly — skips the
+     *  strict tmdb_verified gate that would otherwise hide every
+     *  poster on the discovery shelf. */
+    @SerialName("poster_url") val posterUrl: String? = null,
 )
 
 @Serializable

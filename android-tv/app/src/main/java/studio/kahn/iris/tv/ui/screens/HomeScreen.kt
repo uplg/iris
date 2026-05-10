@@ -521,11 +521,13 @@ private fun FeaturedCard(
     ).joinToString(" · ")
     PosterCard(
         container = container,
-        tmdbId = result.tmdbId,
-        // Trust torr9's tmdb_id on featured items — they're hand-curated
-        // server-side, the wrong-poster risk that justifies tmdb_verified
-        // gating on library entries doesn't apply here.
-        tmdbVerified = result.tmdbId != null,
+        // Featured items ship a pre-resolved poster URL from torr9 —
+        // trust it directly, never fall back to a TMDB id lookup
+        // (which can mis-match for the same reasons we no longer use
+        // it on Library cards).
+        tmdbId = null,
+        tmdbVerified = false,
+        posterUrlOverride = result.posterUrl,
         title = result.title,
         subtitle = subtitle.ifEmpty { result.providerId },
         progress = null,
@@ -571,11 +573,13 @@ private fun CollectionCard(
     }
     PosterCard(
         container = container,
-        tmdbId = collection.tmdbId,
-        // The collection's tmdb_id was either captured at ingest from a
-        // verified search hit or matched server-side — trust it for the
-        // poster fetch the same way TV-side WatchlistCard does.
-        tmdbVerified = collection.tmdbId != null,
+        // No TMDB lookup on library cards. Even tmdb_verified
+        // collections have surfaced wrong posters in the past
+        // (runtime probe within ±15% can false-match an unrelated
+        // title). SCENE display title is the truth; the kind icon
+        // placeholder carries the rest.
+        tmdbId = null,
+        tmdbVerified = false,
         title = prettifyFilename(collection.displayTitle),
         subtitle = subtitle,
         progress = null,
