@@ -92,12 +92,15 @@ fun HomeScreen(
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onOpenSettings: () -> Unit,
     /** Open the search screen. When `query` is non-null the search runs
-     *  immediately with that string pre-filled — used by Featured Movies
-     *  cards (which don't have a dedicated detail page yet). */
+     *  immediately with that string pre-filled. */
     onOpenSearch: (query: String?) -> Unit,
-    /** Open the SeriesScreen for a follow. Used by Watchlist cards
-     *  and by Featured Series cards after they auto-create the
-     *  follow. */
+    /** Route to the detail screen for a (provider, externalId) pair —
+     *  same destination as picking a search result. Used by Featured
+     *  cards so the user previews before deciding to follow / play.
+     *  `kind` lets the detail screen render the Follow button only
+     *  for TV results. */
+    onPickResult: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
+    /** Open the SeriesScreen for an existing follow. */
     onOpenSeries: (followId: String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -294,7 +297,13 @@ fun HomeScreen(
                             FeaturedCard(
                                 container = container,
                                 result = r,
-                                onClick = { onOpenSearch(r.title) },
+                                // Featured Movies route to the detail
+                                // screen (same as picking a search
+                                // result) — preview file list, then
+                                // ingest from there.
+                                onClick = {
+                                    onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
+                                },
                             )
                         }
                     }
@@ -307,10 +316,12 @@ fun HomeScreen(
                             FeaturedCard(
                                 container = container,
                                 result = r,
-                                // SCENE-mode: if the user already
-                                // follows a series with this normalised
-                                // name, jump straight in. Otherwise
-                                // create the follow and navigate.
+                                // If the user already follows this
+                                // series, jump straight to its
+                                // Series page. Otherwise route to
+                                // the detail screen — we no longer
+                                // auto-follow on click; the explicit
+                                // Follow action lives on SearchDetail.
                                 onClick = {
                                     val existing = watchlist.firstOrNull {
                                         it.normalizedName == normalizeForMatch(r.title)
@@ -318,23 +329,7 @@ fun HomeScreen(
                                     if (existing != null) {
                                         onOpenSeries(existing.id)
                                     } else {
-                                        scope.launch {
-                                            val url = container.sessionStore.serverUrl.first() ?: return@launch
-                                            val api = container.apiFor(url)
-                                            try {
-                                                val created = withContext(Dispatchers.IO) {
-                                                    api.addFollow(
-                                                        AddFollowRequest(
-                                                            name = r.title,
-                                                            tmdbId = r.tmdbId,
-                                                        )
-                                                    )
-                                                }
-                                                onOpenSeries(created.id)
-                                            } catch (e: Exception) {
-                                                error = e.message ?: "Follow failed"
-                                            }
-                                        }
+                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
                                     }
                                 },
                             )

@@ -30,7 +30,7 @@ object Routes {
     const val DETAIL = "detail/{infohash}"
     const val SETTINGS = "settings"
     const val SEARCH = "search?q={q}&autoPlay={autoPlay}"
-    const val SEARCH_DETAIL = "search-detail/{provider}/{externalId}?tmdbId={tmdbId}"
+    const val SEARCH_DETAIL = "search-detail/{provider}/{externalId}?tmdbId={tmdbId}&kind={kind}"
     const val SERIES = "series/{followId}"
     const val WATCH = "watch/{infohash}/{fileIdx}"
     fun detail(infohash: String) = "detail/$infohash"
@@ -38,13 +38,21 @@ object Routes {
         val qPart = q?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
         return "search?q=$qPart&autoPlay=$autoPlay"
     }
-    fun searchDetail(provider: String, externalId: String, tmdbId: Long?): String {
+    fun searchDetail(
+        provider: String,
+        externalId: String,
+        tmdbId: Long?,
+        kind: String? = null,
+    ): String {
         val p = java.net.URLEncoder.encode(provider, "UTF-8")
         val e = java.net.URLEncoder.encode(externalId, "UTF-8")
         // Pass `0` to mean "no tmdb id" — NavType.LongType doesn't accept null
         // and treating 0 as "absent" is fine since TMDB ids start at 1.
         val t = tmdbId ?: 0L
-        return "search-detail/$p/$e?tmdbId=$t"
+        // Empty `kind` = unknown / movie-by-default. Detail screen
+        // uses it to gate the Follow button.
+        val k = kind?.let { java.net.URLEncoder.encode(it, "UTF-8") }.orEmpty()
+        return "search-detail/$p/$e?tmdbId=$t&kind=$k"
     }
     fun watch(infohash: String, fileIdx: Int) = "watch/$infohash/$fileIdx"
     fun series(followId: String): String {
@@ -115,6 +123,11 @@ fun IrisRoot(
                     onOpenSearch = { query ->
                         navController.navigate(Routes.search(query))
                     },
+                    onPickResult = { providerId, externalId, tmdbId, kind ->
+                        navController.navigate(
+                            Routes.searchDetail(providerId, externalId, tmdbId, kind),
+                        )
+                    },
                     onOpenSeries = { followId ->
                         navController.navigate(Routes.series(followId))
                     },
@@ -165,8 +178,10 @@ fun IrisRoot(
                     container = container,
                     initialQuery = q,
                     autoPickTop = autoPlay,
-                    onPickResult = { providerId, externalId, tmdbId ->
-                        navController.navigate(Routes.searchDetail(providerId, externalId, tmdbId))
+                    onPickResult = { providerId, externalId, tmdbId, kind ->
+                        navController.navigate(
+                            Routes.searchDetail(providerId, externalId, tmdbId, kind),
+                        )
                     },
                     onPickFile = { infohash, fileIdx ->
                         navController.navigate(Routes.watch(infohash, fileIdx))
@@ -186,6 +201,11 @@ fun IrisRoot(
                         type = NavType.LongType
                         defaultValue = 0L
                     },
+                    navArgument("kind") {
+                        type = NavType.StringType
+                        defaultValue = ""
+                        nullable = false
+                    },
                 ),
             ) { backStackEntry ->
                 val provider = java.net.URLDecoder.decode(
@@ -195,16 +215,26 @@ fun IrisRoot(
                     backStackEntry.arguments!!.getString("externalId")!!, "UTF-8",
                 )
                 val tmdbId = backStackEntry.arguments!!.getLong("tmdbId").takeIf { it > 0L }
+                val kind = backStackEntry.arguments
+                    ?.getString("kind")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
                 SearchDetailScreen(
                     container = container,
                     providerId = provider,
                     externalId = externalId,
                     tmdbId = tmdbId,
+                    kind = kind,
                     onPickFile = { infohash, fileIdx ->
                         navController.navigate(Routes.watch(infohash, fileIdx)) {
                             // Don't leave the detail screen on the back
                             // stack — user lands at /watch and Back from
                             // there should go to search.
+                            popUpTo(Routes.SEARCH_DETAIL) { inclusive = true }
+                        }
+                    },
+                    onOpenSeries = { followId ->
+                        navController.navigate(Routes.series(followId)) {
                             popUpTo(Routes.SEARCH_DETAIL) { inclusive = true }
                         }
                     },

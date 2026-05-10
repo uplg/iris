@@ -72,7 +72,7 @@ fun SearchScreen(
      *  owns the ingest + navigate-to-watch flow; SearchScreen no longer
      *  ingests directly, so the user always gets to see what they're
      *  about to grab (audio / sub / file size) before committing. */
-    onPickResult: (providerId: String, externalId: String, tmdbId: Long?) -> Unit,
+    onPickResult: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onPickTorrent: (infohash: String) -> Unit,
     onBack: () -> Unit,
@@ -223,7 +223,9 @@ fun SearchScreen(
                             // where the user can read the synopsis,
                             // check audio/sub langs, then commit. The
                             // detail screen owns the ingest + navigate.
-                            onClick = { onPickResult(r.providerId, r.externalId, r.tmdbId) },
+                            onClick = {
+                                onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
+                            },
                         )
                     }
                 }

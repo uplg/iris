@@ -458,8 +458,8 @@ mod tests {
     fn strip_trailing_year_handles_edges() {
         assert_eq!(strip_trailing_year("squid game"), "squid game");
         assert_eq!(strip_trailing_year("squid game 2021"), "squid game");
-        // Not a year — out of range.
-        assert_eq!(strip_trailing_year("squid game 1234"), "squid game");
+        // Out-of-range "year" — left in place.
+        assert_eq!(strip_trailing_year("squid game 1234"), "squid game 1234");
         assert_eq!(strip_trailing_year("show 2099"), "show");
         assert_eq!(strip_trailing_year("show 2100"), "show 2100");
         // No leading space — not a year suffix.

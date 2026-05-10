@@ -38,6 +38,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import studio.kahn.iris.tv.data.AddFollowRequest
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.AudioInfoDetails
 import studio.kahn.iris.tv.data.IngestRequest
@@ -66,8 +67,14 @@ fun SearchDetailScreen(
      *  this from the search result; if null, the hero falls back to a
      *  gradient placeholder. */
     tmdbId: Long?,
+    /** `"tv"` or `"movie"` from the originating SearchResult. Drives
+     *  whether the explicit "Follow series" action is rendered. */
+    kind: String? = null,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onPickTorrent: (infohash: String) -> Unit,
+    /** Invoked after a successful follow create — navigates to the
+     *  newly-created Series page. Only fires when [kind] is `"tv"`. */
+    onOpenSeries: (followId: String) -> Unit = {},
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -76,6 +83,7 @@ fun SearchDetailScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var ingesting by remember { mutableStateOf(false) }
+    var following by remember { mutableStateOf(false) }
 
     LaunchedEffect(providerId, externalId, tmdbId) {
         loading = true
@@ -190,6 +198,42 @@ fun SearchDetailScreen(
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                     contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
                 ) { Text("Back") }
+                if (kind == "tv") {
+                    Button(
+                        onClick = {
+                            if (following) return@Button
+                            val title = details?.title
+                            if (title.isNullOrBlank()) return@Button
+                            following = true
+                            error = null
+                            scope.launch {
+                                try {
+                                    val url = container.sessionStore.serverUrl.first()
+                                        ?: return@launch run {
+                                            error = "Not signed in"
+                                            following = false
+                                        }
+                                    val api = container.apiFor(url)
+                                    val created = withContext(Dispatchers.IO) {
+                                        api.addFollow(
+                                            AddFollowRequest(
+                                                name = title,
+                                                tmdbId = tmdbId,
+                                            ),
+                                        )
+                                    }
+                                    onOpenSeries(created.id)
+                                } catch (e: Exception) {
+                                    error = e.message ?: "Follow failed"
+                                    following = false
+                                }
+                            }
+                        },
+                        enabled = details != null && !following && !ingesting,
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
+                    ) { Text(if (following) "Following…" else "♥  Follow") }
+                }
                 Button(
                     onClick = {
                         if (ingesting) return@Button
