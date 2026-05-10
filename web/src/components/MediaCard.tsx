@@ -72,19 +72,22 @@ export function MediaCard(props: MediaCardProps) {
     className,
   } = props;
 
-  // TMDB lookup only fires when no direct posterUrl is provided. Lookups
-  // are cached forever (TMDB metadata is essentially static for an id).
-  // The `kind` query param is critical: TMDB uses separate id namespaces
-  // for movies and TV, so the same numerical id can resolve to two
-  // unrelated entries. Without the hint the server's lookup tries movie
-  // first and serves a wrong unrelated movie's poster on TV cards.
+  // TMDB lookup only fires when no direct posterUrl is provided.
+  // The `kind` query param disambiguates TMDB's separate movie/tv
+  // id namespaces — without it the server's lookup tries movie
+  // first, which collides with TV ids.
+  //
+  // We deliberately do NOT pin staleTime / gcTime to Infinity: a
+  // transient 4xx (server cold-start, deploy-window race,
+  // intermittent TMDB hiccup) used to get cached forever, leaving
+  // posters empty until the user hard-refreshed. The Android TV
+  // client re-queries on every screen mount, so we mirror that
+  // behaviour here — short stale window, default retries.
   const tmdbQ = useQuery({
     queryKey: ["tmdb", tmdbId, kind],
     queryFn: () => metadata.tmdb(tmdbId!, kind ?? undefined),
     enabled: tmdbId != null && !posterUrl,
-    staleTime: Infinity,
-    gcTime: Infinity,
-    retry: false,
+    staleTime: 60_000,
   });
 
   const finalUrl = posterUrl ?? tmdbImage(tmdbQ.data?.poster_path, TMDB_SIZE[size]);

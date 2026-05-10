@@ -78,14 +78,14 @@ fun DetailScreen(
             val t = api.getTorrent(infohash)
             torrent = t
             progresses = runCatching { api.torrentProgress(infohash) }.getOrDefault(emptyList())
-            // Only call TMDB if the server has confirmed the mapping is
-            // right (runtime ≈ probed duration). Unverified `tmdb_id`s
-            // would happily point us at the wrong movie's poster /
-            // synopsis, which is exactly the bug we're fixing.
-            if (t.tmdbVerified) {
-                t.tmdbId?.let { id ->
-                    meta = runCatching { api.tmdbMetadata(id, t.kind) }.getOrNull()
-                }
+            // Trust the server's tmdb_id without the verified gate —
+            // the lookup endpoint already does a kind-namespace
+            // fallback (`/movie/X` → `/tv/X`), so even a wrong-kind
+            // hint resolves to *something*. Hiding the poster on
+            // every unverified torrent was hurting UX more than the
+            // rare wrong-poster mismatch.
+            t.tmdbId?.let { id ->
+                meta = runCatching { api.tmdbMetadata(id, t.kind) }.getOrNull()
             }
         } catch (e: Exception) {
             error = e.message ?: "Failed to load"
@@ -235,10 +235,20 @@ private fun FileRow(
         pct != null -> "$pct% watched"
         else -> formatBytes(file.sizeBytes)
     }
+    // Keep the focused colors inside the dark palette. The default
+    // `CardDefaults.colors()` inverts to `inverseSurface` /
+    // `inverseOnSurface` on focus, which renders as a bright card
+    // with BLACK text on our dark theme — illegible.
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().height(72.dp),
         shape = CardDefaults.shape(shape = RoundedCornerShape(8.dp)),
+        colors = CardDefaults.colors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            focusedContentColor = MaterialTheme.colorScheme.onSurface,
+        ),
     ) {
         Row(
             Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -246,7 +256,12 @@ private fun FileRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Column(Modifier.weight(1f)) {
-                Text(name, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                Text(
+                    name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall,

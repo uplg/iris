@@ -140,6 +140,12 @@ interface IrisApi {
 
     @GET("api/library")
     suspend fun library(@Query("view") view: String = "collections"): LibraryResponse
+
+    /** Full content of a single collection — every torrent attached
+     *  plus the merged episode list (TV only). Powers the
+     *  `CollectionScreen` browse view. */
+    @GET("api/library/collections/{id}")
+    suspend fun collectionDetail(@Path("id") id: String): CollectionDetail
 }
 
 // ============================== DTOs ====================================
@@ -582,6 +588,25 @@ sealed class LibraryResponse {
         @SerialName("total_uploaded_bytes") val totalUploadedBytes: Long = 0,
     ) : LibraryResponse()
 }
+
+@Serializable
+data class CollectionDetail(
+    val id: String,
+    @SerialName("tmdb_id") val tmdbId: Long? = null,
+    @SerialName("display_title") val displayTitle: String,
+    val kind: String,
+    val torrents: List<TorrentView> = emptyList(),
+    val episodes: List<CollectionEpisode> = emptyList(),
+)
+
+@Serializable
+data class CollectionEpisode(
+    val season: Long,
+    val episode: Long,
+    val infohash: String,
+    @SerialName("file_idx") val fileIdx: Int,
+    val watched: Boolean = false,
+)
 
 @Serializable
 data class CollectionListItem(

@@ -6,12 +6,11 @@ import { me } from "@/lib/api";
 
 /**
  * Continue Watching shelf on the home page. Renders shared MediaCards
- * with TMDB-backed posters when we know `(tmdb_id, kind)` — the kind is
- * critical because TMDB's separate movie / tv id namespaces collide
- * (the same numerical id resolves to two unrelated entries) and a
- * lookup without the disambiguator served the wrong poster on every
- * card. When `tmdb_id` is missing or unverified, the card falls back
- * to the kind-aware placeholder.
+ * with TMDB-backed posters when we know `(tmdb_id, kind)` — the server
+ * already falls back from `collection.tmdb_id` to `torrent.tmdb_id` via
+ * `COALESCE`, and the `/api/metadata/tmdb/{id}` lookup tries both
+ * `/movie/X` and `/tv/X` so a wrong-kind hint still resolves. When
+ * neither tmdb_id is set we render the kind-aware placeholder.
  */
 export function ContinueWatching() {
   const navigate = useNavigate();
@@ -46,14 +45,9 @@ export function ContinueWatching() {
           return (
             <MediaCard
               key={`${it.infohash}:${it.file_idx}`}
-              // Trust the indexer-supplied tmdb_id without gating on
-              // verified — the lookup endpoint already does a kind
-              // namespace fallback so a wrong-kind id still resolves
-              // to *something*. A wrong poster is rare, missing
-              // posters were the loud regression.
               tmdbId={it.tmdb_id}
               kind={it.kind}
-              title={prettifyFilename(primary)}
+              title={primary}
               subtitle={subtitle}
               progress={pct}
               onClick={() =>
@@ -74,9 +68,4 @@ function formatTimecode(sec: number): string {
   if (h > 0)
     return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-function prettifyFilename(raw: string): string {
-  const noExt = raw.includes(".") ? raw.slice(0, raw.lastIndexOf(".")) : raw;
-  return noExt.replace(/[._]+/g, " ").trim();
 }

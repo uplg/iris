@@ -13,6 +13,7 @@ import androidx.navigation.navArgument
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.ui.screens.CollectionScreen
 import studio.kahn.iris.tv.ui.screens.DetailScreen
 import studio.kahn.iris.tv.ui.screens.HomeScreen
 import studio.kahn.iris.tv.ui.screens.PairingScreen
@@ -32,8 +33,13 @@ object Routes {
     const val SEARCH = "search?q={q}&autoPlay={autoPlay}"
     const val SEARCH_DETAIL = "search-detail/{provider}/{externalId}?tmdbId={tmdbId}&kind={kind}"
     const val SERIES = "series/{followId}"
+    const val COLLECTION = "collection/{collectionId}"
     const val WATCH = "watch/{infohash}/{fileIdx}"
     fun detail(infohash: String) = "detail/$infohash"
+    fun collection(id: String): String {
+        val cid = java.net.URLEncoder.encode(id, "UTF-8")
+        return "collection/$cid"
+    }
     fun search(q: String? = null, autoPlay: Boolean = false): String {
         val qPart = q?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
         return "search?q=$qPart&autoPlay=$autoPlay"
@@ -131,6 +137,25 @@ fun IrisRoot(
                     onOpenSeries = { followId ->
                         navController.navigate(Routes.series(followId))
                     },
+                    onOpenCollection = { collectionId ->
+                        navController.navigate(Routes.collection(collectionId))
+                    },
+                )
+            }
+            composable(
+                Routes.COLLECTION,
+                arguments = listOf(navArgument("collectionId") { type = NavType.StringType }),
+            ) { backStackEntry ->
+                val cid = java.net.URLDecoder.decode(
+                    backStackEntry.arguments!!.getString("collectionId")!!, "UTF-8",
+                )
+                CollectionScreen(
+                    container = container,
+                    collectionId = cid,
+                    onPickFile = { infohash, fileIdx ->
+                        navController.navigate(Routes.watch(infohash, fileIdx))
+                    },
+                    onBack = { navController.popBackStack() },
                 )
             }
             composable(

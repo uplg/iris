@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -106,6 +107,9 @@ fun HomeScreen(
     onPickResult: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
     /** Open the SeriesScreen for an existing follow. */
     onOpenSeries: (followId: String) -> Unit,
+    /** Open the CollectionScreen for a Library collection. Lists all
+     *  torrents + episodes belonging to that collection. */
+    onOpenCollection: (collectionId: String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var continueWatching by remember { mutableStateOf<List<ContinueWatchingItem>>(emptyList()) }
@@ -298,15 +302,14 @@ fun HomeScreen(
                             CollectionCard(
                                 container = container,
                                 collection = c,
-                                onClick = {
-                                    val infohash = c.representativeInfohash ?: return@CollectionCard
-                                    val snap = library.firstOrNull { it.infohash == infohash }
-                                    if (snap != null) {
-                                        routeTorrent(snap, onPickFile, onPickTorrent)
-                                    } else {
-                                        onPickTorrent(infohash)
-                                    }
-                                },
+                                // Open the dedicated Collection screen
+                                // so the user gets the full episode /
+                                // file list (mirrors web's
+                                // `/collection/:id`). Previously this
+                                // shot straight to the representative
+                                // torrent, hiding the rest of the
+                                // collection's content.
+                                onClick = { onOpenCollection(c.id) },
                             )
                         }
                     }
@@ -484,9 +487,18 @@ private fun ContinueWatchingCard(
     PosterCard(
         container = container,
         tmdbId = item.tmdbId,
-        tmdbVerified = item.tmdbVerified,
+        // Trust the server's tmdb_id — `playback::continue_watching`
+        // already COALESCEs from the parent collection's value
+        // (which the SCENE backfill resolved). The runtime-verified
+        // flag is irrelevant for poster display.
+        tmdbVerified = item.tmdbId != null,
         kindHint = item.kind,
-        title = prettifyFilename(rawTitle),
+        // Original release / file name verbatim. We don't strip
+        // tokens — episode numbers (SxxExx) and quality markers stay
+        // visible; the marquee scroll on PosterCard handles long
+        // strings without truncating the SxxExx out of view.
+        title = rawTitle,
+        marqueeTitle = true,
         subtitle = pct?.let { "${(it * 100).toInt()}% watched" } ?: "Just started",
         progress = pct,
         progressColor = null, // primary = watch progress
@@ -722,6 +734,11 @@ private fun PosterCard(
      *  the Watchlist shelf where /api/me/follows already returns the poster
      *  path inline. When `null`, falls back to the regular TMDB lookup. */
     posterUrlOverride: String? = null,
+    /** When true, the title scrolls horizontally on a single line if it
+     *  overflows (Compose `basicMarquee`). Used by Continue Watching
+     *  cards where we want the full episode filename visible without
+     *  truncation. */
+    marqueeTitle: Boolean = false,
     /** Optional top-right overlay (e.g., "X new" badge). Renders on
      *  top of the poster. */
     topBadge: (@Composable () -> Unit)? = null,
@@ -828,11 +845,27 @@ private fun PosterCard(
                 }
             }
             Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    displayTitle,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 2,
-                )
+                if (marqueeTitle) {
+                    // Single-line marquee scroll for filenames like
+                    // `Show.S01E04.1080p.MULTI.x264-XYZ.mkv` where
+                    // truncating to 2 lines hid the SxxExx part.
+                    Text(
+                        displayTitle,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        modifier = Modifier.basicMarquee(
+                            iterations = Int.MAX_VALUE,
+                            initialDelayMillis = 1500,
+                            repeatDelayMillis = 1500,
+                        ),
+                    )
+                } else {
+                    Text(
+                        displayTitle,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 2,
+                    )
+                }
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall,
