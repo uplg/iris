@@ -561,12 +561,15 @@ data class EpisodePoint(
 
 /**
  * Polymorphic response from `/api/library?view=...`. The backend
- * tags each variant with the `view` field so kotlinx.serialization
- * can route to the right shape. We only consume `Collections` from TV
- * (the raw torrent view stays on the web admin panel) but the type
- * still models both for forward-compat.
+ * tags each variant with the `view` field (`#[serde(tag = "view")]`
+ * on the Rust side), so we override kotlinx.serialization's default
+ * `"type"` discriminator to match. Without this, deserialisation
+ * silently fails — no Library shelf, even though the API returned
+ * a perfectly good payload.
  */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
+@kotlinx.serialization.json.JsonClassDiscriminator("view")
 sealed class LibraryResponse {
     @Serializable
     @SerialName("collections")
