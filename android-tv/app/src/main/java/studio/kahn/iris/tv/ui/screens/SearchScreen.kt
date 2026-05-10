@@ -35,10 +35,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import android.content.Context
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
@@ -261,6 +266,7 @@ fun SearchScreen(
 
     val focusManager: FocusManager = LocalFocusManager.current
     val keyboard: SoftwareKeyboardController? = LocalSoftwareKeyboardController.current
+    val context = LocalContext.current
     Column(
         Modifier
             .fillMaxSize()
@@ -279,19 +285,35 @@ fun SearchScreen(
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Submitting fires the search AND drops focus / dismisses
-            // the IME so the user lands directly on the result grid
-            // instead of having to D-pad-back through the keyboard.
-            // Without this drop, hitting the IME's Search key (or our
-            // Search button) re-focused the field and the keyboard
-            // stayed up.
+            // The leanback (Android TV) on-screen keyboard is a
+            // separate system Activity — Compose's
+            // `SoftwareKeyboardController.hide()` doesn't always
+            // dismiss it, so we layer three strategies:
+            //   1. Move focus to the Search button (non-text target →
+            //      the IME has no reason to stay attached).
+            //   2. Compose's `keyboard?.hide()` (best-effort).
+            //   3. The system `InputMethodManager.hideSoftInputFromWindow`
+            //      against the current window token — the same call
+            //      legacy Android Views use, and the only one that
+            //      reliably dismisses the leanback keyboard activity
+            //      when the IME action button is the one tapped.
+            val searchBtnFocus = remember { FocusRequester() }
+            val dismissImeViaSystem = {
+                val activity = context as? android.app.Activity
+                val token = activity?.window?.decorView?.windowToken
+                if (token != null) {
+                    val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                    imm?.hideSoftInputFromWindow(token, 0)
+                }
+            }
             val submit = {
                 if (!pending && query.trim().length >= 2) {
                     submittedQuery = query.trim()
                     page = 1
                 }
-                focusManager.clearFocus(force = true)
+                runCatching { searchBtnFocus.requestFocus() }
                 keyboard?.hide()
+                dismissImeViaSystem()
             }
             OutlinedTextField(
                 value = query,
@@ -326,14 +348,18 @@ fun SearchScreen(
                 ),
                 // Input keeps its own column at a sensible width, NOT
                 // stretching to fill — leaves room for the Type chips
-                // on the same row.
-                modifier = Modifier.width(420.dp).height(48.dp),
+                // on the same row. No fixed height: M3 OutlinedTextField
+                // needs ~56 dp internally (label + content + bottom
+                // padding) and a smaller forced height clipped the
+                // typed text.
+                modifier = Modifier.width(420.dp),
             )
             Button(
                 onClick = { submit() },
                 enabled = !pending && query.trim().length >= 2,
                 shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                modifier = Modifier.focusRequester(searchBtnFocus),
             ) { Text(if (pending) "…" else "Search") }
             Button(
                 onClick = { launchVoice() },
