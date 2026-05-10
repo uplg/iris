@@ -142,9 +142,11 @@ async fn refresh(
         .verify_refresh(&token)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    if !iris_db::refresh_tokens::is_active(state.db(), claims.jti).await? {
+    let Some(prev) =
+        iris_db::refresh_tokens::get_active_device_info(state.db(), claims.jti).await?
+    else {
         return Err(ApiError::Unauthorized);
-    }
+    };
 
     let user_id = UserId::from(claims.sub);
     let user = iris_db::users::find_by_id(state.db(), user_id)
@@ -152,7 +154,28 @@ async fn refresh(
         .ok_or(ApiError::Unauthorized)?;
 
     iris_db::refresh_tokens::revoke(state.db(), claims.jti).await?;
-    let jar = issue_session(&state, &jar, user.id, user.is_admin).await?;
+    // Carry the device tagging forward across the rotation. Without this,
+    // a paired TV's first refresh strips `device_kind` from the row and
+    // it disappears from the account-page device list. We also preserve
+    // the original token's longer lifetime by passing the remaining TTL
+    // — paired devices use a 90-day refresh, browsers use the configured
+    // default; either way, rotating shouldn't shorten what was issued.
+    let remaining_ttl = (prev.expires_at - chrono::Utc::now()).num_seconds().max(60);
+    let ttl_override = if prev.device_kind.is_some() {
+        Some(remaining_ttl)
+    } else {
+        None
+    };
+    let jar = issue_session_for_kind(
+        &state,
+        &jar,
+        user.id,
+        user.is_admin,
+        ttl_override,
+        prev.device_label.as_deref(),
+        prev.device_kind.as_deref(),
+    )
+    .await?;
 
     Ok((
         jar,

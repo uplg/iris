@@ -81,6 +81,38 @@ pub async fn revoke_for_user(
     Ok(res.rows_affected() == 1)
 }
 
+/// Device label / kind / expires_at attached to an active refresh token,
+/// or `None` if the jti is unknown / revoked / expired. Used by `/auth/refresh`
+/// to carry the device tagging forward when rotating the token — without
+/// this, paired-device rows lose their `device_kind` after the first
+/// rotation and the account-page listing (which filters on
+/// `device_kind IS NOT NULL`) shows "no paired devices yet".
+#[derive(Debug, Clone)]
+pub struct ActiveDeviceInfo {
+    pub device_label: Option<String>,
+    pub device_kind: Option<String>,
+    pub expires_at: DateTime<Utc>,
+}
+
+pub async fn get_active_device_info(
+    pool: &SqlitePool,
+    jti: Uuid,
+) -> Result<Option<ActiveDeviceInfo>, sqlx::Error> {
+    let row: Option<(Option<String>, Option<String>, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT device_label, device_kind, expires_at FROM refresh_tokens \
+         WHERE jti = ?1 AND revoked_at IS NULL AND expires_at > ?2",
+    )
+    .bind(jti)
+    .bind(Utc::now())
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(device_label, device_kind, expires_at)| ActiveDeviceInfo {
+        device_label,
+        device_kind,
+        expires_at,
+    }))
+}
+
 pub async fn is_active(pool: &SqlitePool, jti: Uuid) -> Result<bool, sqlx::Error> {
     // EXISTS-style probe with `query_scalar` — we don't need to materialise
     // a full RefreshToken row, and `FromRow` is strict about every column
