@@ -213,40 +213,87 @@ struct SeMatch {
 }
 
 fn find_se_marker(stem: &str) -> Option<SeMatch> {
+    // Two-pass: prefer a full `S01E02` marker (most precise), fall back
+    // to a season-only `S01` marker (season packs / MULTI releases that
+    // cover an entire season — `Show.Name.S01.MULTI.1080p…`). Without
+    // the fallback, season packs got their title boundary placed at the
+    // quality marker instead, leaking `S01 MULTI` into the parsed title
+    // and breaking TMDB resolution for the parent collection.
+    if let Some(m) = scan_for_se(stem, /* require_episode = */ true) {
+        return Some(m);
+    }
+    scan_for_se(stem, /* require_episode = */ false)
+}
+
+fn scan_for_se(stem: &str, require_episode: bool) -> Option<SeMatch> {
     let bytes = stem.as_bytes();
     let mut i = 0;
-    while i + 4 <= bytes.len() {
-        if bytes[i] == b'S' || bytes[i] == b's' {
+    while i < bytes.len() {
+        // Token boundary: only treat `S` as a marker when it stands at
+        // the start of a fresh token (preceded by separator). Without
+        // this, `S` inside a word like "Squid" or "Lassie" matches.
+        let at_boundary = i == 0
+            || matches!(bytes[i - 1], b'.' | b'_' | b' ' | b'-' | b'(' | b'[');
+        if at_boundary && (bytes[i] == b'S' || bytes[i] == b's') {
             let mut j = i + 1;
             let mut s_digits = 0;
             while j < bytes.len() && bytes[j].is_ascii_digit() && s_digits < 4 {
                 j += 1;
                 s_digits += 1;
             }
-            if s_digits > 0
-                && j < bytes.len()
-                && (bytes[j] == b'E' || bytes[j] == b'e')
-            {
+            if s_digits > 0 {
                 let s_end = j;
-                let mut k = j + 1;
-                let mut e_digits = 0;
-                while k < bytes.len() && bytes[k].is_ascii_digit() && e_digits < 4 {
-                    k += 1;
-                    e_digits += 1;
+                let has_e = j < bytes.len() && (bytes[j] == b'E' || bytes[j] == b'e');
+                if has_e {
+                    let mut k = j + 1;
+                    let mut e_digits = 0;
+                    while k < bytes.len() && bytes[k].is_ascii_digit() && e_digits < 4 {
+                        k += 1;
+                        e_digits += 1;
+                    }
+                    if e_digits > 0 {
+                        if let (Ok(s), Ok(e)) = (
+                            stem[i + 1..s_end].parse::<u32>(),
+                            stem[j + 1..k].parse::<u32>(),
+                        ) {
+                            let title_end = stem[..i]
+                                .trim_end_matches(['.', '_', ' ', '-'])
+                                .len();
+                            return Some(SeMatch {
+                                title_end,
+                                season: s,
+                                episode: e,
+                            });
+                        }
+                    }
                 }
-                if e_digits > 0 {
-                    if let (Ok(s), Ok(e)) = (
-                        stem[i + 1..s_end].parse::<u32>(),
-                        stem[j + 1..k].parse::<u32>(),
-                    ) {
-                        let title_end = stem[..i]
-                            .trim_end_matches(['.', '_', ' ', '-'])
-                            .len();
-                        return Some(SeMatch {
-                            title_end,
-                            season: s,
-                            episode: e,
-                        });
+                // Season-only fallback (`S01` with no `E\d+`). Only
+                // accept it when (a) the caller asked for the relaxed
+                // form and (b) the next char is a real separator, so
+                // we don't false-match a chunk like `S01ABC` that
+                // isn't actually a season marker.
+                if !require_episode {
+                    let next_ok = j == bytes.len()
+                        || matches!(bytes[j], b'.' | b'_' | b' ' | b'-' | b']' | b')');
+                    if next_ok {
+                        if let Ok(s) = stem[i + 1..s_end].parse::<u32>() {
+                            let title_end = stem[..i]
+                                .trim_end_matches(['.', '_', ' ', '-'])
+                                .len();
+                            return Some(SeMatch {
+                                title_end,
+                                season: s,
+                                // `episode = 0` is the in-band sentinel
+                                // for "season pack" — `Parsed::is_tv()`
+                                // only checks `season.is_some()`, so
+                                // downstream classification still works,
+                                // and SCENE-grouping uses the
+                                // (collection_id, season, episode) key
+                                // for episode-level joins which a
+                                // season pack shouldn't appear in.
+                                episode: 0,
+                            });
+                        }
                     }
                 }
             }
@@ -391,6 +438,33 @@ mod tests {
         assert_eq!(p.title, "Show Name");
         assert_eq!(p.season, Some(1));
         assert_eq!(p.episode, Some(2));
+    }
+
+    #[test]
+    fn parses_season_pack_release() {
+        // Season-only marker, no `EXX` — typical of MULTI / COMPLETE
+        // packs that group every episode into one torrent. Without
+        // this case, the title boundary fell back to the quality
+        // marker and `S01.MULTI` leaked into the parsed title.
+        let p = parse("Silicon.Valley.S01.MULTi.1080p.BluRay.x264-XYZ.mkv").unwrap();
+        assert_eq!(p.title, "Silicon Valley");
+        assert_eq!(p.season, Some(1));
+        assert_eq!(p.episode, Some(0)); // sentinel for season-pack
+        assert!(p.is_tv());
+        // The dedup key the collection uses to group siblings is just
+        // the title — no episode marker leaks into it.
+        assert_eq!(p.normalized_key(), "silicon valley");
+    }
+
+    #[test]
+    fn parses_season_pack_no_metadata() {
+        // Bare `S01` at the end of the title with no quality / source
+        // tail. Still split the season off so the cleaned title is
+        // usable for TMDB resolution.
+        let p = parse("Some.Show.S03.mkv").unwrap();
+        assert_eq!(p.title, "Some Show");
+        assert_eq!(p.season, Some(3));
+        assert!(p.is_tv());
     }
 
     #[test]

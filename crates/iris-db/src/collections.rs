@@ -80,6 +80,20 @@ pub async fn find_by_parsed_title(
     .await
 }
 
+/// Every collection currently in the library. Used by the TMDB
+/// backfill to walk the canonical SCENE-grouped entities directly,
+/// rather than re-deriving the title from individual member torrents
+/// (one of which could be poorly named and resolve to garbage).
+pub async fn list_all(pool: &SqlitePool) -> Result<Vec<CollectionRow>, sqlx::Error> {
+    sqlx::query_as::<_, CollectionRow>(
+        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at \
+         FROM collections \
+         ORDER BY created_at",
+    )
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get(pool: &SqlitePool, id: Uuid) -> Result<Option<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
         "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at \

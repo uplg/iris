@@ -38,6 +38,132 @@ pub fn spawn(state: AppState) {
 }
 
 async fn run_once(state: &AppState) {
+    // Two passes:
+    //   1. Collection-level — resolve `tmdb_id` from each collection's
+    //      own canonical SCENE-normalised name. This is what the
+    //      library / Continue Watching cards read, and resolving from
+    //      the collection identity (not from an arbitrary member
+    //      torrent's filename) means weirdly-named individual
+    //      torrents can't poison the collection's poster.
+    //   2. Per-torrent — keep `torrents.tmdb_id` in sync for surfaces
+    //      that read it directly (TorrentDetails, single-torrent
+    //      views), and drive `tmdb_verified` via the runtime probe.
+    backfill_collections(state).await;
+    backfill_torrents(state).await;
+}
+
+async fn backfill_collections(state: &AppState) {
+    let pool = state.db();
+    let Some(tmdb) = state.tmdb() else { return };
+    let cols = match iris_db::collections::list_all(pool).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "tmdb_backfill: list_all collections failed");
+            return;
+        }
+    };
+    let mut stamped = 0u64;
+    let mut unresolved = 0u64;
+    for c in cols {
+        let Some(cleaned) = c.parsed_title_normalized.as_ref() else {
+            // Standalone (no SCENE parse) — nothing to look up against.
+            continue;
+        };
+        if cleaned.len() < 2 {
+            continue;
+        }
+        let kind_hint = match c.kind.as_str() {
+            "tv" => Some(crate::tmdb::TmdbKind::Tv),
+            "movie" => Some(crate::tmdb::TmdbKind::Movie),
+            _ => None,
+        };
+        // For movies the normalised key carries a "title YYYY" suffix
+        // (`Parsed::collection_key`); split it back out so multi_search
+        // hits TMDB on a clean title and we can use the year as a
+        // disambiguator. TV keys never have a year suffix.
+        let (query, year_hint) = if kind_hint == Some(crate::tmdb::TmdbKind::Movie) {
+            split_year_suffix(cleaned)
+        } else {
+            (cleaned.as_str(), None)
+        };
+        let resolved = crate::tmdb_resolve::resolve_cleaned(
+            pool,
+            tmdb,
+            query,
+            kind_hint,
+            year_hint,
+        )
+        .await;
+        let Some(r) = resolved else {
+            unresolved += 1;
+            tracing::info!(
+                collection_id = %c.id,
+                display_title = %c.display_title,
+                cleaned = %cleaned,
+                kind = %c.kind,
+                current_tmdb_id = ?c.tmdb_id,
+                "tmdb_backfill: collection unresolved (no confident TMDB match)"
+            );
+            continue;
+        };
+        let resolved_id = match i64::try_from(r.tmdb_id) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if c.tmdb_id == Some(resolved_id) {
+            continue; // already correct, no work needed
+        }
+        if let Err(e) = iris_db::collections::set_tmdb_id(pool, c.id, resolved_id).await {
+            tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: collection write failed");
+            continue;
+        }
+        stamped += 1;
+        tracing::info!(
+            collection_id = %c.id,
+            display_title = %c.display_title,
+            kind = %c.kind,
+            old_tmdb_id = ?c.tmdb_id,
+            new_tmdb_id = resolved_id,
+            "tmdb_backfill: collection.tmdb_id corrected"
+        );
+    }
+    if stamped > 0 || unresolved > 0 {
+        tracing::info!(
+            stamped,
+            unresolved,
+            "tmdb_backfill: collection pass complete"
+        );
+    }
+}
+
+/// `Parsed::collection_key(false)` produces `"title YYYY"` for movies
+/// (e.g., `"dune 1984"`). Split the trailing 4-digit year back off so
+/// TMDB's multi-search gets a clean query and we can use the year as
+/// a tie-breaker. Returns `(title, None)` when there's no year suffix.
+fn split_year_suffix(key: &str) -> (&str, Option<u32>) {
+    let bytes = key.as_bytes();
+    let n = bytes.len();
+    if n < 5 || bytes[n - 5] != b' ' {
+        return (key, None);
+    }
+    let tail = &bytes[n - 4..];
+    if !tail.iter().all(u8::is_ascii_digit) {
+        return (key, None);
+    }
+    let Ok(year_str) = std::str::from_utf8(tail) else {
+        return (key, None);
+    };
+    let Ok(year) = year_str.parse::<u32>() else {
+        return (key, None);
+    };
+    if (1900..=2099).contains(&year) {
+        (&key[..n - 5], Some(year))
+    } else {
+        (key, None)
+    }
+}
+
+async fn backfill_torrents(state: &AppState) {
     let pool = state.db();
     let Some(tmdb) = state.tmdb() else { return };
     let rows = match iris_db::torrents::list_active(pool).await {

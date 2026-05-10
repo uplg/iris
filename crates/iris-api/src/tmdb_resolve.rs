@@ -45,12 +45,23 @@ pub async fn resolve_release_name(
     let parsed = iris_media::filename::parse(release_name)?;
     let cleaned = iris_media::filename::series_key(&parsed.title);
     if cleaned.len() < 2 {
+        tracing::debug!(release_name, parsed_title = %parsed.title, "tmdb_resolve: cleaned title too short");
         return None;
     }
     let resolved_kind = kind_hint.or_else(|| {
         if parsed.is_tv() { Some(TmdbKind::Tv) } else { Some(TmdbKind::Movie) }
     });
-    resolve_cleaned(pool, tmdb, &cleaned, resolved_kind, parsed.year.map(u32::from)).await
+    let result = resolve_cleaned(pool, tmdb, &cleaned, resolved_kind, parsed.year.map(u32::from)).await;
+    if result.is_none() {
+        tracing::info!(
+            release_name,
+            cleaned = %cleaned,
+            kind = ?resolved_kind,
+            year = ?parsed.year,
+            "tmdb_resolve: no match — likely the title isn't on TMDB or the parsed kind disagrees with TMDB results"
+        );
+    }
+    result
 }
 
 /// Lower-level entry point: resolve directly from a pre-cleaned title
@@ -131,31 +142,41 @@ fn pick_best(
     if suggestions.is_empty() {
         return None;
     }
-    // 1) kind + year exact match
-    // 2) kind match, closest year
-    // 3) any kind, year match
-    // 4) first
+    // STRICT kind filter when the caller provided a hint. Returning a
+    // movie for a file that the SCENE parser identified as TV (or vice
+    // versa) is the bug that put `tmdb_id=290019` (94-min movie) on
+    // 24-min episodes — the runtime probe later flags the mismatch but
+    // the wrong poster has already been written. Better to return None
+    // and let the user see no poster than show a confidently wrong one.
     if let Some(kh) = kind_hint {
         let kind_match: Vec<&TmdbSuggestion> = suggestions
             .iter()
             .filter(|s| same_kind(s.kind, kh))
             .collect();
-        if !kind_match.is_empty() {
-            if let Some(yh) = year_hint {
-                if let Some(exact) = kind_match.iter().find(|s| s.year == Some(yh)) {
-                    return Some((*exact).clone());
-                }
-                // Closest year (prefers ±1 over ±5, etc.)
-                let closest = kind_match
-                    .iter()
-                    .min_by_key(|s| s.year.map_or(u32::MAX, |y| y.abs_diff(yh)));
-                if let Some(c) = closest {
-                    return Some((*c).clone());
-                }
-            }
-            return Some(kind_match[0].clone());
+        if kind_match.is_empty() {
+            tracing::debug!(
+                kind = ?kh,
+                total = suggestions.len(),
+                first_kind = ?suggestions.first().map(|s| s.kind),
+                "tmdb_resolve: no candidate matches the hinted kind"
+            );
+            return None;
         }
+        if let Some(yh) = year_hint {
+            if let Some(exact) = kind_match.iter().find(|s| s.year == Some(yh)) {
+                return Some((*exact).clone());
+            }
+            // Closest year (prefers ±1 over ±5, etc.)
+            let closest = kind_match
+                .iter()
+                .min_by_key(|s| s.year.map_or(u32::MAX, |y| y.abs_diff(yh)));
+            if let Some(c) = closest {
+                return Some((*c).clone());
+            }
+        }
+        return Some(kind_match[0].clone());
     }
+    // No kind hint — best effort by year, then popularity.
     if let Some(yh) = year_hint {
         if let Some(s) = suggestions.iter().find(|s| s.year == Some(yh)) {
             return Some(s.clone());
