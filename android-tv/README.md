@@ -102,40 +102,13 @@ adb -s <tv-ip>:5555 install app/build/outputs/apk/debug/app-debug.apk
 
 Or use Studio's **Run** with the TV's IP as the device, after pairing.
 
-## Project layout
+Or download the release APK using Downloader app and install.
 
+## Release build
+
+```sh
+./gradlew assembleRelease
 ```
-app/src/main/
-├── AndroidManifest.xml              ← LEANBACK_LAUNCHER intent filter
-├── res/
-│   ├── values/strings.xml
-│   ├── values/themes.xml            ← system theme (dark, no action bar)
-│   ├── xml/network_security_config  ← cleartext only for 10.0.2.2 + LAN
-│   └── drawable/banner.xml          ← TV launcher banner (placeholder)
-└── java/studio/kahn/iris/tv/
-    ├── IrisApp.kt                   ← Application; builds the AppContainer
-    ├── MainActivity.kt              ← Compose root
-    ├── data/
-    │   ├── AppContainer.kt          ← OkHttp + Retrofit + JSON wiring
-    │   ├── IrisApi.kt               ← Retrofit interface + DTOs
-    │   ├── SessionCookieJar.kt      ← persists Set-Cookie from /auth/login
-    │   └── SessionStore.kt          ← DataStore-backed session prefs
-    └── ui/
-        ├── IrisRoot.kt              ← NavHost (Setup ↔ Home)
-        ├── theme/Theme.kt           ← Iris dark palette
-        └── screens/
-            ├── SetupScreen.kt       ← URL + email + password form
-            └── HomeScreen.kt        ← Continue Watching + Library shelves
-```
-
-## What's NOT here yet (next iterations)
-
-- **WatchScreen** with ExoPlayer + HLS + audio/sub picker (next session)
-- **Search** (D-pad keyboard or Google Assistant integration)
-- **Device pairing flow** (replaces the email/password form with a
-  short-code/QR scheme — needs backend additions on Iris side)
-- **Continue Watching cards with TMDB posters** (Coil is already wired,
-  just need the lookup call)
 
 ## Troubleshooting
 
