@@ -159,6 +159,28 @@ pub async fn set_tmdb_id_if_missing(
     Ok(())
 }
 
+/// Rewrite the human-readable display title on an existing collection.
+/// Used by `tmdb_backfill` to repair rows the older filename parser
+/// left with leaked tokens (`Silicon Valley S01 MULTI`, etc.). Only
+/// touches `display_title` — `parsed_title_normalized` is the
+/// SCENE-grouping key and changing it would risk colliding with the
+/// `(parsed_title_normalized, kind)` unique index, so we leave that
+/// column alone (any inconsistency is internal bookkeeping; the user-
+/// visible name and the TMDB poster flow through `display_title` and
+/// `tmdb_id` which we do rewrite).
+pub async fn set_display_title(
+    pool: &SqlitePool,
+    id: Uuid,
+    display_title: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE collections SET display_title = ?1 WHERE id = ?2")
+        .bind(display_title)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Force-overwrite the collection's `tmdb_id`, regardless of what's
 /// already there. Reserved for the backfill / migration path that
 /// re-resolves torrents whose `tmdb_id` was originally set from the

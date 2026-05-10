@@ -63,103 +63,119 @@ async fn backfill_collections(state: &AppState) {
         }
     };
     let mut stamped = 0u64;
+    let mut renamed = 0u64;
     let mut unresolved = 0u64;
     for c in cols {
-        let Some(cleaned) = c.parsed_title_normalized.as_ref() else {
-            // Standalone (no SCENE parse) — nothing to look up against.
-            continue;
+        // Re-derive everything from a member torrent's filename rather
+        // than trusting the stored `parsed_title_normalized` /
+        // `display_title` — both columns may be polluted by an older
+        // parser that didn't recognise season packs and leaked tokens
+        // like `S01 MULTI` into the title. Same logic as the web /
+        // TV search-page client-side: extract the SCENE title from
+        // the filename, hit TMDB.
+        let torrents = match iris_db::torrents::list_in_collection(pool, c.id).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: list_in_collection failed");
+                continue;
+            }
         };
-        if cleaned.len() < 2 {
-            continue;
-        }
         let kind_hint = match c.kind.as_str() {
             "tv" => Some(crate::tmdb::TmdbKind::Tv),
             "movie" => Some(crate::tmdb::TmdbKind::Movie),
             _ => None,
         };
-        // For movies the normalised key carries a "title YYYY" suffix
-        // (`Parsed::collection_key`); split it back out so multi_search
-        // hits TMDB on a clean title and we can use the year as a
-        // disambiguator. TV keys never have a year suffix.
-        let (query, year_hint) = if kind_hint == Some(crate::tmdb::TmdbKind::Movie) {
-            split_year_suffix(cleaned)
-        } else {
-            (cleaned.as_str(), None)
-        };
-        let resolved = crate::tmdb_resolve::resolve_cleaned(
-            pool,
-            tmdb,
-            query,
-            kind_hint,
-            year_hint,
-        )
-        .await;
-        let Some(r) = resolved else {
+        // Walk the torrents in the collection until one resolves —
+        // siblings sometimes have weirdly-shaped filenames and we want
+        // any clean signal we can get. The first TMDB hit becomes the
+        // canonical answer for the collection.
+        let mut resolved_id: Option<i64> = None;
+        let mut clean_display_title: Option<String> = None;
+        for t in &torrents {
+            // Re-parse with the live (post-fix) parser to derive a
+            // clean title. We capture the parsed title for
+            // `display_title` AND feed `resolve_release_name` to hit
+            // TMDB on the cleaned form.
+            let Some(parsed) = iris_media::filename::parse(&t.name) else { continue };
+            if clean_display_title.is_none() {
+                clean_display_title = Some(parsed.display_with_year(parsed.is_tv()));
+            }
+            if let Some(r) = crate::tmdb_resolve::resolve_release_name(
+                pool, tmdb, &t.name, kind_hint,
+            ).await {
+                if let Ok(id) = i64::try_from(r.tmdb_id) {
+                    resolved_id = Some(id);
+                    // Prefer the TMDB-canonical title for display
+                    // when we got one — it's typically prettier than
+                    // the SCENE-derived form (real punctuation, real
+                    // capitalisation). Falls back to the parsed
+                    // SCENE title when TMDB doesn't return one.
+                    if !r.title.trim().is_empty() {
+                        clean_display_title = Some(r.title.clone());
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Repair the display_title even when TMDB resolution fails.
+        // The user-visible name flowing from the SCENE parser is at
+        // least as clean as the polluted stored value, and matters
+        // independently of poster lookup.
+        if let Some(new_title) = clean_display_title.as_ref() {
+            if !new_title.is_empty() && new_title != &c.display_title {
+                if let Err(e) =
+                    iris_db::collections::set_display_title(pool, c.id, new_title).await
+                {
+                    tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: set_display_title failed");
+                } else {
+                    renamed += 1;
+                    tracing::info!(
+                        collection_id = %c.id,
+                        old = %c.display_title,
+                        new = %new_title,
+                        "tmdb_backfill: collection.display_title rewritten"
+                    );
+                }
+            }
+        }
+
+        let Some(new_id) = resolved_id else {
             unresolved += 1;
             tracing::info!(
                 collection_id = %c.id,
                 display_title = %c.display_title,
-                cleaned = %cleaned,
                 kind = %c.kind,
                 current_tmdb_id = ?c.tmdb_id,
-                "tmdb_backfill: collection unresolved (no confident TMDB match)"
+                torrents = torrents.len(),
+                "tmdb_backfill: collection unresolved (no torrent matched TMDB)"
             );
             continue;
         };
-        let resolved_id = match i64::try_from(r.tmdb_id) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if c.tmdb_id == Some(resolved_id) {
-            continue; // already correct, no work needed
+        if c.tmdb_id == Some(new_id) {
+            continue; // already correct
         }
-        if let Err(e) = iris_db::collections::set_tmdb_id(pool, c.id, resolved_id).await {
-            tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: collection write failed");
+        if let Err(e) = iris_db::collections::set_tmdb_id(pool, c.id, new_id).await {
+            tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: collection set_tmdb_id failed");
             continue;
         }
         stamped += 1;
         tracing::info!(
             collection_id = %c.id,
-            display_title = %c.display_title,
+            display_title = %clean_display_title.as_deref().unwrap_or(c.display_title.as_str()),
             kind = %c.kind,
             old_tmdb_id = ?c.tmdb_id,
-            new_tmdb_id = resolved_id,
+            new_tmdb_id = new_id,
             "tmdb_backfill: collection.tmdb_id corrected"
         );
     }
-    if stamped > 0 || unresolved > 0 {
+    if stamped > 0 || renamed > 0 || unresolved > 0 {
         tracing::info!(
             stamped,
+            renamed,
             unresolved,
             "tmdb_backfill: collection pass complete"
         );
-    }
-}
-
-/// `Parsed::collection_key(false)` produces `"title YYYY"` for movies
-/// (e.g., `"dune 1984"`). Split the trailing 4-digit year back off so
-/// TMDB's multi-search gets a clean query and we can use the year as
-/// a tie-breaker. Returns `(title, None)` when there's no year suffix.
-fn split_year_suffix(key: &str) -> (&str, Option<u32>) {
-    let bytes = key.as_bytes();
-    let n = bytes.len();
-    if n < 5 || bytes[n - 5] != b' ' {
-        return (key, None);
-    }
-    let tail = &bytes[n - 4..];
-    if !tail.iter().all(u8::is_ascii_digit) {
-        return (key, None);
-    }
-    let Ok(year_str) = std::str::from_utf8(tail) else {
-        return (key, None);
-    };
-    let Ok(year) = year_str.parse::<u32>() else {
-        return (key, None);
-    };
-    if (1900..=2099).contains(&year) {
-        (&key[..n - 5], Some(year))
-    } else {
-        (key, None)
     }
 }
 
@@ -214,44 +230,25 @@ async fn backfill_torrents(state: &AppState) {
                 }
             }
         } else if row.tmdb_verified {
-            // Already on the right id and already verified — skip the
-            // collection write (no-op) and the verify probe.
+            // Already on the right id and already verified — nothing to
+            // do for this torrent.
             continue;
         }
-        // Propagate to the parent collection — UNCONDITIONALLY when we
-        // got a SCENE-resolved id, even when the torrent's own id
-        // didn't change. Reason: `collection_assign::run_backfill`
-        // (which runs *before* this task at boot) already stamped
-        // every collection with whatever was on the torrent at that
-        // point, *including* the indexer's wrong values. If the SCENE
-        // resolution agrees with what's already on the torrent
-        // (id_changed=false) but the collection was stamped from a
-        // sibling torrent that had a wrong id, the slot would stay
-        // wrong forever. The write is idempotent when collection
-        // already has the right id.
-        if let Some(collection_id) = row.collection_id {
-            match iris_db::collections::set_tmdb_id(pool, collection_id, resolved_id).await {
-                Ok(_) => {
-                    tracing::info!(
-                        infohash = %row.infohash,
-                        collection_id = %collection_id,
-                        tmdb_id = resolved_id,
-                        torrent_changed = id_changed,
-                        "tmdb_backfill: stamped collection.tmdb_id",
-                    );
-                }
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    infohash = %row.infohash,
-                    collection_id = %collection_id,
-                    "tmdb_backfill: collection set_tmdb_id failed",
-                ),
-            }
-        }
+        // DO NOT write to `collection.tmdb_id` here. The collection
+        // owns its own resolution via `backfill_collections` (which
+        // queries TMDB once with the collection's canonical
+        // `parsed_title_normalized`, the way the web search works
+        // client-side). A per-torrent stamp would race for "last
+        // writer wins" against sibling torrents and clobber the
+        // canonical value.
+        //
         // Re-verify the (possibly new) tmdb_id against the file's
         // probed runtime. `try_verify` is best-effort — if the file
         // isn't on disk yet (still downloading) it short-circuits
-        // and the next backfill pass picks it up.
+        // and the next backfill pass picks it up. It only updates
+        // `torrent.tmdb_verified`; `enrich_after_verify` inside
+        // uses `set_tmdb_id_if_missing` which is a no-op once the
+        // collection slot is filled by `backfill_collections`.
         if try_verify(state, &row.infohash, resolved_id).await {
             verified += 1;
         }

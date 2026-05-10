@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/remux", get(list_remux_jobs))
         .route("/remux/{key}", axum::routing::delete(wipe_remux_job))
+        .route("/tmdb/diagnose/{infohash}", get(diagnose_tmdb))
 }
 
 #[derive(Debug, Serialize)]
@@ -294,6 +295,127 @@ async fn list_remux_jobs(
 struct WipeRemuxResponse {
     /// Bytes freed by removing the cache file.
     freed_bytes: u64,
+}
+
+/// Per-torrent TMDB resolution dump — `GET /admin/tmdb/diagnose/{infohash}`.
+///
+/// Surfaces every input the resolver sees so we can tell *why* a given
+/// torrent is stuck on a wrong tmdb_id: the raw torrent name, what the
+/// SCENE parser extracted, the multi-search candidates TMDB returned,
+/// and what `pick_best` would settle on with the current rules. Useful
+/// when a library card shows the wrong poster and we need to know
+/// whether the bug is upstream of `pick_best` (parser misextracted the
+/// title, TMDB has the wrong show on file) or downstream (our scoring
+/// picks a worse candidate).
+#[derive(Debug, Serialize)]
+struct TmdbDiagnose {
+    infohash: String,
+    torrent_name: String,
+    db_tmdb_id: Option<i64>,
+    db_tmdb_verified: bool,
+    db_collection_id: Option<Uuid>,
+    db_collection_tmdb_id: Option<i64>,
+    parsed: Option<TmdbDiagnoseParsed>,
+    /// Cleaned name fed to `multi_search`. Empty when SCENE parsing
+    /// failed (no title to look up).
+    cleaned_query: String,
+    suggestions: Vec<TmdbDiagnoseSuggestion>,
+    picked: Option<TmdbDiagnoseSuggestion>,
+}
+
+#[derive(Debug, Serialize)]
+struct TmdbDiagnoseParsed {
+    title: String,
+    year: Option<u16>,
+    season: Option<u32>,
+    episode: Option<u32>,
+    is_tv: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct TmdbDiagnoseSuggestion {
+    kind: String,
+    tmdb_id: u64,
+    title: String,
+    year: Option<u32>,
+    poster_path: Option<String>,
+}
+
+async fn diagnose_tmdb(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(infohash): Path<String>,
+) -> ApiResult<Json<TmdbDiagnose>> {
+    let infohash = infohash.to_ascii_lowercase();
+    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let collection_tmdb_id = match row.collection_id {
+        Some(cid) => iris_db::collections::get(state.db(), cid).await?.and_then(|c| c.tmdb_id),
+        None => None,
+    };
+
+    let parsed = iris_media::filename::parse(&row.name);
+    let cleaned = parsed
+        .as_ref()
+        .map(|p| iris_media::filename::series_key(&p.title))
+        .unwrap_or_default();
+
+    let mut suggestions: Vec<TmdbDiagnoseSuggestion> = Vec::new();
+    let mut picked: Option<TmdbDiagnoseSuggestion> = None;
+
+    if let (Some(tmdb), Some(p)) = (state.tmdb(), parsed.as_ref()) {
+        if cleaned.len() >= 2 {
+            let raw = tmdb.multi_search(&cleaned).await;
+            for s in &raw {
+                suggestions.push(TmdbDiagnoseSuggestion {
+                    kind: format!("{:?}", s.kind).to_ascii_lowercase(),
+                    tmdb_id: s.tmdb_id,
+                    title: s.title.clone(),
+                    year: s.year,
+                    poster_path: s.poster_path.clone(),
+                });
+            }
+            // Re-run resolution end-to-end so the dump reflects what the
+            // backfill / ingestion path would actually pick today.
+            let kind_hint = if p.is_tv() {
+                Some(crate::tmdb::TmdbKind::Tv)
+            } else {
+                Some(crate::tmdb::TmdbKind::Movie)
+            };
+            if let Some(r) =
+                crate::tmdb_resolve::resolve_cleaned(state.db(), tmdb, &cleaned, kind_hint, p.year.map(u32::from)).await
+            {
+                picked = Some(TmdbDiagnoseSuggestion {
+                    kind: format!("{:?}", r.kind).to_ascii_lowercase(),
+                    tmdb_id: r.tmdb_id,
+                    title: r.title,
+                    year: r.year,
+                    poster_path: r.poster_path,
+                });
+            }
+        }
+    }
+
+    Ok(Json(TmdbDiagnose {
+        infohash,
+        torrent_name: row.name,
+        db_tmdb_id: row.tmdb_id,
+        db_tmdb_verified: row.tmdb_verified,
+        db_collection_id: row.collection_id,
+        db_collection_tmdb_id: collection_tmdb_id,
+        parsed: parsed.map(|p| TmdbDiagnoseParsed {
+            title: p.title.clone(),
+            year: p.year,
+            season: p.season,
+            episode: p.episode,
+            is_tv: p.is_tv(),
+        }),
+        cleaned_query: cleaned,
+        suggestions,
+        picked,
+    }))
 }
 
 async fn wipe_remux_job(
