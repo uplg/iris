@@ -78,37 +78,49 @@ async fn run_once(state: &AppState) {
                         name = %row.name,
                         old = ?row.tmdb_id,
                         new = resolved_id,
-                        "tmdb_backfill: corrected tmdb_id"
+                        "tmdb_backfill: corrected torrent tmdb_id"
                     );
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    tracing::warn!(error = %e, infohash = %row.infohash, "tmdb_backfill: update failed");
+                    tracing::warn!(error = %e, infohash = %row.infohash, "tmdb_backfill: torrent update failed");
                     continue;
                 }
             }
-            // Propagate the new id to the parent collection straight
-            // away, regardless of whether the runtime probe will match
-            // below. The SCENE-resolved id is by definition more
-            // trustworthy than the old indexer-supplied one, and the
-            // library card reads `collection.tmdb_id` directly (no
-            // `tmdb_verified` gate at the collection level), so users
-            // see correct posters even when the runtime verifier
-            // can't run (file not on disk, runtime mismatch, etc.).
-            if let Some(collection_id) = row.collection_id {
-                if let Err(e) =
-                    iris_db::collections::set_tmdb_id(pool, collection_id, resolved_id).await
-                {
-                    tracing::warn!(
-                        error = %e,
+        } else if row.tmdb_verified {
+            // Already on the right id and already verified — skip the
+            // collection write (no-op) and the verify probe.
+            continue;
+        }
+        // Propagate to the parent collection — UNCONDITIONALLY when we
+        // got a SCENE-resolved id, even when the torrent's own id
+        // didn't change. Reason: `collection_assign::run_backfill`
+        // (which runs *before* this task at boot) already stamped
+        // every collection with whatever was on the torrent at that
+        // point, *including* the indexer's wrong values. If the SCENE
+        // resolution agrees with what's already on the torrent
+        // (id_changed=false) but the collection was stamped from a
+        // sibling torrent that had a wrong id, the slot would stay
+        // wrong forever. The write is idempotent when collection
+        // already has the right id.
+        if let Some(collection_id) = row.collection_id {
+            match iris_db::collections::set_tmdb_id(pool, collection_id, resolved_id).await {
+                Ok(_) => {
+                    tracing::info!(
                         infohash = %row.infohash,
                         collection_id = %collection_id,
-                        "tmdb_backfill: collection set_tmdb_id failed",
+                        tmdb_id = resolved_id,
+                        torrent_changed = id_changed,
+                        "tmdb_backfill: stamped collection.tmdb_id",
                     );
                 }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    infohash = %row.infohash,
+                    collection_id = %collection_id,
+                    "tmdb_backfill: collection set_tmdb_id failed",
+                ),
             }
-        } else if row.tmdb_verified {
-            continue;
         }
         // Re-verify the (possibly new) tmdb_id against the file's
         // probed runtime. `try_verify` is best-effort — if the file
