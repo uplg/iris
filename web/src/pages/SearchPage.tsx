@@ -127,17 +127,17 @@ export function SearchPage() {
     <div className="grid gap-6">
       <section className="grid gap-4">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Recherche</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Search</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {meta.length > 0
               ? meta
                   .map((p) =>
                     p.error
-                      ? `${p.id} (indisponible)`
+                      ? `${p.id} (unavailable)`
                       : `${p.id}${p.total_count != null ? ` (${p.total_count.toLocaleString()})` : ""}`,
                   )
                   .join(" · ")
-              : "Cherche un titre — les suggestions TMDB apparaissent en tapant."}
+              : "Search a title — TMDB suggestions appear as you type."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -146,7 +146,7 @@ export function SearchPage() {
             <Input
               ref={inputRef}
               autoFocus
-              placeholder="Titre, année, n'importe quoi…"
+              placeholder="Title, year, anything…"
               className="h-12 pl-9 text-base"
               value={q}
               onChange={(e) => {
@@ -176,22 +176,22 @@ export function SearchPage() {
             onValueChange={(v) => setKind(v === "movie" || v === "tv" ? v : null)}
             className="shrink-0"
           >
-            <ToggleGroupItem value="all" aria-label="Toutes catégories">
+            <ToggleGroupItem value="all" aria-label="All categories">
               <Layers className="size-4" />
-              Tout
+              All
             </ToggleGroupItem>
-            <ToggleGroupItem value="movie" aria-label="Films uniquement">
+            <ToggleGroupItem value="movie" aria-label="Movies only">
               <Film className="size-4" />
-              Films
+              Movies
             </ToggleGroupItem>
-            <ToggleGroupItem value="tv" aria-label="Séries uniquement">
+            <ToggleGroupItem value="tv" aria-label="Series only">
               <Tv className="size-4" />
-              Séries
+              Series
             </ToggleGroupItem>
           </ToggleGroup>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>Trier par</span>
+          <span>Sort by</span>
           {(["seeders", "uploaded", "size", "title"] as const).map((f) => (
             <button
               key={f}
@@ -216,20 +216,20 @@ export function SearchPage() {
         </div>
       </section>
 
-      {error && <ErrorState title="Recherche échouée" error={error} />}
+      {error && <ErrorState title="Search failed" error={error} />}
 
       {debounced.length < 2 ? (
         <EmptyState
           icon={<SearchIcon className="size-7" />}
-          title="Tape au moins 2 caractères"
-          body="Astuce : sélectionne une suggestion TMDB pour un titre canonique — meilleurs résultats côté tracker."
+          title="Type at least 2 characters"
+          body="Tip: pick a TMDB suggestion to use a canonical title — better results from the tracker."
         />
       ) : isFetching && rows.length === 0 ? (
-        <LoadingState label="Recherche en cours…" />
+        <LoadingState label="Searching…" />
       ) : rows.length === 0 ? (
         <EmptyState
-          title="Aucun résultat"
-          body="Essaie un autre titre, retire l'année, ou bascule entre Films / Séries dans le filtre."
+          title="No results"
+          body="Try a different title, drop the year, or switch between Movies / Series in the filter."
         />
       ) : (
         <>
@@ -267,9 +267,9 @@ export function SearchPage() {
 function labelFor(f: SortField): string {
   switch (f) {
     case "title":
-      return "Titre";
+      return "Title";
     case "size":
-      return "Taille";
+      return "Size";
     case "seeders":
       return "Seeders";
     case "leechers":
@@ -296,7 +296,7 @@ function SuggestionsDropdown({
       {loading && items.length === 0 && (
         <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
           <Loader2 className="size-3 animate-spin" />
-          Suggestions TMDB…
+          TMDB suggestions…
         </div>
       )}
       {items.map((s) => (
@@ -427,8 +427,8 @@ function Pagination({ page, totalPages, onPage, isFetching }: PaginationProps) {
   return (
     <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
       <span>
-        Page {page} sur {totalPages || 1}
-        {isFetching && <span className="ml-2 text-xs">(chargement…)</span>}
+        Page {page} of {totalPages || 1}
+        {isFetching && <span className="ml-2 text-xs">(loading…)</span>}
       </span>
       <div className="flex items-center gap-2">
         <Button
@@ -438,7 +438,7 @@ function Pagination({ page, totalPages, onPage, isFetching }: PaginationProps) {
           disabled={page <= 1 || isFetching}
         >
           <ChevronLeft className="size-3.5" />
-          Précédent
+          Previous
         </Button>
         <Button
           variant="outline"
@@ -446,7 +446,7 @@ function Pagination({ page, totalPages, onPage, isFetching }: PaginationProps) {
           onClick={() => onPage(page + 1)}
           disabled={page >= totalPages || isFetching}
         >
-          Suivant
+          Next
           <ChevronRight className="size-3.5" />
         </Button>
       </div>

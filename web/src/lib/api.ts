@@ -615,29 +615,33 @@ export const library = {
 // ---------------------------------------------------------------------------
 
 export type FollowSummary = {
-  tmdb_id: number;
+  /** Stable id — clients route by this, not by tmdb_id. */
+  id: string;
+  /** SCENE-normalised name; identity for joining episode_files /
+   *  available_episodes. */
+  normalized_name: string;
+  /** Display name as the user picked it. */
   name: string;
-  total_seasons: number | null;
+  /** Decoration only. Even when present, frontends should not pull
+   *  TMDB metadata unless the matching collection has been
+   *  tmdb_verified by the runtime probe (server only fills
+   *  poster_path / backdrop_path under that condition). */
+  tmdb_id: number | null;
+  /** Empty until the joined collection has tmdb_verified=true. */
   poster_path: string | null;
   backdrop_path: string | null;
-  /** Number of episodes the notify scheduler has surfaced as available
-   *  since the user last opened the series page. Drives the "X nouveaux"
-   *  badge on Watchlist cards. */
+  /** Number of distinct (season, episode) the indexer has surfaced
+   *  since `last_visited_at`. Drives the "X new" badge. */
   new_count: number;
   last_visited_at: string | null;
   created_at: string;
 };
 
-export type EpisodeStatus = "downloaded" | "available" | "unavailable";
+export type EpisodeStatus = "downloaded" | "available";
 
 export type EpisodeItem = {
   season: number;
   episode: number;
-  name: string | null;
-  overview: string | null;
-  air_date: string | null;
-  still_path: string | null;
-  runtime_minutes: number | null;
   status: EpisodeStatus;
   /** Per-user `playback_progress.completed` for the underlying file
    *  (only meaningful when status === "downloaded"). */
@@ -645,20 +649,22 @@ export type EpisodeItem = {
   /** Set when status === "downloaded": where to play. */
   infohash: string | null;
   file_idx: number | null;
-  /** Set when status === "available": ready for the on-demand grab
-   *  endpoint (Phase 4). */
+  /** Set when status === "available": pass to grabEpisode. */
   indexer_provider: string | null;
   indexer_torrent_id: string | null;
+  quality: string | null;
+  seeders: number | null;
 };
 
 export type EpisodesResponse = {
-  season: number;
-  total_seasons: number | null;
+  /** Echoes the request's season filter — null when the caller
+   *  asked for the full set across all seasons. */
+  season: number | null;
   items: EpisodeItem[];
 };
 
 export type EpisodePoint = {
-  tmdb_id: number;
+  follow_id: string | null;
   season: number;
   episode: number;
   status: EpisodeStatus;
@@ -681,18 +687,22 @@ export type GrabEpisodeResponse = {
 
 export const follows = {
   list: () => api.get<FollowSummary[]>("/me/follows"),
-  add: (tmdb_id: number, name?: string, total_seasons?: number) =>
-    api.post<FollowSummary>("/me/follows", { tmdb_id, name, total_seasons }),
-  remove: (tmdb_id: number) => api.delete<void>(`/me/follows/${tmdb_id}`),
-  episodes: (tmdb_id: number, season: number = 1) =>
-    api.get<EpisodesResponse>(`/me/follows/${tmdb_id}/episodes?season=${season}`),
-  grabEpisode: (tmdb_id: number, season: number, episode: number) =>
+  add: (name: string, tmdb_id?: number | null) =>
+    api.post<FollowSummary>("/me/follows", { name, tmdb_id: tmdb_id ?? null }),
+  remove: (id: string) => api.delete<void>(`/me/follows/${id}`),
+  /** Pass `season` to filter; omit for the full set. */
+  episodes: (id: string, season?: number) =>
+    api.get<EpisodesResponse>(
+      season != null
+        ? `/me/follows/${id}/episodes?season=${season}`
+        : `/me/follows/${id}/episodes`,
+    ),
+  grabEpisode: (id: string, season: number, episode: number) =>
     api.post<GrabEpisodeResponse>(
-      `/me/follows/${tmdb_id}/episodes/${season}/${episode}/grab`,
+      `/me/follows/${id}/episodes/${season}/${episode}/grab`,
     ),
   /** Fetch context for the file currently playing — drives the
-   *  "Préparer le suivant ?" modal at episode end. Returns nulls when
-   *  the file isn't a TV episode or the user doesn't follow the show. */
+   *  "Watch next?" modal at episode end. */
   episodeContext: (infohash: string, file_idx: number) =>
     api.get<EpisodeContext>(
       `/me/follows/episode-context?infohash=${encodeURIComponent(infohash)}&file_idx=${file_idx}`,

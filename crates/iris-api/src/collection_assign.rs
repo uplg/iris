@@ -7,12 +7,18 @@
 //!
 //! Identity is SCENE-parsed: the torrent name (or, failing that, the
 //! first parseable file leaf) yields a normalised key + display title
-//! that anchors the collection. TMDB id is enrichment metadata only —
-//! attached to the collection if known and not already set, but
-//! never trusted to drive grouping or display. Indexers occasionally
-//! mis-tag torrents with the wrong TMDB id; before this rework that
-//! produced collections whose card title disagreed with the actual
-//! file (sometimes a totally unrelated show / movie).
+//! that anchors the collection. TMDB is **never** trusted at ingest
+//! — neither for grouping, display, nor enrichment. The indexer-
+//! attached `tmdb_id` is far too unreliable: it's wrong often enough
+//! that propagating it to the collection produces cards with the
+//! wrong show's poster or synopsis attached to a correctly-titled
+//! folder.
+//!
+//! `collections.tmdb_id` (used by the UI to fetch poster / synopsis)
+//! is written exclusively by [`enrich_after_verify`] — invoked from
+//! `verify_tmdb_match` once we've matched the file's probed runtime
+//! against TMDB's declared duration. That's the only signal strong
+//! enough to justify pulling third-party metadata.
 //!
 //! For TV torrents we also populate `episode_files` from any file
 //! whose name parses to a `(season, episode)` — this is what lets
@@ -28,15 +34,18 @@ use iris_media::filename;
 use crate::tmdb::TmdbClient;
 
 /// Run after every successful ingest. Picks (or creates) the right
-/// collection from SCENE-parsed identity, attaches the torrent,
-/// optionally enriches the collection with `tmdb_id`, and (for TV)
-/// populates `episode_files`. Best-effort: failures are logged, not
-/// returned, since collection assignment is metadata not playback.
+/// collection from SCENE-parsed identity, attaches the torrent, and
+/// (for TV) populates `episode_files`. Best-effort: failures are
+/// logged, not returned, since collection assignment is metadata
+/// not playback.
 ///
-/// `tmdb` is currently unused — kept in the signature so callers
-/// don't have to change shape if we later re-introduce a TMDB
-/// metadata lookup at this layer (e.g., backfilling a missing
-/// display title from TMDB when SCENE parse came up empty).
+/// Does NOT touch `collections.tmdb_id` — that field is reserved
+/// for [`enrich_after_verify`] which writes it only after the
+/// runtime-match probe has confirmed the indexer's tmdb hint.
+///
+/// `tmdb_id` is accepted for log/trace context but deliberately not
+/// stored on the collection here. `_tmdb` is kept in the signature
+/// for symmetry with future hooks; currently unused.
 pub async fn assign_after_ingest(
     pool: &SqlitePool,
     _tmdb: Option<&TmdbClient>,
@@ -77,15 +86,6 @@ pub async fn assign_after_ingest(
         }
     };
 
-    // Enrichment: stamp tmdb_id on the collection if we have one and
-    // the slot is empty. First writer wins so a later torrent with a
-    // (possibly wrong) tmdb_id can't overwrite a known-good one.
-    if let Some(tid) = tmdb_id {
-        if let Err(e) = collections::set_tmdb_id_if_missing(pool, collection.id, tid).await {
-            tracing::warn!(error = %e, infohash, "collection assign: enrich tmdb failed");
-        }
-    }
-
     if let Err(e) = iris_db::torrents::set_collection(pool, infohash, Some(collection.id)).await {
         tracing::warn!(error = %e, infohash, "collection assign: set_collection failed");
         return;
@@ -95,6 +95,7 @@ pub async fn assign_after_ingest(
         collection_id = %collection.id,
         kind = collection.kind,
         title = %collection.display_title,
+        unverified_tmdb_hint = ?tmdb_id,
         "collection assigned",
     );
 
@@ -212,6 +213,42 @@ async fn resolve_collection(
     collections::create_standalone(pool, torrent_name, kind).await
 }
 
+/// Stamp `collection.tmdb_id` from a torrent that has just been
+/// runtime-verified. Called by `verify_tmdb_match` after flipping
+/// `tmdb_verified=true`. First-writer-wins on the collection slot
+/// — once a verified id is on file, a later torrent with a
+/// different id can't overwrite it (would need explicit manual
+/// re-tagging, future feature).
+///
+/// Also called from [`run_backfill`] for torrents that are already
+/// verified at boot (the verification flag persists across
+/// restarts, but the enrichment write didn't happen pre-rework).
+pub async fn enrich_after_verify(pool: &SqlitePool, infohash: &str) {
+    let row = match iris_db::torrents::find_by_infohash(pool, infohash).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(error = %e, infohash, "enrich_after_verify: lookup failed");
+            return;
+        }
+    };
+    if !row.tmdb_verified {
+        return;
+    }
+    let Some(tmdb_id) = row.tmdb_id else { return };
+    let Some(collection_id) = row.collection_id else { return };
+    if let Err(e) = collections::set_tmdb_id_if_missing(pool, collection_id, tmdb_id).await {
+        tracing::warn!(error = %e, infohash, "enrich_after_verify: write failed");
+        return;
+    }
+    tracing::info!(
+        infohash,
+        collection_id = %collection_id,
+        tmdb_id,
+        "collection enriched with verified tmdb_id",
+    );
+}
+
 /// Walk every torrent currently in the library and assign a collection
 /// to any that doesn't have one yet. Runs at boot to backfill the
 /// existing library after the SCENE-first migration. Idempotent —
@@ -230,7 +267,14 @@ pub async fn run_backfill(
     };
     let mut done = 0;
     for row in rows {
+        // Re-enrich verified torrents whose collection.tmdb_id is
+        // still NULL (pre-rework databases, or torrents that got
+        // verified after their initial assignment). No-op when the
+        // slot is already filled.
         if row.collection_id.is_some() {
+            if row.tmdb_verified {
+                enrich_after_verify(pool, &row.infohash).await;
+            }
             continue;
         }
         // Need the file list to detect TV-vs-movie via SCENE parsing.
@@ -246,6 +290,9 @@ pub async fn run_backfill(
             .map(|f| (f.index, f.path))
             .collect();
         assign_after_ingest(pool, tmdb, &row.infohash, &row.name, row.tmdb_id, &files).await;
+        if row.tmdb_verified {
+            enrich_after_verify(pool, &row.infohash).await;
+        }
         done += 1;
     }
     if done > 0 {

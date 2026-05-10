@@ -31,7 +31,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val SEARCH = "search?q={q}&autoPlay={autoPlay}"
     const val SEARCH_DETAIL = "search-detail/{provider}/{externalId}?tmdbId={tmdbId}"
-    const val SERIES = "series/{tmdbId}"
+    const val SERIES = "series/{followId}"
     const val WATCH = "watch/{infohash}/{fileIdx}"
     fun detail(infohash: String) = "detail/$infohash"
     fun search(q: String? = null, autoPlay: Boolean = false): String {
@@ -47,7 +47,10 @@ object Routes {
         return "search-detail/$p/$e?tmdbId=$t"
     }
     fun watch(infohash: String, fileIdx: Int) = "watch/$infohash/$fileIdx"
-    fun series(tmdbId: Long) = "series/$tmdbId"
+    fun series(followId: String): String {
+        val id = java.net.URLEncoder.encode(followId, "UTF-8")
+        return "series/$id"
+    }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -112,8 +115,8 @@ fun IrisRoot(
                     onOpenSearch = { query ->
                         navController.navigate(Routes.search(query))
                     },
-                    onOpenSeries = { tmdbId ->
-                        navController.navigate(Routes.series(tmdbId))
+                    onOpenSeries = { followId ->
+                        navController.navigate(Routes.series(followId))
                     },
                 )
             }
@@ -215,11 +218,14 @@ fun IrisRoot(
             }
             composable(
                 Routes.SERIES,
-                arguments = listOf(navArgument("tmdbId") { type = NavType.LongType }),
+                arguments = listOf(navArgument("followId") { type = NavType.StringType }),
             ) { backStackEntry ->
+                val followId = java.net.URLDecoder.decode(
+                    backStackEntry.arguments!!.getString("followId")!!, "UTF-8",
+                )
                 SeriesScreen(
                     container = container,
-                    tmdbId = backStackEntry.arguments!!.getLong("tmdbId"),
+                    followId = followId,
                     onPickFile = { infohash, fileIdx ->
                         navController.navigate(Routes.watch(infohash, fileIdx))
                     },

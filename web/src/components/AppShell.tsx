@@ -19,13 +19,13 @@ export function AppShell() {
           <Brand />
           <nav className="flex items-center gap-1 text-sm">
             <NavItem to="/" end icon={<HomeIcon className="size-4" />}>
-              Accueil
+              Home
             </NavItem>
             <NavItem to="/search" icon={<SearchIcon className="size-4" />}>
-              Recherche
+              Search
             </NavItem>
             <NavItem to="/library" icon={<LibraryIcon className="size-4" />}>
-              Bibliothèque
+              Library
             </NavItem>
             {auth.user.is_admin && (
               <NavItem to="/admin" icon={<ShieldCheck className="size-4" />}>

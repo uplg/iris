@@ -66,50 +66,27 @@ pub async fn list_for_collection_season(
     .await
 }
 
-/// Cross-collection lookup by TMDB id — every season. Same join
-/// rationale as [`list_for_tmdb_season`]; used by the notify
-/// scheduler to know what's already on disk before adding rows to
-/// `available_episodes`.
-pub async fn list_for_tmdb(
+/// All episode files for collections matching a SCENE-normalised
+/// name. The Watchlist / Series page uses this — follows are
+/// keyed on the normalised name, so we join via
+/// `collections.parsed_title_normalized` and skip TMDB entirely.
+pub async fn list_for_normalized(
     pool: &SqlitePool,
-    tmdb_id: i64,
+    normalized_name: &str,
 ) -> Result<Vec<EpisodeFileRow>, sqlx::Error> {
     sqlx::query_as::<_, EpisodeFileRow>(
         "SELECT ef.id, ef.collection_id, ef.season, ef.episode, ef.infohash, ef.file_idx, \
                 ef.derived_from, ef.created_at \
          FROM episode_files ef \
          JOIN collections c ON c.id = ef.collection_id \
-         WHERE c.tmdb_id = ?1 \
+         WHERE c.parsed_title_normalized = ?1 AND c.kind = 'tv' \
          ORDER BY ef.season, ef.episode",
     )
-    .bind(tmdb_id)
+    .bind(normalized_name)
     .fetch_all(pool)
     .await
 }
 
-/// Cross-collection lookup by TMDB id — joins through collections.
-/// Returns rows from EVERY collection enriched with this `tmdb_id`
-/// (multiple are now possible: a TMDB-tagged torrent and a SCENE-only
-/// one may live in distinct collections that both happen to map to
-/// the same show). Powers the Series page on a Watchlist follow.
-pub async fn list_for_tmdb_season(
-    pool: &SqlitePool,
-    tmdb_id: i64,
-    season: i64,
-) -> Result<Vec<EpisodeFileRow>, sqlx::Error> {
-    sqlx::query_as::<_, EpisodeFileRow>(
-        "SELECT ef.id, ef.collection_id, ef.season, ef.episode, ef.infohash, ef.file_idx, \
-                ef.derived_from, ef.created_at \
-         FROM episode_files ef \
-         JOIN collections c ON c.id = ef.collection_id \
-         WHERE c.tmdb_id = ?1 AND ef.season = ?2 \
-         ORDER BY ef.episode",
-    )
-    .bind(tmdb_id)
-    .bind(season)
-    .fetch_all(pool)
-    .await
-}
 
 /// Lookup by physical file — used by the player's end-of-episode
 /// "Préparer le suivant ?" flow to identify which episode just

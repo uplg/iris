@@ -1,7 +1,6 @@
-// `tmdb_id`/`season`/`episode`/`file_idx` casts move between i64 (DB
-// storage) and u32/u64 (TMDB / engine APIs). The values are bounded by
-// the domain (no negative TMDB ids, no >2^31 seasons or file indices) so
-// clippy's pedantic cast warnings on these conversions are noise.
+// File-index / season / episode casts move between i64 (DB) and
+// u32/u64 (engine / SCENE parser). Values are domain-bounded, so
+// pedantic cast warnings are noise here.
 #![allow(
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
@@ -10,11 +9,17 @@
 
 //! Per-user series-following endpoints. Mounted under `/api/me/follows`.
 //!
-//! These are the data plumbing for the Watchlist shelf and the Series
-//! detail page: the user follows a TMDB id, we remember it, and we
-//! cross-reference what's downloaded (`episode_files`) and what's
-//! available to grab (`available_episodes`) per episode TMDB tells us
-//! exists.
+//! Identity is the SCENE-normalised name. The Watchlist shelf and
+//! Series page run entirely off this — TMDB is consulted only to
+//! resolve a poster URL when the joined collection has been
+//! `tmdb_verified` (probe runtime match).
+//!
+//! Episode listings come from two sources, keyed on the same
+//! normalised name:
+//!   * `episode_files` (via collection join) — what's on disk
+//!   * `available_episodes` — what the indexer cached for "Préparer"
+
+use std::collections::BTreeMap;
 
 use axum::Json;
 use axum::Router;
@@ -22,7 +27,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use chrono::{DateTime, Utc};
+use iris_media::filename::normalize_title;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::routes::extract::AuthUser;
@@ -32,10 +39,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list).post(create))
         .route("/episode-context", get(episode_context))
-        .route("/{tmdb_id}", delete(remove))
-        .route("/{tmdb_id}/episodes", get(episodes))
+        .route("/{id}", delete(remove))
+        .route("/{id}/episodes", get(episodes))
         .route(
-            "/{tmdb_id}/episodes/{season}/{episode}/grab",
+            "/{id}/episodes/{season}/{episode}/grab",
             post(grab_episode),
         )
 }
@@ -46,17 +53,14 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Debug, Deserialize)]
 struct CreateFollowRequest {
-    tmdb_id: i64,
-    /// Snapshot of the show name. Caller (the discovery / search UI) has
-    /// it in hand from the TMDB lookup that produced the poster they
-    /// clicked, so we don't re-fetch it server-side. If absent, we'll
-    /// look it up from TMDB; if TMDB is unconfigured AND no name was
-    /// supplied, the request is rejected.
-    name: Option<String>,
-    /// Same logic — if missing we try TMDB; if TMDB is unavailable we
-    /// just store NULL and the Series page renders without season tabs
-    /// until the next visit (notify scheduler will fill it in).
-    total_seasons: Option<i64>,
+    /// The display name from whatever surface the user clicked
+    /// (Discovery / Search / `CollectionPage`). Server normalises it
+    /// for identity; the original is kept for indexer queries and
+    /// UI display.
+    name: String,
+    /// Optional TMDB id — stored as decoration. Surfaces a poster
+    /// only after the corresponding collection gets `tmdb_verified`.
+    tmdb_id: Option<i64>,
 }
 
 async fn create(
@@ -64,49 +68,42 @@ async fn create(
     user: AuthUser,
     Json(body): Json<CreateFollowRequest>,
 ) -> ApiResult<Json<FollowSummary>> {
-    let (name, total_seasons) = if let Some(name) = body.name.clone() {
-        (name, body.total_seasons)
-    } else if let Some(tmdb) = state.tmdb() {
-        match tmdb.lookup(body.tmdb_id as u64).await {
-            Some(meta) => (meta.title, meta.number_of_seasons.map(i64::from)),
-            None => {
-                return Err(ApiError::BadRequest(format!(
-                    "tmdb id {} not found",
-                    body.tmdb_id
-                )));
-            }
-        }
-    } else {
-        return Err(ApiError::BadRequest(
-            "tmdb client not configured and no name supplied — provide `name` in the body".into(),
-        ));
-    };
-
-    let row = iris_db::follows::add(state.db(), user.id, body.tmdb_id, &name, total_seasons)
-        .await?;
-
-    // Kick off an immediate background scan so the series page shows
-    // `dispo` chips on first visit instead of waiting up to 4 h for
-    // the scheduler tick. Pre-existing follows still rely on the
-    // periodic scheduler. Best-effort: failures land in the warn log
-    // and the scheduler will retry on its next pass.
-    if let Some(tmdb) = state.tmdb().cloned() {
-        let pool = state.db().clone();
-        let providers = state.providers().clone();
-        let row = row.clone();
-        tokio::spawn(async move {
-            if let Err(e) =
-                crate::follows_scheduler::scan_follow(&pool, &tmdb, &providers, &row).await
-            {
-                tracing::warn!(
-                    tmdb_id = row.tmdb_id,
-                    name = %row.name,
-                    error = %e,
-                    "follow create: initial scan failed",
-                );
-            }
-        });
+    let trimmed = body.name.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError::BadRequest("name is required".into()));
     }
+    let normalized = normalize_title(trimmed);
+    if normalized.is_empty() {
+        return Err(ApiError::BadRequest("name does not normalise".into()));
+    }
+
+    let row = iris_db::follows::add(
+        state.db(),
+        user.id,
+        &normalized,
+        trimmed,
+        body.tmdb_id,
+    )
+    .await?;
+
+    // Kick off an immediate background scan so the series page
+    // shows `dispo` chips on first visit instead of waiting on
+    // the periodic scheduler tick. Best-effort.
+    let pool = state.db().clone();
+    let providers = state.providers().clone();
+    let row_clone = row.clone();
+    tokio::spawn(async move {
+        if let Err(e) =
+            crate::follows_scheduler::scan_follow(&pool, &providers, &row_clone).await
+        {
+            tracing::warn!(
+                follow_id = %row_clone.id,
+                name = %row_clone.name,
+                error = %e,
+                "follow create: initial scan failed",
+            );
+        }
+    });
 
     Ok(Json(summarize(&state, &row).await))
 }
@@ -129,41 +126,47 @@ async fn list(
 
 #[derive(Debug, Serialize)]
 struct FollowSummary {
-    tmdb_id: i64,
+    id: Uuid,
+    /// SCENE-normalised name — clients route by this, not `tmdb_id`.
+    normalized_name: String,
     name: String,
-    total_seasons: Option<i64>,
+    /// Decoration TMDB id (may be null). Even when present, only
+    /// rendered as a poster after the joined collection is verified.
+    tmdb_id: Option<i64>,
     poster_path: Option<String>,
     backdrop_path: Option<String>,
-    /// Count of episodes whose `available_episodes.found_at` is newer than
-    /// `last_visited_at`. Drives the "X nouveaux" badge on Watchlist cards.
     new_count: i64,
     last_visited_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
 }
 
+/// Build the client-facing summary. Poster lookup is gated on the
+/// matching collection being `tmdb_verified` — without that signal
+/// we refuse to fetch TMDB metadata to avoid surfacing the wrong
+/// show's poster.
 async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> FollowSummary {
-    // Poster + backdrop come from TMDB metadata cache. Cheap after the
-    // first hit per (tmdb_id) per uptime.
-    let (poster_path, backdrop_path) = if let Some(tmdb) = state.tmdb() {
-        match tmdb.lookup(row.tmdb_id as u64).await {
-            Some(m) => (m.poster_path, m.backdrop_path),
-            None => (None, None),
+    let trusted_tmdb = trusted_tmdb_id(state.db(), &row.normalized_name).await;
+    let (poster_path, backdrop_path) = match (state.tmdb(), trusted_tmdb) {
+        (Some(client), Some(tid)) => {
+            // tid is a positive i64 from the DB; u64 conversion is safe.
+            #[allow(clippy::cast_sign_loss)]
+            let meta = client.lookup(tid as u64).await;
+            meta.map_or((None, None), |m| (m.poster_path, m.backdrop_path))
         }
-    } else {
-        (None, None)
+        _ => (None, None),
     };
-    // Best-effort — count failures shouldn't poison the list response.
     let new_count = iris_db::available_episodes::count_new_for_series(
         state.db(),
-        row.tmdb_id,
+        &row.normalized_name,
         row.last_visited_at,
     )
     .await
     .unwrap_or(0);
     FollowSummary {
-        tmdb_id: row.tmdb_id,
+        id: row.id,
+        normalized_name: row.normalized_name.clone(),
         name: row.name.clone(),
-        total_seasons: row.total_seasons,
+        tmdb_id: row.tmdb_id,
         poster_path,
         backdrop_path,
         new_count,
@@ -172,16 +175,38 @@ async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> Follo
     }
 }
 
+/// Returns a TMDB id we trust enough to use for poster lookup —
+/// i.e., one stored on a collection whose `tmdb_id` was written by
+/// the post-verify enrichment path (which only fires when the
+/// runtime probe matched). Returns None when no verified
+/// collection joins to this normalised name.
+async fn trusted_tmdb_id(
+    pool: &iris_db::SqlitePool,
+    normalized_name: &str,
+) -> Option<i64> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT tmdb_id FROM collections \
+         WHERE parsed_title_normalized = ?1 AND kind = 'tv' AND tmdb_id IS NOT NULL \
+         ORDER BY created_at LIMIT 1",
+    )
+    .bind(normalized_name)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    row.map(|(t,)| t)
+}
+
 // ---------------------------------------------------------------------------
-// DELETE /api/me/follows/:tmdb_id
+// DELETE /api/me/follows/:id
 // ---------------------------------------------------------------------------
 
 async fn remove(
     State(state): State<AppState>,
     user: AuthUser,
-    Path(tmdb_id): Path<i64>,
+    Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let removed = iris_db::follows::delete(state.db(), user.id, tmdb_id).await?;
+    let removed = iris_db::follows::delete(state.db(), user.id, id).await?;
     if removed {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -190,141 +215,133 @@ async fn remove(
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/me/follows/:tmdb_id/episodes?season=N
+// GET /api/me/follows/:id/episodes
 // ---------------------------------------------------------------------------
 //
-// Fetching this endpoint counts as a "visit" — `last_visited_at` is
-// bumped, which resets the "X nouveaux" badge. The Series page hits this
-// on mount, so the badge clearing is naturally in lockstep with the user
-// actually seeing what's new.
+// SCENE-only: the canonical episode list is the union of
+//   * episode_files (on disk)  — keyed on collection_id, join via
+//     collections.parsed_title_normalized = follow.normalized_name
+//   * available_episodes (indexer cache) — keyed on normalized_name
+// Visiting bumps last_visited_at to clear the "X nouveaux" badge.
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct EpisodesQuery {
-    /// Defaults to season 1 if omitted. The caller (Series page) drives
-    /// per-season tabs and re-fetches as the user clicks across.
+    /// Optional season filter — when set, only that season's rows
+    /// are returned. Otherwise everything we know about ships in
+    /// one response (covers the grouped Series page render).
     season: Option<u32>,
 }
 
 async fn episodes(
     State(state): State<AppState>,
     user: AuthUser,
-    Path(tmdb_id): Path<i64>,
+    Path(id): Path<Uuid>,
     Query(q): Query<EpisodesQuery>,
 ) -> ApiResult<Json<EpisodesResponse>> {
-    let follow = iris_db::follows::get(state.db(), user.id, tmdb_id)
+    let follow = iris_db::follows::get_by_id(state.db(), user.id, id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    let season = q.season.unwrap_or(1);
 
-    let tmdb = state
-        .tmdb()
-        .ok_or_else(|| ApiError::BadRequest("tmdb client not configured".into()))?;
+    // 1. Files on disk — per-collection join via normalised name.
+    let downloaded = iris_db::episode_files::list_for_normalized(
+        state.db(),
+        &follow.normalized_name,
+    )
+    .await
+    .unwrap_or_default();
 
-    let expected = tmdb.tv_season_episodes(tmdb_id as u64, season).await;
-    // SCENE-first: a follow's tmdb_id may map to one or more
-    // collections (enrichment is best-effort and a SCENE-only
-    // collection can coexist with a TMDB-tagged one for the same
-    // show). Union episode_files across all of them.
-    let downloaded =
-        iris_db::episode_files::list_for_tmdb_season(state.db(), tmdb_id, i64::from(season))
-            .await
-            .unwrap_or_default();
-    // Future: could filter `available_episodes` to this season too, but
-    // the table's small enough that grabbing the whole series and
-    // filtering in memory is fine.
-    let available = iris_db::available_episodes::list_best_for_series(state.db(), tmdb_id)
-        .await
-        .unwrap_or_default();
+    // 2. Indexer-cached availability.
+    let available = iris_db::available_episodes::list_best_for_series(
+        state.db(),
+        &follow.normalized_name,
+    )
+    .await
+    .unwrap_or_default();
 
-    // Watched lookup: per-user. Pull the user's playback rows for each
-    // downloaded episode's torrent. Cheap because we only ever ask about
-    // episodes we already have on disk.
-    let mut watched_keys = std::collections::HashSet::new();
+    // Merge: anything in `downloaded` wins; otherwise fall back to
+    // the indexer hint. The two tables can overlap (we ingested an
+    // episode that the indexer also still lists) — downloaded
+    // status is the higher-signal answer.
+    let mut by_key: BTreeMap<(i64, i64), EpisodeItem> = BTreeMap::new();
+
     for d in &downloaded {
-        let p = iris_db::playback::get(state.db(), user.id, &d.infohash, d.file_idx)
-            .await
-            .unwrap_or(None);
-        if let Some(p) = p {
-            if p.completed {
-                watched_keys.insert((d.season, d.episode));
+        if let Some(s) = q.season {
+            if d.season != i64::from(s) {
+                continue;
             }
         }
+        let watched = iris_db::playback::get(state.db(), user.id, &d.infohash, d.file_idx)
+            .await
+            .unwrap_or(None)
+            .is_some_and(|p| p.completed);
+        by_key.insert(
+            (d.season, d.episode),
+            EpisodeItem {
+                season: d.season,
+                episode: d.episode,
+                status: EpisodeStatus::Downloaded,
+                watched,
+                infohash: Some(d.infohash.clone()),
+                file_idx: Some(d.file_idx),
+                indexer_provider: None,
+                indexer_torrent_id: None,
+                quality: None,
+                seeders: None,
+            },
+        );
+    }
+    for a in &available {
+        if let Some(s) = q.season {
+            if a.season != i64::from(s) {
+                continue;
+            }
+        }
+        by_key.entry((a.season, a.episode)).or_insert(EpisodeItem {
+            season: a.season,
+            episode: a.episode,
+            status: EpisodeStatus::Available,
+            watched: false,
+            infohash: None,
+            file_idx: None,
+            indexer_provider: Some(a.indexer_provider.clone()),
+            indexer_torrent_id: Some(a.indexer_torrent_id.clone()),
+            quality: a.quality.clone(),
+            seeders: a.seeders,
+        });
     }
 
-    let items = expected
-        .into_iter()
-        .map(|e| {
-            let dl = downloaded
-                .iter()
-                .find(|d| d.season == i64::from(e.season) && d.episode == i64::from(e.episode));
-            let av = available
-                .iter()
-                .find(|a| a.season == i64::from(e.season) && a.episode == i64::from(e.episode));
-            let watched = watched_keys.contains(&(i64::from(e.season), i64::from(e.episode)));
-            let status = if dl.is_some() {
-                EpisodeStatus::Downloaded
-            } else if av.is_some() {
-                EpisodeStatus::Available
-            } else {
-                EpisodeStatus::Unavailable
-            };
-            EpisodeItem {
-                season: e.season,
-                episode: e.episode,
-                name: e.name,
-                overview: e.overview,
-                air_date: e.air_date,
-                still_path: e.still_path,
-                runtime_minutes: e.runtime_minutes,
-                status,
-                watched,
-                infohash: dl.map(|d| d.infohash.clone()),
-                file_idx: dl.map(|d| d.file_idx),
-                indexer_provider: av.map(|a| a.indexer_provider.clone()),
-                indexer_torrent_id: av.map(|a| a.indexer_torrent_id.clone()),
-            }
-        })
-        .collect();
+    let items: Vec<EpisodeItem> = by_key.into_values().collect();
 
-    // Bump visited timestamp AFTER we've used the previous value (we don't
-    // need it past this point; the response carries the episode statuses
-    // already). Failures here aren't worth aborting on.
-    let _ = iris_db::follows::mark_visited(state.db(), user.id, tmdb_id).await;
+    // Bump visited timestamp AFTER reading — we don't need the
+    // previous value past this point.
+    let _ = iris_db::follows::mark_visited(state.db(), user.id, id).await;
 
     Ok(Json(EpisodesResponse {
-        season,
-        total_seasons: follow.total_seasons,
+        season: q.season,
         items,
     }))
 }
 
 #[derive(Debug, Serialize)]
 struct EpisodesResponse {
-    season: u32,
-    total_seasons: Option<i64>,
+    /// Echoes the request filter — `null` when the caller asked for
+    /// the full set.
+    season: Option<u32>,
     items: Vec<EpisodeItem>,
 }
 
 #[derive(Debug, Serialize)]
 struct EpisodeItem {
-    season: u32,
-    episode: u32,
-    name: Option<String>,
-    overview: Option<String>,
-    air_date: Option<String>,
-    still_path: Option<String>,
-    runtime_minutes: Option<u32>,
+    season: i64,
+    episode: i64,
     status: EpisodeStatus,
-    /// Per-user `playback_progress.completed` for the underlying file (only
-    /// meaningful when status == Downloaded).
     watched: bool,
-    /// Set when status == Downloaded — what to navigate to for play.
     infohash: Option<String>,
     file_idx: Option<i64>,
-    /// Set when status == Available — what to pass to the on-demand grab
-    /// endpoint (Phase 4).
     indexer_provider: Option<String>,
     indexer_torrent_id: Option<String>,
+    quality: Option<String>,
+    seeders: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -332,21 +349,15 @@ struct EpisodeItem {
 enum EpisodeStatus {
     Downloaded,
     Available,
-    Unavailable,
 }
 
 // ---------------------------------------------------------------------------
 // GET /api/me/follows/episode-context?infohash=X&file_idx=N
 // ---------------------------------------------------------------------------
 //
-// Used by the player at end-of-episode to decide whether to prompt
-// "Préparer le suivant ?". Bundles the three lookups (episode_files →
-// follow → next episode + status) into one round-trip so the player
-// doesn't have to issue them sequentially.
-//
-// Returns nulls (not 404) when the file isn't part of a followed series
-// — the caller treats absence as "no prompt needed", which is the
-// dominant case (most plays aren't TV episodes).
+// "Préparer le suivant ?" plumbing for the player. Returns the
+// follow id (if any) plus the `(season, episode + 1)` if we know
+// it from `available_episodes` or already have it on disk.
 
 #[derive(Debug, Deserialize)]
 struct EpisodeContextParams {
@@ -358,15 +369,12 @@ struct EpisodeContextParams {
 struct EpisodeContext {
     followed: bool,
     current: Option<EpisodePoint>,
-    /// Set only when followed AND we found a meaningful "next" episode.
-    /// `next.status` mirrors the Series page status enum so the caller
-    /// can render the modal exactly when status == "available".
     next: Option<EpisodePoint>,
 }
 
 #[derive(Debug, Serialize)]
 struct EpisodePoint {
-    tmdb_id: i64,
+    follow_id: Option<Uuid>,
     season: i64,
     episode: i64,
     status: EpisodeStatus,
@@ -377,7 +385,6 @@ async fn episode_context(
     user: AuthUser,
     Query(p): Query<EpisodeContextParams>,
 ) -> ApiResult<Json<EpisodeContext>> {
-    // Step 1: which episode IS this file?
     let Some(current_row) =
         iris_db::episode_files::find_by_file(state.db(), &p.infohash, p.file_idx).await?
     else {
@@ -387,164 +394,110 @@ async fn episode_context(
             next: None,
         }));
     };
-
-    // Step 2: bridge collection → tmdb_id → follow. The collection
-    // holds the enrichment tmdb_id; without one, there's nothing to
-    // resolve a follow against (SCENE-only collection isn't tied to
-    // the Watchlist surface).
     let collection = iris_db::collections::get(state.db(), current_row.collection_id).await?;
-    let Some(tmdb_id) = collection.and_then(|c| c.tmdb_id) else {
+    let Some(collection) = collection else {
         return Ok(Json(EpisodeContext {
             followed: false,
             current: None,
             next: None,
         }));
     };
-    let follow = iris_db::follows::get(state.db(), user.id, tmdb_id).await?;
-    let followed = follow.is_some();
+    let Some(normalized) = collection.parsed_title_normalized.as_deref() else {
+        // Standalone collection with no SCENE key → no follow can
+        // match → no "next" prompt.
+        return Ok(Json(EpisodeContext {
+            followed: false,
+            current: None,
+            next: None,
+        }));
+    };
+
+    let follow = iris_db::follows::get_by_normalized(state.db(), user.id, normalized).await?;
 
     let current = EpisodePoint {
-        tmdb_id,
+        follow_id: follow.as_ref().map(|f| f.id),
         season: current_row.season,
         episode: current_row.episode,
         status: EpisodeStatus::Downloaded,
     };
 
-    if !followed {
+    let Some(follow) = follow else {
         return Ok(Json(EpisodeContext {
             followed: false,
             current: Some(current),
             next: None,
         }));
-    }
-
-    let Some((next_season, next_episode)) =
-        find_next_episode(state.tmdb(), tmdb_id, current_row.season, current_row.episode).await
-    else {
-        return Ok(Json(EpisodeContext {
-            followed: true,
-            current: Some(current),
-            next: None,
-        }));
     };
 
-    let status = next_episode_status(state.db(), tmdb_id, next_season, next_episode).await;
-
+    let next_se = (current_row.season, current_row.episode + 1);
+    let next_status = lookup_episode_status(state.db(), normalized, next_se).await;
     Ok(Json(EpisodeContext {
         followed: true,
         current: Some(current),
-        next: Some(EpisodePoint {
-            tmdb_id,
-            season: next_season,
-            episode: next_episode,
+        next: next_status.map(|status| EpisodePoint {
+            follow_id: Some(follow.id),
+            season: next_se.0,
+            episode: next_se.1,
             status,
         }),
     }))
 }
 
-/// Walk TMDB's season list to find the episode logically after
-/// `(season, episode)`. Returns `(season, episode + 1)` when the
-/// same season has more, otherwise tries `(season + 1, 1)`. We
-/// stop there — a missing N+2 means the show is over or hasn't
-/// aired more.
-async fn find_next_episode(
-    tmdb: Option<&crate::tmdb::TmdbClient>,
-    tmdb_id: i64,
-    season: i64,
-    episode: i64,
-) -> Option<(i64, i64)> {
-    let same_season_eps = if let Some(t) = tmdb {
-        t.tv_season_episodes(tmdb_id as u64, season as u32).await
-    } else {
-        Vec::new()
-    };
-    if same_season_eps
-        .iter()
-        .any(|e| i64::from(e.episode) == episode + 1)
-    {
-        return Some((season, episode + 1));
-    }
-    let next_season_num = season + 1;
-    let next_eps = if let Some(t) = tmdb {
-        t.tv_season_episodes(tmdb_id as u64, next_season_num as u32)
-            .await
-    } else {
-        Vec::new()
-    };
-    if next_eps.is_empty() {
-        return None;
-    }
-    Some((next_season_num, 1))
-}
-
-/// Status of `(season, episode)` for a given show: downloaded if we
-/// have a file, available if the indexer cache has a magnet,
-/// unavailable otherwise.
-async fn next_episode_status(
+/// "Do we know about this (S, E) for `normalized`?" Returns the
+/// strongest status we have, or None if the indexer cache and disk
+/// both come up empty.
+async fn lookup_episode_status(
     pool: &iris_db::SqlitePool,
-    tmdb_id: i64,
-    season: i64,
-    episode: i64,
-) -> EpisodeStatus {
-    let downloaded = iris_db::episode_files::list_for_tmdb_season(pool, tmdb_id, season)
+    normalized_name: &str,
+    (season, episode): (i64, i64),
+) -> Option<EpisodeStatus> {
+    let on_disk = iris_db::episode_files::list_for_normalized(pool, normalized_name)
         .await
         .unwrap_or_default()
         .into_iter()
-        .any(|r| r.episode == episode);
-    if downloaded {
-        return EpisodeStatus::Downloaded;
+        .any(|r| r.season == season && r.episode == episode);
+    if on_disk {
+        return Some(EpisodeStatus::Downloaded);
     }
-    let avail_rows = iris_db::available_episodes::list_best_for_series(pool, tmdb_id)
+    let avail = iris_db::available_episodes::list_best_for_series(pool, normalized_name)
         .await
         .unwrap_or_default();
-    if avail_rows
+    if avail
         .iter()
         .any(|a| a.season == season && a.episode == episode)
     {
-        EpisodeStatus::Available
-    } else {
-        EpisodeStatus::Unavailable
+        return Some(EpisodeStatus::Available);
     }
+    None
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/me/follows/:tmdb_id/episodes/:season/:episode/grab
+// POST /api/me/follows/:id/episodes/:season/:episode/grab
 // ---------------------------------------------------------------------------
 //
-// Triggered by:
-//   * the "Lire" button on an episode the user hasn't downloaded yet
-//   * the "Préparer le suivant ?" modal at the end of an episode
-//   * the "Préparer" button (just-fetch-without-playing variant)
-//
-// The endpoint is idempotent — if the episode is already in
-// `episode_files` we return its existing (infohash, file_idx) so the
-// caller can navigate straight to /watch.
+// Routed by follow id (UUID). Idempotent — if the episode is
+// already on disk we short-circuit through the existing
+// `episode_files` row.
 
 #[derive(Debug, Serialize)]
 struct GrabResponse {
     infohash: String,
     file_idx: i64,
-    /// True when the episode was already in the library (idempotent
-    /// no-op). False when this call actually triggered an ingest.
     already_grabbed: bool,
 }
 
 async fn grab_episode(
     State(state): State<AppState>,
     user: AuthUser,
-    Path((tmdb_id, season, episode)): Path<(i64, i64, i64)>,
+    Path((id, season, episode)): Path<(Uuid, i64, i64)>,
 ) -> ApiResult<Json<GrabResponse>> {
-    // Caller must follow the show — keeps the grab endpoint scoped to
-    // intentional user behaviour and avoids strangers triggering ingests
-    // by guessing tmdb_ids.
-    let follow = iris_db::follows::get(state.db(), user.id, tmdb_id)
+    let follow = iris_db::follows::get_by_id(state.db(), user.id, id)
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    // Idempotent shortcut: episode already on disk. Cross-collection
-    // join via the follow's tmdb_id (any collection enriched with it
-    // counts).
-    if let Some(existing) = find_episode_file(state.db(), tmdb_id, season, episode).await? {
+    if let Some(existing) =
+        find_episode_file(state.db(), &follow.normalized_name, season, episode).await?
+    {
         return Ok(Json(GrabResponse {
             infohash: existing.infohash,
             file_idx: existing.file_idx,
@@ -552,22 +505,13 @@ async fn grab_episode(
         }));
     }
 
-    // Pick the best magnet: prefer a pre-cached `available_episodes`
-    // row (populated by the notify scheduler), otherwise hit the indexer
-    // inline so a click never gates on a periodic background task.
-    let pick = match best_available(state.db(), tmdb_id, season, episode).await? {
+    let pick = match best_available(state.db(), &follow.normalized_name, season, episode).await? {
         Some(p) => p,
-        None => find_via_indexer(&state, tmdb_id, &follow.name, season, episode)
+        None => find_via_indexer(&state, &follow, season, episode)
             .await?
             .ok_or(ApiError::NotFound)?,
     };
 
-    // Resolve the picked source. The cache may carry an empty magnet
-    // when the scheduler couldn't materialise one (provider returns
-    // `.torrent` files, not magnets — torr9's case). In that fallback
-    // we re-resolve through the provider here, which gives us either
-    // a fresh magnet OR the .torrent bytes. Both routes plug into the
-    // engine.
     let result = if pick.magnet.is_empty() {
         let provider = state
             .providers()
@@ -593,8 +537,6 @@ async fn grab_episode(
     }
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
 
-    // Mirror the ingest route's DB upsert so the torrent shows up in
-    // /api/torrents and benefits from the regular GC + remux pipeline.
     iris_db::torrents::upsert(
         state.db(),
         iris_db::torrents::NewTorrent {
@@ -607,17 +549,17 @@ async fn grab_episode(
             total_size_bytes: result.snapshot.total_size_bytes,
             source_provider: Some(pick.indexer_provider.clone()),
             source_external_id: Some(pick.indexer_torrent_id.clone()),
-            tmdb_id: Some(tmdb_id),
+            // Carry the follow's optional tmdb_id through to the
+            // torrent so the runtime probe can attempt a verify
+            // match. Stays unverified until the probe confirms.
+            tmdb_id: follow.tmdb_id,
             added_by: user.id,
         },
     )
     .await?;
 
     let file_idx = pick_largest_video_file(&result.snapshot.files);
-    finalise_grabbed_episode(
-        state, &result, tmdb_id, season, episode, file_idx,
-    )
-    .await?;
+    finalise_grabbed_episode(state, &result, follow.tmdb_id, season, episode, file_idx).await?;
 
     Ok(Json(GrabResponse {
         infohash: result.snapshot.infohash,
@@ -626,12 +568,6 @@ async fn grab_episode(
     }))
 }
 
-/// Pick the file representing the episode. For the on-demand grab
-/// path the magnet was found by searching for "Show SXXEXX" —
-/// single-episode releases dominate, so the largest video file is
-/// reliably the right one. Season packs would need filename
-/// parsing to pick the right episode (handled in collection
-/// assignment).
 fn pick_largest_video_file(files: &[iris_torrent::FileEntry]) -> i64 {
     const VIDEO_EXTS: [&str; 10] = [
         "mkv", "mp4", "webm", "m4v", "avi", "mov", "ts", "mts", "m2ts", "wmv",
@@ -654,7 +590,7 @@ fn pick_largest_video_file(files: &[iris_torrent::FileEntry]) -> i64 {
 async fn finalise_grabbed_episode(
     state: AppState,
     result: &iris_torrent::IngestResult,
-    tmdb_id: i64,
+    tmdb_id: Option<i64>,
     season: i64,
     episode: i64,
     file_idx: i64,
@@ -670,14 +606,11 @@ async fn finalise_grabbed_episode(
         state.tmdb(),
         &result.snapshot.infohash,
         &result.snapshot.name.clone().unwrap_or_default(),
-        Some(tmdb_id),
+        tmdb_id,
         &files,
     )
     .await;
 
-    // The grab params are the truth here (user clicked S2E3), so
-    // derive_from = TmdbMatch — a "we know S/E because the request
-    // said so" marker, distinct from filename-parsed entries.
     if let Some(t) =
         iris_db::torrents::find_by_infohash(state.db(), &result.snapshot.infohash).await?
     {
@@ -699,24 +632,18 @@ async fn finalise_grabbed_episode(
     Ok(())
 }
 
-/// Existing `episode_files` row for `(tmdb_id, season, episode)`,
-/// resolved by joining through every collection enriched with this
-/// `tmdb_id`. Returns the first hit — when the same episode somehow
-/// lives in multiple collections (rare edge of mixed-tag history),
-/// any one of them satisfies the idempotent shortcut.
 async fn find_episode_file(
     pool: &iris_db::SqlitePool,
-    tmdb_id: i64,
+    normalized_name: &str,
     season: i64,
     episode: i64,
 ) -> Result<Option<iris_db::episode_files::EpisodeFileRow>, sqlx::Error> {
-    let rows = iris_db::episode_files::list_for_tmdb_season(pool, tmdb_id, season).await?;
-    Ok(rows.into_iter().find(|r| r.episode == episode))
+    let rows = iris_db::episode_files::list_for_normalized(pool, normalized_name).await?;
+    Ok(rows
+        .into_iter()
+        .find(|r| r.season == season && r.episode == episode))
 }
 
-/// Best `available_episodes` candidate for `(tmdb_id, season, episode)`.
-/// Picks highest seeders. Returned tuple matches the shape needed by the
-/// ingest path (magnet + provenance for the torrents table).
 struct PickedAvailability {
     magnet: String,
     indexer_provider: String,
@@ -725,11 +652,11 @@ struct PickedAvailability {
 
 async fn best_available(
     pool: &iris_db::SqlitePool,
-    tmdb_id: i64,
+    normalized_name: &str,
     season: i64,
     episode: i64,
 ) -> Result<Option<PickedAvailability>, sqlx::Error> {
-    let rows = iris_db::available_episodes::list_best_for_series(pool, tmdb_id).await?;
+    let rows = iris_db::available_episodes::list_best_for_series(pool, normalized_name).await?;
     Ok(rows
         .into_iter()
         .find(|r| r.season == season && r.episode == episode)
@@ -740,20 +667,15 @@ async fn best_available(
         }))
 }
 
-/// Inline indexer fallback when the notify scheduler hasn't (yet) cached
-/// an `available_episodes` row for this `(tmdb_id, season, episode)`.
-/// Builds a SCENE-style query, picks the best candidate by seeders, and
-/// resolves the magnet through the provider's `resolve` path.
 async fn find_via_indexer(
     state: &AppState,
-    tmdb_id: i64,
-    series_name: &str,
+    follow: &iris_db::follows::FollowRow,
     season: i64,
     episode: i64,
 ) -> Result<Option<PickedAvailability>, ApiError> {
     use iris_core::search::{SearchQuery, SortField, SortOrder};
     let query = SearchQuery {
-        q: format!("{series_name} S{season:02}E{episode:02}"),
+        q: format!("{} S{season:02}E{episode:02}", follow.name),
         page: Some(1),
         limit: Some(20),
         sort_by: Some(SortField::Seeders),
@@ -761,24 +683,15 @@ async fn find_via_indexer(
         kind: None,
     };
     let agg = state.providers().search_all(&query).await;
-    // Pick the candidate with the most seeders — providers already sort
-    // by seeders (we asked) but the multi-provider fan-out concatenates,
-    // so re-sort defensively.
     let mut sorted = agg.results;
     sorted.sort_by_key(|r| std::cmp::Reverse(r.seeders.unwrap_or(0)));
     let Some(best) = sorted.into_iter().next() else {
         return Ok(None);
     };
-
-    // Don't resolve here — same rationale as the scheduler: providers
-    // that hand back `.torrent` files would force us to either store
-    // opaque bytes in the cache or skip them. The grab path already
-    // handles "empty magnet → re-resolve through provider" so we just
-    // record the indexer ref and let the caller resolve.
     let _ = iris_db::available_episodes::upsert(
         state.db(),
         iris_db::available_episodes::UpsertAvailableEpisode {
-            tmdb_id,
+            normalized_name: follow.normalized_name.clone(),
             season,
             episode,
             indexer_provider: best.provider_id.clone(),
@@ -790,7 +703,6 @@ async fn find_via_indexer(
         },
     )
     .await;
-
     Ok(Some(PickedAvailability {
         magnet: String::new(),
         indexer_provider: best.provider_id,

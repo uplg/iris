@@ -1,9 +1,13 @@
-//! Indexer-pre-cache for episodes that aren't in the library yet.
-//! Populated by the notify scheduler (Phase 4) so a user's "Préparer E06"
+//! Indexer pre-cache for episodes that aren't in the library yet.
+//! Populated by the notify scheduler so a user's "Préparer E06"
 //! click doesn't have to wait on a fresh indexer round-trip.
 //!
-//! NOT per-user: if iris knows S03E12 is grabbable, every authorised user
-//! sees the same offer.
+//! Keyed on `normalized_name` (the SCENE-style normalised title)
+//! to match the way `series_follows` is identified — TMDB id is
+//! never used as a join key here.
+//!
+//! NOT per-user: if iris knows a SCENE-named series has S03E12
+//! grabbable, every authorised user sees the same offer.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -13,7 +17,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct AvailableEpisodeRow {
     pub id: Uuid,
-    pub tmdb_id: i64,
+    pub normalized_name: String,
     pub season: i64,
     pub episode: i64,
     pub indexer_provider: String,
@@ -25,48 +29,47 @@ pub struct AvailableEpisodeRow {
     pub found_at: DateTime<Utc>,
 }
 
-/// Best-quality offer per `(tmdb_id, season, episode)`. When multiple
-/// torrents are cached for the same episode, prefer the one with most
-/// seeders. Returns one row per episode at most.
+/// Best-quality offer per `(normalized_name, season, episode)`.
+/// When multiple torrents are cached for the same episode, prefer
+/// the one with most seeders. Returns one row per episode at most.
 pub async fn list_best_for_series(
     pool: &SqlitePool,
-    tmdb_id: i64,
+    normalized_name: &str,
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
     sqlx::query_as::<_, AvailableEpisodeRow>(
-        "SELECT id, tmdb_id, season, episode, indexer_provider, indexer_torrent_id, \
+        "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
                 magnet, quality, seeders, size_bytes, found_at \
          FROM available_episodes a \
-         WHERE tmdb_id = ?1 \
+         WHERE normalized_name = ?1 \
            AND seeders IS (SELECT MAX(seeders) FROM available_episodes \
-                           WHERE tmdb_id = a.tmdb_id \
+                           WHERE normalized_name = a.normalized_name \
                              AND season = a.season \
                              AND episode = a.episode) \
-         GROUP BY tmdb_id, season, episode \
+         GROUP BY normalized_name, season, episode \
          ORDER BY season, episode",
     )
-    .bind(tmdb_id)
+    .bind(normalized_name)
     .fetch_all(pool)
     .await
 }
 
-/// Count of episodes whose `found_at` is newer than `since`. Drives the
-/// "X nouveaux" badge on Watchlist cards (caller passes the follow's
-/// `last_visited_at`).
+/// Count of distinct episodes whose `found_at` is newer than
+/// `since`. Drives the "X nouveaux" badge on Watchlist cards.
 pub async fn count_new_for_series(
     pool: &SqlitePool,
-    tmdb_id: i64,
+    normalized_name: &str,
     since: Option<DateTime<Utc>>,
 ) -> Result<i64, sqlx::Error> {
     let cutoff = since.unwrap_or_else(|| {
-        // No prior visit means "everything currently available is new". Use
-        // a very old timestamp so the COUNT picks up the lot.
+        // No prior visit means "everything currently available is
+        // new". Old enough timestamp to catch the lot.
         DateTime::<Utc>::from_timestamp(0, 0).unwrap()
     });
     let row: (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT season || '-' || episode) FROM available_episodes \
-         WHERE tmdb_id = ?1 AND found_at > ?2",
+         WHERE normalized_name = ?1 AND found_at > ?2",
     )
-    .bind(tmdb_id)
+    .bind(normalized_name)
     .bind(cutoff)
     .fetch_one(pool)
     .await?;
@@ -75,7 +78,7 @@ pub async fn count_new_for_series(
 
 #[derive(Debug, Clone)]
 pub struct UpsertAvailableEpisode {
-    pub tmdb_id: i64,
+    pub normalized_name: String,
     pub season: i64,
     pub episode: i64,
     pub indexer_provider: String,
@@ -92,10 +95,10 @@ pub async fn upsert(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO available_episodes \
-            (id, tmdb_id, season, episode, indexer_provider, indexer_torrent_id, \
+            (id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
              magnet, quality, seeders, size_bytes, found_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
-         ON CONFLICT(tmdb_id, season, episode, indexer_provider, indexer_torrent_id) \
+         ON CONFLICT(normalized_name, season, episode, indexer_provider, indexer_torrent_id) \
          DO UPDATE SET \
             magnet     = excluded.magnet, \
             quality    = excluded.quality, \
@@ -104,7 +107,7 @@ pub async fn upsert(
             found_at   = excluded.found_at",
     )
     .bind(Uuid::new_v4())
-    .bind(a.tmdb_id)
+    .bind(&a.normalized_name)
     .bind(a.season)
     .bind(a.episode)
     .bind(&a.indexer_provider)

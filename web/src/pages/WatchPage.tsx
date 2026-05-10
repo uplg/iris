@@ -45,8 +45,8 @@ export function WatchPage() {
   const lastDurationRef = useRef<number | null>(null);
   const progressLoadedRef = useRef(false);
   const initialSeekDoneRef = useRef(false);
-  // "Préparer le suivant ?" state — gated on a single-shot flip per
-  // mount, plus a dismissal flag so user choosing "Plus tard" doesn't
+  // "Watch next?" state — gated on a single-shot flip per
+  // mount, plus a dismissal flag so user choosing "Later" doesn't
   // get re-prompted within the same session.
   const [nextEpModalOpen, setNextEpModalOpen] = useState(false);
   const [nextEpGrabbing, setNextEpGrabbing] = useState(false);
@@ -174,7 +174,7 @@ export function WatchPage() {
     setNextEpModalOpen(false);
   }, [fileIdx, infohash]);
 
-  // Episode context drives the "Préparer le suivant ?" modal at episode
+  // Episode context drives the "Watch next?" modal at episode
   // end. Returns nulls for non-TV files so the prompt simply never
   // fires — no need to gate the query.
   const episodeContextQ = useQuery({
@@ -352,7 +352,7 @@ export function WatchPage() {
               // Trigger the next-episode prompt at >= 95 % of duration.
               // Using onEnded alone would miss the case where the user
               // closes the tab right before credits — the prompt at 95 %
-              // also lets users hit "Préparer" then keep watching the
+              // also lets users hit "Prepare" then keep watching the
               // last few minutes.
               const totalDur = lastDurationRef.current;
               if (
@@ -589,9 +589,9 @@ export function WatchPage() {
         </div>
       </section>
 
-      {/* "Préparer le suivant ?" — fired when the user is following the
+      {/* "Watch next?" — fired when the user is following the
           current series and the next episode is available but not yet
-          grabbed. One-shot per file mount; "Plus tard" silences it for
+          grabbed. One-shot per file mount; "Later" silences it for
           the rest of the session. */}
       {nextEp && (
         <Dialog
@@ -603,11 +603,11 @@ export function WatchPage() {
         >
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Épisode suivant disponible</DialogTitle>
+              <DialogTitle>Next episode available</DialogTitle>
               <DialogDescription>
                 S{nextEp.season.toString().padStart(2, "0")}E
-                {nextEp.episode.toString().padStart(2, "0")} est prêt à être
-                téléchargé. Le préparer pour la prochaine session ?
+                {nextEp.episode.toString().padStart(2, "0")} is ready to grab.
+                Prepare it for the next session?
               </DialogDescription>
             </DialogHeader>
             <div className="flex flex-wrap justify-end gap-2">
@@ -618,15 +618,16 @@ export function WatchPage() {
                   setNextEpModalOpen(false);
                 }}
               >
-                Plus tard
+                Later
               </Button>
               <Button
                 disabled={nextEpGrabbing}
                 onClick={async () => {
+                  if (!nextEp.follow_id) return;
                   setNextEpGrabbing(true);
                   try {
                     await follows.grabEpisode(
-                      nextEp.tmdb_id,
+                      nextEp.follow_id,
                       nextEp.season,
                       nextEp.episode,
                     );
@@ -643,7 +644,7 @@ export function WatchPage() {
                 ) : (
                   <Download className="size-4" />
                 )}
-                Préparer
+                Prepare
               </Button>
             </div>
           </DialogContent>

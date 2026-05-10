@@ -42,6 +42,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import studio.kahn.iris.tv.data.AddFollowRequest
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
@@ -53,6 +54,28 @@ import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.TmdbMetadata
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+
+/**
+ * SCENE-normalisation kept in sync with iris-media's `normalize_title`
+ * (lowercase → keep alnum → collapse non-alnum to single space → trim).
+ * Used to detect "do I already follow this Featured TV result?" before
+ * issuing an add — avoids creating duplicate follows when the user
+ * clicks a card whose title matches an existing follow.
+ */
+private fun normalizeForMatch(s: String): String {
+    val out = StringBuilder()
+    var lastSpace = true
+    for (c in s) {
+        if (c.isLetterOrDigit()) {
+            out.append(c.lowercaseChar())
+            lastSpace = false
+        } else if (!lastSpace) {
+            out.append(' ')
+            lastSpace = true
+        }
+    }
+    return out.toString().trim()
+}
 
 /**
  * Home screen with two horizontal shelves. Selecting a card jumps to
@@ -72,9 +95,10 @@ fun HomeScreen(
      *  immediately with that string pre-filled — used by Featured Movies
      *  cards (which don't have a dedicated detail page yet). */
     onOpenSearch: (query: String?) -> Unit,
-    /** Open the SeriesScreen for a TV show. Used by Watchlist cards and
-     *  by Featured Series cards (TMDB id available, no torrent yet). */
-    onOpenSeries: (tmdbId: Long) -> Unit,
+    /** Open the SeriesScreen for a follow. Used by Watchlist cards
+     *  and by Featured Series cards after they auto-create the
+     *  follow. */
+    onOpenSeries: (followId: String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var continueWatching by remember { mutableStateOf<List<ContinueWatchingItem>>(emptyList()) }
@@ -249,13 +273,13 @@ fun HomeScreen(
         }
 
         if (watchlist.isNotEmpty()) {
-            Shelf(title = "Ma Watchlist · ${watchlist.size}") {
+            Shelf(title = "My Watchlist · ${watchlist.size}") {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    items(watchlist, key = { it.tmdbId }) { f ->
+                    items(watchlist, key = { it.id }) { f ->
                         WatchlistCard(
                             container = container,
                             follow = f,
-                            onClick = { onOpenSeries(f.tmdbId) },
+                            onClick = { onOpenSeries(f.id) },
                         )
                     }
                 }
@@ -264,7 +288,7 @@ fun HomeScreen(
 
         featured?.let { f ->
             if (f.movies.isNotEmpty()) {
-                Shelf(title = "Sorties Ciné · ${f.movies.size}") {
+                Shelf(title = "New Movies · ${f.movies.size}") {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         items(f.movies, key = { "${it.providerId}:${it.externalId}" }) { r ->
                             FeaturedCard(
@@ -277,20 +301,41 @@ fun HomeScreen(
                 }
             }
             if (f.series.isNotEmpty()) {
-                Shelf(title = "Sorties Séries · ${f.series.size}") {
+                Shelf(title = "New Series · ${f.series.size}") {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         items(f.series, key = { "${it.providerId}:${it.externalId}" }) { r ->
                             FeaturedCard(
                                 container = container,
                                 result = r,
-                                // TV shows with a TMDB id route straight
-                                // to the series page (Follow + episode
-                                // browse). Anything without falls back
-                                // to a pre-filled search.
+                                // SCENE-mode: if the user already
+                                // follows a series with this normalised
+                                // name, jump straight in. Otherwise
+                                // create the follow and navigate.
                                 onClick = {
-                                    val tid = r.tmdbId
-                                    if (tid != null) onOpenSeries(tid)
-                                    else onOpenSearch(r.title)
+                                    val existing = watchlist.firstOrNull {
+                                        it.normalizedName == normalizeForMatch(r.title)
+                                    }
+                                    if (existing != null) {
+                                        onOpenSeries(existing.id)
+                                    } else {
+                                        scope.launch {
+                                            val url = container.sessionStore.serverUrl.first() ?: return@launch
+                                            val api = container.apiFor(url)
+                                            try {
+                                                val created = withContext(Dispatchers.IO) {
+                                                    api.addFollow(
+                                                        AddFollowRequest(
+                                                            name = r.title,
+                                                            tmdbId = r.tmdbId,
+                                                        )
+                                                    )
+                                                }
+                                                onOpenSeries(created.id)
+                                            } catch (e: Exception) {
+                                                error = e.message ?: "Follow failed"
+                                            }
+                                        }
+                                    }
                                 },
                             )
                         }
@@ -314,32 +359,25 @@ fun HomeScreen(
         }
 
         if (collections.isNotEmpty()) {
-            Shelf(title = "Bibliothèque · ${collections.size}") {
+            Shelf(title = "Library · ${collections.size}") {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     items(collections, key = { it.id }) { c ->
                         CollectionCard(
                             container = container,
                             collection = c,
                             onClick = {
-                                // Routing: TV with TMDB → Series page,
-                                // movie / fallback → /watch on the
-                                // representative torrent's first file.
-                                // (Picking the right file index is handled
-                                // by routeTorrent on the snapshot lookup.)
-                                if (c.kind == "tv" && c.tmdbId != null) {
-                                    onOpenSeries(c.tmdbId)
-                                } else if (c.representativeInfohash != null) {
-                                    val snap = library.firstOrNull {
-                                        it.infohash == c.representativeInfohash
-                                    }
-                                    if (snap != null) {
-                                        routeTorrent(snap, onPickFile, onPickTorrent)
-                                    } else {
-                                        // Engine snapshot not loaded yet —
-                                        // fall back to the detail screen
-                                        // which polls for it.
-                                        onPickTorrent(c.representativeInfohash)
-                                    }
+                                // Library cards always route to the
+                                // collection's representative torrent —
+                                // /series is reserved for explicit
+                                // follows now (no client-side bridge
+                                // from collection → follow without an
+                                // existing one).
+                                val infohash = c.representativeInfohash ?: return@CollectionCard
+                                val snap = library.firstOrNull { it.infohash == infohash }
+                                if (snap != null) {
+                                    routeTorrent(snap, onPickFile, onPickTorrent)
+                                } else {
+                                    onPickTorrent(infohash)
                                 }
                             },
                         )
@@ -436,16 +474,14 @@ private fun WatchlistCard(
     follow: FollowSummary,
     onClick: () -> Unit,
 ) {
-    val subtitle = follow.totalSeasons?.let {
-        "$it saison${if (it > 1) "s" else ""}"
-    } ?: "Suivi"
+    // SCENE-mode: server gates poster/backdrop on tmdb_verified, so
+    // we trust whatever it gives us. tmdbId may be null (no decoration
+    // available) — PosterCard renders the placeholder in that case.
+    val subtitle = if (follow.newCount > 0) "${follow.newCount} new" else "Followed"
     PosterCard(
         container = container,
         tmdbId = follow.tmdbId,
-        // FollowSummary's poster_path comes from the same TMDB lookup the
-        // server already did at follow time — bypass the per-card metadata
-        // round-trip and pass it directly.
-        tmdbVerified = true,
+        tmdbVerified = follow.posterPath != null,
         title = follow.name,
         subtitle = subtitle,
         progress = null,
@@ -461,7 +497,7 @@ private fun WatchlistCard(
                     ),
                 ) {
                     Text(
-                        "${follow.newCount} nouveau${if (follow.newCount > 1) "x" else ""}",
+                        "${follow.newCount} new",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -649,7 +685,7 @@ private fun PosterCard(
      *  the Watchlist shelf where /api/me/follows already returns the poster
      *  path inline. When `null`, falls back to the regular TMDB lookup. */
     posterUrlOverride: String? = null,
-    /** Optional top-right overlay (e.g., "X nouveaux" badge). Renders on
+    /** Optional top-right overlay (e.g., "X new" badge). Renders on
      *  top of the poster. */
     topBadge: (@Composable () -> Unit)? = null,
 ) {

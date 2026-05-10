@@ -34,7 +34,7 @@ export default function App() {
                 <Route element={<AppShell />}>
                   <Route index element={<HomePage />} />
                   <Route path="/search" element={<SearchPage />} />
-                  <Route path="/series/:tmdbId" element={<SeriesPage />} />
+                  <Route path="/series/:followId" element={<SeriesPage />} />
                   <Route path="/collection/:id" element={<CollectionPage />} />
                   <Route path="/library" element={<LibraryPage />} />
                   <Route path="/watch/:infohash/:idx" element={<WatchPage />} />

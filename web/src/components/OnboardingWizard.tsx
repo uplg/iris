@@ -56,33 +56,33 @@ export function OnboardingWizard() {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            Bienvenue sur Iris
+            Welcome to Iris
             <span className="text-xs font-normal text-muted-foreground">
               {step + 1}/2
             </span>
           </DialogTitle>
           <DialogDescription>
             {step === 0
-              ? "Une étape rapide pour t'orienter."
-              : "Tu es prêt — voici par où commencer."}
+              ? "A quick step to get you oriented."
+              : "You're ready — here's where to start."}
           </DialogDescription>
         </DialogHeader>
 
         {step === 0 ? (
           <Step
             icon={<Tv className="size-7" />}
-            title="Tu as une Android TV ?"
-            body="Iris a une appli TV. Pair-la depuis tes paramètres pour regarder sur le canapé."
+            title="Got an Android TV?"
+            body="Iris has a TV app. Pair it from your account settings to watch from the couch."
             actions={
               <>
                 <Button asChild>
                   <Link to="/account" onClick={() => setStep(1)}>
-                    Pairer ma TV
+                    Pair my TV
                     <ChevronRight className="size-4" />
                   </Link>
                 </Button>
                 <Button variant="ghost" onClick={() => setStep(1)}>
-                  Pas pour l'instant
+                  Not now
                 </Button>
               </>
             }
@@ -90,18 +90,18 @@ export function OnboardingWizard() {
         ) : (
           <Step
             icon={<SearchIcon className="size-7" />}
-            title="Trouve ce que tu veux regarder"
-            body="La recherche surface les sorties TMDB en temps réel et te laisse cliquer pour télécharger directement."
+            title="Find something to watch"
+            body="Search surfaces fresh indexer hits and lets you tap one to grab it instantly."
             actions={
               <>
                 <Button asChild>
                   <Link to="/search" onClick={dismiss}>
-                    Lancer une recherche
+                    Open search
                     <ChevronRight className="size-4" />
                   </Link>
                 </Button>
                 <Button variant="ghost" onClick={dismiss}>
-                  Explorer plus tard
+                  Explore later
                 </Button>
               </>
             }

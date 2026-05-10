@@ -121,22 +121,22 @@ export function PreviewDialog({
             className="break-words"
             title={preview?.name ?? details?.title ?? initialTitle ?? undefined}
           >
-            {preview?.name ?? details?.title ?? initialTitle ?? "Chargement…"}
+            {preview?.name ?? details?.title ?? initialTitle ?? "Loading…"}
           </DialogTitle>
           <DialogDescription>
             {preview && (
               <span>
-                {preview.files.length} fichier{preview.files.length > 1 ? "s" : ""} ·{" "}
+                {preview.files.length} file{preview.files.length > 1 ? "s" : ""} ·{" "}
                 {formatSize(preview.total_size_bytes)}
                 {details?.uploader && (
                   <span className="ml-2 text-muted-foreground">
-                    · upload {details.uploader}
+                    · uploaded by {details.uploader}
                     {details.age && ` (${details.age})`}
                   </span>
                 )}
               </span>
             )}
-            {!preview && "Lecture des métadonnées…"}
+            {!preview && "Reading metadata…"}
           </DialogDescription>
           {details && (details.tags.length > 0 || details.freeleech || details.exclusive) && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -147,7 +147,7 @@ export function PreviewDialog({
               )}
               {details.exclusive && (
                 <Badge className="bg-amber-500/90 text-[10px] uppercase text-white">
-                  Exclu
+                  Exclusive
                 </Badge>
               )}
               {details.tags.slice(0, 6).map((t) => (
@@ -159,7 +159,7 @@ export function PreviewDialog({
           )}
         </DialogHeader>
 
-        {loading && <p className="text-sm text-muted-foreground">Chargement…</p>}
+        {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
         {error && <p className="text-sm text-destructive">{error}</p>}
 
         <div className="grid max-h-[60vh] gap-4 overflow-y-auto">
@@ -177,7 +177,7 @@ export function PreviewDialog({
           {preview && (
             <div className="rounded-md border border-border">
               <div className="border-b border-border bg-muted/30 px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground">
-                Fichiers — choisis ce qui se lance
+                Files — pick what to play
               </div>
               <ul className="divide-y divide-border">
                 {sortedFiles.map((f) => {
@@ -229,7 +229,7 @@ export function PreviewDialog({
               className="rounded-md border border-border bg-card/30"
             >
               <summary className="cursor-pointer px-3 py-2 text-xs uppercase tracking-wide text-muted-foreground">
-                NFO brut (MediaInfo)
+                Raw NFO (MediaInfo)
               </summary>
               <pre className="max-h-80 overflow-auto border-t border-border bg-background/40 p-3 font-mono text-[11px] leading-relaxed">
                 {details.nfo}
@@ -240,11 +240,11 @@ export function PreviewDialog({
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Annuler
+            Cancel
           </Button>
           <Button onClick={onPlay} disabled={pickedIdx == null || ingesting || !preview}>
             <Play className="size-4" />
-            {ingesting ? "Démarrage…" : "Lire"}
+            {ingesting ? "Starting…" : "Play"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -271,7 +271,7 @@ function FactsGrid({ mi }: { mi: { video: VideoInfo | null; audio: AudioInfo[]; 
     <div className="grid gap-3 rounded-md border border-border bg-card/30 p-3 text-sm">
       {mi.video && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="font-semibold uppercase tracking-wide text-muted-foreground">Vidéo</span>
+          <span className="font-semibold uppercase tracking-wide text-muted-foreground">Video</span>
           {mi.video.codec && <Badge variant="outline">{mi.video.codec}</Badge>}
           {mi.video.resolution && <Badge variant="outline">{mi.video.resolution}</Badge>}
           {mi.video.fps != null && <Badge variant="outline">{mi.video.fps.toFixed(2)}fps</Badge>}
@@ -315,7 +315,7 @@ function FactsGrid({ mi }: { mi: { video: VideoInfo | null; audio: AudioInfo[]; 
       {mi.subtitles.length > 0 && (
         <div className="flex flex-wrap items-start gap-2 text-xs">
           <span className="mt-0.5 font-semibold uppercase tracking-wide text-muted-foreground">
-            Sous-titres
+            Subtitles
           </span>
           <div className="flex flex-1 flex-wrap gap-1.5">
             {mi.subtitles.map((s, i) => (

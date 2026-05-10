@@ -104,18 +104,18 @@ interface IrisApi {
     @POST("api/me/follows")
     suspend fun addFollow(@Body body: AddFollowRequest): FollowSummary
 
-    @retrofit2.http.DELETE("api/me/follows/{tmdbId}")
-    suspend fun removeFollow(@Path("tmdbId") tmdbId: Long)
+    @retrofit2.http.DELETE("api/me/follows/{id}")
+    suspend fun removeFollow(@Path("id") id: String)
 
-    @GET("api/me/follows/{tmdbId}/episodes")
+    @GET("api/me/follows/{id}/episodes")
     suspend fun followEpisodes(
-        @Path("tmdbId") tmdbId: Long,
-        @Query("season") season: Int = 1,
+        @Path("id") id: String,
+        @Query("season") season: Int? = null,
     ): EpisodesResponse
 
-    @POST("api/me/follows/{tmdbId}/episodes/{season}/{episode}/grab")
+    @POST("api/me/follows/{id}/episodes/{season}/{episode}/grab")
     suspend fun grabEpisode(
-        @Path("tmdbId") tmdbId: Long,
+        @Path("id") id: String,
         @Path("season") season: Int,
         @Path("episode") episode: Int,
     ): GrabEpisodeResponse
@@ -380,13 +380,19 @@ data class FeaturedResponse(
 
 @Serializable
 data class FollowSummary(
-    @SerialName("tmdb_id") val tmdbId: Long,
+    /** Stable id — clients route by this, not by tmdbId. */
+    val id: String,
+    /** SCENE-normalised name (lowercased, punctuation-stripped, single
+     *  spaces). Identity for joining episode_files / available_episodes. */
+    @SerialName("normalized_name") val normalizedName: String,
     val name: String,
-    @SerialName("total_seasons") val totalSeasons: Int? = null,
+    /** Decoration only. Server gates poster/backdrop paths on the joined
+     *  collection being tmdb_verified — null poster = no verified match. */
+    @SerialName("tmdb_id") val tmdbId: Long? = null,
     @SerialName("poster_path") val posterPath: String? = null,
     @SerialName("backdrop_path") val backdropPath: String? = null,
-    /** Number of newly-available episodes since the last visit. Drives the
-     *  "X nouveaux" badge on Watchlist cards. */
+    /** Number of distinct (S, E) the indexer has surfaced since
+     *  lastVisitedAt. Drives the "X new" badge on Watchlist cards. */
     @SerialName("new_count") val newCount: Long = 0,
     @SerialName("last_visited_at") val lastVisitedAt: String? = null,
     @SerialName("created_at") val createdAt: String,
@@ -454,15 +460,19 @@ data class SubInfoDetails(
 
 @Serializable
 data class AddFollowRequest(
-    @SerialName("tmdb_id") val tmdbId: Long,
-    val name: String? = null,
-    @SerialName("total_seasons") val totalSeasons: Int? = null,
+    /** Display name from whatever surface the user clicked. Server
+     *  derives normalized_name itself. */
+    val name: String,
+    /** Optional decoration. Server stores it but only renders a
+     *  poster after the joined collection is tmdb_verified. */
+    @SerialName("tmdb_id") val tmdbId: Long? = null,
 )
 
 @Serializable
 data class EpisodesResponse(
-    val season: Int,
-    @SerialName("total_seasons") val totalSeasons: Int? = null,
+    /** Echoes the request's season filter — null when the caller
+     *  asked for all seasons. */
+    val season: Int? = null,
     val items: List<EpisodeItem> = emptyList(),
 )
 
@@ -470,18 +480,15 @@ data class EpisodesResponse(
 data class EpisodeItem(
     val season: Int,
     val episode: Int,
-    val name: String? = null,
-    val overview: String? = null,
-    @SerialName("air_date") val airDate: String? = null,
-    @SerialName("still_path") val stillPath: String? = null,
-    @SerialName("runtime_minutes") val runtimeMinutes: Int? = null,
-    /** "downloaded" | "available" | "unavailable" */
+    /** "downloaded" | "available" */
     val status: String,
     val watched: Boolean = false,
     val infohash: String? = null,
     @SerialName("file_idx") val fileIdx: Int? = null,
     @SerialName("indexer_provider") val indexerProvider: String? = null,
     @SerialName("indexer_torrent_id") val indexerTorrentId: String? = null,
+    val quality: String? = null,
+    val seeders: Long? = null,
 )
 
 @Serializable
@@ -500,10 +507,12 @@ data class EpisodeContext(
 
 @Serializable
 data class EpisodePoint(
-    @SerialName("tmdb_id") val tmdbId: Long,
+    /** Follow id used to drive the on-demand grab call. Null when
+     *  the file isn't part of a followed series. */
+    @SerialName("follow_id") val followId: String? = null,
     val season: Int,
     val episode: Int,
-    /** "downloaded" | "available" | "unavailable" */
+    /** "downloaded" | "available" */
     val status: String,
 )
 

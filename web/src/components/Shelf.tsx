@@ -29,7 +29,7 @@ export type ShelfProps = {
 
 /**
  * One horizontal row of media cards. Used for every shelf on the home
- * (Continue Watching / Watchlist / Sorties / Library). Plain horizontal
+ * (Continue Watching / Watchlist / New / Library). Plain horizontal
  * overflow scroll — no JS-driven carousel, the OS scrollbar / trackpad
  * gesture handles it cleanly.
  */

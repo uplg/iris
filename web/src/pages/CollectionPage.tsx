@@ -27,8 +27,13 @@ export function CollectionPage() {
     enabled: !!id,
   });
 
-  // Auto-navigate cases: a movie collection with one video → straight
-  // to /watch. Saves a useless intermediate click.
+  // Auto-navigate movies straight to /watch when there's a single
+  // playable file. Saves a useless intermediate click.
+  //
+  // Deliberately NO redirect to /series for TV-with-tmdb_id: the
+  // /series page is the Watchlist surface and breaks loudly when
+  // the enrichment tmdb_id was wrong. CollectionPage stays the
+  // "show me what I actually have" view.
   useEffect(() => {
     if (!data) return;
     if (data.kind === "movie") {
@@ -39,11 +44,6 @@ export function CollectionPage() {
       if (t && f) {
         navigate(`/watch/${t.infohash}/${f.index}`, { replace: true });
       }
-    } else if (data.kind === "tv" && data.tmdb_id) {
-      // Same intent as the LibraryPage routing logic — if we landed
-      // here despite having a tmdb_id, take the user where the rich
-      // Series UI lives.
-      navigate(`/series/${data.tmdb_id}`, { replace: true });
     }
   }, [data, navigate]);
 
@@ -51,7 +51,7 @@ export function CollectionPage() {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="size-3 animate-spin" />
-        Chargement de la collection…
+        Loading collection…
       </p>
     );
   }
@@ -69,7 +69,7 @@ export function CollectionPage() {
       <header>
         <h1 className="text-3xl font-semibold tracking-tight">{data.display_title}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {data.kind === "tv" ? "Série" : "Film"} · {data.torrents.length} torrent
+          {data.kind === "tv" ? "Series" : "Movie"} · {data.torrents.length} torrent
           {data.torrents.length > 1 ? "s" : ""}
         </p>
       </header>
@@ -91,17 +91,43 @@ export function CollectionPage() {
               <Button asChild size="sm" className="ml-auto">
                 <a href={`/watch/${e.infohash}/${e.file_idx}`}>
                   <Play className="size-3.5" />
-                  {e.watched ? "Revoir" : "Lire"}
+                  {e.watched ? "Watch again" : "Play"}
                 </a>
               </Button>
             </li>
           ))}
         </ul>
       ) : (
-        <p className="text-sm text-muted-foreground">
-          Pas d'épisode tagué pour cette collection. Vue détaillée des
-          torrents disponible dans /library?view=torrents.
-        </p>
+        // No SCENE-parsed episodes — fall back to listing every
+        // playable file we have across the collection's torrents.
+        // The user can still launch playback even without the
+        // pretty episode grid.
+        <ul className="divide-y divide-border rounded-lg border border-border bg-card/30">
+          {data.torrents.flatMap((t: typeof data.torrents[number]) =>
+            t.files
+              .filter((f: typeof t.files[number]) => VIDEO_RE.test(f.path))
+              .sort(
+                (a: typeof t.files[number], b: typeof t.files[number]) =>
+                  b.size_bytes - a.size_bytes,
+              )
+              .map((f: typeof t.files[number]) => (
+                <li
+                  key={`${t.infohash}:${f.index}`}
+                  className="flex items-center justify-between gap-3 px-4 py-3 text-sm"
+                >
+                  <span className="truncate font-mono text-xs text-muted-foreground">
+                    {f.path.split("/").pop()}
+                  </span>
+                  <Button asChild size="sm" className="ml-auto shrink-0">
+                    <a href={`/watch/${t.infohash}/${f.index}`}>
+                      <Play className="size-3.5" />
+                      Play
+                    </a>
+                  </Button>
+                </li>
+              )),
+          )}
+        </ul>
       )}
     </div>
   );

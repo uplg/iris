@@ -48,7 +48,7 @@ export function EmptyState({
  * `error` directly without unwrapping.
  */
 export function ErrorState({
-  title = "Quelque chose a cassé",
+  title = "Something broke",
   error,
   onRetry,
   className,
@@ -59,7 +59,7 @@ export function ErrorState({
   className?: string;
 }) {
   const msg =
-    error instanceof Error ? error.message : typeof error === "string" ? error : "Erreur inconnue";
+    error instanceof Error ? error.message : typeof error === "string" ? error : "Unknown error";
   return (
     <div
       className={cn(
@@ -74,7 +74,7 @@ export function ErrorState({
       </div>
       {onRetry && (
         <Button variant="outline" size="sm" onClick={onRetry}>
-          Réessayer
+          Retry
         </Button>
       )}
     </div>
@@ -86,7 +86,7 @@ export function ErrorState({
  * use this when nothing else is on screen yet.
  */
 export function LoadingState({
-  label = "Chargement…",
+  label = "Loading…",
   className,
 }: {
   label?: string;

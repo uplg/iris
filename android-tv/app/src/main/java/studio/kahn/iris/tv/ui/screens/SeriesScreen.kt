@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -32,9 +31,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
@@ -43,40 +42,37 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import studio.kahn.iris.tv.data.AddFollowRequest
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.EpisodeItem
 import studio.kahn.iris.tv.data.EpisodesResponse
 import studio.kahn.iris.tv.data.FollowSummary
-import studio.kahn.iris.tv.data.TmdbMetadata
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 
 /**
- * Series detail screen — TV equivalent of the web /series/:tmdb_id page.
- * Hero band with backdrop + poster, season tabs, episode rows with the
- * right primary action per status (Lire / Préparer / À venir). Follow
- * toggle in the hero. No auto-grab — user always confirms.
+ * SCENE-mode series detail. Routed by follow id; episodes come from
+ * the server-side union of episode_files (on disk) and
+ * available_episodes (indexer cache), keyed on the follow's
+ * SCENE-normalised name. No TMDB call client-side — the follow
+ * summary already carries posterPath/backdropPath if the joined
+ * collection is tmdb_verified.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SeriesScreen(
     container: AppContainer,
-    tmdbId: Long,
+    followId: String,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var meta by remember(tmdbId) { mutableStateOf<TmdbMetadata?>(null) }
-    var follow by remember(tmdbId) { mutableStateOf<FollowSummary?>(null) }
-    var episodes by remember { mutableStateOf<EpisodesResponse?>(null) }
-    var season by remember(tmdbId) { mutableIntStateOf(1) }
+    var follow by remember(followId) { mutableStateOf<FollowSummary?>(null) }
+    var episodes by remember(followId) { mutableStateOf<EpisodesResponse?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var followBusy by remember { mutableStateOf(false) }
+    var unfollowBusy by remember { mutableStateOf(false) }
+    var selectedSeason by remember(followId) { mutableIntStateOf(-1) }
 
-    // Initial load: TMDB metadata + follow status. Episode list waits
-    // until the user actually follows the show.
-    LaunchedEffect(tmdbId) {
+    LaunchedEffect(followId) {
         error = null
         val url = container.sessionStore.serverUrl.first()
         if (url == null) {
@@ -84,73 +80,46 @@ fun SeriesScreen(
             return@LaunchedEffect
         }
         val api = container.apiFor(url)
-        val (m, follows) = withContext(Dispatchers.IO) {
-            val m = runCatching { api.tmdbMetadata(tmdbId) }.getOrNull()
-            val follows = runCatching { api.listFollows() }.getOrDefault(emptyList())
-            m to follows
+        val (f, eps) = withContext(Dispatchers.IO) {
+            val list = runCatching { api.listFollows() }.getOrDefault(emptyList())
+            val matched = list.firstOrNull { it.id == followId }
+            val episodesRes = runCatching { api.followEpisodes(followId) }.getOrNull()
+            matched to episodesRes
         }
-        meta = m
-        follow = follows.firstOrNull { it.tmdbId == tmdbId }
+        follow = f
+        episodes = eps
     }
 
-    // Episode list per season — re-fetched whenever the user switches
-    // season tab OR after a successful Follow / Unfollow / Grab.
-    LaunchedEffect(tmdbId, season, follow != null) {
-        if (follow == null) {
-            episodes = null
-            return@LaunchedEffect
-        }
-        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
-        val api = container.apiFor(url)
-        val res = withContext(Dispatchers.IO) {
-            runCatching { api.followEpisodes(tmdbId, season) }
-        }
-        res.onSuccess { episodes = it }
-        res.onFailure { error = it.message ?: "Failed to load episodes" }
+    val seasons = (episodes?.items ?: emptyList())
+        .groupBy { it.season }
+        .toSortedMap()
+    if (selectedSeason == -1 && seasons.isNotEmpty()) {
+        selectedSeason = seasons.keys.first()
     }
 
-    val totalSeasons = follow?.totalSeasons ?: meta?.numberOfSeasons ?: 1
     val scroll = rememberScrollState()
-
-    Column(
-        Modifier.fillMaxSize().verticalScroll(scroll),
-    ) {
+    Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
         Hero(
-            meta = meta,
-            tmdbId = tmdbId,
-            followed = follow != null,
-            followBusy = followBusy,
-            onToggleFollow = {
-                if (followBusy) return@Hero
-                followBusy = true
+            follow = follow,
+            unfollowBusy = unfollowBusy,
+            onUnfollow = {
+                if (unfollowBusy) return@Hero
+                unfollowBusy = true
                 scope.launch {
                     val url = container.sessionStore.serverUrl.first()
                     if (url == null) {
                         error = "Not signed in"
-                        followBusy = false
+                        unfollowBusy = false
                         return@launch
                     }
                     val api = container.apiFor(url)
                     try {
-                        if (follow == null) {
-                            follow = withContext(Dispatchers.IO) {
-                                api.addFollow(
-                                    AddFollowRequest(
-                                        tmdbId = tmdbId,
-                                        name = meta?.title,
-                                        totalSeasons = meta?.numberOfSeasons,
-                                    )
-                                )
-                            }
-                        } else {
-                            withContext(Dispatchers.IO) { api.removeFollow(tmdbId) }
-                            follow = null
-                            episodes = null
-                        }
+                        withContext(Dispatchers.IO) { api.removeFollow(followId) }
+                        onBack()
                     } catch (e: Exception) {
-                        error = e.message ?: "Follow toggle failed"
+                        error = e.message ?: "Unfollow failed"
                     } finally {
-                        followBusy = false
+                        unfollowBusy = false
                     }
                 }
             },
@@ -161,51 +130,58 @@ fun SeriesScreen(
             Modifier.padding(horizontal = 60.dp, vertical = 28.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
-            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
-            if (follow == null) {
+            if (follow == null && error == null) {
                 Text(
-                    "Suis cette série pour voir les épisodes attendus, ce qui est dispo et ce qui manque.",
+                    "Loading…",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            } else {
-                if (totalSeasons > 1) {
-                    SeasonTabs(total = totalSeasons, value = season, onChange = { season = it })
-                }
-                episodes?.let { eps ->
-                    EpisodesList(
-                        items = eps.items,
-                        onPlay = onPickFile,
-                        onGrab = { ep, andPlay ->
-                            scope.launch {
-                                val url = container.sessionStore.serverUrl.first() ?: return@launch
-                                val api = container.apiFor(url)
-                                try {
-                                    val res = withContext(Dispatchers.IO) {
-                                        api.grabEpisode(tmdbId, ep.season, ep.episode)
-                                    }
-                                    if (andPlay) {
-                                        onPickFile(res.infohash, res.fileIdx)
-                                    } else {
-                                        // Re-fetch to flip the row's status badge.
-                                        episodes = withContext(Dispatchers.IO) {
-                                            runCatching { api.followEpisodes(tmdbId, season) }
-                                                .getOrNull()
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    error = e.message ?: "Grab failed"
-                                }
-                            }
-                        },
-                    )
-                } ?: Text(
-                    "Chargement des épisodes…",
+            } else if (episodes == null && follow != null) {
+                Text(
+                    "Loading episodes…",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (seasons.isEmpty() && episodes != null) {
+                Text(
+                    "No episodes found yet. The scheduler runs every 4 h.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (seasons.isNotEmpty()) {
+                if (seasons.size > 1) {
+                    SeasonTabs(
+                        seasons = seasons.keys.toList(),
+                        value = selectedSeason,
+                        onChange = { selectedSeason = it },
+                    )
+                }
+                EpisodesList(
+                    items = (seasons[selectedSeason] ?: emptyList())
+                        .sortedBy { it.episode },
+                    onPlay = onPickFile,
+                    onGrab = { ep, andPlay ->
+                        scope.launch {
+                            val url = container.sessionStore.serverUrl.first() ?: return@launch
+                            val api = container.apiFor(url)
+                            try {
+                                val res = withContext(Dispatchers.IO) {
+                                    api.grabEpisode(followId, ep.season, ep.episode)
+                                }
+                                if (andPlay) {
+                                    onPickFile(res.infohash, res.fileIdx)
+                                } else {
+                                    episodes = withContext(Dispatchers.IO) {
+                                        runCatching { api.followEpisodes(followId) }.getOrNull()
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                error = e.message ?: "Grab failed"
+                            }
+                        }
+                    },
                 )
             }
         }
@@ -215,49 +191,39 @@ fun SeriesScreen(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun Hero(
-    meta: TmdbMetadata?,
-    tmdbId: Long,
-    followed: Boolean,
-    followBusy: Boolean,
-    onToggleFollow: () -> Unit,
+    follow: FollowSummary?,
+    unfollowBusy: Boolean,
+    onUnfollow: () -> Unit,
     onBack: () -> Unit,
 ) {
-    val backdrop = tmdbBackdropUrl(meta?.backdropPath, "w1280")
-    val poster = tmdbPosterUrl(meta?.posterPath, "w342")
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .aspectRatio(16f / 5f),
-    ) {
+    val backdrop = tmdbBackdropUrl(follow?.backdropPath, "w1280")
+    val poster = tmdbPosterUrl(follow?.posterPath, "w342")
+    Box(Modifier.fillMaxWidth().aspectRatio(16f / 5f)) {
         if (backdrop != null) {
             AsyncImage(
                 model = backdrop,
-                contentDescription = meta?.title,
+                contentDescription = follow?.name,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
             Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                            0.5f to androidx.compose.ui.graphics.Color.Transparent,
-                            1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.85f),
-                        ),
+                Modifier.fillMaxSize().background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        0.5f to androidx.compose.ui.graphics.Color.Transparent,
+                        1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.85f),
                     ),
+                ),
             )
         } else {
             Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                            colors = listOf(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
-                                androidx.compose.ui.graphics.Color(0xFF0B0D12),
-                            ),
+                Modifier.fillMaxSize().background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
+                            androidx.compose.ui.graphics.Color(0xFF0B0D12),
                         ),
                     ),
+                ),
             )
         }
         Row(
@@ -281,17 +247,23 @@ private fun Hero(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    meta?.title ?: "Chargement…",
+                    follow?.name ?: "Loading…",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
-                meta?.overview?.let {
+                follow?.let {
                     Text(
-                        it,
-                        style = MaterialTheme.typography.bodyMedium,
+                        "SCENE: ${it.normalizedName}",
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
                     )
+                    if (it.newCount > 0) {
+                        Text(
+                            "${it.newCount} new episode${if (it.newCount > 1) "s" else ""} since last visit",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
             }
             Column(
@@ -299,18 +271,16 @@ private fun Hero(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Button(
-                    onClick = onToggleFollow,
-                    enabled = !followBusy,
+                    onClick = onUnfollow,
+                    enabled = !unfollowBusy && follow != null,
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-                ) {
-                    Text(if (followed) "✓  Suivi" else "♥  Suivre")
-                }
+                ) { Text("Unfollow") }
                 Button(
                     onClick = onBack,
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                ) { Text("Retour") }
+                ) { Text("Back") }
             }
         }
     }
@@ -318,9 +288,9 @@ private fun Hero(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun SeasonTabs(total: Int, value: Int, onChange: (Int) -> Unit) {
+private fun SeasonTabs(seasons: List<Int>, value: Int, onChange: (Int) -> Unit) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        items((1..total).toList()) { s ->
+        items(seasons) { s ->
             val selected = s == value
             Surface(
                 onClick = { onChange(s) },
@@ -331,7 +301,7 @@ private fun SeasonTabs(total: Int, value: Int, onChange: (Int) -> Unit) {
                 ),
             ) {
                 Text(
-                    "Saison $s",
+                    "Season $s",
                     style = MaterialTheme.typography.labelLarge,
                     color = if (selected) MaterialTheme.colorScheme.onPrimary
                     else MaterialTheme.colorScheme.onSurface,
@@ -342,24 +312,16 @@ private fun SeasonTabs(total: Int, value: Int, onChange: (Int) -> Unit) {
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun EpisodesList(
     items: List<EpisodeItem>,
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
     onGrab: (EpisodeItem, /* andPlay */ Boolean) -> Unit,
 ) {
-    if (items.isEmpty()) {
-        Text(
-            "TMDB n'a pas encore listé les épisodes de cette saison.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        return
-    }
+    if (items.isEmpty()) return
     // Use a regular Column rather than LazyColumn so the parent
     // verticalScroll handles the scrolling — nesting two scrollable
-    // containers on TV breaks D-pad focus traversal between sections.
+    // containers on TV breaks D-pad focus traversal.
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items.forEach { ep ->
             EpisodeRow(ep = ep, onPlay = onPlay, onGrab = onGrab)
@@ -398,31 +360,23 @@ private fun EpisodeRow(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        ep.name ?: "Épisode ${ep.episode}",
+                        "S%02dE%02d".format(ep.season, ep.episode),
                         style = MaterialTheme.typography.bodyLarge,
                         maxLines = 1,
                     )
                     StatusBadge(ep)
                 }
-                ep.overview?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                    )
-                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ep.airDate?.let {
+                    ep.quality?.let {
                         Text(
                             it,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    ep.runtimeMinutes?.let {
+                    ep.seeders?.let {
                         Text(
-                            "${it} min",
+                            "$it seeders",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -438,10 +392,9 @@ private fun EpisodeRow(
 @Composable
 private fun StatusBadge(ep: EpisodeItem) {
     val (label, color) = when {
-        ep.watched -> "vu" to androidx.compose.ui.graphics.Color(0xFF6B7280)
-        ep.status == "downloaded" -> "téléchargé" to androidx.compose.ui.graphics.Color(0xFF6B7280)
-        ep.status == "available" -> "dispo" to androidx.compose.ui.graphics.Color(0xFF10B981)
-        else -> "à venir" to androidx.compose.ui.graphics.Color(0xFF374151)
+        ep.watched -> "watched" to androidx.compose.ui.graphics.Color(0xFF6B7280)
+        ep.status == "downloaded" -> "downloaded" to androidx.compose.ui.graphics.Color(0xFF6B7280)
+        else -> "available" to androidx.compose.ui.graphics.Color(0xFF10B981)
     }
     Surface(
         shape = RoundedCornerShape(4.dp),
@@ -463,34 +416,24 @@ private fun EpisodeAction(
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
     onGrab: (EpisodeItem, Boolean) -> Unit,
 ) {
-    when {
-        ep.status == "downloaded" && ep.infohash != null && ep.fileIdx != null -> {
-            Button(
-                onClick = { onPlay(ep.infohash, ep.fileIdx) },
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-            ) { Text(if (ep.watched) "▶  Revoir" else "▶  Lire") }
-        }
-        ep.status == "available" -> {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = { onGrab(ep, false) },
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                ) { Text("⤓  Préparer") }
-                Button(
-                    onClick = { onGrab(ep, true) },
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-                ) { Text("▶  Lire") }
-            }
-        }
-        else -> {
-            Text(
-                "À venir",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+    if (ep.status == "downloaded" && ep.infohash != null && ep.fileIdx != null) {
+        Button(
+            onClick = { onPlay(ep.infohash, ep.fileIdx) },
+            shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+        ) { Text(if (ep.watched) "Watch again" else "Play") }
+        return
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = { onGrab(ep, false) },
+            shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+        ) { Text("Prepare") }
+        Button(
+            onClick = { onGrab(ep, true) },
+            shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+        ) { Text("Play") }
     }
 }

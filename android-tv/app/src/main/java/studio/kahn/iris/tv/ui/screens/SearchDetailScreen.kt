@@ -53,7 +53,7 @@ import studio.kahn.iris.tv.data.tmdbPosterUrl
  * Full-screen detail view for a search hit. Shown when the user picks a
  * card on [SearchScreen]; lets them check what they're about to grab
  * before committing (audio/sub langs, video format, uploader, age, NFO
- * facts) and confirms with a big "Télécharger" button. Modals are
+ * facts) and confirms with a big "Download" button. Modals are
  * awkward with a D-pad on TV — we push a screen instead.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -114,7 +114,7 @@ fun SearchDetailScreen(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    details?.title ?: "Chargement…",
+                    details?.title ?: "Loading…",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -122,7 +122,7 @@ fun SearchDetailScreen(
                     BadgeChip("Freeleech", color = androidx.compose.ui.graphics.Color(0xFF10B981))
                 }
                 if (details?.exclusive == true) {
-                    BadgeChip("Exclu", color = androidx.compose.ui.graphics.Color(0xFFF59E0B))
+                    BadgeChip("Exclusive", color = androidx.compose.ui.graphics.Color(0xFFF59E0B))
                 }
             }
 
@@ -131,7 +131,7 @@ fun SearchDetailScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         d.uploader?.let {
                             Text(
-                                "Upload $it${d.age?.let { age -> " · $age" } ?: ""}",
+                                "Uploaded by $it${d.age?.let { age -> " · $age" } ?: ""}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -148,7 +148,7 @@ fun SearchDetailScreen(
             }
 
             if (loading) {
-                Text("Lecture des détails…", style = MaterialTheme.typography.bodyMedium)
+                Text("Reading details…", style = MaterialTheme.typography.bodyMedium)
             }
             error?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
@@ -189,7 +189,7 @@ fun SearchDetailScreen(
                     onClick = onBack,
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                     contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
-                ) { Text("Retour") }
+                ) { Text("Back") }
                 Button(
                     onClick = {
                         if (ingesting) return@Button
@@ -232,7 +232,7 @@ fun SearchDetailScreen(
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                     contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp),
                 ) {
-                    Text(if (ingesting) "Démarrage…" else "▶  Télécharger et lire")
+                    Text(if (ingesting) "Starting…" else "▶  Download & play")
                 }
             }
         }
@@ -310,7 +310,7 @@ private fun FactsGrid(mi: MediaInfoSummary) {
 @Composable
 private fun VideoFacts(v: VideoInfoDetails) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        SectionLabel("Vidéo")
+        SectionLabel("Video")
         v.codec?.let { ChipText(it) }
         v.resolution?.let { ChipText(it) }
         v.fps?.let { ChipText("${"%.2f".format(it)} fps") }
@@ -352,7 +352,7 @@ private fun AudioFacts(audio: List<AudioInfoDetails>) {
 @Composable
 private fun SubFacts(subs: List<SubInfoDetails>) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-        SectionLabel("Sous-titres")
+        SectionLabel("Subtitles")
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             subs.forEach { s ->
                 Text(

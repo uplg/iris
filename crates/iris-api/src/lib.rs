@@ -41,11 +41,12 @@ fn spawn_background_jobs(
     pool: iris_db::SqlitePool,
     provider_registry: iris_providers::ProviderRegistry,
 ) {
-    // Notify scheduler walks `series_follows` every 4 h, asks TMDB
-    // what's aired, and pre-caches indexer hits in `available_episodes`
+    // Notify scheduler walks `series_follows` every 4 h, queries
+    // the indexer with each follow's SCENE name, SCENE-parses every
+    // hit, and pre-caches new (S, E) entries in `available_episodes`
     // so the user's "Préparer" / "Lire" clicks go through the fast
-    // path. Never ingests on its own.
-    follows_scheduler::spawn(pool.clone(), app_state.tmdb().cloned(), provider_registry);
+    // path. No TMDB call. Never ingests on its own.
+    follows_scheduler::spawn(pool.clone(), provider_registry);
 
     // Collection assignment backfill — attaches a `collections` row to
     // every existing torrent that lacks one. Runs at boot AND every

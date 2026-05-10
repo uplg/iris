@@ -213,7 +213,7 @@ private fun ReadyPlayer(
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // "Préparer le suivant ?" state. Fetched once at mount; the tick
+    // "Prepare next?" state. Fetched once at mount; the tick
     // (below) flips `nextEpModalOpen` when playback crosses 95 %.
     var nextEpisode by remember(infohash, fileIdx) {
         androidx.compose.runtime.mutableStateOf<studio.kahn.iris.tv.data.EpisodePoint?>(null)
@@ -309,7 +309,7 @@ private fun ReadyPlayer(
                             }
                         }
                     }
-                    // "Préparer le suivant ?" trigger — at 95 % of
+                    // "Prepare next?" trigger — at 95 % of
                     // duration once we know it. Single-shot per mount.
                     if (
                         !prompted &&
@@ -373,23 +373,24 @@ private fun ReadyPlayer(
                 nextEpDismissed = true
             },
             title = {
-                androidx.compose.material3.Text("Épisode suivant disponible")
+                androidx.compose.material3.Text("Next episode available")
             },
             text = {
                 androidx.compose.material3.Text(
-                    "S%02dE%02d est prêt à être téléchargé. Le préparer pour la prochaine session ?"
+                    "S%02dE%02d is ready to grab. Prepare it for the next session?"
                         .format(nextEp.season, nextEp.episode),
                 )
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(
-                    enabled = !nextEpGrabbing,
+                    enabled = !nextEpGrabbing && nextEp.followId != null,
                     onClick = {
+                        val fid = nextEp.followId ?: return@TextButton
                         nextEpGrabbing = true
                         scope.launch {
                             runCatching {
                                 container.apiFor(serverUrl).grabEpisode(
-                                    tmdbId = nextEp.tmdbId,
+                                    id = fid,
                                     season = nextEp.season,
                                     episode = nextEp.episode,
                                 )
@@ -400,7 +401,7 @@ private fun ReadyPlayer(
                     },
                 ) {
                     androidx.compose.material3.Text(
-                        if (nextEpGrabbing) "Préparation…" else "Préparer",
+                        if (nextEpGrabbing) "Preparing…" else "Prepare",
                     )
                 }
             },
@@ -411,7 +412,7 @@ private fun ReadyPlayer(
                         nextEpDismissed = true
                     },
                 ) {
-                    androidx.compose.material3.Text("Plus tard")
+                    androidx.compose.material3.Text("Later")
                 }
             },
         )

@@ -83,7 +83,7 @@ export function AdminPage() {
   return (
     <div className="grid gap-8">
       {/* Admin banner — visually distinct from the family-facing UI so
-          it's always clear this isn't where chérie / mom should be.
+          it's always clear this isn't where the family should be.
           Amber border + monospace font for the "this is the engine
           room" effect. */}
       <section className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
@@ -97,7 +97,7 @@ export function AdminPage() {
                 Admin · Seedbox
               </h1>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                Pannel technique. La vue famille vit sur la page d'accueil.
+                Technical panel. The family view lives on the home page.
               </p>
             </div>
           </div>
@@ -105,13 +105,13 @@ export function AdminPage() {
             <Button asChild variant="outline" size="sm">
               <Link to="/library?view=torrents">
                 <List className="size-3.5" />
-                Vue torrents brute
+                Raw torrents view
               </Link>
             </Button>
             <Button asChild variant="ghost" size="sm">
               <Link to="/">
                 <ArrowLeft className="size-3.5" />
-                Retour à l'accueil
+                Back to home
               </Link>
             </Button>
           </div>

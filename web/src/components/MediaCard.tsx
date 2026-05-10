@@ -32,7 +32,7 @@ export type MediaCardProps = {
   title: string;
   /** Secondary line; truncates to one line. */
   subtitle?: string;
-  /** Top-right overlay (e.g., "3 nouveaux", "freeleech", a status pill).
+  /** Top-right overlay (e.g., "3 new", "freeleech", a status pill).
    *  Render-as-is — caller picks the styling. */
   badge?: ReactNode;
   /** 0..1 — when set, draws a thin progress bar across the bottom of the

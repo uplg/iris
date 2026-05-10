@@ -50,11 +50,11 @@ export function LibraryPage() {
     <div className="grid gap-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Bibliothèque</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Library</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {view === "collections"
-              ? "Films et séries regroupés."
-              : "Tous les torrents (vue brute)."}
+              ? "Movies and series grouped together."
+              : "Every torrent (raw view)."}
           </p>
         </div>
         <div className="flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5">
@@ -129,14 +129,14 @@ function CollectionsView() {
   if (items.length === 0) {
     return (
       <EmptyState
-        title="Bibliothèque vide"
+        title="Library is empty"
         body={
           <>
-            Lance une{" "}
+            Start a{" "}
             <Link to="/search" className="underline">
-              recherche
+              search
             </Link>{" "}
-            pour ajouter ton premier titre.
+            to add your first title.
           </>
         }
       />
@@ -178,14 +178,13 @@ function routeCollection(
   c: CollectionListItem,
   navigate: ReturnType<typeof useNavigate>,
 ) {
-  // Movies with a TMDB id are still single-torrent in practice; route
-  // straight to /watch. Movies without TMDB → also /watch on the
-  // first torrent we have (fetched via collection detail). For
-  // simplicity, fall through to /collection/:id which handles both.
-  if (c.kind === "tv" && c.tmdb_id) {
-    navigate(`/series/${c.tmdb_id}`);
-    return;
-  }
+  // Always land on the collection page. The /series/:tmdb_id route
+  // is the Watchlist surface (TMDB-driven episode grid) and only
+  // makes sense for shows the user has explicitly followed — when
+  // we tried to use it from the library we kept landing users on a
+  // "broken follow" view whenever the indexer-attached tmdb_id was
+  // wrong. CollectionPage shows the actual SCENE-grouped content
+  // we have on disk, which is always correct.
   navigate(`/collection/${c.id}`);
 }
 
@@ -220,8 +219,8 @@ function TorrentsView() {
   if (items.length === 0)
     return (
       <EmptyState
-        title="Aucun torrent"
-        body="La bibliothèque est vide pour l'instant."
+        title="No torrents"
+        body="Library is empty for now."
       />
     );
   return (

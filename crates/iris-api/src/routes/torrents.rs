@@ -448,6 +448,12 @@ async fn verify_tmdb_match(
         verified,
         "tmdb verification result",
     );
+    // On successful verification, propagate the now-trusted tmdb_id
+    // to the torrent's collection so the UI can pull poster /
+    // synopsis. Failures are logged inside enrich_after_verify.
+    if verified {
+        crate::collection_assign::enrich_after_verify(state.db(), infohash).await;
+    }
 }
 
 #[derive(Debug, Serialize)]

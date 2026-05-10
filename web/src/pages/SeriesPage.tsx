@@ -2,10 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import {
-  Bookmark,
-  BookmarkCheck,
+  BookmarkX,
   CheckCircle2,
-  Clock,
   Download,
   Loader2,
   Play,
@@ -15,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   follows,
-  metadata,
   tmdbImage,
   type EpisodeItem,
   type EpisodesResponse,
@@ -24,121 +21,117 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * Series detail page. Shows season tabs, episode list with status, and
- * a follow toggle. Each episode has the appropriate primary action
- * inline (Lire / Préparer / Revoir / À venir) so the user never has to
- * leave the page to start playing — except when status is `available`,
- * where the click triggers an ingest then navigates to the player.
+ * SCENE-mode Series detail page.
  *
- * Auto-grab is intentionally NOT a feature; user always confirms by
- * clicking. The notify scheduler pre-caches indexer hits in the
- * background so these clicks resolve instantly.
+ * Routed by follow id (not tmdb_id). The episode list is built
+ * entirely from server-side SCENE sources:
+ *   - episode_files (on disk, joined via collections.parsed_title_normalized)
+ *   - available_episodes (indexer cache, keyed on normalized_name)
+ *
+ * No TMDB call, no "expected" episode grid — episodes the indexer
+ * doesn't know about don't appear here. That's correct: Iris can't
+ * grab what isn't listed anyway. Posters surface only if the
+ * matching collection is `tmdb_verified` (server gates the poster
+ * URL inside the follow summary).
  */
 export function SeriesPage() {
-  const { tmdbId } = useParams<{ tmdbId: string }>();
-  const id = Number(tmdbId);
+  const { followId } = useParams<{ followId: string }>();
+  const id = followId!;
   const qc = useQueryClient();
   const navigate = useNavigate();
 
-  const tmdbQ = useQuery({
-    queryKey: ["tmdb", id],
-    queryFn: () => metadata.tmdb(id),
-    enabled: Number.isFinite(id),
-    staleTime: Infinity,
-  });
-
-  // Watchlist lookup — drives the Follow / Suivi state on the hero.
-  // Cached for 60 s; mutations invalidate explicitly.
   const followsQ = useQuery({
     queryKey: ["follows"],
     queryFn: follows.list,
     staleTime: 60_000,
   });
-  const followed: FollowSummary | undefined = useMemo(
-    () => followsQ.data?.find((f) => f.tmdb_id === id),
+  const follow: FollowSummary | undefined = useMemo(
+    () => followsQ.data?.find((f) => f.id === id),
     [followsQ.data, id],
   );
 
-  const totalSeasons =
-    followed?.total_seasons ?? tmdbQ.data?.number_of_seasons ?? 1;
-  const [season, setSeason] = useState(1);
-  // Reset to season 1 when navigating to a different series.
-  useEffect(() => {
-    setSeason(1);
-  }, [id]);
-
-  // Track when this season's query first ran so we can poll briefly
-  // after the user follows — the backend's notify scan is asynchronous
-  // and takes a few seconds to populate `available_episodes`. Without
-  // polling, the user sees "pas dispo" everywhere until they hit
-  // refresh manually.
+  // Poll briefly for fresh follow data so the just-added follow's
+  // initial scan results come in without forcing a manual refresh.
   const queryStartRef = useRef<number>(0);
   useEffect(() => {
     queryStartRef.current = 0;
-  }, [id, season]);
+  }, [id]);
 
   const episodesQ = useQuery({
-    queryKey: ["follow-episodes", id, season],
-    queryFn: () => follows.episodes(id, season),
-    enabled: Number.isFinite(id) && !!followed, // only useful once the user is following
+    queryKey: ["follow-episodes", id],
+    queryFn: () => follows.episodes(id),
+    enabled: !!id && !!follow,
     refetchInterval: (q) => {
       const data = q.state.data as EpisodesResponse | undefined;
       if (!data) return false;
       if (queryStartRef.current === 0) queryStartRef.current = Date.now();
-      const hasUnavailable = data.items.some((e) => e.status === "unavailable");
       const elapsedMs = Date.now() - queryStartRef.current;
-      // Active scan window: poll fast for the first 60 s after the
-      // page opens so the background scan's results show up without
-      // the user having to refresh. After that, settle.
-      if (hasUnavailable && elapsedMs < 60_000) return 3_000;
+      // Active scan window: poll fast for the first 60 s after page
+      // load. After that, settle — the periodic 4 h scheduler will
+      // pick up later releases.
+      if (elapsedMs < 60_000 && data.items.length === 0) return 3_000;
       return false;
     },
   });
 
-  const followMutation = useMutation({
-    mutationFn: () =>
-      follows.add(
-        id,
-        tmdbQ.data?.title,
-        tmdbQ.data?.number_of_seasons ?? undefined,
-      ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["follows"] }),
-  });
   const unfollowMutation = useMutation({
     mutationFn: () => follows.remove(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["follows"] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["follows"] });
+      navigate("/", { replace: true });
+    },
   });
 
-  if (!Number.isFinite(id)) return <p>Identifiant TMDB invalide.</p>;
+  if (!id) return <p>Invalid follow id.</p>;
+  if (followsQ.isLoading) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-3 animate-spin" />
+        Loading…
+      </p>
+    );
+  }
+  if (!follow) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        This series is no longer in your watchlist.
+      </p>
+    );
+  }
+
+  const seasons = useMemo(() => {
+    const grouped = new Map<number, EpisodeItem[]>();
+    for (const ep of episodesQ.data?.items ?? []) {
+      const arr = grouped.get(ep.season) ?? [];
+      arr.push(ep);
+      grouped.set(ep.season, arr);
+    }
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([season, items]) => ({
+        season,
+        items: items.sort((a, b) => a.episode - b.episode),
+      }));
+  }, [episodesQ.data]);
 
   return (
     <div className="grid gap-6">
       <Hero
-        meta={tmdbQ.data}
-        followed={!!followed}
-        onFollow={() => followMutation.mutate()}
+        follow={follow}
         onUnfollow={() => unfollowMutation.mutate()}
-        followBusy={followMutation.isPending || unfollowMutation.isPending}
+        unfollowBusy={unfollowMutation.isPending}
       />
 
-      {!followed ? (
-        <div className="rounded-md border border-dashed border-border bg-card/40 p-6 text-sm text-muted-foreground">
-          Suis cette série pour voir les épisodes attendus, ce qui est dispo et ce qui
-          manque.
-        </div>
-      ) : (
-        <>
-          <SeasonTabs total={totalSeasons} value={season} onChange={setSeason} />
-          <EpisodesList
-            tmdbId={id}
-            season={season}
-            data={episodesQ.data}
-            loading={episodesQ.isLoading}
-            error={episodesQ.error}
-            onPlay={(infohash, fileIdx) => navigate(`/watch/${infohash}/${fileIdx}`)}
-          />
-        </>
-      )}
+      <EpisodesList
+        followId={id}
+        seasons={seasons}
+        loading={episodesQ.isLoading}
+        error={episodesQ.error}
+        empty={
+          (episodesQ.data?.items.length ?? 0) === 0 && !episodesQ.isLoading
+        }
+        onPlay={(infohash, fileIdx) => navigate(`/watch/${infohash}/${fileIdx}`)}
+      />
     </div>
   );
 }
@@ -148,20 +141,19 @@ export function SeriesPage() {
 // ---------------------------------------------------------------------------
 
 function Hero({
-  meta,
-  followed,
-  onFollow,
+  follow,
   onUnfollow,
-  followBusy,
+  unfollowBusy,
 }: {
-  meta: { title?: string; overview?: string | null; poster_path?: string | null; backdrop_path?: string | null; year?: number | null } | undefined;
-  followed: boolean;
-  onFollow: () => void;
+  follow: FollowSummary;
   onUnfollow: () => void;
-  followBusy: boolean;
+  unfollowBusy: boolean;
 }) {
-  const backdrop = tmdbImage(meta?.backdrop_path, "original");
-  const poster = tmdbImage(meta?.poster_path, "w342");
+  // Server only fills poster_path / backdrop_path when the joined
+  // collection has tmdb_verified=true. No verified collection →
+  // text-only hero.
+  const backdrop = tmdbImage(follow.backdrop_path, "original");
+  const poster = tmdbImage(follow.poster_path, "w342");
   return (
     <section className="relative overflow-hidden rounded-xl border border-border bg-card/30">
       {backdrop && (
@@ -175,49 +167,40 @@ function Hero({
         </>
       )}
       <div className="relative flex flex-wrap gap-6 p-6">
-        {poster && (
+        {poster ? (
           <img
             src={poster}
-            alt={meta?.title ?? ""}
+            alt={follow.name}
             className="h-56 w-40 shrink-0 rounded-md border border-border object-cover shadow-lg"
           />
+        ) : (
+          <div className="flex h-56 w-40 shrink-0 items-center justify-center rounded-md border border-dashed border-border bg-card text-center text-xs text-muted-foreground">
+            No verified poster
+          </div>
         )}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <h1 className="text-3xl font-semibold tracking-tight">
-            {meta?.title ?? "Chargement…"}
-            {meta?.year && (
-              <span className="ml-2 text-base font-normal text-muted-foreground">
-                ({meta.year})
-              </span>
-            )}
+            {follow.name}
           </h1>
-          {meta?.overview && (
-            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-              {meta.overview}
-            </p>
-          )}
+          <p className="text-xs text-muted-foreground">
+            SCENE identity:{" "}
+            <code className="rounded bg-card px-1.5 py-0.5 font-mono">
+              {follow.normalized_name}
+            </code>
+          </p>
           <div className="mt-auto flex items-center gap-2">
             <Button
-              variant={followed ? "secondary" : "default"}
-              onClick={followed ? onUnfollow : onFollow}
-              disabled={followBusy}
+              variant="secondary"
+              onClick={onUnfollow}
+              disabled={unfollowBusy}
             >
-              {followed ? (
-                <>
-                  <BookmarkCheck className="size-4" />
-                  Suivi
-                </>
-              ) : (
-                <>
-                  <Bookmark className="size-4" />
-                  Suivre
-                </>
-              )}
+              <BookmarkX className="size-4" />
+              Unfollow
             </Button>
             <span className="text-xs text-muted-foreground">
-              {followed
-                ? "Tu seras notifié quand de nouveaux épisodes sortent."
-                : "Suis pour être notifié des nouveaux épisodes."}
+              {follow.new_count > 0
+                ? `${follow.new_count} new episode${follow.new_count > 1 ? "s" : ""} since your last visit`
+                : "Up to date"}
             </span>
           </div>
         </div>
@@ -227,22 +210,91 @@ function Hero({
 }
 
 // ---------------------------------------------------------------------------
-// Season tabs
+// Episode list
 // ---------------------------------------------------------------------------
 
+function EpisodesList({
+  followId,
+  seasons,
+  loading,
+  error,
+  empty,
+  onPlay,
+}: {
+  followId: string;
+  seasons: { season: number; items: EpisodeItem[] }[];
+  loading: boolean;
+  error: unknown;
+  empty: boolean;
+  onPlay: (infohash: string, fileIdx: number) => void;
+}) {
+  const [activeSeason, setActiveSeason] = useState<number | null>(null);
+  useEffect(() => {
+    if (activeSeason == null && seasons.length > 0) {
+      setActiveSeason(seasons[0].season);
+    }
+  }, [activeSeason, seasons]);
+
+  if (loading) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-3 animate-spin" />
+        Loading episodes…
+      </p>
+    );
+  }
+  if (error) {
+    return (
+      <p className="text-sm text-destructive">
+        {error instanceof Error ? error.message : "Failed to load"}
+      </p>
+    );
+  }
+  if (empty) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No episodes found yet. The scheduler runs every 4 h.
+      </p>
+    );
+  }
+  if (seasons.length === 0) return null;
+
+  const current = seasons.find((s) => s.season === activeSeason) ?? seasons[0];
+
+  return (
+    <div className="grid gap-4">
+      <SeasonTabs
+        seasons={seasons.map((s) => s.season)}
+        value={current.season}
+        onChange={setActiveSeason}
+      />
+      <ul className="divide-y divide-border rounded-lg border border-border bg-card/30">
+        {current.items.map((ep) => (
+          <EpisodeRow
+            key={`${ep.season}-${ep.episode}`}
+            followId={followId}
+            ep={ep}
+            onPlay={onPlay}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function SeasonTabs({
-  total,
+  seasons,
   value,
   onChange,
 }: {
-  total: number;
+  seasons: number[];
   value: number;
   onChange: (s: number) => void;
 }) {
-  if (total <= 1) return null;
+  if (seasons.length <= 1) return null;
   return (
     <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-      {Array.from({ length: total }, (_, i) => i + 1).map((s) => (
+      {seasons.map((s) => (
         <button
           key={s}
           type="button"
@@ -254,86 +306,34 @@ function SeasonTabs({
               : "border-border text-muted-foreground hover:border-border/80 hover:text-foreground",
           )}
         >
-          Saison {s}
+          Season {s}
         </button>
       ))}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Episode list
-// ---------------------------------------------------------------------------
-
-function EpisodesList({
-  tmdbId,
-  season,
-  data,
-  loading,
-  error,
-  onPlay,
-}: {
-  tmdbId: number;
-  season: number;
-  data: EpisodesResponse | undefined;
-  loading: boolean;
-  error: unknown;
-  onPlay: (infohash: string, fileIdx: number) => void;
-}) {
-  if (loading) {
-    return (
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="size-3 animate-spin" />
-        Chargement des épisodes…
-      </p>
-    );
-  }
-  if (error) {
-    return (
-      <p className="text-sm text-destructive">
-        {error instanceof Error ? error.message : "Échec du chargement"}
-      </p>
-    );
-  }
-  if (!data || data.items.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        TMDB n'a pas encore listé les épisodes de la saison {season}.
-      </p>
-    );
-  }
-  return (
-    <ul className="divide-y divide-border rounded-lg border border-border bg-card/30">
-      {data.items.map((ep) => (
-        <EpisodeRow key={`${ep.season}-${ep.episode}`} tmdbId={tmdbId} ep={ep} onPlay={onPlay} />
-      ))}
-    </ul>
-  );
-}
-
 function EpisodeRow({
-  tmdbId,
+  followId,
   ep,
   onPlay,
 }: {
-  tmdbId: number;
+  followId: string;
   ep: EpisodeItem;
   onPlay: (infohash: string, fileIdx: number) => void;
 }) {
   const qc = useQueryClient();
   const grabAndPlay = useMutation({
-    mutationFn: () => follows.grabEpisode(tmdbId, ep.season, ep.episode),
+    mutationFn: () => follows.grabEpisode(followId, ep.season, ep.episode),
     onSuccess: (res) => {
-      // Refresh episodes so the row flips to "downloaded" on return
-      // even before the polling tick.
-      void qc.invalidateQueries({ queryKey: ["follow-episodes", tmdbId] });
+      void qc.invalidateQueries({ queryKey: ["follow-episodes", followId] });
       onPlay(res.infohash, res.file_idx);
     },
   });
   const grabOnly = useMutation({
-    mutationFn: () => follows.grabEpisode(tmdbId, ep.season, ep.episode),
+    mutationFn: () => follows.grabEpisode(followId, ep.season, ep.episode),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["follow-episodes", tmdbId] });
+      void qc.invalidateQueries({ queryKey: ["follow-episodes", followId] });
     },
   });
 
@@ -344,13 +344,15 @@ function EpisodeRow({
       </span>
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <span className="truncate font-medium">{ep.name ?? `Épisode ${ep.episode}`}</span>
+          <span className="truncate font-medium">
+            S{ep.season.toString().padStart(2, "0")}E
+            {ep.episode.toString().padStart(2, "0")}
+          </span>
           <StatusBadge ep={ep} />
         </div>
         <div className="mt-0.5 flex items-center gap-3 text-xs text-muted-foreground">
-          {ep.air_date && <span>{ep.air_date}</span>}
-          {ep.runtime_minutes && <span>{ep.runtime_minutes} min</span>}
-          {ep.overview && <span className="truncate">· {ep.overview}</span>}
+          {ep.quality && <span>{ep.quality}</span>}
+          {ep.seeders != null && <span>{ep.seeders} seeders</span>}
         </div>
       </div>
       <EpisodeAction
@@ -368,33 +370,18 @@ function StatusBadge({ ep }: { ep: EpisodeItem }) {
   if (ep.watched) {
     return (
       <Badge variant="secondary" className="text-[10px]">
-        <CheckCircle2 className="mr-1 size-3" /> vu
+        <CheckCircle2 className="mr-1 size-3" /> watched
       </Badge>
     );
   }
-  switch (ep.status) {
-    case "downloaded":
-      return (
-        <Badge variant="secondary" className="text-[10px]">
-          téléchargé
-        </Badge>
-      );
-    case "available":
-      return (
-        <Badge className="bg-emerald-500/80 text-[10px]">
-          dispo
-        </Badge>
-      );
-    case "unavailable":
-      return (
-        <Badge variant="outline" className="text-[10px]">
-          <Clock className="mr-1 size-3" />
-          {ep.air_date && ep.air_date > new Date().toISOString().slice(0, 10)
-            ? "à venir"
-            : "pas dispo"}
-        </Badge>
-      );
+  if (ep.status === "downloaded") {
+    return (
+      <Badge variant="secondary" className="text-[10px]">
+        downloaded
+      </Badge>
+    );
   }
+  return <Badge className="bg-emerald-500/80 text-[10px]">available</Badge>;
 }
 
 function EpisodeAction({
@@ -414,27 +401,20 @@ function EpisodeAction({
     return (
       <Button size="sm" onClick={() => onPlay(ep.infohash!, ep.file_idx!)}>
         <Play className="size-3.5" />
-        {ep.watched ? "Revoir" : "Lire"}
+        {ep.watched ? "Watch again" : "Play"}
       </Button>
     );
   }
-  if (ep.status === "available") {
-    return (
-      <div className="flex items-center gap-1">
-        <Button size="sm" variant="secondary" onClick={onGrabOnly} disabled={grabBusy}>
-          <Download className="size-3.5" />
-          Préparer
-        </Button>
-        <Button size="sm" onClick={onGrabAndPlay} disabled={grabBusy}>
-          {grabBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-          Lire
-        </Button>
-      </div>
-    );
-  }
   return (
-    <Button size="sm" variant="ghost" disabled>
-      À venir
-    </Button>
+    <div className="flex items-center gap-1">
+      <Button size="sm" variant="secondary" onClick={onGrabOnly} disabled={grabBusy}>
+        <Download className="size-3.5" />
+        Prepare
+      </Button>
+      <Button size="sm" onClick={onGrabAndPlay} disabled={grabBusy}>
+        {grabBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+        Play
+      </Button>
+    </div>
   );
 }
