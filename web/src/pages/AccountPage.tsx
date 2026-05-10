@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router";
 import { KeyRound, Link2, Trash2, Tv } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -280,16 +280,37 @@ function DevicesCard() {
     }
   }, [params, code, setParams]);
 
+  // After a successful link, the device only appears in the list once the TV
+  // polls /auth/device/poll and a refresh_token row is created. Poll briefly
+  // so the new device shows up without a manual refresh.
+  const [awaitingPair, setAwaitingPair] = useState(false);
+  const expectedCountRef = useRef(0);
+
   const list = useQuery({
     queryKey: ["devices"],
     queryFn: devicesApi.list,
+    refetchInterval: awaitingPair ? 1500 : false,
   });
+
+  useEffect(() => {
+    if (awaitingPair && list.data && list.data.length > expectedCountRef.current) {
+      setAwaitingPair(false);
+    }
+  }, [awaitingPair, list.data]);
+
+  useEffect(() => {
+    if (!awaitingPair) return;
+    const t = setTimeout(() => setAwaitingPair(false), 30_000);
+    return () => clearTimeout(t);
+  }, [awaitingPair]);
 
   const link = useMutation({
     mutationFn: ({ c, l }: { c: string; l: string }) => devicesApi.link(c, l.trim() || undefined),
     onSuccess: () => {
       setCode("");
       setLabel("");
+      expectedCountRef.current = list.data?.length ?? 0;
+      setAwaitingPair(true);
       void qc.invalidateQueries({ queryKey: ["devices"] });
     },
   });
