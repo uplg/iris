@@ -109,6 +109,12 @@ pub struct ContinueWatchingRow {
     pub completed: bool,
     pub audio_track_idx: Option<i64>,
     pub subtitle_track_idx: Option<i64>,
+    /// `"movie"` / `"tv"` from the parent collection. Null for
+    /// standalone torrents not yet attached to a collection. Used
+    /// by clients to pass `?kind=` to the TMDB lookup endpoint —
+    /// without the hint, an id collision between TMDB's separate
+    /// movie / tv namespaces returns the wrong entry's poster.
+    pub kind: Option<String>,
 }
 
 /// Recent in-progress items for the user (excluding completed). Joined with
@@ -123,9 +129,10 @@ pub async fn continue_watching(
     sqlx::query_as::<_, ContinueWatchingRow>(
         "SELECT p.infohash, t.name as torrent_name, t.tmdb_id, t.tmdb_verified, p.file_idx, \
             p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
-            p.audio_track_idx, p.subtitle_track_idx \
+            p.audio_track_idx, p.subtitle_track_idx, c.kind as kind \
          FROM playback_progress p \
          JOIN torrents t ON t.infohash = p.infohash AND t.deleted_at IS NULL \
+         LEFT JOIN collections c ON c.id = t.collection_id \
          WHERE p.user_id = ?1 AND p.completed = FALSE \
          ORDER BY p.last_watched_at DESC \
          LIMIT ?2",

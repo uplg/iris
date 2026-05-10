@@ -84,7 +84,7 @@ fun DetailScreen(
             // synopsis, which is exactly the bug we're fixing.
             if (t.tmdbVerified) {
                 t.tmdbId?.let { id ->
-                    meta = runCatching { api.tmdbMetadata(id) }.getOrNull()
+                    meta = runCatching { api.tmdbMetadata(id, t.kind) }.getOrNull()
                 }
             }
         } catch (e: Exception) {

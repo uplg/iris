@@ -37,6 +37,13 @@ pub struct TorrentRow {
     /// column is reconciled by [`reconcile_uploaded`] from the live session
     /// counter and survives both events.
     pub uploaded_bytes_total: i64,
+    /// `"movie"` / `"tv"` from the parent collection. Null for
+    /// standalone torrents not yet attached to one. Clients pass
+    /// this to `/api/metadata/tmdb/{id}?kind=` — TMDB has separate
+    /// id namespaces for movies and TV, so the same numerical id
+    /// can resolve to two unrelated entries; the kind hint picks
+    /// the right one.
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -105,9 +112,11 @@ pub async fn find_by_infohash(
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total \
+         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         c.kind AS kind \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
+         LEFT JOIN collections c ON c.id = t.collection_id \
          WHERE t.infohash = ?1",
     )
     .bind(infohash)
@@ -119,9 +128,11 @@ pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Err
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total \
+         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         c.kind AS kind \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
+         LEFT JOIN collections c ON c.id = t.collection_id \
          WHERE t.deleted_at IS NULL ORDER BY t.added_at DESC",
     )
     .fetch_all(pool)
@@ -237,9 +248,11 @@ pub async fn list_in_collection(
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total \
+         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         c.kind AS kind \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
+         LEFT JOIN collections c ON c.id = t.collection_id \
          WHERE t.collection_id = ?1 AND t.deleted_at IS NULL \
          ORDER BY t.added_at",
     )

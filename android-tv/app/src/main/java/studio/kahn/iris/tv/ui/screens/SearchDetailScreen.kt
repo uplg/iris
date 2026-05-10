@@ -99,7 +99,7 @@ fun SearchDetailScreen(
         val (det, m) = withContext(Dispatchers.IO) {
             val det = runCatching { api.torrentDetails(providerId, externalId) }
             val m = if (tmdbId != null) {
-                runCatching { api.tmdbMetadata(tmdbId) }.getOrNull()
+                runCatching { api.tmdbMetadata(tmdbId, kind) }.getOrNull()
             } else null
             det to m
         }

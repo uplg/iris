@@ -178,6 +178,11 @@ data class ContinueWatchingItem(
     @SerialName("torrent_name") val torrentName: String,
     @SerialName("tmdb_id") val tmdbId: Long? = null,
     @SerialName("tmdb_verified") val tmdbVerified: Boolean = false,
+    /** `"movie"` | `"tv"` from the parent collection. Passed to the
+     *  TMDB lookup so the right namespace is hit (movies and TV
+     *  shows have separate id spaces; the same numerical id resolves
+     *  to two unrelated entries otherwise). */
+    val kind: String? = null,
     @SerialName("file_idx") val fileIdx: Int,
     @SerialName("file_path") val filePath: String? = null,
     @SerialName("position_seconds") val positionSeconds: Double,
@@ -214,6 +219,9 @@ data class TorrentView(
     /** Lifetime upload counter — survives session restarts and GC.
      *  Default 0 keeps backward-compat with older servers. */
     @SerialName("uploaded_bytes_total") val uploadedBytesTotal: Long = 0,
+    /** `"movie"` | `"tv"` from the parent collection. Pass to TMDB
+     *  lookups to avoid namespace-id collisions. */
+    val kind: String? = null,
 )
 
 @Serializable

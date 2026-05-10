@@ -91,6 +91,7 @@ async fn list_library(
                     source_external_id: row.source_external_id,
                     tmdb_id: row.tmdb_id,
                     tmdb_verified: row.tmdb_verified,
+                    kind: row.kind,
                     uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                     snapshot,
                 });
@@ -171,6 +172,7 @@ async fn collection_detail(
                 source_external_id: row.source_external_id.clone(),
                 tmdb_id: row.tmdb_id,
                 tmdb_verified: row.tmdb_verified,
+                kind: row.kind.clone(),
                 uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                 snapshot,
             });

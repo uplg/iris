@@ -96,6 +96,11 @@ struct ContinueWatchingItem {
     torrent_name: String,
     tmdb_id: Option<i64>,
     tmdb_verified: bool,
+    /// `"movie"` / `"tv"` from the parent collection. Clients pass
+    /// this to `/api/metadata/tmdb/{id}?kind=` — without it, TMDB's
+    /// separate id namespaces collide and the lookup serves a
+    /// stranger's poster.
+    kind: Option<String>,
     file_idx: i64,
     file_path: Option<String>,
     position_seconds: f64,
@@ -124,6 +129,7 @@ async fn continue_watching(
                 torrent_name: r.torrent_name,
                 tmdb_id: r.tmdb_id,
                 tmdb_verified: r.tmdb_verified,
+                kind: r.kind,
                 file_idx: r.file_idx,
                 file_path,
                 position_seconds: r.position_seconds,

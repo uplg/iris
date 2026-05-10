@@ -493,6 +493,10 @@ pub struct TorrentView {
     /// tmdb_verified=true)` pair to decide whether to fetch posters /
     /// titles from TMDB; otherwise they stick with the filename.
     pub tmdb_verified: bool,
+    /// `"movie"` / `"tv"` from the parent collection. Clients pass
+    /// this to `/api/metadata/tmdb/{id}?kind=` so TMDB's separate
+    /// movie / tv namespaces don't collide on poster lookups.
+    pub kind: Option<String>,
     /// Lifetime upload counter — survives session restarts and GC
     /// evictions, unlike `snapshot.uploaded_bytes`.
     pub uploaded_bytes_total: u64,
@@ -518,6 +522,7 @@ async fn list(
                 source_external_id: row.source_external_id,
                 tmdb_id: row.tmdb_id,
                 tmdb_verified: row.tmdb_verified,
+                kind: row.kind,
                 uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                 snapshot,
             });
@@ -548,6 +553,7 @@ async fn get_one(
         source_external_id: row.source_external_id,
         tmdb_id: row.tmdb_id,
         tmdb_verified: row.tmdb_verified,
+        kind: row.kind,
         uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
         snapshot,
     }))

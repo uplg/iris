@@ -384,6 +384,9 @@ export type ContinueWatchingItem = {
    *  for this entry — the wrong-poster / wrong-title experience is worse
    *  than no metadata at all. */
   tmdb_verified: boolean;
+  /** `"movie"` | `"tv"` from the parent collection. Required by the TMDB
+   *  lookup to pick the right namespace (movie vs tv). */
+  kind: MediaKind | null;
   file_idx: number;
   file_path: string | null;
   position_seconds: number;
@@ -473,6 +476,9 @@ export type TorrentView = TorrentSnapshot & {
   tmdb_id: number | null;
   /** Server-validated TMDB association (runtime matches probed duration ±15 %). */
   tmdb_verified: boolean;
+  /** `"movie"` | `"tv"` from the parent collection — pass to the TMDB
+   *  lookup endpoint to disambiguate movie vs tv namespaces. */
+  kind: MediaKind | null;
   /** Lifetime upload counter — survives session restarts and GC eviction,
    *  unlike the snapshot's `uploaded_bytes`. */
   uploaded_bytes_total: number;
