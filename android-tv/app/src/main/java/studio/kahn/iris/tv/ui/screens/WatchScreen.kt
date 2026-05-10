@@ -360,6 +360,12 @@ private fun ReadyPlayer(
                 setShowRewindButton(true)
                 controllerAutoShow = true
                 layoutParams = android.widget.FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                // Hold the screen-on flag for as long as the PlayerView is
+                // attached. Without this, Android TV blanks the panel after
+                // its idle timeout (typically 2-5 min) since the remote
+                // sees no key events during continuous playback. The flag
+                // is dropped automatically when the view is detached.
+                keepScreenOn = true
             }
         },
         update = { it.player = player },

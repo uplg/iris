@@ -7,6 +7,8 @@ pub mod routes;
 pub mod seed_stats;
 pub mod state;
 pub mod tmdb;
+pub mod tmdb_backfill;
+pub mod tmdb_resolve;
 
 use std::path::{Path, PathBuf};
 
@@ -53,6 +55,14 @@ fn spawn_background_jobs(
     // upload counters into `torrents.uploaded_bytes_total` so the value
     // survives restarts and GC evictions.
     seed_stats::spawn(pool.clone(), app_state.engine().clone());
+
+    // One-shot TMDB id migration: legacy torrents were ingested with
+    // the indexer's (often wrong) tmdb_id; this sweep re-resolves each
+    // one from its SCENE-cleaned name and re-runs runtime verification
+    // against the corrected id. New ingests already go through the
+    // override path in `routes::torrents::ingest`, so this only needs
+    // to run once at boot.
+    tmdb_backfill::spawn(app_state.clone());
 
     // Collection assignment backfill — attaches a `collections` row to
     // every existing torrent that lacks one. Runs at boot AND every

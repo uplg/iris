@@ -41,6 +41,8 @@ import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.TmdbMetadata
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.theme.LocalTvLayout
+import studio.kahn.iris.tv.ui.theme.Spacing
 
 private val VIDEO_EXTS_DETAIL = listOf(
     ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
@@ -90,9 +92,15 @@ fun DetailScreen(
         }
     }
 
+    val layout = LocalTvLayout.current
     val t = torrent
     if (t == null) {
-        Box(Modifier.fillMaxSize().padding(40.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(layout.gutterHorizontal),
+            contentAlignment = Alignment.Center,
+        ) {
             if (error != null) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(error!!, color = MaterialTheme.colorScheme.error)
@@ -115,13 +123,18 @@ fun DetailScreen(
     }
 
     Row(
-        Modifier.fillMaxSize().padding(40.dp),
-        horizontalArrangement = Arrangement.spacedBy(40.dp),
+        Modifier
+            .fillMaxSize()
+            .padding(
+                horizontal = layout.gutterHorizontal,
+                vertical = layout.gutterVertical,
+            ),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xxl),
     ) {
         // Left rail: poster + metadata.
         Column(
-            Modifier.width(320.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            Modifier.width(layout.detailRail),
+            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
         ) {
             val poster = tmdbPosterUrl(meta?.posterPath, "w500")
             Card(

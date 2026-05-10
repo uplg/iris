@@ -27,6 +27,53 @@ import {
   type SortOrder,
   type TmdbSuggestion,
 } from "@/lib/api";
+
+/**
+ * UI-level sort presets. `recommended` is a client-side composite
+ * score (seeders ÷ √size_GiB) that surfaces fast-to-process releases
+ * first — small files with healthy swarms, which is what most users
+ * actually want. The remaining presets pass straight through to the
+ * indexer's sort field with a fixed direction. Mirrors the same five
+ * options on the Android TV `SearchScreen` so the experience matches.
+ */
+type SortMode = "recommended" | "seeders" | "uploaded" | "size" | "title";
+
+const SORT_MODES: readonly { id: SortMode; label: string }[] = [
+  { id: "recommended", label: "Recommended" },
+  { id: "seeders", label: "Seeders" },
+  { id: "uploaded", label: "Newest" },
+  { id: "size", label: "Smallest" },
+  { id: "title", label: "Title" },
+] as const;
+
+function apiSort(mode: SortMode): { sort_by: SortField; order: SortOrder } {
+  switch (mode) {
+    case "recommended":
+    case "seeders":
+      return { sort_by: "seeders", order: "desc" };
+    case "uploaded":
+      return { sort_by: "uploaded", order: "desc" };
+    case "size":
+      return { sort_by: "size", order: "asc" };
+    case "title":
+      return { sort_by: "title", order: "asc" };
+  }
+}
+
+/**
+ * Composite score for `recommended`. `seeders / √size_GiB` favours
+ * small + popular releases without crushing every chunky encode out
+ * of the top picks. Falls back to raw seeders when size is unknown so
+ * usable hits don't sink to the bottom.
+ */
+function recommendedScore(r: SearchResult): number {
+  const seeders = r.seeders ?? 0;
+  if (r.size_bytes && r.size_bytes > 0) {
+    const sizeGiB = r.size_bytes / (1024 ** 3);
+    if (sizeGiB > 0.1) return seeders / Math.sqrt(sizeGiB);
+  }
+  return seeders;
+}
 import { formatRelative, formatSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -59,8 +106,7 @@ export function SearchPage() {
   const debounced = useDebounce(q.trim(), 350);
   const [picked, setPicked] = useState<SearchResult | null>(null);
   const [page, setPage] = useState(1);
-  const [sortBy, setSortBy] = useState<SortField>("seeders");
-  const [order, setOrder] = useState<SortOrder>("desc");
+  const [sortMode, setSortMode] = useState<SortMode>("recommended");
   const [kind, setKind] = useState<MediaKind | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -78,7 +124,7 @@ export function SearchPage() {
   // Reset to page 1 when query/sort/kind changes.
   useEffect(() => {
     setPage(1);
-  }, [debounced, sortBy, order, kind]);
+  }, [debounced, sortMode, kind]);
 
   // ---------- TMDB typeahead ----------
   const typeaheadQ = useDebounce(q.trim(), 250);
@@ -90,19 +136,33 @@ export function SearchPage() {
   });
 
   // ---------- Indexer search ----------
+  const { sort_by, order } = apiSort(sortMode);
   const { data, isFetching, error } = useQuery({
-    queryKey: ["search", debounced, page, sortBy, order, kind],
-    queryFn: () =>
-      search.query(debounced, {
+    queryKey: ["search", debounced, page, sortMode, kind],
+    queryFn: async () => {
+      const res = await search.query(debounced, {
         page,
         limit: PAGE_SIZE,
-        sort_by: sortBy,
+        sort_by,
         order,
         kind: kind ?? undefined,
-      }),
+      });
+      // `Recommended` re-ranks the seeders-desc page client-side using
+      // a composite score. Other modes pass straight through.
+      if (sortMode === "recommended") {
+        return {
+          ...res,
+          results: [...res.results].sort(
+            (a, b) => recommendedScore(b) - recommendedScore(a),
+          ),
+        };
+      }
+      return res;
+    },
     enabled: debounced.length >= 2,
     placeholderData: keepPreviousData,
   });
+
 
   const rows = data?.results ?? [];
   const meta = data?.providers ?? [];
@@ -190,27 +250,21 @@ export function SearchPage() {
             </ToggleGroupItem>
           </ToggleGroup>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>Sort by</span>
-          {(["seeders", "uploaded", "size", "title"] as const).map((f) => (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>Sort</span>
+          {SORT_MODES.map((m) => (
             <button
-              key={f}
+              key={m.id}
               type="button"
-              onClick={() => {
-                if (sortBy === f) setOrder(order === "asc" ? "desc" : "asc");
-                else {
-                  setSortBy(f);
-                  setOrder(f === "title" ? "asc" : "desc");
-                }
-              }}
+              onClick={() => setSortMode(m.id)}
               className={cn(
                 "rounded-md px-2 py-0.5",
-                sortBy === f
+                sortMode === m.id
                   ? "bg-muted text-foreground"
                   : "text-muted-foreground hover:bg-muted/40",
               )}
             >
-              {labelFor(f)} {sortBy === f ? (order === "asc" ? "↑" : "↓") : ""}
+              {m.label}
             </button>
           ))}
         </div>
@@ -264,19 +318,49 @@ export function SearchPage() {
   );
 }
 
-function labelFor(f: SortField): string {
-  switch (f) {
-    case "title":
-      return "Title";
-    case "size":
-      return "Size";
-    case "seeders":
-      return "Seeders";
-    case "leechers":
-      return "Leechers";
-    case "uploaded":
-      return "Date";
+/**
+ * Extract the canonical name from a SCENE-style release title. Walks
+ * tokens (split on `.`, `_`, space, `(`, `[`) and stops at the first
+ * "metadata" token — a year, SxxExx, resolution, source, codec or
+ * language tag. Whatever's before the stop token is the title.
+ *
+ * Examples:
+ *   "Silicon.Valley.S01E01.1080p.BluRay.x264-XYZ" → "Silicon Valley"
+ *   "The.Burning.Bed.1984.DVDRip.x264-XYZ"        → "The Burning Bed"
+ *   "Avatar.2009.1080p.BluRay.HEVC-Group"         → "Avatar"
+ *   "Game of Thrones - Season 1 - 1080p"          → "Game of Thrones"
+ *
+ * Falls back to the raw title when nothing parses (e.g. user-uploaded
+ * names without standard separators).
+ */
+const STOP_TOKEN = new RegExp(
+  [
+    "^\\d{4}$", // year
+    "^s\\d{1,2}(e\\d{1,3})?$", // S01 / S01E01
+    "^e\\d{1,3}$", // E01
+    "^season$",
+    "^(480p|576p|720p|1080p|1440p|2160p|4k|uhd)$",
+    "^(bluray|brrip|bdrip|webrip|web-?dl|web|hdtv|hdrip|dvdrip|hdlight|remux|hr-hdtv)$",
+    "^(x264|x265|h\\.?264|h\\.?265|hevc|avc|av1|xvid|divx)$",
+    "^(french|truefrench|vff|vfi|vfq|vf|vostfr|multi|english|eng|vo|vost)$",
+    "^(complete|repack|proper|extended|directors?|uncut|hdr|hdr10|dv)$",
+  ].join("|"),
+  "i",
+);
+
+function extractSceneTitle(raw: string): string {
+  // Drop "Various filename punctuation" → spaces, then split.
+  const tokens = raw
+    .replace(/[._\-[\]()]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const head: string[] = [];
+  for (const t of tokens) {
+    if (STOP_TOKEN.test(t)) break;
+    head.push(t);
   }
+  const cleaned = head.join(" ").trim();
+  return cleaned.length >= 2 ? cleaned : raw.trim();
 }
 
 function SuggestionsDropdown({
@@ -345,16 +429,32 @@ function ResultCard({
   result: SearchResult;
   onClick: () => void;
 }) {
-  // Inline TMDB lookup on each card kept simple — TanStack caches per id.
-  const { data: tmdb } = useQuery({
-    queryKey: ["tmdb", result.tmdb_id],
-    queryFn: () => metadata.tmdb(result.tmdb_id!),
-    enabled: result.tmdb_id != null,
+  // Resolve the poster by *title* rather than by indexer-supplied
+  // `tmdb_id`. The latter is wrong often enough that we've stopped
+  // trusting it for visual cues (torr9 mislabels e.g. Silicon Valley
+  // releases with The Burning Bed's id). The cleaned SCENE title
+  // comes from the release name itself, which is the authoritative
+  // identifier on every tracker.
+  const cleaned = useMemo(() => extractSceneTitle(result.title), [result.title]);
+  const tmdbHitQ = useQuery({
+    queryKey: ["tmdb-by-title", cleaned, result.kind ?? "any"],
+    queryFn: async () => {
+      const hits = await metadata.tmdbSearch(cleaned);
+      // Prefer a hit matching the result's kind when known.
+      return (result.kind ? hits.find((h) => h.kind === result.kind) : null)
+        ?? hits[0]
+        ?? null;
+    },
+    enabled: cleaned.length >= 2,
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
   });
-  const poster = tmdbImage(tmdb?.poster_path, "w342");
+  // Last-resort fallback: a pre-resolved poster URL the indexer
+  // sometimes ships (featured items on torr9). We use it only when
+  // TMDB resolution genuinely failed.
+  const poster =
+    tmdbImage(tmdbHitQ.data?.poster_path, "w342") ?? result.poster_url ?? null;
   const Icon = result.kind === "tv" ? Tv : Film;
   return (
     <button
@@ -390,8 +490,10 @@ function ResultCard({
         <div className="line-clamp-2 text-sm font-medium leading-tight" title={result.title}>
           {result.title}
         </div>
-        {(result.year || tmdb?.year) && (
-          <div className="text-[11px] text-muted-foreground">{result.year ?? tmdb?.year}</div>
+        {(result.year || tmdbHitQ.data?.year) && (
+          <div className="text-[11px] text-muted-foreground">
+            {result.year ?? tmdbHitQ.data?.year}
+          </div>
         )}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
           <span className="text-emerald-400">{result.seeders ?? 0} ↑</span>

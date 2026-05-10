@@ -67,6 +67,12 @@ interface IrisApi {
     @GET("api/metadata/tmdb/{id}")
     suspend fun tmdbMetadata(@Path("id") id: Long): TmdbMetadata
 
+    /** TMDB multi-search (movies + tv). Powers the live suggestion panel
+     *  on the search screen, mirrors what the web UI uses. Empty list on
+     *  network / config failure (server returns `[]`, never errors). */
+    @GET("api/metadata/tmdb/search")
+    suspend fun tmdbSearch(@Query("q") q: String): List<TmdbSuggestion>
+
     @GET("api/search")
     suspend fun search(
         @Query("q") q: String,
@@ -199,6 +205,9 @@ data class TorrentView(
     val peers: Int,
     val files: List<FileEntry> = emptyList(),
     val error: String? = null,
+    /** Lifetime upload counter — survives session restarts and GC.
+     *  Default 0 keeps backward-compat with older servers. */
+    @SerialName("uploaded_bytes_total") val uploadedBytesTotal: Long = 0,
 )
 
 @Serializable
@@ -273,6 +282,21 @@ data class ProgressUpdate(
     @SerialName("duration_seconds") val durationSeconds: Double? = null,
     @SerialName("subtitle_track_idx") val subtitleTrackIdx: Int? = null,
     val completed: Boolean = false,
+)
+
+/**
+ * One TMDB typeahead suggestion. Mirrors `TmdbSuggestion` on the web /
+ * server side. `kind` is `"movie"` or `"tv"` — drives the kind chip and
+ * pre-filters the indexer search when the user picks the suggestion.
+ */
+@Serializable
+data class TmdbSuggestion(
+    val kind: String,
+    @SerialName("tmdb_id") val tmdbId: Long,
+    val title: String,
+    val year: Int? = null,
+    val overview: String? = null,
+    @SerialName("poster_path") val posterPath: String? = null,
 )
 
 @Serializable
@@ -536,7 +560,10 @@ sealed class LibraryResponse {
 
     @Serializable
     @SerialName("torrents")
-    data class Torrents(val items: List<TorrentView> = emptyList()) : LibraryResponse()
+    data class Torrents(
+        val items: List<TorrentView> = emptyList(),
+        @SerialName("total_uploaded_bytes") val totalUploadedBytes: Long = 0,
+    ) : LibraryResponse()
 }
 
 @Serializable

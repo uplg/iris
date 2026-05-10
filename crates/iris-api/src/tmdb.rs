@@ -27,6 +27,13 @@ struct Inner {
     /// and the notify scheduler bursts a fresh request anyway when it finds a
     /// new episode (cache only matters for repeat reads within a single uptime).
     seasons: RwLock<HashMap<(u64, u32), Vec<EpisodeMetadata>>>,
+    /// Lowercase-keyed cache for `multi_search` results. Search-page
+    /// rendering issues one lookup per unique cleaned title and many
+    /// of those repeat across pages / users — caching the raw upstream
+    /// response in-memory keeps TMDB calls bounded without paying a
+    /// DB round-trip on the hot path. Empty results are cached too so
+    /// "no hits" doesn't re-issue.
+    searches: RwLock<HashMap<String, Vec<TmdbSuggestion>>>,
 }
 
 #[derive(Clone)]
@@ -103,6 +110,7 @@ impl TmdbClient {
                 http,
                 cache: RwLock::new(HashMap::new()),
                 seasons: RwLock::new(HashMap::new()),
+                searches: RwLock::new(HashMap::new()),
             }),
         })
     }
@@ -115,8 +123,13 @@ impl TmdbClient {
     /// NOT cached — the typeahead is short-lived and `TanStack` Query
     /// already debounces / caches client-side.
     pub async fn multi_search(&self, query: &str) -> Vec<TmdbSuggestion> {
-        if query.trim().is_empty() {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
             return Vec::new();
+        }
+        let cache_key = trimmed.to_lowercase();
+        if let Some(hit) = self.inner.searches.read().await.get(&cache_key).cloned() {
+            return hit;
         }
         let res = match self
             .inner
@@ -147,7 +160,8 @@ impl TmdbClient {
                 return Vec::new();
             }
         };
-        raw.results
+        let out: Vec<TmdbSuggestion> = raw
+            .results
             .into_iter()
             .filter_map(|r| {
                 let kind = match r.media_type.as_deref() {
@@ -171,7 +185,13 @@ impl TmdbClient {
                 })
             })
             .take(10)
-            .collect()
+            .collect();
+        self.inner
+            .searches
+            .write()
+            .await
+            .insert(cache_key, out.clone());
+        out
     }
 
     /// List the episodes TMDB has on file for a given TV season. Used by the

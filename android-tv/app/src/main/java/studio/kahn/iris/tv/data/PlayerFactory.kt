@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.data
 
 import android.content.Context
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
@@ -30,6 +31,16 @@ fun buildPlayer(
         .setSeekBackIncrementMs(10_000)
         .setSeekForwardIncrementMs(30_000)
         .build()
+        .apply {
+            // Without a wake mode the CPU goes to sleep on idle TV
+            // hardware (no remote events for >2 min during a quiet
+            // dialogue scene) and playback stalls. NETWORK keeps a
+            // partial wake lock + WiFi lock while playing so HLS
+            // segment fetches keep flowing. The lock is released
+            // automatically when playback pauses or `release()` is
+            // called.
+            setWakeMode(C.WAKE_MODE_NETWORK)
+        }
 }
 
 /**

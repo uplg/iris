@@ -11,11 +11,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,6 +47,8 @@ import studio.kahn.iris.tv.data.EpisodesResponse
 import studio.kahn.iris.tv.data.FollowSummary
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.theme.LocalTvLayout
+import studio.kahn.iris.tv.ui.theme.Spacing
 
 /**
  * SCENE-mode series detail. Routed by follow id; episodes come from
@@ -97,93 +98,121 @@ fun SeriesScreen(
         selectedSeason = seasons.keys.first()
     }
 
-    val scroll = rememberScrollState()
-    Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
-        Hero(
-            follow = follow,
-            unfollowBusy = unfollowBusy,
-            onUnfollow = {
-                if (unfollowBusy) return@Hero
-                unfollowBusy = true
-                scope.launch {
-                    val url = container.sessionStore.serverUrl.first()
-                    if (url == null) {
-                        error = "Not signed in"
-                        unfollowBusy = false
-                        return@launch
-                    }
-                    val api = container.apiFor(url)
-                    try {
-                        withContext(Dispatchers.IO) { api.removeFollow(followId) }
-                        onBack()
-                    } catch (e: Exception) {
-                        error = e.message ?: "Unfollow failed"
-                    } finally {
-                        unfollowBusy = false
+    val layout = LocalTvLayout.current
+    val onUnfollow: () -> Unit = onUnfollow@{
+        if (unfollowBusy) return@onUnfollow
+        unfollowBusy = true
+        scope.launch {
+            val url = container.sessionStore.serverUrl.first()
+            if (url == null) {
+                error = "Not signed in"
+                unfollowBusy = false
+                return@launch
+            }
+            val api = container.apiFor(url)
+            try {
+                withContext(Dispatchers.IO) { api.removeFollow(followId) }
+                onBack()
+            } catch (e: Exception) {
+                error = e.message ?: "Unfollow failed"
+            } finally {
+                unfollowBusy = false
+            }
+        }
+    }
+    val onGrab: (EpisodeItem, Boolean) -> Unit = { ep, andPlay ->
+        scope.launch {
+            val url = container.sessionStore.serverUrl.first() ?: return@launch
+            val api = container.apiFor(url)
+            try {
+                val res = withContext(Dispatchers.IO) {
+                    api.grabEpisode(followId, ep.season, ep.episode)
+                }
+                if (andPlay) {
+                    onPickFile(res.infohash, res.fileIdx)
+                } else {
+                    episodes = withContext(Dispatchers.IO) {
+                        runCatching { api.followEpisodes(followId) }.getOrNull()
                     }
                 }
-            },
-            onBack = onBack,
-        )
+            } catch (e: Exception) {
+                error = e.message ?: "Grab failed"
+            }
+        }
+    }
 
-        Column(
-            Modifier.padding(horizontal = 60.dp, vertical = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        // Hero is a single edge-to-edge item — bypass the page gutter so
+        // the backdrop bleeds to the screen edges, just like Netflix.
+        item(key = "hero") {
+            Hero(
+                follow = follow,
+                unfollowBusy = unfollowBusy,
+                onUnfollow = onUnfollow,
+                onBack = onBack,
+            )
+        }
 
-            if (follow == null && error == null) {
-                Text(
-                    "Loading…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else if (episodes == null && follow != null) {
-                Text(
-                    "Loading episodes…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else if (seasons.isEmpty() && episodes != null) {
-                Text(
-                    "No episodes found yet. The scheduler runs every 4 h.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else if (seasons.isNotEmpty()) {
-                if (seasons.size > 1) {
+        item(key = "status") {
+            Column(
+                Modifier.padding(
+                    horizontal = layout.gutterHorizontal,
+                    vertical = Spacing.lg,
+                ),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                when {
+                    follow == null && error == null -> Text(
+                        "Loading…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    episodes == null && follow != null -> Text(
+                        "Loading episodes…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    seasons.isEmpty() && episodes != null -> Text(
+                        "No episodes found yet. The scheduler runs every 4 h.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        if (seasons.size > 1) {
+            item(key = "seasons") {
+                Box(
+                    Modifier.padding(
+                        horizontal = layout.gutterHorizontal,
+                        vertical = Spacing.sm,
+                    ),
+                ) {
                     SeasonTabs(
                         seasons = seasons.keys.toList(),
                         value = selectedSeason,
                         onChange = { selectedSeason = it },
                     )
                 }
-                EpisodesList(
-                    items = (seasons[selectedSeason] ?: emptyList())
-                        .sortedBy { it.episode },
-                    onPlay = onPickFile,
-                    onGrab = { ep, andPlay ->
-                        scope.launch {
-                            val url = container.sessionStore.serverUrl.first() ?: return@launch
-                            val api = container.apiFor(url)
-                            try {
-                                val res = withContext(Dispatchers.IO) {
-                                    api.grabEpisode(followId, ep.season, ep.episode)
-                                }
-                                if (andPlay) {
-                                    onPickFile(res.infohash, res.fileIdx)
-                                } else {
-                                    episodes = withContext(Dispatchers.IO) {
-                                        runCatching { api.followEpisodes(followId) }.getOrNull()
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                error = e.message ?: "Grab failed"
-                            }
-                        }
-                    },
-                )
             }
+        }
+
+        val visible = (seasons[selectedSeason] ?: emptyList()).sortedBy { it.episode }
+        items(visible, key = { "${it.season}:${it.episode}" }) { ep ->
+            Box(
+                Modifier.padding(
+                    horizontal = layout.gutterHorizontal,
+                    vertical = Spacing.xs,
+                ),
+            ) {
+                EpisodeRow(ep = ep, onPlay = onPickFile, onGrab = onGrab)
+            }
+        }
+
+        item(key = "trailing") {
+            Box(Modifier.padding(vertical = Spacing.xl))
         }
     }
 }
@@ -198,7 +227,8 @@ private fun Hero(
 ) {
     val backdrop = tmdbBackdropUrl(follow?.backdropPath, "w1280")
     val poster = tmdbPosterUrl(follow?.posterPath, "w342")
-    Box(Modifier.fillMaxWidth().aspectRatio(16f / 5f)) {
+    val layout = LocalTvLayout.current
+    Box(Modifier.fillMaxWidth().aspectRatio(layout.heroAspect)) {
         if (backdrop != null) {
             AsyncImage(
                 model = backdrop,
@@ -229,10 +259,14 @@ private fun Hero(
         Row(
             Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 60.dp, bottom = 20.dp, end = 60.dp)
+                .padding(
+                    start = layout.gutterHorizontal,
+                    end = layout.gutterHorizontal,
+                    bottom = Spacing.lg,
+                )
                 .fillMaxWidth(),
             verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xl),
         ) {
             if (poster != null) {
                 AsyncImage(
@@ -308,23 +342,6 @@ private fun SeasonTabs(seasons: List<Int>, value: Int, onChange: (Int) -> Unit) 
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun EpisodesList(
-    items: List<EpisodeItem>,
-    onPlay: (infohash: String, fileIdx: Int) -> Unit,
-    onGrab: (EpisodeItem, /* andPlay */ Boolean) -> Unit,
-) {
-    if (items.isEmpty()) return
-    // Use a regular Column rather than LazyColumn so the parent
-    // verticalScroll handles the scrolling — nesting two scrollable
-    // containers on TV breaks D-pad focus traversal.
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items.forEach { ep ->
-            EpisodeRow(ep = ep, onPlay = onPlay, onGrab = onGrab)
         }
     }
 }

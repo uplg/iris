@@ -149,11 +149,11 @@ function CollectionsView() {
           key={c.id}
           title={c.display_title}
           subtitle={collectionSubtitle(c)}
-          // No TMDB lookup on library cards — even tmdb_verified
-          // collections have shown the wrong poster in the past
-          // (runtime probe within ±15% can false-match an unrelated
-          // title). SCENE display title is the truth; the kind
-          // placeholder (Film / Tv icon) carries the rest.
+          // tmdb_id on the collection is now derived server-side from
+          // the SCENE-cleaned name (see `tmdb_resolve` + the ingestion
+          // override). Trustworthy enough to drive poster lookups —
+          // when missing we fall back to the kind-aware placeholder.
+          tmdbId={c.tmdb_id}
           kind={c.kind}
           onClick={() => routeCollection(c, navigate)}
           badge={

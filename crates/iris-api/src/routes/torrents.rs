@@ -217,6 +217,25 @@ async fn ingest(
     }
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
 
+    // Resolve `tmdb_id` from the SCENE-cleaned release name rather than
+    // trusting the indexer's value — torr9 mistags Silicon Valley
+    // releases with The Burning Bed's id, etc. Server-side cache makes
+    // this cheap on repeat ingestions of the same series. Falls back to
+    // the indexer's `body.tmdb_id` when the resolver finds nothing.
+    let release_name = result
+        .snapshot
+        .name
+        .clone()
+        .unwrap_or_else(|| result.snapshot.infohash.clone());
+    let resolved_tmdb_id = if let Some(tmdb) = state.tmdb() {
+        crate::tmdb_resolve::resolve_release_name(state.db(), tmdb, &release_name, None)
+            .await
+            .and_then(|r| i64::try_from(r.tmdb_id).ok())
+    } else {
+        None
+    };
+    let final_tmdb_id = resolved_tmdb_id.or(body.tmdb_id);
+
     let row = iris_db::torrents::upsert(
         state.db(),
         iris_db::torrents::NewTorrent {
@@ -225,7 +244,7 @@ async fn ingest(
             total_size_bytes: result.snapshot.total_size_bytes,
             source_provider: Some(body.provider_id),
             source_external_id: Some(body.external_id),
-            tmdb_id: body.tmdb_id,
+            tmdb_id: final_tmdb_id,
             added_by: user.id,
         },
     )

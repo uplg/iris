@@ -11,9 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -49,6 +48,8 @@ import studio.kahn.iris.tv.data.TorrentDetails
 import studio.kahn.iris.tv.data.VideoInfoDetails
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.theme.LocalTvLayout
+import studio.kahn.iris.tv.ui.theme.Spacing
 
 /**
  * Full-screen detail view for a search hit. Shown when the user picks a
@@ -108,18 +109,20 @@ fun SearchDetailScreen(
         loading = false
     }
 
-    val scroll = rememberScrollState()
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(scroll),
-    ) {
-        Hero(meta = meta, tmdbId = tmdbId, fallbackTitle = details?.title ?: externalId)
+    val layout = LocalTvLayout.current
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        item(key = "hero") {
+            Hero(meta = meta, tmdbId = tmdbId, fallbackTitle = details?.title ?: externalId)
+        }
 
-        Column(
-            Modifier.padding(horizontal = 60.dp, vertical = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-        ) {
+        item(key = "body") {
+            Column(
+                Modifier.padding(
+                    horizontal = layout.gutterHorizontal,
+                    vertical = Spacing.xxl,
+                ),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xl),
+            ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     details?.title ?: "Loading…",
@@ -280,6 +283,9 @@ fun SearchDetailScreen(
                 }
             }
         }
+        }
+
+        item(key = "trailing") { Box(Modifier.padding(vertical = Spacing.xl)) }
     }
 }
 
@@ -288,10 +294,11 @@ fun SearchDetailScreen(
 private fun Hero(meta: TmdbMetadata?, tmdbId: Long?, fallbackTitle: String) {
     val backdrop = tmdbBackdropUrl(meta?.backdropPath, "w1280")
     val poster = tmdbPosterUrl(meta?.posterPath, "w342")
+    val layout = LocalTvLayout.current
     Box(
         Modifier
             .fillMaxWidth()
-            .aspectRatio(16f / 5f),
+            .aspectRatio(layout.heroAspect),
     ) {
         if (backdrop != null) {
             AsyncImage(
@@ -331,8 +338,8 @@ private fun Hero(meta: TmdbMetadata?, tmdbId: Long?, fallbackTitle: String) {
                 contentDescription = null,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(start = 60.dp, bottom = 24.dp)
-                    .width(120.dp)
+                    .padding(start = layout.gutterHorizontal, bottom = Spacing.xl)
+                    .width(if (layout.gutterHorizontal >= 32.dp) 140.dp else 110.dp)
                     .aspectRatio(2f / 3f),
                 contentScale = ContentScale.Crop,
             )

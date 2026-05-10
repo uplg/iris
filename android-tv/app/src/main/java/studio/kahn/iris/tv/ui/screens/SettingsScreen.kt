@@ -44,6 +44,8 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.DeviceView
 import studio.kahn.iris.tv.data.IrisApi
+import studio.kahn.iris.tv.ui.theme.LocalTvLayout
+import studio.kahn.iris.tv.ui.theme.Spacing
 
 /**
  * Settings & devices. Lists every refresh token (= active session) and lets
@@ -83,9 +85,15 @@ fun SettingsScreen(
         }
     }
 
+    val layout = LocalTvLayout.current
     Column(
-        Modifier.fillMaxSize().padding(40.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+        Modifier
+            .fillMaxSize()
+            .padding(
+                horizontal = layout.gutterHorizontal,
+                vertical = layout.gutterVertical,
+            ),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xl),
     ) {
         Text(
             "Settings",

@@ -10,6 +10,7 @@ pub mod migrate;
 pub mod playback;
 pub mod pool;
 pub mod refresh_tokens;
+pub mod tmdb_cache;
 pub mod torrents;
 pub mod users;
 

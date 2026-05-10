@@ -8,9 +8,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.background
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.lazy.LazyColumn
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.height
@@ -54,6 +53,8 @@ import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.TmdbMetadata
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.theme.LocalTvLayout
+import studio.kahn.iris.tv.ui.theme.Spacing
 
 /**
  * SCENE-normalisation kept in sync with iris-media's `normalize_title`
@@ -199,91 +200,105 @@ fun HomeScreen(
         }
     }
 
-    // The whole screen has to scroll vertically — three shelves + a top bar
-    // overflow a 1080p TV when we list more than a handful of items each.
-    // Without `verticalScroll` D-pad focus can't reach the lower shelves
-    // because they're rendered off-canvas.
-    val scrollState = rememberScrollState()
-    Column(
-        Modifier
+    // LazyColumn (not Column + verticalScroll) so D-pad focus moving
+    // down to a shelf the user hasn't scrolled to yet auto-brings it
+    // into view. The plain `verticalScroll` modifier doesn't react to
+    // focus events, which is why the Library row at the bottom was
+    // unreachable on TV remotes.
+    val layout = LocalTvLayout.current
+    LazyColumn(
+        modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(40.dp),
-        verticalArrangement = Arrangement.spacedBy(28.dp),
+            .background(MaterialTheme.colorScheme.background),
+        contentPadding = PaddingValues(
+            horizontal = layout.gutterHorizontal,
+            vertical = layout.gutterVertical,
+        ),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
     ) {
         // Brand on the left, action chips (Search / Settings) pinned to the
         // right edge — TV remotes lose any button that lives at the bottom of
         // a vertical list once the focus drops into the shelves below.
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                "Iris  /",
-                style = MaterialTheme.typography.headlineLarge,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(
-                    onClick = { onOpenSearch(null) },
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-                ) { Text("🔍  Search") }
-                Button(
-                    onClick = onOpenSettings,
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-                ) { Text("⚙  Settings") }
+        item(key = "header") {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    "Iris  /",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(
+                        onClick = { onOpenSearch(null) },
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                    ) { Text("🔍  Search") }
+                    Button(
+                        onClick = onOpenSettings,
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                    ) { Text("⚙  Settings") }
+                }
             }
         }
 
         if (error != null) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(error!!, color = MaterialTheme.colorScheme.error)
-                Button(
-                    onClick = { loadVersion++ },
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            item(key = "error") {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Retry")
+                    Text(error!!, color = MaterialTheme.colorScheme.error)
+                    Button(
+                        onClick = { loadVersion++ },
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    ) {
+                        Text("Retry")
+                    }
                 }
             }
         } else if (loading && downloading.isEmpty() && library.isEmpty() && continueWatching.isEmpty()) {
-            Text(
-                "Loading library…",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            item(key = "loading") {
+                Text(
+                    "Loading library…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
         if (continueWatching.isNotEmpty()) {
-            Shelf(title = "Continue watching") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    items(continueWatching, key = { "${it.infohash}:${it.fileIdx}" }) { item ->
-                        ContinueWatchingCard(
-                            container = container,
-                            item = item,
-                            onClick = { onPickFile(item.infohash, item.fileIdx) },
-                        )
+            item(key = "shelf-cw") {
+                Shelf(title = "Continue watching") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(continueWatching, key = { "${it.infohash}:${it.fileIdx}" }) { item ->
+                            ContinueWatchingCard(
+                                container = container,
+                                item = item,
+                                onClick = { onPickFile(item.infohash, item.fileIdx) },
+                            )
+                        }
                     }
                 }
             }
         }
 
         if (watchlist.isNotEmpty()) {
-            Shelf(title = "My Watchlist · ${watchlist.size}") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    items(watchlist, key = { it.id }) { f ->
-                        WatchlistCard(
-                            container = container,
-                            follow = f,
-                            onClick = { onOpenSeries(f.id) },
-                        )
+            item(key = "shelf-watchlist") {
+                Shelf(title = "My Watchlist · ${watchlist.size}") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(watchlist, key = { it.id }) { f ->
+                            WatchlistCard(
+                                container = container,
+                                follow = f,
+                                onClick = { onOpenSeries(f.id) },
+                            )
+                        }
                     }
                 }
             }
@@ -291,48 +306,42 @@ fun HomeScreen(
 
         featured?.let { f ->
             if (f.movies.isNotEmpty()) {
-                Shelf(title = "New Movies · ${f.movies.size}") {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(f.movies, key = { "${it.providerId}:${it.externalId}" }) { r ->
-                            FeaturedCard(
-                                container = container,
-                                result = r,
-                                // Featured Movies route to the detail
-                                // screen (same as picking a search
-                                // result) — preview file list, then
-                                // ingest from there.
-                                onClick = {
-                                    onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
-                                },
-                            )
+                item(key = "shelf-featured-movies") {
+                    Shelf(title = "New Movies · ${f.movies.size}") {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            items(f.movies, key = { "${it.providerId}:${it.externalId}" }) { r ->
+                                FeaturedCard(
+                                    container = container,
+                                    result = r,
+                                    onClick = {
+                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
+                                    },
+                                )
+                            }
                         }
                     }
                 }
             }
             if (f.series.isNotEmpty()) {
-                Shelf(title = "New Series · ${f.series.size}") {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(f.series, key = { "${it.providerId}:${it.externalId}" }) { r ->
-                            FeaturedCard(
-                                container = container,
-                                result = r,
-                                // If the user already follows this
-                                // series, jump straight to its
-                                // Series page. Otherwise route to
-                                // the detail screen — we no longer
-                                // auto-follow on click; the explicit
-                                // Follow action lives on SearchDetail.
-                                onClick = {
-                                    val existing = watchlist.firstOrNull {
-                                        it.normalizedName == normalizeForMatch(r.title)
-                                    }
-                                    if (existing != null) {
-                                        onOpenSeries(existing.id)
-                                    } else {
-                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
-                                    }
-                                },
-                            )
+                item(key = "shelf-featured-series") {
+                    Shelf(title = "New Series · ${f.series.size}") {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            items(f.series, key = { "${it.providerId}:${it.externalId}" }) { r ->
+                                FeaturedCard(
+                                    container = container,
+                                    result = r,
+                                    onClick = {
+                                        val existing = watchlist.firstOrNull {
+                                            it.normalizedName == normalizeForMatch(r.title)
+                                        }
+                                        if (existing != null) {
+                                            onOpenSeries(existing.id)
+                                        } else {
+                                            onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
+                                        }
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -340,51 +349,47 @@ fun HomeScreen(
         }
 
         if (downloading.isNotEmpty()) {
-            Shelf(title = "Downloading · ${downloading.size}") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    items(downloading, key = { it.infohash }) { t ->
-                        DownloadingCard(
-                            container = container,
-                            torrent = t,
-                            onClick = { routeTorrent(t, onPickFile, onPickTorrent) },
-                        )
+            item(key = "shelf-downloading") {
+                Shelf(title = "Downloading · ${downloading.size}") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(downloading, key = { it.infohash }) { t ->
+                            DownloadingCard(
+                                container = container,
+                                torrent = t,
+                                onClick = { routeTorrent(t, onPickFile, onPickTorrent) },
+                            )
+                        }
                     }
                 }
             }
         }
 
         if (collections.isNotEmpty()) {
-            Shelf(title = "Library · ${collections.size}") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    items(collections, key = { it.id }) { c ->
-                        CollectionCard(
-                            container = container,
-                            collection = c,
-                            onClick = {
-                                // Library cards always route to the
-                                // collection's representative torrent —
-                                // /series is reserved for explicit
-                                // follows now (no client-side bridge
-                                // from collection → follow without an
-                                // existing one).
-                                val infohash = c.representativeInfohash ?: return@CollectionCard
-                                val snap = library.firstOrNull { it.infohash == infohash }
-                                if (snap != null) {
-                                    routeTorrent(snap, onPickFile, onPickTorrent)
-                                } else {
-                                    onPickTorrent(infohash)
-                                }
-                            },
-                        )
+            item(key = "shelf-library") {
+                Shelf(title = "Library · ${collections.size}") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(collections, key = { it.id }) { c ->
+                            CollectionCard(
+                                container = container,
+                                collection = c,
+                                onClick = {
+                                    val infohash = c.representativeInfohash ?: return@CollectionCard
+                                    val snap = library.firstOrNull { it.infohash == infohash }
+                                    if (snap != null) {
+                                        routeTorrent(snap, onPickFile, onPickTorrent)
+                                    } else {
+                                        onPickTorrent(infohash)
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }
         }
-
-        // The coroutine scope outlives the recomposition; we may want to
-        // wire it to background tasks (poster prefetch, etc.) later.
-        @Suppress("UNUSED_EXPRESSION") scope
     }
+
+    @Suppress("UNUSED_EXPRESSION") scope
 }
 
 private val VIDEO_EXTS = listOf(".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv")
@@ -568,13 +573,13 @@ private fun CollectionCard(
     }
     PosterCard(
         container = container,
-        // No TMDB lookup on library cards. Even tmdb_verified
-        // collections have surfaced wrong posters in the past
-        // (runtime probe within ±15% can false-match an unrelated
-        // title). SCENE display title is the truth; the kind icon
-        // placeholder carries the rest.
-        tmdbId = null,
-        tmdbVerified = false,
+        // `collection.tmdb_id` is only stamped once the SCENE-resolved
+        // id passed the runtime verification probe (see
+        // `collection_assign::enrich_after_verify`). Trustworthy
+        // enough to drive a poster lookup — when missing we fall
+        // back to the kind-aware placeholder.
+        tmdbId = collection.tmdbId,
+        tmdbVerified = collection.tmdbId != null,
         title = prettifyFilename(collection.displayTitle),
         subtitle = subtitle,
         progress = null,
@@ -702,9 +707,10 @@ private fun PosterCard(
     val displayTitle = title
     val barColor = progressColor ?: MaterialTheme.colorScheme.primary
 
+    val layout = LocalTvLayout.current
     Card(
         onClick = onClick,
-        modifier = Modifier.width(140.dp),
+        modifier = Modifier.width(layout.shelfPosterWidth),
         shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
     ) {
         Column {
