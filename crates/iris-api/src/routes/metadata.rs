@@ -15,18 +15,34 @@ pub fn router() -> Router<AppState> {
         .route("/tmdb/search", get(tmdb_search))
 }
 
+#[derive(Debug, Deserialize)]
+struct TmdbLookupParams {
+    /// `"movie"` | `"tv"`. Without a kind, the lookup tries movie
+    /// first then TV — but TMDB uses separate id namespaces, so a
+    /// numerical id can collide between a movie and an unrelated TV
+    /// show. Pass the kind whenever the caller knows it
+    /// (collection.kind, search-result kind, etc.) to disambiguate.
+    kind: Option<String>,
+}
+
 async fn tmdb_lookup(
     State(state): State<AppState>,
     _user: AuthUser,
     Path(id): Path<u64>,
+    Query(params): Query<TmdbLookupParams>,
 ) -> ApiResult<Json<MediaMetadata>> {
     let client = state.tmdb().ok_or_else(|| {
         ApiError::BadRequest(
             "TMDB enrichment is not configured (set [tmdb].api_key)".into(),
         )
     })?;
+    let kind_hint = match params.kind.as_deref() {
+        Some("tv") => Some(crate::tmdb::TmdbKind::Tv),
+        Some("movie") => Some(crate::tmdb::TmdbKind::Movie),
+        _ => None,
+    };
     client
-        .lookup(id)
+        .lookup_with_kind(id, kind_hint)
         .await
         .map(Json)
         .ok_or(ApiError::NotFound)

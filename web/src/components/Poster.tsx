@@ -39,8 +39,10 @@ export function Poster({
   alt?: string;
 }) {
   const { data } = useQuery({
-    queryKey: ["tmdb", tmdbId],
-    queryFn: () => metadata.tmdb(tmdbId!),
+    // `kind` disambiguates TMDB's movie/tv namespaces — same numerical
+    // id resolves to two unrelated entries otherwise.
+    queryKey: ["tmdb", tmdbId, kind],
+    queryFn: () => metadata.tmdb(tmdbId!, kind ?? undefined),
     enabled: tmdbId != null,
     staleTime: Infinity,
     gcTime: Infinity,

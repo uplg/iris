@@ -573,13 +573,13 @@ private fun CollectionCard(
     }
     PosterCard(
         container = container,
-        // `collection.tmdb_id` is only stamped once the SCENE-resolved
-        // id passed the runtime verification probe (see
-        // `collection_assign::enrich_after_verify`). Trustworthy
-        // enough to drive a poster lookup — when missing we fall
-        // back to the kind-aware placeholder.
         tmdbId = collection.tmdbId,
         tmdbVerified = collection.tmdbId != null,
+        // Pass the collection's kind so the server's lookup hits the
+        // right TMDB namespace. Without this, an id collision between
+        // `/movie/X` and `/tv/X` flipped the poster to an unrelated
+        // entry.
+        kindHint = collection.kind,
         title = prettifyFilename(collection.displayTitle),
         subtitle = subtitle,
         progress = null,
@@ -685,6 +685,10 @@ private fun PosterCard(
      *  custom color (e.g. blue) to differentiate download from watch. */
     progressColor: androidx.compose.ui.graphics.Color?,
     onClick: () -> Unit,
+    /** `"movie"` / `"tv"` — disambiguates TMDB's separate id namespaces.
+     *  Without it, a `/movie/X` lookup wins arbitrarily over `/tv/X` on
+     *  the server and we end up showing a stranger's poster. */
+    kindHint: String? = null,
     /** Pre-resolved poster URL — skips the TMDB metadata roundtrip. Used by
      *  the Watchlist shelf where /api/me/follows already returns the poster
      *  path inline. When `null`, falls back to the regular TMDB lookup. */
@@ -694,11 +698,13 @@ private fun PosterCard(
     topBadge: (@Composable () -> Unit)? = null,
 ) {
     var meta by remember(tmdbId, tmdbVerified) { mutableStateOf<TmdbMetadata?>(null) }
-    LaunchedEffect(tmdbId, tmdbVerified, posterUrlOverride) {
+    LaunchedEffect(tmdbId, tmdbVerified, posterUrlOverride, kindHint) {
         if (posterUrlOverride != null) return@LaunchedEffect
         if (!tmdbVerified || tmdbId == null) return@LaunchedEffect
         val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
-        meta = runCatching { container.apiFor(url).tmdbMetadata(tmdbId) }.getOrNull()
+        meta = runCatching {
+            container.apiFor(url).tmdbMetadata(tmdbId, kindHint)
+        }.getOrNull()
     }
     val posterUrl = posterUrlOverride ?: tmdbPosterUrl(meta?.posterPath, "w342")
     // Filename always wins for the title — see the rationale on

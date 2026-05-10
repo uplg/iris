@@ -20,7 +20,12 @@ pub struct TmdbClient {
 struct Inner {
     api_key: String,
     http: reqwest::Client,
-    cache: RwLock<HashMap<u64, CacheEntry>>,
+    /// Kind-aware cache. Key is `(id, kind?)` so `/movie/X` and
+    /// `/tv/X` get separate cache slots — TMDB uses separate id
+    /// namespaces and a flat-id cache served the wrong entry
+    /// whenever the two namespaces collided (Silicon Valley TV id =
+    /// some unrelated movie id, etc.).
+    typed_cache: RwLock<HashMap<(u64, Option<&'static str>), CacheEntry>>,
     /// Separate cache for season episode lists, keyed by `(tmdb_id, season_number)`.
     /// TMDB rarely retroactively edits aired episodes, so caching forever is fine —
     /// the only mutation we'd miss is air-date corrections on unaired episodes,
@@ -108,12 +113,23 @@ impl TmdbClient {
             inner: Arc::new(Inner {
                 api_key,
                 http,
-                cache: RwLock::new(HashMap::new()),
+                typed_cache: RwLock::new(HashMap::new()),
                 seasons: RwLock::new(HashMap::new()),
                 searches: RwLock::new(HashMap::new()),
             }),
         })
     }
+
+}
+
+const fn kind_marker(k: TmdbKind) -> &'static str {
+    match k {
+        TmdbKind::Movie => "movie",
+        TmdbKind::Tv => "tv",
+    }
+}
+
+impl TmdbClient {
 
     /// Multi-search across movies + TV shows. Powers the search-page
     /// typeahead — the user types a few characters, we surface "did you
@@ -249,34 +265,62 @@ impl TmdbClient {
     }
 
     /// Look up `tmdb_id` as a movie, then as a TV show. Cached.
+    ///
+    /// Without a `kind_hint` the disambiguation order (movie → tv) is
+    /// arbitrary, and TMDB uses *separate id namespaces* for movies
+    /// and TV shows: `/movie/60573` and `/tv/60573` resolve to two
+    /// completely different entries. Picking blindly returns the
+    /// wrong metadata for whichever id collides — Silicon Valley
+    /// (tv, 60573) is masked by an unrelated movie at the same
+    /// numerical id. Always pass a hint when the caller knows the
+    /// kind (collection.kind, search-result kind, etc.).
     pub async fn lookup(&self, tmdb_id: u64) -> Option<MediaMetadata> {
-        if let Some(hit) = self.inner.cache.read().await.get(&tmdb_id).cloned() {
+        self.lookup_with_kind(tmdb_id, None).await
+    }
+
+    pub async fn lookup_with_kind(
+        &self,
+        tmdb_id: u64,
+        kind_hint: Option<TmdbKind>,
+    ) -> Option<MediaMetadata> {
+        // Cache key includes the kind so a /movie/X lookup doesn't
+        // serve a stale /tv/X entry from a previous call.
+        let cache_key = (tmdb_id, kind_hint.map(kind_marker));
+        if let Some(hit) = self
+            .inner
+            .typed_cache
+            .read()
+            .await
+            .get(&cache_key)
+            .cloned()
+        {
             return match hit {
                 CacheEntry::Found(m) => Some(m),
                 CacheEntry::NotFound => None,
             };
         }
-        if let Some(m) = self.fetch(tmdb_id, TmdbKind::Movie).await {
-            self.inner
-                .cache
-                .write()
-                .await
-                .insert(tmdb_id, CacheEntry::Found(m.clone()));
-            return Some(m);
-        }
-        if let Some(m) = self.fetch(tmdb_id, TmdbKind::Tv).await {
-            self.inner
-                .cache
-                .write()
-                .await
-                .insert(tmdb_id, CacheEntry::Found(m.clone()));
-            return Some(m);
+        // Try the hinted kind first, fall back to the other only when
+        // unhinted lookups (legacy callers) ask for it.
+        let order: &[TmdbKind] = match kind_hint {
+            Some(TmdbKind::Tv) => &[TmdbKind::Tv],
+            Some(TmdbKind::Movie) => &[TmdbKind::Movie],
+            None => &[TmdbKind::Movie, TmdbKind::Tv],
+        };
+        for &k in order {
+            if let Some(m) = self.fetch(tmdb_id, k).await {
+                self.inner
+                    .typed_cache
+                    .write()
+                    .await
+                    .insert(cache_key, CacheEntry::Found(m.clone()));
+                return Some(m);
+            }
         }
         self.inner
-            .cache
+            .typed_cache
             .write()
             .await
-            .insert(tmdb_id, CacheEntry::NotFound);
+            .insert(cache_key, CacheEntry::NotFound);
         None
     }
 

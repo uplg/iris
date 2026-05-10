@@ -265,7 +265,13 @@ export type TmdbSuggestion = {
 };
 
 export const metadata = {
-  tmdb: (id: number) => api.get<TmdbMetadata>(`/metadata/tmdb/${id}`),
+  /** TMDB id lookup. `kind` disambiguates the movie/tv namespaces (the
+   *  same numerical id can refer to two unrelated entries — pass the
+   *  collection / search-result kind to land on the right one). */
+  tmdb: (id: number, kind?: "movie" | "tv") =>
+    api.get<TmdbMetadata>(
+      kind ? `/metadata/tmdb/${id}?kind=${kind}` : `/metadata/tmdb/${id}`,
+    ),
   /** Typeahead: TMDB multi-search proxied through the backend. Empty
    *  array on missing config / network failure (best-effort). */
   tmdbSearch: (q: string) =>

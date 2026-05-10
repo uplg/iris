@@ -74,9 +74,13 @@ export function MediaCard(props: MediaCardProps) {
 
   // TMDB lookup only fires when no direct posterUrl is provided. Lookups
   // are cached forever (TMDB metadata is essentially static for an id).
+  // The `kind` query param is critical: TMDB uses separate id namespaces
+  // for movies and TV, so the same numerical id can resolve to two
+  // unrelated entries. Without the hint the server's lookup tries movie
+  // first and serves a wrong unrelated movie's poster on TV cards.
   const tmdbQ = useQuery({
-    queryKey: ["tmdb", tmdbId],
-    queryFn: () => metadata.tmdb(tmdbId!),
+    queryKey: ["tmdb", tmdbId, kind],
+    queryFn: () => metadata.tmdb(tmdbId!, kind ?? undefined),
     enabled: tmdbId != null && !posterUrl,
     staleTime: Infinity,
     gcTime: Infinity,

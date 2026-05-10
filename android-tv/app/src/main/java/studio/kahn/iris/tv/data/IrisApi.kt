@@ -64,8 +64,14 @@ interface IrisApi {
         @Body body: ProgressUpdate,
     )
 
+    /** TMDB id lookup. `kind` disambiguates the movie/tv namespaces —
+     *  same numerical id resolves to two unrelated entries otherwise.
+     *  Pass the collection / search-result kind whenever known. */
     @GET("api/metadata/tmdb/{id}")
-    suspend fun tmdbMetadata(@Path("id") id: Long): TmdbMetadata
+    suspend fun tmdbMetadata(
+        @Path("id") id: Long,
+        @Query("kind") kind: String? = null,
+    ): TmdbMetadata
 
     /** TMDB multi-search (movies + tv). Powers the live suggestion panel
      *  on the search screen, mirrors what the web UI uses. Empty list on
