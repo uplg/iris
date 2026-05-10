@@ -60,17 +60,34 @@ function apiSort(mode: SortMode): { sort_by: SortField; order: SortOrder } {
   }
 }
 
+/** Below this, a release is almost certainly an ebook / music / sample
+ *  rather than a video. Used to filter `Recommended` and to floor the
+ *  size term in the composite score (a 10 MB book with high seeders
+ *  would otherwise out-score a 5 GB movie by 100×). */
+const MIN_VIDEO_BYTES = 200 * 1024 * 1024;
+const SIZE_FLOOR_GIB = 0.5;
+
+/** Whitelist for `Recommended`: only releases the indexer classified
+ *  as movie/tv (or, when kind is missing, anything bigger than the
+ *  video size floor — catches uncategorised but plausibly-video hits
+ *  without letting books through). */
+function isLikelyVideo(r: SearchResult): boolean {
+  if (r.kind === "movie" || r.kind === "tv") return true;
+  return (r.size_bytes ?? 0) >= MIN_VIDEO_BYTES;
+}
+
 /**
  * Composite score for `recommended`. `seeders / √size_GiB` favours
  * small + popular releases without crushing every chunky encode out
  * of the top picks. Falls back to raw seeders when size is unknown so
- * usable hits don't sink to the bottom.
+ * usable hits don't sink to the bottom. The size term is floored at
+ * 0.5 GiB so a 10 MB hit doesn't game the denominator.
  */
 function recommendedScore(r: SearchResult): number {
   const seeders = r.seeders ?? 0;
   if (r.size_bytes && r.size_bytes > 0) {
     const sizeGiB = r.size_bytes / (1024 ** 3);
-    if (sizeGiB > 0.1) return seeders / Math.sqrt(sizeGiB);
+    return seeders / Math.sqrt(Math.max(sizeGiB, SIZE_FLOOR_GIB));
   }
   return seeders;
 }
@@ -147,14 +164,17 @@ export function SearchPage() {
         order,
         kind: kind ?? undefined,
       });
-      // `Recommended` re-ranks the seeders-desc page client-side using
-      // a composite score. Other modes pass straight through.
+      // `Recommended` filters to video-shaped releases (kind in
+      // {movie, tv} or size ≥ 200 MB so uncategorised video hits
+      // still get through), then re-ranks by the composite score.
+      // Non-video — books, music, samples — drop out entirely.
+      // Other modes pass straight through unchanged.
       if (sortMode === "recommended") {
         return {
           ...res,
-          results: [...res.results].sort(
-            (a, b) => recommendedScore(b) - recommendedScore(a),
-          ),
+          results: res.results
+            .filter(isLikelyVideo)
+            .sort((a, b) => recommendedScore(b) - recommendedScore(a)),
         };
       }
       return res;

@@ -21,7 +21,9 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -40,6 +42,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
@@ -189,7 +192,15 @@ fun SearchScreen(
                 kind = key.kind.apiKind,
             )
             val ranked = if (sort == SortMode.Recommended) {
-                res.copy(results = res.results.sortedByDescending(::recommendedScore))
+                // Filter to video-shaped releases first (kind in
+                // {movie, tv} or size ≥ 200 MB), then re-rank by
+                // composite score. Books / music / samples drop out
+                // entirely instead of dominating the top spots.
+                res.copy(
+                    results = res.results
+                        .filter(::isLikelyVideo)
+                        .sortedByDescending(::recommendedScore),
+                )
             } else {
                 res
             }
@@ -276,6 +287,19 @@ fun SearchScreen(
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Local helper so the input + the IME's "Search" key on
+            // Android TV's leanback keyboard run the same handler. The
+            // bare `imeAction = ImeAction.Search` flag wasn't enough —
+            // it advertises the action to the IME but without a
+            // `keyboardActions` callback the keypress was a no-op,
+            // which is why the user had to dismiss the keyboard and
+            // hit our app-side Search button.
+            val submit = {
+                if (!pending && query.trim().length >= 2) {
+                    submittedQuery = query.trim()
+                    page = 1
+                }
+            }
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -287,6 +311,17 @@ fun SearchScreen(
                     )
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { submit() }),
+                // `textStyle` forces the typed-text colour, which
+                // OutlinedTextField pulls from `LocalTextStyle` first,
+                // not from `OutlinedTextFieldDefaults.colors`. Without
+                // this the input rendered with the default text style's
+                // colour (light-theme black on Android TV's stock IME)
+                // and the user couldn't read what they were typing.
+                textStyle = LocalTextStyle.current.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 18.sp,
+                ),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = MaterialTheme.colorScheme.onSurface,
                     unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
@@ -299,10 +334,7 @@ fun SearchScreen(
                 modifier = Modifier.weight(1f).height(60.dp),
             )
             Button(
-                onClick = {
-                    submittedQuery = query.trim()
-                    page = 1
-                },
+                onClick = { submit() },
                 enabled = !pending && query.trim().length >= 2,
                 shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                 contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
@@ -391,17 +423,34 @@ fun SearchScreen(
     }
 }
 
+/** Below this, a release is almost certainly an ebook / music /
+ *  sample rather than a video. Filters `Recommended` and floors the
+ *  size term in the composite score (a 10 MB book with high seeders
+ *  would otherwise out-score a 5 GB movie by 100×). */
+private const val MIN_VIDEO_BYTES: Long = 200L * 1024 * 1024
+private const val SIZE_FLOOR_GIB: Double = 0.5
+
+/** Whitelist for `Recommended`: only releases the indexer classified
+ *  as movie/tv (or, when kind is missing, anything bigger than the
+ *  video size floor — catches uncategorised but plausibly-video hits
+ *  without letting books through). */
+private fun isLikelyVideo(r: SearchResult): Boolean {
+    if (r.kind == "movie" || r.kind == "tv") return true
+    return (r.sizeBytes ?: 0L) >= MIN_VIDEO_BYTES
+}
+
 /**
  * Composite score the Recommended sort uses. `seeders / sqrt(size_gib)`
  * favours small-file releases without crushing every 10 GiB encode out of
- * the top picks. Falls back to raw seeders when size is unknown so we
- * don't sink usable hits to the bottom.
+ * the top picks. The size term is floored at 0.5 GiB so a 10 MB hit
+ * doesn't game the denominator. Falls back to raw seeders when size is
+ * unknown so we don't sink usable hits to the bottom.
  */
 private fun recommendedScore(r: SearchResult): Double {
     val seeders = (r.seeders ?: 0).toDouble()
     val sizeGiB = r.sizeBytes?.let { it.toDouble() / (1024.0 * 1024.0 * 1024.0) }
-    return if (sizeGiB != null && sizeGiB > 0.1) {
-        seeders / sqrt(sizeGiB)
+    return if (sizeGiB != null && sizeGiB > 0.0) {
+        seeders / sqrt(maxOf(sizeGiB, SIZE_FLOOR_GIB))
     } else {
         seeders
     }
