@@ -139,7 +139,7 @@ function ContinueCard({ item }: { item: ContinueWatchingItem }) {
       href={`/watch/${item.infohash}/${item.file_idx}`}
       title={primary}
       subtitle={subtitle}
-      tmdbId={item.tmdb_verified ? item.tmdb_id : null}
+      tmdbId={item.tmdb_id}
       kind={null}
       progress={progress}
       progressColor="bg-primary"
@@ -148,8 +148,6 @@ function ContinueCard({ item }: { item: ContinueWatchingItem }) {
 }
 
 function WatchlistCard({ follow }: { follow: FollowSummary }) {
-  // SCENE-mode: route by follow id, not tmdb_id. Poster only when
-  // the server-side gate confirms a tmdb_verified collection.
   const href = `/series/${follow.id}`;
   return (
     <MediaCard
