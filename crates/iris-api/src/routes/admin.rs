@@ -104,6 +104,10 @@ struct StorageStats {
     threshold_pct: u8,
     target_pct: u8,
     torrent_count: i64,
+    /// Lifetime total uploaded across every torrent ever ingested,
+    /// including soft-deleted ones. Reconciled from librqbit's session
+    /// counter every 30 s — see `iris_api::seed_stats`.
+    total_uploaded_bytes: u64,
 }
 
 async fn storage_stats(
@@ -118,6 +122,9 @@ async fn storage_stats(
             .fetch_one(state.db())
             .await
             .unwrap_or((0,));
+    let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
+        .await
+        .unwrap_or(0);
     Ok(Json(StorageStats {
         used_bytes: used,
         max_storage_bytes: max,
@@ -126,6 +133,7 @@ async fn storage_stats(
         threshold_pct: cfg.cleanup_threshold_pct,
         target_pct: cfg.cleanup_target_pct,
         torrent_count: count.0,
+        total_uploaded_bytes,
     }))
 }
 

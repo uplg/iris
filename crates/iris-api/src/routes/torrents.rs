@@ -474,6 +474,9 @@ pub struct TorrentView {
     /// tmdb_verified=true)` pair to decide whether to fetch posters /
     /// titles from TMDB; otherwise they stick with the filename.
     pub tmdb_verified: bool,
+    /// Lifetime upload counter — survives session restarts and GC
+    /// evictions, unlike `snapshot.uploaded_bytes`.
+    pub uploaded_bytes_total: u64,
     #[serde(flatten)]
     pub snapshot: TorrentSnapshot,
 }
@@ -496,6 +499,7 @@ async fn list(
                 source_external_id: row.source_external_id,
                 tmdb_id: row.tmdb_id,
                 tmdb_verified: row.tmdb_verified,
+                uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                 snapshot,
             });
         }
@@ -525,6 +529,7 @@ async fn get_one(
         source_external_id: row.source_external_id,
         tmdb_id: row.tmdb_id,
         tmdb_verified: row.tmdb_verified,
+        uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
         snapshot,
     }))
 }
@@ -537,6 +542,17 @@ async fn remove(
     let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
         .await?
         .ok_or(ApiError::NotFound)?;
+    // Capture the final upload delta before the engine drops the torrent —
+    // otherwise the bytes uploaded since the last 30 s reconcile tick are
+    // lost forever.
+    if let Some(snap) = state.engine().get_by_infohash(&row.infohash) {
+        let _ = iris_db::torrents::reconcile_uploaded(
+            state.db(),
+            &row.infohash,
+            snap.uploaded_bytes,
+        )
+        .await;
+    }
     state
         .engine()
         .delete_by_infohash(&row.infohash, true)

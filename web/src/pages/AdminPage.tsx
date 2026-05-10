@@ -335,6 +335,7 @@ function StorageView({
       threshold_pct: number;
       target_pct: number;
       torrent_count: number;
+      total_uploaded_bytes: number;
     }>
   >["data"] &
     object;
@@ -344,6 +345,14 @@ function StorageView({
       ? Math.min(100, (data.used_bytes / data.max_storage_bytes) * 100)
       : 0;
   const overThreshold = data.used_bytes >= data.threshold_bytes;
+  // Ratio = lifetime upload / lifetime download. We approximate "lifetime
+  // download" as `used_bytes` since librqbit doesn't persist a download
+  // counter for deleted torrents either; once a torrent is GC'd the only
+  // honest baseline left is what's currently on disk.
+  const ratio =
+    data.used_bytes > 0
+      ? data.total_uploaded_bytes / data.used_bytes
+      : null;
   return (
     <div className="grid gap-2">
       <div className="flex items-baseline justify-between text-sm">
@@ -362,6 +371,19 @@ function StorageView({
         </span>
         <span>
           threshold {data.threshold_pct}% ({formatSize(data.threshold_bytes)})
+        </span>
+      </div>
+      <div className="mt-2 flex items-baseline justify-between border-t border-border pt-2 text-sm">
+        <span className="text-muted-foreground">Seeded all-time</span>
+        <span className="tabular-nums">
+          <span className="font-medium text-emerald-300">
+            {formatSize(data.total_uploaded_bytes)}
+          </span>
+          {ratio != null && (
+            <span className="ml-2 text-[11px] text-muted-foreground">
+              · ratio {ratio.toFixed(2)}
+            </span>
+          )}
         </span>
       </div>
     </div>

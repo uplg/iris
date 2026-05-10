@@ -32,6 +32,11 @@ pub struct TorrentRow {
     pub last_played_at: Option<DateTime<Utc>>,
     pub last_seed_activity_at: Option<DateTime<Utc>>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Lifetime upload counter. librqbit's per-torrent `uploaded_bytes` is
+    /// a session value (resets on restart, vanishes on GC eviction); this
+    /// column is reconciled by [`reconcile_uploaded`] from the live session
+    /// counter and survives both events.
+    pub uploaded_bytes_total: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +105,7 @@ pub async fn find_by_infohash(
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at \
+         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
          WHERE t.infohash = ?1",
@@ -114,7 +119,7 @@ pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Err
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at \
+         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
          WHERE t.deleted_at IS NULL ORDER BY t.added_at DESC",
@@ -154,6 +159,49 @@ pub async fn set_tmdb_verified(
     Ok(())
 }
 
+/// Reconcile the lifetime upload counter for `infohash` with the current
+/// session value reported by librqbit. Atomic at the SQL level so we don't
+/// race with delete_by_infohash / soft_delete.
+///
+/// Logic: lifetime += max(0, session_now - session_seen). If the current
+/// session value is *below* the last seen one (process restarted, librqbit
+/// reset its counter) we treat the new value as fresh delta — the work
+/// done since boot.
+pub async fn reconcile_uploaded(
+    pool: &SqlitePool,
+    infohash: &str,
+    session_now: u64,
+) -> Result<(), sqlx::Error> {
+    let now = i64::try_from(session_now).unwrap_or(i64::MAX);
+    // Single UPDATE so the read of the previous value and the write of the
+    // new total can't interleave with a delete or another reconcile pass.
+    sqlx::query(
+        "UPDATE torrents SET \
+           uploaded_bytes_total = uploaded_bytes_total + \
+             CASE WHEN ?1 >= uploaded_bytes_session_seen \
+                  THEN ?1 - uploaded_bytes_session_seen \
+                  ELSE ?1 END, \
+           uploaded_bytes_session_seen = ?1 \
+         WHERE infohash = ?2",
+    )
+    .bind(now)
+    .bind(infohash)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Sum of `uploaded_bytes_total` across every torrent ever ingested,
+/// including soft-deleted ones (a torrent we've already evicted still
+/// represents work the seedbox did for the swarm).
+pub async fn total_uploaded_bytes(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let row: (Option<i64>,) =
+        sqlx::query_as("SELECT SUM(uploaded_bytes_total) FROM torrents")
+            .fetch_one(pool)
+            .await?;
+    Ok(u64::try_from(row.0.unwrap_or(0)).unwrap_or(0))
+}
+
 pub async fn touch_played(pool: &SqlitePool, infohash: &str) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE torrents SET last_played_at = ?1 WHERE infohash = ?2")
         .bind(Utc::now())
@@ -189,7 +237,7 @@ pub async fn list_in_collection(
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at \
+         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
          WHERE t.collection_id = ?1 AND t.deleted_at IS NULL \

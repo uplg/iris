@@ -4,6 +4,7 @@ pub mod error;
 pub mod follows_scheduler;
 pub mod observability;
 pub mod routes;
+pub mod seed_stats;
 pub mod state;
 pub mod tmdb;
 
@@ -47,6 +48,11 @@ fn spawn_background_jobs(
     // so the user's "Préparer" / "Lire" clicks go through the fast
     // path. No TMDB call. Never ingests on its own.
     follows_scheduler::spawn(pool.clone(), provider_registry);
+
+    // Lifetime-upload reconciler — every 30 s, merge librqbit's session
+    // upload counters into `torrents.uploaded_bytes_total` so the value
+    // survives restarts and GC evictions.
+    seed_stats::spawn(pool.clone(), app_state.engine().clone());
 
     // Collection assignment backfill — attaches a `collections` row to
     // every existing torrent that lacks one. Runs at boot AND every

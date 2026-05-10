@@ -42,7 +42,14 @@ enum LibraryResponse {
     #[serde(rename = "collections")]
     Collections { items: Vec<CollectionListItem> },
     #[serde(rename = "torrents")]
-    Torrents { items: Vec<TorrentView> },
+    Torrents {
+        items: Vec<TorrentView>,
+        /// Lifetime upload across every torrent ever ingested, including
+        /// the soft-deleted ones not present in `items`. Lets the raw
+        /// view show the "since the beginning" total without needing
+        /// admin scope (the admin storage endpoint does the same sum).
+        total_uploaded_bytes: u64,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -84,12 +91,19 @@ async fn list_library(
                     source_external_id: row.source_external_id,
                     tmdb_id: row.tmdb_id,
                     tmdb_verified: row.tmdb_verified,
+                    uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                     snapshot,
                 });
             }
         }
         let _ = user; // keep the auth gate, no per-user filtering yet
-        return Ok(Json(LibraryResponse::Torrents { items: out }));
+        let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
+            .await
+            .unwrap_or(0);
+        return Ok(Json(LibraryResponse::Torrents {
+            items: out,
+            total_uploaded_bytes,
+        }));
     }
     // Default: collections.
     let summaries = iris_db::collections::list_summaries(state.db()).await?;
@@ -157,6 +171,7 @@ async fn collection_detail(
                 source_external_id: row.source_external_id.clone(),
                 tmdb_id: row.tmdb_id,
                 tmdb_verified: row.tmdb_verified,
+                uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                 snapshot,
             });
         }

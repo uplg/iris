@@ -220,6 +220,8 @@ function TorrentsView() {
   if (isLoading) return <SkeletonCard count={3} />;
   if (error) return <ErrorState error={error} />;
   const items: TorrentView[] = data && data.view === "torrents" ? data.items : [];
+  const totalUploaded =
+    data && data.view === "torrents" ? data.total_uploaded_bytes : 0;
   if (items.length === 0)
     return (
       <EmptyState
@@ -229,6 +231,7 @@ function TorrentsView() {
     );
   return (
     <div className="grid gap-3">
+      <SeedSummary totalUploaded={totalUploaded} items={items} />
       {items.map((t) => (
         <TorrentRow
           key={t.infohash}
@@ -238,6 +241,38 @@ function TorrentsView() {
           removing={remove.isPending}
         />
       ))}
+    </div>
+  );
+}
+
+function SeedSummary({
+  totalUploaded,
+  items,
+}: {
+  totalUploaded: number;
+  items: TorrentView[];
+}) {
+  const liveUpSpeed = items.reduce((s, t) => s + t.upload_speed_bps, 0);
+  const downloaded = items.reduce((s, t) => s + t.progress_bytes, 0);
+  const ratio = downloaded > 0 ? totalUploaded / downloaded : null;
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+      <div className="flex items-baseline gap-2">
+        <span className="text-xs uppercase tracking-wide text-emerald-300/80">
+          Seeded all-time
+        </span>
+        <span className="text-lg font-medium tabular-nums text-emerald-200">
+          {formatSize(totalUploaded)}
+        </span>
+        {ratio != null && (
+          <span className="text-xs text-muted-foreground">
+            · ratio {ratio.toFixed(2)}
+          </span>
+        )}
+      </div>
+      <span className="text-xs text-muted-foreground tabular-nums">
+        ↑ {formatSize(liveUpSpeed)}/s now
+      </span>
     </div>
   );
 }
@@ -276,6 +311,12 @@ function TorrentRow({
             {formatSize(t.progress_bytes)} / {formatSize(t.total_size_bytes)} · ↓{" "}
             {formatSize(t.download_speed_bps)}/s · ↑ {formatSize(t.upload_speed_bps)}/s · {t.peers}{" "}
             peers
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Seeded {formatSize(t.uploaded_bytes_total)}
+            {t.progress_bytes > 0 && (
+              <> · ratio {(t.uploaded_bytes_total / t.progress_bytes).toFixed(2)}</>
+            )}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             Added by <span className="text-foreground">{t.added_by_name}</span>

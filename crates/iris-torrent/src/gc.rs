@@ -126,6 +126,16 @@ impl Gc {
                 size = row.total_size_bytes,
                 "gc: evicting torrent"
             );
+            // Final upload reconcile so the bytes seeded since the last
+            // 30 s tick aren't lost when librqbit drops the torrent.
+            if let Some(snap) = self.inner.engine.get_by_infohash(&row.infohash) {
+                let _ = iris_db::torrents::reconcile_uploaded(
+                    &self.inner.pool,
+                    &row.infohash,
+                    snap.uploaded_bytes,
+                )
+                .await;
+            }
             if let Err(e) = self
                 .inner
                 .engine

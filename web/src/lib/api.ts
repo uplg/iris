@@ -109,6 +109,9 @@ export type StorageStats = {
   threshold_pct: number;
   target_pct: number;
   torrent_count: number;
+  /** Lifetime total uploaded across every torrent ever ingested
+   *  (including soft-deleted ones). Survives session restarts and GC. */
+  total_uploaded_bytes: number;
 };
 
 export type GcEvictedEntry = {
@@ -464,6 +467,9 @@ export type TorrentView = TorrentSnapshot & {
   tmdb_id: number | null;
   /** Server-validated TMDB association (runtime matches probed duration ±15 %). */
   tmdb_verified: boolean;
+  /** Lifetime upload counter — survives session restarts and GC eviction,
+   *  unlike the snapshot's `uploaded_bytes`. */
+  uploaded_bytes_total: number;
 };
 
 export type IngestResponse = {
@@ -588,7 +594,13 @@ export type CollectionListItem = {
 
 export type LibraryResponse =
   | { view: "collections"; items: CollectionListItem[] }
-  | { view: "torrents"; items: TorrentView[] };
+  | {
+      view: "torrents";
+      items: TorrentView[];
+      /** Lifetime upload across every torrent ever ingested, including
+       *  soft-deleted ones not present in `items`. */
+      total_uploaded_bytes: number;
+    };
 
 export type CollectionEpisodeEntry = {
   season: number;
