@@ -38,15 +38,14 @@ async fn run_collections(state: &AppState) {
             return;
         }
     };
+    tracing::info!(total = cols.len(), "tmdb_backfill: starting collection pass");
 
     let mut stamped = 0u64;
-    let mut unresolved = 0u64;
+    let mut already_correct = 0u64;
+    let mut no_torrents = 0u64;
+    let mut no_parse = 0u64;
+    let mut no_hits = 0u64;
     for c in cols {
-        // Pull the collection's torrents and pick the first one whose
-        // filename parses cleanly. The parser yields the SCENE title
-        // (year/SE/MULTI/quality stripped) which is what we hand to
-        // TMDB, exactly like the search dropdown does with the user's
-        // typed query.
         let torrents = match iris_db::torrents::list_in_collection(pool, c.id).await {
             Ok(t) => t,
             Err(e) => {
@@ -54,33 +53,64 @@ async fn run_collections(state: &AppState) {
                 continue;
             }
         };
-        let Some(title) = torrents
-            .iter()
-            .find_map(|t| iris_media::filename::parse(&t.name).map(|p| p.title))
-        else {
-            continue;
-        };
-        if title.trim().len() < 2 {
-            continue;
-        }
-
-        // Single multi_search call. Take the first hit. Same pattern
-        // as the search dropdown's `metadata.tmdbSearch(query)` →
-        // `hits[0]`.
-        let hits = tmdb.multi_search(&title).await;
-        let Some(top) = hits.first() else {
-            unresolved += 1;
+        if torrents.is_empty() {
+            no_torrents += 1;
             tracing::info!(
                 collection_id = %c.id,
                 display_title = %c.display_title,
+                "tmdb_backfill: SKIP — collection has no active torrents"
+            );
+            continue;
+        }
+        let Some((rep_name, title)) = torrents
+            .iter()
+            .find_map(|t| iris_media::filename::parse(&t.name).map(|p| (t.name.clone(), p.title)))
+        else {
+            no_parse += 1;
+            tracing::info!(
+                collection_id = %c.id,
+                display_title = %c.display_title,
+                first_torrent = %torrents[0].name,
+                "tmdb_backfill: SKIP — no torrent in collection parsed"
+            );
+            continue;
+        };
+        if title.trim().len() < 2 {
+            no_parse += 1;
+            tracing::info!(
+                collection_id = %c.id,
+                display_title = %c.display_title,
+                rep_name = %rep_name,
+                "tmdb_backfill: SKIP — parsed title too short"
+            );
+            continue;
+        }
+
+        let hits = tmdb.multi_search(&title).await;
+        let Some(top) = hits.first() else {
+            no_hits += 1;
+            tracing::info!(
+                collection_id = %c.id,
+                display_title = %c.display_title,
+                rep_name = %rep_name,
                 query = %title,
-                "tmdb_backfill: TMDB returned no hits"
+                "tmdb_backfill: SKIP — TMDB returned no hits"
             );
             continue;
         };
         let Ok(new_id) = i64::try_from(top.tmdb_id) else { continue };
         if c.tmdb_id == Some(new_id) {
-            continue; // already there, nothing to do
+            already_correct += 1;
+            tracing::info!(
+                collection_id = %c.id,
+                display_title = %c.display_title,
+                rep_name = %rep_name,
+                query = %title,
+                tmdb_id = new_id,
+                top_title = %top.title,
+                "tmdb_backfill: KEEP — TMDB top hit matches existing tmdb_id"
+            );
+            continue;
         }
         if let Err(e) = iris_db::collections::set_tmdb_id(pool, c.id, new_id).await {
             tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: set_tmdb_id failed");
@@ -90,11 +120,20 @@ async fn run_collections(state: &AppState) {
         tracing::info!(
             collection_id = %c.id,
             display_title = %c.display_title,
+            rep_name = %rep_name,
             query = %title,
             old_tmdb_id = ?c.tmdb_id,
             new_tmdb_id = new_id,
-            "tmdb_backfill: collection.tmdb_id corrected"
+            top_title = %top.title,
+            "tmdb_backfill: WRITE — collection.tmdb_id corrected"
         );
     }
-    tracing::info!(stamped, unresolved, "tmdb_backfill: collection pass complete");
+    tracing::info!(
+        stamped,
+        already_correct,
+        no_torrents,
+        no_parse,
+        no_hits,
+        "tmdb_backfill: collection pass complete"
+    );
 }
