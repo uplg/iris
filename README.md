@@ -2,8 +2,6 @@
 
 Self-hosted "micro-Netflix": aggregate searches across torrent trackers, stream the result inside a React video player, seed the rest, and reclaim disk space when it runs low.
 
-![Iris](./screenshots/iris.gif)
-
 ## Stack
 
 - **Backend**: Rust 2024 workspace, Axum, SQLite (sqlx), librqbit, ffmpeg pipeline.
