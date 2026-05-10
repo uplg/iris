@@ -21,9 +21,11 @@
       android:layout_width="wrap_content"
       android:layout_height="wrap_content"
       android:layout_gravity="top|start"
-      android:layout_marginStart="32dp"
-      android:layout_marginTop="24dp"
-      android:layout_marginEnd="32dp"
+      android:layout_marginStart="48dp"
+      android:layout_marginLeft="48dp"
+      android:layout_marginTop="32dp"
+      android:layout_marginEnd="48dp"
+      android:layout_marginRight="48dp"
       android:textColor="@android:color/white"
       android:textSize="22sp"
       android:fontFamily="sans-serif-medium"
@@ -35,6 +37,11 @@
       android:layout_width="match_parent"
       android:layout_height="@dimen/exo_styled_bottom_bar_height"
       android:layout_marginTop="@dimen/exo_styled_bottom_bar_margin_top"
+      android:layout_marginStart="48dp"
+      android:layout_marginLeft="48dp"
+      android:layout_marginEnd="48dp"
+      android:layout_marginRight="48dp"
+      android:layout_marginBottom="32dp"
       android:layout_gravity="bottom"
       android:background="@color/exo_bottom_bar_background"
       android:layoutDirection="ltr">
@@ -110,17 +117,27 @@
 
   </FrameLayout>
 
+  <!-- The progress sits just above the bottom bar; bottom-bar was shifted
+       up by the 32dp TV safe zone above, so the progress's marginBottom
+       has to match (Media3's default 52dp + our 32dp = 84dp) to keep the
+       same visual gap. -->
   <View android:id="@id/exo_progress_placeholder"
       android:layout_width="match_parent"
       android:layout_height="@dimen/exo_styled_progress_layout_height"
       android:layout_gravity="bottom"
-      android:layout_marginBottom="@dimen/exo_styled_progress_margin_bottom"/>
+      android:layout_marginStart="48dp"
+      android:layout_marginLeft="48dp"
+      android:layout_marginEnd="48dp"
+      android:layout_marginRight="48dp"
+      android:layout_marginBottom="84dp"/>
 
   <LinearLayout android:id="@id/exo_minimal_controls"
       android:layout_width="wrap_content"
       android:layout_height="wrap_content"
       android:layout_gravity="bottom|end"
-      android:layout_marginBottom="@dimen/exo_styled_minimal_controls_margin_bottom"
+      android:layout_marginEnd="48dp"
+      android:layout_marginRight="48dp"
+      android:layout_marginBottom="36dp"
       android:orientation="horizontal"
       android:gravity="center_vertical"
       android:layoutDirection="ltr">
@@ -161,6 +178,9 @@
       android:layout_width="wrap_content"
       android:layout_height="wrap_content"
       android:layout_gravity="top|end"
+      android:layout_marginTop="32dp"
+      android:layout_marginEnd="48dp"
+      android:layout_marginRight="48dp"
       android:background="@android:color/transparent">
     <View
         android:id="@+id/exo_media_route_button_placeholder"

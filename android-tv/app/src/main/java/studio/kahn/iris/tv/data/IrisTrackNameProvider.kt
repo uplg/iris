@@ -4,32 +4,70 @@ import android.content.res.Resources
 import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.Format
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.ui.DefaultTrackNameProvider
 import androidx.media3.ui.PlayerControlView
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackNameProvider
+import java.util.Locale
 
 /**
- * Wrap Media3's [DefaultTrackNameProvider] to surface the `Forced`
- * selection flag in the track-selection menu. The default provider
- * builds names from `Format.language` + role flags only — it ignores
- * `SELECTION_FLAG_FORCED` entirely, so a regular and a forced French
- * sub track both render as "French".
+ * Custom track-name provider for the native Media3 selector. Two goals:
  *
- * Closed-captions / SDH already get a built-in "Closed captions" suffix
- * when the role flags include `CAPTION` / `DESCRIBES_MUSIC_AND_SOUND`,
- * which is what we set on the [androidx.media3.common.MediaItem.SubtitleConfiguration]
- * for SDH-flagged tracks. We don't double up on that here.
+ *  * Surface the `Forced` selection flag — [DefaultTrackNameProvider]
+ *    ignores it entirely, so a regular and a forced French sub render
+ *    as the same string.
+ *  * Keep subtitle names short. The default builds names like
+ *    "Anglais, Sous-titres" (or longer on SDH+forced combos), and on
+ *    TV the popup is anchored to the gear which doesn't leave much
+ *    room before the row gets clipped at the screen edge. We compress
+ *    "Closed captions" to "SDH" and join with thin separators.
+ *
+ * Audio/video tracks still go through the default — their existing
+ * "5.1", resolution + bitrate strings are already concise.
  */
 @UnstableApi
 internal class IrisTrackNameProvider(resources: Resources) : TrackNameProvider {
     private val delegate = DefaultTrackNameProvider(resources)
 
     override fun getTrackName(format: Format): String {
-        val base = delegate.getTrackName(format)
-        val forced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0
-        return if (forced) "$base · Forced" else base
+        if (MimeTypes.getTrackType(format.sampleMimeType) != C.TRACK_TYPE_TEXT) {
+            return delegate.getTrackName(format)
+        }
+
+        val parts = mutableListOf<String>()
+        languageDisplayName(format.language)?.let(parts::add)
+            ?: format.label?.takeIf { it.isNotBlank() }?.let(parts::add)
+            ?: parts.add("Subtitles")
+
+        val roles = format.roleFlags
+        when {
+            roles and (C.ROLE_FLAG_CAPTION or C.ROLE_FLAG_DESCRIBES_MUSIC_AND_SOUND) != 0 ->
+                parts += "SDH"
+            roles and C.ROLE_FLAG_COMMENTARY != 0 -> parts += "Commentary"
+            roles and C.ROLE_FLAG_ALTERNATE != 0 -> parts += "Alternate"
+        }
+        if (format.selectionFlags and C.SELECTION_FLAG_FORCED != 0) parts += "Forced"
+
+        return parts.joinToString(" · ")
+    }
+
+    private fun languageDisplayName(rawCode: String?): String? {
+        if (rawCode.isNullOrBlank() || rawCode.equals("und", ignoreCase = true)) return null
+        // Media3's util normalises ISO 639-2/T (`fre`, `eng`) to the
+        // 2-letter form `Locale.forLanguageTag` understands.
+        val normalized = Util.normalizeLanguageCode(rawCode) ?: return rawCode.uppercase()
+        if (normalized == "und") return null
+        val name = runCatching {
+            Locale.forLanguageTag(normalized).getDisplayLanguage(Locale.ENGLISH)
+        }.getOrNull()
+        return when {
+            name.isNullOrBlank() || name.equals(normalized, ignoreCase = true) ->
+                rawCode.uppercase()
+            else -> name.replaceFirstChar { it.uppercase() }
+        }
     }
 }
 
