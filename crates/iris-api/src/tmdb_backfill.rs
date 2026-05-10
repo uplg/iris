@@ -87,6 +87,26 @@ async fn run_once(state: &AppState) {
                     continue;
                 }
             }
+            // Propagate the new id to the parent collection straight
+            // away, regardless of whether the runtime probe will match
+            // below. The SCENE-resolved id is by definition more
+            // trustworthy than the old indexer-supplied one, and the
+            // library card reads `collection.tmdb_id` directly (no
+            // `tmdb_verified` gate at the collection level), so users
+            // see correct posters even when the runtime verifier
+            // can't run (file not on disk, runtime mismatch, etc.).
+            if let Some(collection_id) = row.collection_id {
+                if let Err(e) =
+                    iris_db::collections::set_tmdb_id(pool, collection_id, resolved_id).await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        infohash = %row.infohash,
+                        collection_id = %collection_id,
+                        "tmdb_backfill: collection set_tmdb_id failed",
+                    );
+                }
+            }
         } else if row.tmdb_verified {
             continue;
         }
@@ -157,29 +177,14 @@ async fn try_verify(state: &AppState, infohash: &str, tmdb_id: i64) -> bool {
         return false;
     }
     if verified {
-        // Force-overwrite the collection's tmdb_id rather than rely on
-        // `enrich_after_verify`'s "first writer wins" rule — at backfill
-        // time the slot was usually already stamped with the SAME (now
-        // wrong) value torr9 originally fed in, and the standard write
-        // would no-op. We re-fetch the row to read the current
-        // `collection_id` (a fresh value after the `tmdb_id` update
-        // above).
-        if let Ok(Some(refreshed)) =
-            iris_db::torrents::find_by_infohash(state.db(), infohash).await
-        {
-            if let Some(collection_id) = refreshed.collection_id {
-                if let Err(e) =
-                    iris_db::collections::set_tmdb_id(state.db(), collection_id, tmdb_id).await
-                {
-                    tracing::warn!(
-                        error = %e,
-                        infohash,
-                        collection_id = %collection_id,
-                        "tmdb_backfill: collection set_tmdb_id failed",
-                    );
-                }
-            }
-        }
+        // The collection's `tmdb_id` was already force-propagated up
+        // in `run_once` when the torrent's id was rewritten — no need
+        // to repeat it here. `enrich_after_verify` would no-op
+        // anyway against the now-correct collection slot, but call
+        // it for symmetry with the live ingestion flow (a future
+        // refactor that adds side-effects to `enrich_after_verify`
+        // will see backfilled torrents too).
+        crate::collection_assign::enrich_after_verify(state.db(), infohash).await;
         tracing::info!(
             infohash,
             tmdb_id,
