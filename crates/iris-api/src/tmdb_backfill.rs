@@ -157,7 +157,29 @@ async fn try_verify(state: &AppState, infohash: &str, tmdb_id: i64) -> bool {
         return false;
     }
     if verified {
-        crate::collection_assign::enrich_after_verify(state.db(), infohash).await;
+        // Force-overwrite the collection's tmdb_id rather than rely on
+        // `enrich_after_verify`'s "first writer wins" rule — at backfill
+        // time the slot was usually already stamped with the SAME (now
+        // wrong) value torr9 originally fed in, and the standard write
+        // would no-op. We re-fetch the row to read the current
+        // `collection_id` (a fresh value after the `tmdb_id` update
+        // above).
+        if let Ok(Some(refreshed)) =
+            iris_db::torrents::find_by_infohash(state.db(), infohash).await
+        {
+            if let Some(collection_id) = refreshed.collection_id {
+                if let Err(e) =
+                    iris_db::collections::set_tmdb_id(state.db(), collection_id, tmdb_id).await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        infohash,
+                        collection_id = %collection_id,
+                        "tmdb_backfill: collection set_tmdb_id failed",
+                    );
+                }
+            }
+        }
         tracing::info!(
             infohash,
             tmdb_id,

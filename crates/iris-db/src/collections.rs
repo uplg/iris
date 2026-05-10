@@ -145,6 +145,26 @@ pub async fn set_tmdb_id_if_missing(
     Ok(())
 }
 
+/// Force-overwrite the collection's `tmdb_id`, regardless of what's
+/// already there. Reserved for the backfill / migration path that
+/// re-resolves torrents whose `tmdb_id` was originally set from the
+/// indexer's (frequently wrong) value — the collection slot was
+/// stamped with that same wrong value and the standard "first writer
+/// wins" rule would block the correction. Live ingestion flows must
+/// keep using [`set_tmdb_id_if_missing`].
+pub async fn set_tmdb_id(
+    pool: &SqlitePool,
+    id: Uuid,
+    tmdb_id: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE collections SET tmdb_id = ?1 WHERE id = ?2")
+        .bind(tmdb_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Standalone collection — used when neither TMDB id nor a parseable
 /// SCENE title is available. Each call inserts a fresh row (no dedup),
 /// since "no identity" by definition can't merge.
