@@ -159,6 +159,27 @@ pub async fn set_tmdb_id_if_missing(
     Ok(())
 }
 
+/// Rewrite the `kind` ("movie" / "tv") on an existing collection. Used
+/// by `tmdb_backfill` when a torrent's filename re-parses to a kind
+/// that disagrees with the stored value (a Silicon Valley S01 pack
+/// originally misclassified as movie because the old parser couldn't
+/// see season-only markers, etc.). The kind drives both poster
+/// resolution and the watch / series routing — keeping it in sync
+/// with the parser's verdict avoids loading a movie poster onto a
+/// TV-row in the library.
+pub async fn set_kind(
+    pool: &SqlitePool,
+    id: Uuid,
+    kind: Kind,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE collections SET kind = ?1 WHERE id = ?2")
+        .bind(kind.as_str())
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Rewrite the human-readable display title on an existing collection.
 /// Used by `tmdb_backfill` to repair rows the older filename parser
 /// left with leaked tokens (`Silicon Valley S01 MULTI`, etc.). Only

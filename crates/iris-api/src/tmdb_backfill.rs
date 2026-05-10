@@ -64,15 +64,10 @@ async fn backfill_collections(state: &AppState) {
     };
     let mut stamped = 0u64;
     let mut renamed = 0u64;
+    let mut kind_corrected = 0u64;
     let mut unresolved = 0u64;
+    let mut preserved = 0u64;
     for c in cols {
-        // Re-derive everything from a member torrent's filename rather
-        // than trusting the stored `parsed_title_normalized` /
-        // `display_title` — both columns may be polluted by an older
-        // parser that didn't recognise season packs and leaked tokens
-        // like `S01 MULTI` into the title. Same logic as the web /
-        // TV search-page client-side: extract the SCENE title from
-        // the filename, hit TMDB.
         let torrents = match iris_db::torrents::list_in_collection(pool, c.id).await {
             Ok(t) => t,
             Err(e) => {
@@ -80,99 +75,129 @@ async fn backfill_collections(state: &AppState) {
                 continue;
             }
         };
-        let kind_hint = match c.kind.as_str() {
-            "tv" => Some(crate::tmdb::TmdbKind::Tv),
-            "movie" => Some(crate::tmdb::TmdbKind::Movie),
-            _ => None,
+
+        // Re-parse a member torrent with the live (post-fix) parser to
+        // derive the canonical SCENE title + kind. The previously
+        // stored `c.kind` and `c.parsed_title_normalized` are
+        // untrustworthy — both written by an older parser that didn't
+        // detect season-only markers (`S01.MULTI`) and so misclassified
+        // TV packs as movies, leaking metadata tokens into the title.
+        let Some((rep, parsed)) = torrents
+            .iter()
+            .find_map(|t| iris_media::filename::parse(&t.name).map(|p| (t, p)))
+        else {
+            continue;
         };
-        // Walk the torrents in the collection until one resolves —
-        // siblings sometimes have weirdly-shaped filenames and we want
-        // any clean signal we can get. The first TMDB hit becomes the
-        // canonical answer for the collection.
-        let mut resolved_id: Option<i64> = None;
-        let mut clean_display_title: Option<String> = None;
-        for t in &torrents {
-            // Re-parse with the live (post-fix) parser to derive a
-            // clean title. We capture the parsed title for
-            // `display_title` AND feed `resolve_release_name` to hit
-            // TMDB on the cleaned form.
-            let Some(parsed) = iris_media::filename::parse(&t.name) else { continue };
-            if clean_display_title.is_none() {
-                clean_display_title = Some(parsed.display_with_year(parsed.is_tv()));
-            }
-            if let Some(r) = crate::tmdb_resolve::resolve_release_name(
-                pool, tmdb, &t.name, kind_hint,
-            ).await {
-                if let Ok(id) = i64::try_from(r.tmdb_id) {
-                    resolved_id = Some(id);
-                    // Prefer the TMDB-canonical title for display
-                    // when we got one — it's typically prettier than
-                    // the SCENE-derived form (real punctuation, real
-                    // capitalisation). Falls back to the parsed
-                    // SCENE title when TMDB doesn't return one.
-                    if !r.title.trim().is_empty() {
-                        clean_display_title = Some(r.title.clone());
-                    }
-                    break;
-                }
+        let parsed_kind = if parsed.is_tv() {
+            crate::tmdb::TmdbKind::Tv
+        } else {
+            crate::tmdb::TmdbKind::Movie
+        };
+        let scene_display_title = parsed.display_with_year(parsed.is_tv());
+
+        // 1. Display title — NEVER overwrite with the TMDB canonical
+        //    form (which has weird punctuation, alt translations, etc.
+        //    that diverge from the user's expectations). Always derive
+        //    from the SCENE filename so the library shows what's on
+        //    disk.
+        if !scene_display_title.is_empty() && scene_display_title != c.display_title {
+            if let Err(e) =
+                iris_db::collections::set_display_title(pool, c.id, &scene_display_title).await
+            {
+                tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: set_display_title failed");
+            } else {
+                renamed += 1;
+                tracing::info!(
+                    collection_id = %c.id,
+                    old = %c.display_title,
+                    new = %scene_display_title,
+                    "tmdb_backfill: collection.display_title rewritten"
+                );
             }
         }
 
-        // Repair the display_title even when TMDB resolution fails.
-        // The user-visible name flowing from the SCENE parser is at
-        // least as clean as the polluted stored value, and matters
-        // independently of poster lookup.
-        if let Some(new_title) = clean_display_title.as_ref() {
-            if !new_title.is_empty() && new_title != &c.display_title {
-                if let Err(e) =
-                    iris_db::collections::set_display_title(pool, c.id, new_title).await
-                {
-                    tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: set_display_title failed");
-                } else {
-                    renamed += 1;
-                    tracing::info!(
-                        collection_id = %c.id,
-                        old = %c.display_title,
-                        new = %new_title,
-                        "tmdb_backfill: collection.display_title rewritten"
-                    );
-                }
+        // 2. Kind — sync with the parser. This drives the watch /
+        //    series routing and the poster-vs-no-poster TMDB lookup,
+        //    so a mismatch leads to "TV row but movie kind" which
+        //    poisons everything downstream.
+        let stored_kind = c.kind.as_str();
+        let new_kind_str = match parsed_kind {
+            crate::tmdb::TmdbKind::Tv => "tv",
+            crate::tmdb::TmdbKind::Movie => "movie",
+        };
+        if stored_kind != new_kind_str {
+            let kind_db = match parsed_kind {
+                crate::tmdb::TmdbKind::Tv => iris_db::collections::Kind::Tv,
+                crate::tmdb::TmdbKind::Movie => iris_db::collections::Kind::Movie,
+            };
+            if let Err(e) = iris_db::collections::set_kind(pool, c.id, kind_db).await {
+                tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: set_kind failed");
+            } else {
+                kind_corrected += 1;
+                tracing::info!(
+                    collection_id = %c.id,
+                    old_kind = %stored_kind,
+                    new_kind = %new_kind_str,
+                    "tmdb_backfill: collection.kind corrected from SCENE re-parse"
+                );
             }
         }
 
-        let Some(new_id) = resolved_id else {
+        // 3. tmdb_id — preserve when ANY associated torrent has been
+        //    runtime-verified (the runtime probe matched TMDB's
+        //    declared duration ±15%; that's strong evidence the id is
+        //    right and nothing the SCENE re-resolution turns up should
+        //    overwrite it). Otherwise, run the resolver with the
+        //    parser-derived kind (NOT the previously-stored c.kind).
+        let any_verified = torrents.iter().any(|t| t.tmdb_verified && t.tmdb_id.is_some());
+        if any_verified {
+            preserved += 1;
+            tracing::debug!(
+                collection_id = %c.id,
+                "tmdb_backfill: tmdb_id preserved (runtime-verified torrent in collection)"
+            );
+            continue;
+        }
+
+        let resolved = crate::tmdb_resolve::resolve_release_name(
+            pool, tmdb, &rep.name, Some(parsed_kind),
+        ).await;
+        let Some(r) = resolved else {
             unresolved += 1;
             tracing::info!(
                 collection_id = %c.id,
-                display_title = %c.display_title,
-                kind = %c.kind,
+                display_title = %scene_display_title,
+                kind = %new_kind_str,
                 current_tmdb_id = ?c.tmdb_id,
-                torrents = torrents.len(),
-                "tmdb_backfill: collection unresolved (no torrent matched TMDB)"
+                rep_name = %rep.name,
+                "tmdb_backfill: collection unresolved (no confident TMDB match)"
             );
             continue;
         };
+        let Ok(new_id) = i64::try_from(r.tmdb_id) else { continue };
         if c.tmdb_id == Some(new_id) {
-            continue; // already correct
+            continue;
         }
         if let Err(e) = iris_db::collections::set_tmdb_id(pool, c.id, new_id).await {
-            tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: collection set_tmdb_id failed");
+            tracing::warn!(error = %e, collection_id = %c.id, "tmdb_backfill: set_tmdb_id failed");
             continue;
         }
         stamped += 1;
         tracing::info!(
             collection_id = %c.id,
-            display_title = %clean_display_title.as_deref().unwrap_or(c.display_title.as_str()),
-            kind = %c.kind,
+            display_title = %scene_display_title,
+            kind = %new_kind_str,
             old_tmdb_id = ?c.tmdb_id,
             new_tmdb_id = new_id,
             "tmdb_backfill: collection.tmdb_id corrected"
         );
     }
-    if stamped > 0 || renamed > 0 || unresolved > 0 {
+    if stamped > 0 || renamed > 0 || kind_corrected > 0 || unresolved > 0 || preserved > 0 {
         tracing::info!(
             stamped,
             renamed,
+            kind_corrected,
+            preserved,
             unresolved,
             "tmdb_backfill: collection pass complete"
         );
