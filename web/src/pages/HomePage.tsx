@@ -140,7 +140,7 @@ function ContinueCard({ item }: { item: ContinueWatchingItem }) {
       title={primary}
       subtitle={subtitle}
       tmdbId={item.tmdb_id}
-      kind={null}
+      kind={item.kind}
       progress={progress}
       progressColor="bg-primary"
     />
@@ -280,8 +280,8 @@ function LibraryCard({ torrent }: { torrent: TorrentView }) {
       href={href}
       title={torrent.name ?? torrent.infohash.slice(0, 12)}
       subtitle={subtitle}
-      tmdbId={torrent.tmdb_verified ? torrent.tmdb_id : null}
-      kind={null}
+      tmdbId={torrent.tmdb_id}
+      kind={torrent.kind}
       progress={progress}
       progressColor="bg-sky-500"
     />
