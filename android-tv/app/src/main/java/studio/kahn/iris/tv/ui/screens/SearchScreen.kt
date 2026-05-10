@@ -72,6 +72,10 @@ import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.TmdbSuggestion
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Search
+import studio.kahn.iris.tv.ui.components.TvIconButton
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
 import kotlin.math.sqrt
@@ -354,18 +358,18 @@ fun SearchScreen(
                 // typed text.
                 modifier = Modifier.width(420.dp),
             )
-            Button(
-                onClick = { submit() },
+            TvIconButton(
+                icon = Icons.Filled.Search,
+                contentDescription = if (pending) "Searching" else "Search",
                 enabled = !pending && query.trim().length >= 2,
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                onClick = { submit() },
                 modifier = Modifier.focusRequester(searchBtnFocus),
-            ) { Text(if (pending) "…" else "Search") }
-            Button(
+            )
+            TvIconButton(
+                icon = Icons.Filled.Mic,
+                contentDescription = "Voice search",
                 onClick = { launchVoice() },
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-            ) { Text("🎤") }
+            )
             Box(Modifier.width(Spacing.lg))
             // Type chips share the input row to save a vertical line.
             // Sort gets its own thin row below.

@@ -57,6 +57,10 @@ import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.TmdbMetadata
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import studio.kahn.iris.tv.ui.components.TvIconButton
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
 
@@ -234,16 +238,16 @@ fun HomeScreen(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
+                    TvIconButton(
+                        icon = Icons.Filled.Search,
+                        contentDescription = "Search",
                         onClick = { onOpenSearch(null) },
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-                    ) { Text("🔍  Search") }
-                    Button(
+                    )
+                    TvIconButton(
+                        icon = Icons.Filled.Settings,
+                        contentDescription = "Settings",
                         onClick = onOpenSettings,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-                    ) { Text("⚙  Settings") }
+                    )
                 }
             }
         }

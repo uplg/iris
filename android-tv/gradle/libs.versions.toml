@@ -55,6 +55,10 @@ compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 # Material3 (mobile) — used for OutlinedTextField, LinearProgressIndicator,
 # Surface inside dialogs. Compose-for-TV deliberately doesn't ship those.
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+# Material Symbols / Icons — full set (Search, Mic, Settings, …). Lives
+# under the legacy `compose.material` group, separate from material3.
+# R8 strips unused icons in release.
+compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 
 # Compose for TV (D-pad focus, leanback-friendly components)
 tv-foundation = { group = "androidx.tv", name = "tv-foundation", version.ref = "compose-tv-foundation" }

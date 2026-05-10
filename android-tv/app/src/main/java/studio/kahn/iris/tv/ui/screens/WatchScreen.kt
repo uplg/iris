@@ -14,20 +14,30 @@ package studio.kahn.iris.tv.ui.screens
 import android.net.Uri
 import androidx.core.net.toUri
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,9 +45,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
@@ -50,14 +63,19 @@ import androidx.tv.material3.Text
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.util.Locale
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.AudioStream
+import studio.kahn.iris.tv.data.EpisodePoint
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.MediaProbe
 import studio.kahn.iris.tv.data.PlayStatus
 import studio.kahn.iris.tv.data.ProgressUpdate
+import studio.kahn.iris.tv.data.SubtitleStream
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
+import studio.kahn.iris.tv.ui.components.TvIconLabelButton
 
 /**
  * Full-screen Media3 PlayerView. Pre-mount we poll `/play/status` so
@@ -176,6 +194,7 @@ fun WatchScreen(
                 infohash = infohash,
                 fileIdx = fileIdx,
                 probe = probe!!,
+                torrent = torrent,
                 startPositionSec = resumePositionSec,
                 onPositionUpdate = { resumePositionSec = it },
                 onPlayerError = { error = it },
@@ -206,6 +225,7 @@ private fun ReadyPlayer(
     infohash: String,
     fileIdx: Int,
     probe: MediaProbe,
+    torrent: TorrentView?,
     startPositionSec: Double,
     onPositionUpdate: (Double) -> Unit,
     onPlayerError: (String) -> Unit,
@@ -216,19 +236,23 @@ private fun ReadyPlayer(
     // "Prepare next?" state. Fetched once at mount; the tick
     // (below) flips `nextEpModalOpen` when playback crosses 95 %.
     var nextEpisode by remember(infohash, fileIdx) {
-        androidx.compose.runtime.mutableStateOf<studio.kahn.iris.tv.data.EpisodePoint?>(null)
+        mutableStateOf<EpisodePoint?>(null)
+    }
+    var currentEpisode by remember(infohash, fileIdx) {
+        mutableStateOf<EpisodePoint?>(null)
     }
     var nextEpModalOpen by remember(infohash, fileIdx) {
-        androidx.compose.runtime.mutableStateOf(false)
+        mutableStateOf(false)
     }
     var nextEpDismissed by remember(infohash, fileIdx) {
-        androidx.compose.runtime.mutableStateOf(false)
+        mutableStateOf(false)
     }
-    var nextEpGrabbing by remember { androidx.compose.runtime.mutableStateOf(false) }
+    var nextEpGrabbing by remember { mutableStateOf(false) }
     LaunchedEffect(infohash, fileIdx) {
         val ctx = runCatching {
             container.apiFor(serverUrl).episodeContext(infohash, fileIdx)
         }.getOrNull()
+        currentEpisode = ctx?.current
         nextEpisode = ctx?.next?.takeIf {
             ctx.followed && it.status == "available"
         }
@@ -349,27 +373,130 @@ private fun ReadyPlayer(
         }
     }
 
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                this.player = player
-                useController = true
-                setShowSubtitleButton(true)
-                setShowFastForwardButton(true)
-                setShowRewindButton(true)
-                controllerAutoShow = true
-                layoutParams = android.widget.FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
-                // Hold the screen-on flag for as long as the PlayerView is
-                // attached. Without this, Android TV blanks the panel after
-                // its idle timeout (typically 2-5 min) since the remote
-                // sees no key events during continuous playback. The flag
-                // is dropped automatically when the view is detached.
-                keepScreenOn = true
-            }
-        },
-        update = { it.player = player },
-    )
+    // Audio + subtitle picker state. Initial selection mirrors the file's
+    // declared `default` flag (or the first stream when nothing is marked
+    // default). Applied to the player via `setPreferredAudioLanguage` /
+    // `setPreferredTextLanguage` so HLS rendition switching happens
+    // without rebuilding the MediaItem.
+    var audioLang by remember(probe) {
+        mutableStateOf(
+            probe.audio.firstOrNull { it.default }?.language
+                ?: probe.audio.firstOrNull()?.language,
+        )
+    }
+    // Subtitles default OFF unless the file flags one as default.
+    var subLang by remember(probe) {
+        mutableStateOf<String?>(probe.subtitle.firstOrNull { it.default }?.language)
+    }
+    LaunchedEffect(player, audioLang) {
+        val lang = audioLang ?: return@LaunchedEffect
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setPreferredAudioLanguage(lang)
+            .build()
+    }
+    LaunchedEffect(player, subLang) {
+        val params = player.trackSelectionParameters.buildUpon()
+        if (subLang == null) {
+            params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+        } else {
+            params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            params.setPreferredTextLanguage(subLang)
+        }
+        player.trackSelectionParameters = params.build()
+    }
+
+    var controllerVisible by remember { mutableStateOf(true) }
+    var audioPickerOpen by remember { mutableStateOf(false) }
+    var subPickerOpen by remember { mutableStateOf(false) }
+
+    val title by remember {
+        derivedStateOf {
+            val raw = torrent?.name ?: ""
+            val pretty = raw.substringBeforeLast('.', raw)
+                .replace('.', ' ')
+                .replace('_', ' ')
+                .trim()
+                .ifBlank { "Now playing" }
+            val ep = currentEpisode
+            if (ep != null) "$pretty · S%02dE%02d".format(ep.season, ep.episode) else pretty
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    this.player = player
+                    useController = true
+                    setShowSubtitleButton(true)
+                    setShowFastForwardButton(true)
+                    setShowRewindButton(true)
+                    controllerAutoShow = true
+                    layoutParams = android.widget.FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                    // Hold the screen-on flag for as long as the PlayerView is
+                    // attached. Without this, Android TV blanks the panel after
+                    // its idle timeout (typically 2-5 min) since the remote
+                    // sees no key events during continuous playback. The flag
+                    // is dropped automatically when the view is detached.
+                    keepScreenOn = true
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            controllerVisible = (visibility == android.view.View.VISIBLE)
+                        },
+                    )
+                }
+            },
+            update = { it.player = player },
+        )
+
+        AnimatedVisibility(
+            visible = controllerVisible,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth(),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            PlayerTopBar(
+                title = title,
+                audioLabel = friendlyLanguage(audioLang) ?: "Unknown",
+                subtitleLabel = friendlyLanguage(subLang) ?: "Off",
+                hasMultipleAudio = probe.audio.size > 1,
+                hasSubtitles = probe.subtitle.isNotEmpty(),
+                onPickAudio = { audioPickerOpen = true },
+                onPickSubtitle = { subPickerOpen = true },
+            )
+        }
+    }
+
+    if (audioPickerOpen) {
+        TrackPickerDialog(
+            title = "Audio language",
+            options = probe.audio.map { audioOption(it) },
+            currentLanguage = audioLang,
+            allowOff = false,
+            onSelect = {
+                audioLang = it
+                audioPickerOpen = false
+            },
+            onDismiss = { audioPickerOpen = false },
+        )
+    }
+    if (subPickerOpen) {
+        TrackPickerDialog(
+            title = "Subtitles",
+            options = probe.subtitle.map { subtitleOption(it) },
+            currentLanguage = subLang,
+            allowOff = true,
+            onSelect = {
+                subLang = it
+                subPickerOpen = false
+            },
+            onDismiss = { subPickerOpen = false },
+        )
+    }
 
     val nextEp = nextEpisode
     if (nextEpModalOpen && nextEp != null) {
@@ -563,6 +690,209 @@ private fun stepFor(status: PlayStatus?, probeReady: Boolean, torrent: TorrentVi
         else -> Step("Preparing playback…", "Almost there.", null)
     }
 }
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun PlayerTopBar(
+    title: String,
+    audioLabel: String,
+    subtitleLabel: String,
+    hasMultipleAudio: Boolean,
+    hasSubtitles: Boolean,
+    onPickAudio: () -> Unit,
+    onPickSubtitle: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(Color.Black.copy(alpha = 0.75f), Color.Transparent),
+                ),
+            )
+            .padding(horizontal = 32.dp, vertical = 24.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (hasMultipleAudio) {
+                TvIconLabelButton(
+                    icon = Icons.Filled.Audiotrack,
+                    label = audioLabel,
+                    contentDescription = "Audio language",
+                    onClick = onPickAudio,
+                )
+            }
+            if (hasSubtitles) {
+                TvIconLabelButton(
+                    icon = Icons.Filled.Subtitles,
+                    label = subtitleLabel,
+                    contentDescription = "Subtitles",
+                    onClick = onPickSubtitle,
+                )
+            }
+        }
+    }
+}
+
+private data class TrackOption(
+    val languageCode: String?,
+    val primary: String,
+    val secondary: String?,
+)
+
+private fun audioOption(stream: AudioStream): TrackOption {
+    val primary = friendlyLanguage(stream.language) ?: stream.title ?: "Track ${stream.index + 1}"
+    val parts = buildList {
+        when (stream.channels) {
+            1 -> add("Mono")
+            2 -> add("Stereo")
+            6 -> add("5.1")
+            8 -> add("7.1")
+            else -> if (stream.channels > 0) add("${stream.channels}ch")
+        }
+        add(stream.codec.uppercase())
+        stream.title?.takeIf { it.isNotBlank() && it != stream.language }?.let { add(it) }
+    }
+    return TrackOption(
+        languageCode = stream.language,
+        primary = primary,
+        secondary = parts.joinToString(" · ").takeIf { it.isNotBlank() },
+    )
+}
+
+private fun subtitleOption(stream: SubtitleStream): TrackOption {
+    val primary = friendlyLanguage(stream.language) ?: stream.title ?: "Track ${stream.index + 1}"
+    val parts = buildList {
+        if (stream.forced) add("Forced")
+        add(stream.codec.uppercase())
+        stream.title?.takeIf { it.isNotBlank() && it != stream.language }?.let { add(it) }
+    }
+    return TrackOption(
+        languageCode = stream.language,
+        primary = primary,
+        secondary = parts.joinToString(" · ").takeIf { it.isNotBlank() },
+    )
+}
+
+@Composable
+private fun TrackPickerDialog(
+    title: String,
+    options: List<TrackOption>,
+    currentLanguage: String?,
+    allowOff: Boolean,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { androidx.compose.material3.Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (allowOff) {
+                    TrackPickerRow(
+                        primary = "Off",
+                        secondary = null,
+                        selected = currentLanguage == null,
+                        onClick = { onSelect(null) },
+                    )
+                }
+                options.forEach { opt ->
+                    TrackPickerRow(
+                        primary = opt.primary,
+                        secondary = opt.secondary,
+                        selected = currentLanguage != null &&
+                            opt.languageCode != null &&
+                            currentLanguage.equals(opt.languageCode, ignoreCase = true),
+                        onClick = { onSelect(opt.languageCode) },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                androidx.compose.material3.Text("Close")
+            }
+        },
+    )
+}
+
+@Composable
+private fun TrackPickerRow(
+    primary: String,
+    secondary: String?,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.RadioButton(selected = selected, onClick = onClick)
+        Spacer(Modifier.width(8.dp))
+        Column {
+            androidx.compose.material3.Text(
+                primary,
+                style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+            )
+            if (secondary != null) {
+                androidx.compose.material3.Text(
+                    secondary,
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Map an ffmpeg/MKV `language` tag (`fre`, `eng`, `und`, `fr-FR`, …) to
+ * an English display name. Falls back to the upper-cased tag when the
+ * code isn't recognised, and to `null` when there's nothing to show
+ * (the caller can substitute "Off" / "Unknown").
+ */
+private fun friendlyLanguage(code: String?): String? {
+    if (code.isNullOrBlank() || code.equals("und", ignoreCase = true)) return null
+    val normalized = code.lowercase()
+    val twoLetter = ISO3_TO_ISO1[normalized] ?: normalized
+    val name = Locale.forLanguageTag(twoLetter).getDisplayLanguage(Locale.ENGLISH)
+    return when {
+        name.isBlank() || name.equals(twoLetter, ignoreCase = true) -> code.uppercase()
+        else -> name.replaceFirstChar { it.uppercase() }
+    }
+}
+
+/** Common ISO 639-2/T → ISO 639-1 mapping. ffmpeg/MKV often tag tracks
+ *  with the 3-letter code, while `Locale.forLanguageTag` only resolves
+ *  display names off the 2-letter form. */
+private val ISO3_TO_ISO1 = mapOf(
+    "eng" to "en", "fre" to "fr", "fra" to "fr",
+    "spa" to "es", "ger" to "de", "deu" to "de",
+    "ita" to "it", "jpn" to "ja", "kor" to "ko",
+    "chi" to "zh", "zho" to "zh", "rus" to "ru",
+    "por" to "pt", "dut" to "nl", "nld" to "nl",
+    "ara" to "ar", "tur" to "tr", "pol" to "pl",
+    "swe" to "sv", "nor" to "no", "fin" to "fi",
+    "dan" to "da", "ces" to "cs", "cze" to "cs",
+    "hun" to "hu", "gre" to "el", "ell" to "el",
+    "heb" to "he", "tha" to "th", "vie" to "vi",
+    "ind" to "id", "ron" to "ro", "rum" to "ro",
+    "ukr" to "uk", "hin" to "hi",
+)
 
 private fun formatBytesShort(b: Long): String {
     val gb = b / 1_000_000_000.0
