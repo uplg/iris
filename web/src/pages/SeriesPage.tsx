@@ -82,6 +82,23 @@ export function SeriesPage() {
     },
   });
 
+  // ALL hooks must run before any early return — React tracks them
+  // by call order. Splitting episodes into seasons stays here.
+  const seasons = useMemo(() => {
+    const grouped = new Map<number, EpisodeItem[]>();
+    for (const ep of episodesQ.data?.items ?? []) {
+      const arr = grouped.get(ep.season) ?? [];
+      arr.push(ep);
+      grouped.set(ep.season, arr);
+    }
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([season, items]) => ({
+        season,
+        items: items.sort((a, b) => a.episode - b.episode),
+      }));
+  }, [episodesQ.data]);
+
   if (!id) return <p>Invalid follow id.</p>;
   if (followsQ.isLoading) {
     return (
@@ -98,21 +115,6 @@ export function SeriesPage() {
       </p>
     );
   }
-
-  const seasons = useMemo(() => {
-    const grouped = new Map<number, EpisodeItem[]>();
-    for (const ep of episodesQ.data?.items ?? []) {
-      const arr = grouped.get(ep.season) ?? [];
-      arr.push(ep);
-      grouped.set(ep.season, arr);
-    }
-    return Array.from(grouped.entries())
-      .sort(([a], [b]) => a - b)
-      .map(([season, items]) => ({
-        season,
-        items: items.sort((a, b) => a.episode - b.episode),
-      }));
-  }, [episodesQ.data]);
 
   return (
     <div className="grid gap-6">

@@ -192,6 +192,9 @@ export type SearchResult = {
   uploaded_at: string | null;
   tmdb_id: number | null;
   kind: MediaKind | null;
+  /** Pre-resolved poster URL from the indexer (torr9 ships these on
+   *  featured items). Use directly — no TMDB lookup needed. */
+  poster_url: string | null;
 };
 
 export type MediaKind = "movie" | "tv";

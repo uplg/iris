@@ -222,6 +222,10 @@ function FeaturedCard({ result }: { result: SearchResult }) {
           }
           title={result.title}
           subtitle={subtitle || undefined}
+          // torr9 ships an editorially-curated poster URL on featured
+          // items — trust it directly. Skips the strict tmdb_verified
+          // gate that would hide every poster on this shelf.
+          posterUrl={result.poster_url}
           kind="tv"
           badge={
             existing ? (
@@ -244,6 +248,7 @@ function FeaturedCard({ result }: { result: SearchResult }) {
       href={movieHref}
       title={result.title}
       subtitle={subtitle || undefined}
+      posterUrl={result.poster_url}
       kind="movie"
       badge={
         result.freeleech ? (

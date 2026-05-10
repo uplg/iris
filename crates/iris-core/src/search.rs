@@ -89,6 +89,12 @@ pub struct SearchResult {
     /// provider's category taxonomy.
     #[serde(default)]
     pub kind: Option<MediaKind>,
+    /// Pre-resolved poster URL when the indexer ships one (torr9
+    /// includes it on featured items). Trusted because the indexer
+    /// curates these editorially — much higher confidence than a
+    /// TMDB-id round-trip.
+    #[serde(default)]
+    pub poster_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

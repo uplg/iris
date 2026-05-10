@@ -505,9 +505,9 @@ struct FeaturedItem {
     /// user clicks Préparer.
     torrent_id: u64,
     title: String,
-    /// Pre-resolved TMDB poster URL. Frontend can use it directly to
-    /// skip a TMDB metadata lookup on the discovery shelf.
-    #[allow(dead_code)]
+    /// Pre-resolved poster URL. Frontend uses it directly — saves a
+    /// TMDB lookup on the discovery shelf and avoids the
+    /// strict-tmdb-id gate that would hide everything otherwise.
     #[serde(default)]
     poster_url: Option<String>,
 }
@@ -538,6 +538,7 @@ impl FeaturedItem {
             uploaded_at: None,
             tmdb_id: self.tmdb_id.filter(|id| *id > 0),
             kind,
+            poster_url: self.poster_url,
         }
     }
 }
@@ -667,6 +668,7 @@ impl Torrent {
             uploaded_at: self.upload_date,
             tmdb_id,
             kind,
+            poster_url: None,
         }
     }
 }
