@@ -3,6 +3,7 @@ package studio.kahn.iris.tv.data
 import android.content.Context
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -62,9 +63,15 @@ fun buildPlayer(
 fun buildMediaItem(
     playUrl: String,
     subtitles: List<MediaItem.SubtitleConfiguration>,
+    title: String? = null,
 ): MediaItem =
     MediaItem.Builder()
         .setUri(playUrl)
         .setMimeType(MimeTypes.APPLICATION_M3U8)
         .setSubtitleConfigurations(subtitles)
+        .apply {
+            if (!title.isNullOrBlank()) {
+                setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
+            }
+        }
         .build()

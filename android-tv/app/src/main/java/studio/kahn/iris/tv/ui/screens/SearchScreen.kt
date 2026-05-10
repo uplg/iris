@@ -140,7 +140,12 @@ fun SearchScreen(
     // (Silicon Valley releases pointed at "The Burning Bed", etc.). One
     // entry per unique cleaned title — all S01/S02/etc. releases of
     // Silicon Valley share a single network call.
-    val tmdbCache = remember { mutableStateMapOf<String, TmdbSuggestion?>() }
+    // Keyed by `(cleaned title, result.kind)` rather than title alone:
+    // a Movies-vs-Series mismatch on the same SCENE name (e.g. a film and
+    // a series sharing a slug) used to share one cache entry, so the
+    // wrong poster carried over to half the rows. Mirrors the web's
+    // `["tmdb-by-title", cleaned, result.kind ?? "any"]` query key.
+    val tmdbCache = remember { mutableStateMapOf<Pair<String, String?>, TmdbSuggestion?>() }
 
     val voiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -254,17 +259,24 @@ fun SearchScreen(
         val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
         val api = container.apiFor(url)
         val unresolved = results
-            .map { extractSceneTitle(it.title) }
-            .filter { it.isNotBlank() && !tmdbCache.containsKey(it) }
+            .map { extractSceneTitle(it.title) to it.kind }
+            .filter { (name, _) -> name.isNotBlank() }
+            .filter { it !in tmdbCache }
             .distinct()
-        for (name in unresolved) {
-            val pick = runCatching { api.tmdbSearch(name) }.getOrNull().orEmpty()
-            // Prefer hits matching the result's `kind` when the search
-            // had a `kind` filter active; otherwise take the popularity
-            // top.
-            val target = pick.firstOrNull { it.kind == kind.apiKind }
+        // One TMDB lookup per distinct cleaned title; we then disambiguate
+        // each (name, kind) bucket against that single response.
+        val byName = mutableMapOf<String, List<TmdbSuggestion>>()
+        for ((name, resultKind) in unresolved) {
+            val pick = byName.getOrPut(name) {
+                runCatching { api.tmdbSearch(name) }.getOrNull().orEmpty()
+            }
+            // Prefer a hit matching the row's own kind; otherwise fall
+            // back to the popularity top. Without the per-row preference
+            // a movie row and a series row sharing the same slug both
+            // pulled whichever of the two TMDB returned first.
+            val target = (resultKind?.let { k -> pick.firstOrNull { it.kind == k } })
                 ?: pick.firstOrNull()
-            tmdbCache[name] = target
+            tmdbCache[name to resultKind] = target
         }
     }
 
@@ -431,7 +443,7 @@ fun SearchScreen(
                             val cleaned = remember(r.title) { extractSceneTitle(r.title) }
                             ResultCard(
                                 result = r,
-                                resolvedPoster = tmdbCache[cleaned]?.posterPath,
+                                resolvedPoster = tmdbCache[cleaned to r.kind]?.posterPath,
                                 onClick = {
                                     onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
                                 },
