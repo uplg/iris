@@ -114,7 +114,10 @@ pub async fn bootstrap_admin_if_configured(
     let user = iris_db::users::create(
         pool,
         iris_db::users::NewUser {
-            email: admin.email.clone(),
+            // Match the runtime normalization in routes::auth so the
+            // bootstrap admin can later log in regardless of how the
+            // operator capitalised the address in the config file.
+            email: admin.email.trim().to_ascii_lowercase(),
             password_hash: hash,
             is_admin: true,
         },

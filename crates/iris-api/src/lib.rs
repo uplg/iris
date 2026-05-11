@@ -3,6 +3,7 @@ pub mod collection_assign;
 pub mod error;
 pub mod follows_scheduler;
 pub mod observability;
+pub mod rate_limit;
 pub mod routes;
 pub mod seed_stats;
 pub mod state;

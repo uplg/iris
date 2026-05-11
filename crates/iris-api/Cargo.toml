@@ -28,6 +28,7 @@ axum = { workspace = true }
 axum-extra = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
+tower_governor = "0.8"
 hyper = { workspace = true }
 http = { workspace = true }
 

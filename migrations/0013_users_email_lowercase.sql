@@ -1,0 +1,12 @@
+-- Normalise every existing user's email to lowercase so the
+-- application-layer `normalize_email` (lowercase + trim) in
+-- iris-api/routes/auth.rs lines up with what's on disk.
+-- SQLite's TEXT UNIQUE constraint is case-sensitive, so before this
+-- pass `Alice@Example.com` and `alice@example.com` could coexist as
+-- two distinct accounts.
+--
+-- If two rows collapse to the same lowercase form (vanishingly
+-- unlikely on an invite-only single-server deployment) the UNIQUE
+-- constraint will refuse the UPDATE and the migration fails loudly
+-- — that's the right call: a human needs to pick which one wins.
+UPDATE users SET email = LOWER(email) WHERE email != LOWER(email);

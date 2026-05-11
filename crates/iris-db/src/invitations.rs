@@ -58,10 +58,13 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<Invitation>, sqlx::Error> {
     .await
 }
 
-pub async fn find_active_by_hash(
-    pool: &SqlitePool,
+pub async fn find_active_by_hash<'e, E>(
+    executor: E,
     token_hash: &str,
-) -> Result<Option<Invitation>, sqlx::Error> {
+) -> Result<Option<Invitation>, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     sqlx::query_as::<_, Invitation>(
         "SELECT id, token_hash, created_by, created_at, expires_at, consumed_at, consumed_by \
          FROM invitations \
@@ -69,15 +72,18 @@ pub async fn find_active_by_hash(
     )
     .bind(token_hash)
     .bind(Utc::now())
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
 }
 
-pub async fn consume(
-    pool: &SqlitePool,
+pub async fn consume<'e, E>(
+    executor: E,
     id: InvitationId,
     consumed_by: UserId,
-) -> Result<bool, sqlx::Error> {
+) -> Result<bool, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let id: Uuid = id.into();
     let user: Uuid = consumed_by.into();
     let res = sqlx::query(
@@ -87,7 +93,7 @@ pub async fn consume(
     .bind(Utc::now())
     .bind(user)
     .bind(id)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(res.rows_affected() == 1)
 }

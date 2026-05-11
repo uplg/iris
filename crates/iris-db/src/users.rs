@@ -52,7 +52,10 @@ fn default_display_name(email: &str) -> String {
     }
 }
 
-pub async fn create(pool: &SqlitePool, new: NewUser) -> Result<User, sqlx::Error> {
+pub async fn create<'e, E>(executor: E, new: NewUser) -> Result<User, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let id = Uuid::new_v4();
     let now = Utc::now();
     let display_name = default_display_name(&new.email);
@@ -66,7 +69,7 @@ pub async fn create(pool: &SqlitePool, new: NewUser) -> Result<User, sqlx::Error
     .bind(&display_name)
     .bind(new.is_admin)
     .bind(now)
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(User {
@@ -81,14 +84,17 @@ pub async fn create(pool: &SqlitePool, new: NewUser) -> Result<User, sqlx::Error
 const USER_COLUMNS: &str =
     "id, email, password_hash, display_name, is_admin, created_at";
 
-pub async fn find_by_email(
-    pool: &SqlitePool,
+pub async fn find_by_email<'e, E>(
+    executor: E,
     email: &str,
-) -> Result<Option<(User, String)>, sqlx::Error> {
+) -> Result<Option<(User, String)>, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let q = format!("SELECT {USER_COLUMNS} FROM users WHERE email = ?1");
     let row: Option<UserRow> = sqlx::query_as(&q)
         .bind(email)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
     Ok(row.map(UserRow::into_domain))
 }

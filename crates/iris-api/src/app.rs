@@ -1,24 +1,43 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
 use axum::extract::Request;
 use axum::routing::get;
 use tower::Layer;
+use tower_governor::GovernorLayer;
+use tower_governor::governor::GovernorConfigBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
+use crate::rate_limit::CloudflareIpKeyExtractor;
 use crate::routes;
 use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
+    // Per-CF-client-IP token bucket on `/api/auth/*` (login, register,
+    // refresh, logout, device pairing). 5 req/s steady-state, burst
+    // 20 — leaves normal multi-tab / multi-device usage unaffected
+    // but caps an attacker's Argon2 spend at ~5 verifies/sec per
+    // attacker IP. Key extraction reads `CF-Connecting-IP`; see
+    // `rate_limit::CloudflareIpKeyExtractor` for the bypass story.
+    let auth_governor = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(5)
+            .burst_size(20)
+            .key_extractor(CloudflareIpKeyExtractor)
+            .finish()
+            .expect("auth governor config is hard-coded and valid"),
+    );
     // Device-pairing endpoints are merged INTO the auth and me routers
     // (rather than nested separately) because axum forbids overlapping
     // nest paths like `/auth` and `/auth/device`.
     let auth = routes::auth::router()
-        .nest("/device", routes::devices::auth_router());
+        .nest("/device", routes::devices::auth_router())
+        .layer(GovernorLayer::new(auth_governor));
     let me = routes::me::router()
         .nest("/devices", routes::devices::me_router())
         .nest("/follows", routes::follows::router());
