@@ -920,7 +920,14 @@ async fn play_asset(
             .ensure_remuxed(&key, &path, plan)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("remux: {e}")))?;
+        // Two-layer "last play" tracking: the DB row drives torrent-level
+        // LRU (which entire seed to evict), the remux sentinel drives
+        // cache-entry LRU (which (infohash, file_idx) to trim first when
+        // the cache itself is over budget). They serve different windows
+        // — a season's torrent might be hot while only the latest episode
+        // cache is — so we touch both.
         let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
+        state.remuxer().touch_played(&key).await;
     }
 
     let asset_path = state

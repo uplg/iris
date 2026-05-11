@@ -172,9 +172,9 @@ pub async fn set_tmdb_verified(
 
 /// Reconcile the lifetime upload counter for `infohash` with the current
 /// session value reported by librqbit. Atomic at the SQL level so we don't
-/// race with delete_by_infohash / soft_delete.
+/// race with `delete_by_infohash` / `soft_delete`.
 ///
-/// Logic: lifetime += max(0, session_now - session_seen). If the current
+/// Logic: lifetime += max(0, `session_now` - `session_seen`). If the current
 /// session value is *below* the last seen one (process restarted, librqbit
 /// reset its counter) we treat the new value as fresh delta — the work
 /// done since boot.

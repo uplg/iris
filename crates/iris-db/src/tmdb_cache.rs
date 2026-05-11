@@ -9,6 +9,20 @@
 use chrono::{DateTime, Duration, Utc};
 use sqlx::SqlitePool;
 
+/// `(tmdb_id, title, year, poster_path, backdrop_path, overview, fetched_at)`
+/// — kept as a tuple alias because sqlx's `query_as` needs the full
+/// column shape at the call site, and breaking the row apart would
+/// split a tightly-coupled contract.
+type Row = (
+    Option<i64>,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    DateTime<Utc>,
+);
+
 #[derive(Debug, Clone)]
 pub struct ResolveEntry {
     pub tmdb_id: Option<i64>,
@@ -47,15 +61,7 @@ pub async fn get(
     max_age: Duration,
 ) -> Result<Option<ResolveEntry>, sqlx::Error> {
     let cutoff = Utc::now() - max_age;
-    let row: Option<(
-        Option<i64>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let row: Option<Row> = sqlx::query_as(
         "SELECT tmdb_id, title, year, poster_path, backdrop_path, overview, fetched_at \
          FROM tmdb_resolve_cache \
          WHERE cleaned_name = ?1 AND (kind_hint IS ?2 OR kind_hint = ?2) \

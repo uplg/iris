@@ -300,7 +300,7 @@ struct WipeRemuxResponse {
 /// Per-torrent TMDB resolution dump — `GET /admin/tmdb/diagnose/{infohash}`.
 ///
 /// Surfaces every input the resolver sees so we can tell *why* a given
-/// torrent is stuck on a wrong tmdb_id: the raw torrent name, what the
+/// torrent is stuck on a wrong `tmdb_id`: the raw torrent name, what the
 /// SCENE parser extracted, the multi-search candidates TMDB returned,
 /// and what `pick_best` would settle on with the current rules. Useful
 /// when a library card shows the wrong poster and we need to know

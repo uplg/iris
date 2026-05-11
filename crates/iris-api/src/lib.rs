@@ -13,13 +13,15 @@ pub mod tmdb_resolve;
 use std::path::{Path, PathBuf};
 
 /// Build the remux cache manager and spawn its background size-cap evictor.
-/// Cap at 100 GB (~100 hot movies on a typical 1080p library) — well under
-/// the storage budget on a KS-5 SSD. Tick every 15 min.
-fn setup_remuxer(data_dir: &Path) -> anyhow::Result<iris_media::RemuxManager> {
+/// The 100 GB hard ceiling here is a safety net independent of disk
+/// pressure; the disk GC also calls into the remuxer first when the
+/// overall budget is exceeded, evicting oldest-played caches before
+/// torrents.
+fn setup_remuxer(data_dir: &Path) -> anyhow::Result<(iris_media::RemuxManager, PathBuf)> {
     use anyhow::Context;
     let remux_dir = data_dir.join("remux");
     std::fs::create_dir_all(&remux_dir).context("creating remux dir")?;
-    let remuxer = iris_media::RemuxManager::new(remux_dir);
+    let remuxer = iris_media::RemuxManager::new(remux_dir.clone());
     let evictor = remuxer.clone();
     let cap_bytes: u64 = 100 * 1_073_741_824;
     tokio::spawn(async move {
@@ -28,13 +30,81 @@ fn setup_remuxer(data_dir: &Path) -> anyhow::Result<iris_media::RemuxManager> {
         ticker.tick().await; // skip immediate boot tick
         loop {
             ticker.tick().await;
-            let n = evictor.evict_to(cap_bytes).await;
-            if n > 0 {
-                tracing::info!(count = n, "remuxer cache eviction pass complete");
+            let (count, _) = evictor.evict_to(cap_bytes).await;
+            if count > 0 {
+                tracing::info!(count, "remuxer cache eviction pass complete");
             }
         }
     });
-    Ok(remuxer)
+    Ok((remuxer, remux_dir))
+}
+
+/// Wire the disk GC to both the torrent engine and the remux cache so
+/// it can shed the regenerable bytes first under pressure. Extracted
+/// from `run` to keep that function under the clippy line-count budget.
+fn setup_gc(
+    cfg: &iris_config::AppConfig,
+    engine: &std::sync::Arc<iris_torrent::Engine>,
+    pool: &iris_db::SqlitePool,
+    remuxer: &iris_media::RemuxManager,
+    remux_dir: PathBuf,
+) -> iris_torrent::Gc {
+    // Derived-cache hook: when total disk usage tops the threshold the
+    // GC asks this closure to shrink the remux dir to `target` bytes
+    // (oldest-played first) before any torrent gets evicted. Returns
+    // bytes actually freed.
+    let derived = {
+        let remuxer = remuxer.clone();
+        iris_torrent::DerivedCache {
+            dir: remux_dir,
+            trim_to: std::sync::Arc::new(move |target: u64| {
+                let remuxer = remuxer.clone();
+                Box::pin(async move {
+                    let (_count, freed) = remuxer.evict_to(target).await;
+                    freed
+                })
+            }),
+        }
+    };
+
+    // Wipe matching remux cache dirs (one per file index, named
+    // `{infohash}_{idx}`) after a torrent is evicted, so derived state
+    // doesn't outlive its source.
+    let on_evict = {
+        let remuxer = remuxer.clone();
+        move |infohash: &str| {
+            let remuxer = remuxer.clone();
+            let h = infohash.to_string();
+            tokio::spawn(async move {
+                let cache_dir = remuxer.base_dir().to_path_buf();
+                let prefix = format!("{h}_");
+                if let Ok(mut rd) = tokio::fs::read_dir(&cache_dir).await {
+                    while let Ok(Some(e)) = rd.next_entry().await {
+                        if let Some(name) = e.file_name().to_str() {
+                            if name.starts_with(&prefix) {
+                                let _ = tokio::fs::remove_file(e.path()).await;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    };
+
+    iris_torrent::Gc::new(
+        engine.clone(),
+        pool.clone(),
+        iris_torrent::GcConfig {
+            max_storage_bytes: cfg.storage.max_storage_gb.saturating_mul(1_073_741_824),
+            cleanup_threshold_pct: cfg.storage.cleanup_threshold_pct,
+            cleanup_target_pct: cfg.storage.cleanup_target_pct,
+            interval: std::time::Duration::from_secs(15 * 60),
+            active_window: std::time::Duration::from_secs(60 * 60),
+        },
+        cfg.storage.download_dir.clone(),
+        Some(derived),
+        on_evict,
+    )
 }
 
 /// Background tasks that depend on the live `AppState`. Extracted from
@@ -129,44 +199,10 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         "torrent engine ready"
     );
 
-    let remuxer = setup_remuxer(&cfg.storage.data_dir).context("setting up remuxer")?;
+    let (remuxer, remux_dir) =
+        setup_remuxer(&cfg.storage.data_dir).context("setting up remuxer")?;
 
-    let gc = iris_torrent::Gc::new(
-        engine.clone(),
-        pool.clone(),
-        iris_torrent::GcConfig {
-            max_storage_bytes: cfg.storage.max_storage_gb.saturating_mul(1_073_741_824),
-            cleanup_threshold_pct: cfg.storage.cleanup_threshold_pct,
-            cleanup_target_pct: cfg.storage.cleanup_target_pct,
-            interval: std::time::Duration::from_secs(15 * 60),
-            active_window: std::time::Duration::from_secs(60 * 60),
-        },
-        cfg.storage.download_dir.clone(),
-        {
-            let remuxer = remuxer.clone();
-            move |infohash| {
-                // When a torrent is GC'd off disk, drop the matching remux
-                // caches (one per file index). We don't know how many files
-                // there are without going back to the DB — wipe by prefix
-                // match on the cache file names instead.
-                let remuxer = remuxer.clone();
-                let h = infohash.to_string();
-                tokio::spawn(async move {
-                    let cache_dir = remuxer.base_dir().to_path_buf();
-                    let prefix = format!("{h}_");
-                    if let Ok(mut rd) = tokio::fs::read_dir(&cache_dir).await {
-                        while let Ok(Some(e)) = rd.next_entry().await {
-                            if let Some(name) = e.file_name().to_str() {
-                                if name.starts_with(&prefix) {
-                                    let _ = tokio::fs::remove_file(e.path()).await;
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        },
-    );
+    let gc = setup_gc(&cfg, &engine, &pool, &remuxer, remux_dir);
     gc.clone().spawn();
     tracing::info!(
         max_gb = cfg.storage.max_storage_gb,

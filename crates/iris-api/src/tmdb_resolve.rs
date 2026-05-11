@@ -8,7 +8,7 @@
 //!
 //! Flow:
 //!   1. Parse the SCENE-style name with `iris_media::filename::parse`
-//!      to extract `(title, year, season?)`. The presence of an SxxExx
+//!      to extract `(title, year, season?)`. The presence of an `SxxExx`
 //!      marker doubles as the kind hint (TV vs movie) when callers
 //!      don't supply one.
 //!   2. Look up the `(cleaned_name, kind_hint)` pair in the persistent
@@ -88,7 +88,7 @@ pub async fn resolve_cleaned(
         Some(t) => ResolveEntry {
             tmdb_id: i64::try_from(t.tmdb_id).ok(),
             title: Some(t.title.clone()),
-            year: t.year.and_then(|y| i64::try_from(y).ok()),
+            year: t.year.map(i64::from),
             poster_path: t.poster_path.clone(),
             backdrop_path: None, // multi_search doesn't return backdrops; ok to leave
             overview: t.overview.clone(),

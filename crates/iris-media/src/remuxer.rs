@@ -52,6 +52,24 @@ pub enum RemuxError {
 /// Master playlist filename, served as the entry point.
 pub const MASTER_PLAYLIST: &str = "master.m3u8";
 
+/// Sentinel file written into each cache dir on every `master.m3u8`
+/// request. Its mtime drives LRU eviction so a fully-cached show that's
+/// been replayed three times this week looks fresher than one that was
+/// remuxed last month and never opened again.
+const LAST_PLAYED_SENTINEL: &str = ".last_played";
+
+/// Last "logical play time" for a cache dir. Prefers the sentinel
+/// (touched on every `master.m3u8` hit); falls back to the dir's own
+/// mtime so older caches predating this feature still sort sensibly.
+async fn cache_last_played(dir: &Path, dir_meta: &std::fs::Metadata) -> SystemTime {
+    if let Ok(meta) = tokio::fs::metadata(dir.join(LAST_PLAYED_SENTINEL)).await {
+        if let Ok(t) = meta.modified() {
+            return t;
+        }
+    }
+    dir_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
 /// Convert a non-negative finite seconds value into milliseconds,
 /// saturating instead of wrapping. Used for the progress total.
 #[allow(
@@ -389,13 +407,40 @@ impl RemuxManager {
         Ok(freed)
     }
 
-    /// Evict cache entries (oldest mtime first) until total size ≤ cap.
-    /// In-flight jobs are skipped. Returns the number of dirs removed.
-    pub async fn evict_to(&self, max_total_bytes: u64) -> usize {
+    /// Bump the "last played" timestamp for [`key`] so LRU eviction
+    /// favours recently-watched caches. The directory's own mtime
+    /// stops updating once ffmpeg finishes writing segments, so a
+    /// well-loved show that's been replayed many times would otherwise
+    /// look as cold as a one-shot from a year ago. We write a small
+    /// `.last_played` sentinel file and read its mtime in [`evict_to`].
+    /// No-op when the cache dir doesn't exist yet (first play, ffmpeg
+    /// will create it shortly).
+    pub async fn touch_played(&self, key: &str) {
+        let dir = self.cache_dir(key);
+        if !tokio::fs::try_exists(&dir).await.unwrap_or(false) {
+            return;
+        }
+        // We write the current epoch (not an empty byte) so the file's
+        // content actually changes on every call. POSIX leaves `O_TRUNC`
+        // on an already-empty file as implementation-defined for mtime
+        // purposes; writing real bytes forces every FS we care about to
+        // bump it.
+        let payload = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+            .to_string();
+        if let Err(e) = tokio::fs::write(dir.join(LAST_PLAYED_SENTINEL), payload.as_bytes()).await {
+            tracing::debug!(key = %key, error = %e, "remuxer: touch_played write failed");
+        }
+    }
+
+    /// Evict cache entries (oldest last-played first) until total size
+    /// ≤ cap. In-flight jobs are skipped. Returns `(count, bytes_freed)`.
+    pub async fn evict_to(&self, max_total_bytes: u64) -> (usize, u64) {
         let active: HashSet<String> = self.inner.jobs.lock().await.keys().cloned().collect();
         let mut entries: Vec<(PathBuf, u64, SystemTime, String)> = Vec::new();
         let Ok(mut rd) = tokio::fs::read_dir(&self.inner.base_dir).await else {
-            return 0;
+            return (0, 0);
         };
         while let Ok(Some(entry)) = rd.next_entry().await {
             let Ok(meta) = entry.metadata().await else {
@@ -411,16 +456,17 @@ impl RemuxManager {
                 continue;
             }
             let size = dir_size(&entry.path()).await.unwrap_or(0);
-            let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            let mtime = cache_last_played(&entry.path(), &meta).await;
             entries.push((entry.path(), size, mtime, name));
         }
         let total: u64 = entries.iter().map(|(_, sz, _, _)| sz).sum();
         if total <= max_total_bytes {
-            return 0;
+            return (0, 0);
         }
         entries.sort_by_key(|(_, _, mtime, _)| *mtime);
         let mut current = total;
         let mut evicted = 0usize;
+        let mut freed = 0u64;
         for (path, sz, _, key) in entries {
             if current <= max_total_bytes {
                 break;
@@ -430,10 +476,11 @@ impl RemuxManager {
                 continue;
             }
             current -= sz;
+            freed += sz;
             evicted += 1;
             tracing::info!(key = %key, freed_bytes = sz, "remuxer: evicted cache");
         }
-        evicted
+        (evicted, freed)
     }
 
     /// Inventory of cache dirs for the admin endpoint.
@@ -454,10 +501,10 @@ impl RemuxManager {
                 continue;
             };
             let size = dir_size(&entry.path()).await.unwrap_or(0);
-            let mtime_secs = meta
-                .modified()
+            let mtime_secs = cache_last_played(&entry.path(), &meta)
+                .await
+                .duration_since(SystemTime::UNIX_EPOCH)
                 .ok()
-                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
                 .and_then(|d| i64::try_from(d.as_secs()).ok());
             let in_flight = active.contains(&key);
             out.push(JobInfo {

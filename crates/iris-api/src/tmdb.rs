@@ -307,8 +307,7 @@ impl TmdbClient {
         // would 404 in that case and serve no poster at all.
         let order: &[TmdbKind] = match kind_hint {
             Some(TmdbKind::Tv) => &[TmdbKind::Tv, TmdbKind::Movie],
-            Some(TmdbKind::Movie) => &[TmdbKind::Movie, TmdbKind::Tv],
-            None => &[TmdbKind::Movie, TmdbKind::Tv],
+            Some(TmdbKind::Movie) | None => &[TmdbKind::Movie, TmdbKind::Tv],
         };
         for &k in order {
             if let Some(m) = self.fetch(tmdb_id, k).await {

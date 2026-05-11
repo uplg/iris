@@ -9,5 +9,5 @@ pub mod gc;
 pub mod metadata;
 
 pub use engine::{Engine, EngineError, FileEntry, IngestResult, TorrentSnapshot, TorrentState};
-pub use gc::{Gc, GcConfig, GcReport};
+pub use gc::{DerivedCache, DerivedTrimFn, Gc, GcConfig, GcReport};
 pub use metadata::{TorrentFilePreview, TorrentPreview, parse_preview};

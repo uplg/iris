@@ -81,7 +81,7 @@ pub async fn revoke_for_user(
     Ok(res.rows_affected() == 1)
 }
 
-/// Device label / kind / expires_at attached to an active refresh token,
+/// Device label / kind / `expires_at` attached to an active refresh token,
 /// or `None` if the jti is unknown / revoked / expired. Used by `/auth/refresh`
 /// to carry the device tagging forward when rotating the token — without
 /// this, paired-device rows lose their `device_kind` after the first
