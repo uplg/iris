@@ -10,6 +10,7 @@ use iris_core::search::TorrentSource;
 use iris_torrent::{TorrentPreview, TorrentSnapshot};
 use serde::{Deserialize, Serialize};
 use std::io::SeekFrom;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
@@ -43,9 +44,33 @@ pub fn router() -> Router<AppState> {
             get(play_asset).head(play_asset),
         )
         .route("/{infohash}/files/{idx}/probe", get(probe_file))
+        // Capability-negotiated entry point. Clients fetch the manifest
+        // once, then pick a decode tier; see docs/SOTA_ARCHITECTURE.md.
+        .route(
+            "/{infohash}/files/{idx}/manifest.json",
+            get(manifest_json),
+        )
+        // Playhead hint → playhead-priority piece prefetch (Phase 1).
+        .route("/{infohash}/files/{idx}/seek", post(seek_hint))
+        .route(
+            "/{infohash}/files/{idx}/playback-error",
+            post(playback_error),
+        )
         .route(
             "/{infohash}/files/{idx}/sub/{stream_idx}/track.vtt",
             get(subtitle_vtt),
+        )
+        // ASS/SSA preserved as-is for client-side libass-wasm overlay
+        // rendering. Phase 2d.
+        .route(
+            "/{infohash}/files/{idx}/sub/{stream_idx}/track.ass",
+            get(subtitle_ass),
+        )
+        // PGS bitmap subtitles copied verbatim for client-side libpgs-js
+        // overlay rendering. Phase 2d.
+        .route(
+            "/{infohash}/files/{idx}/sub/{stream_idx}/track.sup",
+            get(subtitle_sup),
         )
         .route(
             // PUT for normal calls; POST is accepted because
@@ -631,6 +656,112 @@ async fn probe_file(
     Ok(Json(probe))
 }
 
+async fn manifest_json(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path((infohash, idx)): Path<(String, usize)>,
+) -> ApiResult<Json<iris_media::Manifest>> {
+    let infohash = infohash.to_ascii_lowercase();
+    if !infohash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ApiError::BadRequest("invalid infohash".into()));
+    }
+    let _row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let snapshot = state
+        .engine()
+        .get_by_infohash(&infohash)
+        .ok_or(ApiError::NotFound)?;
+    let file = snapshot
+        .files
+        .iter()
+        .find(|f| f.index == idx)
+        .ok_or_else(|| ApiError::BadRequest("file index out of range".into()))?
+        .clone();
+    let path = state
+        .engine()
+        .file_path(&infohash, idx)
+        .map_err(map_engine_err)?;
+
+    // Phase 1: probe partial downloads by pre-fetching the byte ranges
+    // ffprobe needs (first 8 KiB for any container header, last 1 MiB for
+    // MKV Cues / MP4 trailing `moov` / AVI `idx1`). librqbit downloads
+    // those pieces to the sparse file on disk, then ffprobe reads real
+    // bytes instead of zero-pad. 30s timeout covers the common slow-
+    // tracker case; if we time out we still try the probe (it might
+    // succeed on the pieces we got, or fail with a useful error).
+    if !snapshot.finished {
+        let header_count: u64 = 1 << 16; // 64 KiB — generous for any container header
+        let tail_count: u64 = 1 << 20;   // 1 MiB
+        let tail_start = file.size_bytes.saturating_sub(tail_count);
+        let engine = state.engine().clone();
+        let infohash_for_prefetch = infohash.clone();
+        let header = engine.prefetch_range(
+            &infohash_for_prefetch,
+            idx,
+            0,
+            header_count,
+            Duration::from_secs(30),
+        );
+        let tail = engine.prefetch_range(
+            &infohash_for_prefetch,
+            idx,
+            tail_start,
+            tail_count,
+            Duration::from_secs(30),
+        );
+        let (h, t) = tokio::join!(header, tail);
+        if let Err(e) = h {
+            tracing::debug!(error = %e, "manifest: header prefetch errored");
+        }
+        if let Err(e) = t {
+            tracing::debug!(error = %e, "manifest: tail prefetch errored");
+        }
+    }
+    if !path.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "file not yet on disk: {}",
+            path.display()
+        )));
+    }
+
+    let probe = state
+        .probes()
+        .get_or_probe(&infohash, idx, &path)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
+
+    let file_idx_u32 = u32::try_from(idx)
+        .map_err(|_| ApiError::BadRequest("file index too large".into()))?;
+    let progress = if snapshot.total_size_bytes > 0 {
+        #[allow(clippy::cast_precision_loss)]
+        let p = snapshot.progress_bytes as f64 / snapshot.total_size_bytes as f64;
+        p.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let manifest = iris_media::build_manifest(
+        &probe,
+        iris_media::ManifestInputs {
+            infohash: &infohash,
+            file_idx: file_idx_u32,
+            filename: &file.path,
+            size_bytes: file.size_bytes,
+            download_progress: progress,
+            // ranges_complete reporting needs librqbit's piece bitmap;
+            // out of scope for Phase 1. The download_progress + bytes
+            // figures cover what the UI needs today.
+            ranges_complete: Vec::new(),
+            bytes_complete: snapshot.progress_bytes.min(file.size_bytes),
+        },
+        Some(&path),
+    )
+    .await;
+
+    Ok(Json(manifest))
+}
+
 fn map_engine_err(e: iris_torrent::EngineError) -> ApiError {
     match e {
         iris_torrent::EngineError::NotFound => ApiError::NotFound,
@@ -639,6 +770,201 @@ fn map_engine_err(e: iris_torrent::EngineError) -> ApiError {
         }
         iris_torrent::EngineError::Librqbit(e) => ApiError::Internal(e),
     }
+}
+
+/// Playhead hint sent by the client on every user-initiated seek. Phase 1
+/// will use it to bias librqbit's piece priority. Phase 0 only logs.
+#[derive(Debug, Deserialize)]
+pub struct SeekHint {
+    pub byte_offset: u64,
+    pub playhead_s: Option<f64>,
+}
+
+async fn seek_hint(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path((infohash, idx)): Path<(String, usize)>,
+    Json(body): Json<SeekHint>,
+) -> ApiResult<StatusCode> {
+    let infohash = infohash.to_ascii_lowercase();
+    if !infohash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ApiError::BadRequest("invalid infohash".into()));
+    }
+    tracing::debug!(
+        infohash,
+        file_idx = idx,
+        byte_offset = body.byte_offset,
+        playhead_s = body.playhead_s,
+        "seek hint",
+    );
+    // Spawn the prefetch in the background so the client gets its 204 back
+    // immediately; librqbit picks up the priority bias as soon as the read
+    // starts. We aim for ~30 seconds of playback ahead — derived from the
+    // probed bitrate when we have one, falling back to a flat 64 MiB cap.
+    let engine = state.engine().clone();
+    let probes = state.probes().clone();
+    let infohash_clone = infohash.clone();
+    let byte_offset = body.byte_offset;
+    tokio::spawn(async move {
+        let bytes_ahead = playhead_window_bytes(&engine, &probes, &infohash_clone, idx).await;
+        if let Err(e) = engine
+            .prefetch_range(
+                &infohash_clone,
+                idx,
+                byte_offset,
+                bytes_ahead,
+                Duration::from_secs(60),
+            )
+            .await
+        {
+            tracing::debug!(error = %e, "seek hint prefetch errored");
+        }
+    });
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Window of bytes to mark high-priority ahead of the playhead. Targets
+/// ~30 seconds of playback by deriving bytes-per-second from the cached
+/// probe (total size ÷ duration); falls back to a flat 64 MiB ceiling
+/// when the probe is unavailable. Capped at 256 MiB so a long seek on a
+/// 4 K HEVC remux doesn't lock librqbit into an impossibly wide window.
+async fn playhead_window_bytes(
+    engine: &std::sync::Arc<iris_torrent::Engine>,
+    probes: &iris_media::ProbeCache,
+    infohash: &str,
+    idx: usize,
+) -> u64 {
+    const FALLBACK: u64 = 64 * 1024 * 1024;
+    const CAP: u64 = 256 * 1024 * 1024;
+    const SECONDS_AHEAD: f64 = 30.0;
+
+    let Some(snapshot) = engine.get_by_infohash(infohash) else {
+        return FALLBACK;
+    };
+    let file_size = snapshot
+        .files
+        .iter()
+        .find(|f| f.index == idx)
+        .map_or(0, |f| f.size_bytes);
+    if file_size == 0 {
+        return FALLBACK;
+    }
+    let Ok(path) = engine.file_path(infohash, idx) else {
+        return FALLBACK;
+    };
+    let Ok(probe) = probes.get_or_probe(infohash, idx, &path).await else {
+        return FALLBACK;
+    };
+    let Some(duration) = probe.duration_seconds.filter(|d| *d > 0.0) else {
+        return FALLBACK;
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let bps = file_size as f64 / duration;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let bytes = (bps * SECONDS_AHEAD).round() as u64;
+    bytes.clamp(8 * 1024 * 1024, CAP)
+}
+
+/// Playback-error report sent by clients when a decode tier fails.
+/// Echoes the legacy HLS URL as the fallback and pre-warms the server-
+/// side ffmpeg + shaka remux in the background so the client's next
+/// request to `/play/master.m3u8` lands on a hot cache.
+#[derive(Debug, Deserialize)]
+pub struct PlaybackErrorBody {
+    pub tier: String,
+    pub reason: String,
+    #[serde(default)]
+    pub codec: Option<String>,
+    #[serde(default)]
+    pub browser: Option<String>,
+    #[serde(default)]
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PlaybackErrorResponse {
+    pub fallback_tier: &'static str,
+    pub fallback_url: String,
+}
+
+async fn playback_error(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path((infohash, idx)): Path<(String, usize)>,
+    Json(body): Json<PlaybackErrorBody>,
+) -> ApiResult<Json<PlaybackErrorResponse>> {
+    let infohash = infohash.to_ascii_lowercase();
+    if !infohash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ApiError::BadRequest("invalid infohash".into()));
+    }
+    tracing::warn!(
+        infohash,
+        file_idx = idx,
+        tier = %body.tier,
+        reason = %body.reason,
+        codec = ?body.codec,
+        browser = ?body.browser,
+        details = ?body.details,
+        "client-side playback error → falling back to legacy HLS"
+    );
+
+    // Fire-and-forget: prewarm the legacy HLS cache for THIS specific
+    // file so the client's `/play/master.m3u8` request lands on a hot
+    // ffmpeg+shaka output. Idempotent — `RemuxManager::ensure_remuxed`
+    // returns immediately when the cache already exists. Best-effort:
+    // we still return the fallback URL even if the prewarm task errors.
+    let prewarm_state = state.clone();
+    let prewarm_infohash = infohash.clone();
+    tokio::spawn(async move {
+        prewarm_remux_file(&prewarm_state, &prewarm_infohash, idx).await;
+    });
+
+    Ok(Json(PlaybackErrorResponse {
+        fallback_tier: "F",
+        fallback_url: format!("/api/torrents/{infohash}/files/{idx}/play/master.m3u8"),
+    }))
+}
+
+/// Prewarm the legacy HLS remux for a specific (`infohash`, `file_idx`).
+/// Differs from [`prewarm_default_remux`] in that it targets the file
+/// the client just failed on — no need to guess which video is the
+/// "main" one. Called on `POST /playback-error`.
+async fn prewarm_remux_file(state: &AppState, infohash: &str, idx: usize) {
+    let Ok(path) = state.engine().file_path(infohash, idx) else {
+        return;
+    };
+    if !path.exists() {
+        tracing::debug!(infohash, idx, "fallback prewarm: file not on disk yet");
+        return;
+    }
+    // If the torrent isn't finished, the client's playback was
+    // sparse-streaming. The remux pipeline can't handle partial files,
+    // so defer until completion.
+    if let Some(snap) = state.engine().get_by_infohash(infohash) {
+        if !snap.finished {
+            tracing::debug!(
+                infohash,
+                idx,
+                pct = snap.progress_pct,
+                "fallback prewarm: deferring until torrent finishes"
+            );
+            return;
+        }
+    }
+    let probe = match state.probes().get_or_probe(infohash, idx, &path).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::debug!(error = %e, "fallback prewarm: probe failed");
+            return;
+        }
+    };
+    let key = format!("{infohash}_{idx}");
+    let plan = build_remux_plan(&probe);
+    if let Err(e) = state.remuxer().ensure_remuxed(&key, &path, plan).await {
+        tracing::warn!(error = %e, infohash, idx, "fallback prewarm: remux failed");
+        return;
+    }
+    tracing::info!(infohash, idx, "fallback prewarm: HLS cache hot");
 }
 
 /// State of the per-file remux job exposed to the player UI. Polled
@@ -756,6 +1082,35 @@ async fn subtitle_vtt(
     _user: AuthUser,
     Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
 ) -> ApiResult<Response> {
+    serve_subtitle(&state, &infohash, idx, stream_idx, iris_media::SubtitleFormat::WebVtt).await
+}
+
+async fn subtitle_ass(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
+) -> ApiResult<Response> {
+    serve_subtitle(&state, &infohash, idx, stream_idx, iris_media::SubtitleFormat::Ass).await
+}
+
+async fn subtitle_sup(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
+) -> ApiResult<Response> {
+    serve_subtitle(&state, &infohash, idx, stream_idx, iris_media::SubtitleFormat::Sup).await
+}
+
+/// Shared subtitle handler used by `track.{vtt,ass,sup}`. Caches per-
+/// (`infohash`, `file_idx`, `stream_idx`, format) tuple so the three formats
+/// coexist without overwriting each other.
+async fn serve_subtitle(
+    state: &AppState,
+    infohash: &str,
+    idx: usize,
+    stream_idx: u32,
+    format: iris_media::SubtitleFormat,
+) -> ApiResult<Response> {
     let infohash = infohash.to_ascii_lowercase();
     let _row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
         .await?
@@ -769,13 +1124,12 @@ async fn subtitle_vtt(
     }
 
     let cache_dir = state.cfg().storage.data_dir.join("subs");
-    let cache_path = iris_media::subtitle_cache_path(&cache_dir, &infohash, idx, stream_idx);
+    let cache_path = iris_media::subtitle_cache_path(&cache_dir, &infohash, idx, stream_idx, format);
 
-    // Cache hit: serve as static file (instant for the player).
     if cache_path.exists() {
         return Ok(Response::builder()
             .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/vtt; charset=utf-8")
+            .header(header::CONTENT_TYPE, format.mime())
             .header(header::CACHE_CONTROL, "public, max-age=86400")
             .body(Body::from(tokio::fs::read(&cache_path).await.map_err(
                 |e| ApiError::Internal(anyhow::anyhow!("read cache: {e}")),
@@ -783,14 +1137,12 @@ async fn subtitle_vtt(
             .unwrap());
     }
 
-    // Miss: stream chunks from ffmpeg as it produces them (so Firefox doesn't
-    // abort the <track> request) and tee into the cache for next time.
-    let stream = iris_media::stream_webvtt(&path, stream_idx, cache_path)
+    let stream = iris_media::stream_subtitle(&path, stream_idx, format, cache_path)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("webvtt: {e}")))?;
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("subtitle extract: {e}")))?;
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/vtt; charset=utf-8")
+        .header(header::CONTENT_TYPE, format.mime())
         .header(header::CACHE_CONTROL, "no-store")
         .header(header::TRANSFER_ENCODING, "chunked")
         .body(Body::from_stream(stream))

@@ -22,12 +22,26 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 fun buildOkHttpClient(sessionStore: SessionStore): OkHttpClient {
     val authenticator = IrisAuthenticator(sessionStore)
+    // Cache the Iris-Caps header value once. Build.VERSION fields don't
+    // change at runtime, so re-computing per request would be wasted work.
+    val capsHeaderValue = IrisCaps.headerValue()
     val client = OkHttpClient.Builder()
         .cookieJar(SessionCookieJar(sessionStore))
         .authenticator(authenticator)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .callTimeout(120, TimeUnit.SECONDS)
+        // Stamp Iris-Caps on every outbound request. The server middleware
+        // ignores it on non-/torrents paths; the per-request cost is one
+        // ~200-byte header line. Cheaper than maintaining a per-Retrofit-
+        // method header annotation list, and Media3 segment fetches inherit
+        // the header without extra plumbing.
+        .addInterceptor { chain ->
+            val request = chain.request().newBuilder()
+                .header(IRIS_CAPS_HEADER, capsHeaderValue)
+                .build()
+            chain.proceed(request)
+        }
         .addInterceptor(
             HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BASIC

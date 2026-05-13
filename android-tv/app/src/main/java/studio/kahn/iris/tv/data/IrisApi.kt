@@ -51,6 +51,21 @@ interface IrisApi {
         @Path("idx") idx: Int,
     ): MediaProbe
 
+    /**
+     * Capability-negotiated playback manifest. Superset of [probe] — adds
+     * MSE/WebCodecs codec strings, HDR metadata, container index layout,
+     * and per-track sidecar URLs. See `docs/SOTA_ARCHITECTURE.md` §2.1.
+     *
+     * Phase 0 of the Android TV client keeps using `/play/master.m3u8`
+     * for actual playback; this call exists to validate the wire contract
+     * and seed Phase 3's switch to direct-blob playback.
+     */
+    @GET("api/torrents/{infohash}/files/{idx}/manifest.json")
+    suspend fun manifest(
+        @Path("infohash") infohash: String,
+        @Path("idx") idx: Int,
+    ): Manifest
+
     @GET("api/torrents/{infohash}/files/{idx}/play/status")
     suspend fun playStatus(
         @Path("infohash") infohash: String,
@@ -275,6 +290,95 @@ data class MediaProbe(
     val video: List<VideoStream>,
     val audio: List<AudioStream>,
     val subtitle: List<SubtitleStream>,
+)
+
+// ----- Manifest (Phase 0 of the capability-negotiated pipeline) -----------
+
+@Serializable
+data class ByteRange(val start: Long, val end: Long)
+
+@Serializable
+data class DownloadStatus(
+    val progress: Double,
+    @SerialName("ranges_complete") val rangesComplete: List<List<Long>> = emptyList(),
+    @SerialName("bytes_complete") val bytesComplete: Long = 0,
+)
+
+@Serializable
+data class ManifestVideoTrack(
+    @SerialName("stream_idx") val streamIdx: Int,
+    val codec: String,
+    @SerialName("codec_string") val codecString: String? = null,
+    val profile: String? = null,
+    val level: Int? = null,
+    @SerialName("bit_depth") val bitDepth: Int? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    @SerialName("fps_num") val fpsNum: Int? = null,
+    @SerialName("fps_den") val fpsDen: Int? = null,
+    /** "none" | "hdr10" | "hdr10_plus" | "dovi" | "hlg" */
+    val hdr: String = "none",
+    @SerialName("color_primaries") val colorPrimaries: String? = null,
+    @SerialName("color_transfer") val colorTransfer: String? = null,
+    @SerialName("color_matrix") val colorMatrix: String? = null,
+    @SerialName("max_cll") val maxCll: Int? = null,
+    @SerialName("max_fall") val maxFall: Int? = null,
+)
+
+@Serializable
+data class ManifestAudioTrack(
+    @SerialName("stream_idx") val streamIdx: Int,
+    val codec: String,
+    @SerialName("codec_string") val codecString: String? = null,
+    val channels: Int,
+    @SerialName("channel_layout") val channelLayout: String? = null,
+    @SerialName("sample_rate") val sampleRate: Int? = null,
+    val bitrate: Long? = null,
+    val lang: String? = null,
+    val title: String? = null,
+    val default: Boolean = false,
+    val forced: Boolean = false,
+    @SerialName("browser_native") val browserNative: Boolean = false,
+)
+
+@Serializable
+data class ManifestSubtitleTrack(
+    @SerialName("stream_idx") val streamIdx: Int,
+    val codec: String,
+    val lang: String? = null,
+    val title: String? = null,
+    val default: Boolean = false,
+    val forced: Boolean = false,
+    @SerialName("text_based") val textBased: Boolean,
+    val extractable: Boolean = true,
+    val url: String,
+)
+
+@Serializable
+data class ManifestChapter(
+    @SerialName("start_s") val startS: Double,
+    @SerialName("end_s") val endS: Double,
+    val title: String? = null,
+)
+
+@Serializable
+data class Manifest(
+    @SerialName("schema_version") val schemaVersion: Int,
+    val infohash: String,
+    @SerialName("file_idx") val fileIdx: Int,
+    val filename: String,
+    val container: String,
+    @SerialName("duration_s") val durationS: Double? = null,
+    @SerialName("size_bytes") val sizeBytes: Long,
+    @SerialName("moov_at_start") val moovAtStart: Boolean? = null,
+    @SerialName("index_at_end") val indexAtEnd: Boolean = true,
+    @SerialName("header_byte_range") val headerByteRange: ByteRange,
+    @SerialName("tail_byte_range") val tailByteRange: ByteRange? = null,
+    val download: DownloadStatus,
+    val video: List<ManifestVideoTrack> = emptyList(),
+    val audio: List<ManifestAudioTrack> = emptyList(),
+    val subtitles: List<ManifestSubtitleTrack> = emptyList(),
+    val chapters: List<ManifestChapter> = emptyList(),
 )
 
 /**

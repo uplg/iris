@@ -8,6 +8,7 @@ members = [
     "crates/iris-providers",
     "crates/iris-torrent",
     "crates/iris-media",
+    "crates/iris-caps",
     "crates/iris-api",
 ]
 
@@ -38,6 +39,7 @@ iris-auth = { path = "crates/iris-auth" }
 iris-providers = { path = "crates/iris-providers" }
 iris-torrent = { path = "crates/iris-torrent" }
 iris-media = { path = "crates/iris-media" }
+iris-caps = { path = "crates/iris-caps" }
 
 # Async runtime + http
 tokio = { version = "1.52", features = ["full"] }

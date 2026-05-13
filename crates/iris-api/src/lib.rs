@@ -2,6 +2,7 @@ pub mod app;
 pub mod collection_assign;
 pub mod error;
 pub mod follows_scheduler;
+pub mod middleware;
 pub mod observability;
 pub mod rate_limit;
 pub mod routes;

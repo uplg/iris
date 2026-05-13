@@ -8,6 +8,7 @@ pub mod follows;
 pub mod invitations;
 pub mod migrate;
 pub mod playback;
+pub mod playback_caps;
 pub mod pool;
 pub mod refresh_tokens;
 pub mod tmdb_cache;

@@ -1,12 +1,7 @@
-import "@vidstack/react/player/styles/default/theme.css";
-import "@vidstack/react/player/styles/default/layouts/video.css";
-
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { CheckCircle2, Download, Library as LibraryIcon, Loader2, Play } from "lucide-react";
-import { MediaPlayer, MediaProvider, Track, type MediaPlayerInstance } from "@vidstack/react";
-import { defaultLayoutIcons, DefaultVideoLayout } from "@vidstack/react/player/layouts/default";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +23,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  fetchManifest,
+  hlsUrl,
+  ManifestNotReadyError,
+  pickTier,
+  postSeekHint,
+  rawStreamUrl,
+  type DecodeTier,
+} from "@/lib/iris-core/manifest-client";
+import { IrisPlayer } from "@/lib/iris-core/IrisPlayer";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
@@ -37,14 +42,10 @@ export function WatchPage() {
   const navigate = useNavigate();
 
   const [playerError, setPlayerError] = useState<string | null>(null);
-  // Use a ref (not state) for the player instance so callbacks always see
-  // the latest value without depending on render-cycle ordering.
-  const playerRef = useRef<MediaPlayerInstance | null>(null);
   const lastTimeRef = useRef(0);
   const lastSavedTimeRef = useRef(0);
   const lastDurationRef = useRef<number | null>(null);
   const progressLoadedRef = useRef(false);
-  const initialSeekDoneRef = useRef(false);
   // "Watch next?" state — gated on a single-shot flip per
   // mount, plus a dismissal flag so user choosing "Later" doesn't
   // get re-prompted within the same session.
@@ -125,6 +126,64 @@ export function WatchPage() {
     [probe],
   );
 
+  // Phase 0 of the tiered cascade: fetch the manifest alongside probe.
+  // The manifest carries the codec strings + container layout the Phase 2
+  // tier-cascade needs. Until then it gives us just enough to pick between
+  // Tier A (direct <video src> over /stream) and Tier F (legacy HLS).
+  const manifestQ = useQuery({
+    queryKey: ["manifest", infohash, fileIdx],
+    queryFn: () => fetchManifest(infohash!, fileIdx),
+    enabled: !!infohash && downloadFinished,
+    retry: (failureCount, err) =>
+      err instanceof ManifestNotReadyError && failureCount < 5,
+    retryDelay: 2000,
+  });
+  const manifest = manifestQ.data;
+  const [tier, setTier] = useState<DecodeTier>("F");
+  // Demoted tiers we shouldn't retry within this mount (e.g., Tier C
+  // failed its 1-frame probe → don't try Tier D on the same codec,
+  // skip straight to F).
+  const demotedRef = useRef<Set<DecodeTier>>(new Set());
+  useEffect(() => {
+    if (!manifest) return;
+    void pickTier(manifest).then((t) => {
+      const final = demotedRef.current.has(t) ? "F" : t;
+      setTier(final);
+      // Telemetry until Grafana is wired up.
+      console.log("[iris-core] tier", final, {
+        container: manifest.container,
+        video: manifest.video.map((v) => v.codec_string ?? v.codec),
+        audio: manifest.audio.map((a) => `${a.codec}${a.browser_native ? "(native)" : ""}`),
+      });
+    });
+  }, [manifest]);
+  // Demote the active tier on a fatal player error. Tier C → F is the
+  // common case (probe lied about HW HEVC). Best-effort POST so the
+  // server-side legacy fallback can pre-warm.
+  const demoteTier = useCallback(
+    (from: DecodeTier, reason: string) => {
+      console.warn(`[iris-core] tier ${from} demoting → F (${reason})`);
+      demotedRef.current.add(from);
+      setPlayerError(null);
+      setTier("F");
+      if (manifest) {
+        void fetch(`/api/torrents/${manifest.infohash}/files/${manifest.file_idx}/playback-error`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tier: from,
+            reason,
+            codec: manifest.video[0]?.codec ?? null,
+            browser: navigator.userAgent,
+          }),
+          keepalive: true,
+        }).catch(() => undefined);
+      }
+    },
+    [manifest],
+  );
+
   // Saved progress (audio choice + last position) for this user/file.
   // No `staleTime: Infinity` — we want a fresh read every time the user
   // mounts the page (otherwise navigating away and back would replay the
@@ -167,7 +226,6 @@ export function WatchPage() {
     lastSavedTimeRef.current = 0;
     lastDurationRef.current = null;
     progressLoadedRef.current = false;
-    initialSeekDoneRef.current = false;
     subtitleTrackRef.current = null;
     nextEpDismissedRef.current = false;
     nextEpPromptedRef.current = false;
@@ -194,6 +252,69 @@ export function WatchPage() {
     nextEpPromptedRef.current = true;
     setNextEpModalOpen(true);
   }
+
+  // Unified player callbacks — defined once, fed into <IrisPlayer> which
+  // forwards them to whichever tier engine is active.
+  const onTimeUpdate = useCallback(
+    (t: number) => {
+      if (t > 0) lastTimeRef.current = t;
+      if (infohash && t > 5 && t - lastSavedTimeRef.current > 7) {
+        lastSavedTimeRef.current = t;
+        const dur = lastDurationRef.current ?? null;
+        const completed = dur != null && t >= dur - 30;
+        void progressApi.put(infohash, fileIdx, {
+          position_seconds: t,
+          duration_seconds: dur,
+          subtitle_track_idx: subtitleTrackRef.current,
+          completed,
+        });
+      }
+      // Next-episode prompt at >= 95 % of duration. Belt-and-suspenders
+      // with onEnded — short episodes can skip the threshold sample.
+      const totalDur = lastDurationRef.current;
+      if (
+        totalDur != null &&
+        totalDur > 0 &&
+        t / totalDur >= 0.95 &&
+        canPromptNext &&
+        !nextEpPromptedRef.current
+      ) {
+        maybePromptNext();
+      }
+    },
+    // maybePromptNext / canPromptNext are recomputed each render but
+    // capture stable refs; the eslint exhaustive-deps rule misfires
+    // here, ignore by listing only the load-bearing identities.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [infohash, fileIdx, canPromptNext],
+  );
+  const onDurationChange = useCallback((d: number) => {
+    if (d > 0) lastDurationRef.current = d;
+  }, []);
+  const onPause = useCallback(
+    (t: number) => {
+      if (!infohash || t <= 0) return;
+      lastSavedTimeRef.current = t;
+      void progressApi.put(infohash, fileIdx, {
+        position_seconds: t,
+        duration_seconds: lastDurationRef.current ?? null,
+        subtitle_track_idx: subtitleTrackRef.current,
+        completed: false,
+      });
+    },
+    [infohash, fileIdx],
+  );
+  const onEndedCb = useCallback(() => {
+    if (!infohash) return;
+    void progressApi.put(infohash, fileIdx, {
+      position_seconds: lastDurationRef.current ?? lastTimeRef.current,
+      duration_seconds: lastDurationRef.current,
+      subtitle_track_idx: subtitleTrackRef.current,
+      completed: true,
+    });
+    maybePromptNext();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [infohash, fileIdx]);
 
   // Capture saved subtitle pick (the actual seek is applied in onCanPlay).
   useEffect(() => {
@@ -262,7 +383,16 @@ export function WatchPage() {
   const downBps = data.download_speed_bps;
   const upBps = data.upload_speed_bps;
   const pct = Math.min(100, Math.max(0, data.progress_pct));
-  const playSrc = torrents.playUrl(infohash, fileIdx);
+  // Tier A: direct <video src> over /stream — bypasses ffmpeg+shaka.
+  // Tier B: Mediabunny demux + remux to fMP4 → MSE.
+  // Tier C/D: WebCodecs decode → Canvas2D (rendered via <TierCPlayer>).
+  // Tier F: legacy server-side HLS remux, the final fallback.
+  const playSrc = tier === "F" ? torrents.playUrl(infohash, fileIdx) : rawStreamUrl(infohash, fileIdx);
+  const playSrcType = tier === "F" ? "application/vnd.apple.mpegurl" : "video/mp4";
+  // Only Tier F polls /play/status (it's the only path that gates on a
+  // server-side remux). Everything else is ready once the manifest is.
+  const sourceReady = tier === "F" ? playReady && probe != null : manifest != null;
+  void hlsUrl; // kept exported for parity; no direct use here yet
 
   return (
     <div className="grid gap-6">
@@ -303,156 +433,29 @@ export function WatchPage() {
       )}
 
       <div className="aspect-video w-full overflow-hidden rounded-lg border border-border bg-black">
-        {/* `probe` is part of the gate: <Track> children are derived from
-            `probe.subtitle` and Vidstack initialises its track menu at mount
-            time. If the HLS cache happens to be ready before the probe
-            (cached from a prior session, or just plain faster), mounting
-            without the probe means subtitles silently miss the first run
-            and only show up after a manual refresh. */}
-        {playSrc && !progressQ.isPending && playReady && probe ? (
-          <MediaPlayer
-            // Including startPosition in the key forces a clean re-mount when
-            // we navigate to a different saved offset (which never happens
-            // mid-render today, but future-proofs against subtle re-renders).
-            key={`${playSrc}#${startPosition.toFixed(0)}`}
+        {playSrc && !progressQ.isPending && sourceReady && manifest ? (
+          <IrisPlayer
+            tier={tier}
+            src={playSrc}
+            srcType={playSrcType}
             title={fileName}
-            // Object form with explicit MIME — the URL has no extension so
-            // Vidstack can't sniff the type from the path. `video/mp4` routes
-            // to the progressive (native HTMLVideoElement) provider, which
-            // is what we want for a single-file fragmented MP4 served via
-            // HTTP byte-range.
-            // HLS source — hls.js handles segment loading, manages multi-
-            // audio renditions (player.audioTracks), and avoids Chrome's
-            // parallel byte-range scanning that plagued the progressive
-            // single-file fMP4. Vidstack auto-loads hls.js when the source
-            // type is `application/vnd.apple.mpegurl`.
-            src={{ src: playSrc, type: "application/vnd.apple.mpegurl" }}
-            // No autoPlay — Firefox / Safari block autoplay-with-sound by
-            // default, and the console error is louder than the UX win.
-            className="h-full w-full"
-            onTimeUpdate={(detail) => {
-              if (detail.currentTime > 0) {
-                lastTimeRef.current = detail.currentTime;
-              }
-              if (
-                infohash &&
-                detail.currentTime > 5 &&
-                detail.currentTime - lastSavedTimeRef.current > 7
-              ) {
-                lastSavedTimeRef.current = detail.currentTime;
-                const dur = lastDurationRef.current ?? null;
-                const completed = dur != null && detail.currentTime >= dur - 30;
-                void progressApi.put(infohash, fileIdx, {
-                  position_seconds: detail.currentTime,
-                  duration_seconds: dur,
-                  subtitle_track_idx: subtitleTrackRef.current,
-                  completed,
-                });
-              }
-              // Trigger the next-episode prompt at >= 95 % of duration.
-              // Using onEnded alone would miss the case where the user
-              // closes the tab right before credits — the prompt at 95 %
-              // also lets users hit "Prepare" then keep watching the
-              // last few minutes.
-              const totalDur = lastDurationRef.current;
-              if (
-                totalDur != null &&
-                totalDur > 0 &&
-                detail.currentTime / totalDur >= 0.95 &&
-                canPromptNext &&
-                !nextEpPromptedRef.current
-              ) {
-                maybePromptNext();
-              }
+            manifest={manifest}
+            startPosition={startPosition}
+            onTimeUpdate={onTimeUpdate}
+            onDurationChange={onDurationChange}
+            onSeeking={(t) => postSeekHint(manifest, t)}
+            onPause={onPause}
+            onEnded={onEndedCb}
+            onError={(msg) => {
+              // Tier A → Vidstack: keep the legacy "Player error: …"
+              //   banner so the user has feedback while we don't auto-
+              //   demote (Vidstack errors are usually transient).
+              // Tier B/C/D → demote to F. The legacy HLS pipeline always
+              //   plays the file, at the cost of server-side ffmpeg.
+              if (tier === "A" || tier === "F") setPlayerError(msg);
+              else demoteTier(tier, msg);
             }}
-            onDurationChange={(detail) => {
-              if (detail > 0) lastDurationRef.current = detail;
-            }}
-            onPause={() => {
-              if (!infohash) return;
-              const t = lastTimeRef.current;
-              if (t <= 0) return;
-              lastSavedTimeRef.current = t;
-              const dur = lastDurationRef.current ?? null;
-              void progressApi.put(infohash, fileIdx, {
-                position_seconds: t,
-                duration_seconds: dur,
-                subtitle_track_idx: subtitleTrackRef.current,
-                completed: false,
-              });
-            }}
-            onEnded={() => {
-              if (!infohash) return;
-              void progressApi.put(infohash, fileIdx, {
-                position_seconds: lastDurationRef.current ?? lastTimeRef.current,
-                duration_seconds: lastDurationRef.current,
-                subtitle_track_idx: subtitleTrackRef.current,
-                completed: true,
-              });
-              // Belt-and-suspenders: also try the prompt at the actual
-              // end event (covers files where the 95 % heuristic doesn't
-              // fire, e.g., very short episodes where onTimeUpdate
-              // sampling skips the threshold).
-              maybePromptNext();
-            }}
-            onCanPlay={() => {
-              // One-shot resume seek. Applied exactly once after the first
-              // canplay event so we don't fight subsequent user scrubs.
-              if (initialSeekDoneRef.current) return;
-              initialSeekDoneRef.current = true;
-              if (startPosition > 0 && playerRef.current) {
-                try {
-                  playerRef.current.currentTime = startPosition;
-                } catch {
-                  /* swallowed: edge case, user can seek manually */
-                }
-              }
-            }}
-            onError={(detail) => {
-              // eslint-disable-next-line no-console
-              console.error("[Vidstack onError]", detail);
-              setPlayerError(
-                `${detail.message ?? "unknown error"}` +
-                  (detail.mediaError ? ` (code ${detail.mediaError.code})` : ""),
-              );
-            }}
-            // Surface the actual provider Vidstack chose AND enable
-            // hls.js debug tracing so we can tell, when something goes
-            // wrong, whether (a) Vidstack didn't pick HLS at all
-            // (provider.type !== "hls"), (b) hls.js was picked but
-            // filtered the variant on codec, or (c) the loading itself
-            // erred. Filter the console with `[HLS]` for hls.js's own
-            // verbose log line, and with `[Vidstack provider]` for the
-            // provider selection.
-            onProviderChange={(provider) => {
-              // eslint-disable-next-line no-console
-              console.log("[Vidstack provider]", provider?.type, provider);
-              if (provider && "config" in provider) {
-                (provider as { config: Record<string, unknown> }).config = {
-                  ...(provider as { config: Record<string, unknown> }).config,
-                  debug: true,
-                };
-              }
-            }}
-            playsInline
-            ref={(p) => {
-              playerRef.current = p;
-            }}
-          >
-            <MediaProvider>
-              {textSubs.map((s, i, all) => (
-                <Track
-                  key={String(s.index)}
-                  src={torrents.subtitleUrl(infohash, fileIdx, s.index)}
-                  kind="subtitles"
-                  label={uniqueSubtitleLabel(s, i, all)}
-                  lang={s.language ?? "und"}
-                  default={s.default}
-                />
-              ))}
-            </MediaProvider>
-            <DefaultVideoLayout icons={defaultLayoutIcons} />
-          </MediaPlayer>
+          />
         ) : (
           <PlayerLoadingStatus
             torrent={data}
@@ -668,22 +671,6 @@ function StateBadge({ state }: { state: TorrentView["state"] }) {
   );
 }
 
-function uniqueSubtitleLabel(s: SubtitleStream, _idx: number, all: SubtitleStream[]): string {
-  const baseTitle = s.title?.trim();
-  const langCode = s.language?.toUpperCase();
-  const sameLang = all.filter((x) => x.language === s.language);
-  const hasDuplicates = sameLang.length > 1 && !baseTitle;
-  let label = baseTitle ?? langCode ?? `Sub ${s.index + 1}`;
-  if (s.forced) label += " · forced";
-  if (s.codec && s.codec.toLowerCase() !== "subrip") {
-    label += ` · ${s.codec.toLowerCase()}`;
-  }
-  if (hasDuplicates) {
-    const positionAmongSameLang = sameLang.findIndex((x) => x.index === s.index) + 1;
-    label += ` (${positionAmongSameLang})`;
-  }
-  return label;
-}
 
 function PlayerLoadingStatus({
   torrent,

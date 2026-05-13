@@ -13,6 +13,7 @@ use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
+use crate::middleware::{coop_coep_layers, iris_caps_layer};
 use crate::rate_limit::CloudflareIpKeyExtractor;
 use crate::routes;
 use crate::state::AppState;
@@ -42,6 +43,14 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/devices", routes::devices::me_router())
         .nest("/follows", routes::follows::router());
 
+    // Apply the Iris-Caps parser + telemetry on /torrents only — that's
+    // where capability negotiation matters, and the middleware reads the DB
+    // pool from state, which would be wasteful on /search etc.
+    let torrents = routes::torrents::router().layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        iris_caps_layer,
+    ));
+
     let api = Router::new()
         .route("/health", get(routes::health::get))
         .nest("/auth", auth)
@@ -50,7 +59,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/search", routes::search::router())
         .nest("/discover", routes::discover::router())
         .nest("/library", routes::library::router())
-        .nest("/torrents", routes::torrents::router())
+        .nest("/torrents", torrents)
         .nest("/providers", routes::providers::router())
         .nest("/metadata", routes::metadata::router());
 
@@ -73,8 +82,15 @@ pub fn build_router(state: AppState) -> Router {
         }
     }
 
+    // COOP/COEP enable cross-origin isolation so the web client can use
+    // SharedArrayBuffer for libav.js threads and SubtitlesOctopus. Applied
+    // on every response (API + static); for /api the headers are harmless
+    // extras.
+    let (opener_policy, embedder_policy) = coop_coep_layers();
     app.layer(CompressionLayer::new())
         .layer(cors)
+        .layer(opener_policy)
+        .layer(embedder_policy)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

@@ -36,10 +36,35 @@ pub struct VideoStream {
     pub absolute_index: u32,
     pub codec: String,
     pub profile: Option<String>,
+    /// Codec level encoded as the integer ffprobe reports (e.g. 51 = level 5.1).
+    pub level: Option<u32>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub bit_rate: Option<u64>,
     pub frame_rate: Option<f64>,
+    /// Frame rate as a rational, when available. The legacy `frame_rate` float
+    /// remains for existing callers; this field gives the exact ratio MSE
+    /// timestamps need.
+    pub frame_rate_num: Option<u32>,
+    pub frame_rate_den: Option<u32>,
+    pub bit_depth: Option<u8>,
+    pub color_primaries: Option<String>,
+    pub color_transfer: Option<String>,
+    pub color_space: Option<String>,
+    /// Detected HDR flavour, derived from `color_transfer` + side data.
+    pub hdr: HdrKind,
+    pub max_cll: Option<u32>,
+    pub max_fall: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HdrKind {
+    None,
+    Hdr10,
+    Hdr10Plus,
+    Dovi,
+    Hlg,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -241,6 +266,7 @@ fn dedupe_video(items: Vec<VideoStream>) -> Vec<VideoStream> {
             s.profile.clone(),
             s.width,
             s.height,
+            s.bit_depth,
             // Quantise the frame rate to mil­li-fps (24.0 → 24000) so the
             // tuple's `Eq` works on `f64` indirectly via i64. Real frame
             // rates are 12–120 fps, can't overflow i64.
@@ -298,18 +324,43 @@ fn dedupe_subtitles(items: Vec<SubtitleStream>) -> Vec<SubtitleStream> {
 }
 
 fn normalize_video(stream: RawStream, index: usize) -> VideoStream {
+    let (fps_num, fps_den) = parse_frame_rate_rational(stream.avg_frame_rate.as_deref());
+    let frame_rate = match (fps_num, fps_den) {
+        (Some(n), Some(d)) if d != 0 => Some(f64::from(n) / f64::from(d)),
+        _ => None,
+    };
+    let bit_depth = stream
+        .bits_per_raw_sample
+        .as_ref()
+        .and_then(|s| s.parse::<u8>().ok())
+        .or_else(|| bit_depth_from_pix_fmt(stream.pix_fmt.as_deref()));
+    let hdr = detect_hdr(
+        stream.color_transfer.as_deref(),
+        stream.side_data_list.as_deref(),
+    );
+    let (max_cll, max_fall) = content_light_level(stream.side_data_list.as_deref());
     VideoStream {
         index,
         absolute_index: stream.index,
         codec: stream.codec_name.unwrap_or_default(),
         profile: stream.profile,
+        level: stream.level.and_then(|l| u32::try_from(l).ok()),
         width: stream.width,
         height: stream.height,
         bit_rate: stream
             .bit_rate
             .as_ref()
             .and_then(|s| s.parse::<u64>().ok()),
-        frame_rate: parse_frame_rate(stream.avg_frame_rate.as_deref()),
+        frame_rate,
+        frame_rate_num: fps_num,
+        frame_rate_den: fps_den,
+        bit_depth,
+        color_primaries: stream.color_primaries,
+        color_transfer: stream.color_transfer,
+        color_space: stream.color_space,
+        hdr,
+        max_cll,
+        max_fall,
     }
 }
 
@@ -359,17 +410,63 @@ fn lang_and_title(tags: Option<&RawTags>) -> (Option<String>, Option<String>) {
     (lang, title)
 }
 
-fn parse_frame_rate(s: Option<&str>) -> Option<f64> {
-    let s = s?;
+fn parse_frame_rate_rational(s: Option<&str>) -> (Option<u32>, Option<u32>) {
+    let Some(s) = s else { return (None, None); };
     if let Some((a, b)) = s.split_once('/') {
-        let a: f64 = a.parse().ok()?;
-        let b: f64 = b.parse().ok()?;
-        if b == 0.0 {
-            return None;
+        let num = a.parse::<u32>().ok();
+        let den = b.parse::<u32>().ok();
+        if matches!(den, Some(0)) {
+            return (None, None);
         }
-        return Some(a / b);
+        return (num, den);
     }
-    s.parse().ok()
+    // Single number e.g. "23.976" — convert to milli-fps rational.
+    if let Ok(f) = s.parse::<f64>() {
+        if f > 0.0 && f < 1000.0 {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let num = (f * 1000.0).round() as u32;
+            return (Some(num), Some(1000));
+        }
+    }
+    (None, None)
+}
+
+fn bit_depth_from_pix_fmt(pix_fmt: Option<&str>) -> Option<u8> {
+    let p = pix_fmt?.to_ascii_lowercase();
+    // ffmpeg pix_fmt names embed the bit depth: yuv420p10le, p010le, gbrp12le…
+    for depth in [16_u8, 14, 12, 10] {
+        if p.contains(&format!("p{depth}")) || p.contains(&format!("{depth}le")) {
+            return Some(depth);
+        }
+    }
+    if p.starts_with("yuv") || p.starts_with("nv") || p == "gbrp" {
+        return Some(8);
+    }
+    None
+}
+
+fn detect_hdr(color_transfer: Option<&str>, side_data: Option<&[RawSideData]>) -> HdrKind {
+    let has_dovi = side_data.is_some_and(|sd| sd.iter().any(RawSideData::is_dovi));
+    if has_dovi {
+        return HdrKind::Dovi;
+    }
+    let has_hdr10plus = side_data.is_some_and(|sd| sd.iter().any(RawSideData::is_hdr10plus));
+    match color_transfer.map(str::to_ascii_lowercase).as_deref() {
+        Some("smpte2084") if has_hdr10plus => HdrKind::Hdr10Plus,
+        Some("smpte2084") => HdrKind::Hdr10,
+        Some("arib-std-b67") => HdrKind::Hlg,
+        _ => HdrKind::None,
+    }
+}
+
+fn content_light_level(side_data: Option<&[RawSideData]>) -> (Option<u32>, Option<u32>) {
+    let Some(items) = side_data else { return (None, None); };
+    for item in items {
+        if item.is_content_light_level() {
+            return (item.max_content, item.max_average);
+        }
+    }
+    (None, None)
 }
 
 // ---- raw ffprobe schema (only the fields we actually consume) ----
@@ -387,6 +484,7 @@ struct RawStream {
     codec_type: String,
     codec_name: Option<String>,
     profile: Option<String>,
+    level: Option<i32>,
     width: Option<u32>,
     height: Option<u32>,
     avg_frame_rate: Option<String>,
@@ -394,8 +492,49 @@ struct RawStream {
     channel_layout: Option<String>,
     sample_rate: Option<String>,
     bit_rate: Option<String>,
+    bits_per_raw_sample: Option<String>,
+    pix_fmt: Option<String>,
+    color_primaries: Option<String>,
+    color_transfer: Option<String>,
+    color_space: Option<String>,
+    side_data_list: Option<Vec<RawSideData>>,
     tags: Option<RawTags>,
     disposition: Option<RawDisposition>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSideData {
+    side_data_type: Option<String>,
+    /// Present on `"Content light level metadata"` entries.
+    #[serde(default)]
+    max_content: Option<u32>,
+    /// Present on `"Content light level metadata"` entries.
+    #[serde(default)]
+    max_average: Option<u32>,
+}
+
+impl RawSideData {
+    fn type_lower(&self) -> Option<String> {
+        self.side_data_type
+            .as_ref()
+            .map(|s| s.to_ascii_lowercase())
+    }
+
+    fn is_dovi(&self) -> bool {
+        // ffprobe labels it "DOVI configuration record".
+        self.type_lower()
+            .is_some_and(|t| t.contains("dovi") || t.contains("dolby vision"))
+    }
+
+    fn is_hdr10plus(&self) -> bool {
+        self.type_lower()
+            .is_some_and(|t| t.contains("hdr10+") || t.contains("hdr dynamic metadata"))
+    }
+
+    fn is_content_light_level(&self) -> bool {
+        self.type_lower()
+            .is_some_and(|t| t.contains("content light level"))
+    }
 }
 
 #[derive(Debug, Deserialize)]

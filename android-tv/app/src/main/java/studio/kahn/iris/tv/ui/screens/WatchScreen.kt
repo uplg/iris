@@ -87,6 +87,7 @@ fun WatchScreen(
 ) {
     var serverUrl by remember { mutableStateOf<String?>(null) }
     var probe by remember { mutableStateOf<MediaProbe?>(null) }
+    var manifest by remember { mutableStateOf<studio.kahn.iris.tv.data.Manifest?>(null) }
     var playStatus by remember { mutableStateOf<PlayStatus?>(null) }
     var torrent by remember { mutableStateOf<TorrentView?>(null) }
     var resumePositionSec by remember { mutableStateOf(0.0) }
@@ -145,6 +146,28 @@ fun WatchScreen(
                 .onSuccess { torrent = it }
             delay(2_000)
         }
+    }
+
+    // Phase 0 of the capability-negotiated pipeline: fetch the manifest
+    // once the probe succeeds. Phase 0 keeps using /play/master.m3u8 for
+    // actual playback; the manifest call here exists to validate the wire
+    // contract end-to-end and seed Phase 3's switch to direct-blob play.
+    LaunchedEffect(probe, serverUrl) {
+        val baseUrl = serverUrl ?: return@LaunchedEffect
+        probe ?: return@LaunchedEffect
+        if (manifest != null) return@LaunchedEffect
+        runCatching { container.apiFor(baseUrl).manifest(infohash, fileIdx) }
+            .onSuccess { m ->
+                manifest = m
+                android.util.Log.i(
+                    "iris-core",
+                    "manifest: container=${m.container} v=${m.video.map { it.codecString ?: it.codec }} " +
+                        "a=${m.audio.size} subs=${m.subtitles.size} hdr=${m.video.firstOrNull()?.hdr}",
+                )
+            }
+            .onFailure {
+                android.util.Log.w("iris-core", "manifest fetch failed: ${it.message}")
+            }
     }
 
     // Playback prep status. Polls every second until the HLS master

@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -16,7 +17,7 @@ use librqbit::{
 };
 use serde::Serialize;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncSeek};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 /// `librqbit` re-exports `ManagedTorrentHandle` as a private type alias inside
 /// `torrent_state`; keep the local alias explicit so callers don't need to
@@ -266,6 +267,80 @@ impl Engine {
             inner: Box::pin(stream),
             file_size,
         })
+    }
+
+    /// Force librqbit to download a specific byte range of one file by
+    /// opening a [`librqbit::FileStream`], seeking, and reading the bytes
+    /// into a sink. The stream is dropped on return; the side effect of
+    /// the seek + read is that librqbit's piece picker prioritises those
+    /// pieces. Caller-supplied `timeout` bounds how long we wait — return
+    /// `Ok(bytes_actually_read)` on success or completion-with-partial,
+    /// `Err` only if the stream itself errors.
+    ///
+    /// `start` is clamped to the file size; `count` is clamped so the
+    /// effective range stays within `[0, file_size)`. Reading 0 bytes is
+    /// a no-op but still has the side effect of registering the stream
+    /// (because the stream is created), which is sometimes what callers
+    /// want as a cheap priority nudge.
+    pub async fn prefetch_range(
+        &self,
+        infohash: &str,
+        file_idx: usize,
+        start: u64,
+        count: u64,
+        timeout: Duration,
+    ) -> Result<u64, EngineError> {
+        let mut handle = self.open_stream(infohash, file_idx)?;
+        let file_size = handle.file_size();
+        let start = start.min(file_size);
+        let remaining = file_size.saturating_sub(start);
+        let to_read = count.min(remaining);
+        if to_read == 0 {
+            return Ok(0);
+        }
+        let read_fut = async move {
+            handle
+                .inner
+                .seek(std::io::SeekFrom::Start(start))
+                .await
+                .map_err(|e| EngineError::Librqbit(anyhow::anyhow!("seek: {e}")))?;
+            // Discard buffer — we only care about the side effect on
+            // librqbit's piece priority. 256 KiB matches librqbit's
+            // internal piece buffer ceiling for cheap, predictable
+            // throughput.
+            let mut buf = vec![0_u8; 256 * 1024];
+            let mut taken = 0_u64;
+            while taken < to_read {
+                let remaining = to_read - taken;
+                #[allow(clippy::cast_possible_truncation)]
+                let want = (remaining.min(buf.len() as u64)) as usize;
+                let n = handle
+                    .inner
+                    .read(&mut buf[..want])
+                    .await
+                    .map_err(|e| EngineError::Librqbit(anyhow::anyhow!("read: {e}")))?;
+                if n == 0 {
+                    break;
+                }
+                taken += n as u64;
+            }
+            Ok::<u64, EngineError>(taken)
+        };
+        match tokio::time::timeout(timeout, read_fut).await {
+            Ok(Ok(n)) => Ok(n),
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                tracing::debug!(
+                    infohash,
+                    file_idx,
+                    start,
+                    count,
+                    timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+                    "prefetch_range timed out (pieces still flowing in the background)"
+                );
+                Ok(0)
+            }
+        }
     }
 }
 
