@@ -702,12 +702,35 @@ export const mountTierB: EngineMount = async (opts) => {
     formats: ALL_FORMATS,
   });
   try {
-    // Initial mount: no `trim`. The browser seeks to
-    // `opts.startPosition` after `canplay` (handled by
-    // `bindVideoCallbacks`). Trim is only used for seek-restart
-    // scrubs — that path had buggy interaction with Mediabunny's
-    // encoder probe on the first run.
-    await startConversion(0, "initial");
+    // Initial mount. Two paths:
+    //   - startPosition == 0 → vanilla `Conversion` from time 0.
+    //   - startPosition >  0 → low-level manual pipeline jumping to
+    //     the keyframe before `startPosition` via MKV Cues. The
+    //     previous code path called `startConversion(0, "initial")`
+    //     and relied on `video.currentTime = startPosition` after
+    //     `canplay`, which made Mediabunny remux every packet from
+    //     0 → startPosition (downloading hundreds of MB before
+    //     playback could begin on a resume).
+    if (opts.startPosition > 0) {
+      // Position the playhead at startPosition BEFORE pumping the
+      // first packets. The manual pipeline emits fragments with
+      // absolute timestamps starting near `startPosition`, so the
+      // SourceBuffer.buffered range will be `[~startPosition, X]`.
+      // MSE only fires `canplay` once a buffered range covers the
+      // current playhead — with currentTime stuck at 0, that event
+      // would never come and playback would never begin. We also
+      // suppress `bindVideoCallbacks`' canplay-based initial seek so
+      // it doesn't fight us once data finally arrives.
+      try {
+        video.currentTime = opts.startPosition;
+      } catch {
+        /* swallow */
+      }
+      initialSeek.done = true;
+      await runManualPipeline(opts.startPosition);
+    } else {
+      await startConversion(0, "initial");
+    }
   } catch (e) {
     await dispose();
     const err = e instanceof Error ? e : new Error(String(e));
