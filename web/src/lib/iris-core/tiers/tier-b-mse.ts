@@ -21,7 +21,12 @@
 
 import {
   ALL_FORMATS,
+  AudioSampleSink,
+  AudioSampleSource,
   Conversion,
+  EncodedAudioPacketSource,
+  EncodedPacketSink,
+  EncodedVideoPacketSource,
   Input,
   Mp4OutputFormat,
   Output,
@@ -95,8 +100,11 @@ export const mountTierB: EngineMount = async (opts) => {
 
   let disposed = false;
   let sourceBuffer: SourceBuffer | null = null;
-  // Conversion state that we tear down + rebuild on seek-out-of-buffer.
+  // Two parallel pipeline shapes, both writing into the same
+  // `appendQueue` / `sourceBuffer`. We keep a reference to whichever
+  // is currently feeding so we can cancel it on dispose / seek.
   let conversion: Conversion | null = null;
+  let manualOutput: Output | null = null;
   let conversionGeneration = 0;
   const appendQueue: Uint8Array[] = [];
 
@@ -343,29 +351,225 @@ export const mountTierB: EngineMount = async (opts) => {
   };
 
 
-  /** Best-effort seek-restart. Tries to spin up a fresh Mediabunny
-   *  `Conversion` with `trim.start = seekStart` and swap it in for
-   *  the currently-running one. If init fails (most commonly:
-   *  Mediabunny's encoder-probe path with HEVC video + audio
-   *  transcode — Chrome has no HEVC encoder, the probe throws), we
-   *  bail without touching the running conversion so the user can
-   *  keep playing the buffered range and rewind. No demote to F. */
+  /** Seek-restart via Mediabunny's **low-level** API instead of
+   *  `Conversion`. `Conversion` always forces a video re-encode when
+   *  `trim.start > firstTimestamp` (see `_processVideoTrack`), which
+   *  triggers an encoder probe → fails on Chrome for HEVC sources.
+   *
+   *  Bypassing `Conversion`:
+   *   - Video is fed packet-by-packet via `EncodedVideoPacketSource`,
+   *     iterating an `EncodedPacketSink` starting at the keyframe
+   *     before `seekStart`. Pure passthrough, no encoder needed.
+   *   - Audio is fed sample-by-sample via `AudioSampleSource`
+   *     (Mediabunny encodes them to AAC with WebCodecs.AudioEncoder)
+   *     OR packet-by-packet via `EncodedAudioPacketSource` for
+   *     browser-native source codecs. `AudioSampleSink` invokes our
+   *     registered libav decoder for E-AC-3/AC-3/FLAC. */
   const restartConversionFromSeek = async (seekStart: number): Promise<void> => {
     try {
-      await startConversion(seekStart, "seek");
+      await runManualPipeline(seekStart);
     } catch (e) {
       console.warn(
-        "[iris-core] Tier B: seek-restart failed (Mediabunny init threw). " +
-          "Keeping current playback alive. Rewind to a buffered range to resume.",
+        "[iris-core] Tier B: manual seek pipeline failed. " +
+          "Keeping current playback alive — rewind to a buffered range to resume.",
         e,
       );
-      // Try to revive the previous conversion's generation so its
-      // in-flight writes (if any) are still accepted. The buffered
-      // ranges are still there — the user can scrub back.
-      // (We can't actually "uncancel" a Conversion, but if the new
-      // init threw early enough, the old one was never canceled.)
     }
   };
+
+  /** Low-level pipeline that handles seek without going through
+   *  `Conversion`. See the comment on `restartConversionFromSeek`. */
+  const runManualPipeline = async (seekStart: number): Promise<void> => {
+    const prevConv = conversion;
+    const prevOutput = manualOutput;
+    const newGen = conversionGeneration + 1;
+
+    // Build the new Output and validate it BEFORE killing the old
+    // pipeline. If anything throws here, the running conversion is
+    // untouched and playback continues.
+    const sink = buildSink(newGen);
+    const newOutput = new Output({
+      format: new Mp4OutputFormat({
+        fastStart: "fragmented",
+        minimumFragmentDuration: 1,
+      }),
+      target: new StreamTarget(sink),
+    });
+
+    const videoTrack = await input.getPrimaryVideoTrack();
+    if (!videoTrack) throw new Error("manual pipeline: no primary video track");
+    const sourceVideoCodec = await videoTrack.getCodec();
+    if (!sourceVideoCodec) throw new Error("manual pipeline: unknown video codec");
+    const videoSrc = new EncodedVideoPacketSource(sourceVideoCodec);
+    newOutput.addVideoTrack(videoSrc);
+
+    const allAudio = await input.getAudioTracks();
+    const audioTrack = allAudio[chosenAudioIdx] ?? null;
+    type AudioFeed =
+      | { kind: "passthrough"; source: EncodedAudioPacketSource }
+      | { kind: "transcode"; source: AudioSampleSource };
+    let audioFeed: AudioFeed | null = null;
+    if (audioTrack) {
+      if (audioNeedsTranscode) {
+        const source = new AudioSampleSource({ codec: "aac", bitrate: 192_000 });
+        newOutput.addAudioTrack(source);
+        audioFeed = { kind: "transcode", source };
+      } else {
+        const sourceAudioCodec = await audioTrack.getCodec();
+        if (sourceAudioCodec) {
+          const source = new EncodedAudioPacketSource(sourceAudioCodec);
+          newOutput.addAudioTrack(source);
+          audioFeed = { kind: "passthrough", source };
+        }
+      }
+    }
+
+    await newOutput.start();
+
+    // New Output is live. Now safely swap state.
+    conversionGeneration = newGen;
+    conversion = null;
+    manualOutput = newOutput;
+    try {
+      await prevConv?.cancel();
+    } catch {
+      /* canceled is expected */
+    }
+    try {
+      await prevOutput?.cancel();
+    } catch {
+      /* idempotent */
+    }
+    appendQueue.length = 0;
+    if (sourceBuffer) {
+      await waitForUpdateEnd();
+      try {
+        sourceBuffer.remove(0, Number.POSITIVE_INFINITY);
+      } catch {
+        /* may already be empty */
+      }
+      await waitForUpdateEnd();
+      // Don't set timestampOffset — Mediabunny emits absolute media
+      // timestamps from the source, so SourceBuffer's default 0
+      // offset puts fragments at their natural place on the timeline.
+      try {
+        sourceBuffer.timestampOffset = 0;
+      } catch {
+        /* swallow */
+      }
+    }
+
+    // Pump video + audio concurrently.
+    const videoP = (async () => {
+      const packetSink = new EncodedPacketSink(videoTrack);
+      const startPacket = await packetSink.getKeyPacket(seekStart);
+      if (!startPacket) return;
+      const decoderConfig = await videoTrack.getDecoderConfig();
+      let firstMeta = true;
+      for await (const packet of packetSink.packets(startPacket)) {
+        if (disposed || newGen !== conversionGeneration) break;
+        const meta = firstMeta
+          ? { decoderConfig: decoderConfig ?? undefined }
+          : undefined;
+        await videoSrc.add(packet, meta);
+        firstMeta = false;
+      }
+      await videoSrc.close();
+    })();
+
+    const audioP = audioTrack && audioFeed
+      ? (async () => {
+          if (audioFeed.kind === "passthrough") {
+            const packetSink = new EncodedPacketSink(audioTrack);
+            const startPacket = await packetSink.getKeyPacket(seekStart);
+            if (!startPacket) {
+              await audioFeed.source.close();
+              return;
+            }
+            const decoderConfig = await audioTrack.getDecoderConfig();
+            let firstMeta = true;
+            for await (const packet of packetSink.packets(startPacket)) {
+              if (disposed || newGen !== conversionGeneration) break;
+              const meta = firstMeta
+                ? { decoderConfig: decoderConfig ?? undefined }
+                : undefined;
+              await audioFeed.source.add(packet, meta);
+              firstMeta = false;
+            }
+            await audioFeed.source.close();
+          } else {
+            // Transcode: AudioSampleSink uses our registered libav
+            // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
+            // AudioSampleSource encodes them to AAC via WebCodecs.
+            const sampleSink = new AudioSampleSink(audioTrack);
+            for await (const sample of sampleSink.samples(seekStart, Infinity)) {
+              if (disposed || newGen !== conversionGeneration) {
+                sample.close();
+                break;
+              }
+              await audioFeed.source.add(sample);
+              sample.close();
+            }
+            await audioFeed.source.close();
+          }
+        })()
+      : Promise.resolve();
+
+    void Promise.all([videoP, audioP])
+      .then(() => newOutput.finalize())
+      .catch((e: unknown) => {
+        if (newGen !== conversionGeneration) return;
+        if (e instanceof Error && /canceled/i.test(e.message)) return;
+        fail(e instanceof Error ? e : new Error(String(e)));
+      });
+  };
+
+  /** Build a `WritableStream` sink for a fresh Output, scoped to a
+   *  particular conversion generation so writes from stale outputs
+   *  become no-ops once we bump the generation counter. */
+  function buildSink(generation: number): WritableStream<StreamTargetChunk> {
+    return new WritableStream<StreamTargetChunk>({
+      write: async (chunk) => {
+        if (disposed || generation !== conversionGeneration) return;
+        appendQueue.push(chunk.data);
+        drainQueue();
+        while (
+          !disposed &&
+          generation === conversionGeneration &&
+          bufferedAheadSeconds() > BUFFER_AHEAD_TARGET_SECONDS
+        ) {
+          await new Promise<void>((resolve) => {
+            if (!sourceBuffer) {
+              resolve();
+              return;
+            }
+            let settled = false;
+            const done = () => {
+              if (settled) return;
+              settled = true;
+              sourceBuffer?.removeEventListener("updateend", done);
+              clearTimeout(t);
+              resolve();
+            };
+            sourceBuffer.addEventListener("updateend", done, { once: true });
+            const t = setTimeout(done, 500);
+          });
+        }
+      },
+      close: () => {
+        if (disposed || generation !== conversionGeneration) return;
+        try {
+          if (mediaSource.readyState === "open") mediaSource.endOfStream();
+        } catch {
+          /* idempotent */
+        }
+      },
+      abort: (reason) => {
+        if (generation !== conversionGeneration) return;
+        fail(reason instanceof Error ? reason : new Error(String(reason)));
+      },
+    });
+  }
 
   // ---- Public handle ---------------------------------------------
 
@@ -378,6 +582,11 @@ export const mountTierB: EngineMount = async (opts) => {
       await conversion?.cancel();
     } catch {
       /* canceled is expected */
+    }
+    try {
+      await manualOutput?.cancel();
+    } catch {
+      /* idempotent */
     }
     URL.revokeObjectURL(objectUrl);
     try {
