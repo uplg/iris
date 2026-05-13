@@ -87,12 +87,22 @@ export const mountTierF: EngineMount = async (opts) => {
   });
   hls.on(Hls.Events.MANIFEST_PARSED, () => {
     opts.onReady?.();
-    opts.onAudioTracksChange?.(collectHlsAudioTracks(hls));
+    const tracks = collectHlsAudioTracks(hls);
+    console.log(
+      `[iris-core] Tier F: HLS manifest parsed. ${tracks.length} audio track(s):`,
+      tracks,
+      "raw hls.audioTracks =",
+      hls.audioTracks,
+    );
+    opts.onAudioTracksChange?.(tracks);
   });
   hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
-    opts.onAudioTracksChange?.(collectHlsAudioTracks(hls));
+    const tracks = collectHlsAudioTracks(hls);
+    console.log("[iris-core] Tier F: AUDIO_TRACKS_UPDATED", tracks);
+    opts.onAudioTracksChange?.(tracks);
   });
-  hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, () => {
+  hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_e, data) => {
+    console.log("[iris-core] Tier F: AUDIO_TRACK_SWITCHED to id", data.id);
     opts.onAudioTracksChange?.(collectHlsAudioTracks(hls));
   });
   hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -124,7 +134,18 @@ export const mountTierF: EngineMount = async (opts) => {
     audioTracks: () => collectHlsAudioTracks(hls),
     setAudioTrack: (id) => {
       const idx = Number(id);
-      if (Number.isFinite(idx)) hls.audioTrack = idx;
+      if (!Number.isFinite(idx)) return;
+      const tracks = hls.audioTracks;
+      if (idx < 0 || idx >= tracks.length) {
+        console.warn(
+          `[iris-core] Tier F: setAudioTrack(${idx}) out of range — hls.audioTracks has ${tracks.length} entries`,
+        );
+        return;
+      }
+      console.log(
+        `[iris-core] Tier F: switching to audio track ${idx} (${tracks[idx]?.name ?? tracks[idx]?.lang ?? "?"})`,
+      );
+      hls.audioTrack = idx;
     },
   });
   return handle;

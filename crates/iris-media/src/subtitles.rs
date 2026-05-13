@@ -96,13 +96,18 @@ impl fmt::Display for SubtitleFormat {
 
 pub async fn extract_webvtt(
     source: &Path,
-    idx_in_subtitles: u32,
+    absolute_stream_idx: u32,
 ) -> Result<String, SubtitleError> {
+    // `-map 0:N` selects the absolute stream index. The previous
+    // `-map 0:s:N` form expected N to count only subtitle streams
+    // (0-based among subs), which broke when the manifest started
+    // exposing the global ffprobe index. Using the absolute form
+    // matches what the manifest URL carries end-to-end.
     let output = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error"])
         .arg("-i")
         .arg(source)
-        .args(["-map", &format!("0:s:{idx_in_subtitles}")])
+        .args(["-map", &format!("0:{absolute_stream_idx}")])
         .args(["-c:s", "webvtt", "-f", "webvtt", "pipe:1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -126,10 +131,10 @@ pub type SubtitleStream =
 /// Backwards-compat shim kept for the existing `/track.vtt` route.
 pub async fn stream_webvtt(
     source: &Path,
-    idx_in_subtitles: u32,
+    absolute_stream_idx: u32,
     cache_path: PathBuf,
 ) -> Result<SubtitleStream, SubtitleError> {
-    stream_subtitle(source, idx_in_subtitles, SubtitleFormat::WebVtt, cache_path).await
+    stream_subtitle(source, absolute_stream_idx, SubtitleFormat::WebVtt, cache_path).await
 }
 
 /// Spawn `ffmpeg` to extract a subtitle stream in the requested format
@@ -139,7 +144,7 @@ pub async fn stream_webvtt(
 /// failure or early client disconnect the partial file is removed.
 pub async fn stream_subtitle(
     source: &Path,
-    idx_in_subtitles: u32,
+    absolute_stream_idx: u32,
     format: SubtitleFormat,
     cache_path: PathBuf,
 ) -> Result<SubtitleStream, SubtitleError> {
@@ -153,7 +158,8 @@ pub async fn stream_subtitle(
         .args(["-hide_banner", "-loglevel", "warning"])
         .arg("-i")
         .arg(source)
-        .args(["-map", &format!("0:s:{idx_in_subtitles}")])
+        // Absolute stream index (matches what the manifest URL carries).
+        .args(["-map", &format!("0:{absolute_stream_idx}")])
         .args(["-c:s", format.ffmpeg_codec(), "-f", format.ffmpeg_muxer(), "pipe:1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

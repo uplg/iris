@@ -187,12 +187,18 @@ export const mountTierB: EngineMount = async (opts) => {
    *  to `opts.startPosition` after `canplay`. `mode = 'seek'` is a
    *  scrub outside the buffered range — `trim.start` is applied and
    *  the SourceBuffer's `timestampOffset` aligns new fragments to
-   *  the chosen media time. */
+   *  the chosen media time.
+   *
+   *  For `mode = 'seek'`: the new conversion is `init()`'d BEFORE the
+   *  old one is canceled, so an `init` failure leaves the running
+   *  conversion untouched and the user keeps their buffered playback. */
   const startConversion = async (
     seekStart: number,
     mode: "initial" | "seek",
   ): Promise<void> => {
-    const generation = ++conversionGeneration;
+    const prev = mode === "seek" ? conversion : null;
+    const prevGen = conversionGeneration;
+    const generation = prevGen + 1;
     const useTrim = mode === "seek" && seekStart > 0;
     if (sourceBuffer && useTrim) {
       try {
@@ -271,13 +277,18 @@ export const mountTierB: EngineMount = async (opts) => {
       target: new StreamTarget(sink),
     });
 
+    // No `video` option here — Mediabunny's default is passthrough
+    // when the target container supports the source codec. Setting
+    // `video: { codec: 'hevc' }` actually means "transcode to HEVC",
+    // which forces Mediabunny down a re-encode path that fails on
+    // Chrome (no HEVC encoder) and produces a black screen.
     const newConversion = await Conversion.init({
       input,
       output,
       audio: audioFilter,
       ...(useTrim ? { trim: { start: seekStart } } : {}),
     });
-    if (disposed || generation !== conversionGeneration) {
+    if (disposed) {
       try {
         await newConversion.cancel();
       } catch {
@@ -289,9 +300,41 @@ export const mountTierB: EngineMount = async (opts) => {
       const reasons = newConversion.discardedTracks
         .map((t) => `${t.track.codec}: ${t.reason}`)
         .join("; ");
+      try {
+        await newConversion.cancel();
+      } catch {
+        /* idempotent */
+      }
       throw new Error(`Tier B conversion invalid (discarded: ${reasons})`);
     }
+
+    // Init succeeded. Now safe to swap state.
+    if (prev) {
+      try {
+        await prev.cancel();
+      } catch {
+        /* canceled is expected */
+      }
+      appendQueue.length = 0;
+      if (sourceBuffer) {
+        await waitForUpdateEnd();
+        try {
+          sourceBuffer.remove(0, Number.POSITIVE_INFINITY);
+        } catch {
+          /* may already be empty */
+        }
+        await waitForUpdateEnd();
+        if (useTrim) {
+          try {
+            sourceBuffer.timestampOffset = seekStart;
+          } catch {
+            /* swallow */
+          }
+        }
+      }
+    }
     conversion = newConversion;
+    conversionGeneration = generation;
     void newConversion.execute().catch((e: unknown) => {
       if (generation !== conversionGeneration) return;
       if (e instanceof Error && /canceled/i.test(e.message)) return;
@@ -299,31 +342,29 @@ export const mountTierB: EngineMount = async (opts) => {
     });
   };
 
-  /** Cancel the current conversion, clear the SourceBuffer, and
-   *  start a fresh conversion from `seekStart`. Used when the user
-   *  scrubs to a time outside the buffered ranges. */
+
+  /** Best-effort seek-restart. Tries to spin up a fresh Mediabunny
+   *  `Conversion` with `trim.start = seekStart` and swap it in for
+   *  the currently-running one. If init fails (most commonly:
+   *  Mediabunny's encoder-probe path with HEVC video + audio
+   *  transcode — Chrome has no HEVC encoder, the probe throws), we
+   *  bail without touching the running conversion so the user can
+   *  keep playing the buffered range and rewind. No demote to F. */
   const restartConversionFromSeek = async (seekStart: number): Promise<void> => {
-    const prev = conversion;
-    conversion = null;
-    // Bump the generation so any in-flight sink writes from the
-    // previous conversion become no-ops.
-    conversionGeneration += 1;
     try {
-      await prev?.cancel();
-    } catch {
-      /* canceled is expected */
+      await startConversion(seekStart, "seek");
+    } catch (e) {
+      console.warn(
+        "[iris-core] Tier B: seek-restart failed (Mediabunny init threw). " +
+          "Keeping current playback alive. Rewind to a buffered range to resume.",
+        e,
+      );
+      // Try to revive the previous conversion's generation so its
+      // in-flight writes (if any) are still accepted. The buffered
+      // ranges are still there — the user can scrub back.
+      // (We can't actually "uncancel" a Conversion, but if the new
+      // init threw early enough, the old one was never canceled.)
     }
-    appendQueue.length = 0;
-    if (sourceBuffer) {
-      await waitForUpdateEnd();
-      try {
-        sourceBuffer.remove(0, Number.POSITIVE_INFINITY);
-      } catch {
-        /* may already be empty */
-      }
-      await waitForUpdateEnd();
-    }
-    await startConversion(seekStart, "seek");
   };
 
   // ---- Public handle ---------------------------------------------
@@ -375,26 +416,15 @@ export const mountTierB: EngineMount = async (opts) => {
     ...baseHandle,
     seek: (s: number) => {
       const target = Math.max(0, s);
-      if (isTimeBuffered(target)) {
-        try {
-          video.currentTime = target;
-        } catch {
-          /* swallow */
-        }
-        return;
-      }
-      // Out-of-buffer seek — restart Mediabunny from `target`. The
-      // native `seeking` event will fire when we set currentTime
-      // below; do that AFTER kicking off the restart so the
-      // browser's seeking state aligns with the conversion's seek.
       try {
         video.currentTime = target;
       } catch {
         /* swallow */
       }
-      void restartConversionFromSeek(target).catch((e) => {
-        if (!disposed) fail(e instanceof Error ? e : new Error(String(e)));
-      });
+      if (isTimeBuffered(target)) return;
+      // Out-of-buffer scrub. Best-effort restart; on failure we keep
+      // the current conversion alive (see `restartConversionFromSeek`).
+      void restartConversionFromSeek(target);
     },
   };
 
