@@ -11,6 +11,7 @@
 import Hls from "hls.js";
 
 import {
+  appendNativeTrack,
   bindVideoCallbacks,
   videoBackedHandle,
   type EngineAudioTrack,
@@ -25,14 +26,9 @@ export const mountTierF: EngineMount = async (opts) => {
   video.className = "h-full w-full object-contain";
   video.playsInline = true;
   video.preload = "auto";
+  const nativeTrackMap = new Map<number, HTMLTrackElement>();
   for (const sub of nativeSubs) {
-    const track = document.createElement("track");
-    track.src = sub.vttUrl;
-    track.kind = "subtitles";
-    track.label = sub.title ?? sub.lang?.toUpperCase() ?? `Sub ${sub.stream_idx}`;
-    track.srclang = sub.lang ?? "und";
-    if (sub.default) track.default = true;
-    video.appendChild(track);
+    appendNativeTrack(video, sub, nativeTrackMap);
   }
   container.appendChild(video);
 
@@ -51,6 +47,8 @@ export const mountTierF: EngineMount = async (opts) => {
   if (nativeHls) {
     video.src = streamUrl;
     return videoBackedHandle(video, {
+      nativeTrackMap,
+      fallbackDuration: opts.manifest.duration_s ?? null,
       dispose: async () => {
         unbind();
         video.removeEventListener("error", onErr);
@@ -107,6 +105,8 @@ export const mountTierF: EngineMount = async (opts) => {
   });
 
   const handle: EngineHandle = videoBackedHandle(video, {
+    nativeTrackMap,
+    fallbackDuration: opts.manifest.duration_s ?? null,
     dispose: async () => {
       unbind();
       video.removeEventListener("error", onErr);

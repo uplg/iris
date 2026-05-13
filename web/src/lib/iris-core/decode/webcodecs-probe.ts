@@ -170,6 +170,43 @@ function summariseConfig(c: VideoDecoderConfig): Record<string, unknown> {
   };
 }
 
+/** Materialise a `BufferSource` (ArrayBuffer / ArrayBufferView /
+ *  SharedArrayBuffer) as a regular Uint8Array. Stored once, then
+ *  `freshBuffer(bytes)` produces a brand-new ArrayBuffer copy each
+ *  time we need to hand the description to a WebCodecs decoder. */
+function bufferSourceToBytes(src: AllowSharedBufferSource): Uint8Array {
+  if (src instanceof ArrayBuffer) return new Uint8Array(src).slice();
+  if (typeof SharedArrayBuffer !== "undefined" && src instanceof SharedArrayBuffer) {
+    return new Uint8Array(new Uint8Array(src)).slice();
+  }
+  const view = src as ArrayBufferView;
+  return new Uint8Array(
+    view.buffer as ArrayBuffer,
+    view.byteOffset,
+    view.byteLength,
+  ).slice();
+}
+
+/** Produce a brand-new owned `ArrayBuffer` containing the same bytes.
+ *  Use before every `configure()` because some Chromium builds detach
+ *  the buffer when handing it to the codec internals. */
+export function freshBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.slice().buffer;
+}
+
+/** Return a copy of `config` whose `description` field is a brand-new
+ *  `ArrayBuffer`. Idempotent / cheap. Call right before any
+ *  `VideoDecoder.configure()` / `AudioDecoder.configure()` so a config
+ *  that previously flowed through a decoder (which may have detached
+ *  its description in some Chromium builds) can be safely re-used. */
+export function configWithFreshDescription<
+  T extends { description?: AllowSharedBufferSource | undefined },
+>(config: T): T {
+  if (!config.description) return config;
+  const bytes = bufferSourceToBytes(config.description);
+  return { ...config, description: freshBuffer(bytes) };
+}
+
 /**
  * Probe a video track for WebCodecs decode support. Returns the
  * exact config that produced a `VideoFrame` (or null if none did).
@@ -181,8 +218,24 @@ export async function probeVideoTrack(
 ): Promise<WebCodecsProbeResult | null> {
   if (typeof globalThis.VideoDecoder === "undefined") return null;
 
-  const baseConfig = await track.getDecoderConfig();
-  if (!baseConfig) return null;
+  const rawConfig = await track.getDecoderConfig();
+  if (!rawConfig) return null;
+  // The `description` BufferSource has to be re-cloned **before every
+  // single `configure()` call** because some Chromium versions detach
+  // the buffer when handing it to the codec internals (spec-non-
+  // conforming: the spec says configure makes a copy). Sharing one
+  // ArrayBuffer between probe-decoder and pipeline-decoder reproduces
+  // the "Unsupported configuration" rejection on the second call.
+  //
+  // We keep the original bytes in `descriptionBytes` and stamp a fresh
+  // copy onto the live config every time it leaves this module.
+  const descriptionBytes: Uint8Array | null = rawConfig.description
+    ? bufferSourceToBytes(rawConfig.description)
+    : null;
+  const baseConfig: VideoDecoderConfig = {
+    ...rawConfig,
+    description: descriptionBytes ? freshBuffer(descriptionBytes) : undefined,
+  };
 
   // Negative cache short-circuit: don't waste time on codecs we
   // already know fail in this browser. Positive cases re-test
@@ -224,9 +277,11 @@ export async function probeVideoTrack(
     { hwAcc: undefined, hardware: false },
   ];
   for (const { hwAcc, hardware } of attempts) {
-    const tryConfig: VideoDecoderConfig = hwAcc
-      ? { ...baseConfig, hardwareAcceleration: hwAcc }
-      : { ...baseConfig };
+    const tryConfig: VideoDecoderConfig = {
+      ...baseConfig,
+      ...(hwAcc ? { hardwareAcceleration: hwAcc } : {}),
+      description: descriptionBytes ? freshBuffer(descriptionBytes) : undefined,
+    };
     const support = await VideoDecoder.isConfigSupported(tryConfig).catch(
       () => ({ supported: false } as VideoDecoderSupport),
     );
@@ -234,12 +289,17 @@ export async function probeVideoTrack(
     const decodes = await realDecodeTest(tryConfig, chunk);
     if (decodes) {
       // Success — clear any stale negative entry from a previous
-      // session and return the very config that worked.
+      // session and return a config with a *fresh* description so the
+      // caller's `configure()` doesn't hit a buffer the test decoder
+      // may have detached.
       clearNegativeCache(baseConfig.codec);
       return {
         decodes: true,
         hardware,
-        config: tryConfig,
+        config: {
+          ...tryConfig,
+          description: descriptionBytes ? freshBuffer(descriptionBytes) : undefined,
+        },
         codec: baseConfig.codec,
       };
     }

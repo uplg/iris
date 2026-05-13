@@ -14,6 +14,8 @@
 
 import { EncodedPacketSink, type InputVideoTrack } from "mediabunny";
 
+import { configWithFreshDescription } from "./webcodecs-probe";
+
 export type VideoPipelineOptions = {
   track: InputVideoTrack;
   config: VideoDecoderConfig;
@@ -66,7 +68,11 @@ export function startVideoPipeline(opts: VideoPipelineOptions): VideoPipelineHan
 
   void (async () => {
     try {
-      decoder.configure(opts.config);
+      // Re-clone the description bytes immediately before configure.
+      // Chrome 148+ has been observed detaching the description
+      // buffer at configure time, so a config that already passed
+      // through one decoder can be rejected by the next.
+      decoder.configure(configWithFreshDescription(opts.config));
       const sink = new EncodedPacketSink(opts.track);
       const startPacket =
         opts.startSeconds && opts.startSeconds > 0

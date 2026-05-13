@@ -30,7 +30,7 @@ import { mountRenderer, type VideoRenderer } from "../render/renderer-factory";
 import type { EngineAudioTrack, EngineHandle, EngineMount } from "../engine";
 
 export const mountTierC: EngineMount = async (opts) => {
-  const { container, streamUrl, startPosition } = opts;
+  const { container, streamUrl, startPosition, audioTrackIndex } = opts;
   const onError = opts.onError;
 
   container.innerHTML = "";
@@ -58,7 +58,15 @@ export const mountTierC: EngineMount = async (opts) => {
     throw err;
   }
 
-  const audioTrack = (await input.getPrimaryAudioTrack()) ?? null;
+  // Pick the audio track. The chrome's audio picker writes
+  // `audioTrackIndex` (= position in `manifest.audio`); we walk
+  // Mediabunny's input.getAudioTracks() and take that index.
+  // Defaults to the primary track when no index is supplied.
+  const allAudio = await input.getAudioTracks();
+  const audioTrack =
+    audioTrackIndex != null && audioTrackIndex >= 0 && audioTrackIndex < allAudio.length
+      ? allAudio[audioTrackIndex] ?? null
+      : (await input.getPrimaryAudioTrack()) ?? null;
   const audioConfig = audioTrack ? await audioTrack.getDecoderConfig() : null;
 
   const scheduler: AudioScheduler = await createAudioScheduler();
@@ -197,11 +205,20 @@ export const mountTierC: EngineMount = async (opts) => {
     setVolume: (v) => scheduler.setVolume(v),
     setMuted: (m) => scheduler.setMuted(m),
     audioTracks: (): EngineAudioTrack[] => {
-      return audioTrack
-        ? [{ id: "0", label: "Primary audio", active: true }]
-        : [];
+      const defaultIdx = Math.max(0, opts.manifest.audio.findIndex((x) => x.default));
+      const activeIdx = audioTrackIndex ?? defaultIdx;
+      return opts.manifest.audio.map((a, i) => ({
+        id: String(i),
+        label: a.title ?? a.lang?.toUpperCase() ?? `Audio ${i + 1}`,
+        lang: a.lang ?? undefined,
+        active: i === activeIdx,
+      }));
     },
+    // Tier C audio switch needs a remount (the decoder is bound to a
+    // single Mediabunny track). `IrisPlayer` triggers that via the
+    // mount-key including `audioTrackIndex`.
     setAudioTrack: () => undefined,
+    setNativeSubtitle: () => undefined,
     videoElement: () => null,
     canvasElement: () => renderer.canvas,
   };

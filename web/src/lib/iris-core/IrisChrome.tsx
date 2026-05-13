@@ -16,11 +16,28 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import {
+  Captions,
+  Languages,
+  Maximize,
+  Pause,
+  PictureInPicture2,
+  Play,
+  Rewind,
+  FastForward,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 
 import type { EngineAudioTrack, EngineHandle } from "./engine";
 import type { Manifest, SubtitleTrack } from "./manifest-client";
-import type { DocumentPipHandle } from "./os/document-pip";
 import { subtitleOverlayKind } from "./subs/subtitle-overlay";
+
+export type ChromePipControl = {
+  supported: boolean;
+  isActive: boolean;
+  toggle: () => Promise<void>;
+};
 
 export type IrisChromeProps = {
   handle: EngineHandle | null;
@@ -28,10 +45,16 @@ export type IrisChromeProps = {
   /** Active subtitle track (for both native and overlay paths). null = off. */
   activeSubtitle: SubtitleTrack | null;
   onSubtitleChange: (track: SubtitleTrack | null) => void;
+  /** Index into `manifest.audio` of the currently-active track. The
+   *  chrome highlights it; user picks call `onAudioPick`. */
+  activeAudioIndex: number;
+  /** Called when the user picks an audio track from the menu. Bridges
+   *  to either `handle.setAudioTrack` (Tier F) or a remount (others). */
+  onAudioPick: (id: string) => void;
   /** Container element used as the fullscreen target. */
   fullscreenTarget: HTMLElement | null;
-  /** Document PiP controller (null when API unsupported). */
-  documentPip: DocumentPipHandle | null;
+  /** Document PiP controller. `supported=false` hides the button. */
+  documentPip: ChromePipControl;
   title: string;
 };
 
@@ -47,7 +70,17 @@ export function IrisChrome(props: IrisChromeProps) {
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [buffered, setBuffered] = useState<Array<[number, number]>>([]);
-  const [audioTracks, setAudioTracks] = useState<EngineAudioTrack[]>([]);
+  // Audio tracks come from the manifest (source of truth) — that way
+  // even engines whose track-reporting is racey (e.g., hls.js taking
+  // a beat to populate `hls.audioTracks` after MANIFEST_PARSED) still
+  // show every rendition the user can pick. The chrome marks the
+  // active one based on the parent's `activeAudioIndex` state.
+  const audioTracks: EngineAudioTrack[] = manifest.audio.map((a, i) => ({
+    id: String(i),
+    label: a.title ?? a.lang?.toUpperCase() ?? `Audio ${i + 1}`,
+    lang: a.lang ?? undefined,
+    active: i === props.activeAudioIndex,
+  }));
   const [menu, setMenu] = useState<"none" | "subs" | "audio">("none");
   const [scrubbing, setScrubbing] = useState(false);
   const [hovered, setHovered] = useState(true);
@@ -74,7 +107,6 @@ export function IrisChrome(props: IrisChromeProps) {
       setVolume(handle.volume());
       setMuted(handle.muted());
       setBuffered(handle.buffered());
-      setAudioTracks(handle.audioTracks());
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -180,20 +212,20 @@ export function IrisChrome(props: IrisChromeProps) {
           }}
         />
 
-        <div className="flex items-center gap-2 text-[12px]">
+        <div className="flex items-center gap-1 text-[12px]">
           <Button
             label={paused ? "Play" : "Pause"}
-            icon={paused ? "▶" : "⏸"}
+            icon={paused ? <Play className="size-5" /> : <Pause className="size-5" />}
             onClick={() => (paused ? void handle.play() : handle.pause())}
           />
           <Button
             label="-10s"
-            icon="⟲"
+            icon={<Rewind className="size-4" />}
             onClick={() => handle.seek(Math.max(0, handle.currentTime() - 10))}
           />
           <Button
             label="+10s"
-            icon="⟳"
+            icon={<FastForward className="size-4" />}
             onClick={() => handle.seek(handle.currentTime() + 10)}
           />
           <TimeDisplay current={currentTime} total={duration} />
@@ -215,7 +247,7 @@ export function IrisChrome(props: IrisChromeProps) {
                   ? ` · ${props.activeSubtitle.lang?.toUpperCase() ?? "ON"}`
                   : ""
               }`}
-              icon="CC"
+              icon={<Captions className="size-4" />}
               open={menu === "subs"}
               onToggle={() => setMenu(menu === "subs" ? "none" : "subs")}
             >
@@ -234,30 +266,31 @@ export function IrisChrome(props: IrisChromeProps) {
           {audioTracks.length > 1 && (
             <MenuButton
               label="Audio"
-              icon="A"
+              icon={<Languages className="size-4" />}
               open={menu === "audio"}
               onToggle={() => setMenu(menu === "audio" ? "none" : "audio")}
             >
               <AudioMenu
                 tracks={audioTracks}
                 onSelect={(id) => {
-                  handle.setAudioTrack(id);
+                  props.onAudioPick(id);
                   setMenu("none");
                 }}
               />
             </MenuButton>
           )}
 
-          {props.documentPip && (
+          {props.documentPip.supported && (
             <Button
               label="Picture-in-picture"
-              icon="⧉"
-              onClick={() => void props.documentPip?.toggle()}
+              icon={<PictureInPicture2 className="size-4" />}
+              onClick={() => void props.documentPip.toggle()}
+              active={props.documentPip.isActive}
             />
           )}
           <Button
             label="Fullscreen"
-            icon="⤢"
+            icon={<Maximize className="size-4" />}
             onClick={() => void toggleFullscreen(props.fullscreenTarget)}
           />
         </div>
@@ -345,7 +378,7 @@ function ScrubBar(props: {
 
 function TimeDisplay({ current, total }: { current: number; total: number | null }) {
   return (
-    <span className="font-mono tabular-nums opacity-80">
+    <span className="ml-1 select-none font-mono text-[12px] tabular-nums opacity-80">
       {formatTime(current)} / {total != null ? formatTime(total) : "--:--"}
     </span>
   );
@@ -360,7 +393,13 @@ function VolumeControl(props: {
   const display = props.muted ? 0 : props.volume;
   return (
     <div className="group flex items-center gap-1">
-      <Button label={props.muted ? "Unmute" : "Mute"} icon={props.muted ? "🔇" : "🔊"} onClick={props.onMute} />
+      <Button
+        label={props.muted ? "Unmute" : "Mute"}
+        icon={
+          props.muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />
+        }
+        onClick={props.onMute}
+      />
       <input
         type="range"
         min={0}
@@ -376,7 +415,7 @@ function VolumeControl(props: {
 
 function MenuButton(props: {
   label: string;
-  icon: string;
+  icon: React.ReactNode;
   open: boolean;
   onToggle: () => void;
   children: React.ReactNode;
@@ -460,7 +499,7 @@ function AudioMenu(props: { tracks: EngineAudioTrack[]; onSelect: (id: string) =
 
 function Button(props: {
   label: string;
-  icon: string;
+  icon: React.ReactNode;
   onClick: () => void;
   active?: boolean;
 }) {
@@ -469,7 +508,7 @@ function Button(props: {
       title={props.label}
       aria-label={props.label}
       onClick={props.onClick}
-      className={`grid h-7 min-w-7 place-items-center rounded px-1 text-[12px] hover:bg-white/15 ${
+      className={`grid size-9 place-items-center rounded transition-colors hover:bg-white/15 ${
         props.active ? "bg-white/15" : ""
       }`}
     >

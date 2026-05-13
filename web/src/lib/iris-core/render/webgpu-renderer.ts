@@ -77,7 +77,14 @@ export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<V
   let disposed = false;
 
   device.lost.then((info) => {
-    console.warn("[iris-core] WebGPU device lost:", info.reason, info.message);
+    // Expected on `dispose()` (we call device.destroy()). Anything
+    // else (driver crash, page hidden long enough that the GPU
+    // process reaped us, …) is rare; bump to warn there.
+    if (disposed || info.reason === "destroyed") {
+      console.debug("[iris-core] WebGPU device released:", info.reason);
+    } else {
+      console.warn("[iris-core] WebGPU device lost:", info.reason, info.message);
+    }
   });
 
   const draw = (frame: VideoFrame): void => {

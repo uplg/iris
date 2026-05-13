@@ -8,6 +8,7 @@
  */
 
 import { capsHeader, probeCapabilities } from "./caps";
+import { libavCanDecode } from "./decode/libav-audio-decoder";
 import { cheapProbeVideoCodec } from "./decode/webcodecs-probe";
 
 export type HdrKind = "none" | "hdr10" | "hdr10_plus" | "dovi" | "hlg";
@@ -158,9 +159,17 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
     return MediaSource.isTypeSupported(mime);
   });
   const audioNative = manifest.audio.every((a) => a.browser_native);
+  // libav.js + WebCodecs.AudioEncoder lets us transcode AC-3, E-AC-3
+  // and FLAC to AAC client-side at mount time (see Tier B's audio
+  // filter). Tracks outside that set fall to Tier F.
+  const audioTranscodable = manifest.audio.every(
+    (a) => a.browser_native || libavCanDecode(a.codec),
+  );
+  if (!audioNative && !audioTranscodable) return "F";
 
-  // Tier A/B require the codec to be MSE-friendly AND the audio to be
-  // browser-native (Phase 2b alpha doesn't transcode audio yet).
+  // Tier A: must be MSE-friendly AND native audio (we can't inject
+  // libav.js into a vanilla `<video src>` — the engine is the
+  // browser, no hooks). Tier B picks up the libav-transcoded case.
   if (codecsMse && audioNative) {
     const isMp4Family = /mp4|mov|m4v|isobmff/i.test(manifest.container);
     if (isMp4Family) return "A";
@@ -168,10 +177,19 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
     if (tierBContainers.test(manifest.container)) return "B";
   }
 
-  // Tier C/D: codec MSE refuses but WebCodecs might decode it. Walk the
-  // primary video track; if its codec_string passes the cheap
-  // isConfigSupported check, we're a candidate. The full 1-frame test
-  // runs at mount time so we don't pay it on every manifest.json fetch.
+  // Tier B with audio transcode: MSE accepts the video, libav.js
+  // transcodes the audio to AAC. We always end up in Tier B here
+  // (MP4-family containers with non-native audio also work — the
+  // remux just rebuilds the audio rendition).
+  if (codecsMse && audioTranscodable) {
+    return "B";
+  }
+
+  // Tier C/D: codec MSE refuses but WebCodecs might decode it. Walk
+  // the primary video track; if its codec_string passes the cheap
+  // isConfigSupported check, we're a candidate. The real 1-frame
+  // test runs at mount time so we don't pay it on every manifest
+  // fetch.
   const primary = manifest.video[0];
   if (primary?.codec_string) {
     const probe = await cheapProbeVideoCodec(primary.codec_string);
@@ -179,9 +197,10 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
     if (probe.supportedAny) return "D";
   }
 
-  // Tier E: HEVC at ≤ 1080p in a Chromium-family browser where neither
-  // MSE nor WebCodecs accept the codec. hevc.js transcodes to H.264 in
-  // a WASM worker. 4K is excluded because hevc.js hits ~21 fps on 4K.
+  // Tier E: HEVC at ≤ 1080p in a Chromium-family browser where
+  // neither MSE nor WebCodecs accept the codec. hevc.js transcodes
+  // to H.264 in a WASM worker. 4K is excluded because hevc.js hits
+  // ~21 fps on 4K.
   if (
     primary &&
     /hevc|hev1|hvc1|h265|x265/i.test(primary.codec) &&

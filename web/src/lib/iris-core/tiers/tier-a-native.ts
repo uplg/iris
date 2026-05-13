@@ -7,6 +7,7 @@
  */
 
 import {
+  appendNativeTrack,
   bindVideoCallbacks,
   videoBackedHandle,
   type EngineHandle,
@@ -19,18 +20,10 @@ export const mountTierA: EngineMount = async (opts) => {
   const video = document.createElement("video");
   video.className = "h-full w-full object-contain";
   video.playsInline = true;
-  // No autoplay — Firefox/Safari block with-sound autoplay.
   video.preload = "auto";
-  // `crossOrigin` defaults to anonymous on same-origin requests; we
-  // serve /stream same-origin, so no extra config needed.
+  const nativeTrackMap = new Map<number, HTMLTrackElement>();
   for (const sub of nativeSubs) {
-    const track = document.createElement("track");
-    track.src = sub.vttUrl;
-    track.kind = "subtitles";
-    track.label = sub.title ?? sub.lang?.toUpperCase() ?? `Sub ${sub.stream_idx}`;
-    track.srclang = sub.lang ?? "und";
-    if (sub.default) track.default = true;
-    video.appendChild(track);
+    appendNativeTrack(video, sub, nativeTrackMap);
   }
   container.appendChild(video);
   video.src = streamUrl;
@@ -54,6 +47,8 @@ export const mountTierA: EngineMount = async (opts) => {
   video.addEventListener("error", onErr);
 
   const handle: EngineHandle = videoBackedHandle(video, {
+    nativeTrackMap,
+    fallbackDuration: opts.manifest.duration_s ?? null,
     dispose: async () => {
       unbind();
       video.removeEventListener("loadeddata", onLoadedData);

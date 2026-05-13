@@ -22,6 +22,8 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "hls.js": "^1.6.16",
+    "libav.js": "^6.8.8",
+    "libavjs-webcodecs-bridge": "^0.3.2",
     "libpgs": "^0.8.1",
     "lucide-react": "^1.14.0",
     "mediabunny": "^1.45.0",

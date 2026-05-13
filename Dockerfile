@@ -4,6 +4,51 @@
 # ignored and you're back to recompiling everything every time.
 
 ###############################################################################
+# 0) Custom libav.js build — adds AC-3 / E-AC-3 codecs that none of the
+#    npm-published libav.js variants ship (Dolby licensing). Built once,
+#    cached on subsequent docker builds via BuildKit's `target` cache.
+#
+#    The Iris client uses libav.js for real-time audio transcode in
+#    Tier B (Mediabunny → MSE). Without these codecs, files with
+#    Dolby audio would have to fall back to Tier F (server-side
+#    ffmpeg) — defeating the point of client-side transcode.
+###############################################################################
+# Recent emsdk — the image is multi-arch (linux/amd64 + linux/arm64)
+# so building on Apple Silicon doesn't go through qemu emulation.
+FROM emscripten/emsdk:5.0.7 AS libav-builder
+WORKDIR /build
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        git make python3 yasm nasm pkg-config xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+# Clone libav.js. The version is pinned to match what the web frontend
+# pulled in via `bun install libav.js` so the loader's expected
+# filename (`libav-6.8.8.0-iris.*`) matches the version emscripten
+# spits out.
+ARG LIBAVJS_REPO=https://github.com/Yahweasel/libav.js
+ARG LIBAVJS_REF=v6.8.8.0
+RUN git clone --depth 1 --branch ${LIBAVJS_REF} ${LIBAVJS_REPO} /build/libav.js
+WORKDIR /build/libav.js
+# Custom variant config. `mkconfig.js` must run from inside `configs/`
+# because it reads `fragments/...` via relative paths. Fragments not
+# present on disk (anything not under `configs/fragments/`) fall
+# through to plain `--enable-<kind>=<name>` ffmpeg configure flags —
+# that's how `decoder-ac3` / `decoder-eac3` / `parser-aac` get
+# enabled without needing standalone fragment directories.
+#
+# Decoders only — no muxers / encoders / video — because the Iris
+# client uses libav exclusively to decode non-WebCodecs audio
+# (AC-3, E-AC-3, FLAC, PCM) into PCM samples; encoding back to AAC
+# is done by `WebCodecs.AudioEncoder`, muxing by Mediabunny.
+RUN cd configs && node mkconfig.js iris \
+    '["avformat","avcodec","avfilter","swresample","audio-filters","parser-aac","parser-ac3","decoder-ac3","decoder-eac3","decoder-flac","decoder-pcm_s16le","decoder-pcm_s24le","decoder-pcm_s32le","decoder-pcm_f32le"]'
+RUN --mount=type=cache,target=/build/libav.js/build,sharing=locked \
+    make build-iris -j"$(nproc)" \
+    && cp dist/libav-6.8.8.0-iris.wasm.wasm /libav-iris.wasm \
+    && cp dist/libav-6.8.8.0-iris.wasm.mjs /libav-iris.wasm.mjs \
+    && cp dist/libav-6.8.8.0-iris.wasm.js /libav-iris.wasm.js
+
+###############################################################################
 # 1) Frontend build (bun + Vite)
 ###############################################################################
 FROM oven/bun:1 AS web-builder
@@ -12,6 +57,12 @@ COPY web/package.json web/bun.lock* ./
 RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
     bun install --frozen-lockfile
 COPY web/ ./
+# Drop the iris-variant WASM into public/ so Vite copies it into dist.
+# (The npm-package libav.js wasm files in public/libavjs/ stay as the
+# fallback when the iris variant isn't present.)
+COPY --from=libav-builder /libav-iris.wasm public/libavjs/libav-6.8.8.0-iris.wasm.wasm
+COPY --from=libav-builder /libav-iris.wasm.mjs public/libavjs/libav-6.8.8.0-iris.wasm.mjs
+COPY --from=libav-builder /libav-iris.wasm.js public/libavjs/libav-6.8.8.0-iris.wasm.js
 RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
     bun run build
 

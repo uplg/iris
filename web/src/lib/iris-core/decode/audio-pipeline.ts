@@ -8,6 +8,8 @@
 
 import { EncodedPacketSink, type InputAudioTrack } from "mediabunny";
 
+import { configWithFreshDescription } from "./webcodecs-probe";
+
 export type AudioPipelineOptions = {
   track: InputAudioTrack;
   config: AudioDecoderConfig;
@@ -56,7 +58,7 @@ export function startAudioPipeline(opts: AudioPipelineOptions): AudioPipelineHan
 
   void (async () => {
     try {
-      decoder.configure(opts.config);
+      decoder.configure(configWithFreshDescription(opts.config) as AudioDecoderConfig);
       const sink = new EncodedPacketSink(opts.track);
       const startPacket =
         opts.startSeconds && opts.startSeconds > 0
@@ -72,7 +74,18 @@ export function startAudioPipeline(opts: AudioPipelineOptions): AudioPipelineHan
           await new Promise<void>((r) => setTimeout(r, 4));
         }
         if (stopped) break;
-        decoder.decode(packet.toEncodedAudioChunk());
+        try {
+          decoder.decode(packet.toEncodedAudioChunk());
+        } catch (e) {
+          // The decoder was closed between the queue-size check and
+          // this call (race with `stop()`). Treat as benign — the
+          // caller's stop happens because something else already
+          // surfaced the real error.
+          if (stopped) break;
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.includes("closed codec")) break;
+          throw e;
+        }
       }
       if (!stopped) {
         try {

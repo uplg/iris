@@ -126,30 +126,31 @@ export function WatchPage() {
     [probe],
   );
 
-  // Phase 0 of the tiered cascade: fetch the manifest alongside probe.
-  // The manifest carries the codec strings + container layout the Phase 2
-  // tier-cascade needs. Until then it gives us just enough to pick between
-  // Tier A (direct <video src> over /stream) and Tier F (legacy HLS).
+  // Tiered cascade entry. Drop the `downloadFinished` gate: the
+  // manifest endpoint now handles partial downloads (Phase 1 tail
+  // prefetch), so we should fire as soon as we have a torrent record.
+  // The ManifestNotReadyError retry handles the early-download window.
   const manifestQ = useQuery({
     queryKey: ["manifest", infohash, fileIdx],
     queryFn: () => fetchManifest(infohash!, fileIdx),
-    enabled: !!infohash && downloadFinished,
+    enabled: !!infohash,
     retry: (failureCount, err) =>
-      err instanceof ManifestNotReadyError && failureCount < 5,
+      err instanceof ManifestNotReadyError && failureCount < 30,
     retryDelay: 2000,
   });
   const manifest = manifestQ.data;
   const [tier, setTier] = useState<DecodeTier>("F");
-  // Demoted tiers we shouldn't retry within this mount (e.g., Tier C
-  // failed its 1-frame probe → don't try Tier D on the same codec,
-  // skip straight to F).
+  // Tiers we've already demoted away from this mount. Subsequent
+  // pickTier results that name them collapse straight to F.
   const demotedRef = useRef<Set<DecodeTier>>(new Set());
+  // True while a demote is in flight — swallows redundant onError
+  // callbacks fired by the dying engine before its dispose unwinds.
+  const demotionInProgressRef = useRef<DecodeTier | null>(null);
   useEffect(() => {
     if (!manifest) return;
     void pickTier(manifest).then((t) => {
       const final = demotedRef.current.has(t) ? "F" : t;
       setTier(final);
-      // Telemetry until Grafana is wired up.
       console.log("[iris-core] tier", final, {
         container: manifest.container,
         video: manifest.video.map((v) => v.codec_string ?? v.codec),
@@ -157,31 +158,71 @@ export function WatchPage() {
       });
     });
   }, [manifest]);
-  // Demote the active tier on a fatal player error. Tier C → F is the
-  // common case (probe lied about HW HEVC). Best-effort POST so the
-  // server-side legacy fallback can pre-warm.
-  const demoteTier = useCallback(
-    (from: DecodeTier, reason: string) => {
-      console.warn(`[iris-core] tier ${from} demoting → F (${reason})`);
-      demotedRef.current.add(from);
-      setPlayerError(null);
-      setTier("F");
-      if (manifest) {
-        void fetch(`/api/torrents/${manifest.infohash}/files/${manifest.file_idx}/playback-error`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            tier: from,
-            reason,
-            codec: manifest.video[0]?.codec ?? null,
-            browser: navigator.userAgent,
-          }),
-          keepalive: true,
-        }).catch(() => undefined);
+
+  /** Decide the next tier after a failure. Tier C/D failing on HEVC
+   *  in a Chromium-family ≤ 1080p browser is routed through Tier E
+   *  (hevc.js WASM transcode) before falling back to server-side
+   *  HLS — the user's bandwidth + Chrome's HEVC HW story makes E
+   *  the correct stop on the way down. */
+  const nextDemotionTarget = useCallback(
+    (from: DecodeTier): DecodeTier => {
+      if ((from === "C" || from === "D") && manifest) {
+        const primary = manifest.video[0];
+        const isHevc =
+          primary != null && /hevc|hev1|hvc1|h265|x265/i.test(primary.codec);
+        const within1080p = (primary?.height ?? 0) <= 1080 && (primary?.height ?? 0) > 0;
+        const chromiumish =
+          /Chrome|Edg/.test(navigator.userAgent) && !/Mobile/.test(navigator.userAgent);
+        if (
+          isHevc &&
+          within1080p &&
+          chromiumish &&
+          !demotedRef.current.has("E")
+        ) {
+          return "E";
+        }
       }
+      return "F";
     },
     [manifest],
+  );
+
+  const demoteTier = useCallback(
+    (from: DecodeTier, reason: string) => {
+      // Debounce: if we already demoted this tier in this mount,
+      // swallow follow-on errors fired during teardown.
+      if (demotedRef.current.has(from)) return;
+      if (demotionInProgressRef.current === from) return;
+      demotionInProgressRef.current = from;
+      const target = nextDemotionTarget(from);
+      console.warn(`[iris-core] tier ${from} → ${target} (${reason})`);
+      demotedRef.current.add(from);
+      setPlayerError(null);
+      setTier(target);
+      // Clear the in-flight guard on the next tick — by then the
+      // engine has unmounted and any stragglers are harmless.
+      setTimeout(() => {
+        demotionInProgressRef.current = null;
+      }, 250);
+      if (manifest) {
+        void fetch(
+          `/api/torrents/${manifest.infohash}/files/${manifest.file_idx}/playback-error`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              tier: from,
+              reason,
+              codec: manifest.video[0]?.codec ?? null,
+              browser: navigator.userAgent,
+            }),
+            keepalive: true,
+          },
+        ).catch(() => undefined);
+      }
+    },
+    [manifest, nextDemotionTarget],
   );
 
   // Saved progress (audio choice + last position) for this user/file.

@@ -16,7 +16,7 @@ import type { EngineHandle, EngineMount, NativeSubtitleTrack } from "./engine";
 import type { DecodeTier, Manifest, SubtitleTrack } from "./manifest-client";
 import { nativeSubtitleUrl } from "./manifest-client";
 import { attachMediaSession } from "./os/media-session";
-import { mountDocumentPip, type DocumentPipHandle } from "./os/document-pip";
+import { useDocumentPip } from "./os/document-pip";
 import { SubtitleOverlay, subtitleOverlayKind } from "./subs/subtitle-overlay";
 import { mountTierA } from "./tiers/tier-a-native";
 
@@ -52,6 +52,14 @@ export type IrisPlayerProps = {
   onError: (message: string) => void;
 };
 
+/** Audio-track switching strategy. Tier F changes audio live via
+ *  hls.js. Every other tier requires a re-mount to pick a new
+ *  audio source (Tier A is single-audio; B/C have to re-spin the
+ *  decode/demux pipeline). */
+function tierRequiresRemountForAudio(tier: DecodeTier): boolean {
+  return tier !== "F";
+}
+
 function classifySubtitles(manifest: Manifest): {
   native: NativeSubtitleTrack[];
   overlay: SubtitleTrack[];
@@ -67,12 +75,24 @@ function classifySubtitles(manifest: Manifest): {
 }
 
 export function IrisPlayer(props: IrisPlayerProps) {
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  // Use state (not ref) for the wrapper so children re-render when
+  // it's attached. Plain refs don't trigger re-renders, which leaves
+  // `<SubtitleOverlay host={null}>` stuck on first render and the
+  // overlay never mounts. `useState` + a setter-ref fixes it cleanly.
+  const [wrapper, setWrapper] = useState<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<EngineHandle | null>(null);
   const [handle, setHandle] = useState<EngineHandle | null>(null);
   const currentTimeRef = useRef<number>(props.startPosition);
-  const pipRef = useRef<DocumentPipHandle | null>(null);
+  const pip = useDocumentPip({ width: 720, height: 405 });
+
+  // Active audio track index into `manifest.audio`. Initial pick:
+  // the file's `default` track (first one flagged) if any, else 0.
+  const initialAudioIndex = useMemo(() => {
+    const flagged = props.manifest.audio.findIndex((a) => a.default);
+    return flagged >= 0 ? flagged : 0;
+  }, [props.manifest]);
+  const [audioTrackIndex, setAudioTrackIndex] = useState<number>(initialAudioIndex);
 
   const { native: nativeSubs, overlay: overlaySubs } = useMemo(
     () => classifySubtitles(props.manifest),
@@ -80,31 +100,39 @@ export function IrisPlayer(props: IrisPlayerProps) {
   );
 
   // Unified subtitle state: any subtitle, native or overlay. The
-  // chrome's menu writes here.
+  // chrome's menu writes here. Initial pick:
+  //   1. The file's `default` track if any.
+  //   2. Otherwise the first native (WebVTT-renderable) track if any.
+  //   3. Otherwise the first overlay track (ASS/PGS) — for BluRay
+  //      remuxes that only ship PGS, this is what the user wants.
   const [activeSubtitle, setActiveSubtitle] = useState<SubtitleTrack | null>(() => {
-    const def = props.manifest.subtitles.find((s) => s.default) ?? null;
-    return def;
+    const def = props.manifest.subtitles.find((s) => s.default);
+    if (def) return def;
+    const nativeFirst = props.manifest.subtitles.find(
+      (s) => subtitleOverlayKind(s) === "native",
+    );
+    if (nativeFirst) return nativeFirst;
+    return props.manifest.subtitles[0] ?? null;
   });
 
-  // For native subtitles, we toggle the `<track>` element's `mode`
-  // attribute when the user picks one. The chrome's selection drives
-  // this. Tier C has no <track>, so it's a no-op there.
+  // Push the active native subtitle into the engine. Engines that
+  // back a `<video>` element (A/B/F) flip `<track>.mode` for the
+  // matching `stream_idx`; Tier C/D are a no-op until canvas-side
+  // WebVTT rendering lands. Re-runs whenever the engine remounts so
+  // a freshly-mounted Tier F (after a HEVC demote, say) re-applies
+  // the active sub.
   useEffect(() => {
-    const video = handle?.videoElement?.();
-    if (!video) return;
-    const tracks = video.textTracks;
-    if (!tracks) return;
-    for (let i = 0; i < tracks.length; i += 1) {
-      const t = tracks[i];
-      const sub = nativeSubs[i];
-      if (!t || !sub) continue;
-      const isActive =
-        activeSubtitle != null &&
-        subtitleOverlayKind(activeSubtitle) === "native" &&
-        activeSubtitle.stream_idx === sub.stream_idx;
-      t.mode = isActive ? "showing" : "disabled";
+    if (!handle) return;
+    const kind = activeSubtitle ? subtitleOverlayKind(activeSubtitle) : "none";
+    const idx = kind === "native" ? activeSubtitle?.stream_idx ?? null : null;
+    handle.setNativeSubtitle(idx);
+    if (activeSubtitle) {
+      console.log(
+        `[iris-core] active subtitle: stream=${activeSubtitle.stream_idx} kind=${kind} ` +
+          `codec=${activeSubtitle.codec} url=${activeSubtitle.url}`,
+      );
     }
-  }, [handle, activeSubtitle, nativeSubs]);
+  }, [handle, activeSubtitle]);
 
   // Mount the engine on `(tier, src, startPosition)` change.
   useEffect(() => {
@@ -127,6 +155,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
           streamUrl: props.src,
           startPosition: props.startPosition,
           nativeSubs,
+          audioTrackIndex,
           onTimeUpdate: (t) => {
             currentTimeRef.current = t;
             props.onTimeUpdate(t);
@@ -155,8 +184,22 @@ export function IrisPlayer(props: IrisPlayerProps) {
       setHandle(null);
       void old?.dispose();
     };
+    // `audioTrackIndex` is in the dep list so that tiers without a
+    // live audio-switch API (A/B/C/E) remount when the user picks a
+    // different audio. Tier F bypasses this — see `onAudioPick` below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.tier, props.src, props.startPosition]);
+  }, [props.tier, props.src, props.startPosition, audioTrackIndex]);
+
+  const onAudioPick = (id: string) => {
+    const idx = Number(id);
+    if (!Number.isFinite(idx)) return;
+    setAudioTrackIndex(idx);
+    if (handle && !tierRequiresRemountForAudio(props.tier)) {
+      // Tier F: hls.js switches live; we still update local state so
+      // the chrome's "active" highlight matches the click immediately.
+      handle.setAudioTrack(id);
+    }
+  };
 
   // Media Session wiring — runs alongside any engine, so OS media keys
   // and lock-screen art work even for canvas-only Tier C/D.
@@ -168,16 +211,6 @@ export function IrisPlayer(props: IrisPlayerProps) {
     return wire.dispose;
   }, [handle, props.manifest, props.title]);
 
-  // Document PiP controller — `IrisChrome` reads `pipRef.current` to
-  // render the toggle button. Mounted once per wrapper lifetime.
-  useEffect(() => {
-    const wrapper = wrapperRef.current;
-    if (!wrapper) return;
-    pipRef.current = mountDocumentPip(wrapper);
-    return () => {
-      pipRef.current = null;
-    };
-  }, []);
 
   // Overlay subtitle: only when the active sub needs overlay rendering.
   const activeOverlay =
@@ -185,13 +218,13 @@ export function IrisPlayer(props: IrisPlayerProps) {
       ? overlaySubs.find((s) => s.stream_idx === activeSubtitle.stream_idx) ?? null
       : null;
 
-  return (
-    <div ref={wrapperRef} className="relative h-full w-full bg-black">
+  const playerNode = (
+    <div ref={setWrapper} className="relative h-full w-full bg-black">
       {/* Engine mount point. The engine inserts a <video> or <canvas>
           here; the chrome and overlay are positioned on top. */}
       <div ref={containerRef} className="absolute inset-0" />
       <SubtitleOverlay
-        host={wrapperRef.current}
+        host={wrapper}
         track={activeOverlay}
         getCurrentTime={() => currentTimeRef.current}
       />
@@ -200,10 +233,19 @@ export function IrisPlayer(props: IrisPlayerProps) {
         manifest={props.manifest}
         activeSubtitle={activeSubtitle}
         onSubtitleChange={setActiveSubtitle}
-        fullscreenTarget={wrapperRef.current}
-        documentPip={pipRef.current}
+        activeAudioIndex={audioTrackIndex}
+        onAudioPick={onAudioPick}
+        fullscreenTarget={wrapper}
+        documentPip={{
+          supported:
+            typeof window !== "undefined" && "documentPictureInPicture" in window,
+          isActive: pip.isActive,
+          toggle: pip.toggle,
+        }}
         title={props.title}
       />
     </div>
   );
+
+  return <>{pip.renderInto(playerNode)}</>;
 }

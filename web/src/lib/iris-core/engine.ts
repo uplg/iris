@@ -36,6 +36,13 @@ export type EngineMountOptions = {
   /** Native `<track>`-renderable subtitle tracks. The URL is already
    *  rewritten to the `.vtt` endpoint. ASS / PGS subs never appear here. */
   nativeSubs: NativeSubtitleTrack[];
+  /** Index into `manifest.audio` (NOT `stream_idx`) for the audio track
+   *  the engine should activate on mount. `undefined` = engine picks
+   *  its own default (typically the file's primary). Tier B/C react
+   *  to this; Tier F switches audio via its handle's `setAudioTrack`
+   *  (no remount needed); Tier A is single-audio. Changing this value
+   *  triggers a remount in `IrisPlayer`. */
+  audioTrackIndex?: number;
 
   onReady?: () => void;
   /** Fires on `timeupdate` (native) or on the master-clock tick (C/D). */
@@ -75,6 +82,13 @@ export type EngineHandle = {
   // Audio tracks -----------------------------------------------------
   audioTracks: () => EngineAudioTrack[];
   setAudioTrack: (id: string) => void;
+
+  // Native subtitles -------------------------------------------------
+  /** Set the active native (`<track>`-renderable) subtitle by the
+   *  `stream_idx` it had in the manifest. `null` disables all native
+   *  subs. Engines without a `<video>` element are a no-op — ASS/PGS
+   *  overlay paths run from `IrisPlayer` instead. */
+  setNativeSubtitle: (streamIdx: number | null) => void;
 
   // Optional escape hatches ------------------------------------------
   /** The underlying `<video>` element when the engine has one. Used by
@@ -141,20 +155,32 @@ export function bindVideoCallbacks(
 
 /** Build a standard `<video>` handle backed by an `HTMLVideoElement`.
  *  Used by Tier A/B/F. Tier C overrides most of this since it has no
- *  `<video>`. */
+ *  `<video>`. The `trackMap` ties manifest `stream_idx` → live
+ *  `HTMLTrackElement` so the chrome can flip native subs on/off by
+ *  the same identity it uses in the picker menu. */
 export function videoBackedHandle(
   video: HTMLVideoElement,
   extras: {
     dispose: () => Promise<void>;
     audioTracks?: () => EngineAudioTrack[];
     setAudioTrack?: (id: string) => void;
+    /** Map stream_idx → the `<track>` element this engine injected
+     *  for it. Tier A/B/F engines build this when creating their
+     *  per-sub `<track>` elements. */
+    nativeTrackMap?: Map<number, HTMLTrackElement>;
+    /** Fallback duration the handle reports when `video.duration` is
+     *  `Infinity` (MSE before `endOfStream`) or NaN. The chrome
+     *  needs a finite number to draw the scrub bar. */
+    fallbackDuration?: number | null;
   },
 ): EngineHandle {
   return {
     dispose: extras.dispose,
     currentTime: () => video.currentTime,
-    duration: () =>
-      Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null,
+    duration: () => {
+      if (Number.isFinite(video.duration) && video.duration > 0) return video.duration;
+      return extras.fallbackDuration ?? null;
+    },
     paused: () => video.paused,
     volume: () => video.volume,
     muted: () => video.muted,
@@ -182,7 +208,55 @@ export function videoBackedHandle(
     },
     audioTracks: extras.audioTracks ?? (() => []),
     setAudioTrack: extras.setAudioTrack ?? (() => undefined),
+    setNativeSubtitle: (streamIdx) => {
+      if (!extras.nativeTrackMap) return;
+      // Try to apply the mode change. The `TextTrack` backing each
+      // `<track>` element is created lazily by the browser — `el.track`
+      // can be null for a few rAF ticks after `appendChild`. Retry up
+      // to ~1 s before giving up so the picker selection actually takes.
+      const trackMap = extras.nativeTrackMap;
+      let attempts = 0;
+      const apply = (): void => {
+        let pending = false;
+        for (const [idx, trackEl] of trackMap) {
+          const t = trackEl.track;
+          if (!t) {
+            pending = true;
+            continue;
+          }
+          t.mode = idx === streamIdx ? "showing" : "disabled";
+        }
+        if (pending && attempts < 60) {
+          attempts += 1;
+          requestAnimationFrame(apply);
+        }
+      };
+      apply();
+    },
     videoElement: () => video,
     canvasElement: () => null,
   };
+}
+
+/** Reusable helper: build a `<track>` element for a native subtitle
+ *  and record it in a `stream_idx → element` map for later
+ *  enable/disable by the unified subtitle picker.
+ *
+ *  We intentionally DO NOT set `el.default` — the unified picker is
+ *  the single source of truth for which subtitle is active. Leaving
+ *  the browser to auto-show a "default" track would fight the
+ *  picker's selection on first frame. */
+export function appendNativeTrack(
+  video: HTMLVideoElement,
+  sub: NativeSubtitleTrack,
+  trackMap: Map<number, HTMLTrackElement>,
+): HTMLTrackElement {
+  const el = document.createElement("track");
+  el.src = sub.vttUrl;
+  el.kind = "subtitles";
+  el.label = sub.title ?? sub.lang?.toUpperCase() ?? `Sub ${sub.stream_idx}`;
+  el.srclang = sub.lang ?? "und";
+  video.appendChild(el);
+  trackMap.set(sub.stream_idx, el);
+  return el;
 }
