@@ -776,20 +776,38 @@ async fn run_ffmpeg(
         // browsers, which only decode HEVC when the parameter sets
         // live in the `hvcC` box of the sample entry.
         cmd.args(["-tag:v", "hvc1"]);
-        // Strip Dolby Vision RPU + enhancement-layer NAL units (types
-        // 62 and 63 in HEVC are UNSPEC slots Dolby uses to carry the
-        // RPU metadata and EL data). Chrome on macOS routes HEVC
-        // through VideoToolbox, and VT chokes at the first scene
-        // change whose DV layout it doesn't grok (we observed
-        // `kVTVideoDecoderBadDataErr -17694` around 3:18 on a
-        // Profile 8.1 BL+RPU encode). Stripping those NALs reduces
-        // the stream to its plain HDR10 base layer, which VT decodes
-        // reliably. No-op on sources without DV NALs. Combined with
-        // `-tag:v hvc1` above (which writes a clean `hvcC` instead of
-        // a `dvcC`-augmented sample entry) we don't advertise DV at
-        // the container level either, so browsers won't even try to
-        // engage their DV pipeline.
-        cmd.args(["-bsf:v", "filter_units=remove_types=62|63"]);
+        // Drop NAL units the cascaded MSE → VideoToolbox path on
+        // Chrome can't recover from at HLS segment boundaries:
+        //
+        //   62, 63 — UNSPEC slots Dolby uses for its RPU and EL
+        //            payload. Chrome routes HEVC through
+        //            VideoToolbox on macOS and VT chokes on
+        //            Profile 8.1 BL+RPU streams (we observed
+        //            `kVTVideoDecoderBadDataErr -17694`). Stripping
+        //            them reduces the stream to plain HDR10, which
+        //            VT decodes reliably. Combined with `-tag:v
+        //            hvc1` above (writes a clean `hvcC` instead of
+        //            `dvcC`) we don't advertise DV at the container
+        //            level either, so browsers don't even try to
+        //            engage their DV pipeline.
+        //
+        //    8,  9 — RASL_N / RASL_R: "Random Access Skipped
+        //            Leading" frames. x265 emits CRA keyframes
+        //            (type 21) instead of IDR (type 19/20) by
+        //            default, and CRAs can be followed by RASL
+        //            frames that reference the *previous* GOP. At
+        //            an HLS segment boundary the browser flushes
+        //            the decoder's reference buffer, so RASL
+        //            frames arrive without their refs and VT throws
+        //            the same -17694. The HEVC spec explicitly
+        //            allows discarding RASL on random access — we
+        //            do it preemptively so every segment is
+        //            self-contained. Costs ~0.1% frames at GOP
+        //            boundaries, invisible in playback.
+        //
+        // `filter_units` is a no-op when none of the listed types
+        // appear, so this is safe on closed-GOP / non-DV sources.
+        cmd.args(["-bsf:v", "filter_units=remove_types=8|9|62|63"]);
     }
     // `negative_cts_offsets` lets ffmpeg express B-frame composition
     // offsets without an `elst` edit list — pairs with `-ignore_editlist`

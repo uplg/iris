@@ -12,7 +12,6 @@ import {
   type FileEntry,
   type FileProgressEntry,
   type PlayStatus,
-  type SubtitleStream,
   type TorrentView,
 } from "@/lib/api";
 import { formatSize } from "@/lib/format";
@@ -121,10 +120,6 @@ export function WatchPage() {
   });
 
   const probe = probeQ.data;
-  const textSubs = useMemo<SubtitleStream[]>(
-    () => probe?.subtitle.filter((s) => s.text_based) ?? [],
-    [probe],
-  );
 
   // Tiered cascade entry. Drop the `downloadFinished` gate: the
   // manifest endpoint now handles partial downloads (Phase 1 tail
@@ -590,7 +585,7 @@ export function WatchPage() {
         <div className="grid gap-3 rounded-md border border-border bg-card/40 p-4 text-sm">
           <div className="grid gap-1 text-xs">
             <span className="uppercase tracking-wide text-muted-foreground">
-              Subtitles ({textSubs.length} loadable / {probe.subtitle.length} detected)
+              Subtitles ({probe.subtitle.length})
             </span>
             <ul className="grid gap-0.5 text-muted-foreground">
               {probe.subtitle.map((s) => (
@@ -602,11 +597,6 @@ export function WatchPage() {
                     {s.codec}
                     {s.forced ? " · forced" : ""}
                     {s.default ? " · default" : ""}
-                    {!s.text_based && (
-                      <span className="ml-1 text-amber-400">
-                        (image-based, not exposable as WebVTT)
-                      </span>
-                    )}
                   </span>
                 </li>
               ))}
