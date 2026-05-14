@@ -93,6 +93,21 @@ export type AssOverlayHandle = {
   dispose: () => void;
 };
 
+/**
+ * Toggle libass internal logging via a localStorage flag. Set
+ * `localStorage.setItem("iris.debug.libass", "1")` in DevTools and
+ * reload to see the per-frame trace coming out of the worker — the
+ * fontconfig / font-substitution / error paths all log there. Off
+ * by default in prod to keep the console clean.
+ */
+function libassDebugEnabled(): boolean {
+  try {
+    return localStorage.getItem("iris.debug.libass") === "1";
+  } catch {
+    return false;
+  }
+}
+
 export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverlayHandle> {
   const Ctor = await loadSubtitlesOctopus();
 
@@ -103,15 +118,76 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
   canvas.className = "pointer-events-none absolute inset-0 h-full w-full";
   opts.host.appendChild(canvas);
 
-  const instance: SubtitlesOctopusInstance = new Ctor({
+  const debug = libassDebugEnabled();
+  if (debug) {
+    console.info("[iris-core:libass] mounting overlay", {
+      subUrl: opts.subUrl,
+      hasVideo: !!opts.video,
+      workerUrl: WORKER_URL,
+    });
+  }
+  // Live worker reference. Reassigned on auto-remount (see below).
+  // `let` because the recovery path swaps the binding rather than
+  // mutating the existing object (whose methods may live on the
+  // prototype — `Object.assign` wouldn't copy them).
+  let instance: SubtitlesOctopusInstance;
+
+  const constructorOptions = (
+    onError: (err: unknown) => void,
+  ): SubtitlesOctopusOptions => ({
     video: opts.video,
     canvas,
     subUrl: opts.subUrl,
     workerUrl: WORKER_URL,
     legacyWorkerUrl: LEGACY_WORKER_URL,
     fallbackFont: FALLBACK_FONT_URL,
-    debug: false,
+    debug,
+    onReady: debug
+      ? () => console.info("[iris-core:libass] worker ready")
+      : undefined,
+    onError,
   });
+
+  // Track worker errors so we can auto-remount on transient failures.
+  // libass-wasm sometimes wedges itself on the first cue if the worker
+  // raced its own initialisation (seen on Windows browsers with
+  // intermittent SharedArrayBuffer / cross-origin-isolation quirks).
+  // A one-shot remount-after-error usually unsticks it; if the
+  // problem is structural the second mount fails too and we give up
+  // without flooding the console.
+  let remountAttempts = 0;
+  const MAX_REMOUNTS = 1;
+  const handleWorkerError = (err: unknown) => {
+    console.error("[iris-core:libass] worker error", err);
+    if (remountAttempts >= MAX_REMOUNTS) return;
+    remountAttempts += 1;
+    if (debug) {
+      console.info(
+        `[iris-core:libass] remount attempt ${remountAttempts}/${MAX_REMOUNTS}`,
+      );
+    }
+    try {
+      instance.dispose();
+    } catch {
+      /* recovery path — original instance is already broken */
+    }
+    // Defer one frame so the worker thread fully tears down before
+    // attaching a new one (constructor refetches the worker script).
+    requestAnimationFrame(() => {
+      try {
+        instance = new Ctor(constructorOptions(handleWorkerError));
+        syncResize();
+      } catch (e) {
+        console.error("[iris-core:libass] remount failed", e);
+      }
+    });
+  };
+
+  // Any error path the worker hits (font load failure, malformed
+  // ASS, parse exception, missing SharedArrayBuffer, …) used to
+  // silently disable the overlay because we never wired this
+  // callback. Now logged + one transparent remount.
+  instance = new Ctor(constructorOptions(handleWorkerError));
 
   // When there's no <video>, drive the time pump ourselves via rAF.
   let rafId: number | null = null;
@@ -127,9 +203,15 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
     rafId = requestAnimationFrame(tick);
   }
 
-  // Resize observer: libass needs the canvas to match the host's pixel
-  // size to avoid blurry / aliased text. Use a ResizeObserver and forward.
-  const observer = new ResizeObserver(() => {
+  // Forced initial resize: ResizeObserver fires on layout *change*, not
+  // initial mount, so libass would otherwise stay at its default
+  // bitmap size until the host element resized (window resize,
+  // fullscreen toggle, …). On Windows with display scaling that's a
+  // visible window where subtitles render to a tiny canvas, get
+  // scaled up, and look "missing" / blurry. Read the host's
+  // bounding box immediately and forward — if it's still 0×0 the
+  // observer takes over.
+  const syncResize = () => {
     const rect = opts.host.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
       try {
@@ -138,7 +220,12 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
         /* ignore mid-disposal resize */
       }
     }
-  });
+  };
+  syncResize();
+
+  // Resize observer: libass needs the canvas to match the host's pixel
+  // size to avoid blurry / aliased text. Use a ResizeObserver and forward.
+  const observer = new ResizeObserver(syncResize);
   observer.observe(opts.host);
 
   return {
