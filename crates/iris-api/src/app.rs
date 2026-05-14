@@ -14,7 +14,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use crate::client_version::client_version_layer;
-use crate::middleware::{coop_coep_layers, iris_caps_layer};
+use crate::middleware::{coop_coep_layers, iris_caps_layer, static_cache_layer};
 use crate::rate_limit::CloudflareIpKeyExtractor;
 use crate::routes;
 use crate::state::AppState;
@@ -85,7 +85,14 @@ pub fn build_router(state: AppState) -> Router {
         if dist.is_dir() {
             tracing::info!(path = %dist.display(), "serving static frontend");
             let serve = ServeDir::new(&dist).fallback(ServeFile::new(&index));
-            app = app.fallback_service(serve);
+            // Differentiated Cache-Control per path family — see
+            // `static_cache_layer` for the policy table. Applied here
+            // (not on the whole router) so `/api/*` keeps its own
+            // per-route cache headers untouched.
+            let static_app = Router::new()
+                .fallback_service(serve)
+                .layer(axum::middleware::from_fn(static_cache_layer));
+            app = app.fallback_service(static_app);
         } else {
             tracing::warn!(path = %dist.display(), "web_dist not found, skipping static serving");
         }

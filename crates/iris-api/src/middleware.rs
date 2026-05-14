@@ -99,6 +99,60 @@ fn parse_torrent_path(path: &str) -> (Option<String>, Option<i64>, Option<String
     (infohash, file_idx, route)
 }
 
+/// Cache-Control middleware for the static-file fallback (web bundle).
+/// Differentiated by path because Vite ships its bundle as
+/// content-hashed assets (safe to mark immutable for a year) while
+/// `index.html` and the vendored worker blobs must revalidate to pick
+/// up a new deploy.
+///
+/// Without this, browsers fall back to heuristic caching and can hold
+/// onto `index.html` for hours after a deploy — that pins the user
+/// on the previous bundle's `pickTier` logic, which then mis-routes
+/// payloads (e.g. a fresh DTS-in-MKV release served by Tier F even
+/// though the current bundle's Tier B handles it natively).
+///
+/// Applied ONLY to the static fallback service, not `/api/*` — those
+/// routes set their own cache policy (HLS manifests / segments etc.).
+pub async fn static_cache_layer(req: Request<Body>, next: Next) -> Response {
+    let path = req.uri().path().to_owned();
+    let mut resp = next.run(req).await;
+    let value = pick_static_cache_policy(&path);
+    resp.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static(value),
+    );
+    resp
+}
+
+fn pick_static_cache_policy(path: &str) -> &'static str {
+    // `/assets/<name>-<hash>.<ext>` — Vite emits everything under
+    // `/assets/` with a content hash in the filename, so the URL is
+    // effectively immutable. Browsers can keep these forever; a new
+    // deploy ships new hashed names referenced from a fresh
+    // `index.html`.
+    if path.starts_with("/assets/") {
+        return "public, max-age=31536000, immutable";
+    }
+    // Vendored runtime blobs (libass-wasm / libav.js / hevc.js /
+    // libpgs). Paths are NOT hashed, so a deploy that bumps the lib
+    // changes the file contents at the same URL. Short cache + force
+    // revalidate so users pick up fixes (e.g. the libass legacy
+    // worker we just added) without a hard-reload.
+    if path.starts_with("/hevcjs/")
+        || path.starts_with("/libass/")
+        || path.starts_with("/libavjs/")
+        || path.starts_with("/libpgs/")
+    {
+        return "public, max-age=300, must-revalidate";
+    }
+    // Everything else served by the SPA fallback — `index.html`,
+    // favicon, `iris-audio-worklet.js`, and the SPA-route
+    // index.html-shaped responses (`/`, `/admin`, `/search`, …).
+    // Always revalidate so a deploy is picked up on the next page
+    // load; the response is small and 304s are cheap.
+    "no-cache, must-revalidate"
+}
+
 /// Tower-http layers that set `Cross-Origin-Opener-Policy: same-origin` and
 /// `Cross-Origin-Embedder-Policy: credentialless` on every response.
 ///
