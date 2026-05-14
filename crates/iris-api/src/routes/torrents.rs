@@ -324,10 +324,21 @@ async fn ingest(
 
 async fn prewarm_default_remux(state: &AppState, infohash: &str) {
     use std::time::Duration;
-    // Wait for the torrent to finish downloading before letting ffmpeg
-    // touch it. Remuxing a sparse source produces a truncated cache
-    // that's worse than waiting. Up to 30 minutes — beyond that the
-    // user's first manual Play will trigger the remux synchronously.
+    // We used to remux to fragmented MP4 here so the web client's
+    // Tier F fallback would have a hot cache. With Tier B now
+    // handling the vast majority of files via Mediabunny, Tier F is
+    // a rare path — and the Android TV client plays the raw
+    // `/stream` directly without ever needing the remux. The
+    // eager remux on every torrent ingest cost CPU + disk for a
+    // cache that was almost always unused.
+    //
+    // What we KEEP here is the probe + TMDB verification — those
+    // are still useful side-effects on ingest (the UI relies on
+    // `verify_tmdb_match` for accurate poster / metadata gating
+    // when the torrent name's TMDB inference was ambiguous). The
+    // remux now runs lazily, only when a client actually requests
+    // `/play/master.m3u8` or `/play/status` (see `play_asset` and
+    // `play_status` below).
     let mut chosen_idx: Option<usize> = None;
     for _ in 0..900 {
         if let Some(snap) = state.engine().get_by_infohash(infohash) {
@@ -366,8 +377,6 @@ async fn prewarm_default_remux(state: &AppState, infohash: &str) {
     let Ok(path) = state.engine().file_path(infohash, idx) else {
         return;
     };
-    // Probe runs the TMDB verification side-effect — useful regardless of
-    // whether the remux below succeeds.
     let probe = match state.probes().get_or_probe(infohash, idx, &path).await {
         Ok(p) => p,
         Err(e) => {
@@ -376,13 +385,7 @@ async fn prewarm_default_remux(state: &AppState, infohash: &str) {
         }
     };
     verify_tmdb_match(state, infohash, probe.duration_seconds).await;
-    let key = format!("{infohash}_{idx}");
-    let plan = build_remux_plan(&probe);
-    if let Err(e) = state.remuxer().ensure_remuxed(&key, &path, plan).await {
-        tracing::warn!(error = %e, infohash, "prewarm: remux failed");
-        return;
-    }
-    tracing::info!(infohash, idx, "prewarmed fragmented MP4");
+    tracing::info!(infohash, idx, "prewarm: probed (no remux — lazy on first /play hit)");
 }
 
 /// Build the HLS audio-rendition plan from probe data.
@@ -993,7 +996,10 @@ async fn play_status(
     iris_db::torrents::find_by_infohash(state.db(), &infohash)
         .await?
         .ok_or(ApiError::NotFound)?;
-    let path = state.engine().file_path(&infohash, idx).map_err(map_engine_err)?;
+    // Validate we know about this file even though we no longer touch
+    // the raw bytes here (the lazy-remux path makes them irrelevant
+    // until /play/master.m3u8 is hit).
+    let _ = state.engine().file_path(&infohash, idx).map_err(map_engine_err)?;
 
     if let Some(snap) = state.engine().get_by_infohash(&infohash) {
         if !snap.finished {
@@ -1032,47 +1038,27 @@ async fn play_status(
         }));
     }
 
-    // No cache yet, no recorded failure. If nothing's running for this key,
-    // kick off the remux in the background — otherwise the UI would gate
-    // `/play` on `ready: true` forever, and `/play` is the only place that
-    // triggers ffmpeg. `ensure_remuxed` deduplicates internally, so even if
-    // this poll races with another caller, only one ffmpeg ever runs.
-    let in_flight = state
-        .remuxer()
-        .list_jobs()
-        .await
-        .iter()
-        .any(|j| j.key == key && j.in_flight);
-    if !in_flight {
-        // Probe is needed to know whether a browser-compatible audio track
-        // exists; it's cached per (infohash, idx) so re-running on each
-        // status poll only hits ffprobe the first time.
-        let remuxer = state.remuxer().clone();
-        let probes = state.probes().clone();
-        let infohash_owned = infohash.clone();
-        let key_owned = key.clone();
-        tokio::spawn(async move {
-            let probe = match probes.get_or_probe(&infohash_owned, idx, &path).await {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!(error = %e, key = %key_owned, "play_status: probe failed");
-                    return;
-                }
-            };
-            let plan = build_remux_plan(&probe);
-            if let Err(e) = remuxer.ensure_remuxed(&key_owned, &path, plan).await {
-                tracing::warn!(error = %e, key = %key_owned, "play_status: background remux failed");
-            }
-        });
-    }
-    // Surface ffmpeg's encoded-so-far / total-duration as a 0..1
-    // fraction so the loading overlay can show a real progress bar
-    // instead of an indeterminate spinner.
-    let progress = state.remuxer().progress(&key).await;
+    // `play_status` used to eagerly kick off a background remux here
+    // so the web UI's "Tier F ready" gate would flip without the user
+    // having to request `/play/master.m3u8`. With the web client now
+    // defaulting to Tier B (Mediabunny remux in-browser) and the
+    // Android TV client playing raw `/stream` directly, 99 % of
+    // sessions never touch Tier F — eagerly remuxing on every status
+    // poll was burning server CPU for a fallback path that's rarely
+    // exercised. The remux is now strictly lazy: it fires the first
+    // time someone actually requests `/play/master.m3u8` (see
+    // `play_asset`).
+    //
+    // We fall through here when the torrent is finished, the master
+    // playlist doesn't exist yet, and there's no sticky failure
+    // recorded. That's the new `ready: true` for the raw-stream path
+    // — Tier A/B/TV can start playing immediately. A client that
+    // needs Tier F will hit `/play/master.m3u8` and the remux will
+    // spin up at that moment.
     Ok(Json(PlayStatus {
-        ready: false,
-        reason: Some("remuxing".into()),
-        progress,
+        ready: true,
+        reason: None,
+        progress: None,
         error: None,
     }))
 }

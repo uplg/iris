@@ -1,7 +1,6 @@
 package studio.kahn.iris.tv.data
 
 import android.content.Context
-import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -39,28 +38,20 @@ fun buildPlayer(
             // hardware (no remote events for >2 min during a quiet
             // dialogue scene) and playback stalls. NETWORK keeps a
             // partial wake lock + WiFi lock while playing so the
-            // segment fetches keep flowing. The lock is released
+            // byte-range fetches keep flowing. The lock is released
             // automatically when playback pauses or `release()` is
             // called.
             setWakeMode(C.WAKE_MODE_NETWORK)
-            // Declare ourselves as movie content for the audio sink.
-            // Media3's `DefaultAudioSink` reads these `AudioAttributes`
-            // to negotiate the best output path with the HDMI receiver:
-            //  - `USAGE_MEDIA` + `CONTENT_TYPE_MOVIE` makes Android's
-            //    `AudioCapabilities` report the receiver's full
-            //    surround-codec list (E-AC-3, DTS, TrueHD, …) so the
-            //    sink chooses passthrough for those formats instead of
-            //    decoding to PCM stereo.
-            //  - `handleAudioFocus=true` is what we want for a
-            //    foreground TV player — ducks/pauses on incoming
-            //    Assistant prompts, restores after.
-            setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .build(),
-                /* handleAudioFocus = */ true,
-            )
+            // Audio attributes intentionally left at Media3 defaults.
+            // We previously injected `USAGE_MEDIA` +
+            // `CONTENT_TYPE_MOVIE` + `handleAudioFocus=true` to
+            // nudge `DefaultAudioSink` toward passthrough, but
+            // re-configuring those across a runtime audio-track
+            // switch (AAC → AC-3 or 5.1 → stereo) destabilised the
+            // sink on some Android TV builds — visible as a hard
+            // playback crash on track-change. Defaults already
+            // discover surround capabilities via `AudioCapabilities`
+            // and route passthrough correctly.
         }
 }
 
@@ -99,13 +90,18 @@ fun humanizePlaybackError(e: PlaybackException): Pair<String, Boolean> {
         -> "Audio output failed — check your HDMI / speaker connection."
         else -> "Playback error (${e.errorCodeName})."
     }
+    // Conservative: only re-prepare on genuinely network-shaped
+    // errors. We used to also auto-retry on `DECODING_FAILED` and
+    // `AUDIO_TRACK_WRITE_FAILED`, but those can fire mid-stream
+    // during an audio-track switch (Media3 disabling + re-enabling
+    // the audio renderer with a different codec) — re-`prepare()`
+    // there kills playback instead of healing it. Decoder / audio
+    // sink hiccups surface to the user immediately so they see what
+    // actually broke.
     val transient = when (e.errorCode) {
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
-        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
         PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
-        PlaybackException.ERROR_CODE_DECODING_FAILED,
-        PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED,
         -> true
         else -> false
     }
