@@ -576,12 +576,27 @@ data class FollowSummary(
     @SerialName("created_at") val createdAt: String,
 )
 
+/**
+ * Encoding of [TorrentDetails.description]. Mirrors the Rust
+ * `iris_core::search::DescriptionFormat` enum (lowercase serde). Defaults
+ * to [BBCODE] when the server omits the field — older payloads predate
+ * c411 and were always BBCode (torr9).
+ */
+@Serializable
+enum class DescriptionFormat {
+    @SerialName("bbcode") BBCODE,
+    @SerialName("html") HTML,
+    @SerialName("plain") PLAIN,
+}
+
 @Serializable
 data class TorrentDetails(
     @SerialName("provider_id") val providerId: String,
     @SerialName("external_id") val externalId: String,
     val title: String,
     val description: String? = null,
+    @SerialName("description_format")
+    val descriptionFormat: DescriptionFormat = DescriptionFormat.BBCODE,
     val nfo: String? = null,
     @SerialName("media_info") val mediaInfo: MediaInfoSummary? = null,
     val tags: List<String> = emptyList(),

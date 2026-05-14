@@ -21,8 +21,8 @@ use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::Result;
 use iris_core::search::{
-    MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, SortField, SortOrder,
-    TorrentDetails, TorrentSource,
+    DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
+    SortField, SortOrder, TorrentDetails, TorrentSource,
 };
 
 use crate::nfo;
@@ -405,6 +405,7 @@ impl SearchProvider for Torr9 {
             external_id: external_id.to_string(),
             title: raw.title,
             description: raw.description.filter(|s| !s.is_empty()),
+            description_format: DescriptionFormat::Bbcode,
             nfo: raw.nfo.filter(|s| !s.is_empty()),
             media_info,
             tags: raw.tags,

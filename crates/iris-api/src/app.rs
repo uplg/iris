@@ -13,6 +13,7 @@ use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
+use crate::client_version::client_version_layer;
 use crate::middleware::{coop_coep_layers, iris_caps_layer};
 use crate::rate_limit::CloudflareIpKeyExtractor;
 use crate::routes;
@@ -51,8 +52,12 @@ pub fn build_router(state: AppState) -> Router {
         iris_caps_layer,
     ));
 
-    let api = Router::new()
-        .route("/health", get(routes::health::get))
+    // Apply the X-Iris-Client version gate to every /api route EXCEPT
+    // /health (kept reachable for monitoring / readiness probes) — when
+    // a deployed APK is below the minimum, this returns 426 with a
+    // structured body and the client surfaces "please update". Header
+    // is always parsed + logged for telemetry, regardless of the gate.
+    let gated = Router::new()
         .nest("/auth", auth)
         .nest("/admin", routes::admin::router())
         .nest("/me", me)
@@ -61,7 +66,11 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/library", routes::library::router())
         .nest("/torrents", torrents)
         .nest("/providers", routes::providers::router())
-        .nest("/metadata", routes::metadata::router());
+        .nest("/metadata", routes::metadata::router())
+        .layer(axum::middleware::from_fn(client_version_layer));
+    let api = Router::new()
+        .route("/health", get(routes::health::get))
+        .merge(gated);
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

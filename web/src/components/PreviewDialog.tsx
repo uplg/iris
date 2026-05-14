@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Bookmark, Play } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import DOMPurify from "dompurify";
 import {
   Dialog,
   DialogContent,
@@ -204,10 +205,14 @@ export function PreviewDialog({
           {/* Facts grid — parsed MediaInfo. Hidden when no NFO available. */}
           {details?.media_info && <FactsGrid mi={details.media_info} />}
 
-          {/* Description — BBCode rendered to React. */}
+          {/* Description — dispatched to the right renderer based on
+              the provider's declared format. */}
           {details?.description && (
             <div className="rounded-md border border-border bg-card/30 p-3 text-sm">
-              <BBCode source={details.description} />
+              <Description
+                source={details.description}
+                format={details.description_format ?? "bbcode"}
+              />
             </div>
           )}
 
@@ -406,6 +411,132 @@ function formatRuntime(secs: number): string {
   const m = Math.floor((secs % 3600) / 60);
   if (h > 0) return `${h}h${m.toString().padStart(2, "0")}`;
   return `${m}min`;
+}
+
+// ---------------------------------------------------------------------------
+// Description dispatcher — pick the right renderer per provider format.
+// ---------------------------------------------------------------------------
+//
+// torr9 ships BBCode, c411 ships HTML. The backend declares which via
+// `description_format` on `TorrentDetails`; we dispatch here so the
+// renderers stay small and decoupled.
+
+function Description({
+  source,
+  format,
+}: {
+  source: string;
+  format: NonNullable<TorrentDetails["description_format"]>;
+}) {
+  if (format === "html") return <SanitizedHtml source={source} />;
+  if (format === "plain") {
+    return (
+      <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">
+        {source}
+      </pre>
+    );
+  }
+  return <BBCode source={source} />;
+}
+
+// ---------------------------------------------------------------------------
+// Sanitised HTML renderer (c411 + any future HTML indexers)
+// ---------------------------------------------------------------------------
+//
+// Indexer descriptions are untrusted markup — sanitise with DOMPurify
+// before injection. The configured allow-list keeps c411's rich layout
+// (headings, tables, inline images, links) and drops every code path
+// that can run JS (scripts, event handlers, javascript: URLs). External
+// links are post-processed to open in a new tab with `noopener`.
+
+// DOMPurify hooks are global — register once at module load so we don't
+// thrash add/remove across renders. The hook is idempotent and only
+// touches `<a>` elements, so it can't interfere with other call sites
+// (currently there are none in the app).
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node instanceof Element && node.tagName === "A" && node.hasAttribute("href")) {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
+
+const HTML_ALLOWED_TAGS = [
+  "a",
+  "b",
+  "blockquote",
+  "br",
+  "code",
+  "div",
+  "em",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "i",
+  "img",
+  "li",
+  "ol",
+  "p",
+  "pre",
+  "span",
+  "strong",
+  "table",
+  "tbody",
+  "td",
+  "th",
+  "thead",
+  "tr",
+  "u",
+  "ul",
+];
+
+const HTML_ALLOWED_ATTR = [
+  "href",
+  "src",
+  "alt",
+  "class",
+  "id",
+  "title",
+  "loading",
+  "referrerpolicy",
+  "target",
+  "rel",
+];
+
+function sanitizeIndexerHtml(source: string): string {
+  return DOMPurify.sanitize(source, {
+    ALLOWED_TAGS: HTML_ALLOWED_TAGS,
+    ALLOWED_ATTR: HTML_ALLOWED_ATTR,
+    FORBID_TAGS: ["script", "style", "iframe", "form", "input", "button"],
+    ALLOW_DATA_ATTR: false,
+  });
+}
+
+function SanitizedHtml({ source }: { source: string }) {
+  const html = useMemo(() => sanitizeIndexerHtml(source), [source]);
+  return (
+    <div
+      // Tailwind arbitrary-variant styling keeps headings legible inside
+      // the dialog and trims runaway images down to dialog height.
+      className={cn(
+        "space-y-2 leading-relaxed",
+        "[&_h1]:mt-3 [&_h1]:text-base [&_h1]:font-semibold",
+        "[&_h2]:mt-3 [&_h2]:text-sm [&_h2]:font-semibold",
+        "[&_h3]:mt-2 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:uppercase [&_h3]:tracking-wide",
+        "[&_p]:my-1",
+        "[&_a]:text-primary [&_a]:underline hover:[&_a]:no-underline",
+        "[&_img]:my-1 [&_img]:inline-block [&_img]:max-h-40 [&_img]:rounded-sm",
+        "[&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_table]:text-xs",
+        "[&_th]:bg-muted [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold",
+        "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1",
+        "[&_em]:italic [&_strong]:font-semibold",
+      )}
+      // safe: sanitised by DOMPurify above with a strict allow-list.
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }
 
 // ---------------------------------------------------------------------------

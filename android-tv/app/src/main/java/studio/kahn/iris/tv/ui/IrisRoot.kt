@@ -1,17 +1,30 @@
 package studio.kahn.iris.tv.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.tv.material3.Button
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Text
+import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.screens.CollectionScreen
 import studio.kahn.iris.tv.ui.screens.DetailScreen
@@ -84,6 +97,8 @@ fun IrisRoot(
         pendingVoiceQuery != null -> Routes.search(pendingVoiceQuery, autoPlay = true)
         else -> Routes.HOME
     }
+
+    val clientOutdated by container.clientOutdated.collectAsState()
 
     Box(
         Modifier
@@ -302,5 +317,70 @@ fun IrisRoot(
                 )
             }
         }
+
+        // Server-driven version gate: once any request comes back with
+        // HTTP 426, the AppContainer flips the `clientOutdated` flow.
+        // We cover the UI with a "please update" lock-out everywhere
+        // EXCEPT on the Settings screen, where the in-app updater
+        // lives — otherwise the user would be stuck with no path to
+        // resolve the situation. AppUpdater downloads the APK from a
+        // fixed external URL (`uplg.xyz`), unaffected by the server
+        // gate, so the update flow keeps working.
+        val currentRoute by navController.currentBackStackEntryAsState()
+        if (clientOutdated && currentRoute?.destination?.route != Routes.SETTINGS) {
+            ClientOutdatedOverlay(
+                onOpenSettings = {
+                    navController.navigate(Routes.SETTINGS) {
+                        // Single Settings entry on the back stack — avoids
+                        // a tower of identical screens if the user keeps
+                        // hitting the button.
+                        launchSingleTop = true
+                    }
+                },
+            )
+        }
     }
 }
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun ClientOutdatedOverlay(
+    onOpenSettings: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // Opaque scrim — the underlying NavHost is still composed (to
+            // keep its state warm for after the user updates) but visually
+            // hidden, and we capture all focus by being last in the stack.
+            .background(Color.Black.copy(alpha = 0.92f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(48.dp),
+        ) {
+            Text(
+                "Update Iris",
+                style = MaterialTheme.typography.displaySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                "This Iris server requires a newer app. Open Settings to install the latest APK.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "Installed version: ${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = onOpenSettings) {
+                Text("Open Settings")
+            }
+        }
+    }
+}
+

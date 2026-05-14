@@ -40,6 +40,7 @@ import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AddFollowRequest
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.AudioInfoDetails
+import studio.kahn.iris.tv.data.DescriptionFormat
 import studio.kahn.iris.tv.data.IngestRequest
 import studio.kahn.iris.tv.data.MediaInfoSummary
 import studio.kahn.iris.tv.data.SubInfoDetails
@@ -165,11 +166,19 @@ fun SearchDetailScreen(
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             }
 
-            // Synopsis: prefer TMDB (clean text) over the BBCode-laden
-            // tracker description on TV. We strip the BBCode tags from
-            // the tracker description as a backup so we never show raw
-            // markup on a 10-foot screen.
-            val synopsis = meta?.overview ?: details?.description?.let(::stripBBCode)
+            // Synopsis: prefer TMDB (clean text) over the markup-laden
+            // tracker description on TV. We strip whatever markup the
+            // tracker uses (BBCode for torr9, HTML for c411) as a backup
+            // so we never show raw tags on a 10-foot screen.
+            val synopsis = meta?.overview ?: details?.let { d ->
+                d.description?.let { desc ->
+                    when (d.descriptionFormat) {
+                        DescriptionFormat.BBCODE -> stripBBCode(desc)
+                        DescriptionFormat.HTML -> stripHtml(desc)
+                        DescriptionFormat.PLAIN -> desc
+                    }
+                }
+            }
             if (!synopsis.isNullOrBlank()) {
                 Text(
                     synopsis,
@@ -510,4 +519,35 @@ private fun stripBBCode(input: String): String {
         .joinToString("\n")
         .trim()
     return out
+}
+
+/**
+ * Minimal HTML-to-plain-text for the c411 description fallback. Strips
+ * all tags, decodes the handful of entities indexers actually emit, and
+ * collapses runs of whitespace. We do NOT try to preserve table layout
+ * or images — TV synopsis is plain text only.
+ */
+private fun stripHtml(input: String): String {
+    // Drop block-level tags as newlines so paragraphs don't collide.
+    val withBreaks = input
+        .replace(Regex("(?i)<(br|/p|/h[1-6]|/div|/li|/tr)\\b[^>]*>"), "\n")
+    // Then drop all remaining tags.
+    val noTags = withBreaks.replace(Regex("<[^>]+>"), "")
+    // Decode the common entities. Anything else stays escaped — better
+    // than a half-decoded mess.
+    val decoded = noTags
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+    // Collapse runs of whitespace, preserve paragraph breaks.
+    return decoded
+        .lineSequence()
+        .map { it.replace(Regex("[ \\t]+"), " ").trim() }
+        .joinToString("\n")
+        .replace(Regex("\\n{3,}"), "\n\n")
+        .trim()
 }

@@ -9,8 +9,17 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.Route
 import okhttp3.logging.HttpLoggingInterceptor
+import studio.kahn.iris.tv.BuildConfig
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+
+/** Standard `X-Iris-Client: <kind>/<semver>` header. Parsed server-side
+ *  by `client_version::client_version_layer` for telemetry + the
+ *  `426 Upgrade Required` gate. */
+const val IRIS_CLIENT_HEADER = "X-Iris-Client"
+
+/** HTTP 426 — server tells us we're below `MIN_TV_VERSION`. */
+private const val HTTP_UPGRADE_REQUIRED = 426
 
 /**
  * Shared OkHttp client used by both Retrofit (API calls) and Media3
@@ -19,28 +28,42 @@ import java.util.concurrent.atomic.AtomicBoolean
  * The bundled [IrisAuthenticator] handles 401s transparently by hitting
  * `/api/auth/refresh` with the persisted refresh cookie and replaying the
  * original request. If refresh fails the 401 propagates up.
+ *
+ * [onOutdated] fires once the server answers `426 Upgrade Required` on
+ * any request — the container flips its `clientOutdated` flow so the
+ * root composable can swap in a "please update" lock-out screen.
  */
-fun buildOkHttpClient(sessionStore: SessionStore): OkHttpClient {
+fun buildOkHttpClient(
+    sessionStore: SessionStore,
+    onOutdated: () -> Unit,
+): OkHttpClient {
     val authenticator = IrisAuthenticator(sessionStore)
     // Cache the Iris-Caps header value once. Build.VERSION fields don't
     // change at runtime, so re-computing per request would be wasted work.
     val capsHeaderValue = IrisCaps.headerValue()
+    val clientHeaderValue = "tv/${BuildConfig.VERSION_NAME}"
     val client = OkHttpClient.Builder()
         .cookieJar(SessionCookieJar(sessionStore))
         .authenticator(authenticator)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .callTimeout(120, TimeUnit.SECONDS)
-        // Stamp Iris-Caps on every outbound request. The server middleware
-        // ignores it on non-/torrents paths; the per-request cost is one
-        // ~200-byte header line. Cheaper than maintaining a per-Retrofit-
-        // method header annotation list, and Media3 segment fetches inherit
-        // the header without extra plumbing.
+        // Stamp Iris-Caps + X-Iris-Client on every outbound request. The
+        // server middleware ignores Iris-Caps on non-/torrents paths and
+        // uses X-Iris-Client globally (telemetry + version gate). The
+        // per-request cost is two ~200-byte header lines, much cheaper
+        // than maintaining per-Retrofit-method annotation lists; Media3
+        // segment fetches inherit both without extra plumbing.
         .addInterceptor { chain ->
             val request = chain.request().newBuilder()
                 .header(IRIS_CAPS_HEADER, capsHeaderValue)
+                .header(IRIS_CLIENT_HEADER, clientHeaderValue)
                 .build()
-            chain.proceed(request)
+            val response = chain.proceed(request)
+            if (response.code == HTTP_UPGRADE_REQUIRED) {
+                onOutdated()
+            }
+            response
         }
         .addInterceptor(
             HttpLoggingInterceptor().apply {

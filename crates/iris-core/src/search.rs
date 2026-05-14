@@ -112,13 +112,38 @@ pub enum TorrentSource {
 /// preview dialog. Optional everywhere because shapes vary wildly across
 /// indexers; the typed fields are the lowest common denominator we feel
 /// comfortable surfacing in a unified UI.
+/// What `TorrentDetails::description` is encoded in — indexers don't
+/// agree on a format. The frontend dispatches the right renderer
+/// (`BBCode` parser, sanitised HTML, raw text) off this. Defaults to
+/// [`DescriptionFormat::Bbcode`] when absent so older provider payloads
+/// (torr9 was the only source originally) keep working unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DescriptionFormat {
+    /// torr9 dialect: `[b]`, `[center]`, `[size=N]`, `[color=#xxx]`,
+    /// `[url=…]`, `[img]…[/img]`. Custom renderer in
+    /// `web/src/components/PreviewDialog.tsx`.
+    #[default]
+    Bbcode,
+    /// c411 dialect: full HTML (headings, tables, images). The frontend
+    /// MUST sanitise with `DOMPurify` before rendering.
+    Html,
+    /// No markup — render verbatim in a `pre` block.
+    Plain,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentDetails {
     pub provider_id: String,
     pub external_id: String,
     pub title: String,
-    /// BBCode-formatted description from the indexer (rendered in-app).
+    /// Description body. Encoding depends on [`Self::description_format`].
     pub description: Option<String>,
+    /// Encoding of `description`. Always set on new payloads; absent
+    /// values default to [`DescriptionFormat::Bbcode`] for backward
+    /// compatibility with pre-c411 clients.
+    #[serde(default)]
+    pub description_format: DescriptionFormat,
     /// Raw `MediaInfo` text dump. Web exposes this in a collapsible
     /// `<details>` for power users; TV doesn't show it.
     pub nfo: Option<String>,

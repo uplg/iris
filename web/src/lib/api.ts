@@ -21,6 +21,16 @@ export class ApiError extends Error {
  *  /login instead of leaving stale React Query errors on screen. */
 export const AUTH_EXPIRED_EVENT = "iris:auth-expired";
 
+/** Event fired when any backend request answers HTTP 426 — the
+ *  cached bundle is below the server's `MIN_WEB_VERSION`. App.tsx
+ *  listens for it and renders a full-screen lock-out with a "Reload"
+ *  action so the user pulls the freshly-deployed bundle. */
+export const CLIENT_OUTDATED_EVENT = "iris:client-outdated";
+
+/** Bundle version baked at build time via Vite `define` — see
+ *  `vite.config.ts`. Used in the `X-Iris-Client` header. */
+export const IRIS_WEB_VERSION: string = __IRIS_WEB_VERSION__;
+
 const NO_RETRY_PATHS = new Set([
   "/auth/refresh",
   "/auth/login",
@@ -28,12 +38,25 @@ const NO_RETRY_PATHS = new Set([
   "/auth/logout",
 ]);
 
+function clientHeaders(extra?: HeadersInit): HeadersInit {
+  // X-Iris-Client lands on every outbound API request so the server
+  // can log usage and (optionally) gate via `MIN_WEB_VERSION`. Cheap:
+  // ~30 bytes per request.
+  const base: Record<string, string> = {
+    "X-Iris-Client": `web/${IRIS_WEB_VERSION}`,
+  };
+  if (extra) {
+    return { ...base, ...(extra as Record<string, string>) };
+  }
+  return base;
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const fire = () =>
     fetch(`/api${path}`, {
       method,
       credentials: "include",
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers: clientHeaders(body ? { "Content-Type": "application/json" } : undefined),
       body: body ? JSON.stringify(body) : undefined,
     });
   let res = await fire();
@@ -55,6 +78,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       // setState; AuthProvider wires the listener.
       window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
     }
+  }
+  // 426 = the server has decided this cached bundle is below
+  // `MIN_WEB_VERSION`. Surface globally so App.tsx can lock the UI
+  // and prompt the user to reload; checked after the auth retry so
+  // a refresh-then-426 still surfaces.
+  if (res.status === 426) {
+    window.dispatchEvent(new Event(CLIENT_OUTDATED_EVENT));
   }
   if (res.status === 204) return undefined as T;
   const data = res.headers.get("content-type")?.includes("application/json")
@@ -315,11 +345,18 @@ export type MediaInfoSummary = {
   subtitles: SubInfo[];
 };
 
+/** Encoding of [TorrentDetails.description]. Mirrors the Rust
+ *  `iris_core::search::DescriptionFormat`. Older payloads (torr9 was
+ *  the only source originally) didn't ship the field; default to
+ *  "bbcode" when absent so existing flows keep working. */
+export type DescriptionFormat = "bbcode" | "html" | "plain";
+
 export type TorrentDetails = {
   provider_id: string;
   external_id: string;
   title: string;
   description: string | null;
+  description_format?: DescriptionFormat;
   nfo: string | null;
   media_info: MediaInfoSummary | null;
   tags: string[];

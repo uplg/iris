@@ -192,9 +192,20 @@ private fun UpdaterCard(container: AppContainer) {
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<AppUpdater.Progress?>(null) }
     var job by remember { mutableStateOf<Job?>(null) }
+    var versionStatus by remember {
+        mutableStateOf<AppUpdater.VersionStatus>(AppUpdater.VersionStatus.Unknown)
+    }
 
     DisposableEffect(Unit) {
         onDispose { job?.cancel() }
+    }
+
+    // Best-effort version probe on screen entry. Failure leaves the
+    // status at Unknown and the UI shows "version check unavailable" —
+    // never blocks the Download button.
+    LaunchedEffect(Unit) {
+        val latest = AppUpdater.fetchLatestVersion(container.okHttpClient)
+        versionStatus = AppUpdater.versionStatus(BuildConfig.VERSION_NAME, latest)
     }
 
     // NOT a Card here: a clickable Card on TV grabs D-pad focus and swallows
@@ -217,6 +228,7 @@ private fun UpdaterCard(container: AppContainer) {
                 "Installed version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                 style = MaterialTheme.typography.bodyLarge,
             )
+            VersionStatusLine(versionStatus)
             Text(
                 "Pulls the latest APK from ${AppUpdater.APK_URL} and hands it to the system installer. The TV will ask you to confirm.",
                 style = MaterialTheme.typography.bodySmall,
@@ -274,6 +286,29 @@ private fun UpdaterCard(container: AppContainer) {
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun VersionStatusLine(status: AppUpdater.VersionStatus) {
+    when (status) {
+        AppUpdater.VersionStatus.Unknown -> Text(
+            "Latest available · checking…",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        is AppUpdater.VersionStatus.UpToDate -> Text(
+            "Up to date (latest: ${status.latest})",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        is AppUpdater.VersionStatus.UpdateAvailable -> Text(
+            "Update available: ${status.latest}",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.tertiary,
+        )
     }
 }
 

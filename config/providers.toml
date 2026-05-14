@@ -5,3 +5,10 @@ enabled = true
 base_url = "https://api.torr9.net"
 username_env = "TORR9_USERNAME"
 password_env = "TORR9_PASSWORD"
+
+[[providers]]
+id = "c411"
+kind = "c411"
+enabled = true
+base_url = "https://c411.org"
+api_key_env = "C411_API_KEY"

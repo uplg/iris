@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -22,15 +23,26 @@ import java.io.IOException
  * `Intent.ACTION_VIEW` + `FileProvider`. The system shows its own
  * "Update Iris TV?" confirmation; we never silently replace anything.
  *
- * The fixed URL is intentional — the user hosts the APK and rebuilds
- * out-of-band. A future nicety would be to compare a `<version>.txt`
- * sidecar against `BuildConfig.VERSION_NAME` to gate the button when
- * already up-to-date, but for now the user just clicks when they want.
+ * The fixed URLs are intentional — the user self-hosts the APK on
+ * `uplg.xyz` and rebuilds out-of-band. Alongside the APK we also
+ * publish a plain-text `app-release.version` sidecar containing just
+ * the semver of what's hosted (one line, e.g. `0.2.0`). Whenever the
+ * APK is replaced, this file is replaced too — that's how the
+ * Settings screen knows whether the user is running the latest
+ * build.
  */
 object AppUpdater {
 
     /** Where the latest APK is hosted. */
     const val APK_URL: String = "https://uplg.xyz/app-release.apk"
+
+    /** Sidecar plain-text file containing only the semver of the
+     *  APK at [APK_URL] (e.g. `0.2.0\n`). Replaced atomically with
+     *  the APK on every release. Missing / unreachable = the
+     *  Settings card shows "version check unavailable" but the
+     *  Download button still works (best-effort, never block the
+     *  update path). */
+    const val LATEST_VERSION_URL: String = "https://uplg.xyz/app-release.version"
 
     /** Cache subdirectory used by [downloadApk]; cleared on each
      *  successful install request. */
@@ -127,6 +139,79 @@ object AppUpdater {
         } else {
             true
         }
+    }
+
+    /**
+     * Best-effort fetch of the version string from
+     * [LATEST_VERSION_URL]. Returns `null` when the request fails,
+     * the body is empty, or the body doesn't look like a semver —
+     * callers treat that as "unknown" and show the installed
+     * version only.
+     *
+     * Runs on [Dispatchers.IO]; cancellable.
+     */
+    suspend fun fetchLatestVersion(client: OkHttpClient): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                val req = Request.Builder().url(LATEST_VERSION_URL).get().build()
+                client.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@withContext null
+                    val raw = resp.body.string().trim()
+                    raw.takeIf { SEMVER_REGEX.matches(it) }
+                }
+            } catch (_: IOException) {
+                null
+            }
+        }
+
+    /**
+     * Compare two semver strings. Negative when [installed] is older
+     * than [available], positive when newer, zero when equal. A
+     * release (no pre-release tag) is treated as greater than the
+     * same version with a pre-release tag (`0.2.0` > `0.2.0-rc1`).
+     *
+     * Robust to short inputs (`0.2` is treated as `0.2.0`) and to
+     * non-numeric components (sorted lexicographically as a last
+     * resort). Returns `0` only on exact equality; never `null`.
+     */
+    fun compareSemver(installed: String, available: String): Int {
+        val (aCore, aPre) = splitPrerelease(installed)
+        val (bCore, bPre) = splitPrerelease(available)
+        val aParts = aCore.split('.').map { it.toIntOrNull() ?: 0 }
+        val bParts = bCore.split('.').map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(aParts.size, bParts.size)) {
+            val ai = aParts.getOrNull(i) ?: 0
+            val bi = bParts.getOrNull(i) ?: 0
+            if (ai != bi) return ai.compareTo(bi)
+        }
+        return when {
+            aPre == null && bPre == null -> 0
+            aPre == null -> 1   // release > prerelease
+            bPre == null -> -1
+            else -> aPre.compareTo(bPre)
+        }
+    }
+
+    /** Up-to-date / outdated verdict for the Settings card. */
+    fun versionStatus(installed: String, available: String?): VersionStatus {
+        val latest = available ?: return VersionStatus.Unknown
+        return when {
+            compareSemver(installed, latest) < 0 -> VersionStatus.UpdateAvailable(latest)
+            else -> VersionStatus.UpToDate(latest)
+        }
+    }
+
+    sealed interface VersionStatus {
+        data object Unknown : VersionStatus
+        data class UpToDate(val latest: String) : VersionStatus
+        data class UpdateAvailable(val latest: String) : VersionStatus
+    }
+
+    private val SEMVER_REGEX = Regex("""\d+(?:\.\d+){0,2}(?:-[\w.]+)?""")
+
+    private fun splitPrerelease(s: String): Pair<String, String?> {
+        val idx = s.indexOf('-')
+        return if (idx < 0) s to null else s.substring(0, idx) to s.substring(idx + 1)
     }
 
     /**

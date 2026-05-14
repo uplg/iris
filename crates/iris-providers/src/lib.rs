@@ -5,9 +5,15 @@
 //! 2. implement [`SearchProvider`]
 //! 3. register the kind in [`registry::build_provider`]
 //! 4. add an entry in `providers.toml`
+//!
+//! When the new tracker exposes a Torznab API, prefer composing
+//! [`torznab::TorznabProvider`] from the new module instead of
+//! reimplementing the wire format (see [`c411`] for an example).
 
+pub mod c411;
 pub mod registry;
 pub mod torr9;
+pub mod torznab;
 
 mod util;
 

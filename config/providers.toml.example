@@ -11,3 +11,25 @@ password_env = "TORR9_PASSWORD"
 # optional overrides:
 # referer = "https://torr9.net/"
 # origin  = "https://torr9.net"
+
+# c411 (Communauté 411) — Torznab search + curated /api/homepage featured.
+[[providers]]
+id = "c411"
+kind = "c411"
+enabled = true
+base_url = "https://c411.org"
+api_key_env = "C411_API_KEY"
+# optional Torznab tunings:
+# api_path = "/api"
+# movie_categories = "2000,2030,2040,2045,2050"
+# tv_categories    = "5000,5030,5040,5045,5070"
+
+# Generic Torznab indexer (UNIT3D, Jackett-fed, etc.) — only search +
+# resolve, no curated featured shelf. Use the `c411` kind instead for
+# c411 specifically so the homepage carousel gets populated.
+# [[providers]]
+# id = "myindexer"
+# kind = "torznab"
+# enabled = true
+# base_url = "https://indexer.example"
+# api_key_env = "MYINDEXER_API_KEY"

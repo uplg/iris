@@ -1,6 +1,6 @@
 {
   "name": "web",
-  "version": "0.0.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -21,6 +21,7 @@
     "@tanstack/react-query": "^5.100.9",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dompurify": "^3.4.3",
     "hls.js": "^1.6.16",
     "libav.js": "^6.8.8",
     "libavjs-webcodecs-bridge": "^0.3.2",
@@ -41,6 +42,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/dompurify": "^3.2.0",
     "@types/node": "^25.7.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

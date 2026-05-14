@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider } from "@/lib/auth";
 import { ThemeProvider } from "@/lib/theme";
 import { AppShell } from "@/components/AppShell";
+import { ClientOutdatedOverlay } from "@/components/ClientOutdatedOverlay";
 import { RequireAuth } from "@/components/RequireAuth";
 import { LoginPage } from "@/pages/LoginPage";
 import { RegisterPage } from "@/pages/RegisterPage";
@@ -45,6 +46,7 @@ export default function App() {
                 </Route>
               </Route>
             </Routes>
+            <ClientOutdatedOverlay />
           </BrowserRouter>
         </AuthProvider>
       </QueryClientProvider>

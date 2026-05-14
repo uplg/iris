@@ -1,4 +1,5 @@
 pub mod app;
+pub mod client_version;
 pub mod collection_assign;
 pub mod error;
 pub mod follows_scheduler;

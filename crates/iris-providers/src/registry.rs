@@ -136,6 +136,8 @@ impl ProviderRegistry {
 pub fn build_provider(entry: &ProviderEntry) -> Result<Arc<dyn SearchProvider>> {
     match entry.kind.as_str() {
         "torr9" => Ok(crate::torr9::Torr9::from_config(entry)?),
+        "torznab" => Ok(crate::torznab::TorznabProvider::from_config(entry)?),
+        "c411" => Ok(crate::c411::C411::from_config(entry)?),
         other => Err(Error::Provider(format!(
             "unknown provider kind: {other} (provider id: {})",
             entry.id
