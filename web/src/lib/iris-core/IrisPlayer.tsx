@@ -9,7 +9,7 @@
  * which track is active.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { IrisChrome } from "./IrisChrome";
 import type { EngineHandle, EngineMount, NativeSubtitleTrack } from "./engine";
@@ -99,6 +99,16 @@ export function IrisPlayer(props: IrisPlayerProps) {
   // user lands back where they were, not at startPosition.
   const [mountStartPosition, setMountStartPosition] = useState<number>(
     props.startPosition,
+  );
+  // Remount-trigger counter. We can't put `audioTrackIndex` itself
+  // in the mount effect's deps: that fires a remount for Tier F too,
+  // which would wipe out the live `hls.audioTrack` switch and snap
+  // back to hls.js's default audio. Instead we bump this version
+  // ONLY for tiers that need a remount (A/B/C/E), and pass the
+  // current `audioTrackIndex` to the engine through closure.
+  const [audioRemountVersion, bumpAudioRemount] = useReducer(
+    (x: number) => x + 1,
+    0,
   );
 
   const { native: nativeSubs, overlay: overlaySubs } = useMemo(
@@ -191,29 +201,38 @@ export function IrisPlayer(props: IrisPlayerProps) {
       setHandle(null);
       void old?.dispose();
     };
-    // `audioTrackIndex` is in the dep list so that tiers without a
-    // live audio-switch API (A/B/C/E) remount when the user picks a
-    // different audio. Tier F bypasses this — see `onAudioPick` below.
-    // `mountStartPosition` (not `props.startPosition`) drives the
-    // remount target so audio switches resume at the playhead.
+    // The mount effect re-fires when the *triggering* identity
+    // changes — tier, src, resume position, or our explicit
+    // `audioRemountVersion` counter. `audioTrackIndex` deliberately
+    // isn't a dep: it gets captured by closure and reflects the
+    // user's latest pick at the moment the effect actually runs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.tier, props.src, mountStartPosition, audioTrackIndex]);
+  }, [props.tier, props.src, mountStartPosition, audioRemountVersion]);
 
   const onAudioPick = (id: string) => {
     const idx = Number(id);
     if (!Number.isFinite(idx)) return;
+    console.log(
+      `[iris-core] onAudioPick id=${id} tier=${props.tier} hasHandle=${!!handle} needsRemount=${tierRequiresRemountForAudio(props.tier)}`,
+    );
+    setAudioTrackIndex(idx);
     if (tierRequiresRemountForAudio(props.tier)) {
       // Capture the current playhead BEFORE the remount tears the
       // engine down. The engine's `currentTime()` becomes 0 once
       // disposed, so reading from our forwarded `currentTimeRef`
       // (updated on every `timeupdate`) gives the true position.
       setMountStartPosition(currentTimeRef.current);
-    }
-    setAudioTrackIndex(idx);
-    if (handle && !tierRequiresRemountForAudio(props.tier)) {
-      // Tier F: hls.js switches live; we still update local state so
-      // the chrome's "active" highlight matches the click immediately.
+      bumpAudioRemount();
+    } else if (handle) {
+      // Tier F: hls.js switches the rendition live. No remount
+      // needed — and crucially we mustn't bump `audioRemountVersion`
+      // here, otherwise the mount effect would re-fire and spin up a
+      // fresh hls.js instance that snaps back to its default audio.
       handle.setAudioTrack(id);
+    } else {
+      console.warn(
+        "[iris-core] onAudioPick: tier doesn't need remount but handle is null — swallowed",
+      );
     }
   };
 

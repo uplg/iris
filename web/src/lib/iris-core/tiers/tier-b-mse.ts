@@ -50,6 +50,55 @@ import {
  *  download + decode bursts, smaller = lower memory footprint. */
 const BUFFER_AHEAD_TARGET_SECONDS = 60;
 
+/** Probe + memoise whether `WebCodecs.AudioEncoder` accepts the
+ *  source channel count for AAC at the given sample rate. Chrome
+ *  handles 5.1/7.1 fine; Firefox rejects anything > 2ch outright
+ *  ("encoder configuration not supported by this browser"). We cache
+ *  on `${channels}/${sampleRate}` because rates can differ across
+ *  tracks (44.1 vs 48 vs 96 kHz) and the encoder may accept the
+ *  channel layout at one rate but not another. Returns the highest
+ *  channel count ≤ `srcChannels` that's encodable, falling back to 2
+ *  if the API isn't available. */
+const aacEncoderProbeCache = new Map<string, number>();
+async function pickEncodableAacChannels(
+  srcChannels: number,
+  sampleRate: number,
+): Promise<number> {
+  if (srcChannels <= 2) return srcChannels;
+  if (typeof globalThis.AudioEncoder === "undefined") return 2;
+  const key = `${srcChannels}/${sampleRate}`;
+  const cached = aacEncoderProbeCache.get(key);
+  if (cached !== undefined) return cached;
+  // Walk down from source to stereo. We test 6 and 2 explicitly
+  // since those are the realistic targets — testing every integer
+  // would just waste calls.
+  const candidates = Array.from(
+    new Set([srcChannels, 6, 2].filter((n) => n > 0 && n <= srcChannels)),
+  );
+  let chosen = 2;
+  for (const n of candidates) {
+    try {
+      const r = await AudioEncoder.isConfigSupported({
+        codec: "mp4a.40.2",
+        sampleRate,
+        numberOfChannels: n,
+        bitrate: 192_000,
+      });
+      if (r.supported) {
+        chosen = n;
+        break;
+      }
+    } catch {
+      /* keep walking down */
+    }
+  }
+  console.log(
+    `[iris-core] Tier B: AAC encoder accepts ${chosen}ch @ ${sampleRate}Hz (source: ${srcChannels}ch)`,
+  );
+  aacEncoderProbeCache.set(key, chosen);
+  return chosen;
+}
+
 /** Mediabunny's MP4 muxer validates that every packet's PTS is ≥ the
  *  max PTS of the previous GOP. That assumption breaks for open-GOP
  *  / deep B-frame video (x265, AV1 with `--b-pyramid normal`, anything
@@ -275,7 +324,30 @@ export const mountTierB: EngineMount = async (opts) => {
     let audioFeed: AudioFeed | null = null;
     if (audioTrack) {
       if (audioNeedsTranscode) {
-        const source = new AudioSampleSource({ codec: "aac", bitrate: 192_000 });
+        // Pick the highest channel count the browser's
+        // WebCodecs.AudioEncoder will accept. Chrome handles 6ch
+        // AAC fine — we want to preserve 5.1 there. Firefox
+        // rejects multi-channel AAC outright ("This specific
+        // encoder configuration (mp4a.40.2, 192000 bps, 6 channels,
+        // 48000 Hz) is not supported by this browser") — we
+        // downmix to stereo for it. Probing rather than UA-sniffing
+        // keeps Safari + any future browser auto-correct. Mediabunny
+        // applies ITU BS.775 downmix coefficients when
+        // `transform.numberOfChannels` is set lower than the
+        // source.
+        const srcChannels = await audioTrack.getNumberOfChannels();
+        const srcSampleRate = await audioTrack.getSampleRate();
+        const targetChannels = await pickEncodableAacChannels(
+          srcChannels,
+          srcSampleRate,
+        );
+        const source = new AudioSampleSource({
+          codec: "aac",
+          bitrate: 192_000,
+          ...(targetChannels !== srcChannels
+            ? { transform: { numberOfChannels: targetChannels } }
+            : {}),
+        });
         newOutput.addAudioTrack(source);
         audioFeed = { kind: "transcode", source };
       } else {
