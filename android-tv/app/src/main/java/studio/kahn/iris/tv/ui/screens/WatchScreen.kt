@@ -114,20 +114,35 @@ fun WatchScreen(
         val maxAttempts = 60 // ~2 min at 2s each
         while (attempts < maxAttempts) {
             try {
-                probe = api.probe(infohash, fileIdx)
-                val progresses = runCatching { api.torrentProgress(infohash) }.getOrDefault(emptyList())
-                resumePositionSec = progresses.firstOrNull { it.fileIdx == fileIdx }
+                // Fetch probe AND progress into locals first, then
+                // commit them to state in one block at the end. The
+                // previous version assigned `probe` first, which
+                // immediately triggered a Compose recomposition and
+                // could let `ReadyPlayer` mount with the stale
+                // `resumePositionSec=0` (default) before the bulk
+                // progress fetch wrote the real resume offset.
+                // Effect: "Continue watching" entries always started
+                // at 0 on TV. The `ExoPlayer` instance is built via
+                // `remember(playUrl)` and only reads the start
+                // position ONCE, so the late-arriving update never
+                // got picked up.
+                val freshProbe = api.probe(infohash, fileIdx)
+                val progresses = runCatching { api.torrentProgress(infohash) }
+                    .getOrDefault(emptyList())
+                val resume = progresses.firstOrNull { it.fileIdx == fileIdx }
                     ?.takeUnless { it.completed }?.positionSeconds ?: 0.0
-                // Also fetch the single-file progress to recover the
-                // user's previous audio + subtitle picks. The bulk
-                // endpoint above only carries position; this one has
-                // the per-file `audio_track_idx` + `subtitle_track_idx`
-                // the player will hand back to `trackSelectionParameters`
-                // at mount. Safe to ignore failures (e.g. the user
-                // has never watched this file before → `null`).
-                val saved = runCatching { api.getProgress(infohash, fileIdx) }.getOrNull()
+                // Per-file progress carries the audio + subtitle
+                // picks; safe to ignore failures (first-time watch).
+                val saved = runCatching { api.getProgress(infohash, fileIdx) }
+                    .getOrNull()
+                // Commit atomically. The order here matters: write
+                // `resumePositionSec` BEFORE `probe` so the very
+                // first recomposition that sees `probe != null`
+                // already has the right start offset.
+                resumePositionSec = resume
                 savedAudioIdx = saved?.audioTrackIdx
                 savedSubIdx = saved?.subtitleTrackIdx
+                probe = freshProbe
                 return@LaunchedEffect
             } catch (e: retrofit2.HttpException) {
                 if (e.code() == 401 || e.code() == 404) {
