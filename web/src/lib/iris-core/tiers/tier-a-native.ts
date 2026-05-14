@@ -39,7 +39,11 @@ export const mountTierA: EngineMount = async (opts) => {
   };
   video.addEventListener("loadeddata", onLoadedData);
 
+  // One-shot. See the comment in `tier-f-hls.ts` for rationale.
+  let errorFired = false;
   const onErr = () => {
+    if (errorFired) return;
+    errorFired = true;
     const err = video.error;
     const msg = err ? `media error ${err.code}: ${err.message}` : "video element error";
     opts.onError(new Error(msg));

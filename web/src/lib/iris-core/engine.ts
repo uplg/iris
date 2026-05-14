@@ -185,9 +185,24 @@ export function videoBackedHandle(
     volume: () => video.volume,
     muted: () => video.muted,
     buffered: () => {
+      // Defensive: Firefox can throw `DOMException: Index or size
+      // is negative…` from `<video>.buffered.start/end(i)` when the
+      // media element is in a transient state (mid-detach, after a
+      // decode error, …). The TimeRanges length is read fresh on
+      // each iteration so most races resolve themselves, but a
+      // throw here would propagate into the chrome's rAF tick →
+      // `setBuffered` during render → React errors recursively
+      // through the tree (visible as a long stack of minified
+      // function frames repeating). Catching keeps the chrome
+      // responsive even when the underlying media is wedged.
       const ranges: Array<[number, number]> = [];
-      for (let i = 0; i < video.buffered.length; i += 1) {
-        ranges.push([video.buffered.start(i), video.buffered.end(i)]);
+      try {
+        const tr = video.buffered;
+        for (let i = 0; i < tr.length; i += 1) {
+          ranges.push([tr.start(i), tr.end(i)]);
+        }
+      } catch {
+        /* return whatever we managed to collect so far */
       }
       return ranges;
     },

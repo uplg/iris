@@ -39,7 +39,16 @@ export const mountTierF: EngineMount = async (opts) => {
 
   const initialSeek = { done: false };
   const unbind = bindVideoCallbacks(video, opts, initialSeek);
+  // One-shot. Firefox can fire `error` on the `<video>` element
+  // tens of times per second when the MSE buffer is full of
+  // undecodable data (e.g., HEVC content its VT decoder refuses).
+  // Without the guard, every event re-fires `opts.onError` which
+  // cascades into demote / banner / analytics POSTs — and once
+  // `opts.onError` has surfaced once, repeating doesn't add info.
+  let errorFired = false;
   const onErr = () => {
+    if (errorFired) return;
+    errorFired = true;
     const err = video.error;
     opts.onError(new Error(err ? `media error ${err.code}: ${err.message}` : "video element error"));
   };
@@ -176,27 +185,71 @@ export const mountTierF: EngineMount = async (opts) => {
     console.log("[iris-core] Tier F: AUDIO_TRACK_SWITCHED to id", data.id);
     opts.onAudioTracksChange?.(collectHlsAudioTracks(hls));
   });
-  // Error handling, mirrored from Vidstack's `HLSController.#onError`.
-  // On fatal `mediaError` we call `hls.recoverMediaError()` — this
-  // is the canonical hls.js recovery path and was what Vidstack did
-  // (and what worked on Firefox before our custom player landed).
-  // For anything else fatal, surface to the demote / banner path.
+  // Error handling, mirrored from Vidstack's `HLSController.#onError`
+  // but bounded. `hls.recoverMediaError()` detaches the media
+  // element and re-loads the manifest from scratch; when the
+  // underlying issue is content-shaped (Firefox + 4K HEVC HDR, a
+  // bsf strip ate something VT needed, …) the recovery itself
+  // trips the same fatal `bufferAppendError` within seconds and we
+  // loop forever — the user sees "Tier F: HLS manifest parsed"
+  // every couple seconds. Cap at `MAX_RECOVER` attempts inside a
+  // `RECOVER_WINDOW_MS` sliding window; past that, surface the
+  // error AND stop the loader so subsequent error events don't
+  // re-fire `opts.onError` (which would re-set the banner on every
+  // tick) or keep streaming bytes from the server.
+  const MAX_RECOVER = 2;
+  const RECOVER_WINDOW_MS = 8_000;
+  const recentRecoveries: number[] = [];
+  let surfaced = false;
   hls.on(Hls.Events.ERROR, (_event, data) => {
+    if (surfaced) {
+      // Already gave up. Swallow further fatal errors so we don't
+      // re-fire `opts.onError` and re-trigger the banner / demote
+      // path on every subsequent tick.
+      return;
+    }
     if (!data.fatal) {
       console.warn("[iris-core] hls.js non-fatal", data.type, data.details);
       return;
     }
     if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+      const now = performance.now();
+      while (
+        recentRecoveries.length > 0 &&
+        now - recentRecoveries[0]! > RECOVER_WINDOW_MS
+      ) {
+        recentRecoveries.shift();
+      }
+      if (recentRecoveries.length >= MAX_RECOVER) {
+        surfaced = true;
+        console.error(
+          `[iris-core] Tier F: ${recentRecoveries.length} fatal recoveries in ${RECOVER_WINDOW_MS}ms — surfacing ${data.details}`,
+        );
+        // Stop the loader; `hls.destroy()` would be ideal but it
+        // can re-enter this handler with its own teardown errors,
+        // so we go for the lighter `stopLoad()` + `detachMedia()`.
+        // Full `destroy()` runs in the engine's `dispose()` path
+        // once IrisPlayer / WatchPage react to the surfaced error.
+        try { hls.stopLoad(); } catch { /* idempotent */ }
+        try { hls.detachMedia(); } catch { /* idempotent */ }
+        opts.onError(new Error(`hls.js fatal ${data.type}: ${data.details}`));
+        return;
+      }
+      recentRecoveries.push(now);
       console.warn(
-        `[iris-core] Tier F: fatal mediaError ${data.details} — recoverMediaError()`,
+        `[iris-core] Tier F: fatal mediaError ${data.details} — recoverMediaError() #${recentRecoveries.length}`,
       );
       try {
         hls.recoverMediaError();
       } catch (e) {
+        surfaced = true;
+        try { hls.stopLoad(); } catch { /* idempotent */ }
         opts.onError(e instanceof Error ? e : new Error(String(e)));
       }
       return;
     }
+    surfaced = true;
+    try { hls.stopLoad(); } catch { /* idempotent */ }
     opts.onError(new Error(`hls.js fatal ${data.type}: ${data.details}`));
   });
 

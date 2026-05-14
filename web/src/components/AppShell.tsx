@@ -2,7 +2,7 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router";
 import { Home as HomeIcon, Library as LibraryIcon, LogOut, Search as SearchIcon, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Brand } from "@/components/Brand";
-import { OnboardingWizard } from "@/components/OnboardingWizard";
+import { FirefoxWarning } from "@/components/FirefoxWarning";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useAuth } from "@/lib/auth";
 
@@ -58,7 +58,7 @@ export function AppShell() {
       <main className="mx-auto max-w-6xl px-6 py-10">
         <Outlet />
       </main>
-      <OnboardingWizard />
+      <FirefoxWarning />
     </div>
   );
 }

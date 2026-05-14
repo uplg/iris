@@ -258,7 +258,15 @@ export const mountTierB: EngineMount = async (opts) => {
   let conversionGeneration = 0;
   const appendQueue: Uint8Array[] = [];
 
+  // One-shot. Firefox can fire `error` on `<video>` repeatedly
+  // when the SourceBuffer is full of undecodable data — without
+  // this guard the demote / banner / analytics path runs on every
+  // tick. Cosmetic but otherwise floods the console + sends a
+  // burst of `playback-error` POSTs.
+  let errorFired = false;
   const onErr = () => {
+    if (errorFired) return;
+    errorFired = true;
     const err = video.error;
     fail(new Error(err ? `media error ${err.code}: ${err.message}` : "video element error"));
   };
@@ -358,7 +366,7 @@ export const mountTierB: EngineMount = async (opts) => {
     } catch (e) {
       console.warn(
         "[iris-core] Tier B: manual seek pipeline failed. " +
-          "Keeping current playback alive — rewind to a buffered range to resume.",
+        "Keeping current playback alive — rewind to a buffered range to resume.",
         e,
       );
     }
@@ -381,9 +389,38 @@ export const mountTierB: EngineMount = async (opts) => {
       throw new Error("Tier B: runManualPipeline called before input init");
     }
 
-    // Build the new Output and validate it BEFORE killing the old
-    // pipeline. If anything throws here, the running conversion is
-    // untouched and playback continues.
+    // **Critical ordering.** Mediabunny's `Output.start()` may emit
+    // the fMP4 init segment synchronously through the StreamTarget
+    // sink. The sink's `write` callback gates on `generation ===
+    // conversionGeneration` to drop stale chunks from cancelled
+    // pipelines. If we built the sink with `newGen` while
+    // `conversionGeneration` was still the old value, that init
+    // segment would be silently dropped — Firefox then receives
+    // media fragments with no preceding init and reports
+    // `media error 3` (decode error), non-deterministically
+    // depending on whether `start()` writes sync or async.
+    //
+    // To dodge that race we cancel the previous pipelines FIRST,
+    // bump `conversionGeneration` to `newGen`, and only THEN build
+    // the new Output. The cost is the loss of the previous
+    // "init-before-swap" safety property (if `newOutput.start()`
+    // throws we have no fallback) — acceptable because init
+    // failures here have always meant a hard demote anyway.
+    conversionGeneration = newGen;
+    try {
+      await prevConv?.cancel();
+    } catch {
+      /* canceled is expected */
+    }
+    try {
+      await prevOutput?.cancel();
+    } catch {
+      /* idempotent */
+    }
+    conversion = null;
+    manualOutput = null;
+    appendQueue.length = 0;
+
     const sink = buildSink(newGen);
     const newOutput = new Output({
       format: new Mp4OutputFormat({
@@ -438,23 +475,21 @@ export const mountTierB: EngineMount = async (opts) => {
       }
     }
 
-    await newOutput.start();
-
-    // New Output is live. Now safely swap state.
-    conversionGeneration = newGen;
-    conversion = null;
-    manualOutput = newOutput;
+    // Pause the video before we touch the SourceBuffer. Firefox is
+    // strict about an active playhead crossing through an empty
+    // buffered range — it'll fire decode-error events and try to
+    // "recover" by re-seeking to whatever's left, which on a fresh
+    // remove(0,Inf) is "nothing", so it snaps to 0 and loops.
+    // Chrome tolerates this; Firefox doesn't. Remember the pre-
+    // seek play state and restore it after the playhead is
+    // re-anchored.
+    const wasPlaying = !video.paused;
     try {
-      await prevConv?.cancel();
-    } catch {
-      /* canceled is expected */
-    }
-    try {
-      await prevOutput?.cancel();
+      video.pause();
     } catch {
       /* idempotent */
     }
-    appendQueue.length = 0;
+
     if (sourceBuffer) {
       await waitForUpdateEnd();
       try {
@@ -471,6 +506,39 @@ export const mountTierB: EngineMount = async (opts) => {
       } catch {
         /* swallow */
       }
+    }
+
+    // Now start the Output. This emits the fMP4 init segment
+    // through the sink; the sink's `generation === conversionGeneration`
+    // check now passes (we bumped `conversionGeneration` to `newGen`
+    // earlier), so the init lands in `appendQueue` and gets
+    // `appendBuffer`'d ahead of any media segments. Without this
+    // ordering the init was raced out of the queue and Firefox
+    // surfaced `media error 3` non-deterministically.
+    await newOutput.start();
+    manualOutput = newOutput;
+
+    // Re-anchor the playhead. The seek handler above intentionally
+    // does NOT touch `video.currentTime` for out-of-buffer scrubs —
+    // we do it here, AFTER the SourceBuffer has been cleared and
+    // the init segment has been pushed, so Firefox sees a
+    // coherent state from the next `appendBuffer` onward.
+    if (seekStart > 0) {
+      try {
+        if (Math.abs(video.currentTime - seekStart) > 0.05) {
+          video.currentTime = seekStart;
+        }
+      } catch {
+        /* swallow */
+      }
+    }
+
+    // Resume playback (if we paused above) once the playhead is
+    // anchored. The video will buffer for a beat before frames
+    // arrive — `play()` is a Promise we don't await here, the
+    // browser handles the wait → autoplay transition naturally.
+    if (wasPlaying) {
+      void video.play().catch(() => undefined);
     }
 
     // Pump video + audio concurrently.
@@ -545,40 +613,40 @@ export const mountTierB: EngineMount = async (opts) => {
 
     const audioP = audioTrack && audioFeed
       ? (async () => {
-          if (audioFeed.kind === "passthrough") {
-            const packetSink = new EncodedPacketSink(audioTrack);
-            const startPacket = await packetSink.getKeyPacket(seekStart);
-            if (!startPacket) {
-              await audioFeed.source.close();
-              return;
-            }
-            const decoderConfig = await audioTrack.getDecoderConfig();
-            let firstMeta = true;
-            for await (const packet of packetSink.packets(startPacket)) {
-              if (disposed || newGen !== conversionGeneration) break;
-              const meta = firstMeta
-                ? { decoderConfig: decoderConfig ?? undefined }
-                : undefined;
-              await audioFeed.source.add(packet, meta);
-              firstMeta = false;
-            }
+        if (audioFeed.kind === "passthrough") {
+          const packetSink = new EncodedPacketSink(audioTrack);
+          const startPacket = await packetSink.getKeyPacket(seekStart);
+          if (!startPacket) {
             await audioFeed.source.close();
-          } else {
-            // Transcode: AudioSampleSink uses our registered libav
-            // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
-            // AudioSampleSource encodes them to AAC via WebCodecs.
-            const sampleSink = new AudioSampleSink(audioTrack);
-            for await (const sample of sampleSink.samples(seekStart, Infinity)) {
-              if (disposed || newGen !== conversionGeneration) {
-                sample.close();
-                break;
-              }
-              await audioFeed.source.add(sample);
-              sample.close();
-            }
-            await audioFeed.source.close();
+            return;
           }
-        })()
+          const decoderConfig = await audioTrack.getDecoderConfig();
+          let firstMeta = true;
+          for await (const packet of packetSink.packets(startPacket)) {
+            if (disposed || newGen !== conversionGeneration) break;
+            const meta = firstMeta
+              ? { decoderConfig: decoderConfig ?? undefined }
+              : undefined;
+            await audioFeed.source.add(packet, meta);
+            firstMeta = false;
+          }
+          await audioFeed.source.close();
+        } else {
+          // Transcode: AudioSampleSink uses our registered libav
+          // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
+          // AudioSampleSource encodes them to AAC via WebCodecs.
+          const sampleSink = new AudioSampleSink(audioTrack);
+          for await (const sample of sampleSink.samples(seekStart, Infinity)) {
+            if (disposed || newGen !== conversionGeneration) {
+              sample.close();
+              break;
+            }
+            await audioFeed.source.add(sample);
+            sample.close();
+          }
+          await audioFeed.source.close();
+        }
+      })()
       : Promise.resolve();
 
     void Promise.all([videoP, audioP])
@@ -709,14 +777,30 @@ export const mountTierB: EngineMount = async (opts) => {
     ...baseHandle,
     seek: (s: number) => {
       const target = Math.max(0, s);
-      try {
-        video.currentTime = target;
-      } catch {
-        /* swallow */
+      if (isTimeBuffered(target)) {
+        // In-buffer: native video seek is instant, do it now.
+        try {
+          video.currentTime = target;
+        } catch {
+          /* swallow */
+        }
+        return;
       }
-      if (isTimeBuffered(target)) return;
-      // Out-of-buffer scrub. Best-effort restart; on failure we keep
-      // the current conversion alive (see `restartConversionFromSeek`).
+      // Out-of-buffer scrub. **Don't** touch `video.currentTime`
+      // yet — Firefox handles the gap between "currentTime in
+      // unbuffered region" and "first new fragment appended" very
+      // poorly: it snap-resets the playhead to the start of the
+      // last buffered range (or 0 if we just removed it), fires a
+      // spurious decode error, and the resulting `<video error>`
+      // event cascades into a Tier B → F demote where hls.js then
+      // recover-loops. Chrome is forgiving here; Firefox is not.
+      //
+      // The manual pipeline (below) clears the SourceBuffer,
+      // re-anchors `timestampOffset`, starts pumping, and only
+      // THEN sets `video.currentTime = seekStart`. By that point
+      // the SourceBuffer's first new fragment is on its way and
+      // Firefox sees a coherent state (currentTime + buffered
+      // range matching). See `runManualPipeline`.
       void restartConversionFromSeek(target);
     },
   };
@@ -785,9 +869,7 @@ export const mountTierB: EngineMount = async (opts) => {
   // ---- Spin up the first Conversion -----------------------------
 
   input = new Input({
-    source: new UrlSource(streamUrl, {
-      requestInit: { credentials: "include" },
-    }),
+    source: new UrlSource(streamUrl, {}),
     formats: ALL_FORMATS,
   });
   try {

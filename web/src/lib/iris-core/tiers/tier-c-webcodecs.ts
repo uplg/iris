@@ -36,7 +36,7 @@ export const mountTierC: EngineMount = async (opts) => {
   container.innerHTML = "";
 
   const input = new Input({
-    source: new UrlSource(streamUrl, { requestInit: { credentials: "include" } }),
+    source: new UrlSource(streamUrl, {}),
     formats: ALL_FORMATS,
   });
 

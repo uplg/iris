@@ -162,14 +162,14 @@ export function IrisChrome(props: IrisChromeProps) {
     return () => el.removeEventListener("keydown", onKey);
   }, [handle, props.fullscreenTarget]);
 
-  // Click-to-toggle on the surface (but not on the chrome itself).
-  const onSurfaceClick = (e: React.MouseEvent) => {
-    // Ignore clicks coming from chrome — they bubble up otherwise.
-    if ((e.target as HTMLElement).closest("[data-iris-chrome]")) return;
-    if (!handle) return;
-    if (handle.paused()) void handle.play();
-    else handle.pause();
-  };
+  // Click-to-toggle is handled at the wrapper level in `IrisPlayer`
+  // — see `onSurfaceClick` there. We used to also register a
+  // `flex-1.onClick={...}` here that was supposed to ignore chrome-
+  // internal clicks, but the `closest('[data-iris-chrome]')` check
+  // matched our own root wrapper (which carries `data-iris-chrome`)
+  // and consequently bailed on every click, so it was always dead
+  // code. Removed; we let pointer events pass through the
+  // transparent surface area to the wrapper instead.
 
   if (!handle) return null;
 
@@ -183,9 +183,13 @@ export function IrisChrome(props: IrisChromeProps) {
       }}
       className="absolute inset-0 z-10 flex flex-col"
     >
-      {/* Click target — covers the whole player but lets chrome through.
-          Sits behind the chrome bar; click anywhere else toggles play. */}
-      <div className="flex-1 cursor-pointer" onClick={onSurfaceClick} />
+      {/* Transparent surface above the engine. We want clicks here to
+          fall through to `IrisPlayer`'s wrapper-level `onSurfaceClick`
+          (which toggles play/pause), so we deliberately disable
+          pointer events on the surface itself — interactive children
+          (chrome bar / scrubber / menus) re-enable them via their own
+          `pointer-events-auto`. */}
+      <div className="pointer-events-none flex-1" />
 
       <div
         className={`pointer-events-auto flex flex-col gap-1 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-12 text-white transition-opacity duration-200 ${

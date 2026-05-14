@@ -106,6 +106,12 @@ export function IrisPlayer(props: IrisPlayerProps) {
   const handleRef = useRef<EngineHandle | null>(null);
   const [handle, setHandle] = useState<EngineHandle | null>(null);
   const currentTimeRef = useRef<number>(props.startPosition);
+  // Latched "were we playing right before the last engine teardown?"
+  // The mount-effect cleanup snapshots `!handle.paused()` here so the
+  // next mount can auto-resume — without this an audio-track switch
+  // (Tier B/C/E only — those tiers remount on pick) leaves the user
+  // staring at a paused frame.
+  const playingBeforeRemountRef = useRef<boolean>(false);
   const pip = useDocumentPip({ width: 720, height: 405 });
 
   // Active audio track index into `manifest.audio`. Initial pick:
@@ -212,6 +218,19 @@ export function IrisPlayer(props: IrisPlayerProps) {
         } else {
           handleRef.current = h;
           setHandle(h);
+          // Auto-resume if the previous engine was playing right
+          // before this remount fired (typically an audio-track
+          // switch on Tier B/C/E). The first play attempt might
+          // happen before the engine is fully primed; the .catch
+          // keeps the failure silent so we don't double-fire
+          // onError. The flag is consumed (set back to false) so it
+          // only triggers for THIS specific remount.
+          if (playingBeforeRemountRef.current) {
+            playingBeforeRemountRef.current = false;
+            void h.play().catch(() => {
+              /* engine not ready yet; user can hit play manually */
+            });
+          }
         }
       } catch (e) {
         if (!cancelled) props.onError(e instanceof Error ? e.message : String(e));
@@ -221,6 +240,13 @@ export function IrisPlayer(props: IrisPlayerProps) {
     return () => {
       cancelled = true;
       const old = handleRef.current;
+      if (old) {
+        try {
+          playingBeforeRemountRef.current = !old.paused();
+        } catch {
+          playingBeforeRemountRef.current = false;
+        }
+      }
       handleRef.current = null;
       setHandle(null);
       void old?.dispose();
@@ -277,8 +303,47 @@ export function IrisPlayer(props: IrisPlayerProps) {
       ? overlaySubs.find((s) => s.stream_idx === activeSubtitle.stream_idx) ?? null
       : null;
 
+  const onSurfaceClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const h = handleRef.current;
+      if (!h) return;
+      // Ignore clicks that land on (or inside) interactive chrome
+      // bits — the chrome's own play button + scrubber + menus
+      // already handle themselves; toggling here on top would
+      // double-fire (play→pause→play within one click). Walk up
+      // from the click target until we hit the wrapper, bailing if
+      // we cross any element marked `data-iris-chrome` or a native
+      // interactive control.
+      let n: HTMLElement | null = e.target as HTMLElement;
+      while (n && n !== e.currentTarget) {
+        const tag = n.tagName;
+        if (
+          tag === "BUTTON" ||
+          tag === "INPUT" ||
+          tag === "A" ||
+          tag === "SELECT" ||
+          tag === "TEXTAREA" ||
+          n.dataset.irisChrome !== undefined
+        ) {
+          return;
+        }
+        n = n.parentElement;
+      }
+      if (h.paused()) {
+        void h.play().catch(() => undefined);
+      } else {
+        h.pause();
+      }
+    },
+    [],
+  );
+
   const playerNode = (
-    <div ref={setWrapper} className="relative h-full w-full bg-black">
+    <div
+      ref={setWrapper}
+      onClick={onSurfaceClick}
+      className="relative h-full w-full bg-black"
+    >
       {/* React-managed slot. The callback ref re-appends our stable
           `videoHostRef` into this slot whenever React mounts a new
           one (e.g., after a Document PiP open/close moves the
