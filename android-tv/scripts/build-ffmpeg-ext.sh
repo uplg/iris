@@ -58,20 +58,83 @@ ENABLED_DECODERS=(
     alac      # Apple Lossless (rare but cheap to include)
 )
 
-# ABIs Iris targets. Drop x86_64 if you only run on real TVs (Apple
-# Silicon emulators use arm64 these days).
-ABIS=(armeabi-v7a arm64-v8a x86_64)
+# Minimum Android API level the produced .so files target. Drives the
+# compiler name (`armv7a-linux-androideabi${LEVEL}-clang`). Must be
+# ≥ the `minSdk` declared in `app/build.gradle.kts` (currently 23).
+ANDROID_API_LEVEL="${ANDROID_API_LEVEL:-23}"
 
-# Toolchain. Reads ANDROID_NDK_HOME or NDK_HOME; falls back to the
-# Android Studio default install path on macOS.
-NDK_PATH="${ANDROID_NDK_HOME:-${NDK_HOME:-${HOME}/Library/Android/sdk/ndk/27.0.12077973}}"
-if [[ ! -d "${NDK_PATH}" ]]; then
-    echo "Android NDK not found at ${NDK_PATH}." >&2
-    echo "Set ANDROID_NDK_HOME or install via Android Studio → SDK Manager → NDK." >&2
+# Host toolchain dir under `${NDK}/toolchains/llvm/prebuilt/`. Picked
+# from what the NDK actually ships rather than hardcoded — the layout
+# differs between major versions:
+#   * NDK r25 / r26 on macOS → only `darwin-x86_64` (Apple Silicon
+#     runs it through Rosetta).
+#   * NDK r27+ on macOS → `darwin-aarch64` (native ARM) AND, on some
+#     installs, `darwin-x86_64` for Intel hosts.
+# Resolved below once `NDK_PATH` is known.
+HOST_PLATFORM=""
+
+# Toolchain. Prefer an explicit env var; otherwise scan the Android
+# Studio NDK install directory and pick a build-friendly version.
+#
+# Why r26 specifically (and not whatever's newest): Media3's
+# `build_ffmpeg.sh` invokes the legacy NDK toolchain via direct
+# `gcc`-compatible wrappers (`armv7a-linux-androideabi*-clang` etc.)
+# that NDK r27 removed in favour of unified `clang --target=...`
+# invocations. The build fails with cryptic "compiler not found"
+# errors on r27. r26 still ships both layouts. r25 also works as a
+# fallback. Anything older lacks the `aarch64-linux-android21+`
+# sysroot the script asks for.
+SDK_NDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-${HOME}/Library/Android/sdk}}/ndk"
+NDK_PATH="${ANDROID_NDK_HOME:-${NDK_HOME:-}}"
+if [[ -z "${NDK_PATH}" && -d "${SDK_NDK_DIR}" ]]; then
+    # Try the build-friendly ranges in priority order. `sort -V` picks
+    # the highest patch within each major; we walk majors low-to-high
+    # only if the preferred one isn't installed.
+    for major_pattern in '^26\.' '^25\.' '^24\.' '^23\.'; do
+        candidate="$(ls -1 "${SDK_NDK_DIR}" 2>/dev/null \
+            | grep -E "${major_pattern}" \
+            | sort -V \
+            | tail -n1)"
+        if [[ -n "${candidate}" && -d "${SDK_NDK_DIR}/${candidate}" ]]; then
+            NDK_PATH="${SDK_NDK_DIR}/${candidate}"
+            break
+        fi
+    done
+fi
+if [[ -z "${NDK_PATH}" || ! -d "${NDK_PATH}" ]]; then
+    echo "Compatible Android NDK not found (r23–r26 expected)." >&2
+    echo "  Searched: ${SDK_NDK_DIR}" >&2
+    echo "  Available: $(ls "${SDK_NDK_DIR}" 2>/dev/null | tr '\n' ' ')" >&2
+    echo "  Install NDK r26 via Android Studio → SDK Manager → SDK Tools → NDK (Side by side)," >&2
+    echo "  or set ANDROID_NDK_HOME=/path/to/ndk-r26 explicitly." >&2
     exit 1
 fi
+echo "→ Using NDK at ${NDK_PATH}"
 
-HOST_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x86_64/;s/arm64/aarch64/')"
+# Resolve the host toolchain dir against what's actually on disk. On
+# Apple Silicon, prefer the native `darwin-aarch64` build when it
+# exists (NDK r27+) since the Rosetta-translated `darwin-x86_64`
+# variant is ~2× slower; on Intel macs there's only `darwin-x86_64`.
+PREBUILT_DIR="${NDK_PATH}/toolchains/llvm/prebuilt"
+HOST_ARCH="$(uname -m)"
+HOST_CANDIDATES=()
+if [[ "${HOST_ARCH}" == "arm64" || "${HOST_ARCH}" == "aarch64" ]]; then
+    HOST_CANDIDATES=(darwin-aarch64 darwin-x86_64)
+else
+    HOST_CANDIDATES=(darwin-x86_64 darwin-aarch64)
+fi
+for candidate in "${HOST_CANDIDATES[@]}"; do
+    if [[ -d "${PREBUILT_DIR}/${candidate}" ]]; then
+        HOST_PLATFORM="${candidate}"
+        break
+    fi
+done
+if [[ -z "${HOST_PLATFORM}" ]]; then
+    echo "No usable toolchain under ${PREBUILT_DIR}." >&2
+    echo "  Found: $(ls "${PREBUILT_DIR}" 2>/dev/null | tr '\n' ' ')" >&2
+    exit 1
+fi
+echo "→ Using host toolchain ${HOST_PLATFORM}"
 
 # ---------------------------------------------------------------------
 # 1. Fetch sources (Media3 + FFmpeg).
@@ -101,12 +164,21 @@ fi
 echo "→ Building FFmpeg native libraries…"
 cd "${EXT_DIR}/jni"
 
-# The build_ffmpeg.sh shipped with Media3 takes positional args:
-#   <ffmpeg-src> <ndk-path> <host-platform> <enabled-decoders…>
+# Positional args expected by Media3's `build_ffmpeg.sh`:
+#   1) FFMPEG_MODULE_PATH — the `decoder_ffmpeg/src/main` dir; the
+#      script descends into `${1}/jni/ffmpeg` for the configure call.
+#   2) NDK_PATH — absolute path to the NDK install.
+#   3) HOST_PLATFORM — `darwin-x86_64` / `darwin-aarch64` / `linux-x86_64`.
+#      Must match a subdir of `${NDK_PATH}/toolchains/llvm/prebuilt/`.
+#   4) ANDROID_ABI — misleadingly named, actually the minimum Android
+#      API level (number, e.g. `23`). Drives the compiler binary name:
+#      `armv7a-linux-androideabi${LEVEL}-clang`.
+#   5..N) ENABLED_DECODERS — codec names passed to `--enable-decoder=`.
 bash ./build_ffmpeg.sh \
-    "${EXT_DIR}/jni/ffmpeg" \
+    "${EXT_DIR}" \
     "${NDK_PATH}" \
     "${HOST_PLATFORM}" \
+    "${ANDROID_API_LEVEL}" \
     "${ENABLED_DECODERS[@]}"
 
 # ---------------------------------------------------------------------
@@ -116,10 +188,16 @@ echo "→ Assembling AAR via Gradle…"
 cd "${WORK_DIR}/media"
 ./gradlew :lib-decoder-ffmpeg:assembleRelease
 
-AAR_SRC="${WORK_DIR}/media/libraries/decoder_ffmpeg/build/outputs/aar"
-AAR_FILE="$(find "${AAR_SRC}" -name '*-release.aar' | head -n1)"
+# Media3 uses an out-of-tree build directory (`buildout/`) instead of
+# the per-module `build/` Gradle default — set up via their root
+# `build.gradle.kts`. The AAR lands there as `lib-decoder-ffmpeg-release.aar`
+# (no version suffix — Media3 doesn't stamp the version into the
+# file name).
+AAR_SRC="${WORK_DIR}/media/libraries/decoder_ffmpeg/buildout/outputs/aar"
+AAR_FILE="$(find "${AAR_SRC}" -name 'lib-decoder-ffmpeg-*-release.aar' -o -name 'lib-decoder-ffmpeg-release.aar' 2>/dev/null | head -n1)"
 if [[ -z "${AAR_FILE}" ]]; then
     echo "could not locate built AAR under ${AAR_SRC}" >&2
+    echo "  Found: $(ls "${AAR_SRC}" 2>/dev/null | tr '\n' ' ')" >&2
     exit 1
 fi
 
@@ -129,10 +207,14 @@ fi
 DEST_DIR="${APP_DIR}/app/libs"
 mkdir -p "${DEST_DIR}"
 # Clear prior AARs so we never link two copies of the same shared lib.
-rm -f "${DEST_DIR}"/media3-decoder-ffmpeg-*.aar
-cp "${AAR_FILE}" "${DEST_DIR}/"
+# Stamp the Media3 version into the destination filename ourselves so
+# the user can spot a stale AAR after a Media3 bump (the upstream AAR
+# isn't versioned in its file name, frustratingly).
+DEST_AAR="${DEST_DIR}/lib-decoder-ffmpeg-${MEDIA3_VERSION}-release.aar"
+rm -f "${DEST_DIR}"/lib-decoder-ffmpeg-*.aar
+cp "${AAR_FILE}" "${DEST_AAR}"
 
 echo
-echo "✓ Done. Installed: ${DEST_DIR}/$(basename "${AAR_FILE}")"
+echo "✓ Done. Installed: ${DEST_AAR}"
 echo "  Re-build the app and the FFmpeg renderer will be picked up"
 echo "  automatically by PlayerFactory.kt (EXTENSION_RENDERER_MODE_ON)."

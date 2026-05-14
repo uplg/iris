@@ -30,19 +30,33 @@ fun buildPlayer(
     val mediaSourceFactory = DefaultMediaSourceFactory(context)
         .setDataSourceFactory(dataSourceFactory)
 
-    // Renderers factory with extension-mode ON. This is a no-op when
-    // the Media3 FFmpeg decoder extension isn't on the classpath
-    // (`app/libs/` empty, default in fresh clones) — DefaultRenderersFactory
-    // silently skips it via reflection. When it IS present (built and
-    // dropped in by `scripts/build-ffmpeg-ext.sh`), Media3 adds the
-    // FFmpeg audio renderer as a fallback for codecs the platform
-    // refuses: DTS / DTS-HD MA / TrueHD / MLP on devices without
-    // hardware support (notably the Android TV emulator). Platform
-    // decoders still take precedence for the codecs they handle
-    // natively (AAC, AC3, EAC3, …) so this costs nothing on hardware
-    // that already works.
+    // Renderers factory. The FFmpeg decoder extension is built and
+    // dropped into `app/libs/` by `scripts/build-ffmpeg-ext.sh`; when
+    // absent (fresh clone), `DefaultRenderersFactory` silently skips
+    // the missing renderer class via reflection — playback works for
+    // anything Android handles natively but DTS / DTS-HD MA / TrueHD
+    // / MLP go silent.
+    //
+    // `EXTENSION_RENDERER_MODE_PREFER` puts the FFmpeg renderer
+    // BEFORE the platform `MediaCodecAudioRenderer`. We picked PREFER
+    // over the lighter-touch `ON` because some Android TV builds
+    // (notably the AVD emulator and some AFTV firmwares) register a
+    // MediaCodec that claims DTS support but produces silence at
+    // runtime — with mode ON, ExoPlayer trusts that claim and never
+    // falls through to FFmpeg, so playback is silent. With PREFER,
+    // FFmpeg handles every codec it supports; the platform renderer
+    // only sees codecs FFmpeg can't decode. CPU cost is negligible on
+    // modern Android TV silicon (~1–3 % for AAC stereo) and we're
+    // always plugged in.
+    //
+    // `setEnableDecoderFallback(true)` is belt-and-braces: if the
+    // selected renderer hits a runtime init failure (corrupted .so,
+    // missing symbol on an exotic ABI, …), ExoPlayer transparently
+    // retries with the next renderer instead of bubbling an error to
+    // the user.
     val renderersFactory = DefaultRenderersFactory(context)
-        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+        .setEnableDecoderFallback(true)
 
     return ExoPlayer.Builder(context)
         .setRenderersFactory(renderersFactory)
