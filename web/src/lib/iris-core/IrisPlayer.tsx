@@ -340,11 +340,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
 
   const onSurfaceClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
-      const ignored = shouldIgnoreClick(e);
-      console.log(
-        `[iris-core] surface click target=${(e.target as HTMLElement).tagName} ignored=${ignored} hasHandle=${!!handleRef.current}`,
-      );
-      if (ignored) return;
+      if (shouldIgnoreClick(e)) return;
       const h = handleRef.current;
       if (!h) return;
       if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
@@ -362,11 +358,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
 
   const onSurfaceDoubleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
-      const ignored = shouldIgnoreClick(e);
-      console.log(
-        `[iris-core] surface dblclick target=${(e.target as HTMLElement).tagName} ignored=${ignored}`,
-      );
-      if (ignored) return;
+      if (shouldIgnoreClick(e)) return;
       if (clickTimerRef.current) {
         clearTimeout(clickTimerRef.current);
         clickTimerRef.current = null;
