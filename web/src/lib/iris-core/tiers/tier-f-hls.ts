@@ -25,7 +25,12 @@ export const mountTierF: EngineMount = async (opts) => {
   const video = document.createElement("video");
   video.className = "h-full w-full object-contain";
   video.playsInline = true;
-  video.preload = "auto";
+  // Match Vidstack's HLS provider, which leaves `preload` as the
+  // empty string default. With `preload="auto"`, Firefox pre-
+  // allocates a decoder pipeline before hls.js has even attached
+  // its MediaSource — measurably benign on Chrome, mildly
+  // problematic on Firefox.
+  video.preload = "";
   const nativeTrackMap = new Map<number, HTMLTrackElement>();
   for (const sub of nativeSubs) {
     appendNativeTrack(video, sub, nativeTrackMap);
@@ -94,20 +99,47 @@ export const mountTierF: EngineMount = async (opts) => {
     throw err;
   }
 
+  // Mirror Vidstack's HLS setup (its `HLSController.setup` in
+  // `packages/vidstack/src/providers/hls/hls.ts`). The single
+  // non-default flag that matters is `renderTextTracksNatively:
+  // false`. Default hls.js (`true`) makes hls.js attach itself to
+  // any `<track>` element on the video to push HLS-embedded cues
+  // into it. We ALREADY append our own `<track>` elements for the
+  // server-side .vtt subtitle URLs (see `appendNativeTrack` in
+  // engine.ts) — when hls.js then competes for those tracks, the
+  // resulting TextTrack state churn upsets Firefox's MSE pipeline
+  // enough that AppleVTDecoder errors out on the next segment
+  // append. Chrome tolerates it; Firefox doesn't.
+  //
+  // Switching to `renderTextTracksNatively: false` tells hls.js to
+  // mind its own business: any HLS-internal text tracks would be
+  // exposed via the `NON_NATIVE_TEXT_TRACKS_FOUND` event (we don't
+  // listen for it because our HLS pipeline never embeds subs —
+  // shaka-packager serves them as standalone files referenced from
+  // the manifest), and our `<track>` elements remain untouched.
   const hls = new Hls({
     xhrSetup: (xhr) => {
       xhr.withCredentials = true;
     },
-    // Tight ABR — we serve a single video rendition, so default ABR
-    // mostly matters for the audio track switching path.
     debug: false,
-    // Capacity tuning: leave defaults; hls.js handles backpressure.
+    renderTextTracksNatively: false,
   });
-  hls.attachMedia(video);
 
-  hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-    hls.loadSource(streamUrl);
-  });
+  // Match Vidstack's HLSController.setup ordering exactly:
+  //   1. Register every event listener BEFORE attachMedia.
+  //   2. Call attachMedia.
+  //   3. Set up DOM (preload + a `<source>` element with the
+  //      manifest URL — hls.js removes all `<source>` children on
+  //      attach and re-adds its own blob source, so this only
+  //      matters as an AirPlay hint; we mirror it for safety).
+  //   4. Call loadSource directly (no waiting on MEDIA_ATTACHED —
+  //      hls.js queues it internally until attach completes).
+  //
+  // Empirical: Firefox's media pipeline is sensitive to subtle
+  // ordering here. Registering listeners AFTER attachMedia plus
+  // gating loadSource on MEDIA_ATTACHED is what we had before;
+  // Vidstack didn't do either and worked. Aligning gives us the
+  // strongest chance the next test crosses the threshold.
   hls.on(Hls.Events.MANIFEST_PARSED, () => {
     opts.onReady?.();
     const tracks = collectHlsAudioTracks(hls);
@@ -144,69 +176,22 @@ export const mountTierF: EngineMount = async (opts) => {
     console.log("[iris-core] Tier F: AUDIO_TRACK_SWITCHED to id", data.id);
     opts.onAudioTracksChange?.(collectHlsAudioTracks(hls));
   });
-  // hls.js media-error recovery. Firefox in particular trips
-  // `bufferAppendError` on the first segment append after a seek —
-  // the SourceBuffer is sometimes still in `updating` state or has
-  // a tiny timing gap that Firefox's MSE rejects but Chrome forgives.
-  // The hls.js docs prescribe a 2-step recovery on `mediaError`:
-  //   1. `recoverMediaError()` — flushes the SB, re-requests segments.
-  //   2. If a second `mediaError` fires within ~3s of step 1,
-  //      `swapAudioCodec()` then `recoverMediaError()` again.
-  //   3. Only surface the error after step 2 also fails.
-  // The recovery state machine is per-mount; it gets reset on
-  // success (a brief grace window without a new mediaError).
-  let mediaRecoveryAttempt = 0;
-  let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
-  const armRecoveryReset = () => {
-    if (recoveryTimer) clearTimeout(recoveryTimer);
-    recoveryTimer = setTimeout(() => {
-      mediaRecoveryAttempt = 0;
-    }, 5000);
-  };
+  // Error handling, mirrored from Vidstack's `HLSController.#onError`.
+  // On fatal `mediaError` we call `hls.recoverMediaError()` — this
+  // is the canonical hls.js recovery path and was what Vidstack did
+  // (and what worked on Firefox before our custom player landed).
+  // For anything else fatal, surface to the demote / banner path.
   hls.on(Hls.Events.ERROR, (_event, data) => {
     if (!data.fatal) {
       console.warn("[iris-core] hls.js non-fatal", data.type, data.details);
       return;
     }
     if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-      if (mediaRecoveryAttempt === 0) {
-        console.warn(
-          `[iris-core] Tier F: fatal mediaError ${data.details} — recoverMediaError() #1`,
-        );
-        mediaRecoveryAttempt = 1;
-        armRecoveryReset();
-        try {
-          hls.recoverMediaError();
-        } catch (e) {
-          opts.onError(e instanceof Error ? e : new Error(String(e)));
-        }
-        return;
-      }
-      if (mediaRecoveryAttempt === 1) {
-        console.warn(
-          `[iris-core] Tier F: fatal mediaError ${data.details} again — swapAudioCodec + recoverMediaError() #2`,
-        );
-        mediaRecoveryAttempt = 2;
-        armRecoveryReset();
-        try {
-          hls.swapAudioCodec();
-          hls.recoverMediaError();
-        } catch (e) {
-          opts.onError(e instanceof Error ? e : new Error(String(e)));
-        }
-        return;
-      }
-      // Recovery exhausted — surface to the demote path.
-      const msg = `hls.js fatal ${data.type}: ${data.details} (recovery exhausted)`;
-      opts.onError(new Error(msg));
-      return;
-    }
-    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
       console.warn(
-        `[iris-core] Tier F: fatal networkError ${data.details} — startLoad()`,
+        `[iris-core] Tier F: fatal mediaError ${data.details} — recoverMediaError()`,
       );
       try {
-        hls.startLoad();
+        hls.recoverMediaError();
       } catch (e) {
         opts.onError(e instanceof Error ? e : new Error(String(e)));
       }
@@ -215,13 +200,28 @@ export const mountTierF: EngineMount = async (opts) => {
     opts.onError(new Error(`hls.js fatal ${data.type}: ${data.details}`));
   });
 
+  // Now attach + load. Order taken from Vidstack: listeners are
+  // registered above, then `attachMedia`, then `loadSource` directly.
+  hls.attachMedia(video);
+  // Mirror Vidstack's `appendSource` for AirPlay hint compatibility.
+  // hls.js's `BufferController.onMediaAttaching` strips all
+  // `<source>` children and re-adds its own `blob:` source pointing
+  // at the MediaSource, so this is purely informational once
+  // attached — but adding it makes the pre-attach video element
+  // state match what Vidstack's player passed to hls.js.
+  const hlsSource = document.createElement("source");
+  hlsSource.src = streamUrl;
+  hlsSource.type = "application/x-mpegurl";
+  hlsSource.setAttribute("data-iris", "");
+  video.appendChild(hlsSource);
+  hls.loadSource(streamUrl);
+
   const handle: EngineHandle = videoBackedHandle(video, {
     nativeTrackMap,
     fallbackDuration: opts.manifest.duration_s ?? null,
     dispose: async () => {
       unbind();
       video.removeEventListener("error", onErr);
-      if (recoveryTimer) clearTimeout(recoveryTimer);
       try {
         hls.destroy();
       } catch {

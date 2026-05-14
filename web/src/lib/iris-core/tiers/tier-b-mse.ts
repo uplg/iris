@@ -50,53 +50,102 @@ import {
  *  download + decode bursts, smaller = lower memory footprint. */
 const BUFFER_AHEAD_TARGET_SECONDS = 60;
 
-/** Probe + memoise whether `WebCodecs.AudioEncoder` accepts the
- *  source channel count for AAC at the given sample rate. Chrome
- *  handles 5.1/7.1 fine; Firefox rejects anything > 2ch outright
- *  ("encoder configuration not supported by this browser"). We cache
- *  on `${channels}/${sampleRate}` because rates can differ across
- *  tracks (44.1 vs 48 vs 96 kHz) and the encoder may accept the
- *  channel layout at one rate but not another. Returns the highest
- *  channel count ≤ `srcChannels` that's encodable, falling back to 2
- *  if the API isn't available. */
-const aacEncoderProbeCache = new Map<string, number>();
-async function pickEncodableAacChannels(
+/** Result of probing `WebCodecs.AudioEncoder`: which target codec
+ *  works at what channel count for the given source. Returns null
+ *  when neither AAC nor Opus encoding works (caller fails the
+ *  Tier B mount and demotes to F).
+ *
+ *  We probe in priority order:
+ *    1. **AAC** — broadest device / receiver compat. Chrome accepts
+ *       up to 5.1ch + the `format: 'aac'` field Mediabunny requires
+ *       for AAC-in-MP4. Firefox doesn't support AAC-in-MP4 encoding
+ *       at all (its WebCodecs AudioEncoder only emits ADTS).
+ *    2. **Opus** — Firefox's fallback. 2ch only (browser Opus
+ *       encoders are practically stereo-capped). MSE-in-MP4 accepts
+ *       `audio/mp4; codecs="opus"` on Chrome + Firefox since ~2020.
+ *
+ *  Critical: the AAC probe MUST pass `aac: { format: 'aac' }` to
+ *  match Mediabunny's own internal config. Firefox returns
+ *  `supported: true` on the bare query and then rejects the encoder
+ *  once `format` is set — probing without `format` would green-
+ *  light Tier B on Firefox and we'd waste a full mount cycle. */
+export type AudioEncoderChoice =
+  | { codec: "aac"; channels: number; mp4Codec: "mp4a.40.2" }
+  | { codec: "opus"; channels: number; mp4Codec: "opus" };
+
+const encoderProbeCache = new Map<string, AudioEncoderChoice | null>();
+
+async function pickAudioEncoder(
   srcChannels: number,
   sampleRate: number,
-): Promise<number> {
-  if (srcChannels <= 2) return srcChannels;
-  if (typeof globalThis.AudioEncoder === "undefined") return 2;
+): Promise<AudioEncoderChoice | null> {
+  if (typeof globalThis.AudioEncoder === "undefined") return null;
   const key = `${srcChannels}/${sampleRate}`;
-  const cached = aacEncoderProbeCache.get(key);
+  const cached = encoderProbeCache.get(key);
   if (cached !== undefined) return cached;
-  // Walk down from source to stereo. We test 6 and 2 explicitly
-  // since those are the realistic targets — testing every integer
-  // would just waste calls.
-  const candidates = Array.from(
+
+  // Pass 1 — AAC at descending channel counts (prefer source layout).
+  const aacCandidates = Array.from(
     new Set([srcChannels, 6, 2].filter((n) => n > 0 && n <= srcChannels)),
   );
-  let chosen = 2;
-  for (const n of candidates) {
+  for (const n of aacCandidates) {
     try {
       const r = await AudioEncoder.isConfigSupported({
         codec: "mp4a.40.2",
         sampleRate,
         numberOfChannels: n,
         bitrate: 192_000,
-      });
+        aac: { format: "aac" },
+      } as AudioEncoderConfig);
       if (r.supported) {
-        chosen = n;
-        break;
+        const choice: AudioEncoderChoice = {
+          codec: "aac",
+          channels: n,
+          mp4Codec: "mp4a.40.2",
+        };
+        console.log(
+          `[iris-core] Tier B: AudioEncoder → AAC ${n}ch @ ${sampleRate}Hz (source: ${srcChannels}ch)`,
+        );
+        encoderProbeCache.set(key, choice);
+        return choice;
       }
     } catch {
-      /* keep walking down */
+      /* keep walking */
     }
   }
+
+  // Pass 2 — Opus 2ch (Firefox fallback). 128 kbps is around the
+  // transparency point for music; speech-heavy content sounds fine
+  // well below that, so this is conservative.
+  try {
+    const r = await AudioEncoder.isConfigSupported({
+      codec: "opus",
+      sampleRate,
+      numberOfChannels: 2,
+      bitrate: 128_000,
+      opus: { format: "opus" },
+    } as AudioEncoderConfig);
+    if (r.supported) {
+      const choice: AudioEncoderChoice = {
+        codec: "opus",
+        channels: 2,
+        mp4Codec: "opus",
+      };
+      console.log(
+        `[iris-core] Tier B: AudioEncoder → Opus 2ch @ ${sampleRate}Hz (source: ${srcChannels}ch, AAC unavailable)`,
+      );
+      encoderProbeCache.set(key, choice);
+      return choice;
+    }
+  } catch {
+    /* fall through */
+  }
+
   console.log(
-    `[iris-core] Tier B: AAC encoder accepts ${chosen}ch @ ${sampleRate}Hz (source: ${srcChannels}ch)`,
+    `[iris-core] Tier B: no encodable audio codec @ ${sampleRate}Hz (source: ${srcChannels}ch)`,
   );
-  aacEncoderProbeCache.set(key, chosen);
-  return chosen;
+  encoderProbeCache.set(key, null);
+  return null;
 }
 
 /** Mediabunny's MP4 muxer validates that every packet's PTS is ≥ the
@@ -156,6 +205,26 @@ export const mountTierB: EngineMount = async (opts) => {
     ensureLibavAudioDecoderRegistered();
   }
 
+  // Probe the encoder NOW (before MSE setup) so we know which mp4
+  // audio codec to advertise in the SourceBuffer MIME. Uses the
+  // manifest's channels + sample_rate — saves a round-trip through
+  // Mediabunny's demuxer just to read metadata. Defaults to 48 kHz
+  // when the manifest doesn't carry a rate (rare on AC-3 / E-AC-3,
+  // which are 48 kHz by spec).
+  let encoderChoice: AudioEncoderChoice | null = null;
+  if (audioNeedsTranscode && chosenAudio) {
+    const srcChannels = chosenAudio.channels ?? 2;
+    const srcSampleRate = chosenAudio.sample_rate ?? 48_000;
+    encoderChoice = await pickAudioEncoder(srcChannels, srcSampleRate);
+    if (!encoderChoice) {
+      const err = new Error(
+        `Tier B: this browser doesn't support encoding ${srcChannels}ch @ ${srcSampleRate}Hz audio in MP4 (neither AAC nor Opus accepted by AudioEncoder)`,
+      );
+      fail(err);
+      throw err;
+    }
+  }
+
   container.innerHTML = "";
   const video = document.createElement("video");
   video.className = "h-full w-full object-contain";
@@ -180,6 +249,12 @@ export const mountTierB: EngineMount = async (opts) => {
   // is currently feeding so we can cancel it on dispose / seek.
   let conversion: Conversion | null = null;
   let manualOutput: Output | null = null;
+  // Mediabunny `Input` — assigned later (after we've validated MSE
+  // + opened the MediaSource). Declared up here so `dispose` can
+  // close it on any failure path without tripping a TDZ
+  // `ReferenceError` on the early throws (codec unsupported, MIME
+  // not supported, MediaSource error, …).
+  let input: Input | null = null;
   let conversionGeneration = 0;
   const appendQueue: Uint8Array[] = [];
 
@@ -295,6 +370,16 @@ export const mountTierB: EngineMount = async (opts) => {
     const prevConv = conversion;
     const prevOutput = manualOutput;
     const newGen = conversionGeneration + 1;
+    // `input` is typed `Input | null` (so `dispose()` can call its
+    // `dispose()` safely from early-throw paths before assignment).
+    // At this point it must be non-null — the caller is guaranteed
+    // to have reached past the assignment in `mountTierB`. Pin a
+    // local non-null binding so the rest of the body type-checks
+    // cleanly.
+    const liveInput = input;
+    if (!liveInput) {
+      throw new Error("Tier B: runManualPipeline called before input init");
+    }
 
     // Build the new Output and validate it BEFORE killing the old
     // pipeline. If anything throws here, the running conversion is
@@ -309,14 +394,14 @@ export const mountTierB: EngineMount = async (opts) => {
     });
     relaxMediabunnyGopCheck(newOutput);
 
-    const videoTrack = await input.getPrimaryVideoTrack();
+    const videoTrack = await liveInput.getPrimaryVideoTrack();
     if (!videoTrack) throw new Error("manual pipeline: no primary video track");
     const sourceVideoCodec = await videoTrack.getCodec();
     if (!sourceVideoCodec) throw new Error("manual pipeline: unknown video codec");
     const videoSrc = new EncodedVideoPacketSource(sourceVideoCodec);
     newOutput.addVideoTrack(videoSrc);
 
-    const allAudio = await input.getAudioTracks();
+    const allAudio = await liveInput.getAudioTracks();
     const audioTrack = allAudio[chosenAudioIdx] ?? null;
     type AudioFeed =
       | { kind: "passthrough"; source: EncodedAudioPacketSource }
@@ -324,28 +409,21 @@ export const mountTierB: EngineMount = async (opts) => {
     let audioFeed: AudioFeed | null = null;
     if (audioTrack) {
       if (audioNeedsTranscode) {
-        // Pick the highest channel count the browser's
-        // WebCodecs.AudioEncoder will accept. Chrome handles 6ch
-        // AAC fine — we want to preserve 5.1 there. Firefox
-        // rejects multi-channel AAC outright ("This specific
-        // encoder configuration (mp4a.40.2, 192000 bps, 6 channels,
-        // 48000 Hz) is not supported by this browser") — we
-        // downmix to stereo for it. Probing rather than UA-sniffing
-        // keeps Safari + any future browser auto-correct. Mediabunny
-        // applies ITU BS.775 downmix coefficients when
-        // `transform.numberOfChannels` is set lower than the
-        // source.
+        // Encoder probe ran earlier (outer scope, before MSE setup)
+        // so the MIME advertised in `addSourceBuffer` already names
+        // the right codec. Here we just hand the choice to
+        // Mediabunny.
+        if (!encoderChoice) {
+          throw new Error(
+            "Tier B: internal — audioNeedsTranscode but encoderChoice is null",
+          );
+        }
         const srcChannels = await audioTrack.getNumberOfChannels();
-        const srcSampleRate = await audioTrack.getSampleRate();
-        const targetChannels = await pickEncodableAacChannels(
-          srcChannels,
-          srcSampleRate,
-        );
         const source = new AudioSampleSource({
-          codec: "aac",
-          bitrate: 192_000,
-          ...(targetChannels !== srcChannels
-            ? { transform: { numberOfChannels: targetChannels } }
+          codec: encoderChoice.codec,
+          bitrate: encoderChoice.codec === "opus" ? 128_000 : 192_000,
+          ...(encoderChoice.channels !== srcChannels
+            ? { transform: { numberOfChannels: encoderChoice.channels } }
             : {}),
         });
         newOutput.addAudioTrack(source);
@@ -576,6 +654,24 @@ export const mountTierB: EngineMount = async (opts) => {
     } catch {
       /* idempotent */
     }
+    // CRITICAL: dispose the Mediabunny `Input` itself. Without this,
+    // the UrlSource keeps issuing HTTP range requests in the
+    // background, registered CustomAudioDecoders (our libav.js
+    // backend) keep emitting AudioSamples that get garbage-collected
+    // unclosed (the "AudioSample was garbage collected without first
+    // being closed" warning), and — most importantly on Firefox —
+    // the live decoders hold AppleVTDecoder / WebCodecs slots from
+    // the system pool. Firefox's pool is small enough that a zombie
+    // Tier-B Input is enough to starve Tier F's MSE → VT pipeline
+    // for video decoder instances, surfacing as
+    // `kVTVideoDecoderBadDataErr` on the very first segment append.
+    // Chrome's pool is generous enough to mask the leak, which is
+    // why this manifested as a "Firefox-only" bug for so long.
+    try {
+      input?.dispose();
+    } catch {
+      /* idempotent */
+    }
     URL.revokeObjectURL(objectUrl);
     try {
       if (mediaSource.readyState === "open") mediaSource.endOfStream();
@@ -643,7 +739,12 @@ export const mountTierB: EngineMount = async (opts) => {
   });
 
   const videoCodec = manifest.video[0]?.codec_string;
-  const audioCodec = audioNeedsTranscode ? "mp4a.40.2" : chosenAudio?.codec_string;
+  // For transcoded audio, advertise whichever codec the
+  // AudioEncoder probe selected (AAC on Chrome, Opus on Firefox).
+  // For passthrough, use whatever the source already had.
+  const audioCodec = audioNeedsTranscode
+    ? encoderChoice?.mp4Codec ?? "mp4a.40.2"
+    : chosenAudio?.codec_string;
   const codecs = [videoCodec, audioCodec].filter((c): c is string => !!c).join(",");
   const mime = codecs ? `video/mp4; codecs="${codecs}"` : "video/mp4";
   if (!MediaSource.isTypeSupported(mime)) {
@@ -683,7 +784,7 @@ export const mountTierB: EngineMount = async (opts) => {
 
   // ---- Spin up the first Conversion -----------------------------
 
-  const input = new Input({
+  input = new Input({
     source: new UrlSource(streamUrl, {
       requestInit: { credentials: "include" },
     }),
