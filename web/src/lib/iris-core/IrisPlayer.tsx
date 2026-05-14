@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import { IrisChrome } from "./IrisChrome";
+import { IrisChrome, toggleFullscreen } from "./IrisChrome";
 import type { EngineHandle, EngineMount, NativeSubtitleTrack } from "./engine";
 import type { DecodeTier, Manifest, SubtitleTrack } from "./manifest-client";
 import { nativeSubtitleUrl } from "./manifest-client";
@@ -303,17 +303,21 @@ export function IrisPlayer(props: IrisPlayerProps) {
       ? overlaySubs.find((s) => s.stream_idx === activeSubtitle.stream_idx) ?? null
       : null;
 
-  const onSurfaceClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      const h = handleRef.current;
-      if (!h) return;
+  // Click-to-toggle handling. Single click → play/pause, double
+  // click → fullscreen. Since the browser fires `click` for BOTH
+  // clicks in a double-click sequence (before `dblclick`), we
+  // defer the play/pause via a short timer and cancel it if a
+  // second click arrives. 250 ms matches the OS-level double-click
+  // threshold on most platforms; longer would feel laggy on single
+  // clicks, shorter would miss legit double clicks.
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const shouldIgnoreClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>): boolean => {
       // Ignore clicks that land on (or inside) interactive chrome
       // bits — the chrome's own play button + scrubber + menus
       // already handle themselves; toggling here on top would
-      // double-fire (play→pause→play within one click). Walk up
-      // from the click target until we hit the wrapper, bailing if
-      // we cross any element marked `data-iris-chrome` or a native
-      // interactive control.
+      // double-fire (play→pause→play within one click).
       let n: HTMLElement | null = e.target as HTMLElement;
       while (n && n !== e.currentTarget) {
         const tag = n.tagName;
@@ -325,23 +329,62 @@ export function IrisPlayer(props: IrisPlayerProps) {
           tag === "TEXTAREA" ||
           n.dataset.irisChrome !== undefined
         ) {
-          return;
+          return true;
         }
         n = n.parentElement;
       }
-      if (h.paused()) {
-        void h.play().catch(() => undefined);
-      } else {
-        h.pause();
-      }
+      return false;
     },
     [],
   );
+
+  const onSurfaceClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const ignored = shouldIgnoreClick(e);
+      console.log(
+        `[iris-core] surface click target=${(e.target as HTMLElement).tagName} ignored=${ignored} hasHandle=${!!handleRef.current}`,
+      );
+      if (ignored) return;
+      const h = handleRef.current;
+      if (!h) return;
+      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = setTimeout(() => {
+        clickTimerRef.current = null;
+        if (h.paused()) {
+          void h.play().catch(() => undefined);
+        } else {
+          h.pause();
+        }
+      }, 250);
+    },
+    [shouldIgnoreClick],
+  );
+
+  const onSurfaceDoubleClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const ignored = shouldIgnoreClick(e);
+      console.log(
+        `[iris-core] surface dblclick target=${(e.target as HTMLElement).tagName} ignored=${ignored}`,
+      );
+      if (ignored) return;
+      if (clickTimerRef.current) {
+        clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      void toggleFullscreen(wrapper);
+    },
+    [shouldIgnoreClick, wrapper],
+  );
+
+  useEffect(() => () => {
+    if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+  }, []);
 
   const playerNode = (
     <div
       ref={setWrapper}
       onClick={onSurfaceClick}
+      onDoubleClick={onSurfaceDoubleClick}
       className="relative h-full w-full bg-black"
     >
       {/* React-managed slot. The callback ref re-appends our stable

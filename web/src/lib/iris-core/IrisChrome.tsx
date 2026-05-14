@@ -175,23 +175,25 @@ export function IrisChrome(props: IrisChromeProps) {
 
   return (
     <div
-      data-iris-chrome
       onMouseMove={resetHideTimer}
       onMouseLeave={() => {
         if (hideTimer.current) clearTimeout(hideTimer.current);
         if (!paused) setHovered(false);
       }}
+      // The chrome root deliberately does NOT carry
+      // `data-iris-chrome` — that marker is now on the bottom bar
+      // only. Clicks on the chrome's transparent upper area bubble
+      // up to `IrisPlayer`'s wrapper-level `onSurfaceClick`
+      // (play/pause + dblclick → fullscreen) and our walk-up
+      // ignore-check finds no interactive ancestor, so the action
+      // fires. Clicks on the bottom bar still bail correctly
+      // because the bar's `data-iris-chrome` is hit first.
       className="absolute inset-0 z-10 flex flex-col"
     >
-      {/* Transparent surface above the engine. We want clicks here to
-          fall through to `IrisPlayer`'s wrapper-level `onSurfaceClick`
-          (which toggles play/pause), so we deliberately disable
-          pointer events on the surface itself — interactive children
-          (chrome bar / scrubber / menus) re-enable them via their own
-          `pointer-events-auto`. */}
       <div className="pointer-events-none flex-1" />
 
       <div
+        data-iris-chrome
         className={`pointer-events-auto flex flex-col gap-1 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-12 text-white transition-opacity duration-200 ${
           hovered || paused || menu !== "none" ? "opacity-100" : "opacity-0"
         }`}
@@ -531,7 +533,7 @@ function formatTime(sec: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
-async function toggleFullscreen(target: HTMLElement | null): Promise<void> {
+export async function toggleFullscreen(target: HTMLElement | null): Promise<void> {
   if (!target) return;
   if (document.fullscreenElement === target) {
     try {
