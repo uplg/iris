@@ -370,6 +370,11 @@ struct EpisodeContext {
     followed: bool,
     current: Option<EpisodePoint>,
     next: Option<EpisodePoint>,
+    /// Previous episode (symmetric to [`Self::next`]). Powers the
+    /// "‹ Prev" chip in the TV player so the user can step back
+    /// without bouncing through the Series detail screen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prev: Option<EpisodePoint>,
 }
 
 #[derive(Debug, Serialize)]
@@ -378,6 +383,14 @@ struct EpisodePoint {
     season: i64,
     episode: i64,
     status: EpisodeStatus,
+    /// Physical location for `status == Downloaded`. Lets the TV
+    /// player navigate directly to the next episode without a
+    /// round-trip through `/grab`. `None` for `Available` (the file
+    /// doesn't exist on disk yet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    infohash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_idx: Option<i64>,
 }
 
 async fn episode_context(
@@ -388,87 +401,176 @@ async fn episode_context(
     let Some(current_row) =
         iris_db::episode_files::find_by_file(state.db(), &p.infohash, p.file_idx).await?
     else {
+        // Standalone or movie file — no episode taxonomy to chain
+        // off. Still surface a same-torrent fallback so a season pack
+        // with no SCENE-recognised filenames keeps the "next" button
+        // working.
+        let next = same_torrent_next(state.db(), &p.infohash, p.file_idx + 1).await?;
+        let prev = if p.file_idx > 0 {
+            same_torrent_next(state.db(), &p.infohash, p.file_idx - 1).await?
+        } else {
+            None
+        };
         return Ok(Json(EpisodeContext {
             followed: false,
             current: None,
-            next: None,
+            next,
+            prev,
         }));
     };
     let collection = iris_db::collections::get(state.db(), current_row.collection_id).await?;
-    let Some(collection) = collection else {
-        return Ok(Json(EpisodeContext {
-            followed: false,
-            current: None,
-            next: None,
-        }));
-    };
-    let Some(normalized) = collection.parsed_title_normalized.as_deref() else {
-        // Standalone collection with no SCENE key → no follow can
-        // match → no "next" prompt.
-        return Ok(Json(EpisodeContext {
-            followed: false,
-            current: None,
-            next: None,
-        }));
-    };
+    let normalized = collection
+        .as_ref()
+        .and_then(|c| c.parsed_title_normalized.as_deref());
 
-    let follow = iris_db::follows::get_by_normalized(state.db(), user.id, normalized).await?;
+    let follow = if let Some(n) = normalized {
+        iris_db::follows::get_by_normalized(state.db(), user.id, n).await?
+    } else {
+        None
+    };
 
     let current = EpisodePoint {
         follow_id: follow.as_ref().map(|f| f.id),
         season: current_row.season,
         episode: current_row.episode,
         status: EpisodeStatus::Downloaded,
+        infohash: Some(current_row.infohash.clone()),
+        file_idx: Some(current_row.file_idx),
     };
 
-    let Some(follow) = follow else {
-        return Ok(Json(EpisodeContext {
-            followed: false,
-            current: Some(current),
-            next: None,
-        }));
+    // 1. Try the next episode within the same season.
+    // 2. If that's nowhere (downloaded nor available), try season N+1
+    //    episode 1 — covers a binge across a season finale.
+    // 3. Finally, fall back to file_idx+1 in the same torrent so
+    //    season packs with no follow / collection-context still
+    //    surface a "next" button.
+    let next_collection = if let Some(n) = normalized {
+        let same_season = (current_row.season, current_row.episode + 1);
+        let by_same_season = lookup_next_episode(state.db(), follow.as_ref(), n, same_season).await;
+        if by_same_season.is_some() {
+            by_same_season
+        } else {
+            let next_season = (current_row.season + 1, 1);
+            lookup_next_episode(state.db(), follow.as_ref(), n, next_season).await
+        }
+    } else {
+        None
+    };
+    let next = match next_collection {
+        Some(ep) => Some(ep),
+        None => same_torrent_next(state.db(), &p.infohash, p.file_idx + 1).await?,
     };
 
-    let next_se = (current_row.season, current_row.episode + 1);
-    let next_status = lookup_episode_status(state.db(), normalized, next_se).await;
+    // Symmetric previous-episode lookup. (S, E-1), then the last
+    // episode of S-1, then same-torrent file_idx-1.
+    let prev_collection = if let Some(n) = normalized {
+        if current_row.episode > 1 {
+            let same_season = (current_row.season, current_row.episode - 1);
+            lookup_next_episode(state.db(), follow.as_ref(), n, same_season).await
+        } else if current_row.season > 1 {
+            // Find the highest-numbered episode of the previous
+            // season so the chip can land the user there.
+            let prev_season = current_row.season - 1;
+            let last_ep = iris_db::episode_files::list_for_normalized(state.db(), n)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.season == prev_season)
+                .map(|r| r.episode)
+                .max();
+            match last_ep {
+                Some(ep) => {
+                    lookup_next_episode(state.db(), follow.as_ref(), n, (prev_season, ep)).await
+                }
+                None => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let prev = match prev_collection {
+        Some(ep) => Some(ep),
+        None if p.file_idx > 0 => {
+            same_torrent_next(state.db(), &p.infohash, p.file_idx - 1).await?
+        }
+        None => None,
+    };
+
     Ok(Json(EpisodeContext {
-        followed: true,
+        followed: follow.is_some(),
         current: Some(current),
-        next: next_status.map(|status| EpisodePoint {
-            follow_id: Some(follow.id),
-            season: next_se.0,
-            episode: next_se.1,
-            status,
-        }),
+        next,
+        prev,
     }))
 }
 
-/// "Do we know about this (S, E) for `normalized`?" Returns the
-/// strongest status we have, or None if the indexer cache and disk
-/// both come up empty.
-async fn lookup_episode_status(
+/// Resolve `(season, episode)` for `normalized_name` to an
+/// [`EpisodePoint`], preferring on-disk over indexer-cached. Returns
+/// `None` when neither layer knows about it. `available` is only
+/// surfaced when the user actually follows the series — without a
+/// follow they have no `/grab` endpoint to call anyway.
+async fn lookup_next_episode(
     pool: &iris_db::SqlitePool,
+    follow: Option<&iris_db::follows::FollowRow>,
     normalized_name: &str,
     (season, episode): (i64, i64),
-) -> Option<EpisodeStatus> {
+) -> Option<EpisodePoint> {
     let on_disk = iris_db::episode_files::list_for_normalized(pool, normalized_name)
         .await
         .unwrap_or_default()
         .into_iter()
-        .any(|r| r.season == season && r.episode == episode);
-    if on_disk {
-        return Some(EpisodeStatus::Downloaded);
+        .find(|r| r.season == season && r.episode == episode);
+    if let Some(row) = on_disk {
+        return Some(EpisodePoint {
+            follow_id: follow.map(|f| f.id),
+            season,
+            episode,
+            status: EpisodeStatus::Downloaded,
+            infohash: Some(row.infohash),
+            file_idx: Some(row.file_idx),
+        });
     }
+    let follow = follow?;
     let avail = iris_db::available_episodes::list_best_for_series(pool, normalized_name)
         .await
         .unwrap_or_default();
-    if avail
-        .iter()
-        .any(|a| a.season == season && a.episode == episode)
-    {
-        return Some(EpisodeStatus::Available);
+    if avail.iter().any(|a| a.season == season && a.episode == episode) {
+        return Some(EpisodePoint {
+            follow_id: Some(follow.id),
+            season,
+            episode,
+            status: EpisodeStatus::Available,
+            infohash: None,
+            file_idx: None,
+        });
     }
     None
+}
+
+/// Last-resort fallback: if there's a sibling file at `file_idx` on
+/// the SAME infohash and it has an `episode_files` row (= SCENE
+/// parsing recognised it as an episode), return it as a downloaded
+/// next. Used when the collection / follow context comes up empty,
+/// e.g. season packs that landed without a follow or movies in a
+/// folder torrent.
+async fn same_torrent_next(
+    pool: &iris_db::SqlitePool,
+    infohash: &str,
+    file_idx: i64,
+) -> Result<Option<EpisodePoint>, ApiError> {
+    let Some(row) = iris_db::episode_files::find_by_file(pool, infohash, file_idx).await? else {
+        return Ok(None);
+    };
+    Ok(Some(EpisodePoint {
+        follow_id: None,
+        season: row.season,
+        episode: row.episode,
+        status: EpisodeStatus::Downloaded,
+        infohash: Some(row.infohash),
+        file_idx: Some(row.file_idx),
+    }))
 }
 
 // ---------------------------------------------------------------------------

@@ -92,6 +92,12 @@ export function IrisPlayer(props: IrisPlayerProps) {
   // `<SubtitleOverlay host={null}>` stuck on first render and the
   // overlay never mounts. `useState` + a setter-ref fixes it cleanly.
   const [wrapper, setWrapper] = useState<HTMLDivElement | null>(null);
+  // Mirror IrisChrome's controls visibility so we can hide the
+  // mouse cursor over the entire player surface while playback is
+  // uninterrupted — matches native fullscreen players. Starts
+  // visible so the user always sees the cursor on initial mount;
+  // the chrome flips this to `false` after 2.5 s of mouse-still.
+  const [controlsVisible, setControlsVisible] = useState(true);
   // Stable DOM node the engine mounts its `<video>` (or `<canvas>`)
   // into. We create it ONCE, outside React's reconciliation, so that
   // when `createPortal` moves the player tree into a Document
@@ -426,7 +432,10 @@ export function IrisPlayer(props: IrisPlayerProps) {
       ref={setWrapper}
       onClick={onSurfaceClick}
       onDoubleClick={onSurfaceDoubleClick}
-      className="relative h-full w-full bg-black"
+      className={
+        "relative h-full w-full bg-black" +
+        (controlsVisible ? "" : " cursor-none")
+      }
     >
       {/* React-managed slot. The callback ref re-appends our stable
           `videoHostRef` into this slot whenever React mounts a new
@@ -448,6 +457,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
         activeAudioIndex={audioTrackIndex}
         onAudioPick={onAudioPick}
         fullscreenTarget={wrapper}
+        onControlsVisibleChange={setControlsVisible}
         documentPip={{
           supported:
             typeof window !== "undefined" && "documentPictureInPicture" in window,

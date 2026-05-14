@@ -696,6 +696,11 @@ data class EpisodeContext(
     val followed: Boolean,
     val current: EpisodePoint? = null,
     val next: EpisodePoint? = null,
+    /** Previous episode (symmetric to [next]). The TV player exposes
+     *  a "‹ Prev" chip alongside the next-episode chip so the user
+     *  can step back into the last watched episode without going
+     *  through the Series detail screen. */
+    val prev: EpisodePoint? = null,
 )
 
 @Serializable
@@ -707,6 +712,12 @@ data class EpisodePoint(
     val episode: Int,
     /** "downloaded" | "available" */
     val status: String,
+    /** Physical infohash for `status == "downloaded"`. Lets WatchScreen
+     *  navigate straight to the next episode without re-grabbing. Null
+     *  when only an indexer cache entry exists. */
+    val infohash: String? = null,
+    /** File index inside [infohash] for `status == "downloaded"`. */
+    @SerialName("file_idx") val fileIdx: Int? = null,
 )
 
 /**

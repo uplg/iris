@@ -56,6 +56,11 @@ export type IrisChromeProps = {
   /** Document PiP controller. `supported=false` hides the button. */
   documentPip: ChromePipControl;
   title: string;
+  /** Notified whenever the controls visibility flips. The parent
+   *  uses this to hide the mouse cursor over the player surface
+   *  while playback is uninterrupted — matches the cursor-hide
+   *  behaviour every native fullscreen player has. */
+  onControlsVisibleChange?: (visible: boolean) => void;
 };
 
 export function IrisChrome(props: IrisChromeProps) {
@@ -95,6 +100,16 @@ export function IrisChrome(props: IrisChromeProps) {
       if (!paused && !scrubbing && menu === "none") setHovered(false);
     }, 2500);
   };
+
+  // Surface controls-visibility to the parent (IrisPlayer) so it can
+  // hide the cursor on the wrapper while playback is uninterrupted.
+  // `paused` keeps controls up, same as menus and scrubbing — so the
+  // cursor only disappears when the user is actually watching.
+  const controlsVisible = hovered || paused || menu !== "none" || scrubbing;
+  const onControlsVisibleChange = props.onControlsVisibleChange;
+  useEffect(() => {
+    onControlsVisibleChange?.(controlsVisible);
+  }, [controlsVisible, onControlsVisibleChange]);
 
   // rAF loop drives the displayed state from the engine.
   useEffect(() => {
@@ -413,7 +428,20 @@ function VolumeControl(props: {
         step={0.01}
         value={display}
         onChange={(e) => props.onVolume(Number(e.target.value))}
-        className="h-1 w-0 cursor-pointer appearance-none rounded bg-white/30 transition-all group-hover:w-20"
+        className={
+          // Track collapses to 0 width unless the wrapper is hovered.
+          // The slider *thumb* gets explicit appearance rules so it
+          // also hides — without them browsers paint the OS-default
+          // dot OUTSIDE the 0-width track, which is what the user
+          // was seeing as a stray dot.
+          "h-1 w-0 cursor-pointer appearance-none rounded bg-white/30 transition-all group-hover:w-20" +
+          " [&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none" +
+          " [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white" +
+          " [&::-webkit-slider-thumb]:opacity-0 group-hover:[&::-webkit-slider-thumb]:opacity-100" +
+          " [&::-moz-range-thumb]:size-3 [&::-moz-range-thumb]:appearance-none" +
+          " [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white" +
+          " [&::-moz-range-thumb]:opacity-0 group-hover:[&::-moz-range-thumb]:opacity-100"
+        }
       />
     </div>
   );

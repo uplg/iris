@@ -314,6 +314,14 @@ fun IrisRoot(
                     infohash = backStackEntry.arguments!!.getString("infohash")!!,
                     fileIdx = backStackEntry.arguments!!.getInt("fileIdx"),
                     onBack = { navController.popBackStack() },
+                    onNavigateToFile = { nextInfohash, nextFileIdx ->
+                        // Replace the current Watch entry instead of
+                        // stacking — Back from the next episode should
+                        // skip the one we just finished watching.
+                        navController.navigate(Routes.watch(nextInfohash, nextFileIdx)) {
+                            popUpTo(Routes.WATCH) { inclusive = true }
+                        }
+                    },
                 )
             }
         }

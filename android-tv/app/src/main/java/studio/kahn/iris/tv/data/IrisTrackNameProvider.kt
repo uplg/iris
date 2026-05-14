@@ -57,8 +57,11 @@ internal class IrisTrackNameProvider(resources: Resources) : TrackNameProvider {
     private fun languageDisplayName(rawCode: String?): String? {
         if (rawCode.isNullOrBlank() || rawCode.equals("und", ignoreCase = true)) return null
         // Media3's util normalises ISO 639-2/T (`fre`, `eng`) to the
-        // 2-letter form `Locale.forLanguageTag` understands.
-        val normalized = Util.normalizeLanguageCode(rawCode) ?: return rawCode.uppercase()
+        // 2-letter form `Locale.forLanguageTag` understands. Recent
+        // Media3 versions tightened the signature to return a
+        // non-nullable `String`, so there's nothing to coalesce — the
+        // worst case is the input echoed back unchanged.
+        val normalized = Util.normalizeLanguageCode(rawCode)
         if (normalized == "und") return null
         val name = runCatching {
             Locale.forLanguageTag(normalized).getDisplayLanguage(Locale.ENGLISH)

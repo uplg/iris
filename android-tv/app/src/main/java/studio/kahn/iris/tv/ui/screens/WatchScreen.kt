@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,6 +46,8 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Surface
+import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -80,6 +83,12 @@ fun WatchScreen(
     infohash: String,
     fileIdx: Int,
     onBack: () -> Unit,
+    /** Swap the player to a different (infohash, file_idx) — used by
+     *  the Netflix-style "Up next" pill to auto-advance between
+     *  episodes. The caller pops the current WATCH entry and pushes
+     *  the new one, so Back from the new episode skips the previous
+     *  one entirely. */
+    onNavigateToFile: (String, Int) -> Unit,
 ) {
     var serverUrl by remember { mutableStateOf<String?>(null) }
     var probe by remember { mutableStateOf<MediaProbe?>(null) }
@@ -221,6 +230,8 @@ fun WatchScreen(
                 initialSubIdx = savedSubIdx,
                 onPositionUpdate = { resumePositionSec = it },
                 onPlayerError = { error = it },
+                onBack = onBack,
+                onNavigateToFile = onNavigateToFile,
             )
         } else {
             LoadingOverlay(
@@ -251,33 +262,52 @@ private fun ReadyPlayer(
     initialSubIdx: Int?,
     onPositionUpdate: (Double) -> Unit,
     onPlayerError: (String) -> Unit,
+    onBack: () -> Unit,
+    onNavigateToFile: (String, Int) -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // "Prepare next?" state. Fetched once at mount; the tick
-    // (below) flips `nextEpModalOpen` when playback crosses 95 %.
+    // Episode navigation context — fetched once per mount. Drives
+    // the small "Prev / Next" chips overlaid on the player. Both
+    // sides may be null (movie / first episode / last episode), in
+    // which case the corresponding chip simply doesn't render.
+    var prevEpisode by remember(infohash, fileIdx) {
+        mutableStateOf<EpisodePoint?>(null)
+    }
     var nextEpisode by remember(infohash, fileIdx) {
         mutableStateOf<EpisodePoint?>(null)
     }
     var currentEpisode by remember(infohash, fileIdx) {
         mutableStateOf<EpisodePoint?>(null)
     }
-    var nextEpModalOpen by remember(infohash, fileIdx) {
+    // Player.STATE_ENDED — used to surface the "End of series"
+    // banner when there's no next episode to chain into. Reset to
+    // false on STATE_READY so a buffer-underrun retry doesn't keep
+    // the banner stuck on.
+    var playerEnded by remember(infohash, fileIdx) {
         mutableStateOf(false)
     }
-    var nextEpDismissed by remember(infohash, fileIdx) {
+    // Crossed the 95 % mark at least once this mount. Drives the
+    // bigger bottom-right "Up next" pill — Netflix-style nudge that
+    // shows up around the credit roll, complementing the always-on
+    // top-right chips. Deliberate action only (no countdown).
+    var nearEnd by remember(infohash, fileIdx) {
         mutableStateOf(false)
     }
-    var nextEpGrabbing by remember { mutableStateOf(false) }
+    // User explicitly closed the credit-roll pill. The top-right
+    // chips stay; only the prominent bottom-right pill is silenced.
+    var pillDismissed by remember(infohash, fileIdx) {
+        mutableStateOf(false)
+    }
+    var grabbing by remember(infohash, fileIdx) { mutableStateOf(false) }
     LaunchedEffect(infohash, fileIdx) {
         val ctx = runCatching {
             container.apiFor(serverUrl).episodeContext(infohash, fileIdx)
         }.getOrNull()
         currentEpisode = ctx?.current
-        nextEpisode = ctx?.next?.takeIf {
-            ctx.followed && it.status == "available"
-        }
+        nextEpisode = ctx?.next
+        prevEpisode = ctx?.prev
     }
 
     val playUrl = remember(serverUrl, infohash, fileIdx) {
@@ -467,10 +497,22 @@ private fun ReadyPlayer(
             }
 
             override fun onPlaybackStateChanged(state: Int) {
-                if (state == androidx.media3.common.Player.STATE_READY) {
-                    // Successful resume — reset the retry budget.
-                    retryCount = 0
-                    firstRetryAt = 0L
+                when (state) {
+                    androidx.media3.common.Player.STATE_READY -> {
+                        // Successful resume — reset the retry budget
+                        // AND clear any stale ENDED flag (a buffer
+                        // underrun followed by re-prepare looks like
+                        // a brief STATE_ENDED → STATE_READY blip; we
+                        // don't want that to fire the auto-advance
+                        // countdown while playback is actually
+                        // continuing).
+                        retryCount = 0
+                        firstRetryAt = 0L
+                        playerEnded = false
+                    }
+                    androidx.media3.common.Player.STATE_ENDED -> {
+                        playerEnded = true
+                    }
                 }
             }
 
@@ -563,13 +605,22 @@ private fun ReadyPlayer(
         val handler = android.os.Handler(android.os.Looper.getMainLooper())
         var lastSavedMs: Long = (startPositionSec * 1000).toLong()
         var durationMs: Long = -1
-        var prompted = false
         val tick = object : Runnable {
             override fun run() {
                 if (player.duration > 0) durationMs = player.duration
                 val pos = player.currentPosition
                 if (pos > 0) {
                     onPositionUpdate(pos / 1000.0)
+                    if (
+                        !nearEnd
+                        && durationMs > 0
+                        && pos.toFloat() / durationMs.toFloat() >= 0.95f
+                    ) {
+                        // Fire the bigger credit-roll pill once. The
+                        // top-right chips have been visible all along;
+                        // this is the prominent nudge.
+                        nearEnd = true
+                    }
                     if (pos - lastSavedMs >= 7_000) {
                         lastSavedMs = pos
                         val completed = durationMs > 0 && pos >= durationMs - 30_000
@@ -590,18 +641,6 @@ private fun ReadyPlayer(
                                 )
                             }
                         }
-                    }
-                    // "Prepare next?" trigger — at 95 % of
-                    // duration once we know it. Single-shot per mount.
-                    if (
-                        !prompted &&
-                        !nextEpDismissed &&
-                        nextEpisode != null &&
-                        durationMs > 0 &&
-                        pos.toFloat() / durationMs.toFloat() >= 0.95f
-                    ) {
-                        prompted = true
-                        nextEpModalOpen = true
                     }
                 }
                 handler.postDelayed(this, 1_000)
@@ -694,57 +733,294 @@ private fun ReadyPlayer(
         update = { it.player = player },
     )
 
-    val nextEp = nextEpisode
-    if (nextEpModalOpen && nextEp != null) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = {
-                nextEpModalOpen = false
-                nextEpDismissed = true
-            },
-            title = {
-                androidx.compose.material3.Text("Next episode available")
-            },
-            text = {
-                androidx.compose.material3.Text(
-                    "S%02dE%02d is ready to grab. Prepare it for the next session?"
-                        .format(nextEp.season, nextEp.episode),
-                )
-            },
-            confirmButton = {
-                androidx.compose.material3.TextButton(
-                    enabled = !nextEpGrabbing && nextEp.followId != null,
-                    onClick = {
-                        val fid = nextEp.followId ?: return@TextButton
-                        nextEpGrabbing = true
+    // Always-on episode-navigation overlay. Two small chips in the
+    // top-right corner of the player surface: "‹ Prev" and "Next ›",
+    // each appearing only when the backend resolved an episode in
+    // that direction. The chips never auto-advance — every action is
+    // a deliberate D-pad click. Subtle enough to ignore during the
+    // show, discoverable enough to reach for at the credits.
+    //
+    // Exception: when the player has reached STATE_ENDED AND there's
+    // no next episode at all, swap the next chip for a more visible
+    // "End of series — Back to Home" banner so the user has a clear
+    // exit path instead of staring at a frozen final frame.
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 32.dp, vertical = 24.dp),
+    ) {
+        Row(
+            modifier = Modifier.align(Alignment.TopEnd),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            prevEpisode?.let { prev ->
+                EpisodeNavChip(
+                    label = "S%02dE%02d".format(prev.season, prev.episode),
+                    direction = NavDirection.Prev,
+                    grabbing = grabbing && prev.status == "available",
+                    point = prev,
+                    onPlay = {
+                        val ih = prev.infohash
+                        val idx = prev.fileIdx
+                        if (ih != null && idx != null) onNavigateToFile(ih, idx)
+                    },
+                    onPrepare = {
+                        val fid = prev.followId ?: return@EpisodeNavChip
+                        grabbing = true
                         scope.launch {
-                            runCatching {
+                            val grabbed = runCatching {
                                 container.apiFor(serverUrl).grabEpisode(
                                     id = fid,
-                                    season = nextEp.season,
-                                    episode = nextEp.episode,
+                                    season = prev.season,
+                                    episode = prev.episode,
+                                )
+                            }.getOrNull()
+                            grabbing = false
+                            if (grabbed != null) {
+                                prevEpisode = prev.copy(
+                                    status = "downloaded",
+                                    infohash = grabbed.infohash,
+                                    fileIdx = grabbed.fileIdx,
                                 )
                             }
-                            nextEpGrabbing = false
-                            nextEpModalOpen = false
                         }
                     },
+                )
+            }
+            nextEpisode?.let { next ->
+                EpisodeNavChip(
+                    label = "S%02dE%02d".format(next.season, next.episode),
+                    direction = NavDirection.Next,
+                    grabbing = grabbing && next.status == "available",
+                    point = next,
+                    onPlay = {
+                        val ih = next.infohash
+                        val idx = next.fileIdx
+                        if (ih != null && idx != null) onNavigateToFile(ih, idx)
+                    },
+                    onPrepare = {
+                        val fid = next.followId ?: return@EpisodeNavChip
+                        grabbing = true
+                        scope.launch {
+                            val grabbed = runCatching {
+                                container.apiFor(serverUrl).grabEpisode(
+                                    id = fid,
+                                    season = next.season,
+                                    episode = next.episode,
+                                )
+                            }.getOrNull()
+                            grabbing = false
+                            if (grabbed != null) {
+                                nextEpisode = next.copy(
+                                    status = "downloaded",
+                                    infohash = grabbed.infohash,
+                                    fileIdx = grabbed.fileIdx,
+                                )
+                            }
+                        }
+                    },
+                )
+            }
+        }
+
+        if (playerEnded && nextEpisode == null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(bottom = 96.dp),
+            ) {
+                EndOfSeriesPill(onBack = onBack)
+            }
+        } else if ((nearEnd || playerEnded) && !pillDismissed) {
+            // Bigger Netflix-style "Up next" pill in the bottom-right
+            // corner, appearing once we're past 95 % of the runtime.
+            // No countdown, no auto-advance — a single deliberate
+            // "Play next" tap (or Dismiss to silence it).
+            val next = nextEpisode
+            if (next != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(bottom = 96.dp),
                 ) {
-                    androidx.compose.material3.Text(
-                        if (nextEpGrabbing) "Preparing…" else "Prepare",
+                    UpNextPill(
+                        next = next,
+                        grabbing = grabbing && next.status == "available",
+                        onPlay = {
+                            val ih = next.infohash
+                            val idx = next.fileIdx
+                            if (ih != null && idx != null) onNavigateToFile(ih, idx)
+                        },
+                        onPrepare = {
+                            val fid = next.followId ?: return@UpNextPill
+                            grabbing = true
+                            scope.launch {
+                                val grabbed = runCatching {
+                                    container.apiFor(serverUrl).grabEpisode(
+                                        id = fid,
+                                        season = next.season,
+                                        episode = next.episode,
+                                    )
+                                }.getOrNull()
+                                grabbing = false
+                                if (grabbed != null) {
+                                    nextEpisode = next.copy(
+                                        status = "downloaded",
+                                        infohash = grabbed.infohash,
+                                        fileIdx = grabbed.fileIdx,
+                                    )
+                                }
+                            }
+                        },
+                        onDismiss = { pillDismissed = true },
                     )
                 }
-            },
-            dismissButton = {
-                androidx.compose.material3.TextButton(
-                    onClick = {
-                        nextEpModalOpen = false
-                        nextEpDismissed = true
-                    },
-                ) {
-                    androidx.compose.material3.Text("Later")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun UpNextPill(
+    next: EpisodePoint,
+    grabbing: Boolean,
+    onPlay: () -> Unit,
+    onPrepare: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val downloaded = next.status == "downloaded" && next.infohash != null && next.fileIdx != null
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        colors = SurfaceDefaults.colors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "Up next".uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "S%02dE%02d".format(next.season, next.episode),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                if (downloaded) {
+                    Button(
+                        onClick = onPlay,
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    ) { Text("Play next") }
+                } else {
+                    Button(
+                        onClick = onPrepare,
+                        enabled = !grabbing && next.followId != null,
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    ) { Text(if (grabbing) "Preparing…" else "Prepare") }
                 }
-            },
-        )
+                Button(
+                    onClick = onDismiss,
+                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                ) { Text("Dismiss") }
+            }
+        }
+    }
+}
+
+private enum class NavDirection { Prev, Next }
+
+/**
+ * Small focusable chip overlaid on the player. "Prev" → left arrow
+ * prefix, "Next" → right arrow suffix. Surface is semi-transparent
+ * so it doesn't pull focus from the playing video; the focus ring
+ * (TV-Material's default) makes it obvious where the D-pad is. For
+ * downloaded episodes a tap navigates immediately; for available
+ * ones it kicks off a `/grab` and the chip flips to "Preparing…",
+ * then once the grab returns the parent re-renders us with
+ * `status == "downloaded"`.
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun EpisodeNavChip(
+    label: String,
+    direction: NavDirection,
+    grabbing: Boolean,
+    point: EpisodePoint,
+    onPlay: () -> Unit,
+    onPrepare: () -> Unit,
+) {
+    val downloaded = point.status == "downloaded" && point.infohash != null && point.fileIdx != null
+    val text = when {
+        grabbing -> "Preparing $label…"
+        downloaded && direction == NavDirection.Prev -> "‹ $label"
+        downloaded && direction == NavDirection.Next -> "$label ›"
+        direction == NavDirection.Prev -> "‹ Prepare $label"
+        else -> "Prepare $label ›"
+    }
+    Button(
+        onClick = {
+            when {
+                grabbing -> Unit
+                downloaded -> onPlay()
+                else -> onPrepare()
+            }
+        },
+        enabled = !grabbing && (downloaded || point.followId != null),
+        shape = ButtonDefaults.shape(shape = RoundedCornerShape(20.dp)),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+        colors = ButtonDefaults.colors(
+            // Translucent so the chip reads as overlay, not chrome —
+            // matches the visual weight of subtitle blocks rather
+            // than the bottom controller bar.
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+    ) {
+        Text(text, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun EndOfSeriesPill(onBack: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        colors = SurfaceDefaults.colors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "You're all caught up".uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "No more episodes available.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Button(
+                onClick = onBack,
+                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.padding(top = 4.dp),
+            ) { Text("Back to Home") }
+        }
     }
 }
 
