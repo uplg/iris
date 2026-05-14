@@ -9,7 +9,7 @@
  * which track is active.
  */
 
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { IrisChrome } from "./IrisChrome";
 import type { EngineHandle, EngineMount, NativeSubtitleTrack } from "./engine";
@@ -80,7 +80,29 @@ export function IrisPlayer(props: IrisPlayerProps) {
   // `<SubtitleOverlay host={null}>` stuck on first render and the
   // overlay never mounts. `useState` + a setter-ref fixes it cleanly.
   const [wrapper, setWrapper] = useState<HTMLDivElement | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  // Stable DOM node the engine mounts its `<video>` (or `<canvas>`)
+  // into. We create it ONCE, outside React's reconciliation, so that
+  // when `createPortal` moves the player tree into a Document
+  // Picture-in-Picture window, the engine's media element doesn't
+  // get orphaned in the original document. Instead, our callback
+  // ref (`mountSlotRef` below) re-appends this stable host into
+  // whichever React-managed slot is currently mounted, in whichever
+  // document. Cross-document `appendChild` performs WHATWG-spec
+  // "adopting steps" automatically; modern Chromium/Firefox keep
+  // `<video>` playback alive across the move.
+  const videoHostRef = useRef<HTMLDivElement | null>(null);
+  if (videoHostRef.current === null && typeof document !== "undefined") {
+    const host = document.createElement("div");
+    host.className = "absolute inset-0";
+    videoHostRef.current = host;
+  }
+  const mountSlotRef = useCallback((slot: HTMLDivElement | null) => {
+    const host = videoHostRef.current;
+    if (!host || !slot) return;
+    if (host.parentElement !== slot) {
+      slot.appendChild(host);
+    }
+  }, []);
   const handleRef = useRef<EngineHandle | null>(null);
   const [handle, setHandle] = useState<EngineHandle | null>(null);
   const currentTimeRef = useRef<number>(props.startPosition);
@@ -152,8 +174,10 @@ export function IrisPlayer(props: IrisPlayerProps) {
   }, [handle, activeSubtitle]);
 
   // Mount the engine on `(tier, src, startPosition)` change.
+  // Uses the stable `videoHostRef` so PiP / portal moves don't
+  // trigger a remount — see the comment on `videoHostRef`.
   useEffect(() => {
-    const container = containerRef.current;
+    const container = videoHostRef.current;
     if (!container) return;
     const loader = ENGINE_LOADERS[props.tier];
     if (!loader) {
@@ -255,9 +279,13 @@ export function IrisPlayer(props: IrisPlayerProps) {
 
   const playerNode = (
     <div ref={setWrapper} className="relative h-full w-full bg-black">
-      {/* Engine mount point. The engine inserts a <video> or <canvas>
-          here; the chrome and overlay are positioned on top. */}
-      <div ref={containerRef} className="absolute inset-0" />
+      {/* React-managed slot. The callback ref re-appends our stable
+          `videoHostRef` into this slot whenever React mounts a new
+          one (e.g., after a Document PiP open/close moves the
+          player tree across documents). The engine's `<video>`
+          lives inside `videoHostRef` and is carried along
+          automatically — playback state survives the move. */}
+      <div ref={mountSlotRef} className="absolute inset-0" />
       <SubtitleOverlay
         host={wrapper}
         track={activeOverlay}
