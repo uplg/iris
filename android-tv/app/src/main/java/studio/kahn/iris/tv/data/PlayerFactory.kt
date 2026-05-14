@@ -1,10 +1,12 @@
 package studio.kahn.iris.tv.data
 
 import android.content.Context
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -36,21 +38,108 @@ fun buildPlayer(
             // Without a wake mode the CPU goes to sleep on idle TV
             // hardware (no remote events for >2 min during a quiet
             // dialogue scene) and playback stalls. NETWORK keeps a
-            // partial wake lock + WiFi lock while playing so HLS
+            // partial wake lock + WiFi lock while playing so the
             // segment fetches keep flowing. The lock is released
             // automatically when playback pauses or `release()` is
             // called.
             setWakeMode(C.WAKE_MODE_NETWORK)
+            // Declare ourselves as movie content for the audio sink.
+            // Media3's `DefaultAudioSink` reads these `AudioAttributes`
+            // to negotiate the best output path with the HDMI receiver:
+            //  - `USAGE_MEDIA` + `CONTENT_TYPE_MOVIE` makes Android's
+            //    `AudioCapabilities` report the receiver's full
+            //    surround-codec list (E-AC-3, DTS, TrueHD, …) so the
+            //    sink chooses passthrough for those formats instead of
+            //    decoding to PCM stereo.
+            //  - `handleAudioFocus=true` is what we want for a
+            //    foreground TV player — ducks/pauses on incoming
+            //    Assistant prompts, restores after.
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                /* handleAudioFocus = */ true,
+            )
         }
 }
 
 /**
- * Build a `MediaItem` for the Iris `/play/master.m3u8` endpoint — an
- * HLS-CMAF master playlist exposing one video variant + N audio
- * renditions. The `APPLICATION_M3U8` mime hint routes the
- * `DefaultMediaSourceFactory` to `HlsMediaSource`, which handles
- * multi-audio rendition switching natively via Media3's track selector.
- * Text-based subtitles are still side-loaded as external WebVTT tracks.
+ * Translates a Media3 [PlaybackException] into a (user-readable
+ * message, isTransient) pair. The boolean drives the auto-retry
+ * heuristic in `WatchScreen` — transient errors (network blip,
+ * mid-stream decoder hiccup) are worth re-`prepare()`ing once or
+ * twice; the rest need user attention.
+ */
+fun humanizePlaybackError(e: PlaybackException): Pair<String, Boolean> {
+    val message = when (e.errorCode) {
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        -> "Connection to the Iris server was lost. Retrying…"
+        PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
+        PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
+        -> "The server refused this stream — you may need to sign in again."
+        PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "Source file not found."
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Server returned an error response."
+        PlaybackException.ERROR_CODE_IO_UNSPECIFIED -> "Network read failed."
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+        -> "This file's container format isn't supported by Media3 on this device."
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+        -> "This file appears corrupted (bad container metadata)."
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+        -> "This device doesn't have a decoder for this video / audio codec."
+        PlaybackException.ERROR_CODE_DECODING_FAILED,
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+        -> "Playback stalled — the decoder couldn't keep up."
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED,
+        -> "Audio output failed — check your HDMI / speaker connection."
+        else -> "Playback error (${e.errorCodeName})."
+    }
+    val transient = when (e.errorCode) {
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+        PlaybackException.ERROR_CODE_DECODING_FAILED,
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED,
+        -> true
+        else -> false
+    }
+    return message to transient
+}
+
+/**
+ * Build a `MediaItem` for the Iris `/stream` endpoint — the raw,
+ * range-supported source bytes (MKV / MP4 / etc.) served as-is by
+ * `iris-api`'s `stream_file` route.
+ *
+ * We deliberately bypass the server-side HLS-CMAF remux pipeline that
+ * the web client uses as its Tier F fallback. Media3 / ExoPlayer
+ * already does everything that pipeline does, but in-process:
+ *   - MatroskaExtractor demuxes the container.
+ *   - HEVC / H.264 video is hardware-decoded (or software-decoded via
+ *     C2 on the SoC).
+ *   - AC-3 / E-AC-3 / DTS audio is passed through to the HDMI sink
+ *     when the receiver advertises support; otherwise Media3 falls
+ *     back to its software AC-3 decoder.
+ *   - Multi-audio + embedded subtitle tracks (SRT, ASS, PGS) are
+ *     surfaced via the standard `Tracks` API and the native
+ *     PlayerView settings menu.
+ *
+ * Savings vs the HLS pipeline: zero ffmpeg+shaka CPU on the server,
+ * no remux wait at start, sub-stream handling is consistent with
+ * the source file (PGS bitmap subs from Blu-rays render correctly
+ * instead of being silently dropped at the VTT filter).
+ *
+ * Mime hint: `APPLICATION_MATROSKA` is the common case for our
+ * library (every torrent we've ingested is `.mkv`). Caller can pass
+ * a different mime via `mimeType` if probing surfaces something else.
+ * Letting Media3 sniff also works (omit the hint) but pre-declaring
+ * skips the first range probe.
  *
  * Resume position is intentionally NOT applied here via
  * `ClippingConfiguration` — that would re-window the timeline so
@@ -62,13 +151,12 @@ fun buildPlayer(
 @UnstableApi
 fun buildMediaItem(
     playUrl: String,
-    subtitles: List<MediaItem.SubtitleConfiguration>,
     title: String? = null,
+    mimeType: String = MimeTypes.APPLICATION_MATROSKA,
 ): MediaItem =
     MediaItem.Builder()
         .setUri(playUrl)
-        .setMimeType(MimeTypes.APPLICATION_M3U8)
-        .setSubtitleConfigurations(subtitles)
+        .setMimeType(mimeType)
         .apply {
             if (!title.isNullOrBlank()) {
                 setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())

@@ -79,6 +79,14 @@ interface IrisApi {
         @Body body: ProgressUpdate,
     )
 
+    /** Single-file progress with `audio_track_idx` + `subtitle_track_idx`.
+     *  Returns `null` when no entry exists yet (first watch). */
+    @GET("api/torrents/{infohash}/files/{idx}/progress")
+    suspend fun getProgress(
+        @Path("infohash") infohash: String,
+        @Path("idx") idx: Int,
+    ): ProgressView?
+
     /** TMDB id lookup. `kind` disambiguates the movie/tv namespaces —
      *  same numerical id resolves to two unrelated entries otherwise.
      *  Pass the collection / search-result kind whenever known. */
@@ -404,8 +412,25 @@ data class PlayStatus(
 data class ProgressUpdate(
     @SerialName("position_seconds") val positionSeconds: Double,
     @SerialName("duration_seconds") val durationSeconds: Double? = null,
+    @SerialName("audio_track_idx") val audioTrackIdx: Int? = null,
     @SerialName("subtitle_track_idx") val subtitleTrackIdx: Int? = null,
     val completed: Boolean = false,
+)
+
+/**
+ * Single-file playback progress, the GET counterpart of
+ * [ProgressUpdate]. Mirrors `ProgressView` in `iris-api`. Returned by
+ * `getProgress(infohash, idx)`, used at mount time to restore the
+ * user's last audio + subtitle picks (the position is restored from
+ * the bulk endpoint already).
+ */
+@Serializable
+data class ProgressView(
+    @SerialName("position_seconds") val positionSeconds: Double,
+    @SerialName("duration_seconds") val durationSeconds: Double? = null,
+    @SerialName("audio_track_idx") val audioTrackIdx: Int? = null,
+    @SerialName("subtitle_track_idx") val subtitleTrackIdx: Int? = null,
+    val completed: Boolean,
 )
 
 /**

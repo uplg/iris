@@ -11,8 +11,6 @@
 
 package studio.kahn.iris.tv.ui.screens
 
-import android.net.Uri
-import androidx.core.net.toUri
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.widget.TextView
 import androidx.compose.foundation.background
@@ -41,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Button
@@ -57,7 +54,6 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.EpisodePoint
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.MediaProbe
-import studio.kahn.iris.tv.data.PlayStatus
 import studio.kahn.iris.tv.data.ProgressUpdate
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.buildMediaItem
@@ -88,9 +84,13 @@ fun WatchScreen(
     var serverUrl by remember { mutableStateOf<String?>(null) }
     var probe by remember { mutableStateOf<MediaProbe?>(null) }
     var manifest by remember { mutableStateOf<studio.kahn.iris.tv.data.Manifest?>(null) }
-    var playStatus by remember { mutableStateOf<PlayStatus?>(null) }
     var torrent by remember { mutableStateOf<TorrentView?>(null) }
     var resumePositionSec by remember { mutableStateOf(0.0) }
+    // Saved audio + subtitle stream indices from the previous session.
+    // `null` means "no preference yet, fall back to the source file's
+    // `default` flag" (initial-mount behaviour for first-time watches).
+    var savedAudioIdx by remember { mutableStateOf<Int?>(null) }
+    var savedSubIdx by remember { mutableStateOf<Int?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var probeVersion by remember { mutableStateOf(0) }
 
@@ -118,6 +118,16 @@ fun WatchScreen(
                 val progresses = runCatching { api.torrentProgress(infohash) }.getOrDefault(emptyList())
                 resumePositionSec = progresses.firstOrNull { it.fileIdx == fileIdx }
                     ?.takeUnless { it.completed }?.positionSeconds ?: 0.0
+                // Also fetch the single-file progress to recover the
+                // user's previous audio + subtitle picks. The bulk
+                // endpoint above only carries position; this one has
+                // the per-file `audio_track_idx` + `subtitle_track_idx`
+                // the player will hand back to `trackSelectionParameters`
+                // at mount. Safe to ignore failures (e.g. the user
+                // has never watched this file before → `null`).
+                val saved = runCatching { api.getProgress(infohash, fileIdx) }.getOrNull()
+                savedAudioIdx = saved?.audioTrackIdx
+                savedSubIdx = saved?.subtitleTrackIdx
                 return@LaunchedEffect
             } catch (e: retrofit2.HttpException) {
                 if (e.code() == 401 || e.code() == 404) {
@@ -170,33 +180,19 @@ fun WatchScreen(
             }
     }
 
-    // Playback prep status. Polls every second until the HLS master
-    // playlist is on disk. The endpoint surfaces both the upstream
-    // torrent download and the in-flight ffmpeg+shaka pipeline so the
-    // loading overlay can show a meaningful step (and the remux %).
-    LaunchedEffect(probe, serverUrl) {
-        val baseUrl = serverUrl ?: return@LaunchedEffect
-        probe ?: return@LaunchedEffect
-        playStatus = null
-        val api = container.apiFor(baseUrl)
-        while (true) {
-            val s = runCatching { api.playStatus(infohash, fileIdx) }.getOrNull()
-            if (s != null) {
-                playStatus = s
-                // Stop polling once the cache is ready OR a sticky failure
-                // is surfaced — both are terminal until the user retries.
-                if (s.ready || s.error != null) break
-            }
-            delay(1_000)
-        }
-    }
+    // No more `/play/status` polling — that endpoint signals when the
+    // server-side HLS-CMAF cache (ffmpeg+shaka) is ready. We now feed
+    // the raw `/stream` bytes straight into Media3, which demuxes and
+    // decodes everything in-process. The probe call above is the only
+    // gate we wait on (it confirms the file is at least partially on
+    // disk and ffprobe scanned its streams).
 
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        val ready = playStatus?.ready == true && probe != null && serverUrl != null
+        val ready = probe != null && serverUrl != null
         if (ready) {
             ReadyPlayer(
                 container = container,
@@ -206,18 +202,18 @@ fun WatchScreen(
                 probe = probe!!,
                 torrent = torrent,
                 startPositionSec = resumePositionSec,
+                initialAudioIdx = savedAudioIdx,
+                initialSubIdx = savedSubIdx,
                 onPositionUpdate = { resumePositionSec = it },
                 onPlayerError = { error = it },
             )
         } else {
             LoadingOverlay(
                 error = error,
-                status = playStatus,
                 probeReady = probe != null,
                 torrent = torrent,
                 onRetry = {
                     probe = null
-                    playStatus = null
                     error = null
                     probeVersion++
                 },
@@ -236,6 +232,8 @@ private fun ReadyPlayer(
     probe: MediaProbe,
     torrent: TorrentView?,
     startPositionSec: Double,
+    initialAudioIdx: Int?,
+    initialSubIdx: Int?,
     onPositionUpdate: (Double) -> Unit,
     onPlayerError: (String) -> Unit,
 ) {
@@ -268,41 +266,19 @@ private fun ReadyPlayer(
     }
 
     val playUrl = remember(serverUrl, infohash, fileIdx) {
-        // HLS-CMAF master playlist — same URL the web client uses.
-        // The bare `/play` path was the old single-file fMP4 endpoint;
-        // the current backend serves the manifest tree under
-        // `/play/{asset}` and the entry point is `master.m3u8`.
+        // Raw source bytes — Media3 demuxes the container in-process
+        // and surfaces every audio + subtitle track (incl. PGS bitmap
+        // subs from Blu-rays) via the native track selector. No
+        // server-side remux needed.
         val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
-        "${base}api/torrents/$infohash/files/$fileIdx/play/master.m3u8"
+        "${base}api/torrents/$infohash/files/$fileIdx/stream"
     }
 
-    val subtitles = remember(probe, serverUrl, infohash, fileIdx) {
-        probe.subtitle.filter { it.textBased }.map { sub ->
-            val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
-            val url = "${base}api/torrents/$infohash/files/$fileIdx/sub/${sub.index}/track.vtt"
-            // SDH detection from the source title — ffmpeg / Matroska
-            // muxers tag closed-caption tracks with strings like "SDH",
-            // "CC", "captions" or "hearing impaired". When matched we
-            // set the role flags Media3's DefaultTrackNameProvider
-            // recognises so the track renders as "Language · Closed
-            // captions" in the native menu.
-            val sdh = sub.title?.lowercase()?.let { t ->
-                "sdh" in t || "captions" in t || "hearing" in t || t.trim() == "cc"
-            } == true
-            var selection = 0
-            if (sub.default) selection = selection or C.SELECTION_FLAG_DEFAULT
-            if (sub.forced) selection = selection or C.SELECTION_FLAG_FORCED
-            var roles = 0
-            if (sdh) roles = roles or C.ROLE_FLAG_CAPTION or C.ROLE_FLAG_DESCRIBES_MUSIC_AND_SOUND
-            MediaItem.SubtitleConfiguration.Builder(url.toUri())
-                .setMimeType(MimeTypes.TEXT_VTT)
-                .setLanguage(sub.language ?: "und")
-                .setLabel(sub.title ?: sub.language?.uppercase() ?: "Sub ${sub.index + 1}")
-                .setSelectionFlags(selection)
-                .setRoleFlags(roles)
-                .build()
-        }
-    }
+    // No more external subtitle injection — the source MKV / MP4
+    // already contains every subtitle track and Media3 has parsers
+    // for SRT, ASS/SSA and PGS bitmap. Defaults are honored below
+    // via `trackSelectionParameters` once the player surfaces the
+    // available tracks.
 
     val title by remember(torrent?.name, currentEpisode) {
         mutableStateOf(buildPlaybackTitle(torrent?.name, currentEpisode))
@@ -311,7 +287,7 @@ private fun ReadyPlayer(
     val player = remember(playUrl) {
         buildPlayer(context, container.okHttpClient).apply {
             setMediaItem(
-                buildMediaItem(playUrl, subtitles, title),
+                buildMediaItem(playUrl, title),
                 (startPositionSec * 1000).toLong().coerceAtLeast(0),
             )
             prepare()
@@ -320,33 +296,125 @@ private fun ReadyPlayer(
     }
 
 
-    // Honour the file's `default` flag for audio/subtitles on first mount.
-    // The native settings gear (`exo_settings`) handles runtime switching;
-    // this just keeps the initial pick from defaulting to whatever Media3
-    // guesses from the system locale.
-    LaunchedEffect(player, probe) {
-        val initialAudio = probe.audio.firstOrNull { it.default }?.language
+    // Pick initial audio + subtitle preferences. Priority order:
+    //   1. The user's saved pick from the previous session
+    //      (via `initialAudioIdx` / `initialSubIdx`, resolved by
+    //      stream index → language through the probe).
+    //   2. The source file's `default` flag.
+    //   3. Whatever Media3 guesses from the system locale.
+    // The native settings gear (`exo_settings`) handles further
+    // runtime switching, which we observe further below to keep the
+    // saved prefs fresh.
+    LaunchedEffect(player, probe, initialAudioIdx, initialSubIdx) {
+        val audioFromSaved = initialAudioIdx?.let { idx ->
+            probe.audio.firstOrNull { it.index == idx }?.language
+        }
+        val initialAudio = audioFromSaved
+            ?: probe.audio.firstOrNull { it.default }?.language
             ?: probe.audio.firstOrNull()?.language
-        val initialSub = probe.subtitle.firstOrNull { it.default }?.language
+        // For subs: `initialSubIdx == null` means "user has no saved
+        // preference yet" → fall back to the source `default` flag.
+        // `initialSubIdx == -1` is the explicit "no subs" sentinel
+        // (user actively disabled subtitles last session); honour it.
+        val subFromSaved = when (initialSubIdx) {
+            null -> probe.subtitle.firstOrNull { it.default }?.language
+            -1 -> null
+            else -> probe.subtitle.firstOrNull { it.index == initialSubIdx }?.language
+        }
+        val subDisabled = initialSubIdx == -1
         val params = player.trackSelectionParameters.buildUpon()
         if (initialAudio != null) params.setPreferredAudioLanguage(initialAudio)
-        if (initialSub != null) {
-            params.setPreferredTextLanguage(initialSub)
+        if (subFromSaved != null) {
+            params.setPreferredTextLanguage(subFromSaved)
             params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+        } else if (subDisabled) {
+            params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
         } else {
             params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
         }
         player.trackSelectionParameters = params.build()
     }
 
-    // Surface ExoPlayer errors back to the parent so the LoadingOverlay
-    // can show them. Without this any decoder / network failure leaves
-    // the player paused at 00:00 with no indication of what went wrong
-    // (this is exactly how the silent `/play` 404 hid for a session).
+    // Track the user's current audio + subtitle picks so subsequent
+    // `saveProgress` calls can persist them. We update via
+    // `onTracksChanged` rather than per-tick polling: tracks only
+    // change when the user opens the settings menu and clicks, so
+    // event-driven is cheap and accurate.
+    val currentAudioIdxRef = remember { java.util.concurrent.atomic.AtomicReference<Int?>(initialAudioIdx) }
+    val currentSubIdxRef = remember { java.util.concurrent.atomic.AtomicReference<Int?>(initialSubIdx) }
+
+    // ExoPlayer errors. Transient codes (network blip, mid-stream
+    // decoder hiccup) trigger an auto-retry up to MAX_RETRIES times
+    // within a sliding RETRY_WINDOW_MS — successful playback resets
+    // the counter. Terminal codes (unsupported container, decoder
+    // init failure, …) surface immediately so the user sees a real
+    // message instead of "ERROR_CODE_FOO_BAR".
     DisposableEffect(player) {
+        val maxRetries = 3
+        val retryWindowMs = 30_000L
+        var retryCount = 0
+        var firstRetryAt = 0L
         val listener = object : androidx.media3.common.Player.Listener {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                onPlayerError(error.errorCodeName + ": " + (error.message ?: "playback failed"))
+                val (message, transient) = studio.kahn.iris.tv.data.humanizePlaybackError(error)
+                android.util.Log.w(
+                    "iris-core",
+                    "playback error ${error.errorCodeName} transient=$transient: ${error.message}",
+                )
+                val now = android.os.SystemClock.uptimeMillis()
+                if (firstRetryAt == 0L || now - firstRetryAt > retryWindowMs) {
+                    firstRetryAt = now
+                    retryCount = 0
+                }
+                if (transient && retryCount < maxRetries) {
+                    retryCount++
+                    android.util.Log.i(
+                        "iris-core",
+                        "auto-retry #$retryCount after transient error",
+                    )
+                    scope.launch {
+                        delay(1_500L * retryCount)
+                        runCatching { player.prepare() }
+                    }
+                    return
+                }
+                onPlayerError(message)
+            }
+
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == androidx.media3.common.Player.STATE_READY) {
+                    // Successful resume — reset the retry budget.
+                    retryCount = 0
+                    firstRetryAt = 0L
+                }
+            }
+
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                // Pull the user's current language picks from the
+                // selected groups, then resolve back to the probe's
+                // stream index so `saveProgress` can write something
+                // the next session understands.
+                val pickedAudioLang = tracks.groups
+                    .firstOrNull { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
+                    ?.let { g ->
+                        (0 until g.length).firstOrNull { g.isTrackSelected(it) }
+                            ?.let { i -> g.getTrackFormat(i).language }
+                    }
+                val pickedSubGroup = tracks.groups
+                    .firstOrNull { it.type == C.TRACK_TYPE_TEXT && it.isSelected }
+                val pickedSubLang = pickedSubGroup?.let { g ->
+                    (0 until g.length).firstOrNull { g.isTrackSelected(it) }
+                        ?.let { i -> g.getTrackFormat(i).language }
+                }
+                currentAudioIdxRef.set(
+                    probe.audio.firstOrNull { it.language == pickedAudioLang }?.index
+                        ?: currentAudioIdxRef.get(),
+                )
+                currentSubIdxRef.set(
+                    if (pickedSubGroup == null || pickedSubLang == null) -1
+                    else probe.subtitle.firstOrNull { it.language == pickedSubLang }?.index
+                        ?: currentSubIdxRef.get(),
+                )
             }
         }
         player.addListener(listener)
@@ -367,6 +435,8 @@ private fun ReadyPlayer(
                     if (pos - lastSavedMs >= 7_000) {
                         lastSavedMs = pos
                         val completed = durationMs > 0 && pos >= durationMs - 30_000
+                        val audioIdx = currentAudioIdxRef.get()
+                        val subIdx = currentSubIdxRef.get()
                         scope.launch {
                             runCatching {
                                 container.apiFor(serverUrl).saveProgress(
@@ -375,6 +445,8 @@ private fun ReadyPlayer(
                                     body = ProgressUpdate(
                                         positionSeconds = pos / 1000.0,
                                         durationSeconds = if (durationMs > 0) durationMs / 1000.0 else null,
+                                        audioTrackIdx = audioIdx,
+                                        subtitleTrackIdx = subIdx,
                                         completed = completed,
                                     ),
                                 )
@@ -404,6 +476,8 @@ private fun ReadyPlayer(
             val pos = player.currentPosition
             val dur = player.duration.takeIf { it > 0 }
             if (pos > 0) onPositionUpdate(pos / 1000.0)
+            val audioIdx = currentAudioIdxRef.get()
+            val subIdx = currentSubIdxRef.get()
             scope.launch {
                 runCatching {
                     container.apiFor(serverUrl).saveProgress(
@@ -412,6 +486,8 @@ private fun ReadyPlayer(
                         body = ProgressUpdate(
                             positionSeconds = pos / 1000.0,
                             durationSeconds = dur?.div(1000.0),
+                            audioTrackIdx = audioIdx,
+                            subtitleTrackIdx = subIdx,
                             completed = dur != null && pos >= dur - 30_000,
                         ),
                     )
@@ -511,7 +587,6 @@ private fun ReadyPlayer(
 @Composable
 private fun LoadingOverlay(
     error: String?,
-    status: PlayStatus?,
     probeReady: Boolean,
     torrent: TorrentView?,
     onRetry: () -> Unit,
@@ -550,7 +625,7 @@ private fun LoadingOverlay(
                 }
                 return@Column
             }
-            val (label, sub, pct) = stepFor(status, probeReady, torrent)
+            val (label, sub, pct) = stepFor(probeReady, torrent)
             Text(label, style = MaterialTheme.typography.titleMedium)
             sub?.let {
                 Text(
@@ -573,77 +648,42 @@ private fun LoadingOverlay(
 
 private data class Step(val label: String, val sub: String?, val pct: Float?)
 
-private fun stepFor(status: PlayStatus?, probeReady: Boolean, torrent: TorrentView?): Step {
-    if (!probeReady) {
-        // The file isn't on disk yet. If we know the torrent's overall
-        // download state, surface that — the user wants "I have 320 MB
-        // out of 4 GB, going at 8 MB/s" not "ffprobe scanning streams".
-        if (torrent != null && torrent.progressPct < 99.9f) {
-            val pct = torrent.progressPct / 100f
-            val sub = buildString {
-                append(formatBytesShort(torrent.progressBytes))
-                append(" / ")
-                append(formatBytesShort(torrent.totalSizeBytes))
-                if (torrent.downloadSpeedBps > 0) {
-                    append(" · ")
-                    append(formatSpeedShort(torrent.downloadSpeedBps))
-                }
-                if (torrent.peers > 0) {
-                    append(" · ${torrent.peers} peers")
-                }
-            }
-            val label = if (torrent.state.equals("paused", ignoreCase = true)) {
-                "Download paused"
-            } else if (torrent.error != null) {
-                "Torrent error"
-            } else if (torrent.downloadSpeedBps > 0 || torrent.peers > 0) {
-                "Downloading…"
-            } else {
-                "Connecting to peers…"
-            }
-            return Step(label, sub, pct.coerceIn(0f, 0.99f))
-        }
-        return Step("Reading media metadata…", "ffprobe scanning streams.", null)
+private fun stepFor(probeReady: Boolean, torrent: TorrentView?): Step {
+    // The TV now plays the raw `/stream` endpoint directly — Media3
+    // demuxes the container in-process, so there's no server-side
+    // remux to wait for. The only gate is "did ffprobe scan the
+    // file's streams" (probeReady), with the torrent download
+    // surfaced underneath so the user sees real bytes / speed while
+    // librqbit is still pulling the first chunks.
+    if (probeReady) {
+        return Step("Starting playback…", null, null)
     }
-    val s = status ?: return Step("Starting playback prep…", null, null)
-    if (s.error != null) return Step("Playback prep failed", s.error, null)
-    return when (s.reason) {
-        "downloading" -> {
-            val pct = s.progress?.coerceIn(0f, 0.99f)
-                ?: torrent?.let { (it.progressPct / 100f).coerceIn(0f, 0.99f) }
-            val sub = torrent?.let {
-                buildString {
-                    append(formatBytesShort(it.progressBytes))
-                    append(" / ")
-                    append(formatBytesShort(it.totalSizeBytes))
-                    if (it.downloadSpeedBps > 0) {
-                        append(" · ")
-                        append(formatSpeedShort(it.downloadSpeedBps))
-                    }
-                    if (it.peers > 0) append(" · ${it.peers} peers")
-                }
+    if (torrent != null && torrent.progressPct < 99.9f) {
+        val pct = torrent.progressPct / 100f
+        val sub = buildString {
+            append(formatBytesShort(torrent.progressBytes))
+            append(" / ")
+            append(formatBytesShort(torrent.totalSizeBytes))
+            if (torrent.downloadSpeedBps > 0) {
+                append(" · ")
+                append(formatSpeedShort(torrent.downloadSpeedBps))
             }
-            Step("Downloading…", sub, pct)
-        }
-        "remuxing" -> {
-            // ffmpeg's encoded-so-far position lands here once the
-            // server has parsed its first `out_time_us` block (~1s
-            // after spawn). Until then `s.progress` is null and we
-            // show an indeterminate bar via the null `pct`.
-            val pct = s.progress?.coerceIn(0f, 0.99f)
-            val label = if (pct != null) {
-                "Remuxing to fragmented MP4 · ${(pct * 100f).toInt()}%"
-            } else {
-                "Remuxing to fragmented MP4…"
+            if (torrent.peers > 0) {
+                append(" · ${torrent.peers} peers")
             }
-            Step(
-                label,
-                "Producing the playable cache (video copied as-is, audio re-encoded to AAC where needed).",
-                pct,
-            )
         }
-        else -> Step("Preparing playback…", "Almost there.", null)
+        val label = if (torrent.state.equals("paused", ignoreCase = true)) {
+            "Download paused"
+        } else if (torrent.error != null) {
+            "Torrent error"
+        } else if (torrent.downloadSpeedBps > 0 || torrent.peers > 0) {
+            "Downloading…"
+        } else {
+            "Connecting to peers…"
+        }
+        return Step(label, sub, pct.coerceIn(0f, 0.99f))
     }
+    return Step("Reading media metadata…", "ffprobe scanning streams.", null)
 }
 
 private fun buildPlaybackTitle(rawName: String?, episode: EpisodePoint?): String {
