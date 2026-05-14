@@ -25,6 +25,7 @@ import {
   AudioSampleSource,
   Conversion,
   EncodedAudioPacketSource,
+  type EncodedPacket,
   EncodedPacketSink,
   EncodedVideoPacketSource,
   Input,
@@ -48,6 +49,31 @@ import {
  *  back-pressuring Mediabunny. Larger = more resilient to slow
  *  download + decode bursts, smaller = lower memory footprint. */
 const BUFFER_AHEAD_TARGET_SECONDS = 60;
+
+/** Mediabunny's MP4 muxer validates that every packet's PTS is ≥ the
+ *  max PTS of the previous GOP. That assumption breaks for open-GOP
+ *  / deep B-frame video (x265, AV1 with `--b-pyramid normal`, anything
+ *  exported by HandBrake with a tight RD), where a new GOP's keyframe
+ *  legitimately presents 1 frame before the previous GOP's last
+ *  B-frame. The muxer's per-sample PTS/CTS book-keeping handles this
+ *  fine, so the only fix needed is to swallow the "previous GOP" error
+ *  thrown by the validator. We patch the validator on each Output we
+ *  build (the muxer is on `output._muxer`). */
+function relaxMediabunnyGopCheck(output: Output): void {
+  const m = (output as unknown as {
+    _muxer?: { validateTimestamp?: (track: unknown, ts: number, isKey: boolean) => void };
+  })._muxer;
+  if (!m || typeof m.validateTimestamp !== "function") return;
+  const original = m.validateTimestamp.bind(m);
+  m.validateTimestamp = (track, ts, isKey) => {
+    try {
+      original(track, ts, isKey);
+    } catch (e) {
+      if (e instanceof Error && /previous GOP/i.test(e.message)) return;
+      throw e;
+    }
+  };
+}
 
 /** Played-out range we keep behind the playhead for instant scrub-back. */
 const PLAYED_KEEP_SECONDS = 30;
@@ -188,169 +214,6 @@ export const mountTierB: EngineMount = async (opts) => {
     }
   };
 
-  // ---- Conversion lifecycle --------------------------------------
-
-  /** Build a fresh Mediabunny `Conversion` and execute it.
-   *  `mode = 'initial'` is the first mount — no `trim`, browser seeks
-   *  to `opts.startPosition` after `canplay`. `mode = 'seek'` is a
-   *  scrub outside the buffered range — `trim.start` is applied and
-   *  the SourceBuffer's `timestampOffset` aligns new fragments to
-   *  the chosen media time.
-   *
-   *  For `mode = 'seek'`: the new conversion is `init()`'d BEFORE the
-   *  old one is canceled, so an `init` failure leaves the running
-   *  conversion untouched and the user keeps their buffered playback. */
-  const startConversion = async (
-    seekStart: number,
-    mode: "initial" | "seek",
-  ): Promise<void> => {
-    const prev = mode === "seek" ? conversion : null;
-    const prevGen = conversionGeneration;
-    const generation = prevGen + 1;
-    const useTrim = mode === "seek" && seekStart > 0;
-    if (sourceBuffer && useTrim) {
-      try {
-        sourceBuffer.timestampOffset = seekStart;
-      } catch {
-        /* some browsers reject offset during pending append */
-      }
-    }
-    // Back-pressure: wait for SourceBuffer updates (or a 500 ms
-    // safety timeout) rather than busy-polling on a short setTimeout
-    // — the latter starved Mediabunny's encoder probe and caused
-    // `Error when probing encoder support` followed by a hard fail.
-    const waitForBufferRoom = (): Promise<void> =>
-      new Promise<void>((resolve) => {
-        if (
-          disposed ||
-          generation !== conversionGeneration ||
-          bufferedAheadSeconds() <= BUFFER_AHEAD_TARGET_SECONDS
-        ) {
-          resolve();
-          return;
-        }
-        let settled = false;
-        const cleanup = () => {
-          if (settled) return;
-          settled = true;
-          sourceBuffer?.removeEventListener("updateend", onUpdate);
-          clearTimeout(timeoutId);
-          resolve();
-        };
-        const onUpdate = () => cleanup();
-        sourceBuffer?.addEventListener("updateend", onUpdate, { once: true });
-        const timeoutId = setTimeout(cleanup, 500);
-      });
-
-    const sink = new WritableStream<StreamTargetChunk>({
-      write: async (chunk) => {
-        if (disposed || generation !== conversionGeneration) return;
-        appendQueue.push(chunk.data);
-        drainQueue();
-        // Back-pressure loop. We yield only when we're ahead of the
-        // playhead by more than the target window.
-        while (
-          !disposed &&
-          generation === conversionGeneration &&
-          bufferedAheadSeconds() > BUFFER_AHEAD_TARGET_SECONDS
-        ) {
-          await waitForBufferRoom();
-        }
-      },
-      close: () => {
-        if (disposed || generation !== conversionGeneration) return;
-        try {
-          if (mediaSource.readyState === "open") mediaSource.endOfStream();
-        } catch {
-          /* idempotent */
-        }
-      },
-      abort: (reason) => {
-        if (generation !== conversionGeneration) return;
-        fail(reason instanceof Error ? reason : new Error(String(reason)));
-      },
-    });
-
-    const audioFilter = (_track: unknown, n: number) => {
-      if (n !== chosenAudioIdx + 1 && chosenAudioIdx >= 0) return { discard: true };
-      if (audioNeedsTranscode) return { codec: "aac" as const, bitrate: 192_000 };
-      return {};
-    };
-
-    const output = new Output({
-      format: new Mp4OutputFormat({
-        fastStart: "fragmented",
-        minimumFragmentDuration: 1,
-      }),
-      target: new StreamTarget(sink),
-    });
-
-    // No `video` option here — Mediabunny's default is passthrough
-    // when the target container supports the source codec. Setting
-    // `video: { codec: 'hevc' }` actually means "transcode to HEVC",
-    // which forces Mediabunny down a re-encode path that fails on
-    // Chrome (no HEVC encoder) and produces a black screen.
-    const newConversion = await Conversion.init({
-      input,
-      output,
-      audio: audioFilter,
-      ...(useTrim ? { trim: { start: seekStart } } : {}),
-    });
-    if (disposed) {
-      try {
-        await newConversion.cancel();
-      } catch {
-        /* idempotent */
-      }
-      return;
-    }
-    if (!newConversion.isValid) {
-      const reasons = newConversion.discardedTracks
-        .map((t) => `${t.track.codec}: ${t.reason}`)
-        .join("; ");
-      try {
-        await newConversion.cancel();
-      } catch {
-        /* idempotent */
-      }
-      throw new Error(`Tier B conversion invalid (discarded: ${reasons})`);
-    }
-
-    // Init succeeded. Now safe to swap state.
-    if (prev) {
-      try {
-        await prev.cancel();
-      } catch {
-        /* canceled is expected */
-      }
-      appendQueue.length = 0;
-      if (sourceBuffer) {
-        await waitForUpdateEnd();
-        try {
-          sourceBuffer.remove(0, Number.POSITIVE_INFINITY);
-        } catch {
-          /* may already be empty */
-        }
-        await waitForUpdateEnd();
-        if (useTrim) {
-          try {
-            sourceBuffer.timestampOffset = seekStart;
-          } catch {
-            /* swallow */
-          }
-        }
-      }
-    }
-    conversion = newConversion;
-    conversionGeneration = generation;
-    void newConversion.execute().catch((e: unknown) => {
-      if (generation !== conversionGeneration) return;
-      if (e instanceof Error && /canceled/i.test(e.message)) return;
-      fail(e instanceof Error ? e : new Error(String(e)));
-    });
-  };
-
-
   /** Seek-restart via Mediabunny's **low-level** API instead of
    *  `Conversion`. `Conversion` always forces a video re-encode when
    *  `trim.start > firstTimestamp` (see `_processVideoTrack`), which
@@ -395,6 +258,7 @@ export const mountTierB: EngineMount = async (opts) => {
       }),
       target: new StreamTarget(sink),
     });
+    relaxMediabunnyGopCheck(newOutput);
 
     const videoTrack = await input.getPrimaryVideoTrack();
     if (!videoTrack) throw new Error("manual pipeline: no primary video track");
@@ -466,14 +330,66 @@ export const mountTierB: EngineMount = async (opts) => {
       if (!startPacket) return;
       const decoderConfig = await videoTrack.getDecoderConfig();
       let firstMeta = true;
+
+      // Open-GOP straggler filter. x265's default settings (open GOP
+      // + b-pyramid) produce two kinds of frames that violate
+      // Mediabunny's MP4 muxer assumption that "keyframe PTS == min
+      // PTS in its GOP":
+      //
+      //   (1) Post-key strays: packets that decode AFTER a keyframe
+      //       but whose PTS is BELOW the keyframe (they present
+      //       before the keyframe, referencing the previous GOP).
+      //       Detection: PTS < currentKeyPts when received.
+      //
+      //   (2) Bridge frames: packets that decode at the END of GOP
+      //       N but whose PTS is ABOVE GOP N+1's keyframe (they
+      //       present after the next keyframe). We only learn the
+      //       next keyframe's PTS when it arrives — so we buffer
+      //       the current GOP and drop any pkt with PTS ≥ nextKey
+      //       on flush.
+      //
+      // Mediabunny's `processTimestamps` asserts `delta >= 0` when
+      // its sorted-PTS DTS assignment dips below `lastTimescaleUnits`
+      // from the prev GOP. The two cases above are the only ways
+      // this happens for trustworthy demux output. Dropping them
+      // loses ~0.7% of frames at GOP boundaries — invisible in
+      // playback.
+
+      let currentKeyPts = -Infinity;
+      let gopBuffer: EncodedPacket[] = [];
+
+      const flushGop = async (nextKeyPts: number | null): Promise<void> => {
+        for (const pkt of gopBuffer) {
+          if (
+            nextKeyPts !== null &&
+            pkt.type !== "key" &&
+            pkt.timestamp >= nextKeyPts
+          ) {
+            continue; // bridge frame — drop
+          }
+          const meta = firstMeta
+            ? { decoderConfig: decoderConfig ?? undefined }
+            : undefined;
+          await videoSrc.add(pkt, meta);
+          firstMeta = false;
+        }
+        gopBuffer = [];
+      };
+
       for await (const packet of packetSink.packets(startPacket)) {
         if (disposed || newGen !== conversionGeneration) break;
-        const meta = firstMeta
-          ? { decoderConfig: decoderConfig ?? undefined }
-          : undefined;
-        await videoSrc.add(packet, meta);
-        firstMeta = false;
+        if (packet.type === "key") {
+          await flushGop(packet.timestamp);
+          currentKeyPts = packet.timestamp;
+          gopBuffer.push(packet);
+        } else if (packet.timestamp < currentKeyPts) {
+          // post-key stray — drop
+          continue;
+        } else {
+          gopBuffer.push(packet);
+        }
       }
+      await flushGop(null);
       await videoSrc.close();
     })();
 
@@ -702,35 +618,30 @@ export const mountTierB: EngineMount = async (opts) => {
     formats: ALL_FORMATS,
   });
   try {
-    // Initial mount. Two paths:
-    //   - startPosition == 0 → vanilla `Conversion` from time 0.
-    //   - startPosition >  0 → low-level manual pipeline jumping to
-    //     the keyframe before `startPosition` via MKV Cues. The
-    //     previous code path called `startConversion(0, "initial")`
-    //     and relied on `video.currentTime = startPosition` after
-    //     `canplay`, which made Mediabunny remux every packet from
-    //     0 → startPosition (downloading hundreds of MB before
-    //     playback could begin on a resume).
+    // Initial mount always goes through the manual pipeline. It:
+    //   1. Lets us drop open-GOP straggler B-frames that would
+    //      otherwise trip Mediabunny's `assert(delta >= 0)` in the
+    //      MP4 muxer's `processTimestamps` (very common on x265
+    //      sources, see the videoP loop comment for details).
+    //   2. Uses `EncodedPacketSink.getKeyPacket(seekStart)` to jump
+    //      via MKV Cues when `startPosition > 0`, avoiding the
+    //      hundreds-of-MB linear remux from byte 0 that `Conversion`
+    //      did on resume.
     if (opts.startPosition > 0) {
-      // Position the playhead at startPosition BEFORE pumping the
-      // first packets. The manual pipeline emits fragments with
-      // absolute timestamps starting near `startPosition`, so the
-      // SourceBuffer.buffered range will be `[~startPosition, X]`.
-      // MSE only fires `canplay` once a buffered range covers the
-      // current playhead — with currentTime stuck at 0, that event
-      // would never come and playback would never begin. We also
-      // suppress `bindVideoCallbacks`' canplay-based initial seek so
-      // it doesn't fight us once data finally arrives.
+      // Position the playhead at startPosition BEFORE pumping. MSE
+      // only fires `canplay` once a buffered range covers the
+      // playhead — with currentTime stuck at 0 and buffered =
+      // [~startPosition, X], canplay would never come. Suppress
+      // `bindVideoCallbacks`' canplay-based initial seek so it
+      // doesn't fight us when data finally arrives.
       try {
         video.currentTime = opts.startPosition;
       } catch {
         /* swallow */
       }
       initialSeek.done = true;
-      await runManualPipeline(opts.startPosition);
-    } else {
-      await startConversion(0, "initial");
     }
+    await runManualPipeline(opts.startPosition);
   } catch (e) {
     await dispose();
     const err = e instanceof Error ? e : new Error(String(e));

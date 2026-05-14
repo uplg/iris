@@ -776,6 +776,20 @@ async fn run_ffmpeg(
         // browsers, which only decode HEVC when the parameter sets
         // live in the `hvcC` box of the sample entry.
         cmd.args(["-tag:v", "hvc1"]);
+        // Strip Dolby Vision RPU + enhancement-layer NAL units (types
+        // 62 and 63 in HEVC are UNSPEC slots Dolby uses to carry the
+        // RPU metadata and EL data). Chrome on macOS routes HEVC
+        // through VideoToolbox, and VT chokes at the first scene
+        // change whose DV layout it doesn't grok (we observed
+        // `kVTVideoDecoderBadDataErr -17694` around 3:18 on a
+        // Profile 8.1 BL+RPU encode). Stripping those NALs reduces
+        // the stream to its plain HDR10 base layer, which VT decodes
+        // reliably. No-op on sources without DV NALs. Combined with
+        // `-tag:v hvc1` above (which writes a clean `hvcC` instead of
+        // a `dvcC`-augmented sample entry) we don't advertise DV at
+        // the container level either, so browsers won't even try to
+        // engage their DV pipeline.
+        cmd.args(["-bsf:v", "filter_units=remove_types=62|63"]);
     }
     // `negative_cts_offsets` lets ffmpeg express B-frame composition
     // offsets without an `elst` edit list — pairs with `-ignore_editlist`
