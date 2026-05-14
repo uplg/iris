@@ -1,6 +1,9 @@
 package studio.kahn.iris.tv.data
 
 import android.content.Context
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -16,6 +19,17 @@ interface AppContainer {
     val sessionStore: SessionStore
     val okHttpClient: OkHttpClient
     val channels: ChannelsService
+    /**
+     * Process-lifetime scope for fire-and-forget background work that
+     * MUST outlive the composable that started it. Typical user:
+     * `saveProgress` calls fired from a `DisposableEffect.onDispose`
+     * when the user navigates back — `rememberCoroutineScope` would
+     * cancel before the request leaves the device, dropping the user's
+     * latest audio / subtitle picks. Use sparingly; the scope never
+     * gets cancelled, so anything started here keeps a coroutine alive
+     * until it completes naturally.
+     */
+    val applicationScope: CoroutineScope
     fun apiFor(baseUrl: String): IrisApi
 }
 
@@ -23,6 +37,8 @@ class DefaultAppContainer(context: Context) : AppContainer {
     override val sessionStore: SessionStore = SessionStore(context.applicationContext)
     override val okHttpClient: OkHttpClient = buildOkHttpClient(sessionStore)
     override val channels: ChannelsService = ChannelsService(context.applicationContext)
+    override val applicationScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val json = Json {
         ignoreUnknownKeys = true

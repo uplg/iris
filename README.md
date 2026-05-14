@@ -35,3 +35,11 @@ cp .env.example .env
 # fill everything
 docker compose up --build -d
 ```
+
+## Android TV app
+
+- Install Downloader by AFTVNews on Google play store.
+- Use this url : https://uplg.xyz/app-release.apk
+- Install (allow unknown sources if needed)
+
+(New updates can be done after using Iris settings screen > Update app.)

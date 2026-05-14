@@ -43,6 +43,12 @@ export type IrisPlayerProps = {
   title: string;
   manifest: Manifest;
   startPosition: number;
+  /** Saved picks restored from server progress, if any. The parent
+   *  passes the values it read from `/progress`; we surface them
+   *  back via `onAudioTrackChange` / `onActiveSubtitleChange` so
+   *  parent can re-write them on every change. */
+  initialAudioIndex?: number;
+  initialSubtitleStreamIdx?: number | null;
 
   onTimeUpdate: (seconds: number) => void;
   onDurationChange: (seconds: number) => void;
@@ -50,6 +56,12 @@ export type IrisPlayerProps = {
   onPause: (seconds: number) => void;
   onEnded: () => void;
   onError: (message: string) => void;
+  /** Fires when the user picks a different audio track (index into
+   *  `manifest.audio`). Lets `WatchPage` persist the pick. */
+  onAudioTrackChange?: (index: number) => void;
+  /** Fires when the user picks a different subtitle (by manifest
+   *  `stream_idx`). `null` means "no subtitles". */
+  onActiveSubtitleChange?: (streamIdx: number | null) => void;
 };
 
 /** Audio-track switching strategy. Tier F changes audio live via
@@ -115,12 +127,26 @@ export function IrisPlayer(props: IrisPlayerProps) {
   const pip = useDocumentPip({ width: 720, height: 405 });
 
   // Active audio track index into `manifest.audio`. Initial pick:
-  // the file's `default` track (first one flagged) if any, else 0.
-  const initialAudioIndex = useMemo(() => {
+  // 1. `props.initialAudioIndex` if the parent restored one from
+  //    server progress (and the index is still valid for this
+  //    manifest — track count can change on a re-ingest).
+  // 2. The file's `default` track (first one flagged) if any.
+  // 3. Otherwise 0.
+  const defaultAudioIndex = useMemo(() => {
     const flagged = props.manifest.audio.findIndex((a) => a.default);
     return flagged >= 0 ? flagged : 0;
   }, [props.manifest]);
-  const [audioTrackIndex, setAudioTrackIndex] = useState<number>(initialAudioIndex);
+  const [audioTrackIndex, setAudioTrackIndex] = useState<number>(() => {
+    const restored = props.initialAudioIndex;
+    if (
+      typeof restored === "number" &&
+      restored >= 0 &&
+      restored < props.manifest.audio.length
+    ) {
+      return restored;
+    }
+    return defaultAudioIndex;
+  });
   // Position passed to the engine on (re)mount. Starts at the
   // resume offset; on an audio-track switch that needs a remount
   // (tiers A/B/C/E) we bump it to the current playhead so the
@@ -146,11 +172,20 @@ export function IrisPlayer(props: IrisPlayerProps) {
 
   // Unified subtitle state: any subtitle, native or overlay. The
   // chrome's menu writes here. Initial pick:
-  //   1. The file's `default` track if any.
-  //   2. Otherwise the first native (WebVTT-renderable) track if any.
-  //   3. Otherwise the first overlay track (ASS/PGS) — for BluRay
+  //   1. `props.initialSubtitleStreamIdx` if the parent restored
+  //      one from server progress — `null` means "user explicitly
+  //      turned subs off", `undefined` means "no saved pick".
+  //   2. The file's `default` track if any.
+  //   3. Otherwise the first native (WebVTT-renderable) track if any.
+  //   4. Otherwise the first overlay track (ASS/PGS) — for BluRay
   //      remuxes that only ship PGS, this is what the user wants.
   const [activeSubtitle, setActiveSubtitle] = useState<SubtitleTrack | null>(() => {
+    const restored = props.initialSubtitleStreamIdx;
+    if (restored === null) return null;
+    if (typeof restored === "number") {
+      const match = props.manifest.subtitles.find((s) => s.stream_idx === restored);
+      if (match) return match;
+    }
     const def = props.manifest.subtitles.find((s) => s.default);
     if (def) return def;
     const nativeFirst = props.manifest.subtitles.find(
@@ -159,6 +194,19 @@ export function IrisPlayer(props: IrisPlayerProps) {
     if (nativeFirst) return nativeFirst;
     return props.manifest.subtitles[0] ?? null;
   });
+
+  // Wrapper around `setActiveSubtitle` that ALSO fires the
+  // `onActiveSubtitleChange` callback so the parent can persist the
+  // pick. Used by the chrome menu (passed as `onSubtitleChange`).
+  // We don't fire from the bare `setActiveSubtitle` because it's
+  // also called internally on initial mount with no user intent.
+  const onSubtitlePick = useCallback(
+    (track: SubtitleTrack | null) => {
+      setActiveSubtitle(track);
+      props.onActiveSubtitleChange?.(track ? track.stream_idx : null);
+    },
+    [props.onActiveSubtitleChange],
+  );
 
   // Push the active native subtitle into the engine. Engines that
   // back a `<video>` element (A/B/F) flip `<track>.mode` for the
@@ -266,6 +314,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
       `[iris-core] onAudioPick id=${id} tier=${props.tier} hasHandle=${!!handle} needsRemount=${tierRequiresRemountForAudio(props.tier)}`,
     );
     setAudioTrackIndex(idx);
+    props.onAudioTrackChange?.(idx);
     if (tierRequiresRemountForAudio(props.tier)) {
       // Capture the current playhead BEFORE the remount tears the
       // engine down. The engine's `currentTime()` becomes 0 once
@@ -395,7 +444,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
         handle={handle}
         manifest={props.manifest}
         activeSubtitle={activeSubtitle}
-        onSubtitleChange={setActiveSubtitle}
+        onSubtitleChange={onSubtitlePick}
         activeAudioIndex={audioTrackIndex}
         onAudioPick={onAudioPick}
         fullscreenTarget={wrapper}

@@ -53,6 +53,10 @@ export function WatchPage() {
   const nextEpDismissedRef = useRef(false);
   const nextEpPromptedRef = useRef(false);
   const subtitleTrackRef = useRef<number | null>(null);
+  // Last user-picked audio track index (into `manifest.audio`). Kept
+  // in a ref — not state — so the various save paths read the latest
+  // value without re-rendering the player on each change.
+  const audioTrackRef = useRef<number | null>(null);
 
   const torrentQ = useQuery<TorrentView>({
     queryKey: ["torrent", infohash],
@@ -274,6 +278,7 @@ export function WatchPage() {
     lastDurationRef.current = null;
     progressLoadedRef.current = false;
     subtitleTrackRef.current = null;
+    audioTrackRef.current = null;
     nextEpDismissedRef.current = false;
     nextEpPromptedRef.current = false;
     setNextEpModalOpen(false);
@@ -312,6 +317,7 @@ export function WatchPage() {
         void progressApi.put(infohash, fileIdx, {
           position_seconds: t,
           duration_seconds: dur,
+          audio_track_idx: audioTrackRef.current,
           subtitle_track_idx: subtitleTrackRef.current,
           completed,
         });
@@ -345,6 +351,7 @@ export function WatchPage() {
       void progressApi.put(infohash, fileIdx, {
         position_seconds: t,
         duration_seconds: lastDurationRef.current ?? null,
+        audio_track_idx: audioTrackRef.current,
         subtitle_track_idx: subtitleTrackRef.current,
         completed: false,
       });
@@ -356,6 +363,7 @@ export function WatchPage() {
     void progressApi.put(infohash, fileIdx, {
       position_seconds: lastDurationRef.current ?? lastTimeRef.current,
       duration_seconds: lastDurationRef.current,
+      audio_track_idx: audioTrackRef.current,
       subtitle_track_idx: subtitleTrackRef.current,
       completed: true,
     });
@@ -363,13 +371,19 @@ export function WatchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [infohash, fileIdx]);
 
-  // Capture saved subtitle pick (the actual seek is applied in onCanPlay).
+  // Capture saved audio + subtitle picks so the next progress save
+  // round-trips them (without this, the first auto-save after a fresh
+  // mount would clobber the server-side value with `null` because
+  // the user hasn't touched the menus yet).
   useEffect(() => {
     if (progressLoadedRef.current) return;
     if (progressQ.isPending) return;
     const p = progressQ.data;
     if (p?.subtitle_track_idx != null) {
       subtitleTrackRef.current = p.subtitle_track_idx;
+    }
+    if (p?.audio_track_idx != null) {
+      audioTrackRef.current = p.audio_track_idx;
     }
     progressLoadedRef.current = true;
   }, [progressQ.data, progressQ.isPending]);
@@ -388,6 +402,7 @@ export function WatchPage() {
       const body = JSON.stringify({
         position_seconds: t,
         duration_seconds: dur,
+        audio_track_idx: audioTrackRef.current,
         subtitle_track_idx: subtitleTrackRef.current,
         completed,
       });
@@ -488,6 +503,14 @@ export function WatchPage() {
             title={fileName}
             manifest={manifest}
             startPosition={startPosition}
+            initialAudioIndex={progressQ.data?.audio_track_idx ?? undefined}
+            initialSubtitleStreamIdx={progressQ.data?.subtitle_track_idx ?? undefined}
+            onAudioTrackChange={(idx) => {
+              audioTrackRef.current = idx;
+            }}
+            onActiveSubtitleChange={(streamIdx) => {
+              subtitleTrackRef.current = streamIdx;
+            }}
             onTimeUpdate={onTimeUpdate}
             onDurationChange={onDurationChange}
             onSeeking={(t) => postSeekHint(manifest, t)}

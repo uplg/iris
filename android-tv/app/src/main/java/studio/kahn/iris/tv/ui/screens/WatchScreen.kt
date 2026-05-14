@@ -311,52 +311,122 @@ private fun ReadyPlayer(
     }
 
 
-    // Pick initial audio + subtitle preferences. Priority order:
-    //   1. The user's saved pick from the previous session
-    //      (via `initialAudioIdx` / `initialSubIdx`, resolved by
-    //      stream index → language through the probe).
-    //   2. The source file's `default` flag.
-    //   3. Whatever Media3 guesses from the system locale.
-    // The native settings gear (`exo_settings`) handles further
-    // runtime switching, which we observe further below to keep the
-    // saved prefs fresh.
-    LaunchedEffect(player, probe, initialAudioIdx, initialSubIdx) {
-        val audioFromSaved = initialAudioIdx?.let { idx ->
-            probe.audio.firstOrNull { it.index == idx }?.language
+    // Resolve the saved track stream indices to ORDINALS — the position
+    // of each saved track within `probe.audio` / `probe.subtitle`. We
+    // identify tracks by ordinal (not language) because:
+    //   * Two audio tracks may share a language (or both have `null`
+    //     language), so `setPreferredAudioLanguage` can't disambiguate.
+    //   * MatroskaExtractor + Media3 surface each MKV track as its own
+    //     `Tracks.Group` in source order, so the N-th audio group
+    //     always corresponds to `probe.audio[N]` — a precise mapping.
+    // For subs `-1` is the explicit "user disabled subtitles" sentinel;
+    // `null` means "no saved preference, let the source default win".
+    val savedAudioOrdinal = remember(probe, initialAudioIdx) {
+        initialAudioIdx?.let { idx ->
+            probe.audio.indexOfFirst { it.index == idx }.takeIf { it >= 0 }
         }
-        val initialAudio = audioFromSaved
+    }
+    val savedSubOrdinal: Int? = remember(probe, initialSubIdx) {
+        when (initialSubIdx) {
+            null -> null
+            -1 -> -1
+            else -> probe.subtitle.indexOfFirst { it.index == initialSubIdx }.takeIf { it >= 0 }
+        }
+    }
+
+    // Hint Media3 toward the saved language at load time so the very
+    // first frames play with the right audio (avoids a brief "wrong
+    // language" beat before the override applies). This is best-effort
+    // — `setPreferredAudioLanguage` collapses multi-track ambiguity,
+    // so the authoritative pin is the `TrackSelectionOverride` we apply
+    // on the first `onTracksChanged` event further below.
+    LaunchedEffect(player, probe, initialAudioIdx, initialSubIdx) {
+        val savedAudioLang = savedAudioOrdinal?.let { probe.audio[it].language }
+        val initialAudio = savedAudioLang
             ?: probe.audio.firstOrNull { it.default }?.language
             ?: probe.audio.firstOrNull()?.language
-        // For subs: `initialSubIdx == null` means "user has no saved
-        // preference yet" → fall back to the source `default` flag.
-        // `initialSubIdx == -1` is the explicit "no subs" sentinel
-        // (user actively disabled subtitles last session); honour it.
-        val subFromSaved = when (initialSubIdx) {
-            null -> probe.subtitle.firstOrNull { it.default }?.language
-            -1 -> null
-            else -> probe.subtitle.firstOrNull { it.index == initialSubIdx }?.language
-        }
-        val subDisabled = initialSubIdx == -1
+        val savedSubLang = savedSubOrdinal
+            ?.takeIf { it >= 0 && it in probe.subtitle.indices }
+            ?.let { probe.subtitle[it].language }
         val params = player.trackSelectionParameters.buildUpon()
         if (initialAudio != null) params.setPreferredAudioLanguage(initialAudio)
-        if (subFromSaved != null) {
-            params.setPreferredTextLanguage(subFromSaved)
+        if (savedSubLang != null) {
+            params.setPreferredTextLanguage(savedSubLang)
             params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-        } else if (subDisabled) {
+        } else if (savedSubOrdinal == -1) {
             params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
         } else {
+            // No saved preference: keep subs off by default (matches
+            // the previous behaviour — the source `default` flag is
+            // surfaced via the gear menu but we don't auto-enable it).
             params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
         }
         player.trackSelectionParameters = params.build()
     }
 
     // Track the user's current audio + subtitle picks so subsequent
-    // `saveProgress` calls can persist them. We update via
-    // `onTracksChanged` rather than per-tick polling: tracks only
-    // change when the user opens the settings menu and clicks, so
-    // event-driven is cheap and accurate.
+    // `saveProgress` calls can persist them. Initialized to the saved
+    // stream indices so the first `onTracksChanged` event (which
+    // happens BEFORE any user interaction, when Media3 first applies
+    // our preferences) matches and triggers no spurious save.
     val currentAudioIdxRef = remember { java.util.concurrent.atomic.AtomicReference<Int?>(initialAudioIdx) }
     val currentSubIdxRef = remember { java.util.concurrent.atomic.AtomicReference<Int?>(initialSubIdx) }
+    // Latched once the first non-empty Tracks event arrives so we
+    // know to (a) apply the `TrackSelectionOverride` to pin the saved
+    // pick, and (b) swallow that first event without saving — the
+    // user hasn't touched anything yet.
+    val initialRestoreDone = remember {
+        java.util.concurrent.atomic.AtomicBoolean(false)
+    }
+    // Persist track-pick changes IMMEDIATELY (debounced 500 ms to
+    // coalesce rapid clicks). The tick-based save inside the
+    // playback loop only fires every 7 s, and the `onDispose` save
+    // races a `rememberCoroutineScope` cancellation if the user
+    // back-presses straight after picking — both windows allowed
+    // an "I picked English audio then backed out" change to be
+    // dropped silently. Firing here on every `onTracksChanged`
+    // closes that gap. We use `container.applicationScope` so the
+    // POST survives the composable unmount; the debounce job is
+    // tracked locally so a fresh pick cancels the pending save.
+    val pendingTrackSaveJob = remember {
+        java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.Job?>(null)
+    }
+    val scheduleTrackSave = remember(serverUrl, infohash, fileIdx, player) {
+        {
+            pendingTrackSaveJob.getAndSet(null)?.cancel()
+            val job = container.applicationScope.launch {
+                kotlinx.coroutines.delay(500)
+                // Media3's `Player` is single-threaded — every getter
+                // / setter MUST be called from the player's
+                // application looper (the main thread, in our case).
+                // `applicationScope` is `Dispatchers.IO`, so we hop
+                // to Main just for the property reads, then return to
+                // IO for the network POST. Without the hop the player
+                // throws `IllegalStateException("Player is accessed
+                // on the wrong thread")` and the audio-track switch
+                // crashes the app.
+                val (pos, dur) = kotlinx.coroutines.withContext(
+                    kotlinx.coroutines.Dispatchers.Main,
+                ) {
+                    player.currentPosition to player.duration.takeIf { it > 0 }
+                }
+                runCatching {
+                    container.apiFor(serverUrl).saveProgress(
+                        infohash = infohash,
+                        idx = fileIdx,
+                        body = ProgressUpdate(
+                            positionSeconds = pos / 1000.0,
+                            durationSeconds = dur?.div(1000.0),
+                            audioTrackIdx = currentAudioIdxRef.get(),
+                            subtitleTrackIdx = currentSubIdxRef.get(),
+                            completed = dur != null && pos >= dur - 30_000,
+                        ),
+                    )
+                }
+            }
+            pendingTrackSaveJob.set(job)
+        }
+    }
 
     // ExoPlayer errors. Transient codes (network blip, mid-stream
     // decoder hiccup) trigger an auto-retry up to MAX_RETRIES times
@@ -405,31 +475,84 @@ private fun ReadyPlayer(
             }
 
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
-                // Pull the user's current language picks from the
-                // selected groups, then resolve back to the probe's
-                // stream index so `saveProgress` can write something
-                // the next session understands.
-                val pickedAudioLang = tracks.groups
-                    .firstOrNull { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
-                    ?.let { g ->
-                        (0 until g.length).firstOrNull { g.isTrackSelected(it) }
-                            ?.let { i -> g.getTrackFormat(i).language }
+                // Slice the Tracks bundle into audio + text groups in
+                // source order. For MKV / MP4 each track surfaces as
+                // its own `Tracks.Group` (length=1) and the order
+                // matches `probe.audio` / `probe.subtitle` — so the
+                // N-th audio group ↔ `probe.audio[N]`, and we can
+                // identify tracks by ordinal instead of language.
+                val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                val subGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+
+                // First event with real tracks loaded: pin the saved
+                // pick via `TrackSelectionOverride` (the only way to
+                // address a specific track group from outside the
+                // gear menu) and swallow the save — the user hasn't
+                // touched anything yet, so writing now would clobber
+                // the value we just read back from the server.
+                if (!initialRestoreDone.get() && audioGroups.isNotEmpty()) {
+                    initialRestoreDone.set(true)
+                    val params = player.trackSelectionParameters.buildUpon()
+                    var dirty = false
+                    if (
+                        savedAudioOrdinal != null &&
+                        savedAudioOrdinal in audioGroups.indices
+                    ) {
+                        val currentSelected = audioGroups.indexOfFirst { it.isSelected }
+                        if (currentSelected != savedAudioOrdinal) {
+                            val target = audioGroups[savedAudioOrdinal]
+                            params.setOverrideForType(
+                                androidx.media3.common.TrackSelectionOverride(
+                                    target.mediaTrackGroup, 0,
+                                ),
+                            )
+                            dirty = true
+                        }
                     }
-                val pickedSubGroup = tracks.groups
-                    .firstOrNull { it.type == C.TRACK_TYPE_TEXT && it.isSelected }
-                val pickedSubLang = pickedSubGroup?.let { g ->
-                    (0 until g.length).firstOrNull { g.isTrackSelected(it) }
-                        ?.let { i -> g.getTrackFormat(i).language }
+                    when (savedSubOrdinal) {
+                        -1 -> { /* already disabled via LaunchedEffect */ }
+                        null -> { /* no preference */ }
+                        else -> if (savedSubOrdinal in subGroups.indices) {
+                            val currentSelected = subGroups.indexOfFirst { it.isSelected }
+                            if (currentSelected != savedSubOrdinal) {
+                                val target = subGroups[savedSubOrdinal]
+                                params
+                                    .setOverrideForType(
+                                        androidx.media3.common.TrackSelectionOverride(
+                                            target.mediaTrackGroup, 0,
+                                        ),
+                                    )
+                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                dirty = true
+                            }
+                        }
+                    }
+                    if (dirty) player.trackSelectionParameters = params.build()
+                    return
                 }
-                currentAudioIdxRef.set(
-                    probe.audio.firstOrNull { it.language == pickedAudioLang }?.index
-                        ?: currentAudioIdxRef.get(),
-                )
-                currentSubIdxRef.set(
-                    if (pickedSubGroup == null || pickedSubLang == null) -1
-                    else probe.subtitle.firstOrNull { it.language == pickedSubLang }?.index
-                        ?: currentSubIdxRef.get(),
-                )
+
+                // Event-driven save. Map the currently-selected group
+                // back to a `probe.audio[i].index` by its ordinal in
+                // the audio-groups list. `-1` for subs means the
+                // user has subtitles disabled.
+                val pickedAudioOrdinal = audioGroups.indexOfFirst { it.isSelected }
+                val newAudioIdx =
+                    if (pickedAudioOrdinal >= 0)
+                        probe.audio.getOrNull(pickedAudioOrdinal)?.index ?: currentAudioIdxRef.get()
+                    else currentAudioIdxRef.get()
+                val pickedSubOrdinal = subGroups.indexOfFirst { it.isSelected }
+                val newSubIdx: Int? =
+                    if (pickedSubOrdinal >= 0)
+                        probe.subtitle.getOrNull(pickedSubOrdinal)?.index ?: currentSubIdxRef.get()
+                    else -1
+
+                val audioChanged = currentAudioIdxRef.getAndSet(newAudioIdx) != newAudioIdx
+                val subChanged = currentSubIdxRef.getAndSet(newSubIdx) != newSubIdx
+                if (audioChanged || subChanged) {
+                    // Debounced save so the new pick survives an
+                    // immediate back-press — see `scheduleTrackSave`.
+                    scheduleTrackSave()
+                }
             }
         }
         player.addListener(listener)
@@ -493,7 +616,14 @@ private fun ReadyPlayer(
             if (pos > 0) onPositionUpdate(pos / 1000.0)
             val audioIdx = currentAudioIdxRef.get()
             val subIdx = currentSubIdxRef.get()
-            scope.launch {
+            // Cancel any pending debounced track-save so we don't
+            // race the dispose-time POST with a stale 500 ms-old one.
+            pendingTrackSaveJob.getAndSet(null)?.cancel()
+            // Use the process-lifetime scope here — `rememberCoroutineScope`
+            // is being cancelled as the composable unmounts, which on
+            // some back-press flows dropped the final save before the
+            // POST left the device.
+            container.applicationScope.launch {
                 runCatching {
                     container.apiFor(serverUrl).saveProgress(
                         infohash = infohash,
@@ -520,6 +650,25 @@ private fun ReadyPlayer(
         titleView?.text = title
     }
 
+    // Captured for the BackHandler below so the first back-press can
+    // dismiss the controller overlay before the second one actually
+    // leaves the screen.
+    var playerView by remember { mutableStateOf<PlayerView?>(null) }
+
+    // Intercept the back gesture: if the controller overlay is
+    // currently showing, hide it instead of leaving the watch
+    // screen. Falls through to the default back behaviour (return
+    // to home) only once the overlay is already invisible — so the
+    // user gets the standard "one back to dismiss, one back to
+    // exit" two-step instead of being kicked all the way out.
+    // `controllerAutoShow = true` makes the overlay come up on the
+    // first remote click anyway, so this matters on every session.
+    androidx.activity.compose.BackHandler(
+        enabled = playerView?.isControllerFullyVisible == true,
+    ) {
+        playerView?.hideController()
+    }
+
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
@@ -539,6 +688,7 @@ private fun ReadyPlayer(
                 keepScreenOn = true
                 titleView = findViewById(R.id.iris_title)
                 installIrisTrackNameProvider(this)
+                playerView = this
             }
         },
         update = { it.player = player },
