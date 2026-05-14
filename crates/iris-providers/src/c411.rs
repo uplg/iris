@@ -65,10 +65,6 @@ pub struct C411 {
     http: Client,
     torznab: Arc<TorznabProvider>,
     featured_cache: Mutex<Option<CachedFeatured>>,
-    /// `torrentId` (string) -> magnet link built from the homepage payload.
-    /// Lets us answer `resolve()` for a featured item even if the user
-    /// never searched (so the Torznab link cache stays empty).
-    magnet_cache: Mutex<HashMap<String, String>>,
     /// `infohash` -> `TorrentDetails` from c411's JSON API. Survives
     /// short windows of UI navigation without re-hitting the indexer.
     details_cache: Mutex<HashMap<String, CachedDetails>>,
@@ -126,7 +122,6 @@ impl C411 {
             http,
             torznab,
             featured_cache: Mutex::new(None),
-            magnet_cache: Mutex::new(HashMap::new()),
             details_cache: Mutex::new(HashMap::new()),
         }))
     }
@@ -230,17 +225,16 @@ impl C411 {
 
         let mut movies = Vec::new();
         let mut series = Vec::new();
-        let mut magnets = HashMap::new();
         for item in resp.exclusive_recent {
             let kind = classify_title(&item.title);
-            let external_id = item.torrent_id.to_string();
-            let magnet = magnet_from(&item.info_hash, &item.title);
-            magnets.insert(external_id.clone(), magnet.clone());
-            // Mirror into the Torznab link cache so a future resolve()
-            // can hit either layer transparently.
-            self.torznab
-                .cache_download_url(external_id.clone(), magnet.clone())
-                .await;
+            // Use the infohash as `external_id` so featured items live
+            // in the same namespace as Torznab search hits (whose
+            // `<guid>` content is the infohash for c411). Without this
+            // alignment, `resolve()` would never find the cached
+            // `.torrent` download URL populated by an earlier search
+            // — and the preview path would fail with a "magnet
+            // sources need full ingest first" error.
+            let external_id = item.info_hash.clone();
 
             let result = SearchResult {
                 provider_id: self.id.clone(),
@@ -251,7 +245,11 @@ impl C411 {
                 seeders: None,
                 leechers: None,
                 infohash: Some(item.info_hash),
-                magnet: Some(magnet),
+                // No magnet: c411 serves real `.torrent` files via its
+                // Torznab endpoint and that's what we want to land at
+                // ingest / preview time. `resolve()` primes the
+                // Torznab link cache on demand below.
+                magnet: None,
                 category: None,
                 tags: Vec::new(),
                 freeleech: false,
@@ -274,13 +272,27 @@ impl C411 {
             "c411 featured refreshed",
         );
 
-        *self.magnet_cache.lock().await = magnets;
         *self.featured_cache.lock().await = Some(CachedFeatured {
             movies,
             series,
             fetched_at: Instant::now(),
         });
         Ok(())
+    }
+
+    /// Look up a featured item's release title (the `name` we got from
+    /// `/api/homepage`) by its infohash. Used by `resolve()` to seed a
+    /// Torznab search just-in-time when the user clicks a featured
+    /// item before ever running a search.
+    async fn featured_title_for(&self, infohash: &str) -> Option<String> {
+        let cache = self.featured_cache.lock().await;
+        let featured = cache.as_ref()?;
+        featured
+            .movies
+            .iter()
+            .chain(featured.series.iter())
+            .find(|r| r.external_id == infohash)
+            .map(|r| r.title.clone())
     }
 }
 
@@ -306,13 +318,49 @@ impl SearchProvider for C411 {
     }
 
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource> {
-        // Featured-only items don't go through Torznab search, so the
-        // shared link cache may be empty. Fall back to the magnet we
-        // built from the homepage infohash before bubbling the error up.
-        if let Some(magnet) = self.magnet_cache.lock().await.get(external_id).cloned() {
-            return Ok(TorrentSource::Magnet(magnet));
+        // Fast path: the Torznab link cache already has the signed
+        // download URL for this infohash (populated either by an
+        // earlier search or by a prior prime-via-search round below).
+        if let Ok(source) = self.torznab.resolve(external_id).await {
+            return Ok(source);
         }
-        self.torznab.resolve(external_id).await
+
+        // Cache miss — typical when the user clicks a featured item
+        // before searching for the show. c411 doesn't expose download
+        // URLs on `/api/homepage`, but it does in the Torznab search
+        // response; replay a Torznab search keyed on the release name
+        // we cached at homepage-fetch time. The search side-effects
+        // the link cache, then resolve() finishes through the normal
+        // path.
+        if is_infohash(external_id) {
+            if let Some(title) = self.featured_title_for(external_id).await {
+                tracing::debug!(
+                    provider = %self.id,
+                    infohash = external_id,
+                    title = %title,
+                    "c411: priming Torznab link cache via title search",
+                );
+                let prime = SearchQuery {
+                    q: title,
+                    page: Some(1),
+                    limit: Some(25),
+                    sort_by: None,
+                    order: None,
+                    kind: None,
+                };
+                // Best-effort: if the search fails (network, indexer
+                // 5xx), we fall through to the explicit error below
+                // so the user sees a clear "couldn't resolve" rather
+                // than a silent hang.
+                let _ = self.torznab.search(&prime).await;
+                return self.torznab.resolve(external_id).await;
+            }
+        }
+
+        Err(Error::Provider(format!(
+            "c411 resolve: no cached download URL for `{external_id}` \
+             and no featured entry to prime from",
+        )))
     }
 
     async fn details(&self, external_id: &str) -> Result<Option<TorrentDetails>> {
@@ -382,33 +430,6 @@ fn classify_title(title: &str) -> MediaKind {
     MediaKind::Movie
 }
 
-fn magnet_from(info_hash: &str, title: &str) -> String {
-    // Minimal BEP-9 magnet — no announce list, lets librqbit fall back
-    // to DHT + the trackers from the .torrent we'll grab later via
-    // Torznab resolve if the user actually starts the download.
-    let encoded = urlencode(title);
-    format!("magnet:?xt=urn:btih:{info_hash}&dn={encoded}")
-}
-
-/// Minimal percent-encoding for the magnet `dn=` parameter. We only
-/// need to keep query-significant characters safe — full RFC 3986 isn't
-/// required for a display-name hint.
-fn urlencode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                use std::fmt::Write;
-                let _ = write!(out, "%{b:02X}");
-            }
-        }
-    }
-    out
-}
-
 #[derive(Debug, Deserialize)]
 struct HomepageResponse {
     #[serde(default, rename = "exclusiveRecent")]
@@ -417,8 +438,6 @@ struct HomepageResponse {
 
 #[derive(Debug, Deserialize)]
 struct HomepageItem {
-    #[serde(rename = "torrentId")]
-    torrent_id: u64,
     #[serde(rename = "infoHash")]
     info_hash: String,
     title: String,
@@ -612,12 +631,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn magnet_format() {
-        let m = magnet_from("abc123def456", "Foo Bar 2024");
-        assert!(m.starts_with("magnet:?xt=urn:btih:abc123def456&dn="));
-        assert!(m.contains("Foo%20Bar%202024"));
-    }
 
     #[test]
     fn validates_infohash() {
