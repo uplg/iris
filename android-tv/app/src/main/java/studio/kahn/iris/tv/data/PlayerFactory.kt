@@ -12,6 +12,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import okhttp3.OkHttpClient
+import studio.kahn.iris.tv.BuildConfig
 
 /**
  * Build an `ExoPlayer` whose HTTP layer reuses our OkHttp client (cookie
@@ -23,7 +24,7 @@ import okhttp3.OkHttpClient
 fun buildPlayer(
     context: Context,
     okHttp: OkHttpClient,
-    userAgent: String = "iris-tv/0.1.0 (Media3)",
+    userAgent: String = "iris-tv/${BuildConfig.VERSION_NAME} (Media3)",
 ): ExoPlayer {
     val dataSourceFactory = OkHttpDataSource.Factory(okHttp).setUserAgent(userAgent)
     val mediaSourceFactory = DefaultMediaSourceFactory(context)
