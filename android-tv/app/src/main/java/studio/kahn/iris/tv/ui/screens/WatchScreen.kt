@@ -693,6 +693,13 @@ private fun ReadyPlayer(
     // dismiss the controller overlay before the second one actually
     // leaves the screen.
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
+    // Pushed by PlayerView's `ControllerVisibilityListener` whenever the
+    // play/pause overlay shows or hides. Drives the top-right nav chips
+    // — they only make sense alongside the rest of the chrome, so we
+    // gate them on the same signal. Starts `false` so the chips stay
+    // hidden on entry; the listener flips it to `true` if/when the
+    // controller comes up.
+    var controllerVisible by remember { mutableStateOf(false) }
 
     // Intercept the back gesture: if the controller overlay is
     // currently showing, hide it instead of leaving the watch
@@ -712,6 +719,17 @@ private fun ReadyPlayer(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
             PlayerView(ctx).apply {
+                // Register the visibility listener BEFORE attaching the
+                // player. Once the player is set, Media3 may fire the
+                // initial `controllerAutoShow` synchronously — anything
+                // we register afterwards would miss that first event
+                // and the chips would sit stuck at their default value
+                // until the user wiggled the controller manually.
+                setControllerVisibilityListener(
+                    PlayerView.ControllerVisibilityListener { visibility ->
+                        controllerVisible = visibility == android.view.View.VISIBLE
+                    },
+                )
                 this.player = player
                 useController = true
                 setShowSubtitleButton(true)
@@ -727,6 +745,10 @@ private fun ReadyPlayer(
                 keepScreenOn = true
                 titleView = findViewById(R.id.iris_title)
                 installIrisTrackNameProvider(this)
+                // Sync the current value — defensive belt-and-braces for
+                // the rare case the platform raced past the listener
+                // registration on slower devices.
+                controllerVisible = isControllerFullyVisible
                 playerView = this
             }
         },
@@ -749,11 +771,19 @@ private fun ReadyPlayer(
             .fillMaxSize()
             .padding(horizontal = 32.dp, vertical = 24.dp),
     ) {
-        Row(
-            modifier = Modifier.align(Alignment.TopEnd),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            prevEpisode?.let { prev ->
+        // Top chips ride with the rest of the chrome: visible while
+        // PlayerView's controller overlay is up, or once we're near
+        // the end of the episode (≥ 95 %) or after it has ended —
+        // those two moments are when next-episode navigation is the
+        // most relevant action and the user shouldn't have to wake
+        // the controller first.
+        val chipsVisible = controllerVisible || nearEnd || playerEnded
+        if (chipsVisible) {
+            Row(
+                modifier = Modifier.align(Alignment.TopEnd),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                prevEpisode?.let { prev ->
                 EpisodeNavChip(
                     label = "S%02dE%02d".format(prev.season, prev.episode),
                     direction = NavDirection.Prev,
@@ -820,6 +850,7 @@ private fun ReadyPlayer(
                         }
                     },
                 )
+            }
             }
         }
 

@@ -38,10 +38,20 @@ WORKDIR /build/libav.js
 #
 # Decoders only — no muxers / encoders / video — because the Iris
 # client uses libav exclusively to decode non-WebCodecs audio
-# (AC-3, E-AC-3, FLAC, PCM) into PCM samples; encoding back to AAC
-# is done by `WebCodecs.AudioEncoder`, muxing by Mediabunny.
+# (AC-3, E-AC-3, FLAC, PCM, DTS) into PCM samples; encoding back to
+# AAC is done by `WebCodecs.AudioEncoder`, muxing by Mediabunny.
+#
+# `decoder-dca` is ffmpeg's native DTS Coherent Acoustics decoder.
+# It handles core DTS losslessly and falls back to the core layer
+# for DTS-HD MA (the extension substream is silently dropped) —
+# acceptable for Tier B since we re-encode to AAC stereo/5.1 anyway.
+# This pairs with the `mediabunny` patch (see `patches/mediabunny+*.patch`)
+# which teaches the Matroska parser to surface `A_DTS` tracks as
+# `dts` — upstream mediabunny ignores them. If that patch ever fails
+# to apply, DTS files quietly fall through to Tier F (server-side
+# ffmpeg HLS) which is still functional.
 RUN cd configs && node mkconfig.js iris \
-    '["avformat","avcodec","avfilter","swresample","audio-filters","parser-aac","parser-ac3","decoder-ac3","decoder-eac3","decoder-flac","decoder-pcm_s16le","decoder-pcm_s24le","decoder-pcm_s32le","decoder-pcm_f32le"]'
+    '["avformat","avcodec","avfilter","swresample","audio-filters","parser-aac","parser-ac3","parser-dca","decoder-ac3","decoder-eac3","decoder-flac","decoder-dca","decoder-pcm_s16le","decoder-pcm_s24le","decoder-pcm_s32le","decoder-pcm_f32le"]'
 RUN --mount=type=cache,target=/build/libav.js/build,sharing=locked \
     make build-iris -j"$(nproc)" \
     && cp dist/libav-6.8.8.0-iris.wasm.wasm /libav-iris.wasm \
@@ -53,7 +63,14 @@ RUN --mount=type=cache,target=/build/libav.js/build,sharing=locked \
 ###############################################################################
 FROM oven/bun:1 AS web-builder
 WORKDIR /app/web
+# Copy lockfiles AND the patches directory before installing — bun
+# resolves `patchedDependencies` paths during `install`, so the patch
+# files must already exist on disk by the time we run it. Without
+# this the build fails with `Couldn't find patch file:
+# patches/<pkg>@<ver>.patch`. The `patches/` directory is created
+# under `web/` by `bun patch --commit`.
 COPY web/package.json web/bun.lock* ./
+COPY web/patches ./patches
 RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
     bun install --frozen-lockfile
 COPY web/ ./

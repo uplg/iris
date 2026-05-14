@@ -8,6 +8,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import okhttp3.OkHttpClient
@@ -28,7 +29,22 @@ fun buildPlayer(
     val mediaSourceFactory = DefaultMediaSourceFactory(context)
         .setDataSourceFactory(dataSourceFactory)
 
+    // Renderers factory with extension-mode ON. This is a no-op when
+    // the Media3 FFmpeg decoder extension isn't on the classpath
+    // (`app/libs/` empty, default in fresh clones) — DefaultRenderersFactory
+    // silently skips it via reflection. When it IS present (built and
+    // dropped in by `scripts/build-ffmpeg-ext.sh`), Media3 adds the
+    // FFmpeg audio renderer as a fallback for codecs the platform
+    // refuses: DTS / DTS-HD MA / TrueHD / MLP on devices without
+    // hardware support (notably the Android TV emulator). Platform
+    // decoders still take precedence for the codecs they handle
+    // natively (AAC, AC3, EAC3, …) so this costs nothing on hardware
+    // that already works.
+    val renderersFactory = DefaultRenderersFactory(context)
+        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+
     return ExoPlayer.Builder(context)
+        .setRenderersFactory(renderersFactory)
         .setMediaSourceFactory(mediaSourceFactory)
         .setSeekBackIncrementMs(10_000)
         .setSeekForwardIncrementMs(30_000)

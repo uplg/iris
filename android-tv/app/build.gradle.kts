@@ -104,6 +104,18 @@ dependencies {
     implementation(libs.media3.session)
     implementation(libs.media3.datasource.okhttp)
 
+    // Optional Media3 FFmpeg extension — provides soft decoders for DTS,
+    // DTS-HD MA, TrueHD, MLP and a few other formats Android's stock
+    // codecs lack. The AAR is NOT on Maven Central: build it once with
+    // `scripts/build-ffmpeg-ext.sh` and drop the resulting
+    // `media3-decoder-ffmpeg-<version>.aar` into `app/libs/`. The
+    // fileTree below is empty until then — the player gracefully falls
+    // back to platform decoders (works on Samsung / LG / Shield which
+    // have hardware DTS, fails to play DTS-only files on bare emulators
+    // and budget Android TV boxes without the AAR). Build instructions
+    // live in `android-tv/README.md` § "FFmpeg extension".
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
+
     // Networking
     implementation(libs.retrofit)
     implementation(libs.retrofit.kotlinx.serialization)

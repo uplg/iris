@@ -232,7 +232,19 @@ fn normalize(raw: FfprobeOutput) -> MediaProbe {
     let mut subtitle = Vec::new();
     for stream in raw.streams {
         match stream.codec_type.as_str() {
-            "video" => video.push(normalize_video(stream, video.len())),
+            "video" => {
+                // Skip cover-art / poster streams. The remux pipeline
+                // already excludes them via ffmpeg's `0:V` selector;
+                // we mirror the filter here so the manifest never
+                // surfaces them either.
+                let is_cover_art = stream
+                    .disposition
+                    .as_ref()
+                    .is_some_and(|d| d.attached_pic == 1);
+                if !is_cover_art {
+                    video.push(normalize_video(stream, video.len()));
+                }
+            }
             "audio" => audio.push(normalize_audio(stream, audio.len())),
             "subtitle" => subtitle.push(normalize_subtitle(stream, subtitle.len())),
             _ => {}
@@ -551,6 +563,16 @@ struct RawDisposition {
     default: u8,
     #[serde(default)]
     forced: u8,
+    /// Set by ffprobe on cover-art / poster streams (MKV `attached_pic`
+    /// flag, MP4 `still_image`). These are typically MJPEG or PNG
+    /// thumbnail tracks that aren't meant to be played as video —
+    /// surfacing them in `manifest.video[]` confuses both the
+    /// MSE-tier check (mjpeg/png never pass `isTypeSupported`) and
+    /// the TV/Web "primary video codec" display ("MJPEG" instead of
+    /// "HEVC"). We drop them at probe time so every downstream
+    /// consumer sees only real playable video tracks.
+    #[serde(default)]
+    attached_pic: u8,
 }
 
 #[derive(Debug, Deserialize)]

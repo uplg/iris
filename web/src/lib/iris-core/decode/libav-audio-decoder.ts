@@ -40,6 +40,14 @@ const SUPPORTED: ReadonlySet<AudioCodec> = new Set<AudioCodec>([
   "ac3",
   "eac3",
   "flac",
+  // `dts` is wired through a local mediabunny patch (see
+  // `patches/mediabunny+*.patch`) — vanilla upstream's Matroska
+  // demuxer skips `A_DTS` tracks because it doesn't carry the
+  // codec ID in its map. Our patch adds the mapping; the libav
+  // `dca` decoder picks up the packets and produces PCM samples.
+  // DTS-HD MA core layer is decoded; the extension substream is
+  // dropped (fine — Tier B re-encodes to AAC anyway).
+  "dts",
   "pcm-s16",
   "pcm-s24",
   "pcm-s32",
@@ -262,6 +270,9 @@ function mediabunnyToLibavCodecName(codec: AudioCodec): string {
       return "eac3";
     case "flac":
       return "flac";
+    // ffmpeg's DTS decoder is named `dca` (DTS Coherent Acoustics).
+    case "dts":
+      return "dca";
     case "pcm-s16":
       return "pcm_s16le";
     case "pcm-s24":

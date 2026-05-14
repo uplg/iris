@@ -110,6 +110,45 @@ Or download the release APK using Downloader app and install.
 ./gradlew assembleRelease
 ```
 
+## FFmpeg extension (optional, DTS / TrueHD / MLP)
+
+The stock Android TV stack ships HEVC/H.264/AAC/AC3 hardware decoders.
+DTS, DTS-HD MA, TrueHD and MLP have spotty support: most physical
+Samsung / LG / Shield TVs do them in hardware, but the AVD emulator
+and budget AFTV boxes don't. The Media3 FFmpeg decoder extension fills
+the gap with software decoders.
+
+The extension AAR is **not** on Maven Central — build it once per
+machine with:
+
+```sh
+./scripts/build-ffmpeg-ext.sh
+```
+
+Prerequisites: Android NDK ≥ 27, `yasm`, `nasm`, `automake`, `libtool`,
+`git`. On macOS:
+
+```sh
+brew install yasm nasm automake libtool
+# Install NDK via Android Studio → SDK Manager → SDK Tools → NDK.
+```
+
+The script clones the matching Media3 source (parsed out of
+`gradle/libs.versions.toml`), clones FFmpeg 7.1, builds the native libs
+for `armeabi-v7a` / `arm64-v8a` / `x86_64`, and assembles the AAR into
+`app/libs/media3-decoder-ffmpeg-<version>-release.aar`. Gradle's
+`fileTree` picks it up automatically — re-build the app and DTS plays.
+
+When the AAR is absent, `PlayerFactory.kt` still runs fine: Media3's
+`DefaultRenderersFactory` skips missing extension renderers silently
+and falls back to platform decoders. The cost on hardware that
+already plays DTS natively is **zero** — the FFmpeg renderer only
+kicks in when the platform refuses a codec.
+
+Bump Media3 in the version catalog → re-run the script. The AAR and
+the `media3-exoplayer` artifact must share the same Media3 version
+or you'll get `NoClassDefFoundError` / `NoSuchMethodError` at runtime.
+
 ## Troubleshooting
 
 - **"Unresolved reference: tv-material"**: Sync Gradle from the toolbar
