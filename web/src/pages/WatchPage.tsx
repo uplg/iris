@@ -148,6 +148,17 @@ export function WatchPage() {
   const demotionInProgressRef = useRef<DecodeTier | null>(null);
   useEffect(() => {
     if (!manifest) return;
+    // Debug override: `?tier=F` (or A/B/C/D/E) on the URL pins the
+    // engine instead of letting `pickTier` decide. Useful for
+    // verifying a specific code path (e.g. server-side DV strip on
+    // Tier F) without having to coax the cascade into demoting.
+    const forced = new URLSearchParams(window.location.search).get("tier");
+    if (forced && /^[A-F]$/i.test(forced)) {
+      const t = forced.toUpperCase() as DecodeTier;
+      setTier(t);
+      console.log("[iris-core] tier", t, "(forced via ?tier=)");
+      return;
+    }
     void pickTier(manifest).then((t) => {
       const final = demotedRef.current.has(t) ? "F" : t;
       setTier(final);

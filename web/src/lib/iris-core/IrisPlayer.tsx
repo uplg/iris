@@ -93,6 +93,13 @@ export function IrisPlayer(props: IrisPlayerProps) {
     return flagged >= 0 ? flagged : 0;
   }, [props.manifest]);
   const [audioTrackIndex, setAudioTrackIndex] = useState<number>(initialAudioIndex);
+  // Position passed to the engine on (re)mount. Starts at the
+  // resume offset; on an audio-track switch that needs a remount
+  // (tiers A/B/C/E) we bump it to the current playhead so the
+  // user lands back where they were, not at startPosition.
+  const [mountStartPosition, setMountStartPosition] = useState<number>(
+    props.startPosition,
+  );
 
   const { native: nativeSubs, overlay: overlaySubs } = useMemo(
     () => classifySubtitles(props.manifest),
@@ -153,7 +160,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
           container,
           manifest: props.manifest,
           streamUrl: props.src,
-          startPosition: props.startPosition,
+          startPosition: mountStartPosition,
           nativeSubs,
           audioTrackIndex,
           onTimeUpdate: (t) => {
@@ -187,12 +194,21 @@ export function IrisPlayer(props: IrisPlayerProps) {
     // `audioTrackIndex` is in the dep list so that tiers without a
     // live audio-switch API (A/B/C/E) remount when the user picks a
     // different audio. Tier F bypasses this — see `onAudioPick` below.
+    // `mountStartPosition` (not `props.startPosition`) drives the
+    // remount target so audio switches resume at the playhead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.tier, props.src, props.startPosition, audioTrackIndex]);
+  }, [props.tier, props.src, mountStartPosition, audioTrackIndex]);
 
   const onAudioPick = (id: string) => {
     const idx = Number(id);
     if (!Number.isFinite(idx)) return;
+    if (tierRequiresRemountForAudio(props.tier)) {
+      // Capture the current playhead BEFORE the remount tears the
+      // engine down. The engine's `currentTime()` becomes 0 once
+      // disposed, so reading from our forwarded `currentTimeRef`
+      // (updated on every `timeupdate`) gives the true position.
+      setMountStartPosition(currentTimeRef.current);
+    }
     setAudioTrackIndex(idx);
     if (handle && !tierRequiresRemountForAudio(props.tier)) {
       // Tier F: hls.js switches live; we still update local state so
