@@ -1,0 +1,17 @@
+# GitHub Linguist hints — keep language stats honest.
+#
+# Everything under web/public/<vendored-lib>/ is third-party code we
+# ship verbatim from npm packages (libass-wasm / SubtitlesOctopus,
+# libav.js, hevc.js, libpgs). Without these markers, Linguist sums
+# their ~8 MB of minified JS / WebAssembly into our totals and tags
+# the repo as "JavaScript".
+web/public/libass/**     linguist-vendored
+web/public/libavjs/**    linguist-vendored
+web/public/hevcjs/**     linguist-vendored
+web/public/libpgs/**     linguist-vendored
+
+# Lockfiles aren't authored code. Linguist treats most of these as
+# `linguist-generated` via its defaults, but pin them explicitly so
+# a future Linguist update can't surprise us.
+Cargo.lock               linguist-generated
+web/bun.lock             linguist-generated
