@@ -24,9 +24,18 @@ api_key_env = "C411_API_KEY"
 # movie_categories = "2000,2030,2040,2045,2050"
 # tv_categories    = "5000,5030,5040,5045,5070"
 
-# Generic Torznab indexer (UNIT3D, Jackett-fed, etc.) — only search +
-# resolve, no curated featured shelf. Use the `c411` kind instead for
-# c411 specifically so the homepage carousel gets populated.
+# TheOldSchool — UNIT3D tracker, JSON:API native (UNIT3D doesn't ship
+# Torznab; use `kind = "unit3d"` for any UNIT3D-derived indexer:
+# BLU, Aither, AvistaZ, etc.).
+[[providers]]
+id = "tos"
+kind = "unit3d"
+enabled = true
+base_url = "https://theoldschool.cc"
+api_key_env = "TOS_API_KEY"
+
+# Generic Torznab indexer (Jackett-fed, Prowlarr-fed, NewzNab clones).
+# UNIT3D-based trackers should use `kind = "unit3d"` above instead.
 # [[providers]]
 # id = "myindexer"
 # kind = "torznab"

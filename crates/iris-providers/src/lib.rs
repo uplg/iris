@@ -14,6 +14,7 @@ pub mod c411;
 pub mod registry;
 pub mod torr9;
 pub mod torznab;
+pub mod unit3d;
 
 mod util;
 

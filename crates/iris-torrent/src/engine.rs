@@ -12,8 +12,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use librqbit::{
-    AddTorrent, AddTorrentOptions, AddTorrentResponse, ManagedTorrent, Session, SessionOptions,
-    SessionPersistenceConfig, TorrentStatsState,
+    AddTorrent, AddTorrentOptions, AddTorrentResponse, ListenerOptions, ManagedTorrent, Session,
+    SessionOptions, SessionPersistenceConfig, TorrentStatsState,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -111,11 +111,21 @@ impl Engine {
             // Pin the BitTorrent listen port so docker can forward it and
             // peers can reach us. Inbound connections roughly double download
             // speed on private trackers and let us actually upload (= keep
-            // ratio sane).
-            listen_port_range: Some(listen_port..(listen_port + 1)),
-            // Try UPnP on the local router; harmless on a server with a
-            // public IP (the router-side step just no-ops).
-            enable_upnp_port_forwarding: true,
+            // ratio sane). Bind to `::` so we accept both v4 and v6 on the
+            // same port; UPnP is harmless on a server with a public IP (the
+            // router-side step just no-ops).
+            listen: Some(ListenerOptions {
+                listen_addr: (std::net::Ipv6Addr::UNSPECIFIED, listen_port).into(),
+                enable_upnp_port_forwarding: true,
+                ..Default::default()
+            }),
+            // Some private trackers (UNIT3D-Announce, e.g. theoldschool.cc)
+            // reject HTTP announces with absent or overly long User-Agents.
+            // librqbit's reqwest builder didn't set any by default before
+            // 9.0.0-beta.2 + our `client_name_and_version` patch (see
+            // workspace `[patch.crates-io]`). A short BT-client-style UA
+            // works on all the trackers we currently aggregate.
+            client_name_and_version: Some(concat!("rqbit/", env!("CARGO_PKG_VERSION")).to_string()),
             ..Default::default()
         };
         let session = Session::new_with_opts(download_dir.clone(), opts).await?;
@@ -248,7 +258,7 @@ impl Engine {
     /// Open a streaming reader for one file. The returned reader implements
     /// `AsyncRead + AsyncSeek` and triggers sequential piece priority in
     /// librqbit, which is what makes "click-to-play" feasible.
-    pub fn open_stream(
+    pub async fn open_stream(
         &self,
         infohash: &str,
         file_idx: usize,
@@ -262,7 +272,10 @@ impl Engine {
                     .ok_or_else(|| anyhow::anyhow!("file index out of range"))
             })
             .map_err(EngineError::Librqbit)??;
-        let stream = handle.stream(file_idx)?;
+        // librqbit 9.x made `stream()` async (it now awaits the underlying
+        // FileStream construction). Bubble up via `.await?` instead of the
+        // old sync `?`.
+        let stream = handle.stream(file_idx).await?;
         Ok(StreamHandle {
             inner: Box::pin(stream),
             file_size,
@@ -290,7 +303,7 @@ impl Engine {
         count: u64,
         timeout: Duration,
     ) -> Result<u64, EngineError> {
-        let mut handle = self.open_stream(infohash, file_idx)?;
+        let mut handle = self.open_stream(infohash, file_idx).await?;
         let file_size = handle.file_size();
         let start = start.min(file_size);
         let remaining = file_size.saturating_sub(start);
@@ -373,7 +386,7 @@ fn snapshot_of(handle: &Handle) -> TorrentSnapshot {
         Some(l) => (
             mbps_to_bps(l.download_speed.mbps),
             mbps_to_bps(l.upload_speed.mbps),
-            u32::try_from(l.snapshot.peer_stats.live).unwrap_or(u32::MAX),
+            l.snapshot.peer_stats.live,
         ),
         None => (0, 0, 0),
     };

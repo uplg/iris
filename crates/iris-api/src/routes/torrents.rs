@@ -1148,6 +1148,7 @@ async fn stream_file(
     let stream = state
         .engine()
         .open_stream(&infohash, idx)
+        .await
         .map_err(|e| match e {
             iris_torrent::EngineError::NotFound => ApiError::NotFound,
             iris_torrent::EngineError::FileOutOfRange => {

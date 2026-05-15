@@ -12,3 +12,13 @@ kind = "c411"
 enabled = true
 base_url = "https://c411.org"
 api_key_env = "C411_API_KEY"
+
+# TheOldSchool — UNIT3D tracker, consumed via the native UNIT3D
+# JSON:API (UNIT3D doesn't ship Torznab). Generate an API key in
+# your account settings → API Tokens.
+[[providers]]
+id = "tos"
+kind = "unit3d"
+enabled = true
+base_url = "https://theoldschool.cc"
+api_key_env = "TOS_API_KEY"
