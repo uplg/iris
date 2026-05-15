@@ -96,10 +96,12 @@ once_cell = "1.21"
 # stable 9.x release once ikatson ships one with the option.
 librqbit = "=9.0.0-beta.2"
 
-# Mirror of ikatson:main + minimal UA-override patch (subset of PR 577).
+# Mirror of ikatson:main + PR 577 (HTTP-tracker + peer-handshake UA
+# override), minus the unrelated `rqbit ` → `rqbit/` flip on the const
+# `client_name_and_version()` that the upstream reviewer asked to drop.
 # Pinned by SHA so a future force-push on the branch can't surprise us.
 [patch.crates-io]
-librqbit = { git = "https://github.com/uplg/rqbit.git", rev = "8be80d6d2b18027263432511db349f735d06bd5f" }
+librqbit = { git = "https://github.com/uplg/rqbit.git", rev = "d62e00be8225619f1c0998768db45c97f50c3502" }
 
 [profile.release]
 lto = "thin"

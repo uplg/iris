@@ -39,6 +39,30 @@ pub enum EngineError {
     Librqbit(#[from] anyhow::Error),
 }
 
+/// Return the leading `MAJOR.MINOR.PATCH` portion of a semver string,
+/// dropping any prerelease (`-beta.2`) and build (`+something`) tail.
+/// Some private trackers blocklist User-Agents containing tokens like
+/// `alpha` / `beta` / `rc` outright, so we advertise `rqbit/9.0.0`
+/// regardless of whether the underlying crate is on a prerelease.
+fn stable_version_prefix(semver: &str) -> &str {
+    let cut = semver.find(['-', '+']).unwrap_or(semver.len());
+    &semver[..cut]
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::stable_version_prefix;
+    #[test]
+    fn strips_prerelease_and_build() {
+        assert_eq!(stable_version_prefix("9.0.0"), "9.0.0");
+        assert_eq!(stable_version_prefix("9.0.0-beta.2"), "9.0.0");
+        assert_eq!(stable_version_prefix("9.0.0-alpha.1"), "9.0.0");
+        assert_eq!(stable_version_prefix("9.0.0-rc.3"), "9.0.0");
+        assert_eq!(stable_version_prefix("9.0.0+commit.abc"), "9.0.0");
+        assert_eq!(stable_version_prefix("9.0.0-beta.2+ci.4"), "9.0.0");
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TorrentState {
@@ -125,7 +149,14 @@ impl Engine {
             // 9.0.0-beta.2 + our `client_name_and_version` patch (see
             // workspace `[patch.crates-io]`). A short BT-client-style UA
             // works on all the trackers we currently aggregate.
-            client_name_and_version: Some(concat!("rqbit/", env!("CARGO_PKG_VERSION")).to_string()),
+            //
+            // We strip the prerelease suffix (`-beta.X`, `-alpha.X`, `-rc.X`)
+            // because some trackers blocklist UAs containing those tokens
+            // outright. Sending `rqbit/9.0.0` is indistinguishable from a
+            // hypothetical stable build on the wire and avoids the false
+            // positive entirely. Default-build optimises away the runtime
+            // cost — the const `CARGO_PKG_VERSION` is split at compile time.
+            client_name_and_version: Some(format!("rqbit/{}", stable_version_prefix(env!("CARGO_PKG_VERSION")))),
             ..Default::default()
         };
         let session = Session::new_with_opts(download_dir.clone(), opts).await?;
