@@ -241,7 +241,7 @@ pub async fn enrich_after_verify(pool: &SqlitePool, infohash: &str) {
         tracing::warn!(error = %e, infohash, "enrich_after_verify: write failed");
         return;
     }
-    tracing::info!(
+    tracing::debug!(
         infohash,
         collection_id = %collection_id,
         tmdb_id,

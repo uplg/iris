@@ -1,18 +1,25 @@
 //! One-shot collection TMDB id backfill.
 //!
-//! Mirrors what the web search dropdown does:
+//! Mirrors the per-torrent SCENE resolver:
 //!   1. Take a member torrent's filename.
-//!   2. Run `iris_media::filename::parse` to extract the SCENE title.
-//!   3. `multi_search(title)` → take the first hit.
+//!   2. Run `iris_media::filename::parse` to extract `(title, year)`.
+//!   3. `multi_search(title)` → score candidates by `(kind, year)` via
+//!      [`crate::tmdb_resolve::pick_best`] and take the best match.
 //!   4. Write its `tmdb_id` to the collection.
 //!
-//! No kind filter. No year filter. No preservation. No `display_title`
-//! rewrite. No fallback to torr9's `tmdb_id`. The first TMDB hit wins,
-//! every time, exactly like the web search suggestion.
+//! Kind hint comes from the collection itself (`tv` vs `movie` already
+//! decided at ingest). Year hint comes from the SCENE-parsed filename.
+//! Both are critical: TMDB's `multi_search` orders by popularity, so a
+//! query like `"Transformers"` returns the 1986 animated series (id
+//! 4269) above the 2007 film (id 1858). Without the year filter, every
+//! Transformers (200X) collection would inherit the cartoon's poster
+//! despite the per-torrent path getting it right.
 
 use std::time::Duration;
 
 use crate::state::AppState;
+use crate::tmdb::TmdbKind;
+use crate::tmdb_resolve::pick_best;
 
 /// One-shot at boot. Runs after a 45 s delay so it doesn't fight the
 /// collection-assignment backfill for the same DB lock; nothing
@@ -87,18 +94,18 @@ async fn process_one_collection(
         }
     };
     if torrents.is_empty() {
-        tracing::info!(
+        tracing::debug!(
             collection_id = %c.id,
             display_title = %c.display_title,
             "tmdb_backfill: SKIP — collection has no active torrents"
         );
         return CollectionOutcome::NoTorrents;
     }
-    let Some((rep_name, title)) = torrents
+    let Some((rep_name, parsed)) = torrents
         .iter()
-        .find_map(|t| iris_media::filename::parse(&t.name).map(|p| (t.name.clone(), p.title)))
+        .find_map(|t| iris_media::filename::parse(&t.name).map(|p| (t.name.clone(), p)))
     else {
-        tracing::info!(
+        tracing::debug!(
             collection_id = %c.id,
             display_title = %c.display_title,
             first_torrent = %torrents[0].name,
@@ -106,8 +113,15 @@ async fn process_one_collection(
         );
         return CollectionOutcome::NoParse;
     };
+    let title = parsed.title;
+    let year_hint: Option<u32> = parsed.year.map(u32::from);
+    let kind_hint: Option<TmdbKind> = match c.kind.as_str() {
+        "movie" => Some(TmdbKind::Movie),
+        "tv" => Some(TmdbKind::Tv),
+        _ => None,
+    };
     if title.trim().len() < 2 {
-        tracing::info!(
+        tracing::debug!(
             collection_id = %c.id,
             display_title = %c.display_title,
             rep_name = %rep_name,
@@ -117,13 +131,20 @@ async fn process_one_collection(
     }
 
     let hits = tmdb.multi_search(&title).await;
-    let Some(top) = hits.first() else {
-        tracing::info!(
+    // Score by `(kind, year)` instead of taking the popularity-sorted
+    // top hit. Same logic the per-torrent SCENE resolver uses, so
+    // collection-level and torrent-level tmdb_ids can't disagree on
+    // the obvious year-disambiguated cases like Transformers 2007 vs
+    // the 1986 animated series.
+    let Some(top) = pick_best(&hits, kind_hint, year_hint) else {
+        tracing::debug!(
             collection_id = %c.id,
             display_title = %c.display_title,
             rep_name = %rep_name,
             query = %title,
-            "tmdb_backfill: SKIP — TMDB returned no hits"
+            year_hint,
+            kind_hint = ?kind_hint,
+            "tmdb_backfill: SKIP — no candidate matched kind/year"
         );
         return CollectionOutcome::NoHits;
     };
@@ -131,7 +152,7 @@ async fn process_one_collection(
         return CollectionOutcome::Error;
     };
     if c.tmdb_id == Some(new_id) {
-        tracing::info!(
+        tracing::debug!(
             collection_id = %c.id,
             display_title = %c.display_title,
             rep_name = %rep_name,

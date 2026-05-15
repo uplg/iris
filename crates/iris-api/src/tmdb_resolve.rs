@@ -134,7 +134,7 @@ impl ResolvedTitle {
     }
 }
 
-fn pick_best(
+pub(crate) fn pick_best(
     suggestions: &[TmdbSuggestion],
     kind_hint: Option<TmdbKind>,
     year_hint: Option<u32>,
