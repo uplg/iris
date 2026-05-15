@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import {
   CheckCircle2,
@@ -119,13 +119,74 @@ function ViewToggleButton({
 // Collections view
 // ---------------------------------------------------------------------------
 
+type SortMode = "alpha" | "recent" | "size";
+
+const SORT_LABEL: Record<SortMode, string> = {
+  alpha: "Alphabetical",
+  recent: "Recently added",
+  size: "Total size",
+};
+
 function CollectionsView() {
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
   const { data, isLoading, error } = useQuery({
     queryKey: ["library", "collections"],
     queryFn: () => library.list("collections"),
     refetchInterval: 5_000,
   });
+
+  const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
+  // URL-persisted: kind=movie|tv (omit = all). Mirrors `?view=…`.
+  const kindFilter = params.get("kind");
+  const setKindFilter = (next: "movie" | "tv" | null) => {
+    const np = new URLSearchParams(params);
+    if (next == null) np.delete("kind");
+    else np.set("kind", next);
+    setParams(np, { replace: true });
+  };
+  // Sort persisted in URL too (`?sort=alpha|recent|size|episodes`) so a
+  // refresh keeps the user's choice. Defaults to `recent` which matches
+  // the previous server-side ordering.
+  const sort = (params.get("sort") as SortMode | null) ?? "recent";
+  const setSort = (next: SortMode) => {
+    const np = new URLSearchParams(params);
+    if (next === "recent") np.delete("sort");
+    else np.set("sort", next);
+    setParams(np, { replace: true });
+  };
+
+  const allItems = useMemo<CollectionListItem[]>(
+    () => (data && data.view === "collections" ? data.items : []),
+    [data],
+  );
+
+  const items = useMemo(() => {
+    const q = deferredSearch.trim().toLowerCase();
+    let out = allItems.filter((c) => {
+      if (kindFilter === "movie" && c.kind !== "movie") return false;
+      if (kindFilter === "tv" && c.kind !== "tv") return false;
+      if (!q) return true;
+      return (
+        c.display_title.toLowerCase().includes(q) ||
+        (c.tmdb_id != null && String(c.tmdb_id).includes(q))
+      );
+    });
+    out = [...out];
+    switch (sort) {
+      case "alpha":
+        out.sort((a, b) => a.display_title.localeCompare(b.display_title));
+        break;
+      case "size":
+        out.sort((a, b) => b.total_size_bytes - a.total_size_bytes);
+        break;
+      case "recent":
+        // Server already orders by recent — keep the data order.
+        break;
+    }
+    return out;
+  }, [allItems, deferredSearch, kindFilter, sort]);
 
   if (isLoading) {
     return <SkeletonCard count={5} />;
@@ -133,9 +194,7 @@ function CollectionsView() {
   if (error) {
     return <ErrorState error={error} />;
   }
-  const items: CollectionListItem[] =
-    data && data.view === "collections" ? data.items : [];
-  if (items.length === 0) {
+  if (allItems.length === 0) {
     return (
       <EmptyState
         title="Library is empty"
@@ -151,40 +210,290 @@ function CollectionsView() {
       />
     );
   }
+
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-      {items.map((c) => (
-        <MediaCard
-          key={c.id}
-          title={c.display_title}
-          subtitle={collectionSubtitle(c)}
-          // tmdb_id on the collection is now derived server-side from
-          // the SCENE-cleaned name (see `tmdb_resolve` + the ingestion
-          // override). Trustworthy enough to drive poster lookups —
-          // when missing we fall back to the kind-aware placeholder.
-          tmdbId={c.tmdb_id}
-          kind={c.kind}
-          onClick={() => routeCollection(c, navigate)}
-          badge={
-            c.kind === "tv" && c.episode_count > 0 ? (
-              <Badge variant="secondary" className="text-[10px] shadow-md">
-                {c.episode_count} ep
-              </Badge>
-            ) : undefined
-          }
+    <div className="grid gap-3">
+      <CollectionsFilters
+        search={search}
+        onSearchChange={setSearch}
+        kindFilter={kindFilter}
+        onKindChange={setKindFilter}
+        sort={sort}
+        onSortChange={setSort}
+        total={allItems.length}
+        shown={items.length}
+      />
+      {items.length === 0 ? (
+        <EmptyState
+          title="No matches"
+          body="Adjust the search or filters to see more."
         />
-      ))}
+      ) : (
+        <VirtualCollectionsGrid
+          items={items}
+          onPick={(c) => routeCollection(c, navigate)}
+        />
+      )}
     </div>
   );
 }
 
+function CollectionsFilters({
+  search,
+  onSearchChange,
+  kindFilter,
+  onKindChange,
+  sort,
+  onSortChange,
+  total,
+  shown,
+}: {
+  search: string;
+  onSearchChange: (v: string) => void;
+  kindFilter: string | null;
+  onKindChange: (k: "movie" | "tv" | null) => void;
+  sort: SortMode;
+  onSortChange: (s: SortMode) => void;
+  total: number;
+  shown: number;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="relative min-w-[14rem] flex-1">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Search collections…"
+          className="w-full rounded-md border border-border bg-card/40 py-1.5 pl-9 pr-9 text-sm placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => onSearchChange("")}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+          >
+            <X className="size-3" />
+            <span className="sr-only">Clear search</span>
+          </button>
+        )}
+      </div>
+      <div className="flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5 text-xs">
+        <KindChip active={kindFilter == null} onClick={() => onKindChange(null)}>
+          All
+        </KindChip>
+        <KindChip
+          active={kindFilter === "movie"}
+          onClick={() => onKindChange("movie")}
+          icon={<Film className="size-3" />}
+        >
+          Movies
+        </KindChip>
+        <KindChip
+          active={kindFilter === "tv"}
+          onClick={() => onKindChange("tv")}
+          icon={<Tv className="size-3" />}
+        >
+          Series
+        </KindChip>
+      </div>
+      <select
+        value={sort}
+        onChange={(e) => onSortChange(e.target.value as SortMode)}
+        className="rounded-md border border-border bg-card/40 px-2 py-1.5 text-xs focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/20"
+      >
+        {(Object.keys(SORT_LABEL) as SortMode[]).map((m) => (
+          <option key={m} value={m}>
+            {SORT_LABEL[m]}
+          </option>
+        ))}
+      </select>
+      <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
+        {shown === total ? `${total} collections` : `${shown} / ${total}`}
+      </span>
+    </div>
+  );
+}
+
+function KindChip({
+  active,
+  onClick,
+  icon,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex items-center gap-1 rounded px-2.5 py-1 transition",
+        active
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+      )}
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
+
+/**
+ * Virtualized grid of collection cards. Adapts the lane count to the
+ * container width (`ResizeObserver` watches the parent), so the same
+ * component switches between 2/3/4/5 columns as breakpoints would.
+ * Each virtual row renders `lanes` cards side-by-side; only the rows
+ * intersecting the viewport are kept in the DOM.
+ */
+function VirtualCollectionsGrid({
+  items,
+  onPick,
+}: {
+  items: CollectionListItem[];
+  onPick: (c: CollectionListItem) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  // Lane count + row height are derived from container width via the
+  // CSS variable trick: the wrapper sets `--lanes` based on its width,
+  // and we read it back through ResizeObserver. Avoids the breakpoint-
+  // duplication trap (Tailwind classes vs JS thresholds).
+  const [lanes, setLanes] = useState(5);
+  useResizeObserver(parentRef, (width) => {
+    // Same intent as `sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5`:
+    //   < 640  → 2 lanes
+    //   < 1024 → 3 lanes
+    //   < 1280 → 4 lanes
+    //   else   → 5 lanes
+    const next = width < 640 ? 2 : width < 1024 ? 3 : width < 1280 ? 4 : 5;
+    setLanes(next);
+  });
+
+  const rowCount = Math.ceil(items.length / lanes);
+  // Aspect-2/3 poster + title + subtitle + a touch of padding/badge —
+  // empirically ~280-320 px depending on lane width. Slightly over-
+  // estimated so initial scroll feels smooth; `measureElement` fixes
+  // up the real height per row once rendered.
+  const estimatedRowHeight = 320;
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => estimatedRowHeight,
+    overscan: 2,
+  });
+
+  return (
+    <div
+      ref={parentRef}
+      className="max-h-[calc(100vh-14rem)] overflow-y-auto rounded-lg"
+    >
+      <div
+        style={{ height: virtualizer.getTotalSize(), position: "relative" }}
+      >
+        {virtualizer.getVirtualItems().map((vrow) => {
+          const start = vrow.index * lanes;
+          const slice = items.slice(start, start + lanes);
+          return (
+            <div
+              key={vrow.key}
+              ref={virtualizer.measureElement}
+              data-index={vrow.index}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                transform: `translateY(${vrow.start}px)`,
+              }}
+              className="px-1 pb-4"
+            >
+              <div
+                className="grid gap-4"
+                style={{
+                  gridTemplateColumns: `repeat(${lanes}, minmax(0, 1fr))`,
+                }}
+              >
+                {slice.map((c) => (
+                  <MediaCard
+                    key={c.id}
+                    title={c.display_title}
+                    subtitle={collectionSubtitle(c)}
+                    // tmdb_id on the collection is now derived server-
+                    // side from the SCENE-cleaned name (see
+                    // `tmdb_resolve` + the ingestion override).
+                    // Trustworthy enough to drive poster lookups —
+                    // when missing we fall back to the kind-aware
+                    // placeholder.
+                    tmdbId={c.tmdb_id}
+                    kind={c.kind}
+                    onClick={() => onPick(c)}
+                    badge={collectionBadge(c)}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Watch a `ref`-ed element's `clientWidth`. The hook batches changes
+ * via `ResizeObserver` (browser-native — not a setTimeout poll, so it
+ * stays compliant with the web/ timer rule) and only fires the
+ * callback when the integer width actually changes, avoiding a re-
+ * render storm during continuous resize.
+ */
+function useResizeObserver(
+  ref: React.RefObject<HTMLElement | null>,
+  onChange: (width: number) => void,
+) {
+  const lastWidth = useRef(0);
+  const cb = useRef(onChange);
+  cb.current = onChange;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const w = Math.floor(entries[0]?.contentRect.width ?? 0);
+      if (w !== lastWidth.current && w > 0) {
+        lastWidth.current = w;
+        cb.current(w);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+}
+
 function collectionSubtitle(c: CollectionListItem): string {
   const parts: string[] = [];
-  if (c.kind === "tv" && c.torrent_count > 1) {
+  if (c.kind === "tv" && c.episode_count > 0) {
+    parts.push(`${c.episode_count} ep`);
+  } else if (c.kind === "tv" && c.torrent_count > 1) {
     parts.push(`${c.torrent_count} torrents`);
   }
   parts.push(formatSize(c.total_size_bytes));
   return parts.join(" · ");
+}
+
+function collectionBadge(c: CollectionListItem): React.ReactNode {
+  if (c.kind === "tv" && c.episode_count > 0) {
+    return (
+      <Badge variant="secondary" className="text-[10px] shadow-md">
+        {c.episode_count} ep
+      </Badge>
+    );
+  }
+  return undefined;
 }
 
 function routeCollection(
