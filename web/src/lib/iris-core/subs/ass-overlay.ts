@@ -90,6 +90,12 @@ export type AssOverlayOptions = {
 };
 
 export type AssOverlayHandle = {
+  /** Hot-reload the subtitle track from a (possibly new) URL without
+   *  tearing down the worker. Used during torrent download: the
+   *  `?v=<progress>` query bumps on a milestone, the watcher calls
+   *  `setUrl` and libass re-fetches in place. Avoids the ~500 ms
+   *  blank-canvas flash a full remount would produce. */
+  setUrl: (url: string) => void;
   dispose: () => void;
 };
 
@@ -229,6 +235,15 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
   observer.observe(opts.host);
 
   return {
+    setUrl: (url: string) => {
+      try {
+        instance.setTrackByUrl(url);
+      } catch (e) {
+        // Worker may have terminated mid-flight (auto-remount race);
+        // logging is enough — the next milestone will retry.
+        console.warn("[iris-core:libass] setTrackByUrl failed", e);
+      }
+    },
     dispose: () => {
       observer.disconnect();
       if (rafId !== null) cancelAnimationFrame(rafId);

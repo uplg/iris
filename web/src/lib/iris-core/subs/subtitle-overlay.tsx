@@ -16,8 +16,10 @@
 import { useEffect, useRef } from "react";
 
 import type { SubtitleTrack } from "../manifest-client";
-import { mountAssOverlay } from "./ass-overlay";
-import { mountPgsOverlay } from "./pgs-overlay";
+import { mountAssOverlay, type AssOverlayHandle } from "./ass-overlay";
+import { mountPgsOverlay, type PgsOverlayHandle } from "./pgs-overlay";
+
+type OverlayHandle = AssOverlayHandle | PgsOverlayHandle;
 
 export type SubtitleOverlayKind = "none" | "native" | "ass" | "pgs";
 
@@ -47,23 +49,47 @@ export function SubtitleOverlay({ host, track, getCurrentTime }: Props) {
   const clockRef = useRef(getCurrentTime);
   clockRef.current = getCurrentTime;
 
+  // Two-effect split:
+  //   1) Mount/unmount on track *identity* (stream_idx + codec). This
+  //      is the only path that destroys + re-creates the libass worker.
+  //   2) Call `handle.setUrl(track.url)` on URL *content* changes —
+  //      typically the `?v=<progress>` cache-buster bumping as the
+  //      torrent download advances. This re-fetches the `.ass` in-place
+  //      without a canvas blank-flash and without the user having to
+  //      re-pick the track from the menu.
+  const handleRef = useRef<OverlayHandle | null>(null);
+  // Live mirror of `track.url` — the mount-effect's `.then` reads this
+  // after the (async) worker init resolves to reconcile against any URL
+  // drift that happened in the meantime (e.g., the torrent crossed a
+  // progress milestone and the parent re-rendered with `?v=` bumped).
+  const latestUrlRef = useRef<string | null>(track?.url ?? null);
+  latestUrlRef.current = track?.url ?? null;
+  const streamIdx = track?.stream_idx ?? null;
+  const codec = track?.codec ?? null;
+  const kind = subtitleOverlayKind(track);
+
   useEffect(() => {
     if (!host || !track) return;
-    const kind = subtitleOverlayKind(track);
     if (kind === "none" || kind === "native") return;
 
     let cancelled = false;
-    let handle: { dispose: () => void } | null = null;
-
+    const initialUrl = track.url;
     const mountFn = kind === "ass" ? mountAssOverlay : mountPgsOverlay;
     void mountFn({
       host,
-      subUrl: track.url,
+      subUrl: initialUrl,
       getCurrentTime: () => clockRef.current(),
     })
       .then((h) => {
-        if (cancelled) h.dispose();
-        else handle = h;
+        if (cancelled) {
+          h.dispose();
+          return;
+        }
+        handleRef.current = h;
+        // Reconcile if the URL bumped while the worker was spinning up.
+        if (latestUrlRef.current && latestUrlRef.current !== initialUrl) {
+          h.setUrl(latestUrlRef.current);
+        }
       })
       .catch((e) => {
         console.error(`[iris-core] ${kind} overlay failed`, e);
@@ -71,10 +97,20 @@ export function SubtitleOverlay({ host, track, getCurrentTime }: Props) {
 
     return () => {
       cancelled = true;
-      handle?.dispose();
-      handle = null;
+      handleRef.current?.dispose();
+      handleRef.current = null;
     };
-  }, [host, track]);
+    // Re-mount only when the track identity changes — not on URL-only
+    // updates, which the second effect handles in-place.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host, streamIdx, codec, kind]);
+
+  useEffect(() => {
+    if (!track) return;
+    const h = handleRef.current;
+    if (!h) return;
+    h.setUrl(track.url);
+  }, [track?.url, track]);
 
   return null;
 }

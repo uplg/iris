@@ -1090,6 +1090,14 @@ async fn subtitle_sup(
 /// Shared subtitle handler used by `track.{vtt,ass,sup}`. Caches per-
 /// (`infohash`, `file_idx`, `stream_idx`, format) tuple so the three formats
 /// coexist without overwriting each other.
+///
+/// Two states:
+/// - **Torrent finished** + `.ok` sidecar present → serve permanent
+///   cache (`max-age=86400`).
+/// - **Torrent still downloading** OR no `.ok` sidecar → re-extract
+///   fresh, stream to client, do NOT promote to cache. Web client
+///   bumps the URL's `?v=` query param on torrent-progress milestones
+///   to drive `libass.setTrackByUrl` re-fetches without remounting.
 async fn serve_subtitle(
     state: &AppState,
     infohash: &str,
@@ -1109,10 +1117,22 @@ async fn serve_subtitle(
         return Err(ApiError::BadRequest("file not yet on disk".into()));
     }
 
-    let cache_dir = state.cfg().storage.data_dir.join("subs");
-    let cache_path = iris_media::subtitle_cache_path(&cache_dir, &infohash, idx, stream_idx, format);
+    let torrent_finished = state
+        .engine()
+        .get_by_infohash(&infohash)
+        .is_some_and(|s| s.finished);
 
-    if cache_path.exists() {
+    let cache_dir = state.cfg().storage.data_dir.join("subs");
+    let cache_path =
+        iris_media::subtitle_cache_path(&cache_dir, &infohash, idx, stream_idx, format);
+    let marker_path = cache_path.with_extension(format!("{}.ok", format.extension()));
+
+    // Cache hit requires BOTH the file AND its completion marker. The
+    // marker was introduced when we discovered ffmpeg silently produces
+    // truncated `.ass` outputs on librqbit's sparse source files (exits
+    // 0 at the first un-downloaded piece) — pre-marker caches are
+    // assumed unsafe and re-extracted.
+    if cache_path.exists() && marker_path.exists() {
         return Ok(Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, format.mime())
@@ -1123,9 +1143,15 @@ async fn serve_subtitle(
             .unwrap());
     }
 
-    let stream = iris_media::stream_subtitle(&path, stream_idx, format, cache_path)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("subtitle extract: {e}")))?;
+    let stream = iris_media::stream_subtitle(
+        &path,
+        stream_idx,
+        format,
+        cache_path,
+        torrent_finished,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("subtitle extract: {e}")))?;
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, format.mime())

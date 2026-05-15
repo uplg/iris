@@ -62,6 +62,17 @@ export type IrisPlayerProps = {
   /** Fires when the user picks a different subtitle (by manifest
    *  `stream_idx`). `null` means "no subtitles". */
   onActiveSubtitleChange?: (streamIdx: number | null) => void;
+  /** Token that changes when the upstream subtitle source (the torrent
+   *  source MKV) has accumulated new bytes since the last extraction
+   *  the client received. Threaded into overlay subtitle URLs as a
+   *  `?v=<token>` cache-buster: when it bumps, the SubtitleOverlay
+   *  hot-reloads via `libass.setTrackByUrl` in place — no worker
+   *  recreate, no canvas flash, no re-pick from the menu. Drives the
+   *  "subs catch up as the torrent downloads" UX. The token should
+   *  flip to a stable value (e.g. `"final"`) once the torrent is
+   *  finished so the URL stops mutating and the response can be HTTP
+   *  cached. */
+  subtitleVersion?: string;
 };
 
 /** Audio-track switching strategy. Tier F changes audio live via
@@ -353,10 +364,19 @@ export function IrisPlayer(props: IrisPlayerProps) {
 
 
   // Overlay subtitle: only when the active sub needs overlay rendering.
-  const activeOverlay =
-    activeSubtitle != null && subtitleOverlayKind(activeSubtitle) !== "native"
-      ? overlaySubs.find((s) => s.stream_idx === activeSubtitle.stream_idx) ?? null
-      : null;
+  // The URL is decorated with the current `subtitleVersion` token so the
+  // SubtitleOverlay's URL-watch effect can hot-reload through libass /
+  // libpgs as the torrent download progresses. When `subtitleVersion`
+  // is undefined (parent didn't thread it, e.g. tests / older callers)
+  // the URL stays bare and there's no auto-refresh — old behaviour.
+  const activeOverlay = useMemo(() => {
+    if (activeSubtitle == null) return null;
+    if (subtitleOverlayKind(activeSubtitle) === "native") return null;
+    const base = overlaySubs.find((s) => s.stream_idx === activeSubtitle.stream_idx);
+    if (!base) return null;
+    if (!props.subtitleVersion) return base;
+    return { ...base, url: `${base.url}?v=${encodeURIComponent(props.subtitleVersion)}` };
+  }, [activeSubtitle, overlaySubs, props.subtitleVersion]);
 
   // Click-to-toggle handling. Single click → play/pause, double
   // click → fullscreen. Since the browser fires `click` for BOTH

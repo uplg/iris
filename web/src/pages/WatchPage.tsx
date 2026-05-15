@@ -72,6 +72,23 @@ export function WatchPage() {
     [data],
   );
 
+  // Cache-buster passed into `<IrisPlayer subtitleVersion>` for ASS/PGS
+  // overlay URLs. Quantised to 5%-progress buckets — a fast 100 Mb/s
+  // download crosses the whole bar in ~1 minute, so we want at most
+  // ~20 worker-side re-fetches across that, not 100. The bump pin to
+  // `"final"` once `finished` flips lets the server promote a permanent
+  // cache (`.ok` sidecar) and HTTP-cache the response. The
+  // SubtitleOverlay's URL effect calls `libass.setTrackByUrl` on every
+  // bump — in-place re-fetch, no remount, no canvas flash, no menu
+  // re-pick required. UX gap: subtitles trail the download by at most
+  // ~5% of the file's duration — usually well past the playhead since
+  // the video itself can't play past what's downloaded either.
+  const subtitleVersion = useMemo(() => {
+    if (!data) return "0";
+    if (data.finished) return "final";
+    return Math.floor(data.progress_pct / 5).toString();
+  }, [data]);
+
   // Poll the playback-prep status until the .fmp4 cache is on disk and
   // ready to be served via byte-range. The status endpoint surfaces the
   // upstream torrent download progress and the in-flight ffmpeg remux so
@@ -505,6 +522,7 @@ export function WatchPage() {
             startPosition={startPosition}
             initialAudioIndex={progressQ.data?.audio_track_idx ?? undefined}
             initialSubtitleStreamIdx={progressQ.data?.subtitle_track_idx ?? undefined}
+            subtitleVersion={subtitleVersion}
             onAudioTrackChange={(idx) => {
               audioTrackRef.current = idx;
             }}

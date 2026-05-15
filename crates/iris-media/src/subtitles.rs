@@ -17,6 +17,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::Bytes;
 use futures::Stream;
@@ -133,26 +134,46 @@ pub async fn stream_webvtt(
     source: &Path,
     absolute_stream_idx: u32,
     cache_path: PathBuf,
+    mark_complete: bool,
 ) -> Result<SubtitleStream, SubtitleError> {
-    stream_subtitle(source, absolute_stream_idx, SubtitleFormat::WebVtt, cache_path).await
+    stream_subtitle(source, absolute_stream_idx, SubtitleFormat::WebVtt, cache_path, mark_complete).await
 }
 
 /// Spawn `ffmpeg` to extract a subtitle stream in the requested format
-/// and return a stream that emits chunks as ffmpeg produces them. Bytes
-/// are also tee'd into `cache_path` so subsequent calls can short-
-/// circuit. On clean exit the `.tmp` cache is renamed atomically; on
-/// failure or early client disconnect the partial file is removed.
+/// and return a stream that emits chunks as ffmpeg produces them.
+///
+/// `mark_complete` is the "source is fully downloaded" signal from the
+/// caller. **Only when it's true do we promote the extraction to a
+/// permanent cache** — otherwise we drop the partial output on the
+/// floor. Reason: librqbit presents un-downloaded pieces as sparse
+/// zero-filled holes; ffmpeg reads up to the first hole and exits
+/// cleanly with status 0, producing a truncated `.ass` that looks
+/// correct but ends mid-episode. The legacy code path (no flag)
+/// happily renamed those into the permanent cache and served them
+/// forever — that's the "subs cut off at 5 min" bug.
+///
+/// When `mark_complete` is true we also write an empty `<cache>.ok`
+/// sidecar. The serve side requires both files to exist before
+/// trusting a cached extraction — old caches written before this
+/// fix have no sidecar and are transparently re-extracted.
+// Unique tmp per `stream_subtitle` call so concurrent extractions don't
+// truncate each other's `File::create`d handles. Process-local counter;
+// collisions across server restarts don't matter since tmps are removed
+// on success or failure.
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 pub async fn stream_subtitle(
     source: &Path,
     absolute_stream_idx: u32,
     format: SubtitleFormat,
     cache_path: PathBuf,
+    mark_complete: bool,
 ) -> Result<SubtitleStream, SubtitleError> {
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    let tmp_path = cache_path.with_extension(format!("{}.tmp", format.extension()));
-    let _ = std::fs::remove_file(&tmp_path);
+    let nonce = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = cache_path.with_extension(format!("{}.tmp.{nonce}", format.extension()));
 
     let mut child = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "warning"])
@@ -184,6 +205,7 @@ pub async fn stream_subtitle(
 
     let cache_file = tokio::fs::File::create(&tmp_path).await?;
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+    let ext = format.extension();
 
     tokio::spawn(async move {
         let mut cache = cache_file;
@@ -212,10 +234,25 @@ pub async fn stream_subtitle(
         let _ = cache.shutdown().await;
         drop(cache);
         match child.wait().await {
-            Ok(status) if status.success() && !had_io_error => {
+            Ok(status) if status.success() && !had_io_error && mark_complete => {
                 if let Err(e) = tokio::fs::rename(&tmp_path, &cache_path).await {
                     tracing::warn!(error = %e, "subtitle cache promote failed");
+                } else {
+                    let marker = cache_path.with_extension(format!("{ext}.ok"));
+                    if let Err(e) = tokio::fs::File::create(&marker).await {
+                        // Marker write failure means the next request
+                        // will re-extract — annoying but correct. Don't
+                        // bubble: extraction itself succeeded.
+                        tracing::warn!(error = %e, "subtitle cache marker write failed");
+                    }
                 }
+            }
+            Ok(status) if status.success() && !had_io_error => {
+                // Successful extraction but source wasn't fully
+                // downloaded — output is potentially truncated, do not
+                // poison the cache. The client got the partial bytes
+                // already; we just drop the tmp.
+                let _ = tokio::fs::remove_file(&tmp_path).await;
             }
             Ok(status) => {
                 tracing::warn!(?status, "ffmpeg subtitle extraction exited non-zero");

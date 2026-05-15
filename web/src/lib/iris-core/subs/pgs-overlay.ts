@@ -24,6 +24,10 @@ export type PgsOverlayOptions = {
 };
 
 export type PgsOverlayHandle = {
+  /** Hot-reload from a new URL without remounting the renderer.
+   *  Mirrors the ASS overlay so the parent's torrent-progress
+   *  watcher can swap both kinds uniformly. */
+  setUrl: (url: string) => void;
   dispose: () => void;
 };
 
@@ -57,6 +61,13 @@ export async function mountPgsOverlay(opts: PgsOverlayOptions): Promise<PgsOverl
   }
 
   return {
+    setUrl: (url: string) => {
+      try {
+        renderer.loadFromUrl(url);
+      } catch (e) {
+        console.warn("[iris-core:libpgs] loadFromUrl failed", e);
+      }
+    },
     dispose: () => {
       if (rafId !== null) cancelAnimationFrame(rafId);
       try {
