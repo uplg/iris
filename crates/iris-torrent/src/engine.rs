@@ -42,16 +42,37 @@ pub enum EngineError {
 /// Return the leading `MAJOR.MINOR.PATCH` portion of a semver string,
 /// dropping any prerelease (`-beta.2`) and build (`+something`) tail.
 /// Some private trackers blocklist User-Agents containing tokens like
-/// `alpha` / `beta` / `rc` outright, so we advertise `rqbit/9.0.0`
-/// regardless of whether the underlying crate is on a prerelease.
+/// `alpha` / `beta` / `rc` outright, so we strip those before
+/// advertising.
 fn stable_version_prefix(semver: &str) -> &str {
     let cut = semver.find(['-', '+']).unwrap_or(semver.len());
     &semver[..cut]
 }
 
+/// Identity string we advertise on both the BEP 10 peer extension
+/// handshake (`v` field) and the HTTP tracker `User-Agent`. librqbit's
+/// const default is `"rqbit X.Y.Z[-prerelease]"` (space-separated,
+/// matches the BEP 10 convention every other BT client uses for the
+/// `v` field — µTorrent, qBittorrent, Transmission, Deluge…). We keep
+/// the space form and the `rqbit` name verbatim, only stripping the
+/// prerelease suffix so private trackers that blocklist `beta` /
+/// `alpha` / `rc` in their UA regex can't bounce us. Peers in the
+/// swarm view us as `rqbit 9.0.0`, identical to a hypothetical stable
+/// build.
+fn client_ua() -> String {
+    let raw = librqbit::client_name_and_version();
+    match raw.split_once(' ') {
+        Some((name, version)) => format!("{name} {}", stable_version_prefix(version)),
+        // librqbit's const always emits the `"<name> <version>"` shape
+        // — this arm only fires if upstream ever changes that contract.
+        // Don't panic in production; fall back to the raw value.
+        None => raw.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod version_tests {
-    use super::stable_version_prefix;
+    use super::{client_ua, stable_version_prefix};
     #[test]
     fn strips_prerelease_and_build() {
         assert_eq!(stable_version_prefix("9.0.0"), "9.0.0");
@@ -60,6 +81,23 @@ mod version_tests {
         assert_eq!(stable_version_prefix("9.0.0-rc.3"), "9.0.0");
         assert_eq!(stable_version_prefix("9.0.0+commit.abc"), "9.0.0");
         assert_eq!(stable_version_prefix("9.0.0-beta.2+ci.4"), "9.0.0");
+    }
+    #[test]
+    fn client_ua_matches_rqbit_convention() {
+        // Must look like `rqbit MAJOR.MINOR.PATCH` — name from librqbit,
+        // space-separated, no prerelease tail. Concrete version varies
+        // with the dep bump so we only assert structure.
+        let ua = client_ua();
+        let (name, version) = ua.split_once(' ').expect("name <space> version");
+        assert_eq!(name, "rqbit");
+        assert!(
+            !version.contains('-') && !version.contains('+'),
+            "stripped UA must not carry prerelease/build tail: {ua}"
+        );
+        assert!(
+            version.split('.').count() >= 3,
+            "version must look like MAJOR.MINOR.PATCH: {ua}"
+        );
     }
 }
 
@@ -143,20 +181,20 @@ impl Engine {
                 enable_upnp_port_forwarding: true,
                 ..Default::default()
             }),
-            // Some private trackers (UNIT3D-Announce, e.g. theoldschool.cc)
-            // reject HTTP announces with absent or overly long User-Agents.
-            // librqbit's reqwest builder didn't set any by default before
-            // 9.0.0-beta.2 + our `client_name_and_version` patch (see
-            // workspace `[patch.crates-io]`). A short BT-client-style UA
-            // works on all the trackers we currently aggregate.
+            // Override the default `rqbit X.Y.Z-beta.N` with a stripped
+            // `rqbit X.Y.Z`. Two reasons (full rationale + the slash vs
+            // space convention discussion in `client_ua` and the
+            // upstream PR #577 review thread):
             //
-            // We strip the prerelease suffix (`-beta.X`, `-alpha.X`, `-rc.X`)
-            // because some trackers blocklist UAs containing those tokens
-            // outright. Sending `rqbit/9.0.0` is indistinguishable from a
-            // hypothetical stable build on the wire and avoids the false
-            // positive entirely. Default-build optimises away the runtime
-            // cost — the const `CARGO_PKG_VERSION` is split at compile time.
-            client_name_and_version: Some(format!("rqbit/{}", stable_version_prefix(env!("CARGO_PKG_VERSION")))),
+            //   - Some private trackers (UNIT3D-Announce derivatives)
+            //     run a UA regex and reject HTTP announces with no UA
+            //     or with `beta` / `alpha` / `rc` tokens.
+            //   - The same string flows into the BEP 10 peer-handshake
+            //     `v` field, so peers in the swarm view us as
+            //     `rqbit X.Y.Z` (correct space-separated BEP 10
+            //     convention, real librqbit version pulled via
+            //     `librqbit::client_name_and_version()`).
+            client_name_and_version: Some(client_ua()),
             ..Default::default()
         };
         let session = Session::new_with_opts(download_dir.clone(), opts).await?;
