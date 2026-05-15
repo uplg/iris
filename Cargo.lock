@@ -1023,7 +1023,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1157,7 +1157,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2328,7 +2328,7 @@ dependencies = [
 [[package]]
 name = "librqbit"
 version = "9.0.0-beta.2"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2392,7 +2392,7 @@ dependencies = [
 [[package]]
 name = "librqbit-bencode"
 version = "3.1.0"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -2408,7 +2408,7 @@ dependencies = [
 [[package]]
 name = "librqbit-buffers"
 version = "4.2.0"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "bytes",
  "librqbit-clone-to-owned",
@@ -2419,7 +2419,7 @@ dependencies = [
 [[package]]
 name = "librqbit-clone-to-owned"
 version = "3.0.1"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "bytes",
 ]
@@ -2427,7 +2427,7 @@ dependencies = [
 [[package]]
 name = "librqbit-core"
 version = "5.0.0"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2456,7 +2456,7 @@ dependencies = [
 [[package]]
 name = "librqbit-dht"
 version = "5.3.0"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "anyhow",
  "backon",
@@ -2503,7 +2503,7 @@ dependencies = [
 [[package]]
 name = "librqbit-lsd"
 version = "0.1.0"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "anyhow",
  "atoi",
@@ -2523,7 +2523,7 @@ dependencies = [
 [[package]]
 name = "librqbit-peer-protocol"
 version = "4.3.0"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "anyhow",
  "bitvec",
@@ -2543,7 +2543,7 @@ dependencies = [
 [[package]]
 name = "librqbit-sha1-wrapper"
 version = "4.1.0"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "assert_cfg",
  "crypto-hash",
@@ -2552,7 +2552,7 @@ dependencies = [
 [[package]]
 name = "librqbit-tracker-comms"
 version = "3.0.0"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2580,7 +2580,7 @@ dependencies = [
 [[package]]
 name = "librqbit-upnp"
 version = "1.0.0"
-source = "git+https://github.com/uplg/rqbit.git?rev=d62e00be8225619f1c0998768db45c97f50c3502#d62e00be8225619f1c0998768db45c97f50c3502"
+source = "git+https://github.com/ikatson/rqbit.git?rev=af966eba108f822395f65efea32bc9ec14cb8a21#af966eba108f822395f65efea32bc9ec14cb8a21"
 dependencies = [
  "anyhow",
  "bstr",
@@ -2811,7 +2811,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3679,7 +3679,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3737,7 +3737,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4416,7 +4416,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5268,7 +5268,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
