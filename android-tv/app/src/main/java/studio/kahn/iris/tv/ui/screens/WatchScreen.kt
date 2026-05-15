@@ -330,7 +330,7 @@ private fun ReadyPlayer(
     }
 
     val player = remember(playUrl) {
-        buildPlayer(context, container.okHttpClient).apply {
+        buildPlayer(context, container.mediaOkHttpClient).apply {
             setMediaItem(
                 buildMediaItem(playUrl, title),
                 (startPositionSec * 1000).toLong().coerceAtLeast(0),
@@ -456,6 +456,54 @@ private fun ReadyPlayer(
             }
             pendingTrackSaveJob.set(job)
         }
+    }
+
+    // Seek hint posting. Mirror of the web client's `postSeekHint`
+    // (`web/src/lib/iris-core/manifest-client.ts`). On every user-
+    // initiated seek we fire a fire-and-forget POST so the server can
+    // bias librqbit's piece priority toward ~30 s of bytes forward of
+    // the new playhead. Without this, a rewind to a piece librqbit
+    // hasn't kept hot (e.g. user resumed mid-file then scrolled back)
+    // makes Media3's read block on slow piece delivery — the freeze
+    // looks like "buffering forever" because the server is genuinely
+    // waiting on bytes.
+    //
+    // Byte offset is a linear approximation from playhead × file_size /
+    // duration; the server's `prefetch_range` widens the priority bias
+    // around it, so an off-by-a-few-MB estimate is fine.
+    val fileSizeBytes: Long = remember(torrent, fileIdx) {
+        torrent?.files?.firstOrNull { it.index == fileIdx }?.sizeBytes ?: 0L
+    }
+    DisposableEffect(player, fileSizeBytes) {
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onPositionDiscontinuity(
+                oldPosition: androidx.media3.common.Player.PositionInfo,
+                newPosition: androidx.media3.common.Player.PositionInfo,
+                reason: Int,
+            ) {
+                if (reason != androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK) return
+                val durMs = player.duration
+                if (durMs <= 0 || fileSizeBytes <= 0) return
+                val playheadS = newPosition.positionMs / 1000.0
+                val byteOffset = (
+                    (newPosition.positionMs.toDouble() / durMs.toDouble()) * fileSizeBytes
+                ).toLong().coerceIn(0L, fileSizeBytes - 1)
+                container.applicationScope.launch {
+                    runCatching {
+                        container.apiFor(serverUrl).postSeekHint(
+                            infohash = infohash,
+                            idx = fileIdx,
+                            body = studio.kahn.iris.tv.data.SeekHint(
+                                byteOffset = byteOffset,
+                                playheadS = playheadS,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
     }
 
     // ExoPlayer errors. Transient codes (network blip, mid-stream

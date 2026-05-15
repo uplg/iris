@@ -21,6 +21,12 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
 interface AppContainer {
     val sessionStore: SessionStore
     val okHttpClient: OkHttpClient
+    /** Separate OkHttp client for Media3 streaming — see
+     *  [deriveMediaOkHttpClient] for the Fire-TV rationale. Owns its own
+     *  `ConnectionPool` + `Dispatcher` and has no `callTimeout`. NEVER
+     *  reuse this for JSON RPC — it's tuned for long-lived byte-range
+     *  streams. */
+    val mediaOkHttpClient: OkHttpClient
     val channels: ChannelsService
     /**
      * Process-lifetime scope for fire-and-forget background work that
@@ -50,6 +56,7 @@ class DefaultAppContainer(context: Context) : AppContainer {
     override val clientOutdated: StateFlow<Boolean> = outdatedFlag.asStateFlow()
     override val okHttpClient: OkHttpClient =
         buildOkHttpClient(sessionStore) { outdatedFlag.value = true }
+    override val mediaOkHttpClient: OkHttpClient = deriveMediaOkHttpClient(okHttpClient)
     override val channels: ChannelsService = ChannelsService(context.applicationContext)
     override val applicationScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO)

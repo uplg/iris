@@ -87,6 +87,21 @@ interface IrisApi {
         @Path("idx") idx: Int,
     ): ProgressView?
 
+    /** Fire-and-forget hint: the user just seeked to `playheadSec`. The
+     *  server bias-prioritises ~30 s of pieces forward of the matching
+     *  byte offset (`prefetch_range`) so the subsequent Range request
+     *  from Media3 doesn't sit on undownloaded pieces. Best-effort:
+     *  returns 204 and the prefetch runs in the background. Web does
+     *  the equivalent via `postSeekHint`; TV used to skip it, which is
+     *  fine on a quick Android TV stack but bites on Fire TV where the
+     *  client-side cancel + reconnect can race librqbit's piece picker. */
+    @POST("api/torrents/{infohash}/files/{idx}/seek")
+    suspend fun postSeekHint(
+        @Path("infohash") infohash: String,
+        @Path("idx") idx: Int,
+        @Body body: SeekHint,
+    )
+
     /** TMDB id lookup. `kind` disambiguates the movie/tv namespaces —
      *  same numerical id resolves to two unrelated entries otherwise.
      *  Pass the collection / search-result kind whenever known. */
@@ -415,6 +430,15 @@ data class ProgressUpdate(
     @SerialName("audio_track_idx") val audioTrackIdx: Int? = null,
     @SerialName("subtitle_track_idx") val subtitleTrackIdx: Int? = null,
     val completed: Boolean = false,
+)
+
+/** Wire format for `POST /api/torrents/.../seek`. `playhead_s` is
+ *  optional but recommended — the server uses it for telemetry; the
+ *  authoritative piece-priority bias is `byte_offset`. */
+@Serializable
+data class SeekHint(
+    @SerialName("byte_offset") val byteOffset: Long,
+    @SerialName("playhead_s") val playheadS: Double? = null,
 )
 
 /**

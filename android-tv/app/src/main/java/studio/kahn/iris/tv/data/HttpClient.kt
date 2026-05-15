@@ -3,6 +3,8 @@ package studio.kahn.iris.tv.data
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import okhttp3.Authenticator
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -74,6 +76,49 @@ fun buildOkHttpClient(
     authenticator.bind(client)
     return client
 }
+
+/**
+ * Media3-specific OkHttp client, forked off the API client.
+ *
+ * Why a separate client: Fire TV (Fire OS, AOSP-derivative) has been
+ * observed wedging its network layer after an ExoPlayer Range-request
+ * cancel on a seek (rewind in particular drops the entire internal
+ * buffer, which forces a brand-new Range request immediately on top of
+ * the cancellation). Symptom: rewind once, every subsequent call —
+ * Media3 AND API — hangs forever, "totalement frozen". Standard
+ * Android TVs with a current stack handle the cancellation cleanly.
+ *
+ * Two changes vs the API client:
+ *
+ * 1. **Dedicated `ConnectionPool` + `Dispatcher`.** Total isolation from
+ *    the Retrofit client. If the Media3 pool DOES wedge on a Fire OS
+ *    cancel race, it stays local to Media3 — API calls (back nav →
+ *    other movie → manifest fetch) keep working on their own pool.
+ *    The pool isolation alone is what lets the user recover by going
+ *    back to the home screen and trying a different file instead of
+ *    needing to kill the app.
+ *
+ * 2. **`callTimeout = 0` (disabled).** A streamed Range body
+ *    legitimately spans many minutes while ExoPlayer drip-reads at
+ *    playback rate; the API client's 120 s ceiling would hard-kill the
+ *    call mid-buffer and ExoPlayer's retry would just rebuild the same
+ *    dying request. `readTimeout` (per-read) still bounds genuine
+ *    stalls.
+ *
+ * Stays on HTTP/2 like the API client — lower handshake cost on seeks
+ * keeps rewind snappy on healthy stacks. If a Fire TV still wedges
+ * inside Media3 after this change, the escalation is to add
+ * `.protocols(listOf(Protocol.HTTP_1_1))` here — that gives each Range
+ * request its own TCP socket so cancel = `close(socket)` net, at the
+ * cost of one extra RTT per seek on every device.
+ */
+fun deriveMediaOkHttpClient(api: OkHttpClient): OkHttpClient =
+    api.newBuilder()
+        .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
+        .dispatcher(Dispatcher())
+        .callTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
 
 /**
  * OkHttp [Authenticator] that transparently refreshes the access cookie when

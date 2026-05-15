@@ -15,18 +15,20 @@ import okhttp3.OkHttpClient
 import studio.kahn.iris.tv.BuildConfig
 
 /**
- * Build an `ExoPlayer` whose HTTP layer reuses our OkHttp client (cookie
- * jar, timeouts, logging). Without this Media3 spins up its own
- * `DefaultHttpDataSource`, which does NOT see our session cookies, so the
- * HLS manifest + segment requests would 401 immediately.
+ * Build an `ExoPlayer` whose HTTP layer reuses our session cookies via a
+ * dedicated, Media3-tuned OkHttp client. The caller MUST pass the
+ * `mediaOkHttpClient` from `AppContainer` — never the bare `okHttpClient`
+ * shared with Retrofit. See `deriveMediaOkHttpClient` in `HttpClient.kt`
+ * for the Fire-TV-specific reason that isolation matters (shared pool +
+ * HTTP/2 stream cancel = wedged TCP connection on Fire OS).
  */
 @UnstableApi
 fun buildPlayer(
     context: Context,
-    okHttp: OkHttpClient,
+    mediaOkHttp: OkHttpClient,
     userAgent: String = "iris-tv/${BuildConfig.VERSION_NAME} (Media3)",
 ): ExoPlayer {
-    val dataSourceFactory = OkHttpDataSource.Factory(okHttp).setUserAgent(userAgent)
+    val dataSourceFactory = OkHttpDataSource.Factory(mediaOkHttp).setUserAgent(userAgent)
     val mediaSourceFactory = DefaultMediaSourceFactory(context)
         .setDataSourceFactory(dataSourceFactory)
 
