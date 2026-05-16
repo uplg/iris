@@ -22,6 +22,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -111,6 +113,18 @@ fun SearchDetailScreen(
     }
 
     val layout = LocalTvLayout.current
+
+    // Without this, Compose-TV hands initial focus to the first
+    // focusable in the tree — the "Back" button, which sat at the very
+    // bottom of the body. The LazyColumn then scrolled all the way down
+    // to it on entry, hiding the title. We park focus on the primary
+    // action instead (now rendered directly under the title), so the
+    // screen opens on the title with the remote ready on "play".
+    val playFocus = remember { FocusRequester() }
+    LaunchedEffect(details) {
+        if (details != null) runCatching { playFocus.requestFocus() }
+    }
+
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item(key = "hero") {
             Hero(meta = meta, tmdbId = tmdbId, fallbackTitle = details?.title ?: externalId)
@@ -129,6 +143,12 @@ fun SearchDetailScreen(
                     details?.title ?: "Loading…",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.SemiBold,
+                    // tv-material3 Text with no color falls back to a
+                    // black LocalContentColor here (no enclosing Surface
+                    // sets it) → black-on-dark. Every other Text on this
+                    // screen sets it explicitly; the title was the one
+                    // that didn't.
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 if (details?.freeleech == true) {
                     BadgeChip("Freeleech", color = androidx.compose.ui.graphics.Color(0xFF10B981))
@@ -158,37 +178,6 @@ fun SearchDetailScreen(
                     }
                 }
             }
-
-            if (loading) {
-                Text("Reading details…", style = MaterialTheme.typography.bodyMedium)
-            }
-            error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-            }
-
-            // Synopsis: prefer TMDB (clean text) over the markup-laden
-            // tracker description on TV. We strip whatever markup the
-            // tracker uses (BBCode for torr9, HTML for c411) as a backup
-            // so we never show raw tags on a 10-foot screen.
-            val synopsis = meta?.overview ?: details?.let { d ->
-                d.description?.let { desc ->
-                    when (d.descriptionFormat) {
-                        DescriptionFormat.BBCODE -> stripBBCode(desc)
-                        DescriptionFormat.HTML -> stripHtml(desc)
-                        DescriptionFormat.PLAIN -> desc
-                    }
-                }
-            }
-            if (!synopsis.isNullOrBlank()) {
-                Text(
-                    synopsis,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.fillMaxWidth(0.8f),
-                )
-            }
-
-            details?.mediaInfo?.let { FactsGrid(it) }
 
             // Stats line + action buttons.
             Row(
@@ -284,6 +273,7 @@ fun SearchDetailScreen(
                             }
                         }
                     },
+                    modifier = Modifier.focusRequester(playFocus),
                     enabled = details != null && !ingesting,
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                     contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp),
@@ -291,6 +281,37 @@ fun SearchDetailScreen(
                     Text(if (ingesting) "Starting…" else "▶  Download & play")
                 }
             }
+
+            if (loading) {
+                Text("Reading details…", style = MaterialTheme.typography.bodyMedium)
+            }
+            error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            // Synopsis: prefer TMDB (clean text) over the markup-laden
+            // tracker description on TV. We strip whatever markup the
+            // tracker uses (BBCode for torr9, HTML for c411) as a backup
+            // so we never show raw tags on a 10-foot screen.
+            val synopsis = meta?.overview ?: details?.let { d ->
+                d.description?.let { desc ->
+                    when (d.descriptionFormat) {
+                        DescriptionFormat.BBCODE -> stripBBCode(desc)
+                        DescriptionFormat.HTML -> stripHtml(desc)
+                        DescriptionFormat.PLAIN -> desc
+                    }
+                }
+            }
+            if (!synopsis.isNullOrBlank()) {
+                Text(
+                    synopsis,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.fillMaxWidth(0.8f),
+                )
+            }
+
+            details?.mediaInfo?.let { FactsGrid(it) }
         }
         }
 
@@ -402,6 +423,10 @@ private fun AudioFacts(audio: List<AudioInfoDetails>) {
                         if (a.default) "default" else null,
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,
+                    // No explicit color → black LocalContentColor on a
+                    // dark screen. VideoFacts dodges this via ChipText;
+                    // the plain Audio/Subtitles rows did not.
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
@@ -423,6 +448,7 @@ private fun SubFacts(subs: List<SubInfoDetails>) {
                         if (s.title?.contains("SDH", ignoreCase = true) == true) "SDH" else null,
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }

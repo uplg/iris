@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items as lazyListItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -29,6 +31,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -42,6 +45,7 @@ import android.content.Context
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -75,6 +79,7 @@ import studio.kahn.iris.tv.data.AggregatedResults
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.SearchResult
+import studio.kahn.iris.tv.data.SearchViewMode
 import studio.kahn.iris.tv.data.TmdbSuggestion
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
@@ -136,6 +141,13 @@ fun SearchScreen(
 ) {
     val scope = rememberCoroutineScope()
     val layout = LocalTvLayout.current
+
+    // Persisted client-side (PrefsStore / its own DataStore) so the
+    // user picks Grid vs List once, not every visit. collectAsState
+    // drives the UI reactively; the toggle just writes the new value
+    // and the flow re-emits.
+    val viewMode by container.prefsStore.searchViewMode
+        .collectAsState(initial = SearchViewMode.GRID)
 
     // rememberSaveable, not remember: navigating to a result detail
     // disposes this composable. With plain `remember` the query +
@@ -415,7 +427,7 @@ fun SearchScreen(
             )
         }
 
-        // --- Sort chips alone on a thin row ---
+        // --- Sort chips + view-mode toggle on a thin row ---
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -427,6 +439,14 @@ fun SearchScreen(
                 value = sort,
                 labelOf = { it.label },
                 onChange = { sort = it; page = 1 },
+            )
+            Box(Modifier.weight(1f))
+            ChipGroup(
+                label = "View",
+                options = listOf(SearchViewMode.GRID, SearchViewMode.LIST),
+                value = viewMode,
+                labelOf = { if (it == SearchViewMode.GRID) "Grid" else "List" },
+                onChange = { scope.launch { container.prefsStore.setSearchViewMode(it) } },
             )
         }
 
@@ -454,20 +474,42 @@ fun SearchScreen(
                 // Compact poster minSize: smaller cards = more rows
                 // visible at a glance.
                 Box(Modifier.weight(1f)) {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 110.dp),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-                        contentPadding = PaddingValues(vertical = Spacing.xs),
-                    ) {
-                        items(rows, key = { "${it.providerId}:${it.externalId}" }) { r ->
-                            ResultCard(
-                                result = r,
-                                resolvedPoster = tmdbCache[r.title to r.kind]?.posterPath,
-                                onClick = {
-                                    onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
-                                },
-                            )
+                    when (viewMode) {
+                        SearchViewMode.GRID -> LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 110.dp),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            contentPadding = PaddingValues(vertical = Spacing.xs),
+                        ) {
+                            items(
+                                rows,
+                                key = { "${it.providerId}:${it.externalId}" },
+                            ) { r ->
+                                ResultCard(
+                                    result = r,
+                                    resolvedPoster = tmdbCache[r.title to r.kind]?.posterPath,
+                                    onClick = {
+                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
+                                    },
+                                )
+                            }
+                        }
+                        SearchViewMode.LIST -> LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            contentPadding = PaddingValues(vertical = Spacing.xs),
+                        ) {
+                            lazyListItems(
+                                rows,
+                                key = { "${it.providerId}:${it.externalId}" },
+                            ) { r ->
+                                ResultRow(
+                                    result = r,
+                                    resolvedPoster = tmdbCache[r.title to r.kind]?.posterPath,
+                                    onClick = {
+                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -765,6 +807,149 @@ private fun ResultCard(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * List-mode row. Shows exactly the same information as [ResultCard]
+ * (poster, title, year · quality, seeders / leechers / size, kind,
+ * language / sub + provider / freeleech badges) but laid out
+ * horizontally so the full release title is readable at a glance —
+ * the whole point of List mode. Compact w185 thumbnail keeps it light
+ * for fast scrolling. Every `Text` sets an explicit colour: tv-material3
+ * `Text` with none falls back to a black `LocalContentColor` here.
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun ResultRow(
+    result: SearchResult,
+    resolvedPoster: String?,
+    onClick: () -> Unit,
+) {
+    val parsed = remember(result) { parseTags(result) }
+    val poster: String? = tmdbPosterUrl(resolvedPoster, "w185") ?: result.posterUrl
+    var focused by remember { mutableStateOf(false) }
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused || it.hasFocus },
+        shape = CardDefaults.shape(shape = RoundedCornerShape(10.dp)),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .width(46.dp)
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(6.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (poster != null) {
+                    AsyncImage(
+                        model = poster,
+                        contentDescription = result.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
+                                    Color(0xFF0B0D12),
+                                ),
+                            ),
+                        ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (result.kind == "tv") "📺" else "🎬",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color.White.copy(alpha = 0.55f),
+                        )
+                    }
+                }
+            }
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                // Full title: 2 lines at row width covers virtually
+                // every release name; on focus it marquees so even the
+                // longest scrolls fully into view.
+                Text(
+                    result.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = if (focused) 1 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (focused) Modifier.basicMarquee() else Modifier,
+                )
+                val sub = buildList {
+                    result.year?.let { add(it.toString()) }
+                    parsed.quality?.let { add(it) }
+                }.joinToString(" · ")
+                if (sub.isNotEmpty()) {
+                    Text(
+                        sub,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "↑ ${result.seeders ?: 0}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFF34D399),
+                    )
+                    Text(
+                        "↓ ${result.leechers ?: 0}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFFFB7185),
+                    )
+                    result.sizeBytes?.let {
+                        Text(
+                            "·  ${formatSizeShort(it)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            // Trailing badges — same set as the grid card.
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                result.kind?.let { k ->
+                    BadgePill(
+                        if (k == "tv") "TV" else "Movie",
+                        Color.Black.copy(alpha = 0.65f),
+                        small = true,
+                    )
+                }
+                parsed.langs.forEach { lang ->
+                    BadgePill(lang, MaterialTheme.colorScheme.surfaceVariant, small = true)
+                }
+                if (parsed.subs) {
+                    BadgePill("SUB", Color(0xFF6366F1), small = true)
+                }
+                if (result.freeleech) {
+                    BadgePill("FL", Color(0xFF10B981), small = true)
+                }
+                BadgePill(result.providerId, Color.Black.copy(alpha = 0.65f), small = true)
             }
         }
     }

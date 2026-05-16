@@ -20,6 +20,9 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
  */
 interface AppContainer {
     val sessionStore: SessionStore
+    /** Client-side UI preferences (search layout, …). Separate from
+     *  [sessionStore] so clearing the session keeps display choices. */
+    val prefsStore: PrefsStore
     val okHttpClient: OkHttpClient
     /** Separate OkHttp client for Media3 streaming — see
      *  [deriveMediaOkHttpClient] for the Fire-TV rationale. Owns its own
@@ -52,6 +55,7 @@ interface AppContainer {
 
 class DefaultAppContainer(context: Context) : AppContainer {
     override val sessionStore: SessionStore = SessionStore(context.applicationContext)
+    override val prefsStore: PrefsStore = PrefsStore(context.applicationContext)
     private val outdatedFlag = MutableStateFlow(false)
     override val clientOutdated: StateFlow<Boolean> = outdatedFlag.asStateFlow()
     override val okHttpClient: OkHttpClient =
