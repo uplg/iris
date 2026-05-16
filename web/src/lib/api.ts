@@ -306,6 +306,18 @@ export const metadata = {
    *  array on missing config / network failure (best-effort). */
   tmdbSearch: (q: string) =>
     api.get<TmdbSuggestion[]>(`/metadata/tmdb/search?q=${encodeURIComponent(q)}`),
+  /** Resolve a raw release title to its single best TMDB match. Scored
+   *  server-side by kind + year (not popularity) and served from the
+   *  persistent 30d resolve cache — this is the poster path for search
+   *  results. `null` when nothing matched / TMDB unconfigured. Send the
+   *  untouched release name; the backend parses title/year/kind out of
+   *  it (one source of truth instead of a per-client SCENE parser). */
+  tmdbResolve: (title: string, kind?: MediaKind | null) =>
+    api.get<TmdbSuggestion | null>(
+      `/metadata/tmdb/resolve?title=${encodeURIComponent(title)}${
+        kind ? `&kind=${kind}` : ""
+      }`,
+    ),
 };
 
 // ---------------------------------------------------------------------------

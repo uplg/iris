@@ -6,6 +6,7 @@ import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +35,8 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import android.content.Context
 import android.view.inputmethod.InputMethodManager
@@ -42,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -50,6 +54,7 @@ import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
@@ -109,6 +114,15 @@ private data class FetchKey(
     val kind: KindFilter,
 )
 
+/**
+ * Saver for `rememberSaveable` of an enum: persists the variant by
+ * `name` so the user's search query / filters survive navigating to a
+ * result and pressing Back (the SEARCH back-stack entry keeps its
+ * SavedStateRegistry alive — only a plain `remember` was losing it).
+ */
+private inline fun <reified T : Enum<T>> enumStateSaver(): Saver<T, String> =
+    Saver(save = { it.name }, restore = { enumValueOf<T>(it) })
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SearchScreen(
@@ -123,11 +137,25 @@ fun SearchScreen(
     val scope = rememberCoroutineScope()
     val layout = LocalTvLayout.current
 
-    var query by remember { mutableStateOf(initialQuery ?: "") }
-    var submittedQuery by remember { mutableStateOf(initialQuery?.trim().orEmpty()) }
-    var kind by remember { mutableStateOf(KindFilter.All) }
-    var sort by remember { mutableStateOf(SortMode.Recommended) }
-    var page by remember { mutableIntStateOf(1) }
+    // rememberSaveable, not remember: navigating to a result detail
+    // disposes this composable. With plain `remember` the query +
+    // filters were lost, so pressing Back (UI or remote) dumped the
+    // user on an empty search bar — they had to retype everything every
+    // time. Saveable state is restored from the SEARCH back-stack
+    // entry; the fetch LaunchedEffect below then re-runs and repopulates
+    // the results. The search only clears when the user actually leaves
+    // the screen or clears it themselves.
+    var query by rememberSaveable { mutableStateOf(initialQuery ?: "") }
+    var submittedQuery by rememberSaveable {
+        mutableStateOf(initialQuery?.trim().orEmpty())
+    }
+    var kind by rememberSaveable(stateSaver = enumStateSaver<KindFilter>()) {
+        mutableStateOf(KindFilter.All)
+    }
+    var sort by rememberSaveable(stateSaver = enumStateSaver<SortMode>()) {
+        mutableStateOf(SortMode.Recommended)
+    }
+    var page by rememberSaveable { mutableIntStateOf(1) }
 
     var data by remember { mutableStateOf<AggregatedResults?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -258,25 +286,18 @@ fun SearchScreen(
         if (results.isEmpty()) return@LaunchedEffect
         val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
         val api = container.apiFor(url)
+        // One resolve call per distinct (release title, kind). The
+        // backend parses + scores by kind + year and caches 30d, so this
+        // is both correct (no more "Pride" → "Pride and Prejudice"
+        // popularity collisions) and cheap (shared server-side cache).
         val unresolved = results
-            .map { extractSceneTitle(it.title) to it.kind }
-            .filter { (name, _) -> name.isNotBlank() }
+            .map { it.title to it.kind }
+            .filter { (title, _) -> title.isNotBlank() }
             .filter { it !in tmdbCache }
             .distinct()
-        // One TMDB lookup per distinct cleaned title; we then disambiguate
-        // each (name, kind) bucket against that single response.
-        val byName = mutableMapOf<String, List<TmdbSuggestion>>()
-        for ((name, resultKind) in unresolved) {
-            val pick = byName.getOrPut(name) {
-                runCatching { api.tmdbSearch(name) }.getOrNull().orEmpty()
-            }
-            // Prefer a hit matching the row's own kind; otherwise fall
-            // back to the popularity top. Without the per-row preference
-            // a movie row and a series row sharing the same slug both
-            // pulled whichever of the two TMDB returned first.
-            val target = (resultKind?.let { k -> pick.firstOrNull { it.kind == k } })
-                ?: pick.firstOrNull()
-            tmdbCache[name to resultKind] = target
+        for ((title, kind) in unresolved) {
+            tmdbCache[title to kind] =
+                runCatching { api.tmdbResolve(title, kind) }.getOrNull()
         }
     }
 
@@ -440,10 +461,9 @@ fun SearchScreen(
                         contentPadding = PaddingValues(vertical = Spacing.xs),
                     ) {
                         items(rows, key = { "${it.providerId}:${it.externalId}" }) { r ->
-                            val cleaned = remember(r.title) { extractSceneTitle(r.title) }
                             ResultCard(
                                 result = r,
-                                resolvedPoster = tmdbCache[cleaned to r.kind]?.posterPath,
+                                resolvedPoster = tmdbCache[r.title to r.kind]?.posterPath,
                                 onClick = {
                                     onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
                                 },
@@ -614,9 +634,12 @@ private fun ResultCard(
 ) {
     val parsed = remember(result) { parseTags(result) }
     val poster: String? = tmdbPosterUrl(resolvedPoster, "w342") ?: result.posterUrl
+    var focused by remember { mutableStateOf(false) }
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused || it.hasFocus },
         shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
     ) {
         Column {
@@ -679,10 +702,17 @@ private fun ResultCard(
                 Modifier.padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                // Titles are routinely longer than the card. Off-focus:
+                // 2 lines + ellipsis (keeps grid density). On-focus:
+                // single-line marquee so the user can read the full
+                // title of the card they're on — only one scrolls at a
+                // time, never the whole grid.
                 Text(
                     result.title,
                     style = MaterialTheme.typography.titleSmall,
-                    maxLines = 2,
+                    maxLines = if (focused) 1 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (focused) Modifier.basicMarquee() else Modifier,
                 )
                 // Year + quality tags.
                 val sub = buildList {
@@ -888,47 +918,6 @@ private fun Pagination(
             ) { Text("Next →") }
         }
     }
-}
-
-// ===== SCENE name extraction ============================================
-
-private val STOP_TOKEN = Regex(
-    listOf(
-        "^\\d{4}$",                                       // year
-        "^[sS]\\d{1,2}([eE]\\d{1,3})?$",                  // S01 / S01E01
-        "^[eE]\\d{1,3}$",                                  // E01
-        "^season$",
-        "^(480p|576p|720p|1080p|1440p|2160p|4k|uhd)$",
-        "^(bluray|brrip|bdrip|webrip|web-?dl|web|hdtv|hdrip|dvdrip|hdlight|remux|hr-hdtv)$",
-        "^(x264|x265|h\\.?264|h\\.?265|hevc|avc|av1|xvid|divx)$",
-        "^(french|truefrench|vff|vfi|vfq|vf|vostfr|multi|english|eng|vo|vost)$",
-        "^(complete|repack|proper|extended|directors?|uncut|hdr|hdr10|dv)$",
-    ).joinToString("|"),
-    RegexOption.IGNORE_CASE,
-)
-
-/**
- * Extract the canonical name from a SCENE-style release title. Walks
- * tokens (split on `.`, `_`, ` `, `[`, `(`) and stops at the first
- * "metadata" token (year, SxxExx, resolution, source, codec, language).
- * Whatever's before is the title we hand to TMDB.
- *
- * Mirrors the same logic in `web/src/pages/SearchPage.tsx`. Falls back
- * to the raw title when nothing parses (e.g. user-uploaded names without
- * standard separators), so we never end up with a blank lookup key.
- */
-fun extractSceneTitle(raw: String): String {
-    val tokens = raw
-        .replace(Regex("[\\.\\_\\-\\[\\]\\(\\)]+"), " ")
-        .split(Regex("\\s+"))
-        .filter { it.isNotEmpty() }
-    val head = mutableListOf<String>()
-    for (t in tokens) {
-        if (STOP_TOKEN.matches(t)) break
-        head += t
-    }
-    val cleaned = head.joinToString(" ").trim()
-    return if (cleaned.length >= 2) cleaned else raw.trim()
 }
 
 // ===== Tag parsing & helpers ============================================

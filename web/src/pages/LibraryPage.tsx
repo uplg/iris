@@ -762,7 +762,7 @@ function TorrentRow({
     <div className="group rounded-lg border border-border/70 bg-card/60 transition hover:border-border">
       <div className="flex gap-4 p-4">
         <TorrentPoster
-          tmdbId={t.tmdb_id}
+          name={t.name}
           kind={t.kind}
           verified={t.tmdb_verified}
         />
@@ -894,18 +894,24 @@ function TorrentRow({
  * re-mounts during scroll don't re-hit the network.
  */
 function TorrentPoster({
-  tmdbId,
+  name,
   kind,
   verified,
 }: {
-  tmdbId: number | null;
+  name: string | null;
   kind: MediaKind | null;
   verified: boolean;
 }) {
+  // Resolve by release *name* (server-side kind+year scoring, shared 30d
+  // cache) — the exact path the search results use. The torrent's stored
+  // `tmdb_id` is set once at ingest and falls back to the unreliable
+  // indexer id whenever the resolver found nothing then, so trusting it
+  // here is what made this list "fantasque". Shared `tmdb-resolve` query
+  // key dedupes against the search card for the same title.
   const tmdbQ = useQuery({
-    queryKey: ["tmdb", tmdbId, kind],
-    queryFn: () => metadata.tmdb(tmdbId!, kind ?? undefined),
-    enabled: tmdbId != null,
+    queryKey: ["tmdb-resolve", name, kind ?? "any"],
+    queryFn: () => metadata.tmdbResolve(name!, kind),
+    enabled: !!name && name.length >= 2,
     staleTime: 60_000,
   });
   const url = tmdbImage(tmdbQ.data?.poster_path, "w92");

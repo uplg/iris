@@ -338,51 +338,6 @@ export function SearchPage() {
   );
 }
 
-/**
- * Extract the canonical name from a SCENE-style release title. Walks
- * tokens (split on `.`, `_`, space, `(`, `[`) and stops at the first
- * "metadata" token — a year, SxxExx, resolution, source, codec or
- * language tag. Whatever's before the stop token is the title.
- *
- * Examples:
- *   "Silicon.Valley.S01E01.1080p.BluRay.x264-XYZ" → "Silicon Valley"
- *   "The.Burning.Bed.1984.DVDRip.x264-XYZ"        → "The Burning Bed"
- *   "Avatar.2009.1080p.BluRay.HEVC-Group"         → "Avatar"
- *   "Game of Thrones - Season 1 - 1080p"          → "Game of Thrones"
- *
- * Falls back to the raw title when nothing parses (e.g. user-uploaded
- * names without standard separators).
- */
-const STOP_TOKEN = new RegExp(
-  [
-    "^\\d{4}$", // year
-    "^s\\d{1,2}(e\\d{1,3})?$", // S01 / S01E01
-    "^e\\d{1,3}$", // E01
-    "^season$",
-    "^(480p|576p|720p|1080p|1440p|2160p|4k|uhd)$",
-    "^(bluray|brrip|bdrip|webrip|web-?dl|web|hdtv|hdrip|dvdrip|hdlight|remux|hr-hdtv)$",
-    "^(x264|x265|h\\.?264|h\\.?265|hevc|avc|av1|xvid|divx)$",
-    "^(french|truefrench|vff|vfi|vfq|vf|vostfr|multi|english|eng|vo|vost)$",
-    "^(complete|repack|proper|extended|directors?|uncut|hdr|hdr10|dv)$",
-  ].join("|"),
-  "i",
-);
-
-function extractSceneTitle(raw: string): string {
-  // Drop "Various filename punctuation" → spaces, then split.
-  const tokens = raw
-    .replace(/[._\-[\]()]+/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
-  const head: string[] = [];
-  for (const t of tokens) {
-    if (STOP_TOKEN.test(t)) break;
-    head.push(t);
-  }
-  const cleaned = head.join(" ").trim();
-  return cleaned.length >= 2 ? cleaned : raw.trim();
-}
-
 function SuggestionsDropdown({
   open,
   loading,
@@ -449,23 +404,18 @@ function ResultCard({
   result: SearchResult;
   onClick: () => void;
 }) {
-  // Resolve the poster by *title* rather than by indexer-supplied
+  // Resolve the poster by *release name* rather than by indexer-supplied
   // `tmdb_id`. The latter is wrong often enough that we've stopped
   // trusting it for visual cues (torr9 mislabels e.g. Silicon Valley
-  // releases with The Burning Bed's id). The cleaned SCENE title
-  // comes from the release name itself, which is the authoritative
-  // identifier on every tracker.
-  const cleaned = useMemo(() => extractSceneTitle(result.title), [result.title]);
+  // releases with The Burning Bed's id). We send the untouched title to
+  // `/tmdb/resolve`, which parses + scores it by kind + year server-side
+  // (one source of truth, shared 30d cache) instead of the old
+  // client-side "clean title → popularity #1" heuristic that mismatched
+  // short titles like "Pride" → "Pride and Prejudice".
   const tmdbHitQ = useQuery({
-    queryKey: ["tmdb-by-title", cleaned, result.kind ?? "any"],
-    queryFn: async () => {
-      const hits = await metadata.tmdbSearch(cleaned);
-      // Prefer a hit matching the result's kind when known.
-      return (result.kind ? hits.find((h) => h.kind === result.kind) : null)
-        ?? hits[0]
-        ?? null;
-    },
-    enabled: cleaned.length >= 2,
+    queryKey: ["tmdb-resolve", result.title, result.kind ?? "any"],
+    queryFn: () => metadata.tmdbResolve(result.title, result.kind),
+    enabled: result.title.length >= 2,
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,

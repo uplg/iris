@@ -117,6 +117,19 @@ interface IrisApi {
     @GET("api/metadata/tmdb/search")
     suspend fun tmdbSearch(@Query("q") q: String): List<TmdbSuggestion>
 
+    /** Resolve a raw release title to its single best TMDB match. Scored
+     *  server-side by kind + year (not popularity) and served from the
+     *  persistent 30d resolve cache — this is the poster path for search
+     *  results. Send the untouched release name; the backend parses
+     *  title/year/kind out of it (one source of truth instead of a
+     *  per-client SCENE parser). `null` when nothing matched / TMDB
+     *  unconfigured. */
+    @GET("api/metadata/tmdb/resolve")
+    suspend fun tmdbResolve(
+        @Query("title") title: String,
+        @Query("kind") kind: String? = null,
+    ): TmdbSuggestion?
+
     @GET("api/search")
     suspend fun search(
         @Query("q") q: String,
