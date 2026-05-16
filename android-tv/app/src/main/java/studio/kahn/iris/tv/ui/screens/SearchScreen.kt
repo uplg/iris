@@ -479,7 +479,13 @@ fun SearchScreen(
                             columns = GridCells.Adaptive(minSize = 110.dp),
                             horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                             verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-                            contentPadding = PaddingValues(vertical = Spacing.xs),
+                            // Horizontal inset gives the scaled edge
+                            // cards room to grow without clipping at
+                            // the grid bounds.
+                            contentPadding = PaddingValues(
+                                horizontal = Spacing.xs,
+                                vertical = Spacing.xs,
+                            ),
                         ) {
                             items(
                                 rows,
@@ -683,6 +689,10 @@ private fun ResultCard(
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused || it.hasFocus },
         shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
+        // tv-material3's default focusedScale is 1.1 — on a tight
+        // poster grid the edge cards blow past the gutter. A subtle
+        // 1.05 keeps the focus cue without overflowing.
+        scale = CardDefaults.scale(focusedScale = 1.05f),
     ) {
         Column {
             Box(
@@ -837,6 +847,10 @@ private fun ResultRow(
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused || it.hasFocus },
         shape = CardDefaults.shape(shape = RoundedCornerShape(10.dp)),
+        // Full-width row: any focusedScale > 1 overflows horizontally
+        // by definition. Disable the zoom; focus is shown via the
+        // card's focused container colour instead.
+        scale = CardDefaults.scale(focusedScale = 1f),
     ) {
         Row(
             Modifier
