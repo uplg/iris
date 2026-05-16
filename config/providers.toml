@@ -22,3 +22,12 @@ kind = "unit3d"
 enabled = true
 base_url = "https://theoldschool.cc"
 api_key_env = "TOS_API_KEY"
+
+# SeedPool — UNIT3D tracker, same native JSON:API as TOS. Generate an
+# API key in your account settings → API Tokens.
+[[providers]]
+id = "seedpool"
+kind = "unit3d"
+enabled = true
+base_url = "https://seedpool.org"
+api_key_env = "SEEDPOOL_API_KEY"

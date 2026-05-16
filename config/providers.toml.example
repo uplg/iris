@@ -34,6 +34,15 @@ enabled = true
 base_url = "https://theoldschool.cc"
 api_key_env = "TOS_API_KEY"
 
+# SeedPool — another UNIT3D tracker; identical wiring, just a
+# different base_url + api_key_env.
+[[providers]]
+id = "seedpool"
+kind = "unit3d"
+enabled = true
+base_url = "https://seedpool.org"
+api_key_env = "SEEDPOOL_API_KEY"
+
 # Generic Torznab indexer (Jackett-fed, Prowlarr-fed, NewzNab clones).
 # UNIT3D-based trackers should use `kind = "unit3d"` above instead.
 # [[providers]]
