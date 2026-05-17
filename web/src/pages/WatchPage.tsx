@@ -109,33 +109,25 @@ export function WatchPage() {
   });
   const playReady = playStatusQ.data?.ready === true;
 
-  // Gate probe on "download is finished" via playStatus, NOT on
-  // `!!file`. Two reasons:
-  //   1. `data.files` from /api/torrents can briefly be empty after a
-  //      grab (librqbit metadata race) — gating on it left users stuck
-  //      on "Preparing playback".
-  //   2. ffprobe explodes on librqbit's pre-allocated zero-filled
-  //      sparse files mid-download ("EBML header parsing failed").
-  // playStatus reports `reason="downloading"` while bytes are still
-  // arriving and flips to `"remuxing"` (or `ready: true`) the moment
-  // the file is fully on disk. That's the precise signal we want — and
-  // it lets us probe ONCE without the wasted retries that a fixed
-  // timeout would impose on slow downloads.
-  const downloadFinished =
-    playStatusQ.data != null &&
-    playStatusQ.data.reason !== "downloading" &&
-    playStatusQ.data.error == null;
+  // Do NOT gate the probe on the whole torrent finishing. Click-to-play
+  // must work as soon as the head is on disk — a 4 K remux is tens of GB
+  // and waiting for 100% (or watching it sit at 99%) defeats the point.
+  // The backend `/probe` route now actively prefetches the container
+  // header + tail and returns a retryable "file not yet on disk" 400
+  // while those bytes are still arriving (instead of a 500 on ffprobe's
+  // "EBML header parsing failed"). So we fire as soon as we have a
+  // torrent record and poll on the not-ready signal, exactly like the
+  // manifest query below.
   const probeQ = useQuery({
     queryKey: ["probe", infohash, fileIdx],
     queryFn: () => torrents.probe(infohash!, fileIdx),
-    enabled: !!infohash && downloadFinished,
+    enabled: !!infohash,
     retry: (failureCount, err) => {
-      // Tight retry budget — by the time we even fire this query the
-      // download is already done per playStatus. The only "not yet on
-      // disk" case left is the brief window between librqbit flushing
-      // the last piece and the file being readable.
+      // The backend prefetch can take up to ~30s per attempt to pull the
+      // head from a slow private-tracker swarm; keep polling on the
+      // not-ready signal with the same budget as the manifest query.
       const msg = err instanceof Error ? err.message : "";
-      return msg.includes("not yet on disk") && failureCount < 5;
+      return msg.includes("not yet on disk") && failureCount < 30;
     },
     retryDelay: 2000,
   });

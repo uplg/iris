@@ -169,6 +169,42 @@ pub async fn probe_file(path: &Path) -> Result<MediaProbe, ProbeError> {
         }
     }
 
+    // librqbit pre-allocates the file at full size and zero-fills regions
+    // whose pieces haven't arrived yet. A freshly-grabbed torrent therefore
+    // has a full-size file whose head is all zeros — ffprobe then dies with
+    // "EBML header parsing failed" / "invalid as first byte". No real
+    // container starts with a run of zero bytes (MKV begins `1A 45 DF A3`,
+    // MP4 with a non-zero box size), so an all-zero head means "the bytes
+    // we need just aren't downloaded yet". Surface that with the
+    // recognisable "file not yet on disk" token the caller / frontend
+    // retry-policy keys on, instead of letting ffprobe choke.
+    {
+        use tokio::io::AsyncReadExt;
+        let mut f = tokio::fs::File::open(path).await?;
+        let want = 1usize << 16; // 64 KiB — covers any container header
+        let mut buf = vec![0u8; want];
+        let mut filled = 0usize;
+        loop {
+            let n = f.read(&mut buf[filled..]).await?;
+            if n == 0 {
+                break;
+            }
+            filled += n;
+            if filled == want {
+                break;
+            }
+        }
+        if filled > 0 && buf[..filled].iter().all(|&b| b == 0) {
+            return Err(ProbeError::Failed(
+                -1,
+                format!(
+                    "file not yet on disk (header not downloaded yet: {})",
+                    path.display()
+                ),
+            ));
+        }
+    }
+
     let output = tokio::process::Command::new("ffprobe")
         .args([
             // `-v error` surfaces ffprobe's own error messages on stderr.

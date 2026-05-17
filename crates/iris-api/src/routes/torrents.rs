@@ -630,32 +630,54 @@ async fn probe_file(
         .await?
         .ok_or(ApiError::NotFound)?;
     let path = state.engine().file_path(&infohash, idx).map_err(map_engine_err)?;
+
+    // Don't gate playback on the *whole torrent* finishing — a 4 K remux is
+    // tens of GB and "click-to-play" must work as soon as the head is here.
+    // Mirror `manifest_json`: while the torrent is still downloading, force
+    // the bytes ffprobe needs (container header at the front, MKV Cues /
+    // MP4 trailing `moov` at the tail) to download now. `prefetch_range`'s
+    // sequential priority is per-stream and transient, so this never slows
+    // the other torrents (no global first/last-piece priority).
+    let snap = state.engine().get_by_infohash(&infohash);
+    let torrent_finished = snap.as_ref().is_some_and(|s| s.finished);
+    if let Some(snap) = snap.as_ref() {
+        if !snap.finished {
+            if let Some(file) = snap.files.iter().find(|f| f.index == idx) {
+                let header_count: u64 = 1 << 16; // 64 KiB
+                let tail_count: u64 = 1 << 20; // 1 MiB
+                let tail_start = file.size_bytes.saturating_sub(tail_count);
+                let engine = state.engine().clone();
+                let ih = infohash.clone();
+                let header =
+                    engine.prefetch_range(&ih, idx, 0, header_count, Duration::from_secs(30));
+                let tail = engine.prefetch_range(
+                    &ih,
+                    idx,
+                    tail_start,
+                    tail_count,
+                    Duration::from_secs(30),
+                );
+                let (h, t) = tokio::join!(header, tail);
+                if let Err(e) = h {
+                    tracing::debug!(error = %e, "probe: header prefetch errored");
+                }
+                if let Err(e) = t {
+                    tracing::debug!(error = %e, "probe: tail prefetch errored");
+                }
+            }
+        }
+    }
     if !path.exists() {
         return Err(ApiError::BadRequest(format!(
             "file not yet on disk: {}",
             path.display()
         )));
     }
-    // librqbit pre-allocates the full target size with zeros and fills
-    // in pieces as they arrive. So a freshly added torrent has a path
-    // that exists at full size but contains all-zero bytes — ffprobe
-    // chokes on this with "EBML header parsing failed". Gate the probe
-    // on the engine's `finished` flag so we mirror what `play_status`
-    // already does, and return a "not yet on disk" message so the
-    // frontend's retry loop keeps polling.
-    if let Some(snap) = state.engine().get_by_infohash(&infohash) {
-        if !snap.finished {
-            return Err(ApiError::BadRequest(format!(
-                "file not yet on disk: download in progress ({:.0}%)",
-                snap.progress_pct
-            )));
-        }
-    }
     let probe = state
         .probes()
         .get_or_probe(&infohash, idx, &path)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
+        .map_err(|e| map_probe_err(&e, torrent_finished))?;
     Ok(Json(probe))
 }
 
@@ -733,7 +755,7 @@ async fn manifest_json(
         .probes()
         .get_or_probe(&infohash, idx, &path)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
+        .map_err(|e| map_probe_err(&e, snapshot.finished))?;
 
     let file_idx_u32 = u32::try_from(idx)
         .map_err(|_| ApiError::BadRequest("file index too large".into()))?;
@@ -763,6 +785,35 @@ async fn manifest_json(
     .await;
 
     Ok(Json(manifest))
+}
+
+/// Map a probe failure to an HTTP error. While the torrent is still
+/// downloading, ffprobe choking on librqbit's zero-filled head (EBML /
+/// "invalid as first byte" / "Invalid data found") just means the bytes
+/// aren't here yet — surface it as a retryable 400 carrying the
+/// "file not yet on disk" token the frontend retry-policy keys on, so
+/// click-to-play keeps polling instead of dying on a 500.
+///
+/// Once the torrent is **finished**, the same ffprobe failure is a
+/// genuinely corrupt file — surface it as a real 500 rather than masking
+/// it behind an infinite poll (see memory `feedback_no_hide_bad_data`).
+fn map_probe_err(e: &iris_media::ProbeError, torrent_finished: bool) -> ApiError {
+    let msg = e.to_string();
+    let explicit_not_ready = msg.contains("file not yet on disk");
+    let choked_on_partial_head = msg.contains("EBML header parsing failed")
+        || msg.contains("Invalid data found when processing input")
+        || msg.contains("invalid as first byte");
+    if explicit_not_ready || (!torrent_finished && choked_on_partial_head) {
+        // Carry BOTH "file not yet on disk" and "download in progress" so
+        // any client retry-policy that keys on either phrasing keeps
+        // polling (web regex + older shipped APKs — strict no-break-APK
+        // discipline, see CLAUDE.md backward-compat).
+        ApiError::BadRequest(format!(
+            "file not yet on disk: download in progress ({msg})"
+        ))
+    } else {
+        ApiError::Internal(anyhow::anyhow!("ffprobe: {msg}"))
+    }
 }
 
 fn map_engine_err(e: iris_torrent::EngineError) -> ApiError {
