@@ -11,7 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -21,10 +22,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
@@ -47,19 +53,24 @@ private val VIDEO_EXTS = listOf(
     ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
 )
 
+// Fully-opaque surfaces — the screen background is near-black, so any
+// alpha-blended surface vanishes into it.
+private val CardBg = Color(0xFF1B1B20)
+private val PanelBg = Color(0xFF141418)
+private val Accent = Color(0xFFC084FC)
+private val Good = Color(0xFF34D399)
+private val Danger = Color(0xFFF87171)
+
 /**
- * Seedbox / raw-torrents management view. Mirrors the web's
- * `?view=torrents`: every ingested torrent with its live transfer
- * stats, a per-torrent delete (the backend also wipes the files from
- * disk + reclaims space), and direct playback of the contained video
- * files. The family-friendly Library shelf on Home is untouched — this
- * is the "it's actually a seedbox" surface, reached from the Home top
- * bar.
+ * Seedbox / raw-torrents management view. Reached from the Home top
+ * bar; the family-friendly Library shelf is untouched.
  *
- * Identity: each torrent is keyed on its `infohash` (unique). Lifetime
- * upload + the seed summary come from the same `?view=torrents`
- * payload the web header uses, so the "since the beginning" total
- * survives GC eviction of individual torrents.
+ * TV interaction model kept deliberately flat: a fixed compact top bar
+ * (title + live summary + top-right Back, never scrolls) over a list
+ * of torrent cards. Every card's actions — Play / per-file Play /
+ * Delete — are **always-visible focusable buttons** (D-pad LEFT/RIGHT
+ * within a card, UP/DOWN between cards). No accordion / nested
+ * clickables: that's what made actions unreachable before.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -74,8 +85,6 @@ fun TorrentsScreen(
     var totalUploaded by remember { mutableStateOf(0L) }
     var error by remember { mutableStateOf<String?>(null) }
     var loadVersion by remember { mutableIntStateOf(0) }
-    // infohash currently being deleted — disables that row's actions
-    // and survives across the 5 s refresh (keyed list state).
     var deleting by remember { mutableStateOf<String?>(null) }
 
     suspend fun fetch(): Pair<List<TorrentView>, Long>? {
@@ -89,8 +98,7 @@ fun TorrentsScreen(
 
     LaunchedEffect(loadVersion) {
         error = null
-        val url = container.sessionStore.serverUrl.first()
-        if (url == null) {
+        if (container.sessionStore.serverUrl.first() == null) {
             error = "Not signed in"
             return@LaunchedEffect
         }
@@ -103,9 +111,8 @@ fun TorrentsScreen(
         }
     }
 
-    // Live refresh so progress / speeds tick, same idiom as HomeScreen's
-    // downloading shelf. Only reassign when the payload actually changed
-    // so focused rows don't recompose mid-interaction.
+    // Live refresh — same idiom as HomeScreen's downloading shelf; only
+    // reassign on real change so a focused row doesn't recompose.
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(5_000)
@@ -127,8 +134,6 @@ fun TorrentsScreen(
             }
             try {
                 withContext(Dispatchers.IO) { container.apiFor(url).deleteTorrent(infohash) }
-                // Optimistic drop so the row vanishes immediately; the
-                // refresh loop reconciles the rest.
                 torrents = torrents?.filterNot { it.infohash == infohash }
             } catch (e: Exception) {
                 error = e.message ?: "Delete failed"
@@ -139,143 +144,207 @@ fun TorrentsScreen(
     }
 
     val list = torrents
-    LazyColumn(
-        modifier = Modifier
+    val lazyState = rememberLazyListState()
+    val firstCardFocus = remember { FocusRequester() }
+    var didInitialFocus by remember { mutableStateOf(false) }
+
+    // Initial selection = the TOP card. Earlier attempts requested
+    // focus before the LazyColumn had laid the node out, so the call
+    // no-op'd and the system's spatial default (a fixed mid-list card,
+    // reached from Home's top-right icon) won. Gate on the real layout:
+    // wait until item 0 is actually placed, then request — once.
+    LaunchedEffect(list) {
+        if (didInitialFocus || list.isNullOrEmpty()) return@LaunchedEffect
+        runCatching { lazyState.scrollToItem(0) }
+        snapshotFlow { lazyState.layoutInfo.visibleItemsInfo.any { it.index == 0 } }
+            .first { it }
+        runCatching { firstCardFocus.requestFocus() }
+        withFrameNanos { }
+        runCatching { firstCardFocus.requestFocus() }
+        didInitialFocus = true
+    }
+
+    Column(
+        Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(
-            horizontal = layout.gutterHorizontal,
-            vertical = layout.gutterVertical,
-        ),
-        verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        item(key = "header") {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column {
-                        Text(
-                            "Seedbox",
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            if (list == null) "Loading torrents…"
-                            else "${list.size} torrent${if (list.size == 1) "" else "s"}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Button(
-                        onClick = onBack,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                    ) { Text("← Back") }
+        // ---- Fixed top bar (never scrolls) ----
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = layout.gutterHorizontal,
+                    end = layout.gutterHorizontal,
+                    top = layout.gutterVertical,
+                    bottom = Spacing.md,
+                ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    Text(
+                        "Seedbox",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        when {
+                            list == null -> "Loading torrents…"
+                            list.isEmpty() -> "No torrents yet"
+                            else -> "${list.size} torrent${if (list.size == 1) "" else "s"} · seeding"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                if (list != null) SeedSummary(list, totalUploaded)
-                error?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error)
-                }
+                Button(
+                    onClick = onBack,
+                    scale = ButtonDefaults.scale(focusedScale = 1f),
+                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                ) { Text("← Back") }
+            }
+            list?.let { SummaryStrip(it, totalUploaded) }
+            error?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = Danger)
             }
         }
 
+        // ---- Scrolling torrent list ----
         if (list != null && list.isEmpty()) {
-            item(key = "empty") {
+            Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
-                    "No torrents. Add content from Search.",
-                    style = MaterialTheme.typography.bodyMedium,
+                    "Nothing here. Add content from Search.",
+                    style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = Spacing.lg),
                 )
             }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                state = lazyState,
+                contentPadding = PaddingValues(
+                    start = layout.gutterHorizontal,
+                    end = layout.gutterHorizontal,
+                    bottom = layout.gutterVertical,
+                ),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                itemsIndexed(list.orEmpty(), key = { _, it -> it.infohash }) { idx, t ->
+                    TorrentCard(
+                        t = t,
+                        deleting = deleting == t.infohash,
+                        externalFocus = if (idx == 0) firstCardFocus else null,
+                        onPlayFile = onPickFile,
+                        onDelete = { onDelete(t.infohash) },
+                    )
+                }
+                item(key = "trailing") { Box(Modifier.height(Spacing.lg)) }
+            }
         }
-
-        items(list.orEmpty(), key = { it.infohash }) { t ->
-            TorrentRow(
-                t = t,
-                deleting = deleting == t.infohash,
-                onPlayFile = onPickFile,
-                onDelete = { onDelete(t.infohash) },
-            )
-        }
-
-        item(key = "trailing") { Box(Modifier.padding(vertical = Spacing.xl)) }
     }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun SeedSummary(items: List<TorrentView>, totalUploaded: Long) {
+private fun SummaryStrip(items: List<TorrentView>, totalUploaded: Long) {
     val downBps = items.sumOf { it.downloadSpeedBps }
     val upBps = items.sumOf { it.uploadSpeedBps }
     val downloaded = items.sumOf { it.progressBytes }
     val ratio = if (downloaded > 0) totalUploaded.toDouble() / downloaded else null
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        colors = SurfaceDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-        ),
+        shape = RoundedCornerShape(10.dp),
+        colors = SurfaceDefaults.colors(containerColor = PanelBg),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
             horizontalArrangement = Arrangement.spacedBy(Spacing.xl),
         ) {
-            Stat("Seeded all-time", formatBytes(totalUploaded))
-            Stat("Ratio", ratio?.let { "%.2f".format(it) } ?: "—")
-            Stat("Live", "↓ ${formatBytes(downBps)}/s   ↑ ${formatBytes(upBps)}/s")
+            Stat("Seeded", formatBytes(totalUploaded), Accent)
+            Stat("Ratio", ratio?.let { "%.2f".format(it) } ?: "—", if ((ratio ?: 0.0) >= 1.0) Good else null)
+            Stat("Down", "↓ ${formatBytes(downBps)}/s", null)
+            Stat("Up", "↑ ${formatBytes(upBps)}/s", Good)
         }
     }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun Stat(label: String, value: String) {
-    Column {
+private fun Stat(label: String, value: String, valueColor: Color?) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         Text(
             label.uppercase(),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = valueColor ?: MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TorrentRow(
+private fun TorrentCard(
     t: TorrentView,
     deleting: Boolean,
+    externalFocus: FocusRequester?,
     onPlayFile: (infohash: String, fileIdx: Int) -> Unit,
     onDelete: () -> Unit,
 ) {
-    // Per-row UI state; survives the 5 s refresh because the LazyColumn
-    // item is keyed on infohash.
-    var expanded by remember(t.infohash) { mutableStateOf(false) }
+    var showFiles by remember(t.infohash) { mutableStateOf(false) }
     var confirming by remember(t.infohash) { mutableStateOf(false) }
+    // Set true the moment the user opens this card's confirm flow, so
+    // the confirm/cancel focus handoff only fires after a real
+    // interaction (never steals focus during initial composition).
+    var armed by remember(t.infohash) { mutableStateOf(false) }
+    // One requester, always parked on whichever button is *leading* in
+    // the current state (primary action, or Confirm while confirming).
+    // The first card uses the screen-provided requester so the screen
+    // can focus it once the list has actually been laid out.
+    val internalFocus = remember(t.infohash) { FocusRequester() }
+    val cardFocus = externalFocus ?: internalFocus
+    val leadingMod = Modifier.focusRequester(cardFocus)
+
+    // Action set swapped (Delete ⇄ Confirm/Cancel): the old focused
+    // button left the tree, so re-anchor focus inside this card instead
+    // of letting it escape to the previous torrent.
+    LaunchedEffect(confirming) {
+        if (!armed) return@LaunchedEffect
+        repeat(10) {
+            runCatching { cardFocus.requestFocus() }
+            withFrameNanos { }
+        }
+    }
 
     val videos = remember(t.files) {
         t.files
             .filter { f -> VIDEO_EXTS.any { f.path.endsWith(it, ignoreCase = true) } }
             .sortedByDescending { it.sizeBytes }
     }
+    val single = videos.size == 1
+    val multi = videos.size > 1
     val pct = t.progressPct.coerceIn(0f, 100f)
     val finished = pct >= 100f
-    val ratio = if (t.progressBytes > 0) {
-        t.uploadedBytesTotal.toDouble() / t.progressBytes
-    } else {
-        null
-    }
+    val ratio = if (t.progressBytes > 0) t.uploadedBytesTotal.toDouble() / t.progressBytes else null
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = SurfaceDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        ),
+        colors = SurfaceDefaults.colors(containerColor = CardBg),
     ) {
         Column(
             Modifier.fillMaxWidth().padding(Spacing.lg),
@@ -283,122 +352,126 @@ private fun TorrentRow(
         ) {
             Text(
                 t.name ?: t.infohash,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Row(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 StateBadge(t.state)
-                Text(
-                    "${t.peers} peer${if (t.peers == 1) "" else "s"}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Meta("${t.peers} peer${if (t.peers == 1) "" else "s"}")
+                Meta("${formatBytes(t.progressBytes)} / ${formatBytes(t.totalSizeBytes)}")
+                Meta("↓ ${formatBytes(t.downloadSpeedBps)}/s")
+                Meta("↑ ${formatBytes(t.uploadSpeedBps)}/s")
                 ratio?.let {
                     Text(
                         "ratio ${"%.2f".format(it)}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (it >= 1.0) {
-                            Color(0xFF10B981)
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        color = if (it >= 1.0) Good else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-
             ProgressBar(pct = pct, finished = finished)
-            Text(
-                "${formatBytes(t.progressBytes)} / ${formatBytes(t.totalSizeBytes)}" +
-                    "   ·   ↓ ${formatBytes(t.downloadSpeedBps)}/s" +
-                    "   ↑ ${formatBytes(t.uploadSpeedBps)}/s",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                "Added by ${t.addedByName.ifBlank { "—" }}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             t.error?.let {
-                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                Text(it, style = MaterialTheme.typography.labelSmall, color = Danger)
             }
 
+            // Actions — always visible, always focusable.
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 if (confirming) {
                     Button(
                         onClick = onDelete,
                         enabled = !deleting,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                        modifier = leadingMod,
+                        scale = ButtonDefaults.scale(focusedScale = 1f),
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
                         colors = ButtonDefaults.colors(
-                            containerColor = Color(0xFFB91C1C),
-                            contentColor = Color.White,
+                            containerColor = Danger,
+                            contentColor = Color(0xFF1A0B0B),
                         ),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                    ) { Text(if (deleting) "Deleting…" else "Confirm delete") }
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                    ) { Text(if (deleting) "Deleting…" else "Confirm") }
                     Button(
                         onClick = { confirming = false },
                         enabled = !deleting,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                        scale = ButtonDefaults.scale(focusedScale = 1f),
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
                     ) { Text("Cancel") }
                 } else {
-                    if (videos.size == 1) {
+                    if (single) {
                         Button(
                             onClick = { onPlayFile(t.infohash, videos[0].index) },
-                            shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                            modifier = leadingMod,
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
+                            shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
+                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
                         ) { Text("▶ Play") }
                     }
-                    if (videos.size > 1) {
+                    if (multi) {
                         Button(
-                            onClick = { expanded = !expanded },
-                            shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                        ) { Text(if (expanded) "Hide files" else "${videos.size} files") }
+                            onClick = { showFiles = !showFiles },
+                            modifier = leadingMod,
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
+                            shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                        ) { Text(if (showFiles) "Hide files" else "▶ ${videos.size} files") }
                     }
                     Button(
-                        onClick = { confirming = true },
+                        onClick = { armed = true; confirming = true },
                         enabled = !deleting,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                        modifier = if (single || multi) Modifier else leadingMod,
+                        scale = ButtonDefaults.scale(focusedScale = 1f),
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
+                        colors = ButtonDefaults.colors(
+                            containerColor = PanelBg,
+                            contentColor = Danger,
+                        ),
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
                     ) { Text("Delete") }
                 }
             }
 
-            if (expanded && videos.size > 1) {
+            if (showFiles && multi && !confirming) {
                 Column(
-                    Modifier.fillMaxWidth().padding(top = Spacing.xs),
+                    Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
                     for (f in videos) {
                         Button(
                             onClick = { onPlayFile(t.infohash, f.index) },
                             modifier = Modifier.fillMaxWidth(),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
                             shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                             colors = ButtonDefaults.colors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                containerColor = PanelBg,
                                 contentColor = MaterialTheme.colorScheme.onSurface,
                             ),
-                            contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.md),
+                            contentPadding = PaddingValues(
+                                horizontal = Spacing.lg,
+                                vertical = Spacing.sm,
+                            ),
                         ) {
                             Row(
                                 Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
                                     f.path.substringAfterLast('/'),
                                     style = MaterialTheme.typography.bodySmall,
                                     maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
                                 )
                                 Text(
                                     "▶ ${formatBytes(f.sizeBytes)}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = Accent,
                                 )
                             }
                         }
@@ -411,20 +484,28 @@ private fun TorrentRow(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
+private fun Meta(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
 private fun ProgressBar(pct: Float, finished: Boolean) {
-    val track = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
-    val fill = if (finished) Color(0xFF10B981) else MaterialTheme.colorScheme.primary
     Box(
         Modifier
             .fillMaxWidth()
             .height(6.dp)
-            .background(track, RoundedCornerShape(3.dp)),
+            .background(Color(0xFF3A3A42), RoundedCornerShape(3.dp)),
     ) {
         Box(
             Modifier
                 .fillMaxWidth(fraction = (pct / 100f).coerceIn(0f, 1f))
                 .height(6.dp)
-                .background(fill, RoundedCornerShape(3.dp)),
+                .background(if (finished) Good else Accent, RoundedCornerShape(3.dp)),
         )
     }
 }
@@ -433,20 +514,21 @@ private fun ProgressBar(pct: Float, finished: Boolean) {
 @Composable
 private fun StateBadge(state: String) {
     val (label, color) = when (state) {
-        "live" -> "live" to Color(0xFF10B981)
+        "live" -> "live" to Good
         "paused" -> "paused" to Color(0xFFF59E0B)
-        "error" -> "error" to Color(0xFFEF4444)
-        else -> "initializing" to Color(0xFF6B7280)
+        "error" -> "error" to Danger
+        else -> "starting" to Color(0xFF8B8B95)
     }
     Surface(
-        shape = RoundedCornerShape(4.dp),
-        colors = SurfaceDefaults.colors(containerColor = color.copy(alpha = 0.85f)),
+        shape = RoundedCornerShape(5.dp),
+        colors = SurfaceDefaults.colors(containerColor = color),
     ) {
         Text(
-            label,
+            label.uppercase(),
             style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            fontWeight = FontWeight.SemiBold,
+            color = Color(0xFF0B0D12),
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
         )
     }
 }
