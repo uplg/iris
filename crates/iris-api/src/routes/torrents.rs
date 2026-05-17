@@ -611,6 +611,19 @@ async fn remove(
         .delete_by_infohash(&row.infohash, true)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine delete: {e}")))?;
+    // Cascade the removal into `episode_files`. Soft-deleting the torrent
+    // row + dropping the handle + wiping files would otherwise leave the
+    // (collection, season, episode) → infohash mappings behind, and the
+    // series / collection views would keep listing episodes pointing at a
+    // torrent that no longer exists. Re-grabbing the release re-`upsert`s
+    // these rows, so a hard delete is safe here.
+    if let Err(e) = iris_db::episode_files::delete_for_infohash(state.db(), &row.infohash).await {
+        // Best-effort: the self-heal `EXISTS (… deleted_at IS NULL)` filter
+        // on the read paths already hides them, so a failed cascade
+        // degrades to "invisible but still on disk in the DB", not a
+        // user-visible regression. Log and continue with the soft-delete.
+        tracing::warn!(error = %e, infohash = %row.infohash, "episode_files cascade delete failed");
+    }
     // Drop every cached fragmented MP4 for this torrent. We don't know the
     // file count from here without going back to the engine snapshot — the
     // GC callback wired up in `iris-api::lib` already does this prefix
@@ -640,6 +653,7 @@ async fn probe_file(
     // the other torrents (no global first/last-piece priority).
     let snap = state.engine().get_by_infohash(&infohash);
     let torrent_finished = snap.as_ref().is_some_and(|s| s.finished);
+    let mut header_bytes: u64 = 0;
     if let Some(snap) = snap.as_ref() {
         if !snap.finished {
             if let Some(file) = snap.files.iter().find(|f| f.index == idx) {
@@ -658,8 +672,9 @@ async fn probe_file(
                     Duration::from_secs(30),
                 );
                 let (h, t) = tokio::join!(header, tail);
-                if let Err(e) = h {
-                    tracing::debug!(error = %e, "probe: header prefetch errored");
+                match h {
+                    Ok(n) => header_bytes = n,
+                    Err(e) => tracing::debug!(error = %e, "probe: header prefetch errored"),
                 }
                 if let Err(e) = t {
                     tracing::debug!(error = %e, "probe: tail prefetch errored");
@@ -667,6 +682,27 @@ async fn probe_file(
             }
         }
     }
+
+    // Stalled-swarm guard. If after the prefetch window we still couldn't
+    // pull a single header byte AND the torrent isn't finished AND the
+    // swarm is dead (no peers, no throughput), there's nothing to read and
+    // won't be until a seeder reappears. Returning the retryable
+    // "file not yet on disk" here spins the client on
+    // "Reading media metadata…" until its retry budget runs out — with no
+    // hint *why*. Surface a distinct, non-retryable error that does NOT
+    // carry the poll tokens, so the UI can say "no seeders" and stop.
+    if !torrent_finished && header_bytes == 0 {
+        if let Some(s) = state.engine().get_by_infohash(&infohash) {
+            if !s.finished && s.peers == 0 && s.download_speed_bps == 0 {
+                return Err(ApiError::Conflict(format!(
+                    "stalled: no seeders for this file ({:.0}% downloaded, 0 peers, 0 B/s) — \
+                     nothing to read yet",
+                    s.progress_pct
+                )));
+            }
+        }
+    }
+
     if !path.exists() {
         return Err(ApiError::BadRequest(format!(
             "file not yet on disk: {}",
@@ -716,6 +752,7 @@ async fn manifest_json(
     // bytes instead of zero-pad. 30s timeout covers the common slow-
     // tracker case; if we time out we still try the probe (it might
     // succeed on the pieces we got, or fail with a useful error).
+    let mut header_bytes: u64 = 0;
     if !snapshot.finished {
         let header_count: u64 = 1 << 16; // 64 KiB — generous for any container header
         let tail_count: u64 = 1 << 20;   // 1 MiB
@@ -737,11 +774,27 @@ async fn manifest_json(
             Duration::from_secs(30),
         );
         let (h, t) = tokio::join!(header, tail);
-        if let Err(e) = h {
-            tracing::debug!(error = %e, "manifest: header prefetch errored");
+        match h {
+            Ok(n) => header_bytes = n,
+            Err(e) => tracing::debug!(error = %e, "manifest: header prefetch errored"),
         }
         if let Err(e) = t {
             tracing::debug!(error = %e, "manifest: tail prefetch errored");
+        }
+    }
+
+    // Stalled-swarm guard — same rationale as `probe_file`: a dead torrent
+    // (no peers, no throughput, head still unreadable) must surface a
+    // distinct non-retryable error instead of an endless not-ready poll.
+    if !snapshot.finished && header_bytes == 0 {
+        if let Some(s) = state.engine().get_by_infohash(&infohash) {
+            if !s.finished && s.peers == 0 && s.download_speed_bps == 0 {
+                return Err(ApiError::Conflict(format!(
+                    "stalled: no seeders for this file ({:.0}% downloaded, 0 peers, 0 B/s) — \
+                     nothing to read yet",
+                    s.progress_pct
+                )));
+            }
         }
     }
     if !path.exists() {
@@ -799,11 +852,17 @@ async fn manifest_json(
 /// it behind an infinite poll (see memory `feedback_no_hide_bad_data`).
 fn map_probe_err(e: &iris_media::ProbeError, torrent_finished: bool) -> ApiError {
     let msg = e.to_string();
-    let explicit_not_ready = msg.contains("file not yet on disk");
-    let choked_on_partial_head = msg.contains("EBML header parsing failed")
+    let not_ready = msg.contains("file not yet on disk")
+        || msg.contains("EBML header parsing failed")
         || msg.contains("Invalid data found when processing input")
         || msg.contains("invalid as first byte");
-    if explicit_not_ready || (!torrent_finished && choked_on_partial_head) {
+    // The "not ready, keep polling" state is ONLY valid while the torrent
+    // is still downloading. Once it's finished, the same ffprobe failure
+    // (zero head / bad EBML) is a genuinely corrupt file — gating the
+    // retryable branch on `!torrent_finished` stops the client polling
+    // "Reading media metadata…" forever and surfaces the real error
+    // (see memory `feedback_no_hide_bad_data`).
+    if !torrent_finished && not_ready {
         // Carry BOTH "file not yet on disk" and "download in progress" so
         // any client retry-policy that keys on either phrasing keeps
         // polling (web regex + older shipped APKs — strict no-break-APK

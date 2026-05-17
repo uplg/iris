@@ -40,6 +40,8 @@ pub async fn list_for_collection(
         "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at \
          FROM episode_files \
          WHERE collection_id = ?1 \
+           AND EXISTS (SELECT 1 FROM torrents t \
+                       WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL) \
          ORDER BY season, episode",
     )
     .bind(collection_id)
@@ -58,6 +60,8 @@ pub async fn list_for_collection_season(
         "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at \
          FROM episode_files \
          WHERE collection_id = ?1 AND season = ?2 \
+           AND EXISTS (SELECT 1 FROM torrents t \
+                       WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL) \
          ORDER BY episode",
     )
     .bind(collection_id)
@@ -80,6 +84,8 @@ pub async fn list_for_normalized(
          FROM episode_files ef \
          JOIN collections c ON c.id = ef.collection_id \
          WHERE c.parsed_title_normalized = ?1 AND c.kind = 'tv' \
+           AND EXISTS (SELECT 1 FROM torrents t \
+                       WHERE t.infohash = ef.infohash AND t.deleted_at IS NULL) \
          ORDER BY ef.season, ef.episode",
     )
     .bind(normalized_name)
@@ -99,12 +105,33 @@ pub async fn find_by_file(
     sqlx::query_as::<_, EpisodeFileRow>(
         "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at \
          FROM episode_files \
-         WHERE infohash = ?1 AND file_idx = ?2",
+         WHERE infohash = ?1 AND file_idx = ?2 \
+           AND EXISTS (SELECT 1 FROM torrents t \
+                       WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL)",
     )
     .bind(infohash)
     .bind(file_idx)
     .fetch_optional(pool)
     .await
+}
+
+/// Hard-delete every episode-file row for a physical torrent. Called
+/// from the torrent-removal path: removing a torrent soft-deletes its
+/// `torrents` row, drops the librqbit handle and wipes its files — the
+/// matching `episode_files` rows must go too, otherwise the collection /
+/// series views keep listing episodes that point at an infohash whose
+/// torrent no longer exists ("stale collection entities"). Re-grabbing
+/// the same release re-`upsert`s the rows, so a hard delete here is safe.
+/// Returns the number of rows removed.
+pub async fn delete_for_infohash(
+    pool: &SqlitePool,
+    infohash: &str,
+) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query("DELETE FROM episode_files WHERE infohash = ?1")
+        .bind(infohash)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
 }
 
 #[derive(Debug, Clone)]
