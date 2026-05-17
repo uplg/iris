@@ -60,6 +60,7 @@ import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storage
 import studio.kahn.iris.tv.ui.components.TvIconButton
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
@@ -100,6 +101,9 @@ fun HomeScreen(
     onPickTorrent: (infohash: String) -> Unit,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onOpenSettings: () -> Unit,
+    /** Open the seedbox / raw-torrents management view. The Library
+     *  shelf below stays as-is; this is the "it's a seedbox" surface. */
+    onOpenTorrents: () -> Unit,
     /** Open the search screen. When `query` is non-null the search runs
      *  immediately with that string pre-filled. */
     onOpenSearch: (query: String?) -> Unit,
@@ -242,6 +246,11 @@ fun HomeScreen(
                         icon = Icons.Filled.Search,
                         contentDescription = "Search",
                         onClick = { onOpenSearch(null) },
+                    )
+                    TvIconButton(
+                        icon = Icons.Filled.Storage,
+                        contentDescription = "Seedbox / Torrents",
+                        onClick = onOpenTorrents,
                     )
                     TvIconButton(
                         icon = Icons.Filled.Settings,

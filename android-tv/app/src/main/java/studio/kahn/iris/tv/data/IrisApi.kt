@@ -42,6 +42,12 @@ interface IrisApi {
     @GET("api/torrents/{infohash}")
     suspend fun getTorrent(@Path("infohash") infohash: String): TorrentView
 
+    /** Remove a torrent: the backend also wipes its files from disk and
+     *  soft-deletes the row (204 No Content). Any authenticated user —
+     *  the seedbox view is single-household, same as the web client. */
+    @retrofit2.http.DELETE("api/torrents/{infohash}")
+    suspend fun deleteTorrent(@Path("infohash") infohash: String)
+
     @GET("api/torrents/{infohash}/progress")
     suspend fun torrentProgress(@Path("infohash") infohash: String): List<FileProgressEntry>
 

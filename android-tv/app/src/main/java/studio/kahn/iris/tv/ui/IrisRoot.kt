@@ -35,6 +35,7 @@ import studio.kahn.iris.tv.ui.screens.SearchScreen
 import studio.kahn.iris.tv.ui.screens.SeriesScreen
 import studio.kahn.iris.tv.ui.screens.SettingsScreen
 import studio.kahn.iris.tv.ui.screens.SetupScreen
+import studio.kahn.iris.tv.ui.screens.TorrentsScreen
 import studio.kahn.iris.tv.ui.screens.WatchScreen
 
 object Routes {
@@ -43,6 +44,7 @@ object Routes {
     const val HOME = "home"
     const val DETAIL = "detail/{infohash}"
     const val SETTINGS = "settings"
+    const val TORRENTS = "torrents"
     const val SEARCH = "search?q={q}&autoPlay={autoPlay}"
     const val SEARCH_DETAIL = "search-detail/{provider}/{externalId}?tmdbId={tmdbId}&kind={kind}"
     const val SERIES = "series/{followId}"
@@ -141,6 +143,9 @@ fun IrisRoot(
                     onOpenSettings = {
                         navController.navigate(Routes.SETTINGS)
                     },
+                    onOpenTorrents = {
+                        navController.navigate(Routes.TORRENTS)
+                    },
                     onOpenSearch = { query ->
                         navController.navigate(Routes.search(query))
                     },
@@ -180,6 +185,15 @@ fun IrisRoot(
                 DetailScreen(
                     container = container,
                     infohash = backStackEntry.arguments!!.getString("infohash")!!,
+                    onPickFile = { infohash, fileIdx ->
+                        navController.navigate(Routes.watch(infohash, fileIdx))
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(Routes.TORRENTS) {
+                TorrentsScreen(
+                    container = container,
                     onPickFile = { infohash, fileIdx ->
                         navController.navigate(Routes.watch(infohash, fileIdx))
                     },

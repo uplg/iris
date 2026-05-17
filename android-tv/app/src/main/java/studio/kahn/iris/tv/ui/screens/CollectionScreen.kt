@@ -144,7 +144,19 @@ fun CollectionScreen(
                         ),
                     )
                 }
-                items(episodes.sortedBy { it.episode }, key = { "${it.season}:${it.episode}:${it.infohash}" }) { ep ->
+                // Key on the physical-file identity `(infohash,
+                // file_idx)` — the DB's UNIQUE constraint guarantees it
+                // unique, so every file is its own reachable row even
+                // when a mis-parsed pack collapses several leaves onto
+                // the same (season, episode). Keying on (season,
+                // episode) instead crashed the LazyColumn on duplicate
+                // keys. Matches the web client (CollectionPage.tsx).
+                // Secondary-sort by file_idx so collided rows keep a
+                // stable order across refetches.
+                items(
+                    episodes.sortedWith(compareBy({ it.episode }, { it.fileIdx })),
+                    key = { "${it.infohash}:${it.fileIdx}" },
+                ) { ep ->
                     Box(
                         Modifier.padding(
                             horizontal = layout.gutterHorizontal,

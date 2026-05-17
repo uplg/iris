@@ -243,9 +243,26 @@ fn scan_for_se(stem: &str, require_episode: bool) -> Option<SeMatch> {
             }
             if s_digits > 0 {
                 let s_end = j;
-                let has_e = j < bytes.len() && (bytes[j] == b'E' || bytes[j] == b'e');
+                // Allow an optional separator run between the season and
+                // the episode marker. `S02E02`, `S02 E02`, `S02.E02` and
+                // `S02 - E02` all denote S02E02 — some packs name their
+                // leaves `Show - S02 E02.mkv`. Cap the run at three chars
+                // so we skip ` - ` but never leap a whole token (so
+                // `S02 1080p` still falls through to the season-pack
+                // path with episode 0 rather than mis-reading `1080p`).
+                let mut e_pos = j;
+                let mut gap = 0;
+                while e_pos < bytes.len()
+                    && gap < 3
+                    && matches!(bytes[e_pos], b'.' | b'_' | b' ' | b'-')
+                {
+                    e_pos += 1;
+                    gap += 1;
+                }
+                let has_e =
+                    e_pos < bytes.len() && (bytes[e_pos] == b'E' || bytes[e_pos] == b'e');
                 if has_e {
-                    let mut k = j + 1;
+                    let mut k = e_pos + 1;
                     let mut e_digits = 0;
                     while k < bytes.len() && bytes[k].is_ascii_digit() && e_digits < 4 {
                         k += 1;
@@ -254,7 +271,7 @@ fn scan_for_se(stem: &str, require_episode: bool) -> Option<SeMatch> {
                     if e_digits > 0 {
                         if let (Ok(s), Ok(e)) = (
                             stem[i + 1..s_end].parse::<u32>(),
-                            stem[j + 1..k].parse::<u32>(),
+                            stem[e_pos + 1..k].parse::<u32>(),
                         ) {
                             let title_end = stem[..i]
                                 .trim_end_matches(['.', '_', ' ', '-'])
@@ -438,6 +455,38 @@ mod tests {
         assert_eq!(p.title, "Show Name");
         assert_eq!(p.season, Some(1));
         assert_eq!(p.episode, Some(2));
+    }
+
+    #[test]
+    fn handles_spaced_se_marker() {
+        // Real-world season pack whose leaves separate the season and
+        // episode tokens with a space (and a dashed title prefix):
+        // `The Promised Neverland - S02 E02.mkv`. Before the gap-skip
+        // this fell through to the season-pack path and every leaf got
+        // stamped episode 0, so the Collections UI showed S02E00 for
+        // the whole season.
+        let p = parse("The Promised Neverland - S02 E02.mkv").unwrap();
+        assert_eq!(p.title, "The Promised Neverland");
+        assert_eq!(p.season, Some(2));
+        assert_eq!(p.episode, Some(2));
+        assert!(p.is_tv());
+
+        // Dotted and dashed gaps resolve the same way.
+        let dot = parse("Show.Name.S03.E07.1080p.WEB-DL-X.mkv").unwrap();
+        assert_eq!((dot.season, dot.episode), (Some(3), Some(7)));
+        let dash = parse("Show Name - S03 - E07.mkv").unwrap();
+        assert_eq!((dash.season, dash.episode), (Some(3), Some(7)));
+    }
+
+    #[test]
+    fn spaced_season_then_token_stays_a_pack() {
+        // Guard the gap-skip: a separator after the season followed by a
+        // non-`E` token must NOT be read as an episode — it stays a
+        // season pack (episode 0), exactly as before the fix.
+        let p = parse("Silicon Valley S01 1080p BluRay x264-XYZ.mkv").unwrap();
+        assert_eq!(p.season, Some(1));
+        assert_eq!(p.episode, Some(0)); // sentinel for season-pack
+        assert!(p.is_tv());
     }
 
     #[test]

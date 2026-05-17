@@ -249,6 +249,54 @@ pub async fn enrich_after_verify(pool: &SqlitePool, infohash: &str) {
     );
 }
 
+/// Re-derive `scene_parse` episode rows for a torrent that already has
+/// a collection, correcting any `(season, episode)` that drifted
+/// because the filename parser improved since the row was first
+/// written. The motivating case: season packs whose leaves space the
+/// markers (`Show - S02 E02.mkv`) used to parse as a season pack
+/// (episode 0) and every leaf rendered `S02E00`; the parser now reads
+/// the spaced form, and this pass retro-corrects already-ingested
+/// packs the insert-only `upsert` can't touch.
+///
+/// Only `scene_parse` rows are rewritten (see
+/// [`episode_files::correct_scene_parsed`]); user-/tmdb-derived rows
+/// are left alone. Idempotent and effectively free once converged.
+async fn reconcile_scene_episodes(pool: &SqlitePool, infohash: &str, files: &[(usize, String)]) {
+    let mut fixed = 0u32;
+    for (idx, path) in files {
+        if !is_main_video_file(path) {
+            continue;
+        }
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let Some(parsed) = filename::parse(leaf) else {
+            continue;
+        };
+        let (Some(season), Some(episode)) = (parsed.season, parsed.episode) else {
+            continue;
+        };
+        match episode_files::correct_scene_parsed(
+            pool,
+            infohash,
+            *idx as i64,
+            i64::from(season),
+            i64::from(episode),
+        )
+        .await
+        {
+            Ok(true) => fixed += 1,
+            Ok(false) => {}
+            Err(e) => tracing::warn!(error = %e, infohash, "episode reconcile: update failed"),
+        }
+    }
+    if fixed > 0 {
+        tracing::info!(
+            infohash,
+            fixed,
+            "scene episode rows re-derived after parser change",
+        );
+    }
+}
+
 /// Walk every torrent currently in the library and assign a collection
 /// to any that doesn't have one yet. Runs at boot to backfill the
 /// existing library after the SCENE-first migration. Idempotent —
@@ -274,6 +322,15 @@ pub async fn run_backfill(
         if row.collection_id.is_some() {
             if row.tmdb_verified {
                 enrich_after_verify(pool, &row.infohash).await;
+            }
+            // Self-heal stale episode numbers from a since-improved
+            // parser. Needs the engine file list; torrents not yet
+            // loaded are retried on a later tick (same as the
+            // assignment path below).
+            if let Some(snap) = engine.get_by_infohash(&row.infohash) {
+                let files: Vec<(usize, String)> =
+                    snap.files.into_iter().map(|f| (f.index, f.path)).collect();
+                reconcile_scene_episodes(pool, &row.infohash, &files).await;
             }
             continue;
         }

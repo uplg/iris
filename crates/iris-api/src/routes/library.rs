@@ -183,6 +183,18 @@ async fn collection_detail(
         // SCENE-first: episode_files joins on collection_id directly,
         // no need to bridge through tmdb_id (which may be unset on
         // SCENE-only collections).
+        //
+        // Identity contract: each entry is one physical file, uniquely
+        // identified by `(infohash, file_idx)` (DB `UNIQUE` constraint).
+        // We never dedup or drop a file here — a mis-parsed pack whose
+        // leaves all collapsed onto the same `(season, episode)` (e.g.
+        // the season-pack sentinel `episode == 0`) still surfaces every
+        // file as its own playable row; the turn-7 reconcile rewrites
+        // those rows to real numbers once the improved parser
+        // re-derives them. Clients MUST key on `(infohash, file_idx)`,
+        // not `(season, episode)` — the latter is derived and may
+        // collide. Order is sorted by `(season, episode, file_idx)` so
+        // collided rows keep a deterministic, stable position.
         let files = iris_db::episode_files::list_for_collection(state.db(), collection.id).await?;
         let mut out: Vec<EpisodeEntry> = Vec::with_capacity(files.len());
         for f in files {
@@ -198,7 +210,7 @@ async fn collection_detail(
                 watched,
             });
         }
-        out.sort_by_key(|e| (e.season, e.episode));
+        out.sort_by_key(|e| (e.season, e.episode, e.file_idx));
         out
     } else {
         Vec::new()
