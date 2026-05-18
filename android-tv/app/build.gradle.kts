@@ -12,8 +12,8 @@ android {
         applicationId = "studio.kahn.iris.tv"
         minSdk = 23           // Android TV reaches further back than phones
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.3.0"
+        versionCode = 7
+        versionName = "0.3.1"
     }
 
     // We're never publishing this on Play Store — the TV is the only target
@@ -103,6 +103,12 @@ dependencies {
     implementation(libs.media3.ui)
     implementation(libs.media3.session)
     implementation(libs.media3.datasource.okhttp)
+    // Software AV1 (libgav1) — fallback for devices without hardware AV1.
+    // DefaultRenderersFactory(EXTENSION_RENDERER_MODE_ON) picks it up via
+    // reflection, exactly like the FFmpeg audio extension; platform AV1
+    // decoders still take precedence where present (zero cost on Shield
+    // et al.). No PlayerFactory change needed.
+    implementation(libs.media3.decoder.av1)
 
     // Optional Media3 FFmpeg extension — provides soft decoders for DTS,
     // DTS-HD MA, TrueHD, MLP and a few other formats Android's stock

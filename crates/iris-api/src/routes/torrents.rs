@@ -377,7 +377,9 @@ async fn prewarm_default_remux(state: &AppState, infohash: &str) {
     let Ok(path) = state.engine().file_path(infohash, idx) else {
         return;
     };
-    let probe = match state.probes().get_or_probe(infohash, idx, &path).await {
+    // Both prewarm paths only reach here once the torrent is `finished`
+    // (guarded above), so the probe is taken on a complete file.
+    let probe = match state.probes().get_or_probe(infohash, idx, &path, true).await {
         Ok(p) => p,
         Err(e) => {
             tracing::debug!(error = %e, "prewarm: probe failed");
@@ -445,6 +447,10 @@ fn build_remux_plan(probe: &iris_media::MediaProbe) -> iris_media::RemuxPlan {
         audio: renditions,
         source_video_codec: probe.video.first().map(|v| v.codec.clone()),
         source_duration_secs: probe.duration_seconds,
+        // Default: stream-copy video. The caps catch-up path flips this
+        // to `TranscodeH264` only for clients that genuinely can't
+        // decode the source — wired separately (task #4).
+        video: iris_media::VideoMode::Copy,
     }
 }
 
@@ -711,7 +717,7 @@ async fn probe_file(
     }
     let probe = state
         .probes()
-        .get_or_probe(&infohash, idx, &path)
+        .get_or_probe(&infohash, idx, &path, torrent_finished)
         .await
         .map_err(|e| map_probe_err(&e, torrent_finished))?;
     Ok(Json(probe))
@@ -806,7 +812,7 @@ async fn manifest_json(
 
     let probe = state
         .probes()
-        .get_or_probe(&infohash, idx, &path)
+        .get_or_probe(&infohash, idx, &path, snapshot.finished)
         .await
         .map_err(|e| map_probe_err(&e, snapshot.finished))?;
 
@@ -965,7 +971,7 @@ async fn playhead_window_bytes(
     let Ok(path) = engine.file_path(infohash, idx) else {
         return FALLBACK;
     };
-    let Ok(probe) = probes.get_or_probe(infohash, idx, &path).await else {
+    let Ok(probe) = probes.get_or_probe(infohash, idx, &path, snapshot.finished).await else {
         return FALLBACK;
     };
     let Some(duration) = probe.duration_seconds.filter(|d| *d > 0.0) else {
@@ -1064,7 +1070,9 @@ async fn prewarm_remux_file(state: &AppState, infohash: &str, idx: usize) {
             return;
         }
     }
-    let probe = match state.probes().get_or_probe(infohash, idx, &path).await {
+    // Both prewarm paths only reach here once the torrent is `finished`
+    // (guarded above), so the probe is taken on a complete file.
+    let probe = match state.probes().get_or_probe(infohash, idx, &path, true).await {
         Ok(p) => p,
         Err(e) => {
             tracing::debug!(error = %e, "fallback prewarm: probe failed");
@@ -1383,9 +1391,11 @@ async fn play_asset(
     if asset == iris_media::MASTER_PLAYLIST {
         // Probe runs the TMDB-runtime verification side-effect that the UI
         // relies on for poster / metadata gating. Cached, so cheap on repeat.
+        // `play_asset` already rejected unfinished torrents above, so
+        // the remux always probes a complete file.
         let probe = state
             .probes()
-            .get_or_probe(&infohash, idx, &path)
+            .get_or_probe(&infohash, idx, &path, true)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
         verify_tmdb_match(&state, &infohash, probe.duration_seconds).await;

@@ -73,6 +73,11 @@ media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls
 media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 media3-datasource-okhttp = { group = "androidx.media3", name = "media3-datasource-okhttp", version.ref = "media3" }
+# Software AV1 decoder (libgav1). Auto-wired by DefaultRenderersFactory
+# in EXTENSION_RENDERER_MODE_ON as a fallback when the device has no
+# hardware AV1 — real-time at 1080p on modest CPUs (4K AV1 stays the
+# accepted edge case). Same mechanism as the FFmpeg audio extension.
+media3-decoder-av1 = { group = "androidx.media3", name = "media3-decoder-av1", version.ref = "media3" }
 
 # Networking — Retrofit 3 ships its own kotlinx-serialization converter,
 # replacing the previous JakeWharton standalone artifact.

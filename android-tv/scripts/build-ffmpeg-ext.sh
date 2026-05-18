@@ -50,12 +50,48 @@ FFMPEG_VERSION="${FFMPEG_VERSION:-release/7.1}"
 # natively; trim aggressively to keep the resulting .so files small.
 # `dca` is FFmpeg's DTS decoder; `truehd` covers Atmos in TrueHD;
 # `mlp` covers Meridian Lossless Packing carriers.
+#
+# `ac3`/`eac3` look "native" but are NOT safe to omit: since the TV
+# client plays the raw `/stream` directly (no server-side transcode),
+# a plain DDP2.0 (E-AC-3) reaches ExoPlayer untouched. Decoder-poor
+# devices (Chromecast / Google TV builds that rely on HDMI Dolby
+# passthrough and ship no usable E-AC-3 MediaCodec) then have NO
+# platform renderer for it — and with these absent from the .so the
+# FFmpeg fallback can't cover it either, so the audio track is dropped
+# entirely ("Audio: none"). Including them is free on hardware that
+# already decodes AC3/EAC3: EXTENSION_RENDERER_MODE_ON keeps the
+# platform decoder ahead of the FFmpeg one wherever it exists.
+# Belt-and-suspenders: cover the full practical audio universe of
+# scene / WEB / remux releases. Audio decoders are tiny (KB-range each),
+# so a comprehensive list barely moves the .so size while guaranteeing
+# the FFmpeg fallback can decode ANY audio the platform refuses on a
+# decoder-poor device. Platform decoders still win where present
+# (EXTENSION_RENDERER_MODE_ON), so this is free on capable hardware.
 ENABLED_DECODERS=(
+    # --- Dolby / DTS family (HW support patchy off-Shield) ---
     dca       # DTS Coherent Acoustics (core + HD MA core layer)
-    truehd    # Dolby TrueHD (often paired with AC3 on Blu-rays)
+    truehd    # Dolby TrueHD (Atmos carrier; often paired with AC3)
     mlp       # Meridian Lossless Packing
-    flac      # backup — platform decoder occasionally chokes on edge cases
-    alac      # Apple Lossless (rare but cheap to include)
+    ac3       # Dolby Digital — fallback for passthrough-only TV devices
+    eac3      # Dolby Digital Plus (DDP) — the DDP2.0 "Audio: none" fix
+    # --- MPEG / AAC family (universal, cheap safety net) ---
+    aac       # AAC-LC / HE-AAC (MP4/MKV WEB-DL default)
+    aac_latm  # AAC in MPEG-TS (LATM/LOAS framing)
+    mp1       # MPEG-1 Audio Layer I
+    mp2       # MPEG-1 Audio Layer II (common in TS / EU broadcast rips)
+    mp3       # MPEG-1 Audio Layer III
+    # --- Lossless / open ---
+    flac      # platform decoder occasionally chokes on edge cases
+    alac      # Apple Lossless
+    opus      # Opus (WEBM / Matroska)
+    vorbis    # Vorbis (WEBM / Matroska)
+    # --- LPCM (Blu-ray / DVD remuxes) ---
+    pcm_s16le pcm_s16be pcm_s24le pcm_s32le
+    pcm_dvd   # DVD LPCM
+    pcm_bluray # Blu-ray LPCM
+    # --- Legacy AVI/WMV containers still floating around ---
+    wmav2     # Windows Media Audio v2
+    wmapro    # Windows Media Audio Pro
 )
 
 # Minimum Android API level the produced .so files target. Drives the

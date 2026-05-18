@@ -118,18 +118,58 @@ impl ProbeCache {
         Self::default()
     }
 
+    /// `complete` MUST be the torrent's `finished` flag for this file.
+    ///
+    /// While a torrent is still downloading, librqbit zero-fills the
+    /// not-yet-arrived regions. ffprobe can then read the container
+    /// header, report the *video* stream, and silently miss an audio
+    /// stream whose packets land in a zero-filled hole — a successful
+    /// (exit 0) probe that is simply *incomplete*. The bug that lets
+    /// surface: "video plays but Audio: none", or "won't launch at
+    /// all" when even the video scan is short. There is no
+    /// cache-invalidation hook on torrent completion, so a partial
+    /// probe frozen here would stay wrong for the whole process
+    /// lifetime — for every client, since the cache is shared.
+    ///
+    /// So: only ever populate the cache from a *complete* file (a
+    /// cached entry is therefore always trustworthy), and while
+    /// incomplete refuse to hand back a probe that lacks the minimum
+    /// to play — return the retryable "file not yet on disk" token the
+    /// caller's retry-policy keys on, so the client keeps polling until
+    /// the real streams are on disk. Self-heals without an event hook.
+    ///
+    /// Once `complete`, whatever ffprobe reports is the truth and is
+    /// cached verbatim — a genuinely video-only release legitimately
+    /// has no audio (see memory `feedback_no_hide_bad_data`: we don't
+    /// mask, we just don't freeze a half-read).
     pub async fn get_or_probe(
         &self,
         infohash: &str,
         file_idx: usize,
         path: &Path,
+        complete: bool,
     ) -> Result<MediaProbe, ProbeError> {
         let key = format!("{infohash}:{file_idx}");
         if let Some(hit) = self.inner.read().await.get(&key).cloned() {
             return Ok(hit);
         }
         let probe = probe_file(path).await?;
-        self.inner.write().await.insert(key, probe.clone());
+        if complete {
+            self.inner.write().await.insert(key, probe.clone());
+            return Ok(probe);
+        }
+        if probe.video.is_empty() || probe.audio.is_empty() {
+            return Err(ProbeError::Failed(
+                -1,
+                format!(
+                    "file not yet on disk (incomplete stream scan while download in \
+                     progress: {} video / {} audio at {})",
+                    probe.video.len(),
+                    probe.audio.len(),
+                    path.display()
+                ),
+            ));
+        }
         Ok(probe)
     }
 

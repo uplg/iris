@@ -22,7 +22,7 @@ pub use probe::{
 };
 pub use remuxer::{
     AudioCodec, AudioRendition, JobInfo as RemuxJobInfo, MASTER_PLAYLIST, RemuxError, RemuxManager,
-    RemuxPlan,
+    RemuxPlan, VideoMode,
 };
 pub use subtitles::SubtitleError;
 pub use subtitles::SubtitleFormat;

@@ -167,6 +167,38 @@ pub struct RemuxPlan {
     /// remuxing-progress percentage surfaced via `play_status` — we
     /// divide ffmpeg's `out_time_us` by this to compute 0..1.
     pub source_duration_secs: Option<f64>,
+    /// How to treat the video stream. Defaults to `Copy` (stream-copy,
+    /// the cheap path used for every web/`hvc1` session). Set to
+    /// `TranscodeH264` only by the caps "catch-up" path when a client's
+    /// hardware genuinely can't decode the source — see
+    /// `crates/iris-api/.../torrents.rs` `build_remux_plan`.
+    pub video: VideoMode,
+}
+
+/// What `run_ffmpeg` does with the video stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoMode {
+    /// Stream-copy the source video (no re-encode). Original behaviour.
+    Copy,
+    /// Re-encode to H.264 High@4.1 8-bit 4:2:0, capped at 1080p — the
+    /// universal Android baseline. `tonemap` flattens an HDR (PQ/HLG)
+    /// source to BT.709 SDR (an 8-bit H.264 output can't carry HDR, so
+    /// without this the picture comes out washed-out / too dark).
+    TranscodeH264 { tonemap: bool },
+}
+
+impl RemuxPlan {
+    /// Cache-dir discriminator. `Copy` keeps the bare `infohash_idx`
+    /// key so every pre-existing cache entry (and the caps-unaware
+    /// `play_status` / prewarm key) stays valid — only the transcoded
+    /// variant gets a distinct suffix, and only when explicitly asked.
+    #[must_use]
+    pub fn cache_suffix(&self) -> &'static str {
+        match self.video {
+            VideoMode::Copy => "",
+            VideoMode::TranscodeH264 { .. } => "_h264",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +240,7 @@ impl RemuxPlan {
                 .collect(),
             source_video_codec: None,
             source_duration_secs: None,
+            video: VideoMode::Copy,
         }
     }
 }
