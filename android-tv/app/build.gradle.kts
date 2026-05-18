@@ -103,23 +103,19 @@ dependencies {
     implementation(libs.media3.ui)
     implementation(libs.media3.session)
     implementation(libs.media3.datasource.okhttp)
-    // Software AV1 (libgav1) — fallback for devices without hardware AV1.
-    // DefaultRenderersFactory(EXTENSION_RENDERER_MODE_ON) picks it up via
-    // reflection, exactly like the FFmpeg audio extension; platform AV1
-    // decoders still take precedence where present (zero cost on Shield
-    // et al.). No PlayerFactory change needed.
-    implementation(libs.media3.decoder.av1)
 
-    // Optional Media3 FFmpeg extension — provides soft decoders for DTS,
-    // DTS-HD MA, TrueHD, MLP and a few other formats Android's stock
-    // codecs lack. The AAR is NOT on Maven Central: build it once with
-    // `scripts/build-ffmpeg-ext.sh` and drop the resulting
-    // `media3-decoder-ffmpeg-<version>.aar` into `app/libs/`. The
-    // fileTree below is empty until then — the player gracefully falls
-    // back to platform decoders (works on Samsung / LG / Shield which
-    // have hardware DTS, fails to play DTS-only files on bare emulators
-    // and budget Android TV boxes without the AAR). Build instructions
-    // live in `android-tv/README.md` § "FFmpeg extension".
+    // Optional hand-built Media3 decoder extensions, NOT on Maven
+    // (Google doesn't publish the native ones prebuilt). The fileTree
+    // links whatever AARs are present; each is built once per machine /
+    // per Media3 bump and the player gracefully falls back to platform
+    // decoders when absent (zero cost where hardware already decodes —
+    // the extension renderer only kicks in when the platform refuses):
+    //   - `scripts/build-ffmpeg-ext.sh` → lib-decoder-ffmpeg-*.aar:
+    //     soft audio for DTS / DTS-HD MA / TrueHD / MLP / AC3 / EAC3 …
+    //   - `scripts/build-av1-ext.sh` → lib-decoder-av1-*.aar:
+    //     soft AV1 video for boxes / Chromecasts without AV1 silicon.
+    // Both AARs coexist here. Build instructions live in
+    // `android-tv/README.md` §§ "FFmpeg extension" / "AV1 extension".
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
 
     // Networking

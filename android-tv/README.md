@@ -149,6 +149,36 @@ Bump Media3 in the version catalog → re-run the script. The AAR and
 the `media3-exoplayer` artifact must share the same Media3 version
 or you'll get `NoClassDefFoundError` / `NoSuchMethodError` at runtime.
 
+## AV1 extension (optional, software AV1 — libgav1)
+
+AV1 is now the default video codec on a growing share of new WEB-DL
+releases, and budget Android TV boxes / older Chromecasts have no AV1
+silicon. The Media3 libgav1 decoder extension fills the gap with a
+software AV1 video decoder (real-time at 1080p on modest CPUs; 4K AV1
+stays the accepted edge case).
+
+Same deal as the FFmpeg extension — **not** on Maven, build once per
+machine (and per Media3 bump):
+
+```sh
+./scripts/build-av1-ext.sh
+```
+
+Prerequisites: Android NDK ≥ 26, Android SDK **CMake** (SDK Manager →
+SDK Tools → CMake), `git`. Unlike FFmpeg there's no per-ABI
+cross-compile loop — the libgav1 native build runs via the Media3
+module's CMake `externalNativeBuild` during
+`:lib-decoder-av1:assembleRelease`, so AGP/CMake handles every ABI.
+
+The script reuses the shared `.ffmpeg-ext-build/` Media3 checkout,
+clones libgav1 + abseil-cpp into it, assembles the AAR into
+`app/libs/lib-decoder-av1-<version>-release.aar`, and only clears prior
+AV1 AARs — it **coexists** with the FFmpeg extension AAR (Gradle's
+`fileTree` links every `*.aar`). Picked up automatically by
+`PlayerFactory.kt` (`EXTENSION_RENDERER_MODE_ON`); platform AV1
+decoders still take precedence where present, so the cost on AV1-capable
+hardware is **zero**. Same Media3-version-match rule as above.
+
 ## Troubleshooting
 
 - **"Unresolved reference: tv-material"**: Sync Gradle from the toolbar
