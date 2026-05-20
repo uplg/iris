@@ -223,10 +223,13 @@ fun HomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(
-            horizontal = layout.gutterHorizontal,
-            vertical = layout.gutterVertical,
-        ),
+        // Vertical-only contentPadding here. Horizontal gutter is
+        // applied per-item: shelves manage it themselves (so the
+        // first card's focus scale can bleed outside the title's
+        // column without being clipped to the LazyColumn bounds),
+        // and the non-shelf items (header / error / loading) wear
+        // it via a Modifier.padding below.
+        contentPadding = PaddingValues(vertical = layout.gutterVertical),
         verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
     ) {
         // Brand on the left, action chips (Search / Settings) pinned to the
@@ -234,7 +237,9 @@ fun HomeScreen(
         // a vertical list once the focus drops into the shelves below.
         item(key = "header") {
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = layout.gutterHorizontal),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
@@ -267,6 +272,7 @@ fun HomeScreen(
         if (error != null) {
             item(key = "error") {
                 Row(
+                    Modifier.padding(horizontal = layout.gutterHorizontal),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -286,6 +292,7 @@ fun HomeScreen(
                     "Loading library…",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = layout.gutterHorizontal),
                 )
             }
         }
@@ -293,14 +300,12 @@ fun HomeScreen(
         if (continueWatching.isNotEmpty()) {
             item(key = "shelf-cw") {
                 Shelf(title = "Continue watching") {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(continueWatching, key = { "${it.infohash}:${it.fileIdx}" }) { item ->
-                            ContinueWatchingCard(
-                                container = container,
-                                item = item,
-                                onClick = { onPickFile(item.infohash, item.fileIdx) },
-                            )
-                        }
+                    items(continueWatching, key = { "${it.infohash}:${it.fileIdx}" }) { item ->
+                        ContinueWatchingCard(
+                            container = container,
+                            item = item,
+                            onClick = { onPickFile(item.infohash, item.fileIdx) },
+                        )
                     }
                 }
             }
@@ -313,21 +318,19 @@ fun HomeScreen(
         if (collections.isNotEmpty()) {
             item(key = "shelf-library") {
                 Shelf(title = "Library · ${collections.size}") {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(collections, key = { it.id }) { c ->
-                            CollectionCard(
-                                container = container,
-                                collection = c,
-                                // Open the dedicated Collection screen
-                                // so the user gets the full episode /
-                                // file list (mirrors web's
-                                // `/collection/:id`). Previously this
-                                // shot straight to the representative
-                                // torrent, hiding the rest of the
-                                // collection's content.
-                                onClick = { onOpenCollection(c.id) },
-                            )
-                        }
+                    items(collections, key = { it.id }) { c ->
+                        CollectionCard(
+                            container = container,
+                            collection = c,
+                            // Open the dedicated Collection screen
+                            // so the user gets the full episode /
+                            // file list (mirrors web's
+                            // `/collection/:id`). Previously this
+                            // shot straight to the representative
+                            // torrent, hiding the rest of the
+                            // collection's content.
+                            onClick = { onOpenCollection(c.id) },
+                        )
                     }
                 }
             }
@@ -336,22 +339,20 @@ fun HomeScreen(
         if (watchlist.isNotEmpty()) {
             item(key = "shelf-watchlist") {
                 Shelf(title = "My Watchlist · ${watchlist.size}") {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(watchlist, key = { it.id }) { w ->
-                            // Post-0.4: the Watchlist item's `id` IS
-                            // the collection id (sourced from
-                            // `/api/me/watchlist` which joins
-                            // series_follows → collections). Route
-                            // straight to the unified
-                            // CollectionScreen — SeriesScreen is the
-                            // retired surface kept only for legacy
-                            // navigation flows.
-                            WatchlistCard(
-                                container = container,
-                                item = w,
-                                onClick = { onOpenCollection(w.id) },
-                            )
-                        }
+                    items(watchlist, key = { it.id }) { w ->
+                        // Post-0.4: the Watchlist item's `id` IS
+                        // the collection id (sourced from
+                        // `/api/me/watchlist` which joins
+                        // series_follows → collections). Route
+                        // straight to the unified
+                        // CollectionScreen — SeriesScreen is the
+                        // retired surface kept only for legacy
+                        // navigation flows.
+                        WatchlistCard(
+                            container = container,
+                            item = w,
+                            onClick = { onOpenCollection(w.id) },
+                        )
                     }
                 }
             }
@@ -361,16 +362,14 @@ fun HomeScreen(
             if (f.movies.isNotEmpty()) {
                 item(key = "shelf-featured-movies") {
                     Shelf(title = "New Movies · ${f.movies.size}") {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            items(f.movies, key = { "${it.providerId}:${it.externalId}" }) { r ->
-                                FeaturedCard(
-                                    container = container,
-                                    result = r,
-                                    onClick = {
-                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
-                                    },
-                                )
-                            }
+                        items(f.movies, key = { "${it.providerId}:${it.externalId}" }) { r ->
+                            FeaturedCard(
+                                container = container,
+                                result = r,
+                                onClick = {
+                                    onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
+                                },
+                            )
                         }
                     }
                 }
@@ -378,26 +377,24 @@ fun HomeScreen(
             if (f.series.isNotEmpty()) {
                 item(key = "shelf-featured-series") {
                     Shelf(title = "New Series · ${f.series.size}") {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            items(f.series, key = { "${it.providerId}:${it.externalId}" }) { r ->
-                                FeaturedCard(
-                                    container = container,
-                                    result = r,
-                                    onClick = {
-                                        val existing = watchlist.firstOrNull {
-                                            it.normalizedName == normalizeForMatch(r.title)
-                                        }
-                                        if (existing != null) {
-                                            // Already in Watchlist → straight to
-                                            // its CollectionScreen (skip the
-                                            // search-result detail round-trip).
-                                            onOpenCollection(existing.id)
-                                        } else {
-                                            onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
-                                        }
-                                    },
-                                )
-                            }
+                        items(f.series, key = { "${it.providerId}:${it.externalId}" }) { r ->
+                            FeaturedCard(
+                                container = container,
+                                result = r,
+                                onClick = {
+                                    val existing = watchlist.firstOrNull {
+                                        it.normalizedName == normalizeForMatch(r.title)
+                                    }
+                                    if (existing != null) {
+                                        // Already in Watchlist → straight to
+                                        // its CollectionScreen (skip the
+                                        // search-result detail round-trip).
+                                        onOpenCollection(existing.id)
+                                    } else {
+                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
+                                    }
+                                },
+                            )
                         }
                     }
                 }
@@ -407,14 +404,12 @@ fun HomeScreen(
         if (downloading.isNotEmpty()) {
             item(key = "shelf-downloading") {
                 Shelf(title = "Downloading · ${downloading.size}") {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(downloading, key = { it.infohash }) { t ->
-                            DownloadingCard(
-                                container = container,
-                                torrent = t,
-                                onClick = { routeTorrent(t, onPickFile, onPickTorrent) },
-                            )
-                        }
+                    items(downloading, key = { it.infohash }) { t ->
+                        DownloadingCard(
+                            container = container,
+                            torrent = t,
+                            onClick = { routeTorrent(t, onPickFile, onPickTorrent) },
+                        )
                     }
                 }
             }
@@ -477,9 +472,27 @@ private fun routeTorrent(
  * focus we ask the surrounding lazy column to scroll the whole
  * shelf into view.
  */
+/**
+ * Shelf hosts its own LazyRow so every shelf gets identical title
+ * alignment + the same edge breathing room:
+ *   * The title sits at `gutterHorizontal` from the screen edge.
+ *   * The LazyRow itself extends full-width; `contentPadding`
+ *     positions the first card at `gutterHorizontal` (matching the
+ *     title) AND leaves room for the focus scale (~1.1×) to grow
+ *     leftward without clipping at the screen edge.
+ *   * Title → row gap bumped from 12.dp to 20.dp so the focused
+ *     card's vertical scale doesn't crash into the title text.
+ *
+ * Callers pass a `LazyListScope` block — just `items(...) { … }` —
+ * keeping the call sites short.
+ */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun Shelf(title: String, content: @Composable () -> Unit) {
+private fun Shelf(
+    title: String,
+    content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
+) {
+    val layout = LocalTvLayout.current
     val requester = remember { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
     Column(
@@ -490,14 +503,19 @@ private fun Shelf(title: String, content: @Composable () -> Unit) {
                     scope.launch { requester.bringIntoView() }
                 }
             },
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         Text(
             title.uppercase(),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = layout.gutterHorizontal),
         )
-        content()
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = layout.gutterHorizontal),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            content = content,
+        )
     }
 }
 
