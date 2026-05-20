@@ -381,7 +381,7 @@ private suspend fun doGrabPack(
         }.getOrNull()
     } ?: return
     if (autoPlay) {
-        onPlay(res.infohash, res.fileIdx.toInt())
+        onPlay(res.infohash, res.fileIdx)
     }
 }
 
