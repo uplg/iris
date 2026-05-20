@@ -143,6 +143,16 @@ pub struct SearchResult {
     /// deserialisers stay tolerant to future variants.
     #[serde(default)]
     pub language: Option<String>,
+    /// Pre-signed `.torrent` download URL when the provider
+    /// surfaces one in its search response (Torznab `<link>`,
+    /// UNIT3D `download_link`). Internal only — not returned to
+    /// clients (skipped on serialize). The scheduler persists it
+    /// onto `available_episodes.download_url` so the grab path
+    /// survives process restarts that wipe the in-memory link
+    /// caches. `None` for providers that fetch URLs on demand
+    /// (torr9's JSON API resolves per-id at grab time).
+    #[serde(skip_serializing, default)]
+    pub download_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

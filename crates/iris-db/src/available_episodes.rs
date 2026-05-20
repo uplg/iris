@@ -33,6 +33,14 @@ pub struct AvailableEpisodeRow {
     /// as Unknown downstream.
     #[serde(default)]
     pub language: Option<String>,
+    /// Pre-signed `.torrent` download URL captured at scan time.
+    /// Lets the grab path bypass the provider's in-memory link
+    /// cache — that cache evaporates on restart and pre-0.4.0
+    /// installs would 500 on the first grab attempt after each
+    /// reboot. `None` for providers that don't surface a URL
+    /// (torr9's JSON API), or on legacy rows pre-migration 0018.
+    #[serde(default)]
+    pub download_url: Option<String>,
 }
 
 /// Best-quality offer per `(normalized_name, season, episode,
@@ -53,7 +61,7 @@ pub async fn list_best_for_series(
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
     sqlx::query_as::<_, AvailableEpisodeRow>(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url \
          FROM available_episodes a \
          WHERE normalized_name = ?1 \
            AND episode > 0 \
@@ -87,7 +95,7 @@ pub async fn list_season_packs_for_series(
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
     sqlx::query_as::<_, AvailableEpisodeRow>(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url \
          FROM available_episodes a \
          WHERE normalized_name = ?1 \
            AND episode = 0 \
@@ -167,6 +175,11 @@ pub struct UpsertAvailableEpisode {
     /// is only emitted by legacy code paths that pre-date the
     /// multi-language work; new writes always set it.
     pub language: Option<String>,
+    /// Pre-signed `.torrent` download URL captured at scan time
+    /// from Torznab `<link>` / UNIT3D `download_link`. Lets the
+    /// grab path stay alive across server restarts that wipe the
+    /// providers' in-memory link caches.
+    pub download_url: Option<String>,
 }
 
 pub async fn upsert(
@@ -176,16 +189,17 @@ pub async fn upsert(
     sqlx::query(
         "INSERT INTO available_episodes \
             (id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-             magnet, quality, seeders, size_bytes, found_at, language) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+             magnet, quality, seeders, size_bytes, found_at, language, download_url) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
          ON CONFLICT(normalized_name, season, episode, indexer_provider, indexer_torrent_id) \
          DO UPDATE SET \
-            magnet     = excluded.magnet, \
-            quality    = excluded.quality, \
-            seeders    = excluded.seeders, \
-            size_bytes = excluded.size_bytes, \
-            found_at   = excluded.found_at, \
-            language   = excluded.language",
+            magnet       = excluded.magnet, \
+            quality      = excluded.quality, \
+            seeders      = excluded.seeders, \
+            size_bytes   = excluded.size_bytes, \
+            found_at     = excluded.found_at, \
+            language     = excluded.language, \
+            download_url = excluded.download_url",
     )
     .bind(Uuid::new_v4())
     .bind(&a.normalized_name)
@@ -199,6 +213,7 @@ pub async fn upsert(
     .bind(a.size_bytes)
     .bind(Utc::now())
     .bind(a.language)
+    .bind(a.download_url)
     .execute(pool)
     .await?;
     Ok(())

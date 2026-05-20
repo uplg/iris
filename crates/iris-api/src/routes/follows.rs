@@ -830,7 +830,16 @@ pub(crate) async fn grab_episode_core(
         .ok_or(ApiError::NotFound)?,
     };
 
-    let result = ingest_picked(state, &pick).await?;
+    let result = ingest_picked(
+        state,
+        &pick,
+        ReprimeHint {
+            display_title,
+            season,
+            episode: Some(episode),
+        },
+    )
+    .await?;
 
     iris_db::torrents::upsert(
         state.db(),
@@ -944,6 +953,26 @@ struct PickedAvailability {
     magnet: String,
     indexer_provider: String,
     indexer_torrent_id: String,
+    /// Pre-signed `.torrent` URL persisted on `available_episodes`
+    /// at scan time. When set, the grab path fetches the bytes
+    /// directly and skips `provider.resolve()` entirely — that's
+    /// the in-memory-cache fallback path that 500s after restarts
+    /// for Torznab / UNIT3D providers.
+    download_url: Option<String>,
+}
+
+/// Context the grab path has handy that `provider.resolve()` doesn't —
+/// pass it down so we can re-prime an empty link cache by doing a
+/// targeted search. Restart-survivor mechanism #2 (the persisted
+/// `download_url` is #1; this is what kicks in when the URL is null
+/// — old DB rows pre-migration 0018 — or when the URL has 404'd).
+struct ReprimeHint<'a> {
+    /// Display title for the SCENE-form search query.
+    display_title: &'a str,
+    season: i64,
+    /// `None` for season-pack grabs ("Show.Name.S01"); `Some` for
+    /// individual-episode grabs.
+    episode: Option<i64>,
 }
 
 async fn best_available(
@@ -974,6 +1003,7 @@ async fn best_available(
         magnet: r.magnet,
         indexer_provider: r.indexer_provider,
         indexer_torrent_id: r.indexer_torrent_id,
+        download_url: r.download_url,
     }))
 }
 
@@ -986,32 +1016,124 @@ async fn best_available(
 async fn ingest_picked(
     state: &AppState,
     pick: &PickedAvailability,
+    reprime: ReprimeHint<'_>,
 ) -> ApiResult<iris_torrent::IngestResult> {
-    let result = if pick.magnet.is_empty() {
-        let provider = state
-            .providers()
-            .get(&pick.indexer_provider)
-            .ok_or_else(|| {
-                ApiError::Internal(anyhow::anyhow!(
-                    "provider `{}` no longer registered",
-                    pick.indexer_provider
-                ))
-            })?;
-        let source = provider
-            .resolve(&pick.indexer_torrent_id)
+    // Resolution order:
+    //   1. Magnet — pre-resolved magnet URI, hand straight to librqbit.
+    //   2. Persisted download_url — scheduler stashed a pre-signed
+    //      `.torrent` URL at scan time. Fetch via the provider's
+    //      `fetch_bytes` and feed bytes to the engine. Bypasses
+    //      `provider.resolve()`'s in-memory link cache, which
+    //      evaporates on restart and caused real 500s when c411 /
+    //      UNIT3D dropped older releases off the search top page.
+    //   3. provider.resolve() — last resort: per-id round-trip to
+    //      the indexer. Works for torr9-style providers that don't
+    //      ship a URL in the search payload, and as a fallback when
+    //      the persisted URL has expired.
+    if !pick.magnet.is_empty() {
+        return state
+            .engine()
+            .add_from_magnet(&pick.magnet)
             .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("resolve: {e}")))?;
-        match source {
-            iris_core::search::TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,
-            iris_core::search::TorrentSource::TorrentFile(b) => {
-                state.engine().add_from_bytes(b).await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")));
+    }
+    if let Some(url) = pick.download_url.as_deref() {
+        if let Some(provider) = state.providers().get(&pick.indexer_provider) {
+            match provider.fetch_bytes(url).await {
+                Ok(bytes) => {
+                    return state
+                        .engine()
+                        .add_from_bytes(bytes.to_vec())
+                        .await
+                        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        url,
+                        provider = %pick.indexer_provider,
+                        error = %e,
+                        "persisted download_url fetch failed; falling back to provider.resolve()",
+                    );
+                }
             }
         }
-    } else {
-        state.engine().add_from_magnet(&pick.magnet).await
     }
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
-    Ok(result)
+    let provider = state.providers().get(&pick.indexer_provider).ok_or_else(|| {
+        ApiError::Internal(anyhow::anyhow!(
+            "provider `{}` no longer registered",
+            pick.indexer_provider
+        ))
+    })?;
+    // First resolve attempt — works when the provider's in-memory
+    // link cache is still hot (i.e. the scheduler has touched this
+    // (S, E) recently). On a fresh server boot the cache is empty
+    // and Torznab / UNIT3D providers refuse the lookup.
+    let source = match provider.resolve(&pick.indexer_torrent_id).await {
+        Ok(s) => s,
+        Err(first_err) => {
+            // Re-prime: do a targeted search that, by side effect,
+            // refills the provider's link cache for this exact
+            // release. We have the show title + S/E because the
+            // grab path knows them — `resolve()` doesn't get them
+            // through the trait. After the re-prime, the second
+            // `resolve()` lookup hits the cache.
+            tracing::info!(
+                provider = %pick.indexer_provider,
+                external_id = %pick.indexer_torrent_id,
+                reason = %first_err,
+                "resolve cache miss — repriming via search and retrying",
+            );
+            let prime_q = build_reprime_query(&reprime);
+            let _ = provider.search(&prime_q).await;
+            provider
+                .resolve(&pick.indexer_torrent_id)
+                .await
+                .map_err(|e| {
+                    ApiError::Internal(anyhow::anyhow!(
+                        "resolve after re-prime: {e} (first attempt: {first_err})"
+                    ))
+                })?
+        }
+    };
+    match source {
+        iris_core::search::TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,
+        iris_core::search::TorrentSource::TorrentFile(b) => state.engine().add_from_bytes(b).await,
+    }
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))
+}
+
+/// Build the targeted `SearchQuery` used to re-prime a provider's
+/// link cache after a `resolve()` miss. The episode field decides
+/// pack vs singleton: `Some` produces `Show.Name S04E11`, `None`
+/// produces `Show.Name S04` so a season-pack grab finds its
+/// pack-shaped offer.
+fn build_reprime_query(reprime: &ReprimeHint<'_>) -> iris_core::search::SearchQuery {
+    use iris_core::search::{SearchQuery, SortField, SortOrder};
+    let q = match reprime.episode {
+        Some(e) => format!(
+            "{title} S{s:02}E{e:02}",
+            title = reprime.display_title,
+            s = reprime.season,
+            e = e,
+        ),
+        None => format!(
+            "{title} S{s:02}",
+            title = reprime.display_title,
+            s = reprime.season,
+        ),
+    };
+    SearchQuery {
+        q,
+        page: Some(1),
+        limit: Some(20),
+        sort_by: Some(SortField::Seeders),
+        order: Some(SortOrder::Desc),
+        kind: None,
+        parsed_title: Some(iris_media::filename::series_key(reprime.display_title)),
+        season: Some(reprime.season as u32),
+        episode: reprime.episode.map(|e| e as u32),
+        year: None,
+    }
 }
 
 /// Look up a cached season pack that can satisfy a (season, episode)
@@ -1035,6 +1157,7 @@ async fn find_pack_offer(
         magnet: p.magnet,
         indexer_provider: p.indexer_provider,
         indexer_torrent_id: p.indexer_torrent_id,
+        download_url: p.download_url,
     }))
 }
 
@@ -1054,7 +1177,19 @@ async fn ingest_pack_and_pick_episode(
     season: i64,
     episode: i64,
 ) -> ApiResult<GrabResponse> {
-    let result = ingest_picked(state, &pack).await?;
+    let result = ingest_picked(
+        state,
+        &pack,
+        // Re-prime hint targets the season pack, not the individual
+        // episode — a c411 search of "Show.Name S04" turns up the
+        // pack entry, refreshing the link cache the resolver needs.
+        ReprimeHint {
+            display_title,
+            season,
+            episode: None,
+        },
+    )
+    .await?;
 
     // Find the leaf matching the requested (S, E). SCENE-parse each
     // path; pick the one whose `(season, episode)` matches. The
@@ -1169,6 +1304,7 @@ async fn find_via_indexer_for_identity(
             seeders: best.seeders.map(i64::from),
             size_bytes: best.size_bytes.map(|s| s as i64),
             language: Some(lang.as_str().to_string()),
+            download_url: best.download_url.clone(),
         },
     )
     .await;
@@ -1176,5 +1312,6 @@ async fn find_via_indexer_for_identity(
         magnet: String::new(),
         indexer_provider: best.provider_id,
         indexer_torrent_id: best.external_id,
+        download_url: best.download_url,
     }))
 }

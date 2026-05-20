@@ -24,6 +24,8 @@ use iris_core::search::{
     ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, TorrentDetails, TorrentSource,
 };
 
+use iris_core::Error;
+
 pub mod nfo;
 
 #[async_trait]
@@ -50,6 +52,28 @@ pub trait SearchProvider: Send + Sync {
     /// a details endpoint"; the UI falls back to the basic `SearchResult`.
     async fn details(&self, _external_id: &str) -> Result<Option<TorrentDetails>> {
         Ok(None)
+    }
+
+    /// Fetch the bytes of a pre-signed `.torrent` URL the provider
+    /// previously surfaced in a `SearchResult.download_url`. Used by
+    /// the grab path as a restart-safe alternative to `resolve()` —
+    /// `resolve()` relies on each provider's in-memory link cache,
+    /// which evaporates on restart, while a URL persisted on
+    /// `available_episodes.download_url` survives forever.
+    ///
+    /// Default implementation: plain GET via a fresh `reqwest`
+    /// client. Sufficient for Torznab + UNIT3D layouts where the
+    /// URL is signed with an `api_token=` query parameter. Providers
+    /// with cookie / header auth needs override this.
+    async fn fetch_bytes(&self, url: &str) -> Result<bytes::Bytes> {
+        let resp = reqwest::get(url)
+            .await
+            .map_err(|e| Error::Provider(format!("fetch_bytes get: {e}")))?
+            .error_for_status()
+            .map_err(|e| Error::Provider(format!("fetch_bytes status: {e}")))?;
+        resp.bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("fetch_bytes body: {e}")))
     }
 }
 

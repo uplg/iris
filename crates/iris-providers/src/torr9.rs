@@ -553,6 +553,11 @@ impl FeaturedItem {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            // torr9 fetches the `.torrent` bytes on demand via a
+            // per-id authenticated endpoint — no URL to persist
+            // ahead of time, no in-memory cache to lose at
+            // restart.
+            download_url: None,
         }
     }
 }
@@ -702,6 +707,11 @@ impl Torrent {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            // torr9 fetches the `.torrent` bytes on demand via a
+            // per-id authenticated endpoint — no URL to persist
+            // ahead of time, no in-memory cache to lose at
+            // restart.
+            download_url: None,
         }
     }
 }

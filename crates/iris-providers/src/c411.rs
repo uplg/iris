@@ -262,6 +262,12 @@ impl C411 {
                 library_infohash: None,
                 library_file_idx: None,
                 language: None,
+                // c411 featured items don't ship a `.torrent` URL
+                // — they're identified by infohash and resolved
+                // through the underlying Torznab search at grab
+                // time. The Torznab `into_search_result()` path
+                // does set this when it has one.
+                download_url: None,
             };
             match kind {
                 MediaKind::Movie => movies.push(result),

@@ -120,7 +120,7 @@ fun CollectionScreen(
     // new follow whose only signal is a pack still gets its season
     // tab so the user has a "Grab full Season N" affordance.
     val seasons = remember(merged, d.seasonPacks) {
-        val map = sortedMapOf<Int, MutableList<MergedRow>>()
+        val map = sortedMapOf<Int, MutableList<MergedEpisode>>()
         for (row in merged) {
             map.getOrPut(row.season.toInt()) { mutableListOf() }.add(row)
         }
@@ -181,7 +181,7 @@ fun CollectionScreen(
             }
 
             val currentRows = seasons[activeSeason].orEmpty()
-            items(currentRows, key = { it.rowKey() }) { ep ->
+            items(currentRows, key = { "${it.season}:${it.episode}" }) { ep ->
                 Box(
                     Modifier.padding(
                         horizontal = layout.gutterHorizontal,
@@ -191,15 +191,16 @@ fun CollectionScreen(
                     EpisodeRow(
                         ep = ep,
                         onPlay = onPickFile,
-                        onGrabAndPlay = { row ->
+                        onGrabVariant = { variant ->
                             scope.launch {
-                                doGrab(container, collectionId, row, autoPlay = true, onPlay = onPickFile)
-                                reload()
-                            }
-                        },
-                        onGrabOnly = { row ->
-                            scope.launch {
-                                doGrab(container, collectionId, row, autoPlay = false, onPlay = onPickFile)
+                                doGrabVariant(
+                                    container,
+                                    collectionId,
+                                    ep.season,
+                                    ep.episode,
+                                    variant,
+                                    onPickFile,
+                                )
                                 reload()
                             }
                         },
@@ -245,56 +246,55 @@ fun CollectionScreen(
 }
 
 // ============================================================================
-// Episode merge model (mirrors web's MergedEpisode)
+// Episode merge model — one row per (season, episode), variants inside
+// (mirrors web's MergedEpisode shape)
 // ============================================================================
 
-private sealed class MergedRow {
-    abstract val season: Long
-    abstract val episode: Long
+private data class MergedEpisode(
+    val season: Long,
+    val episode: Long,
+    val variants: List<EpisodeVariant>,
+)
 
+private sealed class EpisodeVariant {
+    abstract val language: String?
+
+    /** A release that's already on disk — clicking the chip plays it. */
     data class Downloaded(
-        override val season: Long,
-        override val episode: Long,
         val infohash: String,
         val fileIdx: Int,
         val watched: Boolean,
-        /** Language tag piped through from the server's
-         *  `CollectionEpisode.language` (derived from parent
-         *  torrent's SCENE name). */
-        val language: String?,
-    ) : MergedRow()
+        override val language: String?,
+    ) : EpisodeVariant()
 
+    /** A cached indexer offer — clicking the chip grabs the matching
+     *  language (server enforces a strict-match grab). */
     data class Available(
-        override val season: Long,
-        override val episode: Long,
         val quality: String?,
         val seeders: Long?,
         val sizeBytes: Long?,
-        val language: String?,
-    ) : MergedRow()
-}
-
-private fun MergedRow.rowKey(): String = when (this) {
-    is MergedRow.Downloaded -> "d:${infohash}:${fileIdx}"
-    is MergedRow.Available -> "a:${season}:${episode}:${language ?: "_"}"
+        override val language: String?,
+    ) : EpisodeVariant()
 }
 
 private fun mergeEpisodes(
     onDisk: List<CollectionEpisode>,
     available: List<AvailableEpisodeEntry>,
-): List<MergedRow> {
-    val out = mutableListOf<MergedRow>()
-    val ownedKeys = mutableSetOf<Pair<Long, Long>>()
+): List<MergedEpisode> {
+    // Group both downloaded and available entries under the same
+    // (season, episode) key. Server already filters available rows
+    // whose language is covered by an owned release — anything that
+    // arrives here is a genuine additional variant the user might
+    // want to grab. episode == 0 is the season-pack sentinel and
+    // stays out of the per-episode grid.
+    val buckets = linkedMapOf<Pair<Long, Long>, MutableList<EpisodeVariant>>()
+    val ensure = { season: Long, episode: Long ->
+        buckets.getOrPut(season to episode) { mutableListOf() }
+    }
     for (d in onDisk) {
-        // episode == 0 is the season-pack sentinel — keep it out of
-        // the per-episode grid (the file fallback path still surfaces
-        // it for raw playback).
         if (d.episode == 0L) continue
-        ownedKeys.add(d.season to d.episode)
-        out.add(
-            MergedRow.Downloaded(
-                season = d.season,
-                episode = d.episode,
+        ensure(d.season, d.episode).add(
+            EpisodeVariant.Downloaded(
                 infohash = d.infohash,
                 fileIdx = d.fileIdx,
                 watched = d.watched,
@@ -304,13 +304,8 @@ private fun mergeEpisodes(
     }
     for (a in available) {
         if (a.episode == 0L) continue
-        // Server already filters owned (S, E) — belt+braces in case a
-        // parallel grab landed between server fetch and merge.
-        if (ownedKeys.contains(a.season to a.episode)) continue
-        out.add(
-            MergedRow.Available(
-                season = a.season,
-                episode = a.episode,
+        ensure(a.season, a.episode).add(
+            EpisodeVariant.Available(
                 quality = a.quality,
                 seeders = a.seeders,
                 sizeBytes = a.sizeBytes,
@@ -318,22 +313,28 @@ private fun mergeEpisodes(
             ),
         )
     }
-    // Sort by (season, episode, language) so multi-language variants
-    // of the same unowned episode render contiguously.
-    return out.sortedWith(
-        compareBy(
-            { it.season },
-            { it.episode },
-            { (it as? MergedRow.Available)?.language ?: "" },
-        ),
-    )
+    // Variant order inside a row: downloaded first (the natural
+    // "Play" primary), then available sorted by language for
+    // predictable adjacency.
+    return buckets
+        .map { (key, variants) ->
+            val sorted = variants.sortedWith(
+                compareBy(
+                    { if (it is EpisodeVariant.Downloaded) 0 else 1 },
+                    { it.language ?: "" },
+                ),
+            )
+            MergedEpisode(season = key.first, episode = key.second, variants = sorted)
+        }
+        .sortedWith(compareBy({ it.season }, { it.episode }))
 }
 
-private suspend fun doGrab(
+private suspend fun doGrabVariant(
     container: AppContainer,
     collectionId: String,
-    row: MergedRow.Available,
-    autoPlay: Boolean,
+    season: Long,
+    episode: Long,
+    variant: EpisodeVariant.Available,
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
 ) {
     val url = container.sessionStore.serverUrl.first() ?: return
@@ -342,15 +343,16 @@ private suspend fun doGrab(
         runCatching {
             api.grabCollectionEpisode(
                 id = collectionId,
-                season = row.season.toInt(),
-                episode = row.episode.toInt(),
-                language = row.language,
+                season = season.toInt(),
+                episode = episode.toInt(),
+                language = variant.language,
             )
         }.getOrNull()
     } ?: return
-    if (autoPlay) {
-        onPlay(res.infohash, res.fileIdx.toInt())
-    }
+    // The grab is always play-on-success on TV — the alternate
+    // "Prepare" web button doesn't have a clean D-pad equivalent
+    // and the user typically opens an episode to watch it.
+    onPlay(res.infohash, res.fileIdx.toInt())
 }
 
 /// Grab a full season pack. Calls the same per-episode endpoint
@@ -526,19 +528,25 @@ private fun SeasonTabs(seasons: List<Int>, value: Int, onChange: (Int) -> Unit) 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun EpisodeRow(
-    ep: MergedRow,
+    ep: MergedEpisode,
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
-    onGrabAndPlay: (MergedRow.Available) -> Unit,
-    onGrabOnly: (MergedRow.Available) -> Unit,
+    onGrabVariant: (EpisodeVariant.Available) -> Unit,
 ) {
+    val anyWatched = ep.variants.any { it is EpisodeVariant.Downloaded && it.watched }
     Card(
+        // First downloaded variant wins the "tap the card" primary
+        // action — D-pad lands on the card, OK plays the dub the
+        // user already has. The per-variant chips below cover the
+        // alternate-language affordances explicitly.
         onClick = {
-            when (ep) {
-                is MergedRow.Downloaded -> onPlay(ep.infohash, ep.fileIdx)
-                is MergedRow.Available -> onGrabAndPlay(ep)
+            val first = ep.variants.firstOrNull()
+            when (first) {
+                is EpisodeVariant.Downloaded -> onPlay(first.infohash, first.fileIdx)
+                is EpisodeVariant.Available -> onGrabVariant(first)
+                null -> {}
             }
         },
-        modifier = Modifier.fillMaxWidth().height(72.dp),
+        modifier = Modifier.fillMaxWidth(),
         shape = CardDefaults.shape(shape = RoundedCornerShape(10.dp)),
         colors = CardDefaults.colors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
@@ -547,56 +555,105 @@ private fun EpisodeRow(
             focusedContentColor = MaterialTheme.colorScheme.onSurface,
         ),
     ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
-            Text(
-                "S%02dE%02d".format(ep.season, ep.episode),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.width(96.dp),
-            )
-            StatusBadgeForRow(ep)
-            // Language badge on every row — downloaded AND available
-            // — so a multi-language household tells dubs apart at a
-            // glance. The composable returns null for `unknown` so
-            // no placeholder noise.
-            LanguageBadge(
-                language = when (ep) {
-                    is MergedRow.Downloaded -> ep.language
-                    is MergedRow.Available -> ep.language
-                },
-            )
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                val meta = buildMetaLine(ep)
-                if (meta.isNotEmpty()) {
-                    Text(
-                        meta,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                Text(
+                    "S%02dE%02d".format(ep.season, ep.episode),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (anyWatched) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        colors = SurfaceDefaults.colors(
+                            containerColor = Color(0xFF6B7280).copy(alpha = 0.85f),
+                        ),
+                    ) {
+                        Text(
+                            "watched",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
                 }
             }
-            EpisodeAction(
-                ep = ep,
-                onPlay = onPlay,
-                onGrabAndPlay = onGrabAndPlay,
-                onGrabOnly = onGrabOnly,
-            )
+            // Variant chip strip — one chip per (status, language).
+            // Clicking a downloaded chip plays it; clicking an
+            // available chip grabs that exact language. The row's
+            // own onClick mirrors the first chip so D-pad-OK on
+            // the card defaults to playing what the user has.
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                ep.variants.forEach { v ->
+                    VariantChip(variant = v, onPlay = onPlay, onGrab = onGrabVariant)
+                }
+            }
         }
     }
 }
 
-private fun buildMetaLine(ep: MergedRow): String {
-    if (ep !is MergedRow.Available) return ""
-    val parts = buildList {
-        ep.quality?.takeIf { it.isNotBlank() }?.let(::add)
-        ep.seeders?.let { add("$it seeders") }
-        ep.sizeBytes?.let { add(formatFileSize(it)) }
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun VariantChip(
+    variant: EpisodeVariant,
+    onPlay: (infohash: String, fileIdx: Int) -> Unit,
+    onGrab: (EpisodeVariant.Available) -> Unit,
+) {
+    when (variant) {
+        is EpisodeVariant.Downloaded -> {
+            Button(
+                onClick = { onPlay(variant.infohash, variant.fileIdx) },
+                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LanguageBadge(language = variant.language)
+                    Text(
+                        if (variant.watched) "Replay" else "Play",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+        }
+        is EpisodeVariant.Available -> {
+            Surface(
+                onClick = { onGrab(variant) },
+                shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                colors = ClickableSurfaceDefaults.colors(
+                    containerColor = Color(0xFF10B981).copy(alpha = 0.15f),
+                    focusedContainerColor = Color(0xFF10B981).copy(alpha = 0.30f),
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    focusedContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LanguageBadge(language = variant.language)
+                    val meta = listOfNotNull(
+                        variant.quality?.takeIf { it.isNotBlank() },
+                        variant.seeders?.let { "${it}↑" },
+                        variant.sizeBytes?.let { formatFileSize(it) },
+                    ).joinToString(" · ")
+                    Text(
+                        if (meta.isEmpty()) "Grab" else "Grab · $meta",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+        }
     }
-    return parts.joinToString(" · ")
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -680,60 +737,6 @@ private fun SeasonPackBanner(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun StatusBadgeForRow(ep: MergedRow) {
-    val (label, color) = when (ep) {
-        is MergedRow.Downloaded ->
-            if (ep.watched) "watched" to Color(0xFF6B7280)
-            else "downloaded" to Color(0xFF6B7280)
-        is MergedRow.Available -> "available" to Color(0xFF10B981)
-    }
-    Surface(
-        shape = RoundedCornerShape(4.dp),
-        colors = SurfaceDefaults.colors(containerColor = color.copy(alpha = 0.85f)),
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun EpisodeAction(
-    ep: MergedRow,
-    onPlay: (infohash: String, fileIdx: Int) -> Unit,
-    onGrabAndPlay: (MergedRow.Available) -> Unit,
-    onGrabOnly: (MergedRow.Available) -> Unit,
-) {
-    when (ep) {
-        is MergedRow.Downloaded -> {
-            Button(
-                onClick = { onPlay(ep.infohash, ep.fileIdx) },
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-            ) { Text(if (ep.watched) "Watch again" else "Play") }
-        }
-        is MergedRow.Available -> {
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                Button(
-                    onClick = { onGrabOnly(ep) },
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                ) { Text("Prepare") }
-                Button(
-                    onClick = { onGrabAndPlay(ep) },
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-                ) { Text("Play") }
-            }
-        }
-    }
-}
 
 // ============================================================================
 // File fallback (movies / SCENE-unparseable TV)

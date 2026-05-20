@@ -13,6 +13,7 @@ workspace = true
 iris-core = { workspace = true }
 iris-config = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -10,8 +10,6 @@
 //! one chérie / mom see; torrents stays available for the seedbox UI
 //! at `/admin`.
 
-use std::collections::HashSet;
-
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, Query, State};
@@ -332,6 +330,102 @@ async fn collection_detail(
     }))
 }
 
+/// Resolve the language tag of an on-disk torrent. SCENE names are
+/// the primary signal — `VOSTFR` / `MULTi` / `FRENCH` etc. are
+/// detected from the torrent name. When the parser comes back
+/// `Unknown` (Seedpool's "no explicit tag" convention is the typical
+/// case), fall back to the source provider's `default_language`
+/// config so Seedpool ingests get tagged English instead of staying
+/// "unknown" and silently breaking the language-dedup filter.
+fn resolve_torrent_language(
+    state: &AppState,
+    infohash: &str,
+    torrent_names: &std::collections::HashMap<String, String>,
+    torrent_source_providers: &std::collections::HashMap<String, String>,
+) -> iris_media::filename::Language {
+    let detected = torrent_names
+        .get(infohash)
+        .map_or(iris_media::filename::Language::Unknown, |n| {
+            iris_media::filename::detect_language(n)
+        });
+    if detected != iris_media::filename::Language::Unknown {
+        return detected;
+    }
+    torrent_source_providers
+        .get(infohash)
+        .and_then(|p| state.providers().default_language(p))
+        .map_or(detected, iris_media::filename::Language::parse_tag)
+}
+
+/// Project the scheduler's cached `available_episodes` rows into
+/// the API response shape: drop owned-language duplicates, drop
+/// 0-seeder corpses, count what's "new since last visit". Extracted
+/// from `build_tv_episode_view` to keep that function under the
+/// clippy line cap. Language coverage rule: an owned `Multi`
+/// release satisfies any language (Multi packs both audio tracks),
+/// so it shadows every offer for that (S, E).
+async fn build_available_singletons(
+    state: &AppState,
+    normalized: &str,
+    owned_languages: &std::collections::HashMap<(i64, i64), Vec<iris_media::filename::Language>>,
+    owned_torrent_ids: &std::collections::HashSet<(String, String)>,
+    user_last_visited: Option<DateTime<Utc>>,
+) -> (Vec<AvailableEpisodeEntry>, u32) {
+    let offers = iris_db::available_episodes::list_best_for_series(state.db(), normalized)
+        .await
+        .unwrap_or_default();
+    let mut out: Vec<AvailableEpisodeEntry> = Vec::new();
+    let mut new_count: u32 = 0;
+    for o in offers {
+        // `list_best_for_series` already excludes packs at the SQL
+        // level, but belt + braces against stale rows.
+        if o.episode == 0 {
+            continue;
+        }
+        // Exact-identity match: the offer's torrent is already in
+        // the collection (just-grabbed, still downloading, or fully
+        // on disk). Surfacing it as a "Grab" chip would let the
+        // user retrigger the same ingest from the same row. Skip.
+        if owned_torrent_ids
+            .contains(&(o.indexer_provider.clone(), o.indexer_torrent_id.clone()))
+        {
+            continue;
+        }
+        let offer_lang =
+            iris_media::filename::Language::parse_tag(o.language.as_deref().unwrap_or(""));
+        let covered = owned_languages.get(&(o.season, o.episode)).is_some_and(|owned| {
+            owned
+                .iter()
+                .any(|&l| l == iris_media::filename::Language::Multi || l == offer_lang)
+        });
+        if covered {
+            continue;
+        }
+        // Dead offer (0 seeders, or unknown count): undownloadable
+        // and only clutters the grid. Pack offers stay regardless —
+        // a quiet pack still beats no pack when no singletons exist.
+        if o.seeders.unwrap_or(0) <= 0 {
+            continue;
+        }
+        if user_last_visited.is_none_or(|t| o.found_at > t) {
+            new_count = new_count.saturating_add(1);
+        }
+        out.push(AvailableEpisodeEntry {
+            season: o.season,
+            episode: o.episode,
+            indexer_provider: o.indexer_provider,
+            indexer_torrent_id: o.indexer_torrent_id,
+            quality: o.quality,
+            seeders: o.seeders,
+            size_bytes: o.size_bytes,
+            found_at: o.found_at,
+            language: o.language,
+        });
+    }
+    out.sort_by_key(|e| (e.season, e.episode));
+    (out, new_count)
+}
+
 /// Build the TV-shaped piece of the collection detail payload —
 /// merged `episode_files` rows + indexer offers + per-user
 /// new-since-last-visit count. Extracted from `collection_detail`
@@ -357,17 +451,24 @@ async fn build_tv_episode_view(
     Vec<SeasonPackEntry>,
     u32,
 )> {
-    // Read every torrent of the collection once — used for two
-    // things below:
-    //   * `owned_pack_ids`: suppress pack banners the user has
-    //     already grabbed (matching on the indexer-side identity).
-    //   * `torrent_names`: per-episode SCENE language detection so
-    //     a downloaded row knows whether it's FR / EN / MULTi
-    //     without the client re-parsing the same string.
+    // Read every torrent of the collection once — used below for
+    // three things:
+    //   * `owned_torrent_ids`: suppress any cached offer (singleton
+    //     OR pack) whose indexer-side identity matches an
+    //     already-ingested torrent. Without this you could see the
+    //     same EN release as a "Grab" chip moments after kicking
+    //     off its download.
+    //   * `torrent_names`: per-episode SCENE language detection
+    //     for the downloaded chip badge.
+    //   * `torrent_source_providers`: fallback language when SCENE
+    //     detection comes back `Unknown` (Seedpool ships English
+    //     releases with no explicit tag — its provider config
+    //     declares `default_language = "english"` and we honour
+    //     that here).
     let collection_torrents = iris_db::torrents::list_in_collection(state.db(), collection.id)
         .await
         .unwrap_or_default();
-    let owned_pack_ids: std::collections::HashSet<(String, String)> = collection_torrents
+    let owned_torrent_ids: std::collections::HashSet<(String, String)> = collection_torrents
         .iter()
         .filter_map(|t| match (&t.source_provider, &t.source_external_id) {
             (Some(p), Some(id)) => Some((p.clone(), id.clone())),
@@ -378,31 +479,55 @@ async fn build_tv_episode_view(
         .iter()
         .map(|t| (t.infohash.clone(), t.name.clone()))
         .collect();
+    let torrent_source_providers: std::collections::HashMap<String, String> = collection_torrents
+        .iter()
+        .filter_map(|t| t.source_provider.clone().map(|p| (t.infohash.clone(), p)))
+        .collect();
     let files = iris_db::episode_files::list_for_collection(state.db(), collection.id).await?;
     let mut episodes_out: Vec<EpisodeEntry> = Vec::with_capacity(files.len());
-    let mut owned_keys: HashSet<(i64, i64)> = HashSet::with_capacity(files.len());
+    // Per-(season, episode) owned-language map: for each owned
+    // episode, which release languages are already on disk? Used
+    // below to filter `available_episodes` precisely instead of
+    // dropping every variant the moment one language is owned —
+    // a user with the FR release of S01E01 should still see EN /
+    // MULTi variants as grabable alternatives.
+    let mut owned_languages: std::collections::HashMap<(i64, i64), Vec<iris_media::filename::Language>> =
+        std::collections::HashMap::new();
     for f in files {
         // episode == 0 is the season-pack sentinel — keep it out
-        // of the dedup set so the indexer's individual S04E05
+        // of the dedup map so the indexer's individual S04E05
         // hit still surfaces as "available" even when an S04
         // pack has been ingested.
         if f.episode > 0 {
-            owned_keys.insert((f.season, f.episode));
+            let lang = resolve_torrent_language(
+                state,
+                &f.infohash,
+                &torrent_names,
+                &torrent_source_providers,
+            );
+            owned_languages
+                .entry((f.season, f.episode))
+                .or_default()
+                .push(lang);
         }
         let watched = iris_db::playback::get(state.db(), user_id, &f.infohash, f.file_idx)
             .await
             .unwrap_or(None)
             .is_some_and(|p| p.completed);
-        // Detect language off the parent torrent's name. SCENE
-        // conventions land the tag (VOSTFR / VFF / MULTi / etc.)
-        // on the torrent itself, not on individual file leaves,
-        // so the parent is the right signal source. `None` only
-        // when the torrent is no longer in the collection list
-        // (defensive — `episode_files` rows aren't supposed to
-        // outlive their parent).
-        let language = torrent_names
-            .get(&f.infohash)
-            .map(|n| iris_media::filename::detect_language(n).as_str().to_string());
+        // Same resolver as above so a chip's badge agrees with the
+        // owned_languages dedup map — keeps the UI from disagreeing
+        // with the server about whether an offer's language is
+        // already covered.
+        let language = Some(
+            resolve_torrent_language(
+                state,
+                &f.infohash,
+                &torrent_names,
+                &torrent_source_providers,
+            )
+            .as_str()
+            .to_string(),
+        );
         episodes_out.push(EpisodeEntry {
             season: f.season,
             episode: f.episode,
@@ -420,48 +545,14 @@ async fn build_tv_episode_view(
     let mut packs_out: Vec<SeasonPackEntry> = Vec::new();
     let mut new_count: u32 = 0;
     if let Some(normalized) = collection.parsed_title_normalized.as_deref() {
-        let offers = iris_db::available_episodes::list_best_for_series(state.db(), normalized)
-            .await
-            .unwrap_or_default();
-        for o in offers {
-            // `list_best_for_series` already excludes packs at the
-            // SQL level, but belt + braces in case a stale row
-            // slipped through with `episode = 0`.
-            if o.episode == 0 {
-                continue;
-            }
-            // Skip episodes the household already has on disk —
-            // surface only "what you could grab next" here.
-            if owned_keys.contains(&(o.season, o.episode)) {
-                continue;
-            }
-            // Drop dead offers: a singleton with 0 seeders (or an
-            // unknown count, treated the same) is undownloadable
-            // and only clutters the episode grid. The user
-            // explicitly flagged this — clicking a 0-seeder row
-            // would just hang. Pack offers stay regardless because
-            // a quiet pack still beats no pack when no singletons
-            // exist for that season.
-            if o.seeders.unwrap_or(0) <= 0 {
-                continue;
-            }
-            let is_new = user_last_visited.is_none_or(|t| o.found_at > t);
-            if is_new {
-                new_count = new_count.saturating_add(1);
-            }
-            available_out.push(AvailableEpisodeEntry {
-                season: o.season,
-                episode: o.episode,
-                indexer_provider: o.indexer_provider,
-                indexer_torrent_id: o.indexer_torrent_id,
-                quality: o.quality,
-                seeders: o.seeders,
-                size_bytes: o.size_bytes,
-                found_at: o.found_at,
-                language: o.language,
-            });
-        }
-        available_out.sort_by_key(|e| (e.season, e.episode));
+        (available_out, new_count) = build_available_singletons(
+            state,
+            normalized,
+            &owned_languages,
+            &owned_torrent_ids,
+            user_last_visited,
+        )
+        .await;
 
         // Season packs surfaced separately. The UI renders them as
         // a "Grab full Season N" affordance; the grab path also
@@ -474,7 +565,7 @@ async fn build_tv_episode_view(
             .await
             .unwrap_or_default();
         for p in packs {
-            if owned_pack_ids
+            if owned_torrent_ids
                 .contains(&(p.indexer_provider.clone(), p.indexer_torrent_id.clone()))
             {
                 continue;

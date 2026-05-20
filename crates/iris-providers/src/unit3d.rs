@@ -721,6 +721,14 @@ impl TorrentEnvelope {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            // UNIT3D ships pre-signed `.torrent` URLs in the
+            // search payload. We keep them in the in-memory
+            // `link_cache` for hot grabs AND surface them here so
+            // the scheduler can persist them to
+            // `available_episodes.download_url` — once persisted
+            // a grab survives a server restart even if the search
+            // page no longer lists this release.
+            download_url: Some(attrs.download_link),
         }
     }
 

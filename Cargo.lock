@@ -2127,6 +2127,7 @@ name = "iris-providers"
 version = "0.3.1"
 dependencies = [
  "async-trait",
+ "bytes",
  "chrono",
  "futures",
  "iris-config",

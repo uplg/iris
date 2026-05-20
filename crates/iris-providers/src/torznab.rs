@@ -511,6 +511,11 @@ impl RawItem {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            // Captured here so the scheduler can persist it onto
+            // `available_episodes.download_url`. The in-memory
+            // `link_cache` keeps working as the hot path; this is
+            // the durability backup.
+            download_url: self.download_url,
         }
     }
 }

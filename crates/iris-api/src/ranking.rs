@@ -266,6 +266,7 @@ mod tests {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            download_url: None,
         }
     }
 

@@ -167,85 +167,89 @@ function Hero({ collection }: { collection: CollectionDetail }) {
 // Episode list — merged on-disk + indexer offers
 // ---------------------------------------------------------------------------
 
+/** A single episode row aggregates every variant we have for that
+ *  (S, E) — owned releases + grabbable indexer offers — so a user
+ *  with the FR release on disk and an EN release available in cache
+ *  sees one row with TWO chips, not two separate rows. The chip the
+ *  user clicks decides whether we Play (downloaded) or Grab
+ *  (available, with the right language). */
 type MergedEpisode = {
   season: number;
   episode: number;
-  status: "downloaded" | "available";
-  watched: boolean;
-  /** Set when status === "downloaded". */
-  infohash?: string;
-  file_idx?: number;
-  /** Set when status === "available". */
-  indexer_provider?: string;
-  indexer_torrent_id?: string;
-  quality?: string | null;
-  seeders?: number | null;
-  size_bytes?: number | null;
-  /** Server-detected language tag. Present on both downloaded and
-   *  available rows so a household running multiple languages
-   *  can tell which release they're looking at. */
-  language?: string | null;
+  variants: EpisodeVariant[];
 };
+
+type EpisodeVariant =
+  | {
+      status: "downloaded";
+      language: string | null;
+      infohash: string;
+      file_idx: number;
+      watched: boolean;
+    }
+  | {
+      status: "available";
+      language: string | null;
+      indexer_provider: string;
+      indexer_torrent_id: string;
+      quality: string | null;
+      seeders: number | null;
+      size_bytes: number | null;
+    };
 
 function mergeEpisodes(
   on_disk: CollectionEpisodeEntry[],
   available: AvailableEpisodeEntry[] | undefined,
 ): MergedEpisode[] {
-  // Server already filters owned (season, episode) out of
-  // `available` — but season-pack sentinels (episode === 0) are
-  // intentionally kept in `on_disk`. Skip those when building the
-  // grid: a season pack isn't a per-episode row.
-  //
-  // Downloaded episodes get one row per (S, E). Available episodes
-  // get one row per (S, E, language) — the household has both
-  // anglophone and francophone users on the same library, so an
-  // unowned S04E11 can show as a "FR" row AND an "EN" row side
-  // by side and either user picks the badge they recognise.
-  const out: MergedEpisode[] = [];
-  const ownedKeys = new Set<string>();
+  // Server already filters owned (season, episode, language) out of
+  // `available` — variants we get here are genuinely additive. We
+  // group everything by (S, E) for a single row per episode.
+  // episode === 0 is the season-pack sentinel — the file fallback
+  // path handles those separately.
+  const byKey = new Map<string, MergedEpisode>();
+  const ensure = (season: number, episode: number): MergedEpisode => {
+    const key = `${season}-${episode}`;
+    let row = byKey.get(key);
+    if (!row) {
+      row = { season, episode, variants: [] };
+      byKey.set(key, row);
+    }
+    return row;
+  };
   for (const d of on_disk) {
     if (d.episode === 0) continue;
-    ownedKeys.add(`${d.season}-${d.episode}`);
-    out.push({
-      season: d.season,
-      episode: d.episode,
+    ensure(d.season, d.episode).variants.push({
       status: "downloaded",
-      watched: d.watched,
+      language: d.language ?? null,
       infohash: d.infohash,
       file_idx: d.file_idx,
-      language: d.language,
+      watched: d.watched,
     });
   }
   for (const a of available ?? []) {
     if (a.episode === 0) continue;
-    // Server should already exclude owned (S, E), but belt+braces:
-    // a parallel grab in another tab can have written the
-    // episode_files row between scheduler tick and read.
-    if (ownedKeys.has(`${a.season}-${a.episode}`)) continue;
-    out.push({
-      season: a.season,
-      episode: a.episode,
+    ensure(a.season, a.episode).variants.push({
       status: "available",
-      watched: false,
+      language: a.language ?? null,
       indexer_provider: a.indexer_provider,
       indexer_torrent_id: a.indexer_torrent_id,
       quality: a.quality,
       seeders: a.seeders,
       size_bytes: a.size_bytes,
-      language: a.language,
     });
   }
-  // Sort by (season, episode, language) so a multi-language unowned
-  // episode renders its variants contiguously: ".. S04E11 FR / S04E11
-  // EN .. S04E12 FR / S04E12 EN .." rather than ".. S04E11 FR S04E12
-  // FR S04E11 EN S04E12 EN ..".
-  out.sort(
-    (a, b) =>
-      a.season - b.season ||
-      a.episode - b.episode ||
-      (a.language ?? "").localeCompare(b.language ?? ""),
+  // Stable variant order per row: downloaded first (so the Play
+  // action sits to the left as the natural primary), then available
+  // sorted by language for predictable adjacency.
+  for (const row of byKey.values()) {
+    row.variants.sort((a, b) => {
+      if (a.status !== b.status) return a.status === "downloaded" ? -1 : 1;
+      return (a.language ?? "").localeCompare(b.language ?? "");
+    });
+  }
+  return Array.from(byKey.values()).sort(
+    (a, b) => a.season - b.season || a.episode - b.episode,
   );
-  return out;
 }
 
 function EpisodeList({
@@ -329,7 +333,7 @@ function EpisodeList({
         <ul className="divide-y divide-border rounded-lg border border-border bg-card/30">
           {current.items.map((ep) => (
             <EpisodeRow
-              key={`${ep.season}-${ep.episode}-${ep.language ?? "_"}`}
+              key={`${ep.season}-${ep.episode}`}
               collectionId={collection.id}
               ep={ep}
               onPlay={onPlay}
@@ -456,112 +460,113 @@ function EpisodeRow({
   ep: MergedEpisode;
   onPlay: (infohash: string, fileIdx: number) => void;
 }) {
+  const anyWatched = ep.variants.some(
+    (v) => v.status === "downloaded" && v.watched,
+  );
+  return (
+    <li className="grid grid-cols-[3rem_1fr] items-start gap-3 px-4 py-3 text-sm">
+      <span className="pt-1 text-center font-mono text-muted-foreground">
+        {ep.episode.toString().padStart(2, "0")}
+      </span>
+      <div className="min-w-0 grid gap-2">
+        <div className="flex items-center gap-2">
+          <span className="font-medium">
+            S{ep.season.toString().padStart(2, "0")}E
+            {ep.episode.toString().padStart(2, "0")}
+          </span>
+          {anyWatched && (
+            <Badge variant="secondary" className="text-[10px]">
+              <CheckCircle2 className="mr-1 size-3" /> watched
+            </Badge>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {ep.variants.map((v, i) => (
+            <VariantChip
+              key={i}
+              collectionId={collectionId}
+              season={ep.season}
+              episode={ep.episode}
+              variant={v}
+              onPlay={onPlay}
+            />
+          ))}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+/** One clickable chip per release variant. Downloaded variants play
+ *  immediately; available variants grab in the chip's language then
+ *  play. Layout intentionally compact — a 4-variant row (rare but
+ *  possible: FR + VOSTFR + EN + MULTi) still fits on a single line
+ *  on a desktop. */
+function VariantChip({
+  collectionId,
+  season,
+  episode,
+  variant,
+  onPlay,
+}: {
+  collectionId: string;
+  season: number;
+  episode: number;
+  variant: EpisodeVariant;
+  onPlay: (infohash: string, fileIdx: number) => void;
+}) {
   const qc = useQueryClient();
-  // Language pinned per row — clicking the FR badge grabs the FR
-  // cache slot specifically, no cross-language fallback. `null` on
-  // downloaded rows (irrelevant — Play doesn't grab anything).
-  const grabLang = ep.status === "available" ? ep.language ?? null : null;
-  const grabAndPlay = useMutation({
+  const grab = useMutation({
     mutationFn: () =>
-      library.grabCollectionEpisode(collectionId, ep.season, ep.episode, grabLang),
+      library.grabCollectionEpisode(
+        collectionId,
+        season,
+        episode,
+        variant.status === "available" ? variant.language : null,
+      ),
     onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
       onPlay(res.infohash, res.file_idx);
     },
   });
-  const grabOnly = useMutation({
-    mutationFn: () =>
-      library.grabCollectionEpisode(collectionId, ep.season, ep.episode, grabLang),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
-    },
-  });
 
+  if (variant.status === "downloaded") {
+    return (
+      <button
+        type="button"
+        onClick={() => onPlay(variant.infohash, variant.file_idx)}
+        className="group inline-flex items-center gap-2 rounded-md border border-border bg-card/60 px-2.5 py-1 transition hover:border-primary/60 hover:bg-card"
+      >
+        <LanguageBadge language={variant.language} />
+        <Play className="size-3.5 text-primary" />
+        <span className="text-xs text-muted-foreground">
+          {variant.watched ? "Watch again" : "Play"}
+        </span>
+      </button>
+    );
+  }
+  const meta = [
+    variant.quality,
+    variant.seeders != null ? `${variant.seeders}↑` : null,
+    variant.size_bytes != null ? formatSize(variant.size_bytes) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <li className="grid grid-cols-[3rem_1fr_auto] items-center gap-3 px-4 py-3 text-sm">
-      <span className="text-center font-mono text-muted-foreground">
-        {ep.episode.toString().padStart(2, "0")}
-      </span>
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="truncate font-medium">
-            S{ep.season.toString().padStart(2, "0")}E
-            {ep.episode.toString().padStart(2, "0")}
-          </span>
-          <StatusBadge ep={ep} />
-          {/* Language badge on every row (downloaded + available)
-              so the household knows the dub of each episode at a
-              glance. Component returns null for `unknown` so we
-              never render a useless placeholder. */}
-          <LanguageBadge language={ep.language} />
-        </div>
-        <div className="mt-0.5 flex items-center gap-3 text-xs text-muted-foreground">
-          {ep.quality && <span>{ep.quality}</span>}
-          {ep.seeders != null && <span>{ep.seeders} seeders</span>}
-          {ep.size_bytes != null && <span>{formatSize(ep.size_bytes)}</span>}
-        </div>
-      </div>
-      <EpisodeAction
-        ep={ep}
-        onPlay={onPlay}
-        onGrabAndPlay={() => grabAndPlay.mutate()}
-        onGrabOnly={() => grabOnly.mutate()}
-        grabBusy={grabAndPlay.isPending || grabOnly.isPending}
-      />
-    </li>
-  );
-}
-
-function StatusBadge({ ep }: { ep: MergedEpisode }) {
-  if (ep.watched) {
-    return (
-      <Badge variant="secondary" className="text-[10px]">
-        <CheckCircle2 className="mr-1 size-3" /> watched
-      </Badge>
-    );
-  }
-  if (ep.status === "downloaded") {
-    return (
-      <Badge variant="secondary" className="text-[10px]">
-        downloaded
-      </Badge>
-    );
-  }
-  return <Badge className="bg-emerald-500/80 text-[10px]">available</Badge>;
-}
-
-function EpisodeAction({
-  ep,
-  onPlay,
-  onGrabAndPlay,
-  onGrabOnly,
-  grabBusy,
-}: {
-  ep: MergedEpisode;
-  onPlay: (infohash: string, fileIdx: number) => void;
-  onGrabAndPlay: () => void;
-  onGrabOnly: () => void;
-  grabBusy: boolean;
-}) {
-  if (ep.status === "downloaded" && ep.infohash != null && ep.file_idx != null) {
-    return (
-      <Button size="sm" onClick={() => onPlay(ep.infohash!, ep.file_idx!)}>
-        <Play className="size-3.5" />
-        {ep.watched ? "Watch again" : "Play"}
-      </Button>
-    );
-  }
-  return (
-    <div className="flex items-center gap-1">
-      <Button size="sm" variant="secondary" onClick={onGrabOnly} disabled={grabBusy}>
-        <Download className="size-3.5" />
-        Prepare
-      </Button>
-      <Button size="sm" onClick={onGrabAndPlay} disabled={grabBusy}>
-        {grabBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-        Play
-      </Button>
-    </div>
+    <button
+      type="button"
+      onClick={() => grab.mutate()}
+      disabled={grab.isPending}
+      className="group inline-flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-1 transition hover:border-emerald-500/60 hover:bg-emerald-500/10 disabled:opacity-60"
+    >
+      <LanguageBadge language={variant.language} />
+      {grab.isPending ? (
+        <Loader2 className="size-3.5 animate-spin text-emerald-300" />
+      ) : (
+        <Download className="size-3.5 text-emerald-300" />
+      )}
+      {meta && <span className="text-xs text-muted-foreground">{meta}</span>}
+    </button>
   );
 }
 

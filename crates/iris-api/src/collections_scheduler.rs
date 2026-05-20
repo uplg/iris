@@ -280,6 +280,11 @@ async fn record_availability(
         seeders: best.seeders.map(i64::from),
         size_bytes: best.size_bytes.map(|s| s as i64),
         language: Some(language.as_str().to_string()),
+        // Persist the Torznab / UNIT3D `.torrent` URL so the grab
+        // path survives the next restart even if the provider's
+        // in-memory link cache evaporated. torr9 will be None
+        // here — its resolve() fetches per-id anyway.
+        download_url: best.download_url.clone(),
     };
     if let Err(e) = iris_db::available_episodes::upsert(pool, upsert).await {
         tracing::warn!(error = %e, "scheduler: upsert availability failed");
