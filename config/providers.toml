@@ -31,3 +31,9 @@ kind = "unit3d"
 enabled = true
 base_url = "https://seedpool.org"
 api_key_env = "SEEDPOOL_API_KEY"
+# Seedpool ships English releases by convention without ever tagging
+# the filename. Without this hint the language detector would label
+# them as `unknown` (= no badge), leaving the household's anglophone
+# users without a visual cue. The francophone trackers tag releases
+# explicitly (VOSTFR / VFF / MULTI) so they don't need a default.
+default_language = "english"

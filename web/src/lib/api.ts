@@ -228,6 +228,22 @@ export type SearchResult = {
   /** Pre-resolved poster URL from the indexer (torr9 ships these on
    *  featured items). Use directly — no TMDB lookup needed. */
   poster_url: string | null;
+  /** Server-set: result's SCENE identity (title, S, E) already maps
+   *  to an episode_files row. UI disables the "Add" CTA and offers
+   *  to play the existing file instead. Optional for backwards
+   *  compatibility — older backends omit it. */
+  already_in_library?: boolean;
+  /** When `already_in_library` is true, the infohash of the file we
+   *  already have. Empty otherwise. */
+  library_infohash?: string | null;
+  /** File index inside `library_infohash` for the matching episode.
+   *  Combined with the infohash to build a direct `/watch/X/Y` URL. */
+  library_file_idx?: number | null;
+  /** Coarse language tag the server detected from the SCENE release
+   *  name. Stable string form: `"french"` / `"english"` / `"multi"` /
+   *  `"unknown"`. Drives the FR / EN / MULTi badge on result cards
+   *  so anglophone users can spot Seedpool releases at a glance. */
+  language?: string | null;
 };
 
 export type MediaKind = "movie" | "tv";
@@ -243,9 +259,21 @@ export type ProviderResultMeta = {
   error: string | null;
 };
 
+/** SCENE-style parse of the user query the server ran before fan-out.
+ *  Drives the "Showing results for X · S04E11" banner above the
+ *  search grid. Absent when the query was a bare title with no
+ *  recognisable structure. */
+export type ParsedQueryInfo = {
+  title: string;
+  season: number | null;
+  episode: number | null;
+  year: number | null;
+};
+
 export type AggregatedResults = {
   results: SearchResult[];
   providers: ProviderResultMeta[];
+  parsed_query?: ParsedQueryInfo | null;
 };
 
 export type SearchOpts = {
@@ -471,6 +499,7 @@ export const progress = {
 
 export const me = {
   continueWatching: () => api.get<ContinueWatchingItem[]>("/me/continue-watching"),
+  watchlist: () => api.get<WatchlistItem[]>("/me/watchlist"),
 };
 
 export type FilePreview = {
@@ -669,6 +698,49 @@ export type CollectionEpisodeEntry = {
   infohash: string;
   file_idx: number;
   watched: boolean;
+  /** Language tag derived server-side from the parent torrent's
+   *  SCENE name (`french` / `english` / `multi` / `unknown`).
+   *  Rendered as a row badge so a household with anglophone +
+   *  francophone viewers can tell which dub they have on disk. */
+  language?: string | null;
+};
+
+/** Cached season-pack offer the indexer scanner stashed for this
+ *  collection. Surfaced separately from `available_episodes` because
+ *  the UX is different: a pack covers a whole season, not a single
+ *  episode. The grab path transparently falls back to a matching
+ *  pack when a user clicks a (S, E) that has no singleton offer —
+ *  the pack is ingested and the requested episode's file_idx is
+ *  resolved post-ingest from the SCENE-parsed file list. */
+export type SeasonPackEntry = {
+  season: number;
+  indexer_provider: string;
+  indexer_torrent_id: string;
+  quality: string | null;
+  seeders: number | null;
+  size_bytes: number | null;
+  found_at: string;
+  language: string | null;
+};
+
+/** Indexer offer for an episode not yet on disk, surfaced inside the
+ *  same `CollectionDetail` payload as the on-disk `episodes` so the
+ *  Series view can render a single merged list with `Play` /
+ *  `Grab & Play` / `Prepare` actions per row. Server already
+ *  filters out (season, episode) pairs that exist in `episodes`. */
+export type AvailableEpisodeEntry = {
+  season: number;
+  episode: number;
+  indexer_provider: string;
+  indexer_torrent_id: string;
+  quality: string | null;
+  seeders: number | null;
+  size_bytes: number | null;
+  found_at: string;
+  /** Server-resolved language tag (`french` / `english` / `multi` /
+   *  `unknown`). Rendered as a row badge so anglophone users can
+   *  spot a Seedpool EN release on a francophone-watched show. */
+  language?: string | null;
 };
 
 export type CollectionDetail = {
@@ -676,19 +748,71 @@ export type CollectionDetail = {
   tmdb_id: number | null;
   display_title: string;
   kind: "tv" | "movie";
+  /** Server-resolved TMDB poster_path / backdrop_path (`/abc123.jpg`
+   *  form). Pass through `tmdbImage(path, size)` to get a URL.
+   *  Null when no tmdb_id is attached or the TMDB lookup failed. */
+  poster_path?: string | null;
+  backdrop_path?: string | null;
   torrents: TorrentView[];
   episodes: CollectionEpisodeEntry[];
+  /** Indexer offers for grabbable next episodes. Empty for movies /
+   *  collections with no SCENE identity / TV shows the household has
+   *  fully caught up on. */
+  available_episodes?: AvailableEpisodeEntry[];
+  /** Season-pack offers (separate from `available_episodes`). UI
+   *  renders one "Grab full Season N" CTA per pack/language. */
+  season_packs?: SeasonPackEntry[];
+  /** Count of `available_episodes` whose `found_at > last_visited_at`.
+   *  Drives the home-page Watchlist "X new" badge. */
+  has_new_since_last_visit?: number;
 };
 
 export const library = {
   list: (view: "collections" | "torrents" = "collections") =>
     api.get<LibraryResponse>(`/library?view=${view}`),
   collection: (id: string) => api.get<CollectionDetail>(`/library/collections/${id}`),
+  /** Grab a specific (season, episode) for a TV collection. Idempotent —
+   *  returns `already_grabbed: true` if the episode is already on disk
+   *  under any infohash. When `language` is set, the server picks
+   *  strictly from that language slot in the cache (no cross-language
+   *  fallback) — used when the user clicked an FR / EN badge. */
+  grabCollectionEpisode: (
+    id: string,
+    season: number,
+    episode: number,
+    language?: string | null,
+  ) => {
+    const qs = language ? `?language=${encodeURIComponent(language)}` : "";
+    return api.post<GrabEpisodeResponse>(
+      `/library/collections/${id}/grab/${season}/${episode}${qs}`,
+      {},
+    );
+  },
 };
 
 // ---------------------------------------------------------------------------
 // Series follows (Watchlist + Series detail page)
 // ---------------------------------------------------------------------------
+
+/// Post-0.4 Watchlist tile — returned by `/api/me/watchlist`.
+/// Per-user: derived from the calling user's `series_follows`
+/// rows (auto-created on grab). `id` is the collection id when one
+/// already exists for this normalised name, otherwise the follow
+/// row's own id (used as a routing token for `/collection/:id`).
+export type WatchlistItem = {
+  id: string;
+  /** SCENE-normalised name. Clients use this to detect "is this
+   *  search result already on my Watchlist?" without having to run
+   *  the same normaliser themselves. */
+  normalized_name: string;
+  name: string;
+  tmdb_id: number | null;
+  poster_path: string | null;
+  backdrop_path: string | null;
+  new_count: number;
+  last_visited_at: string | null;
+  created_at: string;
+};
 
 export type FollowSummary = {
   /** Stable id — clients route by this, not by tmdb_id. */

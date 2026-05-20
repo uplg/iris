@@ -85,6 +85,7 @@ import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
+import studio.kahn.iris.tv.ui.components.LanguageBadge
 import studio.kahn.iris.tv.ui.components.TvIconButton
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
@@ -801,17 +802,20 @@ private fun ResultCard(
                         )
                     }
                 }
-                // Language / sub chips. Tracker tags carry these (VFF,
-                // VOSTFR, MULTI…); we surface the flat list so the user
-                // can pick the right release without opening the detail.
-                if (parsed.langs.isNotEmpty() || parsed.subs) {
+                // Language pill (server-authored: FR / EN / MULTi)
+                // + optional SUB indicator. The previous client-side
+                // SCENE parse stacked up to four chips per row which
+                // overwhelmed the card on dense grids; one canonical
+                // language tag matches the web's design and reads
+                // cleaner.
+                val hasLangSignal =
+                    !result.language.isNullOrBlank() && result.language != "unknown"
+                if (hasLangSignal || parsed.subs) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        parsed.langs.forEach { lang ->
-                            BadgePill(lang, MaterialTheme.colorScheme.surfaceVariant, small = true)
-                        }
+                        LanguageBadge(language = result.language)
                         if (parsed.subs) {
                             BadgePill("SUB", Color(0xFF6366F1), small = true)
                         }
@@ -943,6 +947,11 @@ private fun ResultRow(
                 }
             }
             // Trailing badges — same set as the grid card.
+            // Server-authored `language` badge (FR / EN / MULTi)
+            // replaces the local SCENE-name parse from `parseTags`
+            // for the language signal — same colour scheme as the
+            // web's LanguageBadge so users moving between screens
+            // see the same pill in the same colour.
             Row(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -954,9 +963,7 @@ private fun ResultRow(
                         small = true,
                     )
                 }
-                parsed.langs.forEach { lang ->
-                    BadgePill(lang, MaterialTheme.colorScheme.surfaceVariant, small = true)
-                }
+                LanguageBadge(language = result.language)
                 if (parsed.subs) {
                     BadgePill("SUB", Color(0xFF6366F1), small = true)
                 }

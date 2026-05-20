@@ -29,18 +29,48 @@ pub struct ProviderResultMeta {
 pub struct AggregatedResults {
     pub results: Vec<SearchResult>,
     pub providers: Vec<ProviderResultMeta>,
+    /// SCENE-parsed view of the user query when the raw `q` looked
+    /// like a SCENE-style request (e.g. `Classroom of the Elite S04E11`).
+    /// Frontend uses this to render a "Showing results for X · S04E11"
+    /// banner; absent when the parser saw nothing useful.
+    #[serde(default)]
+    pub parsed_query: Option<ParsedQueryInfo>,
+}
+
+/// Surface of the SCENE parser run against the user's raw query string.
+/// Lives here so iris-api's ranking module can construct it without
+/// pulling iris-providers into iris-core.
+#[derive(Debug, Clone, Serialize)]
+pub struct ParsedQueryInfo {
+    pub title: String,
+    pub season: Option<u32>,
+    pub episode: Option<u32>,
+    pub year: Option<u16>,
 }
 
 /// Holds all enabled providers and fans out searches in parallel.
 #[derive(Clone, Default)]
 pub struct ProviderRegistry {
     providers: Arc<HashMap<String, Arc<dyn SearchProvider>>>,
+    /// Provider-id → default language string (`"english"` / `"french"`
+    /// / `"multi"`). Read from the optional `default_language` field
+    /// on each `[[providers]]` entry in `providers.toml`. Used by
+    /// the API layer to disambiguate releases that ship with no
+    /// explicit language marker — Seedpool ships English by
+    /// convention without ever tagging the file, and treating that
+    /// as `Unknown` (= "no badge") would leave anglophone users
+    /// without a visual cue.
+    default_languages: Arc<HashMap<String, String>>,
 }
 
 impl ProviderRegistry {
     pub fn from_entries(entries: &[ProviderEntry]) -> Result<Self> {
         let mut map: HashMap<String, Arc<dyn SearchProvider>> = HashMap::new();
+        let mut defaults: HashMap<String, String> = HashMap::new();
         for entry in entries.iter().filter(|e| e.enabled) {
+            if let Some(toml::Value::String(s)) = entry.fields.get("default_language") {
+                defaults.insert(entry.id.clone(), s.to_ascii_lowercase());
+            }
             match build_provider(entry) {
                 Ok(p) => {
                     tracing::info!(provider = %entry.id, kind = %entry.kind, "loaded provider");
@@ -55,7 +85,16 @@ impl ProviderRegistry {
         }
         Ok(Self {
             providers: Arc::new(map),
+            default_languages: Arc::new(defaults),
         })
+    }
+
+    /// Look up the default language string a provider entry declared
+    /// in its config. `None` when the entry has no `default_language`
+    /// field — most francophone trackers tag releases explicitly so
+    /// the parser's `detect_language` covers them without a default.
+    pub fn default_language(&self, provider_id: &str) -> Option<&str> {
+        self.default_languages.get(provider_id).map(String::as_str)
     }
 
     pub fn ids(&self) -> Vec<String> {

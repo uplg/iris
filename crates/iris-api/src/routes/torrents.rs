@@ -293,6 +293,7 @@ async fn ingest(
     {
         let pool = state.db().clone();
         let tmdb = state.tmdb().cloned();
+        let providers = state.providers().clone();
         let infohash = result.snapshot.infohash.clone();
         let name = result.snapshot.name.clone().unwrap_or_default();
         let tmdb_id = body.tmdb_id;
@@ -306,6 +307,7 @@ async fn ingest(
             crate::collection_assign::assign_after_ingest(
                 &pool,
                 tmdb.as_ref(),
+                Some(&providers),
                 &infohash,
                 &name,
                 tmdb_id,

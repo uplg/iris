@@ -203,6 +203,26 @@ interface IrisApi {
      *  `CollectionScreen` browse view. */
     @GET("api/library/collections/{id}")
     suspend fun collectionDetail(@Path("id") id: String): CollectionDetail
+
+    /** Per-user Watchlist (post-0.4) — TV collections the calling
+     *  user has at least one episode of, sourced from their
+     *  auto-created `series_follows` rows. The legacy
+     *  `listFollows()` above still works through the C1 façade for
+     *  APK 0.3.1 clients; new code should prefer this. */
+    @GET("api/me/watchlist")
+    suspend fun watchlist(): List<WatchlistItem>
+
+    /** Grab a specific (season, episode) by collection id. With
+     *  `language` set, the server picks strictly from that
+     *  language slot — no cross-language fallback. Used when the
+     *  user clicked an FR / EN badge on a multi-language row. */
+    @POST("api/library/collections/{id}/grab/{season}/{episode}")
+    suspend fun grabCollectionEpisode(
+        @Path("id") id: String,
+        @Path("season") season: Int,
+        @Path("episode") episode: Int,
+        @Query("language") language: String? = null,
+    ): GrabEpisodeResponse
 }
 
 // ============================== DTOs ====================================
@@ -526,6 +546,19 @@ data class SearchResult(
      *  strict tmdb_verified gate that would otherwise hide every
      *  poster on the discovery shelf. */
     @SerialName("poster_url") val posterUrl: String? = null,
+    /** Server-side library dedup: result's SCENE identity already
+     *  maps to an episode_files row. UI surfaces an "already
+     *  downloaded" pill and offers to play the existing file
+     *  rather than re-downloading. Defaults to false so APKs
+     *  built against backends that don't ship this field keep
+     *  working. */
+    @SerialName("already_in_library") val alreadyInLibrary: Boolean = false,
+    @SerialName("library_infohash") val libraryInfohash: String? = null,
+    @SerialName("library_file_idx") val libraryFileIdx: Int? = null,
+    /** Server-detected language tag (`french` / `english` / `multi` /
+     *  `unknown`). Future TV releases render an FR / EN badge per
+     *  card; 0.3.x ignores it silently (ignoreUnknownKeys). */
+    val language: String? = null,
 )
 
 @Serializable
@@ -538,10 +571,24 @@ data class ProviderResultMeta(
     val error: String? = null,
 )
 
+/** SCENE-style breakdown of the user query the backend ran before
+ *  fan-out — title + season + episode + year. The TV `SearchScreen`
+ *  can render this as a "Showing results for X · S04E11" header to
+ *  reassure the user the indexer was queried with the structured
+ *  fields. Null when the parser saw nothing useful. */
+@Serializable
+data class ParsedQueryInfo(
+    val title: String,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val year: Int? = null,
+)
+
 @Serializable
 data class AggregatedResults(
     val results: List<SearchResult>,
     val providers: List<ProviderResultMeta>,
+    @SerialName("parsed_query") val parsedQuery: ParsedQueryInfo? = null,
 )
 
 @Serializable
@@ -614,6 +661,24 @@ data class FollowSummary(
     @SerialName("backdrop_path") val backdropPath: String? = null,
     /** Number of distinct (S, E) the indexer has surfaced since
      *  lastVisitedAt. Drives the "X new" badge on Watchlist cards. */
+    @SerialName("new_count") val newCount: Long = 0,
+    @SerialName("last_visited_at") val lastVisitedAt: String? = null,
+    @SerialName("created_at") val createdAt: String,
+)
+
+/** Post-0.4 Watchlist tile — returned by `/api/me/watchlist`.
+ *  Per-user: derived from the calling user's `series_follows` rows
+ *  (auto-created on grab). `id` is a collection id when one
+ *  already exists for this normalised name, otherwise the follow
+ *  row's own id — either form routes to `CollectionScreen`. */
+@Serializable
+data class WatchlistItem(
+    val id: String,
+    @SerialName("normalized_name") val normalizedName: String,
+    val name: String,
+    @SerialName("tmdb_id") val tmdbId: Long? = null,
+    @SerialName("poster_path") val posterPath: String? = null,
+    @SerialName("backdrop_path") val backdropPath: String? = null,
     @SerialName("new_count") val newCount: Long = 0,
     @SerialName("last_visited_at") val lastVisitedAt: String? = null,
     @SerialName("created_at") val createdAt: String,
@@ -795,6 +860,28 @@ data class CollectionDetail(
     val kind: String,
     val torrents: List<TorrentView> = emptyList(),
     val episodes: List<CollectionEpisode> = emptyList(),
+    /** Server-resolved TMDB poster/backdrop (TMDB convention,
+     *  `/abc123.jpg`). Saves a separate `tmdbMetadata` round-trip
+     *  on every CollectionScreen open. Null when the collection
+     *  has no tmdb_id or the TMDB lookup failed. */
+    @SerialName("poster_path") val posterPath: String? = null,
+    @SerialName("backdrop_path") val backdropPath: String? = null,
+    /** Indexer-cached "grabbable next episodes" for this collection.
+     *  Server filters out (S, E) already in `episodes` so this list
+     *  is genuinely "what you could download". One row per
+     *  (S, E, language) — anglophone + francophone users see their
+     *  badges side by side. Empty for movies / no-SCENE collections. */
+    @SerialName("available_episodes") val availableEpisodes: List<AvailableEpisodeEntry> = emptyList(),
+    /** Cached season-pack offers (separate from per-episode rows).
+     *  CollectionScreen renders one "Grab full Season N" CTA per
+     *  pack/language; the grab path also consults these
+     *  transparently when a user clicks a (S, E) with no singleton
+     *  offer. */
+    @SerialName("season_packs") val seasonPacks: List<SeasonPackEntry> = emptyList(),
+    /** Count of `available_episodes` whose `found_at >
+     *  last_visited_at` (per-user). Drives a "X new" hero badge
+     *  on the CollectionScreen. */
+    @SerialName("has_new_since_last_visit") val hasNewSinceLastVisit: Long = 0,
 )
 
 @Serializable
@@ -804,6 +891,47 @@ data class CollectionEpisode(
     val infohash: String,
     @SerialName("file_idx") val fileIdx: Int,
     val watched: Boolean = false,
+    /** Server-detected language tag (`french` / `english` /
+     *  `multi` / `unknown`). Rendered as a row badge — every TV
+     *  row, downloaded or not, carries one. `null` only when the
+     *  parent torrent is no longer registered (defensive). */
+    val language: String? = null,
+)
+
+/** Indexer offer the scheduler cached for an episode that isn't
+ *  yet on disk. The CollectionScreen renders one row per entry
+ *  with a `LanguageBadge`; clicking grabs that specific language
+ *  variant. */
+/** Cached season-pack offer the scheduler stashed for this
+ *  collection. One per (season, language) — the
+ *  `CollectionScreen` renders a "Grab full Season N" CTA per
+ *  entry. The grab path also consults these as a fallback when a
+ *  user clicks a (S, E) with no singleton offer. */
+@Serializable
+data class SeasonPackEntry(
+    val season: Long,
+    @SerialName("indexer_provider") val indexerProvider: String,
+    @SerialName("indexer_torrent_id") val indexerTorrentId: String,
+    val quality: String? = null,
+    val seeders: Long? = null,
+    @SerialName("size_bytes") val sizeBytes: Long? = null,
+    @SerialName("found_at") val foundAt: String,
+    val language: String? = null,
+)
+
+@Serializable
+data class AvailableEpisodeEntry(
+    val season: Long,
+    val episode: Long,
+    @SerialName("indexer_provider") val indexerProvider: String,
+    @SerialName("indexer_torrent_id") val indexerTorrentId: String,
+    val quality: String? = null,
+    val seeders: Long? = null,
+    @SerialName("size_bytes") val sizeBytes: Long? = null,
+    @SerialName("found_at") val foundAt: String,
+    /** `"french"` / `"english"` / `"multi"` / `"unknown"`. Drives
+     *  the FR / EN / MULTi pill on the episode row. */
+    val language: String? = null,
 )
 
 @Serializable

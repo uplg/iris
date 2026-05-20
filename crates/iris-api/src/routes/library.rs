@@ -10,10 +10,13 @@
 //! one chérie / mom see; torrents stays available for the seedbox UI
 //! at `/admin`.
 
+use std::collections::HashSet;
+
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -26,6 +29,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_library))
         .route("/collections/{id}", get(collection_detail))
+        .route(
+            "/collections/{id}/grab/{season}/{episode}",
+            axum::routing::post(grab_collection_episode),
+        )
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -130,12 +137,43 @@ struct CollectionDetail {
     tmdb_id: Option<i64>,
     display_title: String,
     kind: String,
+    /// Server-resolved poster path (TMDB convention — pass through
+    /// `tmdbImage(path, size)` client-side). `None` when no TMDB id
+    /// is attached or the lookup fails. Looked up here (rather than
+    /// from the client) so every collection-detail render gets a
+    /// poster without an extra round-trip and a separate
+    /// `/api/metadata/tmdb/:id` call.
+    #[serde(default)]
+    poster_path: Option<String>,
+    #[serde(default)]
+    backdrop_path: Option<String>,
     /// All torrents attached to this collection.
     torrents: Vec<TorrentView>,
     /// Merged episode list across every torrent in the collection.
     /// Empty for movie-kind collections (which usually have a single
     /// torrent + a single video file).
     episodes: Vec<EpisodeEntry>,
+    /// Indexer-cached episode offers for this collection (TV only).
+    /// Already-in-library episodes are filtered out so this list is
+    /// "what the user could grab next" — the page renders them as
+    /// grabbable rows alongside the on-disk ones. Empty for movies
+    /// and for collections with no SCENE identity. Additive field —
+    /// pre-0.4 clients ignore it.
+    #[serde(default)]
+    available_episodes: Vec<AvailableEpisodeEntry>,
+    /// Season-pack offers cached for this collection. The UI shows
+    /// these as a separate "Grab full Season N" CTA (not as
+    /// per-episode rows). The grab path also consults these when a
+    /// user clicks a (S, E) that has no singleton offer — the pack
+    /// gets ingested and the matching leaf is returned.
+    #[serde(default)]
+    season_packs: Vec<SeasonPackEntry>,
+    /// Count of `available_episodes` whose `found_at >
+    /// last_visited_at`. Drives the home-page Watchlist "X new"
+    /// badge. Computed before `last_visited_at` is bumped to now.
+    /// `0` for movies / no-SCENE collections.
+    #[serde(default)]
+    has_new_since_last_visit: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,6 +185,49 @@ struct EpisodeEntry {
     /// `true` when the requesting user's `playback_progress.completed`
     /// is set for this file — drives the "vu" badge on the Series page.
     watched: bool,
+    /// Language tag derived from the parent torrent's SCENE name so
+    /// users can tell a French / English / `MULTi` episode apart at a
+    /// glance. Same string form as `AvailableEpisodeEntry.language`
+    /// (`"french"` / `"english"` / `"multi"` / `"unknown"`). `null`
+    /// when the parent torrent is no longer registered in the
+    /// engine (shouldn't happen but defensive).
+    language: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AvailableEpisodeEntry {
+    season: i64,
+    episode: i64,
+    indexer_provider: String,
+    indexer_torrent_id: String,
+    quality: Option<String>,
+    seeders: Option<i64>,
+    size_bytes: Option<i64>,
+    found_at: DateTime<Utc>,
+    /// `"french"` / `"english"` / `"multi"` / `"unknown"` —
+    /// stable string form. Clients render an FR / EN / `MULTi`
+    /// badge per row so anglophone users can spot Seedpool
+    /// releases at a glance. `null` only on legacy DB rows from
+    /// before migration 0017 (they read as "unknown" downstream).
+    language: Option<String>,
+}
+
+/// Season-pack offer the indexer scanner cached for this collection.
+/// Surfaced as its own list (separate from `available_episodes`) so
+/// the UI can render a "Grab full Season N" CTA instead of trying
+/// to display the pack as a single episode row. Grab path
+/// transparently falls back to the matching pack when a user clicks
+/// a missing per-episode (S, E) that no singleton offers.
+#[derive(Debug, Serialize)]
+struct SeasonPackEntry {
+    season: i64,
+    indexer_provider: String,
+    indexer_torrent_id: String,
+    quality: Option<String>,
+    seeders: Option<i64>,
+    size_bytes: Option<i64>,
+    found_at: DateTime<Utc>,
+    language: Option<String>,
 }
 
 async fn collection_detail(
@@ -179,41 +260,61 @@ async fn collection_detail(
         }
     }
 
-    let episodes = if collection.kind == "tv" {
-        // SCENE-first: episode_files joins on collection_id directly,
-        // no need to bridge through tmdb_id (which may be unset on
-        // SCENE-only collections).
-        //
-        // Identity contract: each entry is one physical file, uniquely
-        // identified by `(infohash, file_idx)` (DB `UNIQUE` constraint).
-        // We never dedup or drop a file here — a mis-parsed pack whose
-        // leaves all collapsed onto the same `(season, episode)` (e.g.
-        // the season-pack sentinel `episode == 0`) still surfaces every
-        // file as its own playable row; the turn-7 reconcile rewrites
-        // those rows to real numbers once the improved parser
-        // re-derives them. Clients MUST key on `(infohash, file_idx)`,
-        // not `(season, episode)` — the latter is derived and may
-        // collide. Order is sorted by `(season, episode, file_idx)` so
-        // collided rows keep a deterministic, stable position.
-        let files = iris_db::episode_files::list_for_collection(state.db(), collection.id).await?;
-        let mut out: Vec<EpisodeEntry> = Vec::with_capacity(files.len());
-        for f in files {
-            let watched = iris_db::playback::get(state.db(), user.id, &f.infohash, f.file_idx)
-                .await
-                .unwrap_or(None)
-                .is_some_and(|p| p.completed);
-            out.push(EpisodeEntry {
-                season: f.season,
-                episode: f.episode,
-                infohash: f.infohash,
-                file_idx: f.file_idx,
-                watched,
-            });
+    // Per-user "X new since I last opened this" timestamp. Pulled
+    // from this user's series_follows row (auto-created by the
+    // grab path); falls back to None when the user has never
+    // touched this series — in which case every available episode
+    // counts as new.
+    let user_last_visited: Option<DateTime<Utc>> = match collection.parsed_title_normalized.as_deref() {
+        Some(norm) => iris_db::follows::get_by_normalized(state.db(), user.id, norm)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|f| f.last_visited_at),
+        None => None,
+    };
+
+    let (episodes, available_episodes, season_packs, has_new_since_last_visit) =
+        if collection.kind == "tv" {
+            build_tv_episode_view(&state, &collection, user.id, user_last_visited).await?
+        } else {
+            (Vec::new(), Vec::new(), Vec::new(), 0)
+        };
+
+    // Bump *this user's* visited timestamp when (and only when) the
+    // user is already tracking this series. We deliberately don't
+    // auto-create the follow row here: opening a collection page to
+    // browse isn't a strong enough signal — auto-tracking belongs to
+    // the grab path. Without the row → no badge to bump, nothing to
+    // do. The collection-wide `last_visited_at` column stays unused
+    // (kept around for the v0.5 cleanup).
+    if let Some(norm) = collection.parsed_title_normalized.as_deref() {
+        if let Ok(Some(row)) =
+            iris_db::follows::get_by_normalized(state.db(), user.id, norm).await
+        {
+            let _ = iris_db::follows::mark_visited(state.db(), user.id, row.id).await;
         }
-        out.sort_by_key(|e| (e.season, e.episode, e.file_idx));
-        out
-    } else {
-        Vec::new()
+    }
+
+    // TMDB lookup for the hero poster — same gating as the
+    // Watchlist endpoint: only fires when a tmdb_id is attached.
+    // Hand TMDB the collection's `kind` so it queries the right
+    // namespace: `/tv/60573` vs `/movie/60573` are two unrelated
+    // entries and a hint-less lookup serves whichever wins the
+    // fallback coin-flip (the entire reason `lookup_with_kind`
+    // exists).
+    let kind_hint = match collection.kind.as_str() {
+        "tv" => Some(crate::tmdb::TmdbKind::Tv),
+        "movie" => Some(crate::tmdb::TmdbKind::Movie),
+        _ => None,
+    };
+    let (poster_path, backdrop_path) = match (state.tmdb(), collection.tmdb_id) {
+        (Some(client), Some(tid)) => {
+            #[allow(clippy::cast_sign_loss)]
+            let meta = client.lookup_with_kind(tid as u64, kind_hint).await;
+            meta.map_or((None, None), |m| (m.poster_path, m.backdrop_path))
+        }
+        _ => (None, None),
     };
 
     Ok(Json(CollectionDetail {
@@ -221,7 +322,227 @@ async fn collection_detail(
         tmdb_id: collection.tmdb_id,
         display_title: collection.display_title,
         kind: collection.kind,
+        poster_path,
+        backdrop_path,
         torrents,
         episodes,
+        available_episodes,
+        season_packs,
+        has_new_since_last_visit,
     }))
+}
+
+/// Build the TV-shaped piece of the collection detail payload —
+/// merged `episode_files` rows + indexer offers + per-user
+/// new-since-last-visit count. Extracted from `collection_detail`
+/// to keep that handler under the clippy line cap.
+///
+/// Identity contract: each `EpisodeEntry` is one physical file,
+/// uniquely identified by `(infohash, file_idx)` (DB `UNIQUE`
+/// constraint). We never dedup or drop a file here — a mis-parsed
+/// pack whose leaves all collapsed onto the same `(season, episode)`
+/// (e.g. the season-pack sentinel `episode == 0`) still surfaces
+/// every file as its own playable row; the turn-7 reconcile
+/// rewrites those rows to real numbers once the improved parser
+/// re-derives them. Clients MUST key on `(infohash, file_idx)`,
+/// not `(season, episode)` — the latter is derived and may collide.
+async fn build_tv_episode_view(
+    state: &AppState,
+    collection: &iris_db::collections::CollectionRow,
+    user_id: iris_core::ids::UserId,
+    user_last_visited: Option<DateTime<Utc>>,
+) -> ApiResult<(
+    Vec<EpisodeEntry>,
+    Vec<AvailableEpisodeEntry>,
+    Vec<SeasonPackEntry>,
+    u32,
+)> {
+    // Read every torrent of the collection once — used for two
+    // things below:
+    //   * `owned_pack_ids`: suppress pack banners the user has
+    //     already grabbed (matching on the indexer-side identity).
+    //   * `torrent_names`: per-episode SCENE language detection so
+    //     a downloaded row knows whether it's FR / EN / MULTi
+    //     without the client re-parsing the same string.
+    let collection_torrents = iris_db::torrents::list_in_collection(state.db(), collection.id)
+        .await
+        .unwrap_or_default();
+    let owned_pack_ids: std::collections::HashSet<(String, String)> = collection_torrents
+        .iter()
+        .filter_map(|t| match (&t.source_provider, &t.source_external_id) {
+            (Some(p), Some(id)) => Some((p.clone(), id.clone())),
+            _ => None,
+        })
+        .collect();
+    let torrent_names: std::collections::HashMap<String, String> = collection_torrents
+        .iter()
+        .map(|t| (t.infohash.clone(), t.name.clone()))
+        .collect();
+    let files = iris_db::episode_files::list_for_collection(state.db(), collection.id).await?;
+    let mut episodes_out: Vec<EpisodeEntry> = Vec::with_capacity(files.len());
+    let mut owned_keys: HashSet<(i64, i64)> = HashSet::with_capacity(files.len());
+    for f in files {
+        // episode == 0 is the season-pack sentinel — keep it out
+        // of the dedup set so the indexer's individual S04E05
+        // hit still surfaces as "available" even when an S04
+        // pack has been ingested.
+        if f.episode > 0 {
+            owned_keys.insert((f.season, f.episode));
+        }
+        let watched = iris_db::playback::get(state.db(), user_id, &f.infohash, f.file_idx)
+            .await
+            .unwrap_or(None)
+            .is_some_and(|p| p.completed);
+        // Detect language off the parent torrent's name. SCENE
+        // conventions land the tag (VOSTFR / VFF / MULTi / etc.)
+        // on the torrent itself, not on individual file leaves,
+        // so the parent is the right signal source. `None` only
+        // when the torrent is no longer in the collection list
+        // (defensive — `episode_files` rows aren't supposed to
+        // outlive their parent).
+        let language = torrent_names
+            .get(&f.infohash)
+            .map(|n| iris_media::filename::detect_language(n).as_str().to_string());
+        episodes_out.push(EpisodeEntry {
+            season: f.season,
+            episode: f.episode,
+            infohash: f.infohash,
+            file_idx: f.file_idx,
+            watched,
+            language,
+        });
+    }
+    episodes_out.sort_by_key(|e| (e.season, e.episode, e.file_idx));
+
+    // Indexer offers for this collection's SCENE identity.
+    // No identity → no offers (the long-tail standalone path).
+    let mut available_out: Vec<AvailableEpisodeEntry> = Vec::new();
+    let mut packs_out: Vec<SeasonPackEntry> = Vec::new();
+    let mut new_count: u32 = 0;
+    if let Some(normalized) = collection.parsed_title_normalized.as_deref() {
+        let offers = iris_db::available_episodes::list_best_for_series(state.db(), normalized)
+            .await
+            .unwrap_or_default();
+        for o in offers {
+            // `list_best_for_series` already excludes packs at the
+            // SQL level, but belt + braces in case a stale row
+            // slipped through with `episode = 0`.
+            if o.episode == 0 {
+                continue;
+            }
+            // Skip episodes the household already has on disk —
+            // surface only "what you could grab next" here.
+            if owned_keys.contains(&(o.season, o.episode)) {
+                continue;
+            }
+            // Drop dead offers: a singleton with 0 seeders (or an
+            // unknown count, treated the same) is undownloadable
+            // and only clutters the episode grid. The user
+            // explicitly flagged this — clicking a 0-seeder row
+            // would just hang. Pack offers stay regardless because
+            // a quiet pack still beats no pack when no singletons
+            // exist for that season.
+            if o.seeders.unwrap_or(0) <= 0 {
+                continue;
+            }
+            let is_new = user_last_visited.is_none_or(|t| o.found_at > t);
+            if is_new {
+                new_count = new_count.saturating_add(1);
+            }
+            available_out.push(AvailableEpisodeEntry {
+                season: o.season,
+                episode: o.episode,
+                indexer_provider: o.indexer_provider,
+                indexer_torrent_id: o.indexer_torrent_id,
+                quality: o.quality,
+                seeders: o.seeders,
+                size_bytes: o.size_bytes,
+                found_at: o.found_at,
+                language: o.language,
+            });
+        }
+        available_out.sort_by_key(|e| (e.season, e.episode));
+
+        // Season packs surfaced separately. The UI renders them as
+        // a "Grab full Season N" affordance; the grab path also
+        // consults them when a user clicks a (S, E) with no
+        // singleton offer. Already-grabbed packs are filtered out
+        // — once the user has a pack in the library every leaf
+        // has an `episode_files` row and the banner would just
+        // nudge them to re-download what they already own.
+        let packs = iris_db::available_episodes::list_season_packs_for_series(state.db(), normalized)
+            .await
+            .unwrap_or_default();
+        for p in packs {
+            if owned_pack_ids
+                .contains(&(p.indexer_provider.clone(), p.indexer_torrent_id.clone()))
+            {
+                continue;
+            }
+            packs_out.push(SeasonPackEntry {
+                season: p.season,
+                indexer_provider: p.indexer_provider,
+                indexer_torrent_id: p.indexer_torrent_id,
+                quality: p.quality,
+                seeders: p.seeders,
+                size_bytes: p.size_bytes,
+                found_at: p.found_at,
+                language: p.language,
+            });
+        }
+        packs_out.sort_by_key(|p| (p.season, p.language.clone().unwrap_or_default()));
+    }
+    Ok((episodes_out, available_out, packs_out, new_count))
+}
+
+/// `POST /api/library/collections/:id/grab/:season/:episode` —
+/// generalised grab endpoint that doesn't require a `series_follows`
+/// row. The collection-driven Watchlist (post-0.4) calls this; the
+/// legacy `/api/me/follows/:id/episodes/:s/:e/grab` route delegates
+/// here too via the same shared `grab_episode_core` helper, so
+/// behaviour is identical between the two surfaces.
+///
+/// Optional `?language=french|english|multi` narrows the picker to
+/// one cached language slot — what the UI sends when the user
+/// clicked a specific FR / EN badge. Without it the core falls
+/// back to the historical "first available, any language" pick.
+#[derive(Debug, Deserialize)]
+struct GrabQuery {
+    #[serde(default)]
+    language: Option<String>,
+}
+
+async fn grab_collection_episode(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, season, episode)): Path<(Uuid, i64, i64)>,
+    Query(q): Query<GrabQuery>,
+) -> ApiResult<Json<crate::routes::follows::GrabResponse>> {
+    let collection = iris_db::collections::get(state.db(), id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if collection.kind != "tv" {
+        return Err(ApiError::BadRequest(
+            "grab only valid for TV collections".into(),
+        ));
+    }
+    let Some(normalized) = collection.parsed_title_normalized.as_deref() else {
+        return Err(ApiError::BadRequest(
+            "collection has no SCENE identity — cannot resolve episode".into(),
+        ));
+    };
+    let resp = crate::routes::follows::grab_episode_core(
+        &state,
+        crate::routes::follows::GrabEpisodeRequest {
+            user_id: user.id,
+            normalized_name: normalized,
+            display_title: &collection.display_title,
+            tmdb_id: collection.tmdb_id,
+            season,
+            episode,
+            language: q.language.as_deref(),
+        },
+    )
+    .await?;
+    Ok(Json(resp))
 }

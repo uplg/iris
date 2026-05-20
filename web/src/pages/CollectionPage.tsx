@@ -1,22 +1,40 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router";
-import { useQuery } from "@tanstack/react-query";
-import { Loader2, Play } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CheckCircle2, Download, Loader2, Play } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { library } from "@/lib/api";
+import { LanguageBadge } from "@/components/LanguageBadge";
+import {
+  library,
+  tmdbImage,
+  type AvailableEpisodeEntry,
+  type CollectionDetail,
+  type CollectionEpisodeEntry,
+} from "@/lib/api";
+import { formatSize } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
 /**
- * Fallback page for collections that don't route directly to /series
- * (TV with no TMDB id) or /watch (movie with TMDB → Series page handles
- * it). Shows what we have and lets the user pick a file.
+ * Unified collection view — single surface for any series the
+ * household has at least one episode of. Replaces the file-list-only
+ * page and absorbs the responsibilities of the retired /series/:id
+ * route. Per the workstream B plan: no Follow button. The collections
+ * scheduler auto-arms the indexer watch as soon as the first
+ * episode is ingested, so "follow" is implicit.
  *
- * Design choice: this page exists for the long-tail edge cases
- * (untagged TV, movies without TMDB). The common path is handled by
- * `LibraryPage` routing collections to `/series/:tmdb_id` or directly
- * to `/watch` when there's a single video file.
+ * Movies with a single playable file still auto-redirect to /watch
+ * (no value in showing a one-file picker). TV shows render an
+ * episode list merging:
+ *   - episodes already on disk (Play action)
+ *   - available_episodes the indexer has cached (Grab + Play /
+ *     Prepare actions)
+ *
+ * Both lists arrive in a single CollectionDetail payload — no
+ * second round-trip, the server filters out already-owned offers.
  */
 export function CollectionPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,12 +46,9 @@ export function CollectionPage() {
   });
 
   // Auto-navigate movies straight to /watch when there's a single
-  // playable file. Saves a useless intermediate click.
-  //
-  // Deliberately NO redirect to /series for TV-with-tmdb_id: the
-  // /series page is the Watchlist surface and breaks loudly when
-  // the enrichment tmdb_id was wrong. CollectionPage stays the
-  // "show me what I actually have" view.
+  // playable file. Saves a useless intermediate click. TV stays on
+  // this page even when only one episode is on disk — the new
+  // "grab next episode" surface is the point of stopping here.
   useEffect(() => {
     if (!data) return;
     if (data.kind === "movie") {
@@ -64,71 +79,527 @@ export function CollectionPage() {
   }
   if (!data) return null;
 
+  // SCENE parser misses (Plex-style `NxNN` file names, exotic
+  // numbering schemes, etc.) leave a TV collection with zero
+  // `episode_files` rows. Don't show "no episodes" and orphan the
+  // user — fall back to the raw file picker so they can still
+  // play whatever is on disk. The parser improvement is tracked
+  // separately; this is the cheap UX guard until then.
+  const tvHasEpisodes =
+    data.kind === "tv" &&
+    (data.episodes.length > 0 || (data.available_episodes?.length ?? 0) > 0);
+
   return (
     <div className="grid gap-6">
-      <header>
-        <h1 className="text-3xl font-semibold tracking-tight">{data.display_title}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {data.kind === "tv" ? "Series" : "Movie"} · {data.torrents.length} torrent
-          {data.torrents.length > 1 ? "s" : ""}
-        </p>
-      </header>
+      <Hero collection={data} />
+      {tvHasEpisodes ? (
+        <EpisodeList collection={data} onPlay={(ih, idx) => navigate(`/watch/${ih}/${idx}`)} />
+      ) : (
+        // Movies, or a TV pack the SCENE parser couldn't break into
+        // episodes. Either way the raw file picker gets the user
+        // unblocked.
+        <RawFileList collection={data} onPlay={(ih, idx) => navigate(`/watch/${ih}/${idx}`)} />
+      )}
+    </div>
+  );
+}
 
-      {data.kind === "tv" && data.episodes.length > 0 ? (
+// ---------------------------------------------------------------------------
+// Hero
+// ---------------------------------------------------------------------------
+
+function Hero({ collection }: { collection: CollectionDetail }) {
+  // Server-resolved poster + backdrop. Both `null` when the
+  // collection has no tmdb_id or the TMDB lookup failed — the hero
+  // falls back to a placeholder square without rendering broken
+  // `<img>`. Backdrop fades behind the poster for visual depth.
+  const poster = tmdbImage(collection.poster_path, "w342");
+  const backdrop = tmdbImage(collection.backdrop_path, "original");
+  const newCount = collection.has_new_since_last_visit ?? 0;
+  return (
+    <section className="relative overflow-hidden rounded-xl border border-border bg-card/30">
+      {backdrop && (
+        <>
+          <img
+            src={backdrop}
+            alt=""
+            className="absolute inset-0 h-full w-full object-cover opacity-30"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-background via-background/60 to-transparent" />
+        </>
+      )}
+      <div className="relative flex flex-wrap gap-6 p-6">
+        {poster ? (
+          <img
+            src={poster}
+            alt={collection.display_title}
+            className="h-56 w-40 shrink-0 rounded-md border border-border object-cover shadow-lg"
+          />
+        ) : (
+          <div className="flex h-56 w-40 shrink-0 items-center justify-center rounded-md border border-dashed border-border bg-card text-center text-xs text-muted-foreground">
+            No poster
+          </div>
+        )}
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          <h1 className="text-3xl font-semibold tracking-tight">
+            {collection.display_title}
+          </h1>
+          <p className="text-xs text-muted-foreground">
+            {collection.kind === "tv" ? "Series" : "Movie"} ·{" "}
+            {collection.torrents.length} torrent
+            {collection.torrents.length > 1 ? "s" : ""}
+            {newCount > 0 && (
+              <>
+                {" · "}
+                <Badge className="bg-emerald-500/80 text-[10px] uppercase">
+                  {newCount} new
+                </Badge>
+              </>
+            )}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Episode list — merged on-disk + indexer offers
+// ---------------------------------------------------------------------------
+
+type MergedEpisode = {
+  season: number;
+  episode: number;
+  status: "downloaded" | "available";
+  watched: boolean;
+  /** Set when status === "downloaded". */
+  infohash?: string;
+  file_idx?: number;
+  /** Set when status === "available". */
+  indexer_provider?: string;
+  indexer_torrent_id?: string;
+  quality?: string | null;
+  seeders?: number | null;
+  size_bytes?: number | null;
+  /** Server-detected language tag. Present on both downloaded and
+   *  available rows so a household running multiple languages
+   *  can tell which release they're looking at. */
+  language?: string | null;
+};
+
+function mergeEpisodes(
+  on_disk: CollectionEpisodeEntry[],
+  available: AvailableEpisodeEntry[] | undefined,
+): MergedEpisode[] {
+  // Server already filters owned (season, episode) out of
+  // `available` — but season-pack sentinels (episode === 0) are
+  // intentionally kept in `on_disk`. Skip those when building the
+  // grid: a season pack isn't a per-episode row.
+  //
+  // Downloaded episodes get one row per (S, E). Available episodes
+  // get one row per (S, E, language) — the household has both
+  // anglophone and francophone users on the same library, so an
+  // unowned S04E11 can show as a "FR" row AND an "EN" row side
+  // by side and either user picks the badge they recognise.
+  const out: MergedEpisode[] = [];
+  const ownedKeys = new Set<string>();
+  for (const d of on_disk) {
+    if (d.episode === 0) continue;
+    ownedKeys.add(`${d.season}-${d.episode}`);
+    out.push({
+      season: d.season,
+      episode: d.episode,
+      status: "downloaded",
+      watched: d.watched,
+      infohash: d.infohash,
+      file_idx: d.file_idx,
+      language: d.language,
+    });
+  }
+  for (const a of available ?? []) {
+    if (a.episode === 0) continue;
+    // Server should already exclude owned (S, E), but belt+braces:
+    // a parallel grab in another tab can have written the
+    // episode_files row between scheduler tick and read.
+    if (ownedKeys.has(`${a.season}-${a.episode}`)) continue;
+    out.push({
+      season: a.season,
+      episode: a.episode,
+      status: "available",
+      watched: false,
+      indexer_provider: a.indexer_provider,
+      indexer_torrent_id: a.indexer_torrent_id,
+      quality: a.quality,
+      seeders: a.seeders,
+      size_bytes: a.size_bytes,
+      language: a.language,
+    });
+  }
+  // Sort by (season, episode, language) so a multi-language unowned
+  // episode renders its variants contiguously: ".. S04E11 FR / S04E11
+  // EN .. S04E12 FR / S04E12 EN .." rather than ".. S04E11 FR S04E12
+  // FR S04E11 EN S04E12 EN ..".
+  out.sort(
+    (a, b) =>
+      a.season - b.season ||
+      a.episode - b.episode ||
+      (a.language ?? "").localeCompare(b.language ?? ""),
+  );
+  return out;
+}
+
+function EpisodeList({
+  collection,
+  onPlay,
+}: {
+  collection: CollectionDetail;
+  onPlay: (infohash: string, fileIdx: number) => void;
+}) {
+  const episodes = useMemo(
+    () => mergeEpisodes(collection.episodes, collection.available_episodes),
+    [collection.episodes, collection.available_episodes],
+  );
+
+  // Pack offers cover whole seasons — surfaced separately because
+  // the UX is "Grab full Season N", not a per-episode row. Grouped
+  // by season for the banner above the episode list.
+  const packsBySeason = useMemo(() => {
+    const map = new Map<number, NonNullable<CollectionDetail["season_packs"]>>();
+    for (const p of collection.season_packs ?? []) {
+      const arr = map.get(p.season) ?? [];
+      arr.push(p);
+      map.set(p.season, arr);
+    }
+    return map;
+  }, [collection.season_packs]);
+
+  // Union of seasons we know about — from explicit episodes AND
+  // from pack-only seasons (where the indexer cached a pack but
+  // no singletons yet). Without that union, a brand-new follow
+  // whose only signal is a pack would render an empty page.
+  const seasons = useMemo(() => {
+    const grouped = new Map<number, MergedEpisode[]>();
+    for (const ep of episodes) {
+      const arr = grouped.get(ep.season) ?? [];
+      arr.push(ep);
+      grouped.set(ep.season, arr);
+    }
+    for (const s of packsBySeason.keys()) {
+      if (!grouped.has(s)) grouped.set(s, []);
+    }
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([season, items]) => ({ season, items }));
+  }, [episodes, packsBySeason]);
+
+  const [activeSeason, setActiveSeason] = useState<number | null>(null);
+  useEffect(() => {
+    if (activeSeason == null && seasons.length > 0) {
+      setActiveSeason(seasons[0].season);
+    }
+  }, [activeSeason, seasons]);
+
+  if (seasons.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No episodes parsed yet for this collection.
+      </p>
+    );
+  }
+
+  const current = seasons.find((s) => s.season === activeSeason) ?? seasons[0];
+  const currentPacks = packsBySeason.get(current.season) ?? [];
+
+  return (
+    <div className="grid gap-4">
+      <SeasonTabs
+        seasons={seasons.map((s) => s.season)}
+        value={current.season}
+        onChange={setActiveSeason}
+      />
+      {currentPacks.map((p) => (
+        <SeasonPackBanner
+          key={`${p.season}-${p.language ?? "_"}-${p.indexer_torrent_id}`}
+          collectionId={collection.id}
+          pack={p}
+          onPlay={onPlay}
+        />
+      ))}
+      {current.items.length > 0 ? (
         <ul className="divide-y divide-border rounded-lg border border-border bg-card/30">
-          {data.episodes.map((e) => (
-            <li
-              key={`${e.infohash}:${e.file_idx}`}
-              className="flex items-center justify-between gap-3 px-4 py-3 text-sm"
-            >
-              <span className="font-mono text-muted-foreground">
-                S{e.season.toString().padStart(2, "0")}E
-                {e.episode.toString().padStart(2, "0")}
-              </span>
-              {e.watched && (
-                <span className="text-xs text-emerald-300">vu</span>
-              )}
-              <Button asChild size="sm" className="ml-auto">
-                <a href={`/watch/${e.infohash}/${e.file_idx}`}>
-                  <Play className="size-3.5" />
-                  {e.watched ? "Watch again" : "Play"}
-                </a>
-              </Button>
-            </li>
+          {current.items.map((ep) => (
+            <EpisodeRow
+              key={`${ep.season}-${ep.episode}-${ep.language ?? "_"}`}
+              collectionId={collection.id}
+              ep={ep}
+              onPlay={onPlay}
+            />
           ))}
         </ul>
       ) : (
-        // No SCENE-parsed episodes — fall back to listing every
-        // playable file we have across the collection's torrents.
-        // The user can still launch playback even without the
-        // pretty episode grid.
-        <ul className="divide-y divide-border rounded-lg border border-border bg-card/30">
-          {data.torrents.flatMap((t: typeof data.torrents[number]) =>
-            t.files
-              .filter((f: typeof t.files[number]) => VIDEO_RE.test(f.path))
-              .sort(
-                (a: typeof t.files[number], b: typeof t.files[number]) =>
-                  b.size_bytes - a.size_bytes,
-              )
-              .map((f: typeof t.files[number]) => (
-                <li
-                  key={`${t.infohash}:${f.index}`}
-                  className="flex items-center justify-between gap-3 px-4 py-3 text-sm"
-                >
-                  <span className="truncate font-mono text-xs text-muted-foreground">
-                    {f.path.split("/").pop()}
-                  </span>
-                  <Button asChild size="sm" className="ml-auto shrink-0">
-                    <a href={`/watch/${t.infohash}/${f.index}`}>
-                      <Play className="size-3.5" />
-                      Play
-                    </a>
-                  </Button>
-                </li>
-              )),
-          )}
-        </ul>
+        // Season exists only because a pack covers it — no
+        // singletons / on-disk episodes yet. The pack banner above
+        // is the user's only action; this caption explains why.
+        <p className="text-sm text-muted-foreground">
+          No individual episode releases cached. Grab the season pack
+          above to pull every episode in one go.
+        </p>
       )}
     </div>
+  );
+}
+
+function SeasonTabs({
+  seasons,
+  value,
+  onChange,
+}: {
+  seasons: number[];
+  value: number;
+  onChange: (s: number) => void;
+}) {
+  if (seasons.length <= 1) return null;
+  return (
+    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+      {seasons.map((s) => (
+        <button
+          key={s}
+          type="button"
+          onClick={() => onChange(s)}
+          className={cn(
+            "rounded-md border px-3 py-1.5 text-sm transition",
+            s === value
+              ? "border-primary bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:border-border/80 hover:text-foreground",
+          )}
+        >
+          Season {s}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SeasonPackBanner({
+  collectionId,
+  pack,
+  onPlay,
+}: {
+  collectionId: string;
+  pack: NonNullable<CollectionDetail["season_packs"]>[number];
+  onPlay: (infohash: string, fileIdx: number) => void;
+}) {
+  const qc = useQueryClient();
+  // Grabbing the pack ingests the whole season; the backend
+  // resolves us to S0XE01 inside the pack so playback can start
+  // right away. Episode 1 is a deliberate choice — once
+  // collection_assign processes the pack on ingest, episode_files
+  // rows materialise for every leaf and subsequent visits see the
+  // whole season as "downloaded".
+  const grab = useMutation({
+    mutationFn: () =>
+      library.grabCollectionEpisode(collectionId, pack.season, 1, pack.language ?? null),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+      onPlay(res.infohash, res.file_idx);
+    },
+  });
+  const prepare = useMutation({
+    mutationFn: () =>
+      library.grabCollectionEpisode(collectionId, pack.season, 1, pack.language ?? null),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+    },
+  });
+  const busy = grab.isPending || prepare.isPending;
+  return (
+    <div className="grid grid-cols-[1fr_auto] items-center gap-3 rounded-lg border border-emerald-500/40 bg-gradient-to-r from-emerald-500/15 via-emerald-500/5 to-transparent px-4 py-3">
+      <div className="min-w-0 grid gap-1">
+        <div className="flex items-center gap-2">
+          <Badge className="bg-emerald-500/80 text-[10px] uppercase">Season pack</Badge>
+          <span className="text-sm font-medium">
+            Season {pack.season} · full pack available
+          </span>
+          <LanguageBadge language={pack.language} />
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {[
+            pack.quality,
+            pack.seeders != null ? `${pack.seeders} seeders` : null,
+            pack.size_bytes != null ? formatSize(pack.size_bytes) : null,
+            `via ${pack.indexer_provider}`,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="secondary" onClick={() => prepare.mutate()} disabled={busy}>
+          <Download className="size-3.5" />
+          Prepare
+        </Button>
+        <Button size="sm" onClick={() => grab.mutate()} disabled={busy}>
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+          Grab & play
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function EpisodeRow({
+  collectionId,
+  ep,
+  onPlay,
+}: {
+  collectionId: string;
+  ep: MergedEpisode;
+  onPlay: (infohash: string, fileIdx: number) => void;
+}) {
+  const qc = useQueryClient();
+  // Language pinned per row — clicking the FR badge grabs the FR
+  // cache slot specifically, no cross-language fallback. `null` on
+  // downloaded rows (irrelevant — Play doesn't grab anything).
+  const grabLang = ep.status === "available" ? ep.language ?? null : null;
+  const grabAndPlay = useMutation({
+    mutationFn: () =>
+      library.grabCollectionEpisode(collectionId, ep.season, ep.episode, grabLang),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+      onPlay(res.infohash, res.file_idx);
+    },
+  });
+  const grabOnly = useMutation({
+    mutationFn: () =>
+      library.grabCollectionEpisode(collectionId, ep.season, ep.episode, grabLang),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+    },
+  });
+
+  return (
+    <li className="grid grid-cols-[3rem_1fr_auto] items-center gap-3 px-4 py-3 text-sm">
+      <span className="text-center font-mono text-muted-foreground">
+        {ep.episode.toString().padStart(2, "0")}
+      </span>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="truncate font-medium">
+            S{ep.season.toString().padStart(2, "0")}E
+            {ep.episode.toString().padStart(2, "0")}
+          </span>
+          <StatusBadge ep={ep} />
+          {/* Language badge on every row (downloaded + available)
+              so the household knows the dub of each episode at a
+              glance. Component returns null for `unknown` so we
+              never render a useless placeholder. */}
+          <LanguageBadge language={ep.language} />
+        </div>
+        <div className="mt-0.5 flex items-center gap-3 text-xs text-muted-foreground">
+          {ep.quality && <span>{ep.quality}</span>}
+          {ep.seeders != null && <span>{ep.seeders} seeders</span>}
+          {ep.size_bytes != null && <span>{formatSize(ep.size_bytes)}</span>}
+        </div>
+      </div>
+      <EpisodeAction
+        ep={ep}
+        onPlay={onPlay}
+        onGrabAndPlay={() => grabAndPlay.mutate()}
+        onGrabOnly={() => grabOnly.mutate()}
+        grabBusy={grabAndPlay.isPending || grabOnly.isPending}
+      />
+    </li>
+  );
+}
+
+function StatusBadge({ ep }: { ep: MergedEpisode }) {
+  if (ep.watched) {
+    return (
+      <Badge variant="secondary" className="text-[10px]">
+        <CheckCircle2 className="mr-1 size-3" /> watched
+      </Badge>
+    );
+  }
+  if (ep.status === "downloaded") {
+    return (
+      <Badge variant="secondary" className="text-[10px]">
+        downloaded
+      </Badge>
+    );
+  }
+  return <Badge className="bg-emerald-500/80 text-[10px]">available</Badge>;
+}
+
+function EpisodeAction({
+  ep,
+  onPlay,
+  onGrabAndPlay,
+  onGrabOnly,
+  grabBusy,
+}: {
+  ep: MergedEpisode;
+  onPlay: (infohash: string, fileIdx: number) => void;
+  onGrabAndPlay: () => void;
+  onGrabOnly: () => void;
+  grabBusy: boolean;
+}) {
+  if (ep.status === "downloaded" && ep.infohash != null && ep.file_idx != null) {
+    return (
+      <Button size="sm" onClick={() => onPlay(ep.infohash!, ep.file_idx!)}>
+        <Play className="size-3.5" />
+        {ep.watched ? "Watch again" : "Play"}
+      </Button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1">
+      <Button size="sm" variant="secondary" onClick={onGrabOnly} disabled={grabBusy}>
+        <Download className="size-3.5" />
+        Prepare
+      </Button>
+      <Button size="sm" onClick={onGrabAndPlay} disabled={grabBusy}>
+        {grabBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+        Play
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Raw file fallback — for movies with no SCENE-parseable video, and
+// any other long-tail edge case the merged episode list can't render.
+// ---------------------------------------------------------------------------
+
+function RawFileList({
+  collection,
+  onPlay,
+}: {
+  collection: CollectionDetail;
+  onPlay: (infohash: string, fileIdx: number) => void;
+}) {
+  return (
+    <ul className="divide-y divide-border rounded-lg border border-border bg-card/30">
+      {collection.torrents.flatMap((t) =>
+        // Server already returns files in SCENE-aware order
+        // (`compare_video_files` inside the engine snapshot
+        // builder) — don't second-guess that on the client.
+        t.files
+          .filter((f) => VIDEO_RE.test(f.path))
+          .map((f) => (
+            <li
+              key={`${t.infohash}:${f.index}`}
+              className="flex items-center justify-between gap-3 px-4 py-3 text-sm"
+            >
+              <span className="truncate font-mono text-xs text-muted-foreground">
+                {f.path.split("/").pop()}
+              </span>
+              <Button size="sm" className="ml-auto shrink-0" onClick={() => onPlay(t.infohash, f.index)}>
+                <Play className="size-3.5" />
+                Play
+              </Button>
+            </li>
+          )),
+      )}
+    </ul>
   );
 }

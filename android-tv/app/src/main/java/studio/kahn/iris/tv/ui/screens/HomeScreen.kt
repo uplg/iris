@@ -45,14 +45,13 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import studio.kahn.iris.tv.data.AddFollowRequest
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.FeaturedResponse
-import studio.kahn.iris.tv.data.FollowSummary
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.LibraryResponse
+import studio.kahn.iris.tv.data.WatchlistItem
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.TmdbMetadata
 import studio.kahn.iris.tv.data.TorrentView
@@ -126,7 +125,7 @@ fun HomeScreen(
     // those cards stay frozen and skip recomposition entirely.
     var downloading by remember { mutableStateOf<List<TorrentView>>(emptyList()) }
     var library by remember { mutableStateOf<List<TorrentView>>(emptyList()) }
-    var watchlist by remember { mutableStateOf<List<FollowSummary>>(emptyList()) }
+    var watchlist by remember { mutableStateOf<List<WatchlistItem>>(emptyList()) }
     var featured by remember { mutableStateOf<FeaturedResponse?>(null) }
     var collections by remember { mutableStateOf<List<CollectionListItem>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -149,7 +148,7 @@ fun HomeScreen(
             data class HomeFetch(
                 val cw: Result<List<ContinueWatchingItem>>,
                 val tor: Result<List<TorrentView>>,
-                val follows: Result<List<FollowSummary>>,
+                val watchlist: Result<List<WatchlistItem>>,
                 val featured: Result<FeaturedResponse>,
                 val collections: Result<LibraryResponse>,
             )
@@ -160,14 +159,18 @@ fun HomeScreen(
                 HomeFetch(
                     cw = runCatching { api.continueWatching() },
                     tor = runCatching { api.listTorrents() },
-                    follows = runCatching { api.listFollows() },
+                    // Post-0.4: per-user Watchlist sourced from the
+                    // user's series_follows rows (auto-created on
+                    // grab). Replaces the legacy `listFollows()` which
+                    // returned the same data through the C1 façade.
+                    watchlist = runCatching { api.watchlist() },
                     featured = runCatching { api.discoverFeatured() },
                     collections = runCatching { api.library("collections") },
                 )
             }
             val cw = fetch.cw
             val tor = fetch.tor
-            val follows = fetch.follows
+            val wl = fetch.watchlist
             val feat = fetch.featured
             val coll = fetch.collections
             continueWatching = cw.getOrDefault(emptyList())
@@ -175,7 +178,7 @@ fun HomeScreen(
             val (newDl, newLib) = splitTorrents(fresh)
             downloading = newDl
             library = newLib
-            watchlist = follows.getOrDefault(emptyList())
+            watchlist = wl.getOrDefault(emptyList())
             featured = feat.getOrNull()
             collections = (coll.getOrNull() as? LibraryResponse.Collections)?.items.orEmpty()
             val fail = listOfNotNull(cw.exceptionOrNull(), tor.exceptionOrNull()).firstOrNull()
@@ -334,11 +337,19 @@ fun HomeScreen(
             item(key = "shelf-watchlist") {
                 Shelf(title = "My Watchlist · ${watchlist.size}") {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(watchlist, key = { it.id }) { f ->
+                        items(watchlist, key = { it.id }) { w ->
+                            // Post-0.4: the Watchlist item's `id` IS
+                            // the collection id (sourced from
+                            // `/api/me/watchlist` which joins
+                            // series_follows → collections). Route
+                            // straight to the unified
+                            // CollectionScreen — SeriesScreen is the
+                            // retired surface kept only for legacy
+                            // navigation flows.
                             WatchlistCard(
                                 container = container,
-                                follow = f,
-                                onClick = { onOpenSeries(f.id) },
+                                item = w,
+                                onClick = { onOpenCollection(w.id) },
                             )
                         }
                     }
@@ -377,7 +388,10 @@ fun HomeScreen(
                                             it.normalizedName == normalizeForMatch(r.title)
                                         }
                                         if (existing != null) {
-                                            onOpenSeries(existing.id)
+                                            // Already in Watchlist → straight to
+                                            // its CollectionScreen (skip the
+                                            // search-result detail round-trip).
+                                            onOpenCollection(existing.id)
                                         } else {
                                             onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
                                         }
@@ -523,24 +537,24 @@ private fun ContinueWatchingCard(
 @Composable
 private fun WatchlistCard(
     container: AppContainer,
-    follow: FollowSummary,
+    item: WatchlistItem,
     onClick: () -> Unit,
 ) {
-    // SCENE-mode: server gates poster/backdrop on tmdb_verified, so
-    // we trust whatever it gives us. tmdbId may be null (no decoration
-    // available) — PosterCard renders the placeholder in that case.
-    val subtitle = if (follow.newCount > 0) "${follow.newCount} new" else "Followed"
+    // Post-0.4 Watchlist tile — server-provided poster (tmdb_verified
+    // gating handled server-side), `new_count` shows episodes the
+    // indexer surfaced since this user's last visit.
+    val subtitle = if (item.newCount > 0) "${item.newCount} new" else "In your library"
     PosterCard(
         container = container,
-        tmdbId = follow.tmdbId,
-        tmdbVerified = follow.posterPath != null,
-        title = follow.name,
+        tmdbId = item.tmdbId,
+        tmdbVerified = item.posterPath != null,
+        title = item.name,
         subtitle = subtitle,
         progress = null,
         progressColor = null,
         onClick = onClick,
-        posterUrlOverride = tmdbPosterUrl(follow.posterPath, "w342"),
-        topBadge = if (follow.newCount > 0) {
+        posterUrlOverride = tmdbPosterUrl(item.posterPath, "w342"),
+        topBadge = if (item.newCount > 0) {
             {
                 androidx.tv.material3.Surface(
                     shape = RoundedCornerShape(6.dp),
@@ -549,7 +563,7 @@ private fun WatchlistCard(
                     ),
                 ) {
                     Text(
-                        "${follow.newCount} new",
+                        "${item.newCount} new",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),

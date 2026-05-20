@@ -209,6 +209,17 @@ impl SearchProvider for Unit3dProvider {
         let limit = q.limit.unwrap_or(25).clamp(1, 100);
         let page = q.page.unwrap_or(1).max(1);
 
+        // UNIT3D's `name=` filter is a permissive substring match.
+        // When the SCENE parser pulled a clean title + season +
+        // episode out of the raw query we rebuild a canonical SCENE
+        // form (`<title> SxxExx`) so the indexer's substring match
+        // narrows to the exact release line we want. Without this
+        // rebuild a query like "Classroom of the Elite S04E11"
+        // still works (UNIT3D matches the whole string) but typing
+        // just "Classroom of the Elite" used to drown S04E11 in
+        // season packs because the only filter was raw `q`.
+        let name_filter = build_unit3d_name_filter(q);
+
         // `/api/torrents/filter` parameter names per the official docs
         // (camelCase across the board). Anything UNIT3D doesn't
         // recognise is silently dropped, so getting these exactly
@@ -216,13 +227,19 @@ impl SearchProvider for Unit3dProvider {
         // returns the 25 latest uploads regardless of filters".
         let mut qs: Vec<(&'static str, String)> = vec![
             ("api_token", self.api_token.clone()),
-            ("name", q.q.clone()),
+            ("name", name_filter),
             ("page", page.to_string()),
             ("perPage", limit.to_string()),
             ("sortField", "created_at".into()),
             ("sortDirection", "desc".into()),
         ];
-        if let Some(cat_id) = match q.kind {
+        // Tag the request with the TV/movie category when:
+        //   * the caller explicitly asked for it, OR
+        //   * the parser saw an SxxExx marker (an unambiguous TV signal).
+        let inferred_kind = q
+            .kind
+            .or_else(|| q.season.map(|_| MediaKind::Tv));
+        if let Some(cat_id) = match inferred_kind {
             Some(MediaKind::Movie) => Some(self.movie_category_id),
             Some(MediaKind::Tv) => Some(self.tv_category_id),
             None => None,
@@ -500,6 +517,27 @@ struct TorrentAttributes {
 /// value can't poison downstream identity comparisons.
 ///
 /// Two encodings observed in the wild:
+/// Build the `name=` substring filter sent to UNIT3D's
+/// `/api/torrents/filter`. When the SCENE parser extracted a usable
+/// title + season (+ optional episode) from the raw query, rebuild a
+/// canonical SCENE-form string the indexer matches verbatim
+/// (`Classroom.of.the.Elite S04E11`). Without a parser hit we pass
+/// the raw `q` straight through — no regression for free-text searches.
+fn build_unit3d_name_filter(q: &SearchQuery) -> String {
+    let parsed = match q.parsed_title.as_deref() {
+        Some(t) if !t.is_empty() => t,
+        _ => return q.q.clone(),
+    };
+    match (q.season, q.episode) {
+        (Some(s), Some(e)) if e > 0 => format!("{parsed} S{s:02}E{e:02}"),
+        (Some(s), _) => format!("{parsed} S{s:02}"),
+        // Parser recognised a title but no S/E — keep the raw q in
+        // case it contained year / qualifier info we'd lose by
+        // collapsing to the parsed title alone.
+        _ => q.q.clone(),
+    }
+}
+
 ///   * 40 hex chars — the canonical form (`/api/torrents/{id}`,
 ///     mainline `UNIT3D` search rows). Pass-through.
 ///   * 80 hex chars — `/api/torrents/filter` ships the infohash
@@ -679,6 +717,10 @@ impl TorrentEnvelope {
             tmdb_id,
             kind,
             poster_url,
+            already_in_library: false,
+            library_infohash: None,
+            library_file_idx: None,
+            language: None,
         }
     }
 

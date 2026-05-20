@@ -29,6 +29,17 @@ pub struct CollectionRow {
     pub display_title: String,
     pub kind: String,
     pub created_at: DateTime<Utc>,
+    /// Last time the collection-driven scheduler ran an indexer scan
+    /// for this collection. `NULL` until the first scan completes —
+    /// fresh TV collections get picked up on the next tick. Mirror
+    /// of the retired `series_follows.last_checked_at` column.
+    #[serde(default)]
+    pub last_indexer_scan_at: Option<DateTime<Utc>>,
+    /// Last time a user opened the collection detail page. Drives
+    /// the "X new" badge by counting `available_episodes.found_at >
+    /// this stamp` that aren't already in `episode_files`.
+    #[serde(default)]
+    pub last_visited_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +67,8 @@ pub async fn list_by_tmdb(
     tmdb_id: i64,
 ) -> Result<Vec<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at \
+        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
+                last_indexer_scan_at, last_visited_at \
          FROM collections WHERE tmdb_id = ?1 ORDER BY created_at",
     )
     .bind(tmdb_id)
@@ -70,7 +82,8 @@ pub async fn find_by_parsed_title(
     kind: Kind,
 ) -> Result<Option<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at \
+        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
+                last_indexer_scan_at, last_visited_at \
          FROM collections \
          WHERE parsed_title_normalized = ?1 AND kind = ?2",
     )
@@ -86,7 +99,8 @@ pub async fn find_by_parsed_title(
 /// (one of which could be poorly named and resolve to garbage).
 pub async fn list_all(pool: &SqlitePool) -> Result<Vec<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at \
+        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
+                last_indexer_scan_at, last_visited_at \
          FROM collections \
          ORDER BY created_at",
     )
@@ -96,7 +110,8 @@ pub async fn list_all(pool: &SqlitePool) -> Result<Vec<CollectionRow>, sqlx::Err
 
 pub async fn get(pool: &SqlitePool, id: Uuid) -> Result<Option<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at \
+        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
+                last_indexer_scan_at, last_visited_at \
          FROM collections WHERE id = ?1",
     )
     .bind(id)
@@ -174,6 +189,24 @@ pub async fn set_kind(
 ) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE collections SET kind = ?1 WHERE id = ?2")
         .bind(kind.as_str())
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Rewrite `parsed_title_normalized` on an existing collection.
+/// Used by the boot-time self-heal when an older parser run stamped
+/// a leaky title (file-leaf SCENE garbage instead of the canonical
+/// torrent name). Skipped if another row already owns the target
+/// key — that case demands a migration we don't auto-resolve.
+pub async fn set_parsed_title_normalized(
+    pool: &SqlitePool,
+    id: Uuid,
+    normalized: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE collections SET parsed_title_normalized = ?1 WHERE id = ?2")
+        .bind(normalized)
         .bind(id)
         .execute(pool)
         .await?;
@@ -264,6 +297,80 @@ pub struct CollectionSummary {
     /// torrent so a `/watch/<infohash>/0` jump tends to land somewhere
     /// the user actually wants to be.
     pub representative_infohash: Option<String>,
+}
+
+/// TV collections that have at least one `episode_files` row backed
+/// by a still-present torrent. Powers the post-0.4 Watchlist surface
+/// (`GET /api/me/watchlist` + the legacy `/api/me/follows` façade):
+/// "every TV show the household has actually started watching".
+/// Newest activity first via `last_visited_at` then `created_at`.
+pub async fn list_tv_with_episodes(
+    pool: &SqlitePool,
+) -> Result<Vec<CollectionRow>, sqlx::Error> {
+    sqlx::query_as::<_, CollectionRow>(
+        "SELECT c.id, c.tmdb_id, c.parsed_title_normalized, c.display_title, c.kind, \
+                c.created_at, c.last_indexer_scan_at, c.last_visited_at \
+         FROM collections c \
+         WHERE c.kind = 'tv' \
+           AND c.parsed_title_normalized IS NOT NULL \
+           AND EXISTS ( \
+             SELECT 1 FROM episode_files ef \
+             JOIN torrents t ON t.infohash = ef.infohash \
+             WHERE ef.collection_id = c.id AND t.deleted_at IS NULL \
+           ) \
+         ORDER BY COALESCE(c.last_visited_at, c.created_at) DESC, c.created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Collections eligible for an indexer scan — TV collections whose
+/// `last_indexer_scan_at` is older than `cooldown_seconds`, or null.
+/// Ordered NULL-first then oldest first, so freshly-ingested TV
+/// series get their initial scan before older entries recycle.
+pub async fn list_due_for_scan(
+    pool: &SqlitePool,
+    cooldown_seconds: i64,
+) -> Result<Vec<CollectionRow>, sqlx::Error> {
+    sqlx::query_as::<_, CollectionRow>(
+        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
+                last_indexer_scan_at, last_visited_at \
+         FROM collections \
+         WHERE kind = 'tv' \
+           AND parsed_title_normalized IS NOT NULL \
+           AND (last_indexer_scan_at IS NULL \
+                OR last_indexer_scan_at < datetime('now', '-' || ?1 || ' seconds')) \
+         ORDER BY last_indexer_scan_at IS NOT NULL, last_indexer_scan_at",
+    )
+    .bind(cooldown_seconds)
+    .fetch_all(pool)
+    .await
+}
+
+/// Bump `last_indexer_scan_at` to now after the scheduler runs a scan.
+/// Always called in a best-effort manner — if the scan failed we still
+/// stamp it so a permanently-broken indexer doesn't cause the scheduler
+/// to retry the same collection on every tick.
+pub async fn touch_scanned(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE collections SET last_indexer_scan_at = ?1 WHERE id = ?2")
+        .bind(Utc::now())
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Bump `last_visited_at` to now whenever a user opens the collection
+/// detail page. The home-page Watchlist shelf badge counts the number
+/// of `available_episodes` whose `found_at > last_visited_at` and which
+/// don't have a matching `episode_files` row yet.
+pub async fn touch_visited(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE collections SET last_visited_at = ?1 WHERE id = ?2")
+        .bind(Utc::now())
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn list_summaries(

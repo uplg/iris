@@ -2,6 +2,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::State;
 use axum::routing::get;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -13,6 +14,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(me))
         .route("/continue-watching", get(continue_watching))
+        .route("/watchlist", get(watchlist))
         .route("/password", axum::routing::post(change_password))
         .route("/display-name", axum::routing::post(change_display_name))
 }
@@ -107,6 +109,103 @@ struct ContinueWatchingItem {
     duration_seconds: Option<f64>,
     last_watched_at: chrono::DateTime<chrono::Utc>,
     completed: bool,
+}
+
+/// Post-0.4 "My Watchlist" payload. Derived from TV collections
+/// that have at least one ingested episode — the household
+/// auto-tracks every show they're watching, no Follow button. The
+/// shape mirrors what the legacy `/api/me/follows` façade returns
+/// so the web client can flip endpoints without rewriting card
+/// rendering. Old APK 0.3.1 keeps calling `/api/me/follows`.
+#[derive(Debug, Serialize)]
+struct WatchlistItem {
+    /// Collection id — clients route to `/collection/:id`.
+    id: Uuid,
+    /// SCENE-normalised name. Clients use this to detect "is this
+    /// search result already on my Watchlist?" without having to
+    /// run the same normaliser themselves.
+    normalized_name: String,
+    name: String,
+    tmdb_id: Option<i64>,
+    poster_path: Option<String>,
+    backdrop_path: Option<String>,
+    /// Distinct (season, episode) the indexer has surfaced since
+    /// the requesting user last opened this collection. Drives the
+    /// "X new" tile badge.
+    new_count: i64,
+    last_visited_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+async fn watchlist(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<Vec<WatchlistItem>>> {
+    // Per-user: this household now has ~10 viewers from different
+    // families and "what's on the Watchlist" is personal. The shared
+    // surface is the library (episode_files / available_episodes —
+    // disk content is one copy for everyone); the per-user state
+    // lives in `series_follows`, auto-created when the user grabs
+    // or plays an episode (see `grab_episode_core`). The collection
+    // it joins through is shared, so we still surface the same
+    // poster + display title for everyone.
+    let follows = iris_db::follows::list_for_user(state.db(), user.id).await?;
+    let mut out = Vec::with_capacity(follows.len());
+    for f in follows {
+        // Each follow joins through its normalised name to a
+        // (maybe present, maybe verified) TV collection so the tile
+        // can borrow the canonical title + poster. Missing collection
+        // = the user has a follow but no episodes ingested yet —
+        // surface the follow's own name and let the poster slot stay
+        // empty.
+        let collection = iris_db::collections::find_by_parsed_title(
+            state.db(),
+            &f.normalized_name,
+            iris_db::collections::Kind::Tv,
+        )
+        .await
+        .unwrap_or(None);
+        let (display_title, tmdb_id, collection_id) = match collection {
+            Some(c) => (c.display_title, c.tmdb_id.or(f.tmdb_id), c.id),
+            // No collection yet → route the tile to a hypothetical
+            // collection path. The user will see the empty-state
+            // until first ingest; this stays consistent with the
+            // collection routing the rest of the UI uses.
+            None => (f.name.clone(), f.tmdb_id, f.id),
+        };
+        // Watchlist is TV-only by construction (we derive it from
+        // `series_follows`). Hint the TMDB namespace so the same
+        // numerical id can't collide with an unrelated movie.
+        let (poster_path, backdrop_path) = match (state.tmdb(), tmdb_id) {
+            (Some(client), Some(tid)) => {
+                #[allow(clippy::cast_sign_loss)]
+                let meta = client
+                    .lookup_with_kind(tid as u64, Some(crate::tmdb::TmdbKind::Tv))
+                    .await;
+                meta.map_or((None, None), |m| (m.poster_path, m.backdrop_path))
+            }
+            _ => (None, None),
+        };
+        let new_count = iris_db::available_episodes::count_new_for_series(
+            state.db(),
+            &f.normalized_name,
+            f.last_visited_at,
+        )
+        .await
+        .unwrap_or(0);
+        out.push(WatchlistItem {
+            id: collection_id,
+            normalized_name: f.normalized_name,
+            name: display_title,
+            tmdb_id,
+            poster_path,
+            backdrop_path,
+            new_count,
+            last_visited_at: f.last_visited_at,
+            created_at: f.created_at,
+        });
+    }
+    Ok(Json(out))
 }
 
 async fn continue_watching(

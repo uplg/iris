@@ -94,6 +94,38 @@ pub async fn list_for_normalized(
 }
 
 
+/// Library-wide `(collection_normalized_title, season, episode) → infohash`
+/// index. Used by the search ranker to flag results whose SCENE
+/// identity already maps to a file on disk, so the UI can disable
+/// the "Add to library" CTA and prevent the user from downloading
+/// the same episode twice under a different release group.
+/// One round-trip per search request; the household scale keeps
+/// this cheap (low thousands of rows max).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct LibraryEpisodeKey {
+    pub normalized_title: String,
+    pub season: i64,
+    pub episode: i64,
+    pub infohash: String,
+    pub file_idx: i64,
+}
+
+pub async fn list_library_keys(
+    pool: &SqlitePool,
+) -> Result<Vec<LibraryEpisodeKey>, sqlx::Error> {
+    sqlx::query_as::<_, LibraryEpisodeKey>(
+        "SELECT c.parsed_title_normalized AS normalized_title, \
+                ef.season, ef.episode, ef.infohash, ef.file_idx \
+         FROM episode_files ef \
+         JOIN collections c ON c.id = ef.collection_id \
+         WHERE c.kind = 'tv' \
+           AND EXISTS (SELECT 1 FROM torrents t \
+                       WHERE t.infohash = ef.infohash AND t.deleted_at IS NULL)",
+    )
+    .fetch_all(pool)
+    .await
+}
+
 /// Lookup by physical file — used by the player's end-of-episode
 /// "Préparer le suivant ?" flow to identify which episode just
 /// finished playing.

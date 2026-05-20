@@ -48,7 +48,8 @@ use crate::tmdb::TmdbClient;
 /// for symmetry with future hooks; currently unused.
 pub async fn assign_after_ingest(
     pool: &SqlitePool,
-    _tmdb: Option<&TmdbClient>,
+    tmdb: Option<&TmdbClient>,
+    providers: Option<&iris_providers::ProviderRegistry>,
     infohash: &str,
     name: &str,
     tmdb_id: Option<i64>,
@@ -120,6 +121,88 @@ pub async fn assign_after_ingest(
             )
             .await;
         }
+        // Make the first visit useful: the user clicked "Add to
+        // library", they're about to land on a freshly-created
+        // collection page that would otherwise show "No poster" +
+        // empty Watchlist until the runtime probe + 4 h scheduler
+        // tick caught up. Both signals are cheap to pre-warm:
+        //   * SCENE-name → TMDB resolve gives us a `tmdb_id` good
+        //     enough for the poster lookup (NOT `tmdb_verified` —
+        //     that still requires the runtime probe).
+        //   * A one-shot scan against the indexers populates
+        //     `available_episodes` so the "next episodes" picker
+        //     has data on first render.
+        prewarm_tv_collection(pool, tmdb, providers, &collection, name).await;
+    }
+}
+
+/// Best-effort: resolve a TMDB id from the SCENE name and kick the
+/// collections scheduler against the brand-new collection so the
+/// user's first visit to the collection page sees a poster + a
+/// populated "available episodes" panel.
+///
+/// Both operations are tolerant of failure — the runtime probe
+/// (`enrich_after_verify`) and the periodic scheduler tick still run
+/// independently and will eventually fill the gaps. The point of
+/// this pre-warm is just to shorten the visible "empty" window from
+/// minutes to seconds.
+async fn prewarm_tv_collection(
+    pool: &SqlitePool,
+    tmdb: Option<&TmdbClient>,
+    providers: Option<&iris_providers::ProviderRegistry>,
+    collection: &iris_db::collections::CollectionRow,
+    release_name: &str,
+) {
+    if collection.tmdb_id.is_none() {
+        if let Some(client) = tmdb {
+            if let Some(resolved) = crate::tmdb_resolve::resolve_release_name(
+                pool,
+                client,
+                release_name,
+                Some(crate::tmdb::TmdbKind::Tv),
+            )
+            .await
+            {
+                // TMDB ids never exceed ~i32::MAX in practice; reject
+                // anything that doesn't fit i64 cleanly rather than
+                // forcing an `as` cast — keeps `cargo clippy` happy
+                // without an `allow` blanket.
+                let Ok(id) = i64::try_from(resolved.tmdb_id) else {
+                    tracing::warn!(
+                        tmdb_id = resolved.tmdb_id,
+                        collection_id = %collection.id,
+                        "prewarm: TMDB id overflowed i64 — dropping (shouldn't happen)",
+                    );
+                    return;
+                };
+                if let Err(e) =
+                    iris_db::collections::set_tmdb_id_if_missing(pool, collection.id, id).await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        collection_id = %collection.id,
+                        "prewarm: set_tmdb_id_if_missing failed",
+                    );
+                } else {
+                    tracing::info!(
+                        collection_id = %collection.id,
+                        tmdb_id = id,
+                        "prewarm: resolved TMDB id via SCENE name (unverified — poster only)",
+                    );
+                }
+            }
+        }
+    }
+    if let Some(reg) = providers {
+        if let Err(e) =
+            crate::collections_scheduler::scan_collection(pool, reg, collection.id).await
+        {
+            tracing::warn!(
+                error = %e,
+                collection_id = %collection.id,
+                "prewarm: initial scheduler scan failed",
+            );
+        }
     }
 }
 
@@ -181,8 +264,20 @@ fn pick_identity<'a>(
     parsed_files: &'a [(usize, filename::Parsed)],
 ) -> Option<&'a filename::Parsed> {
     if kind == Kind::Tv {
+        // File names usually carry the most canonical SCENE form for
+        // TV releases, BUT only when our parser actually recognised
+        // a season marker. A file like
+        // `Silicon Valley - 1x01 - Minimum Viable Product.mkv`
+        // uses the Plex-style `NxNN` convention the SCENE parser
+        // doesn't recognise — the parse falls through and the
+        // whole filename ends up in `title`. Letting that drive
+        // the collection's display_title leaks junk like
+        // "Silicon Valley - 1x01 - Minimum Viable Product Multi Papaya"
+        // into the UI. Only trust the file parse when it produced
+        // a real season; otherwise fall back to the torrent name
+        // (which for season packs is canonical: `Silicon.Valley.S01.…`).
         if let Some((_, p)) = parsed_files.first() {
-            if !p.title.is_empty() {
+            if !p.title.is_empty() && p.season.is_some() {
                 return Some(p);
             }
         }
@@ -297,6 +392,82 @@ async fn reconcile_scene_episodes(pool: &SqlitePool, infohash: &str, files: &[(u
     }
 }
 
+/// Boot-time repair for TV collections whose `parsed_title_normalized`
+/// and `display_title` were set from a junk file-leaf parse by an
+/// older [`pick_identity`] (which trusted any non-empty file title,
+/// even when no season was found). Today's `pick_identity` requires
+/// a season-marked file parse and falls back to the torrent name —
+/// this self-heal back-applies the same rule to rows already on disk.
+///
+/// Conservative on purpose:
+/// - Movies are left alone (their identity isn't affected by the
+///   `pick_identity` bug fix).
+/// - Skipped when the canonical key would collide with another
+///   existing TV collection (that's a merge we don't auto-resolve).
+/// - Only repairs rows whose torrent name parses with a season —
+///   without that we have no canonical key to write.
+async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
+    let Ok(Some(torrent)) = iris_db::torrents::find_by_infohash(pool, infohash).await else {
+        return;
+    };
+    let Some(collection_id) = torrent.collection_id else { return };
+    let Ok(Some(collection)) = iris_db::collections::get(pool, collection_id).await else {
+        return;
+    };
+    if collection.kind != "tv" {
+        return;
+    }
+    let Some(parsed) = filename::parse(&torrent.name) else { return };
+    if parsed.season.is_none() {
+        return;
+    }
+    let new_key = parsed.collection_key(true);
+    if new_key.is_empty() {
+        return;
+    }
+    let current_key = collection.parsed_title_normalized.as_deref().unwrap_or("");
+    if current_key == new_key {
+        return; // already canonical
+    }
+    // A different collection already owns the canonical key — would
+    // need a torrent-migration to merge; defer instead of corrupting
+    // the existing row.
+    if let Ok(Some(other)) =
+        iris_db::collections::find_by_parsed_title(pool, &new_key, Kind::Tv).await
+    {
+        if other.id != collection_id {
+            tracing::warn!(
+                collection_id = %collection_id,
+                current = %current_key,
+                target = %new_key,
+                other_id = %other.id,
+                "heal_tv_collection_identity: target key already owned by another collection — skipping",
+            );
+            return;
+        }
+    }
+    let new_display = parsed.display_with_year(true);
+    if let Err(e) =
+        iris_db::collections::set_parsed_title_normalized(pool, collection_id, &new_key).await
+    {
+        tracing::warn!(error = %e, collection_id = %collection_id, "heal: set_parsed_title_normalized failed");
+        return;
+    }
+    if let Err(e) =
+        iris_db::collections::set_display_title(pool, collection_id, &new_display).await
+    {
+        tracing::warn!(error = %e, collection_id = %collection_id, "heal: set_display_title failed");
+        return;
+    }
+    tracing::info!(
+        collection_id = %collection_id,
+        old_key = %current_key,
+        new_key = %new_key,
+        new_display = %new_display,
+        "TV collection identity self-healed from torrent name",
+    );
+}
+
 /// Walk every torrent currently in the library and assign a collection
 /// to any that doesn't have one yet. Runs at boot to backfill the
 /// existing library after the SCENE-first migration. Idempotent —
@@ -304,6 +475,7 @@ async fn reconcile_scene_episodes(pool: &SqlitePool, infohash: &str, files: &[(u
 pub async fn run_backfill(
     pool: &SqlitePool,
     tmdb: Option<&TmdbClient>,
+    providers: Option<&iris_providers::ProviderRegistry>,
     engine: &iris_torrent::Engine,
 ) {
     let rows = match iris_db::torrents::list_active(pool).await {
@@ -332,6 +504,13 @@ pub async fn run_backfill(
                     snap.files.into_iter().map(|f| (f.index, f.path)).collect();
                 reconcile_scene_episodes(pool, &row.infohash, &files).await;
             }
+            // Self-heal TV collection identity. Earlier builds picked
+            // the first file's parse without checking for a season
+            // marker, so Plex-style `NxNN` filenames produced junk
+            // `display_title` like "Silicon Valley - 1x01 - Minimum
+            // Viable Product Multi Papaya" when the torrent name
+            // (`Silicon.Valley.S01.…`) was the right answer.
+            heal_tv_collection_identity(pool, &row.infohash).await;
             continue;
         }
         // Need the file list to detect TV-vs-movie via SCENE parsing.
@@ -346,7 +525,16 @@ pub async fn run_backfill(
             .into_iter()
             .map(|f| (f.index, f.path))
             .collect();
-        assign_after_ingest(pool, tmdb, &row.infohash, &row.name, row.tmdb_id, &files).await;
+        assign_after_ingest(
+            pool,
+            tmdb,
+            providers,
+            &row.infohash,
+            &row.name,
+            row.tmdb_id,
+            &files,
+        )
+        .await;
         if row.tmdb_verified {
             enrich_after_verify(pool, &row.infohash).await;
         }

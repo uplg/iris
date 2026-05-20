@@ -304,8 +304,14 @@ impl SearchProvider for Torr9 {
         let limit = q.limit.unwrap_or(25).clamp(1, 100);
         let page = q.page.unwrap_or(1).max(1);
 
+        // Torr9's `q=` is a substring match. When the SCENE parser
+        // pulled a clean title + season/episode out of the raw query
+        // we rebuild a SCENE-form filter so the indexer narrows
+        // exactly to the requested release line.
+        let q_param = build_torr9_q(q);
+
         let mut qs: Vec<(&'static str, String)> = vec![
-            ("q", q.q.clone()),
+            ("q", q_param),
             ("page", page.to_string()),
             ("limit", limit.to_string()),
         ];
@@ -322,7 +328,10 @@ impl SearchProvider for Torr9 {
                 .to_string(),
             ));
         }
-        if let Some(kind) = q.kind {
+        // An SxxExx hint in the raw query is an unambiguous TV signal —
+        // tag the request even if the caller didn't pass an explicit kind.
+        let inferred_kind = q.kind.or_else(|| q.season.map(|_| MediaKind::Tv));
+        if let Some(kind) = inferred_kind {
             qs.push((
                 "category",
                 match kind {
@@ -540,6 +549,10 @@ impl FeaturedItem {
             tmdb_id: self.tmdb_id.filter(|id| *id > 0),
             kind,
             poster_url: self.poster_url,
+            already_in_library: false,
+            library_infohash: None,
+            library_file_idx: None,
+            language: None,
         }
     }
 }
@@ -615,6 +628,21 @@ fn torr9_sort_field(f: SortField) -> &'static str {
     }
 }
 
+/// Compose torr9's `q=` substring filter from the parsed query
+/// hints. SCENE-form `<title> SxxExx` when both are known; otherwise
+/// fall through to the raw user input — no regression for free text.
+fn build_torr9_q(q: &SearchQuery) -> String {
+    let parsed = match q.parsed_title.as_deref() {
+        Some(t) if !t.is_empty() => t,
+        _ => return q.q.clone(),
+    };
+    match (q.season, q.episode) {
+        (Some(s), Some(e)) if e > 0 => format!("{parsed} S{s:02}E{e:02}"),
+        (Some(s), _) => format!("{parsed} S{s:02}"),
+        _ => q.q.clone(),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct Torrent {
     id: u64,
@@ -670,6 +698,10 @@ impl Torrent {
             tmdb_id,
             kind,
             poster_url: None,
+            already_in_library: false,
+            library_infohash: None,
+            library_file_idx: None,
+            language: None,
         }
     }
 }

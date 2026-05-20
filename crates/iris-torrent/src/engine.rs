@@ -428,7 +428,7 @@ impl Engine {
 
 fn snapshot_of(handle: &Handle) -> TorrentSnapshot {
     let stats = handle.stats();
-    let files = handle
+    let mut files = handle
         .with_metadata(|m| {
             m.file_infos
                 .iter()
@@ -441,6 +441,14 @@ fn snapshot_of(handle: &Handle) -> TorrentSnapshot {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    // SCENE-aware sort: TV packs come out in episode order rather
+    // than the .torrent file's encoded order (which a 2.0 GB S02E03
+    // out-of-order chunk would otherwise push to the top). The
+    // FileEntry.index field still holds the original librqbit
+    // position, so playback / file-by-index lookups stay correct —
+    // only the Vec order changes. All API consumers iterate by
+    // `.index` rather than position, so this is safe.
+    files.sort_by(|a, b| iris_media::filename::compare_video_files(&a.path, &b.path));
     let total = if stats.total_bytes > 0 {
         stats.total_bytes
     } else {

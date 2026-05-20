@@ -2153,6 +2153,7 @@ dependencies = [
  "hex 0.4.3",
  "iris-core",
  "iris-db",
+ "iris-media",
  "librqbit",
  "serde",
  "sqlx",

@@ -35,13 +35,18 @@ base_url = "https://theoldschool.cc"
 api_key_env = "TOS_API_KEY"
 
 # SeedPool — another UNIT3D tracker; identical wiring, just a
-# different base_url + api_key_env.
+# different base_url + api_key_env. Ships English releases
+# without explicit language markers, so the search/scheduler
+# language detector falls through to `default_language` for
+# anything it can't classify — gives anglophone users an EN
+# badge in the UI instead of a useless "unknown" label.
 [[providers]]
 id = "seedpool"
 kind = "unit3d"
 enabled = true
 base_url = "https://seedpool.org"
 api_key_env = "SEEDPOOL_API_KEY"
+default_language = "english"
 
 # Generic Torznab indexer (Jackett-fed, Prowlarr-fed, NewzNab clones).
 # UNIT3D-based trackers should use `kind = "unit3d"` above instead.

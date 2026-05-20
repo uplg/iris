@@ -87,18 +87,46 @@ async fn create(
     .await?;
 
     // Kick off an immediate background scan so the series page
-    // shows `dispo` chips on first visit instead of waiting on
-    // the periodic scheduler tick. Best-effort.
+    // shows `dispo` chips on first visit instead of waiting on the
+    // periodic scheduler tick. Best-effort.
+    //
+    // The scheduler now keys on `collections`, not `series_follows`,
+    // so we look up the TV collection that shares this SCENE
+    // identity. The collection may not exist yet (no episode
+    // ingested), in which case the scan no-ops — the scheduler will
+    // pick it up the moment ingest creates a row.
     let pool = state.db().clone();
     let providers = state.providers().clone();
-    let row_clone = row.clone();
+    let normalized = row.normalized_name.clone();
+    let follow_name = row.name.clone();
+    let follow_id = row.id;
     tokio::spawn(async move {
+        let collection = match iris_db::collections::find_by_parsed_title(
+            &pool,
+            &normalized,
+            iris_db::collections::Kind::Tv,
+        )
+        .await
+        {
+            Ok(Some(c)) => c,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(
+                    %follow_id,
+                    %follow_name,
+                    error = %e,
+                    "follow create: collection lookup failed",
+                );
+                return;
+            }
+        };
         if let Err(e) =
-            crate::follows_scheduler::scan_follow(&pool, &providers, &row_clone).await
+            crate::collections_scheduler::scan_collection(&pool, &providers, collection.id).await
         {
             tracing::warn!(
-                follow_id = %row_clone.id,
-                name = %row_clone.name,
+                %follow_id,
+                %follow_name,
+                collection_id = %collection.id,
                 error = %e,
                 "follow create: initial scan failed",
             );
@@ -111,6 +139,17 @@ async fn create(
 // ---------------------------------------------------------------------------
 // GET /api/me/follows
 // ---------------------------------------------------------------------------
+//
+// C1 façade for APK 0.3.1: per-user Watchlist. With ~10 viewers from
+// different families sharing one library, the Watchlist HAS to be
+// per-user — series_follows is the right source. The "Follow"
+// concept is no longer surfaced anywhere; rows are written
+// automatically by `grab_episode_core` on every grab so the user's
+// tracked-shows set just reflects what they actually download. APK
+// 0.3.1 still calls this exactly the way it did — the only change
+// is that the rows it now sees were created implicitly.
+// The new web client calls `/api/me/watchlist` (same data, cleaner
+// shape) and skips this façade entirely.
 
 async fn list(
     State(state): State<AppState>,
@@ -146,11 +185,15 @@ struct FollowSummary {
 /// show's poster.
 async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> FollowSummary {
     let trusted_tmdb = trusted_tmdb_id(state.db(), &row.normalized_name).await;
+    // `series_follows` is TV-only — hint the namespace so a numerical
+    // id collision with a movie can't serve a stranger's poster.
     let (poster_path, backdrop_path) = match (state.tmdb(), trusted_tmdb) {
         (Some(client), Some(tid)) => {
             // tid is a positive i64 from the DB; u64 conversion is safe.
             #[allow(clippy::cast_sign_loss)]
-            let meta = client.lookup(tid as u64).await;
+            let meta = client
+                .lookup_with_kind(tid as u64, Some(crate::tmdb::TmdbKind::Tv))
+                .await;
             meta.map_or((None, None), |m| (m.poster_path, m.backdrop_path))
         }
         _ => (None, None),
@@ -238,14 +281,17 @@ async fn episodes(
     Path(id): Path<Uuid>,
     Query(q): Query<EpisodesQuery>,
 ) -> ApiResult<Json<EpisodesResponse>> {
-    let follow = iris_db::follows::get_by_id(state.db(), user.id, id)
-        .await?
+    // Dual resolution: old APK clients pass `series_follows.id`,
+    // new clients pass `collection.id`. Both shapes resolve to the
+    // same SCENE-normalised name, which is the actual join key.
+    let identity = resolve_followish(&state, user.id, id)
+        .await
         .ok_or(ApiError::NotFound)?;
 
     // 1. Files on disk — per-collection join via normalised name.
     let downloaded = iris_db::episode_files::list_for_normalized(
         state.db(),
-        &follow.normalized_name,
+        &identity.normalized_name,
     )
     .await
     .unwrap_or_default();
@@ -253,7 +299,7 @@ async fn episodes(
     // 2. Indexer-cached availability.
     let available = iris_db::available_episodes::list_best_for_series(
         state.db(),
-        &follow.normalized_name,
+        &identity.normalized_name,
     )
     .await
     .unwrap_or_default();
@@ -314,7 +360,14 @@ async fn episodes(
 
     // Bump visited timestamp AFTER reading — we don't need the
     // previous value past this point.
-    let _ = iris_db::follows::mark_visited(state.db(), user.id, id).await;
+    match identity.source {
+        FollowishSource::SeriesFollow => {
+            let _ = iris_db::follows::mark_visited(state.db(), user.id, id).await;
+        }
+        FollowishSource::Collection => {
+            let _ = iris_db::collections::touch_visited(state.db(), id).await;
+        }
+    }
 
     Ok(Json(EpisodesResponse {
         season: q.season,
@@ -582,10 +635,10 @@ async fn same_torrent_next(
 // `episode_files` row.
 
 #[derive(Debug, Serialize)]
-struct GrabResponse {
-    infohash: String,
-    file_idx: i64,
-    already_grabbed: bool,
+pub(crate) struct GrabResponse {
+    pub infohash: String,
+    pub file_idx: i64,
+    pub already_grabbed: bool,
 }
 
 async fn grab_episode(
@@ -593,51 +646,191 @@ async fn grab_episode(
     user: AuthUser,
     Path((id, season, episode)): Path<(Uuid, i64, i64)>,
 ) -> ApiResult<Json<GrabResponse>> {
-    let follow = iris_db::follows::get_by_id(state.db(), user.id, id)
-        .await?
+    let identity = resolve_followish(&state, user.id, id)
+        .await
         .ok_or(ApiError::NotFound)?;
+    grab_episode_core(
+        &state,
+        GrabEpisodeRequest {
+            user_id: user.id,
+            normalized_name: &identity.normalized_name,
+            display_title: &identity.display_name,
+            tmdb_id: identity.tmdb_id,
+            season,
+            episode,
+            // Legacy APK 0.3.1 path — no language picker in that
+            // build, so let the core pick whatever's there.
+            language: None,
+        },
+    )
+    .await
+    .map(Json)
+}
 
-    if let Some(existing) =
-        find_episode_file(state.db(), &follow.normalized_name, season, episode).await?
-    {
-        return Ok(Json(GrabResponse {
+/// Where a "follow-ish" id came from in the dual-resolver flow.
+/// APK 0.3.1 round-trips `series_follows.id`; post-0.4 clients
+/// round-trip `collections.id`. The handler logic is identical;
+/// only the `last_visited_at` bump goes to a different table.
+enum FollowishSource {
+    SeriesFollow,
+    Collection,
+}
+
+struct FollowishIdentity {
+    normalized_name: String,
+    display_name: String,
+    tmdb_id: Option<i64>,
+    source: FollowishSource,
+}
+
+/// Try to resolve an opaque id as either a legacy `series_follows`
+/// row (APK 0.3.1) or a `collections` row (post-0.4 clients). The
+/// caller never has to care which it was — both produce the same
+/// SCENE identity that downstream logic actually keys on.
+async fn resolve_followish(
+    state: &AppState,
+    user_id: iris_core::ids::UserId,
+    id: Uuid,
+) -> Option<FollowishIdentity> {
+    if let Ok(Some(follow)) = iris_db::follows::get_by_id(state.db(), user_id, id).await {
+        return Some(FollowishIdentity {
+            normalized_name: follow.normalized_name,
+            display_name: follow.name,
+            tmdb_id: follow.tmdb_id,
+            source: FollowishSource::SeriesFollow,
+        });
+    }
+    if let Ok(Some(c)) = iris_db::collections::get(state.db(), id).await {
+        if c.kind == "tv" {
+            if let Some(norm) = c.parsed_title_normalized {
+                return Some(FollowishIdentity {
+                    normalized_name: norm,
+                    display_name: c.display_title,
+                    tmdb_id: c.tmdb_id,
+                    source: FollowishSource::Collection,
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Shared "grab a specific episode" body. Wraps the look-on-disk →
+/// look-in-available_episodes-cache → fall-back-to-live-indexer
+/// flow + the ingest plumbing. Both the legacy follows endpoint and
+/// the new collection-keyed endpoint (`POST /api/library/collections/
+/// :id/grab/:s/:e`) call this — the only difference between callers
+/// is how they resolve the SCENE identity (follow row vs collection
+/// row).
+///
+/// `language_pref` gates the live-indexer fallback so an English
+/// Seedpool release can't be auto-grabbed for a French collection.
+/// Pass `Language::Unknown` to accept any language (first ingest,
+/// or genuinely-undecided household).
+/// Bundle of every input `grab_episode_core` needs. Lives as a
+/// struct (rather than positional args) because the call gathers
+/// inputs from a handful of unrelated sources — auth context, SCENE
+/// identity resolved off either a follow or a collection, a TMDB
+/// id for verify — and "seven args in a row" was a bug magnet at
+/// the call site.
+pub(crate) struct GrabEpisodeRequest<'a> {
+    pub user_id: iris_core::ids::UserId,
+    pub normalized_name: &'a str,
+    pub display_title: &'a str,
+    pub tmdb_id: Option<i64>,
+    pub season: i64,
+    pub episode: i64,
+    /// When the user clicked a specific language badge, the grab
+    /// path commits to that language: `best_available` filters
+    /// strictly, and the live indexer fallback only accepts
+    /// matching releases. `None` for legacy callers (APK 0.3.1's
+    /// follows path) — they get the historical "best by seeders,
+    /// any language" behaviour.
+    pub language: Option<&'a str>,
+}
+
+pub(crate) async fn grab_episode_core(
+    state: &AppState,
+    req: GrabEpisodeRequest<'_>,
+) -> ApiResult<GrabResponse> {
+    let GrabEpisodeRequest {
+        user_id,
+        normalized_name,
+        display_title,
+        tmdb_id,
+        season,
+        episode,
+        language,
+    } = req;
+
+    // Auto-track for this user. With a multi-family household
+    // (~10 viewers, mixed taste) the Watchlist is per-user; the act
+    // of grabbing an episode is the strongest "I want to keep
+    // watching this" signal we have. Fire before the on-disk short-
+    // circuit so a "grab the one I already have" click still tracks.
+    // Idempotent — `iris_db::follows::add` is a no-op when
+    // (user_id, normalized_name) already exists.
+    let _ = iris_db::follows::add(
+        state.db(),
+        user_id,
+        normalized_name,
+        display_title,
+        tmdb_id,
+    )
+    .await;
+
+    if let Some(existing) = find_episode_file(state.db(), normalized_name, season, episode).await? {
+        return Ok(GrabResponse {
             infohash: existing.infohash,
             file_idx: existing.file_idx,
             already_grabbed: true,
-        }));
+        });
     }
 
-    let pick = match best_available(state.db(), &follow.normalized_name, season, episode).await? {
+    // Resolution order:
+    //   1. Cached singleton for exact (S, E, language).
+    //   2. Cached season pack covering the requested season. The
+    //      pack ingest path runs to completion, then we SCENE-parse
+    //      the resulting file list to extract the leaf matching
+    //      (S, E) and return its (infohash, file_idx).
+    //   3. Live indexer query (singleton-only — pack discovery
+    //      lives on the periodic scheduler, not on the grab path).
+    let pack_pick = if best_available(state.db(), normalized_name, season, episode, language)
+        .await?
+        .is_none()
+    {
+        find_pack_offer(state.db(), normalized_name, season, language).await?
+    } else {
+        None
+    };
+    if let Some(pack) = pack_pick {
+        return ingest_pack_and_pick_episode(
+            state,
+            user_id,
+            display_title,
+            tmdb_id,
+            pack,
+            season,
+            episode,
+        )
+        .await;
+    }
+    let pick = match best_available(state.db(), normalized_name, season, episode, language).await?
+    {
         Some(p) => p,
-        None => find_via_indexer(&state, &follow, season, episode)
-            .await?
-            .ok_or(ApiError::NotFound)?,
+        None => find_via_indexer_for_identity(
+            state,
+            normalized_name,
+            display_title,
+            language,
+            season,
+            episode,
+        )
+        .await?
+        .ok_or(ApiError::NotFound)?,
     };
 
-    let result = if pick.magnet.is_empty() {
-        let provider = state
-            .providers()
-            .get(&pick.indexer_provider)
-            .ok_or_else(|| {
-                ApiError::Internal(anyhow::anyhow!(
-                    "provider `{}` no longer registered",
-                    pick.indexer_provider
-                ))
-            })?;
-        let source = provider
-            .resolve(&pick.indexer_torrent_id)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("resolve: {e}")))?;
-        match source {
-            iris_core::search::TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,
-            iris_core::search::TorrentSource::TorrentFile(b) => {
-                state.engine().add_from_bytes(b).await
-            }
-        }
-    } else {
-        state.engine().add_from_magnet(&pick.magnet).await
-    }
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
+    let result = ingest_picked(state, &pick).await?;
 
     iris_db::torrents::upsert(
         state.db(),
@@ -647,27 +840,27 @@ async fn grab_episode(
                 .snapshot
                 .name
                 .clone()
-                .unwrap_or_else(|| format!("{} S{:02}E{:02}", follow.name, season, episode)),
+                .unwrap_or_else(|| format!("{display_title} S{season:02}E{episode:02}")),
             total_size_bytes: result.snapshot.total_size_bytes,
             source_provider: Some(pick.indexer_provider.clone()),
             source_external_id: Some(pick.indexer_torrent_id.clone()),
-            // Carry the follow's optional tmdb_id through to the
-            // torrent so the runtime probe can attempt a verify
-            // match. Stays unverified until the probe confirms.
-            tmdb_id: follow.tmdb_id,
-            added_by: user.id,
+            // Carry the resolved tmdb_id through to the torrent so
+            // the runtime probe can attempt a verify match. Stays
+            // unverified until the probe confirms.
+            tmdb_id,
+            added_by: user_id,
         },
     )
     .await?;
 
     let file_idx = pick_largest_video_file(&result.snapshot.files);
-    finalise_grabbed_episode(state, &result, follow.tmdb_id, season, episode, file_idx).await?;
+    finalise_grabbed_episode(state.clone(), &result, tmdb_id, season, episode, file_idx).await?;
 
-    Ok(Json(GrabResponse {
+    Ok(GrabResponse {
         infohash: result.snapshot.infohash,
         file_idx,
         already_grabbed: result.already_managed,
-    }))
+    })
 }
 
 fn pick_largest_video_file(files: &[iris_torrent::FileEntry]) -> i64 {
@@ -706,6 +899,7 @@ async fn finalise_grabbed_episode(
     crate::collection_assign::assign_after_ingest(
         state.db(),
         state.tmdb(),
+        Some(state.providers()),
         &result.snapshot.infohash,
         &result.snapshot.name.clone().unwrap_or_default(),
         tmdb_id,
@@ -757,43 +951,215 @@ async fn best_available(
     normalized_name: &str,
     season: i64,
     episode: i64,
+    language: Option<&str>,
 ) -> Result<Option<PickedAvailability>, sqlx::Error> {
     let rows = iris_db::available_episodes::list_best_for_series(pool, normalized_name).await?;
-    Ok(rows
+    let same_se: Vec<_> = rows
         .into_iter()
-        .find(|r| r.season == season && r.episode == episode)
-        .map(|r| PickedAvailability {
-            magnet: r.magnet,
-            indexer_provider: r.indexer_provider,
-            indexer_torrent_id: r.indexer_torrent_id,
-        }))
+        .filter(|r| r.season == season && r.episode == episode)
+        .collect();
+    // Honour the caller's language hint exactly when set. We don't
+    // fall back to a different language on miss — if the user
+    // clicked an FR badge there must be an FR offer; falling back
+    // to EN would re-introduce the cross-language download we
+    // explicitly designed out of the scheduler. The handler
+    // surfaces 404 in that case.
+    let picked = match language {
+        Some(lang) => same_se
+            .into_iter()
+            .find(|r| r.language.as_deref() == Some(lang)),
+        None => same_se.into_iter().next(),
+    };
+    Ok(picked.map(|r| PickedAvailability {
+        magnet: r.magnet,
+        indexer_provider: r.indexer_provider,
+        indexer_torrent_id: r.indexer_torrent_id,
+    }))
 }
 
-async fn find_via_indexer(
+/// Resolve a `PickedAvailability` (magnet or provider-hosted
+/// `.torrent`) through librqbit and return the runtime
+/// [`IngestResult`]. Shared between the singleton grab and the
+/// season-pack grab — both paths go through identical engine
+/// plumbing, only the post-ingest "which file is the user's pick"
+/// resolution differs.
+async fn ingest_picked(
     state: &AppState,
-    follow: &iris_db::follows::FollowRow,
+    pick: &PickedAvailability,
+) -> ApiResult<iris_torrent::IngestResult> {
+    let result = if pick.magnet.is_empty() {
+        let provider = state
+            .providers()
+            .get(&pick.indexer_provider)
+            .ok_or_else(|| {
+                ApiError::Internal(anyhow::anyhow!(
+                    "provider `{}` no longer registered",
+                    pick.indexer_provider
+                ))
+            })?;
+        let source = provider
+            .resolve(&pick.indexer_torrent_id)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("resolve: {e}")))?;
+        match source {
+            iris_core::search::TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,
+            iris_core::search::TorrentSource::TorrentFile(b) => {
+                state.engine().add_from_bytes(b).await
+            }
+        }
+    } else {
+        state.engine().add_from_magnet(&pick.magnet).await
+    }
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
+    Ok(result)
+}
+
+/// Look up a cached season pack that can satisfy a (season, episode)
+/// request when no singleton offer exists. Honours `language` when
+/// set — same strict-match contract as the singleton path; the user
+/// who clicked an "FR" badge mustn't be dropped into an English pack.
+async fn find_pack_offer(
+    pool: &iris_db::SqlitePool,
+    normalized_name: &str,
+    season: i64,
+    language: Option<&str>,
+) -> Result<Option<PickedAvailability>, sqlx::Error> {
+    let pack = iris_db::available_episodes::find_pack_for_season(
+        pool,
+        normalized_name,
+        season,
+        language,
+    )
+    .await?;
+    Ok(pack.map(|p| PickedAvailability {
+        magnet: p.magnet,
+        indexer_provider: p.indexer_provider,
+        indexer_torrent_id: p.indexer_torrent_id,
+    }))
+}
+
+/// Ingest a season pack and resolve a specific (season, episode)
+/// leaf inside it. Runs the same engine ingest path as the singleton
+/// grab; the difference is post-ingest: instead of returning the
+/// pack's "main video", we SCENE-parse every file and pick the one
+/// whose `(season, episode)` matches the request. If the parser
+/// can't find the requested episode inside the pack we surface a
+/// `NotFound` — the user clicked a non-existent (S, E).
+async fn ingest_pack_and_pick_episode(
+    state: &AppState,
+    user_id: iris_core::ids::UserId,
+    display_title: &str,
+    tmdb_id: Option<i64>,
+    pack: PickedAvailability,
+    season: i64,
+    episode: i64,
+) -> ApiResult<GrabResponse> {
+    let result = ingest_picked(state, &pack).await?;
+
+    // Find the leaf matching the requested (S, E). SCENE-parse each
+    // path; pick the one whose `(season, episode)` matches. The
+    // engine's snapshot already orders files SCENE-aware, but we
+    // can't trust position alone — a multi-disc pack might have
+    // `Disc1/Show.S01E04.mkv` ahead of `Disc2/Show.S01E12.mkv`
+    // alphabetically without that matching the requested episode.
+    let file_idx = result
+        .snapshot
+        .files
+        .iter()
+        .find_map(|f| {
+            let leaf = f.path.rsplit('/').next().unwrap_or(&f.path);
+            let parsed = iris_media::filename::parse(leaf)?;
+            let s = parsed.season?;
+            let e = parsed.episode?;
+            if i64::from(s) == season && i64::from(e) == episode {
+                Some(f.index as i64)
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            ApiError::NotFound
+        })?;
+
+    iris_db::torrents::upsert(
+        state.db(),
+        iris_db::torrents::NewTorrent {
+            infohash: result.snapshot.infohash.clone(),
+            name: result
+                .snapshot
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("{display_title} S{season:02} pack")),
+            total_size_bytes: result.snapshot.total_size_bytes,
+            source_provider: Some(pack.indexer_provider.clone()),
+            source_external_id: Some(pack.indexer_torrent_id.clone()),
+            tmdb_id,
+            added_by: user_id,
+        },
+    )
+    .await?;
+
+    // Same finalisation as the singleton path — collection_assign
+    // will SCENE-parse every file in the pack and create
+    // episode_files for the FULL season in one shot, so subsequent
+    // calls for sibling episodes short-circuit through the on-disk
+    // check.
+    finalise_grabbed_episode(state.clone(), &result, tmdb_id, season, episode, file_idx).await?;
+
+    Ok(GrabResponse {
+        infohash: result.snapshot.infohash,
+        file_idx,
+        already_grabbed: result.already_managed,
+    })
+}
+
+async fn find_via_indexer_for_identity(
+    state: &AppState,
+    normalized_name: &str,
+    display_title: &str,
+    language: Option<&str>,
     season: i64,
     episode: i64,
 ) -> Result<Option<PickedAvailability>, ApiError> {
     use iris_core::search::{SearchQuery, SortField, SortOrder};
     let query = SearchQuery {
-        q: format!("{} S{season:02}E{episode:02}", follow.name),
+        q: format!("{display_title} S{season:02}E{episode:02}"),
         page: Some(1),
         limit: Some(20),
         sort_by: Some(SortField::Seeders),
         order: Some(SortOrder::Desc),
         kind: None,
+        // Targeted single-episode grab — hand providers the structured
+        // hint so Torznab can dispatch as `t=tvsearch&season=&ep=`
+        // instead of relying on substring matching alone.
+        parsed_title: Some(iris_media::filename::series_key(display_title)),
+        season: Some(season as u32),
+        episode: Some(episode as u32),
+        year: None,
     };
     let agg = state.providers().search_all(&query).await;
-    let mut sorted = agg.results;
+    // Language gate when the caller asked for a specific language
+    // (UI clicked an FR / EN badge). Without a hint everything goes
+    // through — APK 0.3.1 follows path lands here and doesn't ship
+    // the new param.
+    let target_lang = language.map(iris_media::filename::Language::parse_tag);
+    let mut sorted: Vec<_> = agg
+        .results
+        .into_iter()
+        .filter(|r| match target_lang {
+            Some(want) => iris_media::filename::detect_language(&r.title) == want,
+            None => true,
+        })
+        .collect();
     sorted.sort_by_key(|r| std::cmp::Reverse(r.seeders.unwrap_or(0)));
     let Some(best) = sorted.into_iter().next() else {
         return Ok(None);
     };
+    let lang = iris_media::filename::detect_language(&best.title);
     let _ = iris_db::available_episodes::upsert(
         state.db(),
         iris_db::available_episodes::UpsertAvailableEpisode {
-            normalized_name: follow.normalized_name.clone(),
+            normalized_name: normalized_name.to_string(),
             season,
             episode,
             indexer_provider: best.provider_id.clone(),
@@ -802,6 +1168,7 @@ async fn find_via_indexer(
             quality: None,
             seeders: best.seeders.map(i64::from),
             size_bytes: best.size_bytes.map(|s| s as i64),
+            language: Some(lang.as_str().to_string()),
         },
     )
     .await;

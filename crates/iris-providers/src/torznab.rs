@@ -208,21 +208,56 @@ impl SearchProvider for TorznabProvider {
         // dedicated search operations + the corresponding category
         // bucket. With no filter we fall back to the generic search,
         // which any compliant indexer supports.
-        let (t_op, cats) = match q.kind {
-            Some(MediaKind::Movie) => ("movie", self.movie_categories.as_str()),
-            Some(MediaKind::Tv) => ("tvsearch", self.tv_categories.as_str()),
-            None => ("search", ""),
+        //
+        // Override: when the SCENE parser found a season (or season+
+        // episode) in the user query, force `t=tvsearch` even without
+        // an explicit MediaKind. Torznab's tvsearch op accepts
+        // `season=` / `ep=` parameters that filter at the indexer
+        // (e.g. c411 / theoldschool) instead of relying on substring
+        // matching the full `q` — a massive precision win on
+        // "Classroom of the Elite S04E11" style queries.
+        let has_se_hint = q.season.is_some();
+        let (t_op, cats) = if has_se_hint {
+            ("tvsearch", self.tv_categories.as_str())
+        } else {
+            match q.kind {
+                Some(MediaKind::Movie) => ("movie", self.movie_categories.as_str()),
+                Some(MediaKind::Tv) => ("tvsearch", self.tv_categories.as_str()),
+                None => ("search", ""),
+            }
         };
+
+        // When we have a parsed title, send that as `q=` (cleaner
+        // match than the raw user string with `S04E11` baked in) and
+        // hand the structured season/episode separately. Falls back
+        // to the raw query when the parser had nothing useful.
+        let q_param = q
+            .parsed_title
+            .as_deref()
+            .filter(|t| !t.is_empty() && has_se_hint)
+            .map_or_else(|| q.q.clone(), str::to_string);
 
         let mut qs: Vec<(&'static str, String)> = vec![
             ("t", t_op.to_string()),
             ("apikey", self.api_key.clone()),
-            ("q", q.q.clone()),
+            ("q", q_param),
             ("limit", limit.to_string()),
             ("offset", offset.to_string()),
         ];
         if !cats.is_empty() {
             qs.push(("cat", cats.to_string()));
+        }
+        // Season / episode hints (Torznab tvsearch native). `episode==0`
+        // is the in-band season-pack sentinel from the parser — pass
+        // only the season in that case so the indexer returns the
+        // pack alongside the episodes.
+        if let Some(s) = q.season {
+            qs.push(("season", s.to_string()));
+            if let Some(e) = q.episode {
+                if e > 0 {
+                    qs.push(("ep", e.to_string()));
+                }
+            }
         }
 
         let body = self
@@ -472,6 +507,10 @@ impl RawItem {
             tmdb_id: self.tmdb_id,
             kind,
             poster_url: None,
+            already_in_library: false,
+            library_infohash: None,
+            library_file_idx: None,
+            language: None,
         }
     }
 }

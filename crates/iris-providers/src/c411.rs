@@ -258,6 +258,10 @@ impl C411 {
                 tmdb_id: item.tmdb_id.filter(|n| *n > 0),
                 kind: Some(kind),
                 poster_url: item.poster_url,
+                already_in_library: false,
+                library_infohash: None,
+                library_file_idx: None,
+                language: None,
             };
             match kind {
                 MediaKind::Movie => movies.push(result),
@@ -347,6 +351,12 @@ impl SearchProvider for C411 {
                     sort_by: None,
                     order: None,
                     kind: None,
+                    // Priming a featured-link lookup — no need to push
+                    // structured hints down to the underlying Torznab.
+                    parsed_title: None,
+                    season: None,
+                    episode: None,
+                    year: None,
                 };
                 // Best-effort: if the search fails (network, indexer
                 // 5xx), we fall through to the explicit error below

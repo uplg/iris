@@ -9,14 +9,13 @@ import { Shelf } from "@/components/Shelf";
 import { Badge } from "@/components/ui/badge";
 import {
   discover,
-  follows,
   me as meApi,
   tmdbImage,
   torrents,
   type ContinueWatchingItem,
-  type FollowSummary,
   type SearchResult,
   type TorrentView,
+  type WatchlistItem,
 } from "@/lib/api";
 import { formatSize } from "@/lib/format";
 
@@ -36,8 +35,8 @@ export function HomePage() {
     staleTime: 30_000,
   });
   const watchlistQ = useQuery({
-    queryKey: ["follows"],
-    queryFn: follows.list,
+    queryKey: ["watchlist"],
+    queryFn: meApi.watchlist,
     staleTime: 60_000,
   });
   const featuredQ = useQuery({
@@ -86,7 +85,7 @@ export function HomePage() {
           </div>
         }
       >
-        {watchlistQ.data?.map((f) => <WatchlistCard key={f.id} follow={f} />)}
+        {watchlistQ.data?.map((w) => <WatchlistCard key={w.id} item={w} />)}
       </Shelf>
 
       <Shelf
@@ -147,18 +146,20 @@ function ContinueCard({ item }: { item: ContinueWatchingItem }) {
   );
 }
 
-function WatchlistCard({ follow }: { follow: FollowSummary }) {
-  const href = `/series/${follow.id}`;
+function WatchlistCard({ item }: { item: WatchlistItem }) {
+  // Watchlist items carry the collection id directly — route to the
+  // unified Series view. Per-user state (new_count, last_visited_at)
+  // is computed server-side off the calling user's series_follows row.
   return (
     <MediaCard
-      href={href}
-      title={follow.name}
-      posterUrl={tmdbImage(follow.poster_path, "w342")}
+      href={`/collection/${item.id}`}
+      title={item.name}
+      posterUrl={tmdbImage(item.poster_path, "w342")}
       kind="tv"
       badge={
-        follow.new_count > 0 ? (
+        item.new_count > 0 ? (
           <Badge className="bg-primary text-primary-foreground shadow-md">
-            {follow.new_count} new
+            {item.new_count} new
           </Badge>
         ) : (
           <Bookmark className="size-3.5 text-white/80 drop-shadow" />
@@ -174,8 +175,8 @@ function FeaturedCard({ result }: { result: SearchResult }) {
   // auto-follow on click anymore (was a usability foot-gun); the
   // explicit Follow action lives inside PreviewDialog.
   const watchlistQ = useQuery({
-    queryKey: ["follows"],
-    queryFn: follows.list,
+    queryKey: ["watchlist"],
+    queryFn: meApi.watchlist,
     staleTime: 60_000,
   });
   const existing = useMemo(() => {
@@ -193,12 +194,13 @@ function FeaturedCard({ result }: { result: SearchResult }) {
     .filter(Boolean)
     .join(" · ");
 
-  // If the user already follows this series, the card body links
-  // straight to the Series page (skips the dialog round-trip).
-  // Otherwise the click opens PreviewDialog where the explicit
-  // Follow / Play actions live.
+  // If the household already has this series in their Watchlist
+  // (= a collection with on-disk episodes), the card body links
+  // straight to the unified collection view (skips the dialog
+  // round-trip). Otherwise the click opens PreviewDialog where the
+  // Play / Download CTA lives.
   const cardOnClick = existing ? undefined : () => setPreviewOpen(true);
-  const cardHref = existing ? `/series/${existing.id}` : undefined;
+  const cardHref = existing ? `/collection/${existing.id}` : undefined;
 
   return (
     <>
@@ -229,7 +231,6 @@ function FeaturedCard({ result }: { result: SearchResult }) {
         externalId={result.external_id}
         initialTitle={result.title}
         tmdbId={result.tmdb_id}
-        kind={result.kind}
       />
     </>
   );

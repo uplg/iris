@@ -18,6 +18,25 @@ pub struct SearchQuery {
     /// means "everything".
     #[serde(default)]
     pub kind: Option<MediaKind>,
+    /// SCENE-parsed title from `q`, lowercased + punctuation stripped.
+    /// `None` when `q` doesn't parse to a usable title. Providers may
+    /// ignore this; the API layer uses it for relevance scoring.
+    #[serde(default)]
+    pub parsed_title: Option<String>,
+    /// SCENE-parsed season number from `q`. `Some(0)` is the in-band
+    /// sentinel for a season-pack query (e.g. `Show.Name.S04`).
+    /// Torznab maps this to `season=`; UNIT3D/Torr9 append it to the
+    /// name filter as `SxxExx` / `Sxx`.
+    #[serde(default)]
+    pub season: Option<u32>,
+    /// SCENE-parsed episode number from `q`. Only set when `season`
+    /// is also set and the parser found a full `SxxExx` marker.
+    #[serde(default)]
+    pub episode: Option<u32>,
+    /// SCENE-parsed year from `q`. Used to disambiguate remakes
+    /// (Dune 1984 vs Dune 2021) in the relevance score.
+    #[serde(default)]
+    pub year: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +114,35 @@ pub struct SearchResult {
     /// TMDB-id round-trip.
     #[serde(default)]
     pub poster_url: Option<String>,
+    /// API-layer enrichment: `true` when the result's SCENE-parsed
+    /// (title, season, episode) matches an existing `episode_files`
+    /// row. UI uses this to disable the "Add to library" CTA and
+    /// label the card as already-downloaded, preventing the
+    /// surprisingly-common second ingest of the same episode under a
+    /// different release group. Providers always emit `false`; the
+    /// API search layer flips it before returning to the client.
+    #[serde(default)]
+    pub already_in_library: bool,
+    /// Infohash of the existing library file when
+    /// [`Self::already_in_library`] is `true`. Lets the UI link
+    /// straight to `/watch/<infohash>/<file_idx>` instead of asking
+    /// the user to re-download.
+    #[serde(default)]
+    pub library_infohash: Option<String>,
+    /// File index inside [`Self::library_infohash`] for the matching
+    /// episode. Paired with the infohash to build a direct
+    /// `/watch/{infohash}/{file_idx}` URL.
+    #[serde(default)]
+    pub library_file_idx: Option<u32>,
+    /// Coarse language tag derived server-side from the SCENE
+    /// release name: `"french"` / `"english"` / `"multi"` /
+    /// `"unknown"`. Drives the FR / EN / `MULTi` badges on
+    /// search result cards so the household's anglophone users
+    /// can spot a Seedpool release among the c411 / TOS
+    /// francophones at a glance. Stable string form so
+    /// deserialisers stay tolerant to future variants.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

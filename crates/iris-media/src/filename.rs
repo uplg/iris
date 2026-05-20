@@ -97,6 +97,186 @@ pub fn series_key(s: &str) -> String {
     strip_trailing_year(&normalize_title(s))
 }
 
+/// SCENE-aware ordering for raw torrent file lists. Compares two
+/// file paths by:
+///
+/// 1. Extracted `(season, episode)` when both names carry an
+///    SCENE-style marker (`SxxExx`) — sorts in natural episode
+///    order regardless of file size. Without this, a 2.0 GB
+///    `S02E03` lands above 1.8 GB `S02E02` lands above 1.9 GB
+///    `S02E01` and the user has to hunt for episode 1.
+/// 2. Files with markers sort BEFORE files without — so a TV
+///    pack's main episodes sit on top, with extras / featurettes
+///    afterwards.
+/// 3. Fallback: case-insensitive lexicographic compare on the
+///    basename (no natural-numeric handling at this level — Rust's
+///    stdlib doesn't ship one, and SCENE filenames almost always
+///    have leading zeros so plain `cmp` is fine for them).
+///
+/// Compares basenames only — the directory prefix changes for
+/// multi-disc packs but the basename carries the SCENE marker.
+pub fn compare_video_files(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let base_a = a.rsplit('/').next().unwrap_or(a);
+    let base_b = b.rsplit('/').next().unwrap_or(b);
+    let key_a = parse(base_a).and_then(|p| Some((p.season?, p.episode?)));
+    let key_b = parse(base_b).and_then(|p| Some((p.season?, p.episode?)));
+    match (key_a, key_b) {
+        (Some((sa, ea)), Some((sb, eb))) => {
+            sa.cmp(&sb).then_with(|| ea.cmp(&eb))
+        }
+        // SE-marked files come first; bonus / extras drop to the end.
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => {
+            base_a.to_ascii_lowercase().cmp(&base_b.to_ascii_lowercase())
+        }
+    }
+}
+
+/// Coarse language signal extracted from a SCENE release name. Used
+/// by the collections scheduler + grab fallback to avoid mixing
+/// English releases (typical Seedpool / mainline UNIT3D output) into
+/// a collection whose existing episodes are French — the user
+/// flagged this after watching it happen on an anime series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Language {
+    /// Explicit French marker (`VOSTFR`, `VFF`, `VFQ`, `FRENCH`, etc).
+    French,
+    /// Bilingual / multi-audio release. Acceptable for both French
+    /// and English preferences — the user can pick the audio track
+    /// at playback time.
+    Multi,
+    /// Explicit English marker.
+    English,
+    /// No language marker detected. In practice almost always means
+    /// English (English releases ship language-tag-less; FR releases
+    /// almost always tag), so the matcher treats `Unknown` as
+    /// "compatible with English".
+    #[default]
+    Unknown,
+}
+
+/// Detect a coarse language signal from a SCENE-style release
+/// name. Order matters: a release tagged `MULTi.VFF` should
+/// resolve to [`Language::Multi`] (broader compat), not French
+/// alone — Multi grabs satisfy both pref sides, so claiming Multi
+/// is the higher-information answer.
+pub fn detect_language(title: &str) -> Language {
+    let upper = title.to_ascii_uppercase();
+    // Multi-audio first — matches both FR and EN preferences when
+    // resolved through `Language::satisfies`.
+    if has_token(&upper, "MULTI") {
+        return Language::Multi;
+    }
+    // French markers. `SUBFRENCH` / `TRUEFRENCH` are subsets of
+    // FRENCH but we check them explicitly so the broad FRENCH
+    // match doesn't lose them in the token-boundary check.
+    // VF2 / FR2 indicates both VFF (français de France) and VFQ
+    // (français québécois) dubs are present — still a French
+    // release from the matcher's point of view.
+    for marker in [
+        "VOSTFR",
+        "SUBFRENCH",
+        "TRUEFRENCH",
+        "FRENCH",
+        "VFF",
+        "VFQ",
+        "VFI",
+        "VF2",
+        "FR2",
+        "VOQ",
+        "VOF",
+    ] {
+        if has_token(&upper, marker) {
+            return Language::French;
+        }
+    }
+    // Explicit English tag — rare but seen on UNIT3D forks that
+    // bother emitting one. Bare titles fall through to Unknown.
+    if has_token(&upper, "ENGLISH") {
+        return Language::English;
+    }
+    Language::Unknown
+}
+
+impl Language {
+    /// `true` when a release tagged as `self` is acceptable for a
+    /// collection whose preferred language is `preferred`. Multi
+    /// releases satisfy both sides; Unknown releases count as
+    /// English (the wild-west default for indexer output). When
+    /// `preferred` itself is Unknown the matcher accepts anything
+    /// — applies to the first ingest of a series, where no
+    /// preference has been established yet.
+    pub fn satisfies(self, preferred: Language) -> bool {
+        matches!(
+            (preferred, self),
+            (Language::Unknown, _)
+                | (_, Language::Multi)
+                | (Language::French, Language::French)
+                | (Language::English, Language::English | Language::Unknown),
+        )
+    }
+
+    /// Stable string form used as the value of
+    /// `available_episodes.language` and shipped to clients on
+    /// `SearchResult.language` / `AvailableEpisodeEntry.language`.
+    /// Lowercase for grep-friendliness; matches the corresponding
+    /// `from_str` round-trip.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Language::French => "french",
+            Language::English => "english",
+            Language::Multi => "multi",
+            Language::Unknown => "unknown",
+        }
+    }
+
+    /// Inverse of [`Self::as_str`] — accepts the canonical string
+    /// AND a couple of historical aliases. Anything unrecognised
+    /// collapses to `Unknown` so the matcher stays lenient on
+    /// stale or future-format DB rows. Kept as an inherent method
+    /// (not `std::str::FromStr`) so callers can stay infallible —
+    /// every input maps to a valid variant.
+    pub fn parse_tag(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "french" | "fr" | "vf" => Language::French,
+            "english" | "en" | "vo" => Language::English,
+            "multi" => Language::Multi,
+            _ => Language::Unknown,
+        }
+    }
+}
+
+/// Token-boundary contains: only matches `needle` when it sits
+/// between separators (or at string ends). Without this `FRENCH`
+/// would match against `FRENCHTOAST` and similar; matters less in
+/// practice for these specific tokens but cheap to do right.
+fn has_token(haystack: &str, needle: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let nbytes = needle.as_bytes();
+    if nbytes.is_empty() || nbytes.len() > bytes.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i + nbytes.len() <= bytes.len() {
+        if &bytes[i..i + nbytes.len()] == nbytes {
+            let before_ok = i == 0 || is_sep_byte(bytes[i - 1]);
+            let after = i + nbytes.len();
+            let after_ok = after == bytes.len() || is_sep_byte(bytes[after]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn is_sep_byte(b: u8) -> bool {
+    matches!(b, b'.' | b'_' | b'-' | b' ' | b'[' | b']' | b'(' | b')')
+}
+
 /// Strip a trailing 4-digit year (1900-2099) from an already-
 /// normalised title — `"lucky luke 1991"` → `"lucky luke"`. No-op
 /// when no year is present. Used for TV identity so a show that
@@ -598,6 +778,158 @@ mod tests {
         // TV ignores year in the display.
         let tv = parse("Squid.Game.S02E03.1080p.NF.WEB-DL-X.mkv").unwrap();
         assert_eq!(tv.display_with_year(true), "Squid Game");
+    }
+
+    #[test]
+    fn detect_language_real_world_titles() {
+        // The exact strings shipping from indexers today — captured
+        // from a live `/api/search?q=classroom%20of%20the%20elite`
+        // response so this stays grounded in reality, not in what we
+        // think tracker naming conventions should be.
+        assert_eq!(
+            detect_language("Classroom.Of.The.Elite.S04E11.VOSTFR.1080p.WEB.AAC.2.0.x264-Tsundere-Raws"),
+            Language::French,
+        );
+        assert_eq!(
+            detect_language("Classroom.of.the.Elite.S04E11.SUBFRENCH.1080p.CR.WEB.x264.AAC-Tsundere-Raws"),
+            Language::French,
+        );
+        assert_eq!(
+            detect_language("Classroom.of.the.Elite.S04E06.MULTi.AD.1080p.CR.WEB-DL.AAC2.0.x264-Tsundere-Raws"),
+            Language::Multi,
+        );
+        // Seedpool — no language tag at all. Treated as Unknown so
+        // the matcher will refuse a French-preferring collection
+        // but accept an English one.
+        assert_eq!(
+            detect_language("Classroom.of.the.Elite.S04E11.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG"),
+            Language::Unknown,
+        );
+        assert_eq!(
+            detect_language("Show.Name.S01E01.VFF.1080p.BluRay.x264-XYZ"),
+            Language::French,
+        );
+        assert_eq!(
+            detect_language("Show.Name.S01E01.TRUEFRENCH.1080p.BluRay.x264-XYZ"),
+            Language::French,
+        );
+        // VF2 / FR2 — both French dubs (VFF + VFQ) present. The
+        // user flagged this convention after seeing it on real
+        // c411 / TOS releases. Still resolves to French (no
+        // dedicated variant — VF2 is a "more complete French"
+        // signal, not a distinct language).
+        assert_eq!(
+            detect_language("Show.Name.S01E01.VF2.1080p.WEB.x264-XYZ"),
+            Language::French,
+        );
+        assert_eq!(
+            detect_language("Show.Name.S01E01.FR2.1080p.WEB.x264-XYZ"),
+            Language::French,
+        );
+    }
+
+    #[test]
+    fn language_satisfies_matrix() {
+        // French collection: accept FR + Multi; reject EN + Unknown.
+        assert!(Language::French.satisfies(Language::French));
+        assert!(Language::Multi.satisfies(Language::French));
+        assert!(!Language::English.satisfies(Language::French));
+        assert!(!Language::Unknown.satisfies(Language::French));
+
+        // English collection: accept EN + Multi + Unknown; reject FR.
+        assert!(Language::English.satisfies(Language::English));
+        assert!(Language::Multi.satisfies(Language::English));
+        assert!(Language::Unknown.satisfies(Language::English));
+        assert!(!Language::French.satisfies(Language::English));
+
+        // Unknown preference (first ingest, nothing established): take
+        // anything.
+        assert!(Language::French.satisfies(Language::Unknown));
+        assert!(Language::English.satisfies(Language::Unknown));
+        assert!(Language::Multi.satisfies(Language::Unknown));
+        assert!(Language::Unknown.satisfies(Language::Unknown));
+    }
+
+    #[test]
+    fn language_token_boundaries_prevent_substring_false_positives() {
+        // `FRENCH` inside another word doesn't trigger French
+        // detection. The token-boundary check covers this even
+        // though these specific collisions are rare.
+        assert_eq!(
+            detect_language("FRENCHTOAST.S01E01.1080p.WEB.H264"),
+            Language::Unknown,
+        );
+        // Genuine separator → does match.
+        assert_eq!(
+            detect_language("FRENCHTOAST.S01E01.FRENCH.1080p.WEB.H264"),
+            Language::French,
+        );
+    }
+
+    #[test]
+    fn compare_video_files_sorts_tv_pack_by_episode() {
+        // Real-world Stranger Things season pack from the user.
+        // Without SCENE-aware ordering these come out by size
+        // (2.0 → 1.9 → 1.8 → ...), interleaving episodes randomly.
+        let mut files = [
+            "Stranger Things S02E03 MULTi VFI 4KLight HDR BluRay AC3 5.1 x265-QTZ.mkv",
+            "Stranger Things S02E02 MULTi VFI 4KLight HDR BluRay AC3 5.1 x265-QTZ.mkv",
+            "Stranger Things S02E01 MULTi VFI 4KLight HDR BluRay AC3 5.1 x265-QTZ.mkv",
+            "Stranger Things S02E04 MULTi VFI 4KLight HDR BluRay AC3 5.1 x265-QTZ.mkv",
+            "Stranger Things S02E09 MULTi VFI 4KLight HDR BluRay AC3 5.1 x265-QTZ.mkv",
+            "Stranger Things S02E05 MULTi VFI 4KLight HDR BluRay AC3 5.1 x265-QTZ.mkv",
+        ];
+        files.sort_by(|a, b| compare_video_files(a, b));
+        let eps: Vec<&str> = files
+            .iter()
+            .filter_map(|f| f.split_whitespace().nth(2))
+            .collect();
+        assert_eq!(eps, ["S02E01", "S02E02", "S02E03", "S02E04", "S02E05", "S02E09"]);
+    }
+
+    #[test]
+    fn compare_video_files_se_marked_before_extras() {
+        // Featurettes / extras drop to the end. Common pattern:
+        // a season pack ships the episodes + a "Behind the Scenes"
+        // file with no SE marker.
+        let mut files = vec![
+            "Behind.The.Scenes.mkv",
+            "Show.Name.S01E02.mkv",
+            "Bloopers.mkv",
+            "Show.Name.S01E01.mkv",
+        ];
+        files.sort_by(|a, b| compare_video_files(a, b));
+        assert_eq!(
+            files,
+            vec![
+                "Show.Name.S01E01.mkv",
+                "Show.Name.S01E02.mkv",
+                "Behind.The.Scenes.mkv",
+                "Bloopers.mkv",
+            ],
+        );
+    }
+
+    #[test]
+    fn compare_video_files_uses_basename_only() {
+        // Multi-disc packs (Disc1/EpisodeXX.mkv, Disc2/EpisodeYY.mkv)
+        // sort by the SCENE marker, not by directory prefix.
+        let mut files = vec![
+            "Disc2/Show.S01E04.mkv",
+            "Disc1/Show.S01E01.mkv",
+            "Disc2/Show.S01E03.mkv",
+            "Disc1/Show.S01E02.mkv",
+        ];
+        files.sort_by(|a, b| compare_video_files(a, b));
+        assert_eq!(
+            files,
+            vec![
+                "Disc1/Show.S01E01.mkv",
+                "Disc1/Show.S01E02.mkv",
+                "Disc2/Show.S01E03.mkv",
+                "Disc2/Show.S01E04.mkv",
+            ],
+        );
     }
 
     #[test]

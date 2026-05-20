@@ -1,10 +1,11 @@
 pub mod app;
 pub mod client_version;
 pub mod collection_assign;
+pub mod collections_scheduler;
 pub mod error;
-pub mod follows_scheduler;
 pub mod middleware;
 pub mod observability;
+pub mod ranking;
 pub mod rate_limit;
 pub mod routes;
 pub mod seed_stats;
@@ -117,12 +118,13 @@ fn spawn_background_jobs(
     pool: iris_db::SqlitePool,
     provider_registry: iris_providers::ProviderRegistry,
 ) {
-    // Notify scheduler walks `series_follows` every 4 h, queries
-    // the indexer with each follow's SCENE name, SCENE-parses every
-    // hit, and pre-caches new (S, E) entries in `available_episodes`
-    // so the user's "Préparer" / "Lire" clicks go through the fast
-    // path. No TMDB call. Never ingests on its own.
-    follows_scheduler::spawn(pool.clone(), provider_registry);
+    // Notify scheduler walks TV `collections` every 4 h, queries
+    // the indexer with each collection's display name, SCENE-parses
+    // every hit, and pre-caches new (S, E) entries in
+    // `available_episodes` so the user's "Prepare" / "Play next"
+    // clicks go through the fast path. No TMDB call. Never ingests
+    // on its own.
+    collections_scheduler::spawn(pool.clone(), provider_registry);
 
     // Lifetime-upload reconciler — every 30 s, merge librqbit's session
     // upload counters into `torrents.uploaded_bytes_total` so the value
@@ -146,19 +148,32 @@ fn spawn_background_jobs(
     // nothing's left to assign.
     let bf_pool = pool;
     let bf_tmdb = app_state.tmdb().cloned();
+    let bf_providers = app_state.providers().clone();
     let bf_engine = app_state.engine().clone();
     tokio::spawn(async move {
         // First pass: short delay so the engine has at least started
         // loading. The retry loop catches the slow stragglers.
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        collection_assign::run_backfill(&bf_pool, bf_tmdb.as_ref(), &bf_engine).await;
+        collection_assign::run_backfill(
+            &bf_pool,
+            bf_tmdb.as_ref(),
+            Some(&bf_providers),
+            &bf_engine,
+        )
+        .await;
         let mut ticker =
             tokio::time::interval(std::time::Duration::from_secs(5 * 60));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         ticker.tick().await; // skip the immediate fire
         loop {
             ticker.tick().await;
-            collection_assign::run_backfill(&bf_pool, bf_tmdb.as_ref(), &bf_engine).await;
+            collection_assign::run_backfill(
+            &bf_pool,
+            bf_tmdb.as_ref(),
+            Some(&bf_providers),
+            &bf_engine,
+        )
+        .await;
         }
     });
 }

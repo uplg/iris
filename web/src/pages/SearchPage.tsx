@@ -11,10 +11,13 @@ import {
   Tv,
 } from "lucide-react";
 
+import { useNavigate } from "react-router";
+
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { LanguageBadge } from "@/components/LanguageBadge";
 import { PreviewDialog } from "@/components/PreviewDialog";
 import { EmptyState, ErrorState, LoadingState } from "@/components/State";
 import {
@@ -22,6 +25,7 @@ import {
   search,
   tmdbImage,
   type MediaKind,
+  type ParsedQueryInfo,
   type SearchResult,
   type SortField,
   type SortOrder,
@@ -29,26 +33,33 @@ import {
 } from "@/lib/api";
 
 /**
- * UI-level sort presets. `recommended` is a client-side composite
- * score (seeders ÷ √size_GiB) that surfaces fast-to-process releases
- * first — small files with healthy swarms, which is what most users
- * actually want. The remaining presets pass straight through to the
- * indexer's sort field with a fixed direction. Mirrors the same five
- * options on the Android TV `SearchScreen` so the experience matches.
+ * UI-level sort presets. `relevance` is the default: it lets the
+ * backend's ranker order results by SCENE-parsed title + S/E match,
+ * plus a seeders/√size_GiB quality bonus. The other modes pass
+ * straight through to the indexer's sort field with a fixed
+ * direction. Mirrors the same five options on the Android TV
+ * `SearchScreen` so the experience matches.
  */
-type SortMode = "recommended" | "seeders" | "uploaded" | "size" | "title";
+type SortMode = "relevance" | "seeders" | "uploaded" | "size" | "title";
 
 const SORT_MODES: readonly { id: SortMode; label: string }[] = [
-  { id: "recommended", label: "Recommended" },
+  { id: "relevance", label: "Relevance" },
   { id: "seeders", label: "Seeders" },
   { id: "uploaded", label: "Newest" },
   { id: "size", label: "Smallest" },
   { id: "title", label: "Title" },
 ] as const;
 
-function apiSort(mode: SortMode): { sort_by: SortField; order: SortOrder } {
+function apiSort(mode: SortMode): {
+  sort_by?: SortField;
+  order?: SortOrder;
+} {
+  // `relevance` is conveyed by *not* sending `sort_by`: the backend
+  // owns the ranking in that case (title/SE match + quality
+  // composite + library-dedup demotion).
   switch (mode) {
-    case "recommended":
+    case "relevance":
+      return {};
     case "seeders":
       return { sort_by: "seeders", order: "desc" };
     case "uploaded":
@@ -60,37 +71,6 @@ function apiSort(mode: SortMode): { sort_by: SortField; order: SortOrder } {
   }
 }
 
-/** Below this, a release is almost certainly an ebook / music / sample
- *  rather than a video. Used to filter `Recommended` and to floor the
- *  size term in the composite score (a 10 MB book with high seeders
- *  would otherwise out-score a 5 GB movie by 100×). */
-const MIN_VIDEO_BYTES = 200 * 1024 * 1024;
-const SIZE_FLOOR_GIB = 0.5;
-
-/** Whitelist for `Recommended`: only releases the indexer classified
- *  as movie/tv (or, when kind is missing, anything bigger than the
- *  video size floor — catches uncategorised but plausibly-video hits
- *  without letting books through). */
-function isLikelyVideo(r: SearchResult): boolean {
-  if (r.kind === "movie" || r.kind === "tv") return true;
-  return (r.size_bytes ?? 0) >= MIN_VIDEO_BYTES;
-}
-
-/**
- * Composite score for `recommended`. `seeders / √size_GiB` favours
- * small + popular releases without crushing every chunky encode out
- * of the top picks. Falls back to raw seeders when size is unknown so
- * usable hits don't sink to the bottom. The size term is floored at
- * 0.5 GiB so a 10 MB hit doesn't game the denominator.
- */
-function recommendedScore(r: SearchResult): number {
-  const seeders = r.seeders ?? 0;
-  if (r.size_bytes && r.size_bytes > 0) {
-    const sizeGiB = r.size_bytes / (1024 ** 3);
-    return seeders / Math.sqrt(Math.max(sizeGiB, SIZE_FLOOR_GIB));
-  }
-  return seeders;
-}
 import { formatRelative, formatSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -123,10 +103,11 @@ export function SearchPage() {
   const debounced = useDebounce(q.trim(), 350);
   const [picked, setPicked] = useState<SearchResult | null>(null);
   const [page, setPage] = useState(1);
-  const [sortMode, setSortMode] = useState<SortMode>("recommended");
+  const [sortMode, setSortMode] = useState<SortMode>("relevance");
   const [kind, setKind] = useState<MediaKind | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
 
   // Mirror the in-input value into the URL so refresh keeps the search
   // and copy/paste of the URL replays it.
@@ -153,32 +134,22 @@ export function SearchPage() {
   });
 
   // ---------- Indexer search ----------
+  // The server is the source of truth for ordering. In `relevance`
+  // mode it sends nothing back through `sort_by`, leaving the
+  // backend's parser-aware ranker (title/SxxExx + quality +
+  // library-dedup demotion) in charge. The other sort modes pass
+  // straight through.
   const { sort_by, order } = apiSort(sortMode);
   const { data, isFetching, error } = useQuery({
     queryKey: ["search", debounced, page, sortMode, kind],
-    queryFn: async () => {
-      const res = await search.query(debounced, {
+    queryFn: () =>
+      search.query(debounced, {
         page,
         limit: PAGE_SIZE,
         sort_by,
         order,
         kind: kind ?? undefined,
-      });
-      // `Recommended` filters to video-shaped releases (kind in
-      // {movie, tv} or size ≥ 200 MB so uncategorised video hits
-      // still get through), then re-ranks by the composite score.
-      // Non-video — books, music, samples — drop out entirely.
-      // Other modes pass straight through unchanged.
-      if (sortMode === "recommended") {
-        return {
-          ...res,
-          results: res.results
-            .filter(isLikelyVideo)
-            .sort((a, b) => recommendedScore(b) - recommendedScore(a)),
-        };
-      }
-      return res;
-    },
+      }),
     enabled: debounced.length >= 2,
     placeholderData: keepPreviousData,
   });
@@ -292,6 +263,10 @@ export function SearchPage() {
 
       {error && <ErrorState title="Search failed" error={error} />}
 
+      {data?.parsed_query && (
+        <ParsedQueryBanner info={data.parsed_query} rawQuery={debounced} />
+      )}
+
       {debounced.length < 2 ? (
         <EmptyState
           icon={<SearchIcon className="size-7" />}
@@ -313,6 +288,9 @@ export function SearchPage() {
                 key={`${r.provider_id}:${r.external_id}`}
                 result={r}
                 onClick={() => setPicked(r)}
+                onPlayExisting={(infohash, fileIdx) =>
+                  navigate(`/watch/${infohash}/${fileIdx}`)
+                }
               />
             ))}
           </div>
@@ -333,7 +311,52 @@ export function SearchPage() {
         externalId={picked?.external_id ?? null}
         initialTitle={picked?.title}
         tmdbId={picked?.tmdb_id ?? null}
+        alreadyInLibrary={picked?.already_in_library ?? false}
+        libraryInfohash={picked?.library_infohash ?? null}
+        libraryFileIdx={picked?.library_file_idx ?? null}
       />
+    </div>
+  );
+}
+
+/** Renders the SCENE-style summary the server attached to the
+ *  response (title + season + episode + year) above the results
+ *  grid. Reassures the user that the indexer was queried with the
+ *  structured fields, not the raw string. */
+function ParsedQueryBanner({
+  info,
+  rawQuery,
+}: {
+  info: ParsedQueryInfo;
+  rawQuery: string;
+}) {
+  const parts: string[] = [];
+  if (info.season != null) {
+    if (info.episode != null && info.episode > 0) {
+      parts.push(`S${String(info.season).padStart(2, "0")}E${String(info.episode).padStart(2, "0")}`);
+    } else {
+      parts.push(`Season ${info.season}`);
+    }
+  }
+  if (info.year != null) {
+    parts.push(String(info.year));
+  }
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-card/30 px-3 py-2 text-xs text-muted-foreground">
+      <span>
+        Showing results for{" "}
+        <span className="font-medium capitalize text-foreground">{info.title}</span>
+        {parts.length > 0 && (
+          <>
+            {" "}
+            ·{" "}
+            <span className="font-mono text-foreground">{parts.join(" · ")}</span>
+          </>
+        )}
+      </span>
+      <span className="hidden text-muted-foreground sm:inline" title={rawQuery}>
+        Parsed from your query
+      </span>
     </div>
   );
 }
@@ -400,9 +423,11 @@ function SuggestionsDropdown({
 function ResultCard({
   result,
   onClick,
+  onPlayExisting,
 }: {
   result: SearchResult;
   onClick: () => void;
+  onPlayExisting: (infohash: string, fileIdx: number) => void;
 }) {
   // Resolve the poster by *release name* rather than by indexer-supplied
   // `tmdb_id`. The latter is wrong often enough that we've stopped
@@ -426,11 +451,26 @@ function ResultCard({
   const poster =
     tmdbImage(tmdbHitQ.data?.poster_path, "w342") ?? result.poster_url ?? null;
   const Icon = result.kind === "tv" ? Tv : Film;
+  const owned = result.already_in_library === true;
+  const canPlayExisting =
+    owned && result.library_infohash != null && result.library_file_idx != null;
   return (
     <button
       type="button"
-      onClick={onClick}
-      className="group flex flex-col gap-2 rounded-lg border border-border bg-card/40 p-3 text-left transition hover:border-border/80 hover:bg-card/70"
+      onClick={() => {
+        // One-click play when we can resolve a direct watch URL,
+        // otherwise fall back to the preview dialog (which renders
+        // a clearer "you already own this — download anyway?" UI).
+        if (canPlayExisting) {
+          onPlayExisting(result.library_infohash!, result.library_file_idx!);
+        } else {
+          onClick();
+        }
+      }}
+      className={cn(
+        "group flex flex-col gap-2 rounded-lg border border-border bg-card/40 p-3 text-left transition hover:border-border/80 hover:bg-card/70",
+        owned && "ring-1 ring-emerald-500/40",
+      )}
     >
       <div className="relative aspect-[2/3] overflow-hidden rounded-md bg-muted/40">
         {poster ? (
@@ -438,14 +478,25 @@ function ResultCard({
             src={poster}
             alt={result.title}
             loading="lazy"
-            className="h-full w-full object-cover transition group-hover:scale-[1.02]"
+            className={cn(
+              "h-full w-full object-cover transition group-hover:scale-[1.02]",
+              owned && "opacity-80",
+            )}
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center bg-gradient-to-b from-primary/15 to-background/80 text-muted-foreground/60">
             <Icon className="size-8" />
           </div>
         )}
+        {owned && (
+          // Top-left "already in library" pill. Distinct corner from
+          // FL/provider so the two never overlap.
+          <Badge className="absolute left-1.5 top-1.5 bg-emerald-500/95 text-[10px] uppercase text-white shadow-md">
+            In library
+          </Badge>
+        )}
         <div className="absolute right-1.5 top-1.5 flex flex-col items-end gap-1">
+          <LanguageBadge language={result.language} />
           {result.freeleech && (
             <Badge className="bg-emerald-500/90 text-[10px] uppercase text-white shadow-md">
               FL

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
-import { Bookmark, Play } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { Play } from "lucide-react";
 import DOMPurify from "dompurify";
 import {
   Dialog,
@@ -15,13 +14,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   ApiError,
-  follows,
   searchDetails,
   torrents,
   type AudioInfo,
   type FilePreview,
-  type FollowSummary,
-  type MediaKind,
   type SubInfo,
   type TorrentDetails,
   type TorrentPreview,
@@ -37,11 +33,14 @@ type Props = {
   externalId: string | null;
   initialTitle?: string;
   tmdbId?: number | null;
-  /** When `"tv"`, the dialog adds an explicit "Follow series" action
-   *  (creates a watchlist follow keyed on the SCENE-normalised
-   *  title and routes to the Series page). Movies default to the
-   *  ingest-and-play flow only. */
-  kind?: MediaKind | null;
+  /** Server-flagged dedup: the result's SCENE identity matches an
+   *  episode already on disk. UI surfaces a "you already have this"
+   *  banner and promotes "Play existing" over "Download anyway",
+   *  preventing the surprisingly-common second ingest of the same
+   *  episode under a different release group. */
+  alreadyInLibrary?: boolean;
+  libraryInfohash?: string | null;
+  libraryFileIdx?: number | null;
 };
 
 export function PreviewDialog({
@@ -51,17 +50,17 @@ export function PreviewDialog({
   externalId,
   initialTitle,
   tmdbId,
-  kind,
+  alreadyInLibrary = false,
+  libraryInfohash = null,
+  libraryFileIdx = null,
 }: Props) {
   const navigate = useNavigate();
-  const qc = useQueryClient();
   const [preview, setPreview] = useState<TorrentPreview | null>(null);
   const [details, setDetails] = useState<TorrentDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pickedIdx, setPickedIdx] = useState<number | null>(null);
   const [ingesting, setIngesting] = useState(false);
-  const [following, setFollowing] = useState(false);
   const [showNfo, setShowNfo] = useState(false);
 
   useEffect(() => {
@@ -118,32 +117,6 @@ export function PreviewDialog({
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setIngesting(false);
-    }
-  };
-
-  /// Explicit "Follow this series" action — only rendered when
-  /// kind === "tv". Pushes the new follow into the cached
-  /// `["follows"]` query synchronously so the destination Series
-  /// page sees it on first render (instead of racing the cache
-  /// invalidation).
-  const onFollow = async () => {
-    const title = preview?.name ?? details?.title ?? initialTitle;
-    if (!title) return;
-    setFollowing(true);
-    setError(null);
-    try {
-      const created = await follows.add(title, tmdbId ?? null);
-      qc.setQueryData<FollowSummary[]>(["follows"], (old) => {
-        if (!old) return [created];
-        if (old.some((f) => f.id === created.id)) return old;
-        return [...old, created];
-      });
-      onOpenChange(false);
-      navigate(`/series/${created.id}`);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setFollowing(false);
     }
   };
 
@@ -281,24 +254,48 @@ export function PreviewDialog({
           )}
         </div>
 
+        {alreadyInLibrary && libraryInfohash != null && (
+          // Server-side dedup hit — surface a clear banner so the
+          // user understands why the Play CTA points at the existing
+          // file rather than re-downloading. Without it people kept
+          // accidentally ingesting the same episode twice via a
+          // different release.
+          <div className="mt-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+            You already have this episode in your library. Playing the existing
+            file — use <span className="font-medium">Download anyway</span> below
+            only if you want a different release.
+          </div>
+        )}
+
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          {kind === "tv" && (
-            <Button
-              variant="secondary"
-              onClick={onFollow}
-              disabled={following || ingesting}
-            >
-              <Bookmark className="size-4" />
-              {following ? "Following…" : "Follow"}
+          {alreadyInLibrary && libraryInfohash != null && libraryFileIdx != null ? (
+            <>
+              <Button
+                variant="secondary"
+                onClick={onPlay}
+                disabled={pickedIdx == null || ingesting || !preview}
+              >
+                {ingesting ? "Starting…" : "Download anyway"}
+              </Button>
+              <Button
+                onClick={() => {
+                  onOpenChange(false);
+                  navigate(`/watch/${libraryInfohash}/${libraryFileIdx}`);
+                }}
+              >
+                <Play className="size-4" />
+                Play existing
+              </Button>
+            </>
+          ) : (
+            <Button onClick={onPlay} disabled={pickedIdx == null || ingesting || !preview}>
+              <Play className="size-4" />
+              {ingesting ? "Starting…" : "Play"}
             </Button>
           )}
-          <Button onClick={onPlay} disabled={pickedIdx == null || ingesting || !preview}>
-            <Play className="size-4" />
-            {ingesting ? "Starting…" : "Play"}
-          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
