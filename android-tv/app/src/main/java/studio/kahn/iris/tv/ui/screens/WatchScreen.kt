@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,6 +31,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -36,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
@@ -310,13 +314,32 @@ private fun ReadyPlayer(
         prevEpisode = ctx?.prev
     }
 
-    val playUrl = remember(serverUrl, infohash, fileIdx) {
-        // Raw source bytes — Media3 demuxes the container in-process
-        // and surfaces every audio + subtitle track (incl. PGS bitmap
-        // subs from Blu-rays) via the native track selector. No
-        // server-side remux needed.
+    // Tier-F fallback gate: flipped to `true` by the error listener
+    // below when ExoPlayer chokes on the container / decoder / codec
+    // (DV, Atmos JOC, exotic HEVC profiles…). One-shot per playback
+    // session — `remember(infohash, fileIdx)` resets it when the user
+    // navigates to a different file.
+    var useRemuxFallback by remember(infohash, fileIdx) { mutableStateOf(false) }
+    // Position captured at the moment the fallback fires, so the new
+    // HLS player resumes where the user actually was rather than
+    // restarting from 0. Defaults to 0 (= use the props-supplied
+    // `startPositionSec`) when no fallback has happened yet.
+    var fallbackResumeMs by remember(infohash, fileIdx) { mutableLongStateOf(0L) }
+
+    val playUrl = remember(serverUrl, infohash, fileIdx, useRemuxFallback) {
         val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
-        "${base}api/torrents/$infohash/files/$fileIdx/stream"
+        if (useRemuxFallback) {
+            // Tier F — server-side HLS remux. `play/master.m3u8`
+            // wraps the source video in fragmented MP4 + audio in
+            // AAC, sidesteps Media3's MKV demuxer + the picky
+            // native codecs that refused the raw stream.
+            "${base}api/torrents/$infohash/files/$fileIdx/play/master.m3u8"
+        } else {
+            // Default: raw source bytes — Media3 demuxes the
+            // container in-process and surfaces every audio +
+            // subtitle track (incl. PGS bitmap subs from Blu-rays).
+            "${base}api/torrents/$infohash/files/$fileIdx/stream"
+        }
     }
 
     // No more external subtitle injection — the source MKV / MP4
@@ -331,10 +354,14 @@ private fun ReadyPlayer(
 
     val player = remember(playUrl) {
         buildPlayer(context, container.mediaOkHttpClient).apply {
-            setMediaItem(
-                buildMediaItem(playUrl, title),
-                (startPositionSec * 1000).toLong().coerceAtLeast(0),
-            )
+            // Pick the higher of the saved progress and the
+            // mid-stream fallback position so the Tier F swap
+            // resumes where the user was — not at zero.
+            val resumeMs = maxOf(
+                (startPositionSec * 1000).toLong(),
+                fallbackResumeMs,
+            ).coerceAtLeast(0)
+            setMediaItem(buildMediaItem(playUrl, title), resumeMs)
             prepare()
             playWhenReady = true
         }
@@ -539,6 +566,24 @@ private fun ReadyPlayer(
                         delay(1_500L * retryCount)
                         runCatching { player.prepare() }
                     }
+                    return
+                }
+                // Tier-F fallback: codec / container / decoder
+                // failures usually mean Media3 + the device's
+                // native decoders can't chew through this exact
+                // mix of HEVC / DV / Atmos / MKV. The server's HLS
+                // remux pipeline (`/play/master.m3u8`) rewraps the
+                // stream into fragmented MP4 with AAC audio,
+                // sidestepping every one of those choke points.
+                // One shot per session — if THAT also fails we
+                // surface the error properly instead of looping.
+                if (!useRemuxFallback && studio.kahn.iris.tv.data.isRemuxableError(error)) {
+                    android.util.Log.i(
+                        "iris-core",
+                        "switching to server-side HLS remux after ${error.errorCodeName}",
+                    )
+                    fallbackResumeMs = player.currentPosition.coerceAtLeast(0L)
+                    useRemuxFallback = true
                     return
                 }
                 onPlayerError(message)
@@ -902,6 +947,23 @@ private fun ReadyPlayer(
             }
         }
 
+        // Tier-F overlay: when the error listener has swapped us
+        // onto the server's HLS remux, poll `/play/status` and
+        // surface the remuxer's progress so the user understands
+        // why playback stalled for a moment. The overlay hides
+        // automatically once the server reports `ready: true` —
+        // the player itself is already preparing the manifest by
+        // then so playback resumes on its own.
+        if (useRemuxFallback) {
+            Box(modifier = Modifier.align(Alignment.Center)) {
+                RemuxFallbackOverlay(
+                    container = container,
+                    infohash = infohash,
+                    fileIdx = fileIdx,
+                )
+            }
+        }
+
         if (playerEnded && nextEpisode == null) {
             Box(
                 modifier = Modifier
@@ -1204,6 +1266,102 @@ private fun stepFor(probeReady: Boolean, torrent: TorrentView?): Step {
         return Step(label, sub, pct.coerceIn(0f, 0.99f))
     }
     return Step("Reading media metadata…", "ffprobe scanning streams.", null)
+}
+
+/**
+ * Tier-F overlay shown while the server is rewrapping the source
+ * into HLS-fMP4 after a failed direct-stream attempt. Reuses the
+ * `/play/status` endpoint the web's Tier F gate already polls —
+ * same payload, same `reason` / `progress` semantics. Hides itself
+ * by returning an empty Surface once the remuxer reports
+ * `ready: true`; the AndroidView underneath is already loading the
+ * manifest by then and will start drawing frames within a beat.
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun RemuxFallbackOverlay(
+    container: AppContainer,
+    infohash: String,
+    fileIdx: Int,
+) {
+    var status by remember(infohash, fileIdx) {
+        mutableStateOf<studio.kahn.iris.tv.data.PlayStatus?>(null)
+    }
+    LaunchedEffect(infohash, fileIdx) {
+        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
+        val api = container.apiFor(url)
+        // 1.5 s cadence is the same the web client uses for the
+        // same endpoint — fast enough that the progress bar moves
+        // smoothly without hammering the server.
+        while (true) {
+            val res = runCatching { api.playStatus(infohash, fileIdx) }.getOrNull()
+            if (res != null) {
+                status = res
+                if (res.ready) break
+            }
+            kotlinx.coroutines.delay(1_500L)
+        }
+    }
+    val s = status
+    if (s != null && s.ready) {
+        // Don't render anything once the remux is ready — the
+        // AndroidView is already taking over.
+        return
+    }
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        colors = SurfaceDefaults.colors(
+            containerColor = Color.Black.copy(alpha = 0.85f),
+            contentColor = Color.White,
+        ),
+    ) {
+        Column(
+            Modifier.padding(horizontal = 32.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "Switching to remuxed stream",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+            )
+            val (label, pct) = when (s?.reason) {
+                "downloading" -> "Downloading source" to s.progress
+                "remuxing" -> "Remuxing on the server" to s.progress
+                else -> "Preparing" to null
+            }
+            Text(
+                label + (pct?.let { " · ${(it * 100).toInt()}%" } ?: "…"),
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.85f),
+            )
+            // Determinate progress bar when the server is feeding us
+            // a fraction; otherwise an indeterminate sliver so the
+            // overlay never freezes silent on a slow remuxer warm-up.
+            if (pct != null) {
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { pct.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(0.5f).height(4.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = Color.White.copy(alpha = 0.15f),
+                )
+            } else {
+                androidx.compose.material3.LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(0.5f).height(4.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = Color.White.copy(alpha = 0.15f),
+                )
+            }
+            s?.error?.let { err ->
+                Text(
+                    err,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
 }
 
 private fun buildPlaybackTitle(rawName: String?, episode: EpisodePoint?): String {

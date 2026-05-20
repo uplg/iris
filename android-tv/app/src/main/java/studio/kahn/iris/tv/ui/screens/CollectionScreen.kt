@@ -352,7 +352,7 @@ private suspend fun doGrabVariant(
     // The grab is always play-on-success on TV — the alternate
     // "Prepare" web button doesn't have a clean D-pad equivalent
     // and the user typically opens an episode to watch it.
-    onPlay(res.infohash, res.fileIdx.toInt())
+    onPlay(res.infohash, res.fileIdx)
 }
 
 /// Grab a full season pack. Calls the same per-episode endpoint

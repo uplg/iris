@@ -142,6 +142,32 @@ fun humanizePlaybackError(e: PlaybackException): Pair<String, Boolean> {
 }
 
 /**
+ * `true` when an `ExoPlayer` error is the kind a server-side HLS
+ * remux could plausibly fix. Covers every container / decoder /
+ * codec-capability failure: Media3's MKV demuxer choking on a
+ * malformed segment, the native HEVC decoder rejecting a
+ * Main10+DV profile combination, an Atmos JOC audio track the
+ * platform can't pass through, etc. The remux pipeline rewraps to
+ * fragmented MP4 and re-encodes the audio to AAC, which sidesteps
+ * every one of those choke points.
+ *
+ * Deliberately excludes network / I/O errors — those would fail
+ * the remux endpoint just as hard, and excludes the `AUDIO_TRACK_*`
+ * codes which are platform output-sink issues unrelated to the
+ * source format.
+ */
+fun isRemuxableError(e: PlaybackException): Boolean = when (e.errorCode) {
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+    PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+    PlaybackException.ERROR_CODE_DECODING_FAILED,
+    PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+    -> true
+    else -> false
+}
+
+/**
  * Build a `MediaItem` for the Iris `/stream` endpoint — the raw,
  * range-supported source bytes (MKV / MP4 / etc.) served as-is by
  * `iris-api`'s `stream_file` route.
