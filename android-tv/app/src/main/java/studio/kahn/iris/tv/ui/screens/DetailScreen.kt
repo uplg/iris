@@ -31,6 +31,7 @@ import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
@@ -137,10 +138,13 @@ fun DetailScreen(
             verticalArrangement = Arrangement.spacedBy(Spacing.lg),
         ) {
             val poster = tmdbPosterUrl(meta?.posterPath, "w500")
-            Card(
-                onClick = {},
+            // Non-clickable Surface — the poster has no useful tap
+            // action (the previous `onClick = {}` was a placeholder)
+            // but Card's default focus scale (~1.1×) was zooming
+            // the already-2:3 poster off-screen.
+            Surface(
                 modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f),
-                shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
+                shape = RoundedCornerShape(12.dp),
             ) {
                 val displayTitle = t.name ?: t.infohash.take(12)
                 if (poster != null) {
@@ -243,6 +247,7 @@ private fun FileRow(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().height(72.dp),
         shape = CardDefaults.shape(shape = RoundedCornerShape(8.dp)),
+        scale = CardDefaults.scale(focusedScale = 1f),
         colors = CardDefaults.colors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
             contentColor = MaterialTheme.colorScheme.onSurface,

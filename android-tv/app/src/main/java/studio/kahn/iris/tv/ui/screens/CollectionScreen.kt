@@ -505,19 +505,39 @@ private fun SeasonTabs(seasons: List<Int>, value: Int, onChange: (Int) -> Unit) 
     LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         items(seasons) { s ->
             val selected = s == value
+            // ClickableSurfaceDefaults.colors has FOUR slots — the
+            // resting `containerColor` we already set, but ALSO a
+            // `focusedContainerColor` that defaults to the theme's
+            // pale-on-light fallback. Without overriding it the
+            // unselected chip turned white-on-white the moment the
+            // D-pad landed on it; fix by giving every state an
+            // explicit colour. Same for `contentColor` so the text
+            // stays readable on every surface.
+            val resting = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.surfaceVariant
+            val focused = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+            val textOnResting = if (selected) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurface
+            val textOnFocused = MaterialTheme.colorScheme.onPrimary
             Surface(
                 onClick = { onChange(s) },
                 shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                // Disable the default focus scale — the tabs sit in a
+                // dense LazyRow and a 1.1× pop on focus shoves
+                // neighbours around.
+                scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
                 colors = ClickableSurfaceDefaults.colors(
-                    containerColor = if (selected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.surfaceVariant,
+                    containerColor = resting,
+                    focusedContainerColor = focused,
+                    pressedContainerColor = focused,
+                    contentColor = textOnResting,
+                    focusedContentColor = textOnFocused,
                 ),
             ) {
                 Text(
                     "Season $s",
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (selected) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                 )
             }
@@ -533,33 +553,28 @@ private fun EpisodeRow(
     onGrabVariant: (EpisodeVariant.Available) -> Unit,
 ) {
     val anyWatched = ep.variants.any { it is EpisodeVariant.Downloaded && it.watched }
-    Card(
-        // First downloaded variant wins the "tap the card" primary
-        // action — D-pad lands on the card, OK plays the dub the
-        // user already has. The per-variant chips below cover the
-        // alternate-language affordances explicitly.
-        onClick = {
-            val first = ep.variants.firstOrNull()
-            when (first) {
-                is EpisodeVariant.Downloaded -> onPlay(first.infohash, first.fileIdx)
-                is EpisodeVariant.Available -> onGrabVariant(first)
-                null -> {}
-            }
-        },
-        modifier = Modifier.fillMaxWidth(),
-        shape = CardDefaults.shape(shape = RoundedCornerShape(10.dp)),
-        colors = CardDefaults.colors(
+    // Layout mirrors `SeasonPackBanner` exactly (info column on the
+    // left with weight=1f, action buttons on the right inside a Row
+    // — fixed height container). The previous Column-of-Rows shape
+    // broke D-pad focus traversal on Compose-TV: arrivals from the
+    // LazyColumn didn't reach the chips below the header line.
+    // Same pattern, same focus behaviour the user already confirmed
+    // works for pack banners.
+    Surface(
+        modifier = Modifier.fillMaxWidth().height(72.dp),
+        shape = RoundedCornerShape(10.dp),
+        colors = SurfaceDefaults.colors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
             contentColor = MaterialTheme.colorScheme.onSurface,
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            focusedContentColor = MaterialTheme.colorScheme.onSurface,
         ),
     ) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
-            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = Spacing.lg, vertical = Spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
         ) {
             Row(
+                modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
@@ -584,11 +599,6 @@ private fun EpisodeRow(
                     }
                 }
             }
-            // Variant chip strip — one chip per (status, language).
-            // Clicking a downloaded chip plays it; clicking an
-            // available chip grabs that exact language. The row's
-            // own onClick mirrors the first chip so D-pad-OK on
-            // the card defaults to playing what the user has.
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 ep.variants.forEach { v ->
                     VariantChip(variant = v, onPlay = onPlay, onGrab = onGrabVariant)
@@ -611,6 +621,10 @@ private fun VariantChip(
                 onClick = { onPlay(variant.infohash, variant.fileIdx) },
                 shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                // Disable the default focused-scale pop — the chips
+                // sit in a dense row, a 1.1× zoom pushes neighbours
+                // off-screen on every D-pad move.
+                scale = ButtonDefaults.scale(focusedScale = 1f),
             ) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -625,27 +639,37 @@ private fun VariantChip(
             }
         }
         is EpisodeVariant.Available -> {
-            Surface(
+            // Same `Button` shape as the Downloaded chip so D-pad
+            // traversal is uniform across the row. Mixing a
+            // `Surface(onClick=…)` with a `Button` in the same
+            // Row used to block focus from descending onto either
+            // chip — Compose-TV's focus engine treats the two as
+            // separate focus contexts.
+            val meta = listOfNotNull(
+                variant.quality?.takeIf { it.isNotBlank() },
+                variant.seeders?.let { "${it}↑" },
+                variant.sizeBytes?.let { formatFileSize(it) },
+            ).joinToString(" · ")
+            Button(
                 onClick = { onGrab(variant) },
-                shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                colors = ClickableSurfaceDefaults.colors(
-                    containerColor = Color(0xFF10B981).copy(alpha = 0.15f),
-                    focusedContainerColor = Color(0xFF10B981).copy(alpha = 0.30f),
+                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                scale = ButtonDefaults.scale(focusedScale = 1f),
+                colors = ButtonDefaults.colors(
+                    // Emerald tone for "available" so it visually
+                    // reads different from the primary "Play"
+                    // chip even though the focus mechanics match.
+                    containerColor = Color(0xFF10B981).copy(alpha = 0.20f),
+                    focusedContainerColor = Color(0xFF10B981).copy(alpha = 0.55f),
                     contentColor = MaterialTheme.colorScheme.onSurface,
-                    focusedContentColor = MaterialTheme.colorScheme.onSurface,
+                    focusedContentColor = Color.White,
                 ),
             ) {
                 Row(
-                    Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     LanguageBadge(language = variant.language)
-                    val meta = listOfNotNull(
-                        variant.quality?.takeIf { it.isNotBlank() },
-                        variant.seeders?.let { "${it}↑" },
-                        variant.sizeBytes?.let { formatFileSize(it) },
-                    ).joinToString(" · ")
                     Text(
                         if (meta.isEmpty()) "Grab" else "Grab · $meta",
                         style = MaterialTheme.typography.labelMedium,
@@ -663,18 +687,16 @@ private fun SeasonPackBanner(
     onGrab: () -> Unit,
     onPrepare: () -> Unit,
 ) {
-    Card(
-        onClick = onGrab,
+    // Non-clickable container — the Prepare / Grab & play buttons
+    // inside need to be reachable by the D-pad. A clickable Card
+    // would grab focus first and the user could never land on the
+    // inner buttons.
+    Surface(
         modifier = Modifier.fillMaxWidth().height(88.dp),
-        shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
-        colors = CardDefaults.colors(
-            // Emerald-tinted surface to set it apart from regular
-            // episode rows. Stays high-contrast on either focus
-            // state because we keep the text on `onSurface`.
+        shape = RoundedCornerShape(12.dp),
+        colors = SurfaceDefaults.colors(
             containerColor = Color(0xFF10B981).copy(alpha = 0.18f),
             contentColor = MaterialTheme.colorScheme.onSurface,
-            focusedContainerColor = Color(0xFF10B981).copy(alpha = 0.32f),
-            focusedContentColor = MaterialTheme.colorScheme.onSurface,
         ),
     ) {
         Row(
@@ -726,11 +748,13 @@ private fun SeasonPackBanner(
                     onClick = onPrepare,
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                    scale = ButtonDefaults.scale(focusedScale = 1f),
                 ) { Text("Prepare") }
                 Button(
                     onClick = onGrab,
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                     contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                    scale = ButtonDefaults.scale(focusedScale = 1f),
                 ) { Text("Grab & play") }
             }
         }
@@ -749,6 +773,7 @@ private fun FileRow(file: FileEntry, onClick: () -> Unit) {
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().height(64.dp),
         shape = CardDefaults.shape(shape = RoundedCornerShape(8.dp)),
+        scale = CardDefaults.scale(focusedScale = 1f),
         colors = CardDefaults.colors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
             contentColor = MaterialTheme.colorScheme.onSurface,
