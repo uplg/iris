@@ -74,6 +74,16 @@ function apiSort(mode: SortMode): {
 import { formatRelative, formatSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+/** "S04E11" / "S04 pack" / "Season 4" depending on which parts the
+ *  SCENE parser extracted. Episode 0 is the in-band season-pack
+ *  sentinel — render it as "pack" rather than the meaningless E00. */
+function formatSceneMarker(season: number, episode: number | null | undefined): string {
+  const s = `S${String(season).padStart(2, "0")}`;
+  if (episode == null) return s;
+  if (episode === 0) return `${s} · Season pack`;
+  return `${s}E${String(episode).padStart(2, "0")}`;
+}
+
 const PAGE_SIZE = 25;
 
 function useDebounce<T>(value: T, delay = 300): T {
@@ -507,8 +517,27 @@ function ResultCard({
           </Badge>
         </div>
       </div>
-      <div className="grid gap-1">
-        <div className="line-clamp-2 text-sm font-medium leading-tight" title={result.title}>
+      <div className="grid gap-1.5">
+        {/* SCENE-parsed (S, E) up top — the most scannable piece of
+            metadata on a TV release. Users can spot their episode
+            without parsing the full release name with their eyes. */}
+        {result.parsed_season != null && (
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
+            {formatSceneMarker(result.parsed_season, result.parsed_episode)}
+          </div>
+        )}
+        {/* Title clamped to 3 lines to keep the grid visually
+            consistent (cards stay roughly the same height instead
+            of ballooning on long SCENE names). The S/E chip above
+            does the heavy lifting for "find my episode" scanning;
+            `title=` provides the full string on hover when the
+            user needs the remaining tokens. `break-words` keeps
+            dot-separated SCENE names from overflowing horizontally
+            on a narrow card. */}
+        <div
+          className="line-clamp-3 break-words text-sm font-medium leading-snug"
+          title={result.title}
+        >
           {result.title}
         </div>
         {(result.year || tmdbHitQ.data?.year) && (

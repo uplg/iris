@@ -268,6 +268,8 @@ impl C411 {
                 // time. The Torznab `into_search_result()` path
                 // does set this when it has one.
                 download_url: None,
+                parsed_season: None,
+                parsed_episode: None,
             };
             match kind {
                 MediaKind::Movie => movies.push(result),

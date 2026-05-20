@@ -244,6 +244,15 @@ export type SearchResult = {
    *  `"unknown"`. Drives the FR / EN / MULTi badge on result cards
    *  so anglophone users can spot Seedpool releases at a glance. */
   language?: string | null;
+  /** SCENE-parsed season number — server-side extract from the
+   *  release name. Lets the search card surface a compact "S04E11"
+   *  chip so users can spot their episode at a glance instead of
+   *  having to read the full release name. `null` for movies and
+   *  for releases the parser couldn't classify. */
+  parsed_season?: number | null;
+  /** SCENE-parsed episode number. `0` is the season-pack sentinel
+   *  (display as "Sxx pack" rather than "Sxx E00"). */
+  parsed_episode?: number | null;
 };
 
 export type MediaKind = "movie" | "tv";

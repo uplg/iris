@@ -153,6 +153,17 @@ pub struct SearchResult {
     /// (torr9's JSON API resolves per-id at grab time).
     #[serde(skip_serializing, default)]
     pub download_url: Option<String>,
+    /// SCENE-parsed season number from the release title. Lets the
+    /// web search grid surface a compact "S04E11" chip per card so
+    /// users can scan for their episode without opening every
+    /// preview. `None` when the parser saw no marker (movies,
+    /// season packs, exotic naming).
+    #[serde(default)]
+    pub parsed_season: Option<u32>,
+    /// SCENE-parsed episode number. Paired with `parsed_season`.
+    /// `Some(0)` is the season-pack sentinel from the parser.
+    #[serde(default)]
+    pub parsed_episode: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

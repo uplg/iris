@@ -516,6 +516,10 @@ impl RawItem {
             // `link_cache` keeps working as the hot path; this is
             // the durability backup.
             download_url: self.download_url,
+            // Search route fills these via ranking::rerank_results;
+            // providers always emit None.
+            parsed_season: None,
+            parsed_episode: None,
         }
     }
 }

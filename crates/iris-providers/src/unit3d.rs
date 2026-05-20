@@ -729,6 +729,8 @@ impl TorrentEnvelope {
             // a grab survives a server restart even if the search
             // page no longer lists this release.
             download_url: Some(attrs.download_link),
+            parsed_season: None,
+            parsed_episode: None,
         }
     }
 

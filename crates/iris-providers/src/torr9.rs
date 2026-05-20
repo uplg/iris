@@ -558,6 +558,8 @@ impl FeaturedItem {
             // ahead of time, no in-memory cache to lose at
             // restart.
             download_url: None,
+            parsed_season: None,
+            parsed_episode: None,
         }
     }
 }
@@ -712,6 +714,8 @@ impl Torrent {
             // ahead of time, no in-memory cache to lose at
             // restart.
             download_url: None,
+            parsed_season: None,
+            parsed_episode: None,
         }
     }
 }

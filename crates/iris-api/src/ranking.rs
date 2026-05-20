@@ -136,6 +136,13 @@ pub fn rerank_results(agg: &mut AggregatedResults, q: &SearchQuery, lib: &Librar
             }
         }
 
+        // Expose the parsed (season, episode) on the result so the
+        // web search grid can render a compact "S04E11" chip per
+        // card without re-running the parser client-side. We've
+        // already parsed once for ranking — share the work.
+        r.parsed_season = result_season;
+        r.parsed_episode = result_episode;
+
         let score = compute_score(
             q,
             &r,
@@ -267,6 +274,8 @@ mod tests {
             library_file_idx: None,
             language: None,
             download_url: None,
+            parsed_season: None,
+            parsed_episode: None,
         }
     }
 
