@@ -139,6 +139,19 @@ pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Err
     .await
 }
 
+/// Infohashes of every torrent still on disk (not soft-deleted).
+/// Search dedup uses this to flag a result as "already in library"
+/// **only** when it is the exact same torrent — a different release
+/// (or language) of the same episode has a different infohash and must
+/// stay grabbable.
+pub async fn list_active_infohashes(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT infohash FROM torrents WHERE deleted_at IS NULL")
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().map(|(h,)| h).collect())
+}
+
 pub async fn soft_delete(
     pool: &SqlitePool,
     id: TorrentId,

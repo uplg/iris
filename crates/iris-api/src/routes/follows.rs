@@ -27,7 +27,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use chrono::{DateTime, Utc};
-use iris_media::filename::series_key;
+use iris_media::filename::{Language, detect_language, series_key};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -649,6 +649,11 @@ async fn grab_episode(
     let identity = resolve_followish(&state, user.id, id)
         .await
         .ok_or(ApiError::NotFound)?;
+    // Auto-continuation ("prepare next episode"): keep the series in
+    // its established language instead of defaulting to English. We
+    // grab in the dominant owned language, falling back gracefully so
+    // the next episode still downloads if that language has no offer.
+    let dominant = dominant_owned_language(&state, &identity.normalized_name).await;
     grab_episode_core(
         &state,
         GrabEpisodeRequest {
@@ -658,9 +663,7 @@ async fn grab_episode(
             tmdb_id: identity.tmdb_id,
             season,
             episode,
-            // Legacy APK 0.3.1 path — no language picker in that
-            // build, so let the core pick whatever's there.
-            language: None,
+            language: continuation_pref(dominant),
         },
     )
     .await
@@ -740,13 +743,129 @@ pub(crate) struct GrabEpisodeRequest<'a> {
     pub tmdb_id: Option<i64>,
     pub season: i64,
     pub episode: i64,
-    /// When the user clicked a specific language badge, the grab
-    /// path commits to that language: `best_available` filters
-    /// strictly, and the live indexer fallback only accepts
-    /// matching releases. `None` for legacy callers (APK 0.3.1's
-    /// follows path) — they get the historical "best by seeders,
-    /// any language" behaviour.
-    pub language: Option<&'a str>,
+    /// How the grab path treats language — see [`LangSel`].
+    pub language: LangSel,
+}
+
+/// Language selection strategy for a grab.
+///
+/// The three modes encode the three ways a grab is triggered, and they
+/// behave differently so each one stays honest:
+///
+/// * [`LangSel::Any`] — no preference (first ingest of a series, or the
+///   legacy APK 0.3.1 follows path with no picker). Take the best offer
+///   regardless of language.
+/// * [`LangSel::Exact`] — the user clicked a specific language badge in
+///   the library. That language or nothing: we never silently hand back
+///   a different language. The "Play existing" short-circuit only fires
+///   on an owned file in *exactly* that language, and the offer/indexer
+///   pick filters strictly. (Fixes: clicking FR opening the owned EN.)
+/// * [`LangSel::Prefer`] — auto-continuation ("prepare next episode").
+///   Try the languages in order (the series' established language
+///   first), then fall back to anything available so the next episode
+///   still downloads instead of dead-ending or grabbing EN blindly.
+#[derive(Debug, Clone)]
+pub(crate) enum LangSel {
+    Any,
+    Exact(Language),
+    Prefer(Vec<Language>),
+}
+
+impl LangSel {
+    /// Build from an explicit UI language badge: `Some("french")` ⇒
+    /// strict `Exact(French)`, `None` ⇒ `Any`. Used by the library grab
+    /// button so the chosen language is always honoured.
+    pub(crate) fn from_badge(lang: Option<&str>) -> Self {
+        match lang {
+            Some(l) => LangSel::Exact(Language::parse_tag(l)),
+            None => LangSel::Any,
+        }
+    }
+}
+
+/// Pick one item from `items` (each tagged with its language) per the
+/// selection strategy. `items` should already be in preference order
+/// for ties (e.g. seeders-desc) so "first match" is also "best match".
+fn select_by_lang<T: Clone>(items: &[(Language, T)], sel: &LangSel) -> Option<T> {
+    match sel {
+        LangSel::Any => items.first().map(|(_, t)| t.clone()),
+        LangSel::Exact(l) => items.iter().find(|(lang, _)| lang == l).map(|(_, t)| t.clone()),
+        LangSel::Prefer(order) => order
+            .iter()
+            .find_map(|w| items.iter().find(|(lang, _)| lang == w))
+            .or_else(|| items.first())
+            .map(|(_, t)| t.clone()),
+    }
+}
+
+/// Coarse language of an `available_episodes` offer row.
+fn offer_language(r: &iris_db::available_episodes::AvailableEpisodeRow) -> Language {
+    Language::parse_tag(r.language.as_deref().unwrap_or(""))
+}
+
+/// Resolve the language of an on-disk torrent: SCENE name first, the
+/// source provider's `default_language` as fallback. Mirrors
+/// `library::resolve_torrent_language` so the grab path, the collection
+/// view and search all agree on a file's language.
+async fn resolve_owned_language(state: &AppState, infohash: &str) -> Language {
+    let Some(t) = iris_db::torrents::find_by_infohash(state.db(), infohash)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return Language::Unknown;
+    };
+    let detected = detect_language(&t.name);
+    if detected != Language::Unknown {
+        return detected;
+    }
+    t.source_provider
+        .as_deref()
+        .and_then(|p| state.providers().default_language(p))
+        .map_or(Language::Unknown, Language::parse_tag)
+}
+
+/// The series' established language: the most-owned language across its
+/// downloaded episodes. Drives "prepare next episode" so a French
+/// series keeps going in French instead of defaulting to English.
+/// Priority on a tie / no data follows the household rule "majority FR,
+/// else EN, else MULTI".
+async fn dominant_owned_language(state: &AppState, normalized_name: &str) -> Language {
+    let files = iris_db::episode_files::list_for_normalized(state.db(), normalized_name)
+        .await
+        .unwrap_or_default();
+    let (mut fr, mut en, mut multi) = (0u32, 0u32, 0u32);
+    for f in &files {
+        match resolve_owned_language(state, &f.infohash).await {
+            Language::French => fr += 1,
+            Language::English => en += 1,
+            Language::Multi => multi += 1,
+            Language::Unknown => {}
+        }
+    }
+    // "Majority FR ⇒ FR, else EN, else MULTI": French only on a strict
+    // plurality; otherwise English wins (including ties and the
+    // nothing-owned default), with Multi as the last resort.
+    if fr > en && fr > multi {
+        Language::French
+    } else if en >= multi {
+        Language::English
+    } else {
+        Language::Multi
+    }
+}
+
+/// Build the ordered language preference for an auto-continuation grab:
+/// the series' established language first, then EN, MULTI, FR as
+/// graceful fallbacks (deduped, first occurrence wins).
+fn continuation_pref(dominant: Language) -> LangSel {
+    let mut order = vec![dominant];
+    for l in [Language::English, Language::Multi, Language::French] {
+        if !order.contains(&l) {
+            order.push(l);
+        }
+    }
+    LangSel::Prefer(order)
 }
 
 pub(crate) async fn grab_episode_core(
@@ -779,7 +898,13 @@ pub(crate) async fn grab_episode_core(
     )
     .await;
 
-    if let Some(existing) = find_episode_file(state.db(), normalized_name, season, episode).await? {
+    // Short-circuit only when we already hold the episode in the
+    // requested language. An explicit FR badge click must NOT return
+    // the owned EN file — `find_episode_file` honours `language` so the
+    // grab proceeds and fetches the FR release instead.
+    if let Some(existing) =
+        find_episode_file(state, normalized_name, season, episode, &language).await?
+    {
         return Ok(GrabResponse {
             infohash: existing.infohash,
             file_idx: existing.file_idx,
@@ -788,18 +913,18 @@ pub(crate) async fn grab_episode_core(
     }
 
     // Resolution order:
-    //   1. Cached singleton for exact (S, E, language).
+    //   1. Cached singleton for the requested (S, E) honouring `language`.
     //   2. Cached season pack covering the requested season. The
     //      pack ingest path runs to completion, then we SCENE-parse
     //      the resulting file list to extract the leaf matching
     //      (S, E) and return its (infohash, file_idx).
     //   3. Live indexer query (singleton-only — pack discovery
     //      lives on the periodic scheduler, not on the grab path).
-    let pack_pick = if best_available(state.db(), normalized_name, season, episode, language)
+    let pack_pick = if best_available(state.db(), normalized_name, season, episode, &language)
         .await?
         .is_none()
     {
-        find_pack_offer(state.db(), normalized_name, season, language).await?
+        find_pack_offer(state.db(), normalized_name, season, &language).await?
     } else {
         None
     };
@@ -815,14 +940,14 @@ pub(crate) async fn grab_episode_core(
         )
         .await;
     }
-    let pick = match best_available(state.db(), normalized_name, season, episode, language).await?
+    let pick = match best_available(state.db(), normalized_name, season, episode, &language).await?
     {
         Some(p) => p,
         None => find_via_indexer_for_identity(
             state,
             normalized_name,
             display_title,
-            language,
+            &language,
             season,
             episode,
         )
@@ -937,16 +1062,32 @@ async fn finalise_grabbed_episode(
     Ok(())
 }
 
+/// Look for the requested episode already on disk, honouring the
+/// language selection. `LangSel::Exact(FR)` matches only an owned FR
+/// file — so an explicit FR grab never short-circuits to the owned EN
+/// (the user's "clicking FR opens English" bug). `Any` keeps the legacy
+/// "first file wins" behaviour and skips the per-file language probe.
 async fn find_episode_file(
-    pool: &iris_db::SqlitePool,
+    state: &AppState,
     normalized_name: &str,
     season: i64,
     episode: i64,
+    sel: &LangSel,
 ) -> Result<Option<iris_db::episode_files::EpisodeFileRow>, sqlx::Error> {
-    let rows = iris_db::episode_files::list_for_normalized(pool, normalized_name).await?;
-    Ok(rows
+    let rows = iris_db::episode_files::list_for_normalized(state.db(), normalized_name).await?;
+    let candidates: Vec<_> = rows
         .into_iter()
-        .find(|r| r.season == season && r.episode == episode))
+        .filter(|r| r.season == season && r.episode == episode)
+        .collect();
+    if matches!(sel, LangSel::Any) {
+        return Ok(candidates.into_iter().next());
+    }
+    let mut tagged = Vec::with_capacity(candidates.len());
+    for c in candidates {
+        let lang = resolve_owned_language(state, &c.infohash).await;
+        tagged.push((lang, c));
+    }
+    Ok(select_by_lang(&tagged, sel))
 }
 
 struct PickedAvailability {
@@ -980,26 +1121,20 @@ async fn best_available(
     normalized_name: &str,
     season: i64,
     episode: i64,
-    language: Option<&str>,
+    sel: &LangSel,
 ) -> Result<Option<PickedAvailability>, sqlx::Error> {
     let rows = iris_db::available_episodes::list_best_for_series(pool, normalized_name).await?;
-    let same_se: Vec<_> = rows
+    // `list_best_for_series` is best-by-seeders per (S, E, language) and
+    // already ordered, so "first match" is also "best match". `Exact`
+    // never substitutes another language (a clicked FR badge that has
+    // no FR offer 404s rather than grabbing EN); `Prefer` walks the
+    // continuation order and finally accepts anything available.
+    let tagged: Vec<(Language, iris_db::available_episodes::AvailableEpisodeRow)> = rows
         .into_iter()
         .filter(|r| r.season == season && r.episode == episode)
+        .map(|r| (offer_language(&r), r))
         .collect();
-    // Honour the caller's language hint exactly when set. We don't
-    // fall back to a different language on miss — if the user
-    // clicked an FR badge there must be an FR offer; falling back
-    // to EN would re-introduce the cross-language download we
-    // explicitly designed out of the scheduler. The handler
-    // surfaces 404 in that case.
-    let picked = match language {
-        Some(lang) => same_se
-            .into_iter()
-            .find(|r| r.language.as_deref() == Some(lang)),
-        None => same_se.into_iter().next(),
-    };
-    Ok(picked.map(|r| PickedAvailability {
+    Ok(select_by_lang(&tagged, sel).map(|r| PickedAvailability {
         magnet: r.magnet,
         indexer_provider: r.indexer_provider,
         indexer_torrent_id: r.indexer_torrent_id,
@@ -1137,23 +1272,23 @@ fn build_reprime_query(reprime: &ReprimeHint<'_>) -> iris_core::search::SearchQu
 }
 
 /// Look up a cached season pack that can satisfy a (season, episode)
-/// request when no singleton offer exists. Honours `language` when
-/// set — same strict-match contract as the singleton path; the user
-/// who clicked an "FR" badge mustn't be dropped into an English pack.
+/// request when no singleton offer exists. Applies the same language
+/// selection as the singleton path: `Exact` won't drop an "FR" click
+/// into an English pack; `Prefer` walks the continuation order.
 async fn find_pack_offer(
     pool: &iris_db::SqlitePool,
     normalized_name: &str,
     season: i64,
-    language: Option<&str>,
+    sel: &LangSel,
 ) -> Result<Option<PickedAvailability>, sqlx::Error> {
-    let pack = iris_db::available_episodes::find_pack_for_season(
-        pool,
-        normalized_name,
-        season,
-        language,
-    )
-    .await?;
-    Ok(pack.map(|p| PickedAvailability {
+    let packs = iris_db::available_episodes::list_season_packs_for_series(pool, normalized_name)
+        .await?;
+    let tagged: Vec<(Language, iris_db::available_episodes::AvailableEpisodeRow)> = packs
+        .into_iter()
+        .filter(|p| p.season == season)
+        .map(|p| (offer_language(&p), p))
+        .collect();
+    Ok(select_by_lang(&tagged, sel).map(|p| PickedAvailability {
         magnet: p.magnet,
         indexer_provider: p.indexer_provider,
         indexer_torrent_id: p.indexer_torrent_id,
@@ -1252,7 +1387,7 @@ async fn find_via_indexer_for_identity(
     state: &AppState,
     normalized_name: &str,
     display_title: &str,
-    language: Option<&str>,
+    sel: &LangSel,
     season: i64,
     episode: i64,
 ) -> Result<Option<PickedAvailability>, ApiError> {
@@ -1273,24 +1408,22 @@ async fn find_via_indexer_for_identity(
         year: None,
     };
     let agg = state.providers().search_all(&query).await;
-    // Language gate when the caller asked for a specific language
-    // (UI clicked an FR / EN badge). Without a hint everything goes
-    // through — APK 0.3.1 follows path lands here and doesn't ship
-    // the new param.
-    let target_lang = language.map(iris_media::filename::Language::parse_tag);
-    let mut sorted: Vec<_> = agg
-        .results
+    // Apply the same language selection as the cached paths. Sort by
+    // seeders first so "first match per language" is the best one;
+    // `Exact` keeps only the requested language (404 if none — a
+    // clicked FR badge mustn't pull EN), `Prefer` walks the
+    // continuation order then accepts the top result, `Any` takes the
+    // most-seeded.
+    let mut results = agg.results;
+    results.sort_by_key(|r| std::cmp::Reverse(r.seeders.unwrap_or(0)));
+    let tagged: Vec<(Language, iris_core::search::SearchResult)> = results
         .into_iter()
-        .filter(|r| match target_lang {
-            Some(want) => iris_media::filename::detect_language(&r.title) == want,
-            None => true,
-        })
+        .map(|r| (detect_language(&r.title), r))
         .collect();
-    sorted.sort_by_key(|r| std::cmp::Reverse(r.seeders.unwrap_or(0)));
-    let Some(best) = sorted.into_iter().next() else {
+    let Some(best) = select_by_lang(&tagged, sel) else {
         return Ok(None);
     };
-    let lang = iris_media::filename::detect_language(&best.title);
+    let lang = detect_language(&best.title);
     let _ = iris_db::available_episodes::upsert(
         state.db(),
         iris_db::available_episodes::UpsertAvailableEpisode {

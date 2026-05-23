@@ -631,7 +631,7 @@ async fn grab_collection_episode(
             tmdb_id: collection.tmdb_id,
             season,
             episode,
-            language: q.language.as_deref(),
+            language: crate::routes::follows::LangSel::from_badge(q.language.as_deref()),
         },
     )
     .await?;

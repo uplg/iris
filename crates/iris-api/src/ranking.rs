@@ -30,7 +30,7 @@
 //! "Smallest" / "Title", we honour that and skip the relevance
 //! re-sort — the dedup flag still gets set regardless.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use iris_core::search::{SearchQuery, SearchResult};
 use iris_db::episode_files::LibraryEpisodeKey;
@@ -38,53 +38,88 @@ use iris_media::filename::{parse, series_key};
 use iris_providers::registry::{AggregatedResults, ParsedQueryInfo};
 use sqlx::SqlitePool;
 
-/// One on-disk episode the dedup logic can match against.
-#[derive(Debug, Clone)]
-struct LibraryHit {
-    infohash: String,
-    file_idx: u32,
-}
-
-/// `(normalized_collection_title, season, episode) → (infohash, file_idx)`
-/// index of every episode currently on disk. Built once per search
-/// request from `episode_files JOIN collections`. The household scale
-/// keeps this in the low thousands at most so a `HashMap` is plenty.
+/// Identity-level "what's already on disk" index for search dedup.
+///
+/// Dedup is keyed strictly on **infohash** — a result is "already in
+/// library" only when it is the *exact same torrent* we already hold.
+/// A different release group, resolution, or language of the same
+/// episode is a different infohash and stays fully grabbable. (We
+/// deliberately do NOT dedup on `(title, season, episode)`: that masked
+/// an FR release because the EN one was owned, blocking the download —
+/// the exact bug this index was reworked to fix.)
+///
+/// `file_idx_by_infohash` is a best-effort `infohash → playable file`
+/// map drawn from `episode_files`, so the UI's "Play existing" button
+/// can deep-link straight into the file. Absent for movies / packs with
+/// no episode-file row — the frontend then falls back to the preview
+/// dialog. Built once per search request; household scale keeps it tiny.
 #[derive(Debug, Default)]
 pub struct LibraryIndex {
-    by_key: HashMap<(String, u32, u32), LibraryHit>,
+    owned_infohashes: HashSet<String>,
+    file_idx_by_infohash: HashMap<String, u32>,
 }
 
 impl LibraryIndex {
     pub async fn load(pool: &SqlitePool) -> Result<Self, sqlx::Error> {
-        let rows = iris_db::episode_files::list_library_keys(pool).await?;
-        Ok(Self::from_rows(rows))
+        let infohashes = iris_db::torrents::list_active_infohashes(pool).await?;
+        let keys = iris_db::episode_files::list_library_keys(pool).await?;
+        Ok(Self::build(infohashes, keys))
     }
 
     pub fn empty() -> Self {
         Self::default()
     }
 
-    fn from_rows(rows: Vec<LibraryEpisodeKey>) -> Self {
-        let mut by_key = HashMap::with_capacity(rows.len());
-        for r in rows {
-            // Season-pack rows (episode == 0) shouldn't dedup
-            // single-episode searches — keep them out of the index.
-            if r.season >= 0 && r.episode > 0 && r.file_idx >= 0 {
-                by_key.insert(
-                    (r.normalized_title, r.season as u32, r.episode as u32),
-                    LibraryHit {
-                        infohash: r.infohash,
-                        file_idx: r.file_idx as u32,
-                    },
-                );
+    fn build(infohashes: Vec<String>, keys: Vec<LibraryEpisodeKey>) -> Self {
+        let owned_infohashes: HashSet<String> =
+            infohashes.into_iter().map(|h| h.to_ascii_lowercase()).collect();
+        let mut file_idx_by_infohash = HashMap::new();
+        for k in keys {
+            if k.file_idx < 0 {
+                continue;
             }
+            // First episode-file wins; any playable index into the
+            // owned torrent is fine for the "Play existing" deep link.
+            file_idx_by_infohash
+                .entry(k.infohash.to_ascii_lowercase())
+                .or_insert(k.file_idx as u32);
         }
-        Self { by_key }
+        Self {
+            owned_infohashes,
+            file_idx_by_infohash,
+        }
     }
 
-    fn lookup(&self, title_norm: &str, season: u32, episode: u32) -> Option<&LibraryHit> {
-        self.by_key.get(&(title_norm.to_string(), season, episode))
+    /// `Some(match)` when `infohash` is an owned torrent (its
+    /// `file_idx` carries a playable file index when one is known);
+    /// `None` when we don't hold this exact torrent.
+    fn lookup(&self, infohash: &str) -> Option<LibraryMatch> {
+        let h = infohash.to_ascii_lowercase();
+        self.owned_infohashes.contains(&h).then(|| LibraryMatch {
+            file_idx: self.file_idx_by_infohash.get(&h).copied(),
+        })
     }
+}
+
+/// A search result matched an owned torrent by infohash. `file_idx` is
+/// the playable file for the "Play existing" deep link, when known.
+#[derive(Debug, Clone, Copy)]
+struct LibraryMatch {
+    file_idx: Option<u32>,
+}
+
+/// Extract a lowercase hex (40-char v1) btih from a magnet URI's
+/// `xt=urn:btih:` parameter. Returns `None` for base32 / v2 hashes —
+/// we only dedup when we can compare like-for-like with the hex
+/// infohash librqbit stores.
+fn infohash_from_magnet(magnet: &str) -> Option<String> {
+    let lower = magnet.to_ascii_lowercase();
+    let start = lower.find("xt=urn:btih:")? + "xt=urn:btih:".len();
+    let hash: String = lower[start..]
+        .chars()
+        .take_while(|c| *c != '&')
+        .collect();
+    (hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit())).then_some(hash)
 }
 
 /// Project the parsed-query summary the frontend renders as a banner
@@ -122,17 +157,18 @@ pub fn rerank_results(agg: &mut AggregatedResults, q: &SearchQuery, lib: &Librar
         let result_episode = parsed.as_ref().and_then(|p| p.episode);
         let result_year = parsed.as_ref().and_then(|p| p.year).or(r.year);
 
-        if let (Some(t), Some(s), Some(e)) = (result_title.as_deref(), result_season, result_episode)
-        {
-            // episode == 0 is the in-band season-pack sentinel from
-            // the SCENE parser — never let that hit dedup, otherwise
-            // an S04 pack hides every S04Exx single-episode search.
-            if e > 0 {
-                if let Some(hit) = lib.lookup(t, s, e) {
-                    r.already_in_library = true;
-                    r.library_infohash = Some(hit.infohash.clone());
-                    r.library_file_idx = Some(hit.file_idx);
-                }
+        // Dedup is infohash-only: flag the result solely when it is the
+        // exact torrent already on disk. A different release/language of
+        // the same episode is a distinct infohash and stays grabbable.
+        let result_infohash = r
+            .infohash
+            .clone()
+            .or_else(|| r.magnet.as_deref().and_then(infohash_from_magnet));
+        if let Some(ih) = result_infohash {
+            if let Some(m) = lib.lookup(&ih) {
+                r.already_in_library = true;
+                r.library_infohash = Some(ih);
+                r.library_file_idx = m.file_idx;
             }
         }
 
@@ -279,6 +315,29 @@ mod tests {
         }
     }
 
+    fn with_infohash(mut r: SearchResult, ih: &str) -> SearchResult {
+        r.infohash = Some(ih.into());
+        r
+    }
+
+    /// Build a `LibraryIndex` from owned infohashes plus `(infohash,
+    /// file_idx)` episode-file rows.
+    fn lib_with(infohashes: &[&str], files: &[(&str, i64)]) -> LibraryIndex {
+        LibraryIndex::build(
+            infohashes.iter().map(|s| (*s).to_string()).collect(),
+            files
+                .iter()
+                .map(|(ih, idx)| LibraryEpisodeKey {
+                    normalized_title: String::new(),
+                    season: 0,
+                    episode: 0,
+                    infohash: (*ih).to_string(),
+                    file_idx: *idx,
+                })
+                .collect(),
+        )
+    }
+
     fn mk_query(q: &str, season: Option<u32>, episode: Option<u32>) -> SearchQuery {
         SearchQuery {
             q: q.into(),
@@ -338,11 +397,11 @@ mod tests {
     }
 
     #[test]
-    fn dedup_flags_and_demotes_owned_episode() {
-        // User searches the whole season; library has S04E11. The
-        // S04E11 candidate must be flagged (with the library infohash
-        // attached for "Play existing" UI), and a fresh S04E12 wins
-        // the #1 spot because it isn't demoted.
+    fn dedup_flags_and_demotes_owned_torrent() {
+        // User searches the whole season; library holds the exact
+        // S04E11 torrent (infohash "abc"). That candidate is flagged
+        // (with the library infohash + file_idx for "Play existing"),
+        // and a fresh S04E12 — a torrent we don't own — wins #1.
         let q = SearchQuery {
             q: "classroom of the elite S04".into(),
             page: None,
@@ -355,26 +414,26 @@ mod tests {
             episode: None,
             year: None,
         };
-        let owned_e11 = mk_result(
-            "Classroom.of.the.Elite.S04E11.MULTi.1080p.WEB.AAC.x264-Tsundere-Raws",
-            120,
-            1.0,
-            Some(MediaKind::Tv),
+        let owned_e11 = with_infohash(
+            mk_result(
+                "Classroom.of.the.Elite.S04E11.MULTi.1080p.WEB.AAC.x264-Tsundere-Raws",
+                120,
+                1.0,
+                Some(MediaKind::Tv),
+            ),
+            "abc",
         );
-        let fresh_e12 = mk_result(
-            "Classroom.of.the.Elite.S04E12.VOSTFR.1080p.WEBRip.x265-TLC",
-            40,
-            1.2,
-            Some(MediaKind::Tv),
+        let fresh_e12 = with_infohash(
+            mk_result(
+                "Classroom.of.the.Elite.S04E12.VOSTFR.1080p.WEBRip.x265-TLC",
+                40,
+                1.2,
+                Some(MediaKind::Tv),
+            ),
+            "xyz",
         );
 
-        let lib = LibraryIndex::from_rows(vec![LibraryEpisodeKey {
-            normalized_title: series_key("classroom of the elite"),
-            season: 4,
-            episode: 11,
-            infohash: "abc".into(),
-            file_idx: 0,
-        }]);
+        let lib = lib_with(&["abc"], &[("abc", 3)]);
         let mut agg = AggregatedResults {
             results: vec![owned_e11, fresh_e12],
             ..Default::default()
@@ -383,24 +442,33 @@ mod tests {
 
         assert!(
             agg.results[0].title.contains("S04E12"),
-            "fresh episode should outrank the demoted owned one",
+            "un-owned episode should outrank the demoted owned one",
         );
         let owned = agg
             .results
             .iter()
             .find(|r| r.title.contains("S04E11"))
             .expect("owned episode still present");
-        assert!(owned.already_in_library, "owned episode must be flagged");
+        assert!(owned.already_in_library, "owned torrent must be flagged");
         assert_eq!(owned.library_infohash.as_deref(), Some("abc"));
+        assert_eq!(owned.library_file_idx, Some(3));
+        let fresh = agg
+            .results
+            .iter()
+            .find(|r| r.title.contains("S04E12"))
+            .unwrap();
+        assert!(
+            !fresh.already_in_library,
+            "a torrent we don't hold must stay grabbable",
+        );
     }
 
     #[test]
-    fn dedup_flags_every_release_of_same_episode() {
-        // Searching the exact episode the user already has: every
-        // candidate parses to the same (title, S, E), so every
-        // candidate gets flagged. The ranking falls back to quality
-        // (seeders/√size) — UI is responsible for showing "Play
-        // existing" on the row with `library_infohash`.
+    fn dedup_flags_only_the_exact_owned_torrent() {
+        // Regression: owning S04E11 in MULTi must NOT flag a *different*
+        // release (here a VOSTFR rip with its own infohash) of the same
+        // episode. Flagging it would block grabbing the FR version —
+        // the exact bug the infohash-only dedup fixes.
         let q = SearchQuery {
             q: "classroom S04E11".into(),
             page: None,
@@ -413,52 +481,91 @@ mod tests {
             episode: Some(11),
             year: None,
         };
-        let r1 = mk_result(
-            "Classroom.of.the.Elite.S04E11.MULTi.1080p.WEB.AAC.x264-Tsundere-Raws",
-            120,
-            1.0,
-            Some(MediaKind::Tv),
+        let owned = with_infohash(
+            mk_result(
+                "Classroom.of.the.Elite.S04E11.MULTi.1080p.WEB.AAC.x264-Tsundere-Raws",
+                120,
+                1.0,
+                Some(MediaKind::Tv),
+            ),
+            "owned-multi",
         );
-        let r2 = mk_result(
-            "Classroom.of.the.Elite.S04E11.VOSTFR.1080p.WEBRip.x265-TLC",
-            40,
-            1.2,
-            Some(MediaKind::Tv),
+        let other_release = with_infohash(
+            mk_result(
+                "Classroom.of.the.Elite.S04E11.VOSTFR.1080p.WEBRip.x265-TLC",
+                40,
+                1.2,
+                Some(MediaKind::Tv),
+            ),
+            "other-fr",
         );
-        let lib = LibraryIndex::from_rows(vec![LibraryEpisodeKey {
-            normalized_title: series_key("classroom of the elite"),
-            season: 4,
-            episode: 11,
-            infohash: "abc".into(),
-            file_idx: 0,
-        }]);
+        let lib = lib_with(&["owned-multi"], &[("owned-multi", 0)]);
         let mut agg = AggregatedResults {
-            results: vec![r1, r2],
+            results: vec![owned, other_release],
             ..Default::default()
         };
         rerank_results(&mut agg, &q, &lib);
-        assert!(agg.results.iter().all(|r| r.already_in_library));
+
+        let owned = agg
+            .results
+            .iter()
+            .find(|r| r.infohash.as_deref() == Some("owned-multi"))
+            .unwrap();
+        assert!(owned.already_in_library, "the exact owned torrent is flagged");
+        let other = agg
+            .results
+            .iter()
+            .find(|r| r.infohash.as_deref() == Some("other-fr"))
+            .unwrap();
         assert!(
-            agg.results
-                .iter()
-                .all(|r| r.library_infohash.as_deref() == Some("abc")),
-            "every candidate points at the same on-disk infohash",
+            !other.already_in_library,
+            "a different release of the same episode stays grabbable",
         );
     }
 
     #[test]
-    fn season_pack_is_not_indexed_for_dedup() {
-        // A library-side season pack (episode == 0 sentinel) must NOT
-        // mask a single-episode search — only real episodes hit the
-        // dedup map.
-        let lib = LibraryIndex::from_rows(vec![LibraryEpisodeKey {
-            normalized_title: series_key("squid game"),
-            season: 1,
-            episode: 0,
-            infohash: "pack".into(),
-            file_idx: 0,
-        }]);
-        assert!(lib.lookup("squid game", 1, 5).is_none());
+    fn dedup_matches_infohash_derived_from_magnet() {
+        // Results that ship only a magnet (no explicit infohash field)
+        // still dedup against the owned set via the magnet's btih.
+        let hash = "0123456789abcdef0123456789abcdef01234567";
+        let mut r = mk_result(
+            "Show.Name.S01E01.MULTi.1080p.WEB.x264-GRP",
+            10,
+            1.0,
+            Some(MediaKind::Tv),
+        );
+        r.magnet = Some(format!("magnet:?xt=urn:btih:{}&dn=Show", hash.to_uppercase()));
+        let lib = lib_with(&[hash], &[]);
+        let mut agg = AggregatedResults {
+            results: vec![r],
+            ..Default::default()
+        };
+        rerank_results(&mut agg, &mk_query("show S01E01", Some(1), Some(1)), &lib);
+        assert!(agg.results[0].already_in_library);
+        assert_eq!(agg.results[0].library_file_idx, None, "no episode-file row → no deep link");
+    }
+
+    #[test]
+    fn lookup_matches_only_owned_infohash() {
+        let lib = lib_with(&["have"], &[("have", 2)]);
+        let m = lib.lookup("HAVE").expect("owned, case-insensitive");
+        assert_eq!(m.file_idx, Some(2));
+        assert!(lib.lookup("missing").is_none());
+    }
+
+    #[test]
+    fn infohash_from_magnet_extracts_hex_btih() {
+        let hex = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            infohash_from_magnet(&format!("magnet:?xt=urn:btih:{}&dn=x", hex.to_uppercase())),
+            Some(hex.to_string()),
+        );
+        // base32 btih (32 chars) isn't comparable to stored hex → None.
+        assert_eq!(
+            infohash_from_magnet("magnet:?xt=urn:btih:MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U"),
+            None,
+        );
+        assert_eq!(infohash_from_magnet("not a magnet"), None);
     }
 
     #[test]
