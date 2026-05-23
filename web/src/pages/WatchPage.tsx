@@ -57,6 +57,15 @@ export function WatchPage() {
   // in a ref — not state — so the various save paths read the latest
   // value without re-rendering the player on each change.
   const audioTrackRef = useRef<number | null>(null);
+  // Transient backend-outage handling. A 502/503/504 (e.g. a deploy
+  // restarting the server) must NOT be mistaken for a codec failure and
+  // demote the tier — see `handleEngineError`. `streamNonce` bumps to
+  // force the engine to re-mount on the SAME tier once the backend is
+  // back; `outageRef` mirrors `outage` so the async error handler reads
+  // the latest value synchronously.
+  const [outage, setOutage] = useState(false);
+  const [streamNonce, setStreamNonce] = useState(0);
+  const outageRef = useRef(false);
 
   const torrentQ = useQuery<TorrentView>({
     queryKey: ["torrent", infohash],
@@ -263,6 +272,67 @@ export function WatchPage() {
     [manifest, nextDemotionTarget],
   );
 
+  // Probe whether the backend is reachable right now. A HEAD to the raw
+  // stream endpoint goes through the same reverse proxy as everything
+  // else, so a deploy/restart surfaces as 502/503/504 (or a network
+  // throw). Any status < 500 means the server is up — even 404/405/416.
+  const backendReachable = useCallback(async (): Promise<boolean> => {
+    if (!infohash) return false;
+    try {
+      const res = await fetch(rawStreamUrl(infohash, fileIdx), {
+        method: "HEAD",
+        credentials: "include",
+      });
+      return res.status < 500;
+    } catch {
+      return false;
+    }
+  }, [infohash, fileIdx]);
+
+  // Engine error router. A 502/503/504 or unreachable backend mid-
+  // playback — e.g. the user redeploying the server — is NOT a codec
+  // failure: demoting to F is useless (the server is down too) and
+  // sticky (we'd stay on the worse tier after recovery). Probe first;
+  // on an outage, hold the current tier and let `recoveryQ` re-mount it
+  // when the backend returns. Only genuine engine errors (backend up)
+  // demote (B/C/D/E) or surface the banner (A/F).
+  const handleEngineError = useCallback(
+    async (from: DecodeTier, msg: string) => {
+      if (outageRef.current) return; // already reconnecting
+      if (!(await backendReachable())) {
+        console.warn(
+          `[iris-core] tier ${from}: backend unreachable (${msg}) — holding tier, reconnecting`,
+        );
+        outageRef.current = true;
+        setOutage(true);
+        return;
+      }
+      if (from === "A" || from === "F") setPlayerError(msg);
+      else demoteTier(from, msg);
+    },
+    [backendReachable, demoteTier],
+  );
+
+  // While an outage is active, poll the backend; when it answers again,
+  // clear the outage and bump `streamNonce` to re-mount the engine on
+  // the same tier (the `src` change is what re-triggers IrisPlayer's
+  // mount effect). The `streamNonce` in the key gives each outage cycle
+  // a fresh query so a later outage can't read a stale `true`.
+  const recoveryQ = useQuery({
+    queryKey: ["backend-recovery", infohash, fileIdx, streamNonce],
+    queryFn: () => backendReachable(),
+    enabled: outage,
+    refetchInterval: (q) => (q.state.data === true ? (false as const) : 2000),
+    gcTime: 0,
+  });
+  useEffect(() => {
+    if (outage && recoveryQ.data === true) {
+      outageRef.current = false;
+      setOutage(false);
+      setStreamNonce((n) => n + 1);
+    }
+  }, [outage, recoveryQ.data]);
+
   // Saved progress (audio choice + last position) for this user/file.
   // No `staleTime: Infinity` — we want a fresh read every time the user
   // mounts the page (otherwise navigating away and back would replay the
@@ -310,6 +380,9 @@ export function WatchPage() {
     nextEpDismissedRef.current = false;
     nextEpPromptedRef.current = false;
     setNextEpModalOpen(false);
+    outageRef.current = false;
+    setOutage(false);
+    setStreamNonce(0);
   }, [fileIdx, infohash]);
 
   // Episode context drives the "Watch next?" modal at episode
@@ -477,8 +550,16 @@ export function WatchPage() {
   // Tier B: Mediabunny demux + remux to fMP4 → MSE.
   // Tier C/D: WebCodecs decode → Canvas2D (rendered via <TierCPlayer>).
   // Tier F: legacy server-side HLS remux, the final fallback.
-  const playSrc =
+  const playSrcBase =
     tier === "F" ? torrents.playUrl(infohash, fileIdx) : rawStreamUrl(infohash, fileIdx);
+  // `streamNonce` bumps after a backend outage to force IrisPlayer to
+  // re-mount the engine on the SAME tier (a `src` change is what
+  // re-triggers its mount effect). The backend ignores the extra param;
+  // hls.js resolves variant/segment URLs against the path, not the query.
+  const playSrc =
+    streamNonce > 0
+      ? `${playSrcBase}${playSrcBase.includes("?") ? "&" : "?"}_r=${streamNonce}`
+      : playSrcBase;
   const playSrcType = tier === "F" ? "application/vnd.apple.mpegurl" : "video/mp4";
   // Only Tier F polls /play/status (it's the only path that gates on a
   // server-side remux). Everything else is ready once the manifest is.
@@ -523,6 +604,13 @@ export function WatchPage() {
         </div>
       )}
 
+      {outage && (
+        <div className="flex items-center gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-200">
+          <Loader2 className="size-4 animate-spin" />
+          Server unavailable — reconnecting…
+        </div>
+      )}
+
       <div className="aspect-video w-full overflow-hidden rounded-lg border border-border bg-black">
         {playSrc && !progressQ.isPending && sourceReady && manifest ? (
           <IrisPlayer
@@ -547,13 +635,12 @@ export function WatchPage() {
             onPause={onPause}
             onEnded={onEndedCb}
             onError={(msg) => {
-              // Tier A → Vidstack: keep the legacy "Player error: …"
-              //   banner so the user has feedback while we don't auto-
-              //   demote (Vidstack errors are usually transient).
-              // Tier B/C/D → demote to F. The legacy HLS pipeline always
-              //   plays the file, at the cost of server-side ffmpeg.
-              if (tier === "A" || tier === "F") setPlayerError(msg);
-              else demoteTier(tier, msg);
+              // Routed through `handleEngineError`: a transient backend
+              // outage (502/503/504 during a deploy) holds the tier and
+              // reconnects instead of demoting. Genuine errors with the
+              // backend up then either surface the banner (A/F) or demote
+              // to the server-side HLS fallback (B/C/D/E).
+              void handleEngineError(tier, msg);
             }}
           />
         ) : (
