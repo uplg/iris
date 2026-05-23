@@ -1,0 +1,7 @@
+# oxfmt reads .prettierignore by default (see `oxfmt --help`).
+# Vendored third-party bundles live under public/ — they are copied
+# verbatim from node_modules by the `sync-vendor` script on every
+# build/dev and must NOT be reformatted (the diff would be churned
+# right back on the next sync, and they're minified/generated anyway).
+public/
+dist/

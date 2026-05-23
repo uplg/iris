@@ -31,10 +31,7 @@ export type RingBuffer = {
   near_full: () => boolean;
 };
 
-export function createRingBuffer(
-  channels: number,
-  capacityFrames: number,
-): RingBuffer {
+export function createRingBuffer(channels: number, capacityFrames: number): RingBuffer {
   const capacity = capacityFrames * channels;
   const sab = new SharedArrayBuffer(HEADER_SIZE * 4 + capacity * 4);
   const header = new Int32Array(sab, 0, HEADER_SIZE);

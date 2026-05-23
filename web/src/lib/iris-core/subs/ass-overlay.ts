@@ -138,9 +138,7 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
   // prototype — `Object.assign` wouldn't copy them).
   let instance: SubtitlesOctopusInstance;
 
-  const constructorOptions = (
-    onError: (err: unknown) => void,
-  ): SubtitlesOctopusOptions => ({
+  const constructorOptions = (onError: (err: unknown) => void): SubtitlesOctopusOptions => ({
     video: opts.video,
     canvas,
     subUrl: opts.subUrl,
@@ -148,9 +146,7 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
     legacyWorkerUrl: LEGACY_WORKER_URL,
     fallbackFont: FALLBACK_FONT_URL,
     debug,
-    onReady: debug
-      ? () => console.info("[iris-core:libass] worker ready")
-      : undefined,
+    onReady: debug ? () => console.info("[iris-core:libass] worker ready") : undefined,
     onError,
   });
 
@@ -168,9 +164,7 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
     if (remountAttempts >= MAX_REMOUNTS) return;
     remountAttempts += 1;
     if (debug) {
-      console.info(
-        `[iris-core:libass] remount attempt ${remountAttempts}/${MAX_REMOUNTS}`,
-      );
+      console.info(`[iris-core:libass] remount attempt ${remountAttempts}/${MAX_REMOUNTS}`);
     }
     try {
       instance.dispose();

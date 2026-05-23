@@ -65,15 +65,18 @@ export const mountTierC: EngineMount = async (opts) => {
   const allAudio = await input.getAudioTracks();
   const audioTrack =
     audioTrackIndex != null && audioTrackIndex >= 0 && audioTrackIndex < allAudio.length
-      ? allAudio[audioTrackIndex] ?? null
-      : (await input.getPrimaryAudioTrack()) ?? null;
+      ? (allAudio[audioTrackIndex] ?? null)
+      : ((await input.getPrimaryAudioTrack()) ?? null);
   const audioConfig = audioTrack ? await audioTrack.getDecoderConfig() : null;
 
   const scheduler: AudioScheduler = await createAudioScheduler();
   const renderer: VideoRenderer = await mountRenderer({
     container,
     clockSeconds: () => scheduler.currentMediaTimeSeconds(),
-    hdr: probe.config.codec?.startsWith("hev1") || probe.config.codec?.startsWith("hvc1") ? "auto" : "sdr",
+    hdr:
+      probe.config.codec?.startsWith("hev1") || probe.config.codec?.startsWith("hvc1")
+        ? "auto"
+        : "sdr",
     onError,
   });
 
@@ -205,7 +208,10 @@ export const mountTierC: EngineMount = async (opts) => {
     setVolume: (v) => scheduler.setVolume(v),
     setMuted: (m) => scheduler.setMuted(m),
     audioTracks: (): EngineAudioTrack[] => {
-      const defaultIdx = Math.max(0, opts.manifest.audio.findIndex((x) => x.default));
+      const defaultIdx = Math.max(
+        0,
+        opts.manifest.audio.findIndex((x) => x.default),
+      );
       const activeIdx = audioTrackIndex ?? defaultIdx;
       return opts.manifest.audio.map((a, i) => ({
         id: String(i),

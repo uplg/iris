@@ -27,7 +27,12 @@ export function subtitleOverlayKind(track: SubtitleTrack | null | undefined): Su
   if (!track) return "none";
   const codec = track.codec.toLowerCase();
   if (codec === "ass" || codec === "ssa") return "ass";
-  if (codec.includes("pgs") || codec.startsWith("hdmv_") || codec.includes("dvb") || codec.includes("dvd_sub")) {
+  if (
+    codec.includes("pgs") ||
+    codec.startsWith("hdmv_") ||
+    codec.includes("dvb") ||
+    codec.includes("dvd_sub")
+  ) {
     return "pgs";
   }
   return "native";

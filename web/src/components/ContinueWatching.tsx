@@ -25,9 +25,7 @@ export function ContinueWatching() {
 
   return (
     <section className="grid gap-3">
-      <h2 className="text-xs uppercase tracking-wide text-muted-foreground">
-        Continue watching
-      </h2>
+      <h2 className="text-xs uppercase tracking-wide text-muted-foreground">Continue watching</h2>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         {data.map((it) => {
           const pct =
@@ -50,9 +48,7 @@ export function ContinueWatching() {
               title={primary}
               subtitle={subtitle}
               progress={pct}
-              onClick={() =>
-                navigate(`/watch/${it.infohash}/${it.file_idx}`)
-              }
+              onClick={() => navigate(`/watch/${it.infohash}/${it.file_idx}`)}
             />
           );
         })}
@@ -65,7 +61,6 @@ function formatTimecode(sec: number): string {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = Math.floor(sec % 60);
-  if (h > 0)
-    return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   return `${m}:${s.toString().padStart(2, "0")}`;
 }

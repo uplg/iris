@@ -36,6 +36,7 @@ import {
   UrlSource,
 } from "mediabunny";
 
+import { isMobileLike } from "../caps";
 import { ensureLibavAudioDecoderRegistered, libavCanDecode } from "../decode/libav-audio-decoder";
 import {
   appendNativeTrack,
@@ -45,10 +46,49 @@ import {
   type EngineMount,
 } from "../engine";
 
-/** How far ahead of the playhead we let the SourceBuffer fill before
- *  back-pressuring Mediabunny. Larger = more resilient to slow
- *  download + decode bursts, smaller = lower memory footprint. */
-const BUFFER_AHEAD_TARGET_SECONDS = 60;
+// ---- Live SourceBuffer window -------------------------------------
+//
+// The window kept resident in the SourceBuffer is bounded by BOTH a time
+// ceiling and a byte budget, whichever is smaller. Why both:
+//
+//   - A time-only window (what we had) holds `bitrate × seconds` bytes.
+//     A 1080p ~8 Mbps remux at 60 s ahead is ~60 MB — fine. But a 4K
+//     ~40 Mbps remux at the same 60 s pins ~300 MB, and stacked on the
+//     video decoder + Mediabunny's 64 MiB read cache + the JS heap it
+//     gets the renderer OOM-killed on a phone. That OOM raises NO JS
+//     error (the demote cascade can't save it), so it MUST be prevented.
+//     This is the most likely cause of the mobile "Aïe aïe aïe" crash —
+//     a bounded-in-time but unbounded-in-bytes buffer on a high-bitrate
+//     file, which is exactly why halving the time window alone wasn't a
+//     real fix.
+//   - A byte-only window would, on a low-bitrate file, hold an absurd
+//     number of seconds (tens of minutes), wasting memory and over-
+//     fetching from the seedbox.
+//
+// So: low-bitrate files get a generous time window; high-bitrate files
+// stay capped by the byte budget. See `isMobileLike` for the mobile/
+// desktop split.
+
+/** Forward-buffer time ceiling (upper bound; the byte budget can make
+ *  the effective window smaller). */
+const AHEAD_SECONDS_CEILING = 60;
+const AHEAD_SECONDS_CEILING_MOBILE = 30;
+/** Played-out time we keep behind the playhead for instant scrub-back. */
+const BEHIND_SECONDS_CEILING = 30;
+const BEHIND_SECONDS_CEILING_MOBILE = 15;
+
+/** Byte budgets for the same two windows — the real OOM lever. */
+const AHEAD_BYTES_BUDGET = 96 * 1024 * 1024;
+const AHEAD_BYTES_BUDGET_MOBILE = 24 * 1024 * 1024;
+const BEHIND_BYTES_BUDGET = 48 * 1024 * 1024;
+const BEHIND_BYTES_BUDGET_MOBILE = 12 * 1024 * 1024;
+
+/** Floors so a very high-bitrate file can't shrink the forward window to
+ *  the point of constant rebuffering. The media is served by-range from
+ *  the seedbox (already on disk, low latency), so a small forward window
+ *  is acceptable. */
+const MIN_AHEAD_SECONDS = 6;
+const MIN_BEHIND_SECONDS = 3;
 
 /** Result of probing `WebCodecs.AudioEncoder`: which target codec
  *  works at what channel count for the given source. Returns null
@@ -158,9 +198,11 @@ async function pickAudioEncoder(
  *  thrown by the validator. We patch the validator on each Output we
  *  build (the muxer is on `output._muxer`). */
 function relaxMediabunnyGopCheck(output: Output): void {
-  const m = (output as unknown as {
-    _muxer?: { validateTimestamp?: (track: unknown, ts: number, isKey: boolean) => void };
-  })._muxer;
+  const m = (
+    output as unknown as {
+      _muxer?: { validateTimestamp?: (track: unknown, ts: number, isKey: boolean) => void };
+    }
+  )._muxer;
   if (!m || typeof m.validateTimestamp !== "function") return;
   const original = m.validateTimestamp.bind(m);
   m.validateTimestamp = (track, ts, isKey) => {
@@ -173,9 +215,6 @@ function relaxMediabunnyGopCheck(output: Output): void {
   };
 }
 
-/** Played-out range we keep behind the playhead for instant scrub-back. */
-const PLAYED_KEEP_SECONDS = 30;
-
 /** Floor for reactive quota eviction (only used when proactive
  *  back-pressure didn't keep us under the limit — should be rare). */
 const QUOTA_EVICT_SECONDS = 5;
@@ -184,20 +223,50 @@ export const mountTierB: EngineMount = async (opts) => {
   const { container, manifest, streamUrl, nativeSubs, audioTrackIndex } = opts;
   const fail = (err: Error) => opts.onError(err);
 
+  // Derive the live SourceBuffer window up front from the file's average
+  // bitrate, capped by both a time ceiling and a byte budget (see the
+  // constants above). This is what bounds the renderer's memory on a
+  // high-bitrate file — a time-only window would pin hundreds of MB of
+  // 4K and OOM-kill the tab on a phone.
+  const mobile = isMobileLike();
+  const bytesPerSecond =
+    manifest.size_bytes > 0 && manifest.duration_s && manifest.duration_s > 0
+      ? manifest.size_bytes / manifest.duration_s
+      : 0;
+  const clampWindow = (secondsCeiling: number, minSeconds: number, byteBudget: number): number =>
+    bytesPerSecond > 0
+      ? Math.min(secondsCeiling, Math.max(minSeconds, byteBudget / bytesPerSecond))
+      : secondsCeiling;
+  const bufferAheadTarget = clampWindow(
+    mobile ? AHEAD_SECONDS_CEILING_MOBILE : AHEAD_SECONDS_CEILING,
+    MIN_AHEAD_SECONDS,
+    mobile ? AHEAD_BYTES_BUDGET_MOBILE : AHEAD_BYTES_BUDGET,
+  );
+  const playedKeep = clampWindow(
+    mobile ? BEHIND_SECONDS_CEILING_MOBILE : BEHIND_SECONDS_CEILING,
+    MIN_BEHIND_SECONDS,
+    mobile ? BEHIND_BYTES_BUDGET_MOBILE : BEHIND_BYTES_BUDGET,
+  );
+  console.log(
+    `[iris-core] Tier B buffer window: ahead=${bufferAheadTarget.toFixed(0)}s ` +
+      `behind=${playedKeep.toFixed(0)}s (mobile=${mobile}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
+  );
+
   if (typeof globalThis.MediaSource === "undefined") {
     const err = new Error("MediaSource Extensions not available");
     fail(err);
     throw err;
   }
 
-  const defaultAudioIdx = Math.max(0, manifest.audio.findIndex((a) => a.default));
+  const defaultAudioIdx = Math.max(
+    0,
+    manifest.audio.findIndex((a) => a.default),
+  );
   const chosenAudioIdx = audioTrackIndex ?? defaultAudioIdx;
   const chosenAudio = manifest.audio[chosenAudioIdx];
   const audioNeedsTranscode = chosenAudio != null && !chosenAudio.browser_native;
   if (audioNeedsTranscode && !libavCanDecode(chosenAudio.codec)) {
-    const err = new Error(
-      `Tier B: audio codec ${chosenAudio.codec} not transcodable client-side`,
-    );
+    const err = new Error(`Tier B: audio codec ${chosenAudio.codec} not transcodable client-side`);
     fail(err);
     throw err;
   }
@@ -366,7 +435,7 @@ export const mountTierB: EngineMount = async (opts) => {
     } catch (e) {
       console.warn(
         "[iris-core] Tier B: manual seek pipeline failed. " +
-        "Keeping current playback alive — rewind to a buffered range to resume.",
+          "Keeping current playback alive — rewind to a buffered range to resume.",
         e,
       );
     }
@@ -451,9 +520,7 @@ export const mountTierB: EngineMount = async (opts) => {
         // the right codec. Here we just hand the choice to
         // Mediabunny.
         if (!encoderChoice) {
-          throw new Error(
-            "Tier B: internal — audioNeedsTranscode but encoderChoice is null",
-          );
+          throw new Error("Tier B: internal — audioNeedsTranscode but encoderChoice is null");
         }
         const srcChannels = await audioTrack.getNumberOfChannels();
         const source = new AudioSampleSource({
@@ -578,16 +645,10 @@ export const mountTierB: EngineMount = async (opts) => {
 
       const flushGop = async (nextKeyPts: number | null): Promise<void> => {
         for (const pkt of gopBuffer) {
-          if (
-            nextKeyPts !== null &&
-            pkt.type !== "key" &&
-            pkt.timestamp >= nextKeyPts
-          ) {
+          if (nextKeyPts !== null && pkt.type !== "key" && pkt.timestamp >= nextKeyPts) {
             continue; // bridge frame — drop
           }
-          const meta = firstMeta
-            ? { decoderConfig: decoderConfig ?? undefined }
-            : undefined;
+          const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
           await videoSrc.add(pkt, meta);
           firstMeta = false;
         }
@@ -611,43 +672,42 @@ export const mountTierB: EngineMount = async (opts) => {
       await videoSrc.close();
     })();
 
-    const audioP = audioTrack && audioFeed
-      ? (async () => {
-        if (audioFeed.kind === "passthrough") {
-          const packetSink = new EncodedPacketSink(audioTrack);
-          const startPacket = await packetSink.getKeyPacket(seekStart);
-          if (!startPacket) {
-            await audioFeed.source.close();
-            return;
-          }
-          const decoderConfig = await audioTrack.getDecoderConfig();
-          let firstMeta = true;
-          for await (const packet of packetSink.packets(startPacket)) {
-            if (disposed || newGen !== conversionGeneration) break;
-            const meta = firstMeta
-              ? { decoderConfig: decoderConfig ?? undefined }
-              : undefined;
-            await audioFeed.source.add(packet, meta);
-            firstMeta = false;
-          }
-          await audioFeed.source.close();
-        } else {
-          // Transcode: AudioSampleSink uses our registered libav
-          // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
-          // AudioSampleSource encodes them to AAC via WebCodecs.
-          const sampleSink = new AudioSampleSink(audioTrack);
-          for await (const sample of sampleSink.samples(seekStart, Infinity)) {
-            if (disposed || newGen !== conversionGeneration) {
-              sample.close();
-              break;
+    const audioP =
+      audioTrack && audioFeed
+        ? (async () => {
+            if (audioFeed.kind === "passthrough") {
+              const packetSink = new EncodedPacketSink(audioTrack);
+              const startPacket = await packetSink.getKeyPacket(seekStart);
+              if (!startPacket) {
+                await audioFeed.source.close();
+                return;
+              }
+              const decoderConfig = await audioTrack.getDecoderConfig();
+              let firstMeta = true;
+              for await (const packet of packetSink.packets(startPacket)) {
+                if (disposed || newGen !== conversionGeneration) break;
+                const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
+                await audioFeed.source.add(packet, meta);
+                firstMeta = false;
+              }
+              await audioFeed.source.close();
+            } else {
+              // Transcode: AudioSampleSink uses our registered libav
+              // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
+              // AudioSampleSource encodes them to AAC via WebCodecs.
+              const sampleSink = new AudioSampleSink(audioTrack);
+              for await (const sample of sampleSink.samples(seekStart, Infinity)) {
+                if (disposed || newGen !== conversionGeneration) {
+                  sample.close();
+                  break;
+                }
+                await audioFeed.source.add(sample);
+                sample.close();
+              }
+              await audioFeed.source.close();
             }
-            await audioFeed.source.add(sample);
-            sample.close();
-          }
-          await audioFeed.source.close();
-        }
-      })()
-      : Promise.resolve();
+          })()
+        : Promise.resolve();
 
     void Promise.all([videoP, audioP])
       .then(() => newOutput.finalize())
@@ -670,7 +730,7 @@ export const mountTierB: EngineMount = async (opts) => {
         while (
           !disposed &&
           generation === conversionGeneration &&
-          bufferedAheadSeconds() > BUFFER_AHEAD_TARGET_SECONDS
+          bufferedAheadSeconds() > bufferAheadTarget
         ) {
           await new Promise<void>((resolve) => {
             if (!sourceBuffer) {
@@ -754,7 +814,10 @@ export const mountTierB: EngineMount = async (opts) => {
   };
 
   const audioTracksFn = () => {
-    const defaultIdx = Math.max(0, manifest.audio.findIndex((x) => x.default));
+    const defaultIdx = Math.max(
+      0,
+      manifest.audio.findIndex((x) => x.default),
+    );
     const activeIdx = audioTrackIndex ?? defaultIdx;
     return manifest.audio.map((a, i) => ({
       id: String(i),
@@ -827,7 +890,7 @@ export const mountTierB: EngineMount = async (opts) => {
   // AudioEncoder probe selected (AAC on Chrome, Opus on Firefox).
   // For passthrough, use whatever the source already had.
   const audioCodec = audioNeedsTranscode
-    ? encoderChoice?.mp4Codec ?? "mp4a.40.2"
+    ? (encoderChoice?.mp4Codec ?? "mp4a.40.2")
     : chosenAudio?.codec_string;
   const codecs = [videoCodec, audioCodec].filter((c): c is string => !!c).join(",");
   const mime = codecs ? `video/mp4; codecs="${codecs}"` : "video/mp4";
@@ -856,7 +919,7 @@ export const mountTierB: EngineMount = async (opts) => {
   }
 
   sourceBuffer.addEventListener("updateend", () => {
-    evictPlayedRange(PLAYED_KEEP_SECONDS);
+    evictPlayedRange(playedKeep);
     drainQueue();
     if (!opts.onReady) return;
     if (sourceBuffer && sourceBuffer.buffered.length > 0) {

@@ -31,8 +31,6 @@ export function LanguageBadge({
           ? { label: "MULTi", classes: "bg-emerald-500/90 text-white" }
           : { label: lower.toUpperCase(), classes: "bg-muted text-foreground" };
   return (
-    <Badge className={cn("text-[10px] uppercase shadow-md", classes, className)}>
-      {label}
-    </Badge>
+    <Badge className={cn("text-[10px] uppercase shadow-md", classes, className)}>{label}</Badge>
   );
 }

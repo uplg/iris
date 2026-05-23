@@ -110,13 +110,7 @@ export function LoadingState({
  * Better than a single spinner because it preserves the layout (no
  * jump-shift when cards arrive).
  */
-export function SkeletonCard({
-  count = 6,
-  className,
-}: {
-  count?: number;
-  className?: string;
-}) {
+export function SkeletonCard({ count = 6, className }: { count?: number; className?: string }) {
   return (
     <div className={cn("flex gap-4", className)}>
       {Array.from({ length: count }, (_, i) => (

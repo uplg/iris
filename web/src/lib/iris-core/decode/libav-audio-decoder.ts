@@ -138,8 +138,10 @@ function getLibav(): Promise<LibavLike> {
       );
     }
     const mod = await import("libav.js");
-    const factory = (mod as unknown as { LibAV?: (opts: object) => Promise<LibavLike> }).LibAV
-      ?? (mod as unknown as { default?: { LibAV?: (opts: object) => Promise<LibavLike> } }).default?.LibAV;
+    const factory =
+      (mod as unknown as { LibAV?: (opts: object) => Promise<LibavLike> }).LibAV ??
+      (mod as unknown as { default?: { LibAV?: (opts: object) => Promise<LibavLike> } }).default
+        ?.LibAV;
     if (!factory) throw new Error("libav.js: LibAV factory not found");
     return factory({
       base: "/libavjs",
@@ -238,11 +240,7 @@ class LibavAudioDecoder extends CustomAudioDecoder {
       bytes = new Uint8Array(total);
       let off = 0;
       for (const p of planes) {
-        const view = new Uint8Array(
-          p.buffer as ArrayBuffer,
-          p.byteOffset,
-          p.byteLength,
-        );
+        const view = new Uint8Array(p.buffer as ArrayBuffer, p.byteOffset, p.byteLength);
         bytes.set(view, off);
         off += view.byteLength;
       }

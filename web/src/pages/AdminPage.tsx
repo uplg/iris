@@ -93,9 +93,7 @@ export function AdminPage() {
               <Terminal className="size-5" />
             </div>
             <div>
-              <h1 className="font-mono text-2xl font-semibold tracking-tight">
-                Admin · Seedbox
-              </h1>
+              <h1 className="font-mono text-2xl font-semibold tracking-tight">Admin · Seedbox</h1>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 Technical panel. The family view lives on the home page.
               </p>
@@ -180,14 +178,14 @@ export function AdminPage() {
           {invitations.isLoading ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : invitations.data?.length ? (
-            <div className="overflow-hidden rounded-md border border-border">
+            <div className="overflow-x-auto rounded-md border border-border">
               <table className="w-full text-sm">
                 <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
                   <tr>
-                    <th className="px-4 py-2 text-left">Created</th>
-                    <th className="px-4 py-2 text-left">Expires</th>
-                    <th className="px-4 py-2 text-left">Status</th>
-                    <th className="px-4 py-2"></th>
+                    <th className="px-3 py-2 text-left sm:px-4">Created</th>
+                    <th className="hidden px-3 py-2 text-left sm:table-cell sm:px-4">Expires</th>
+                    <th className="px-3 py-2 text-left sm:px-4">Status</th>
+                    <th className="px-3 py-2 sm:px-4"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -195,10 +193,14 @@ export function AdminPage() {
                     const s = status(inv);
                     return (
                       <tr key={inv.id} className="border-t border-border">
-                        <td className="px-4 py-2">{new Date(inv.created_at).toLocaleString()}</td>
-                        <td className="px-4 py-2">{new Date(inv.expires_at).toLocaleString()}</td>
-                        <td className="px-4 py-2">{s}</td>
-                        <td className="px-4 py-2 text-right">
+                        <td className="px-3 py-2 sm:px-4">
+                          {new Date(inv.created_at).toLocaleString()}
+                        </td>
+                        <td className="hidden px-3 py-2 sm:table-cell sm:px-4">
+                          {new Date(inv.expires_at).toLocaleString()}
+                        </td>
+                        <td className="px-3 py-2 sm:px-4">{s}</td>
+                        <td className="px-3 py-2 text-right sm:px-4">
                           {s === "active" && (
                             <Button
                               size="sm"
@@ -262,7 +264,7 @@ function RemuxCacheCard() {
                   <th className="px-2 py-1">Title</th>
                   <th className="px-2 py-1">State</th>
                   <th className="px-2 py-1 text-right">Size</th>
-                  <th className="px-2 py-1">Updated</th>
+                  <th className="hidden px-2 py-1 sm:table-cell">Updated</th>
                   <th className="px-2 py-1"></th>
                 </tr>
               </thead>
@@ -297,7 +299,7 @@ function RemuxCacheCard() {
                       <td className="px-2 py-1.5 text-right tabular-nums">
                         {formatSize(j.size_bytes)}
                       </td>
-                      <td className="px-2 py-1.5 text-xs text-muted-foreground">
+                      <td className="hidden px-2 py-1.5 text-xs text-muted-foreground sm:table-cell">
                         {j.mtime ? new Date(j.mtime * 1000).toLocaleString() : "—"}
                       </td>
                       <td className="px-2 py-1.5 text-right">
@@ -349,10 +351,7 @@ function StorageView({
   // download" as `used_bytes` since librqbit doesn't persist a download
   // counter for deleted torrents either; once a torrent is GC'd the only
   // honest baseline left is what's currently on disk.
-  const ratio =
-    data.used_bytes > 0
-      ? data.total_uploaded_bytes / data.used_bytes
-      : null;
+  const ratio = data.used_bytes > 0 ? data.total_uploaded_bytes / data.used_bytes : null;
   return (
     <div className="grid gap-2">
       <div className="flex items-baseline justify-between text-sm">
@@ -410,21 +409,21 @@ function UsersCard() {
             {users.error instanceof Error ? users.error.message : "failed"}
           </p>
         ) : users.data?.length ? (
-          <div className="overflow-hidden rounded-md border border-border">
+          <div className="overflow-x-auto rounded-md border border-border">
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2 text-left">Email</th>
-                  <th className="px-4 py-2 text-left">Role</th>
-                  <th className="px-4 py-2 text-left">Joined</th>
-                  <th className="px-4 py-2"></th>
+                  <th className="px-3 py-2 text-left sm:px-4">Email</th>
+                  <th className="px-3 py-2 text-left sm:px-4">Role</th>
+                  <th className="hidden px-3 py-2 text-left sm:table-cell sm:px-4">Joined</th>
+                  <th className="px-3 py-2 sm:px-4"></th>
                 </tr>
               </thead>
               <tbody>
                 {users.data.map((u) => (
                   <tr key={u.id} className="border-t border-border">
-                    <td className="break-all px-4 py-2">{u.email}</td>
-                    <td className="px-4 py-2">
+                    <td className="break-all px-3 py-2 sm:px-4">{u.email}</td>
+                    <td className="px-3 py-2 sm:px-4">
                       {u.is_admin ? (
                         <Badge
                           variant="outline"
@@ -437,10 +436,10 @@ function UsersCard() {
                         <span className="text-xs text-muted-foreground">user</span>
                       )}
                     </td>
-                    <td className="px-4 py-2 text-xs text-muted-foreground">
+                    <td className="hidden px-3 py-2 text-xs text-muted-foreground sm:table-cell sm:px-4">
                       {new Date(u.created_at).toLocaleDateString()}
                     </td>
-                    <td className="px-4 py-2 text-right">
+                    <td className="px-3 py-2 text-right sm:px-4">
                       <Button
                         size="sm"
                         variant="outline"

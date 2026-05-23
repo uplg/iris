@@ -142,8 +142,7 @@ export function WatchPage() {
     queryKey: ["manifest", infohash, fileIdx],
     queryFn: () => fetchManifest(infohash!, fileIdx),
     enabled: !!infohash,
-    retry: (failureCount, err) =>
-      err instanceof ManifestNotReadyError && failureCount < 30,
+    retry: (failureCount, err) => err instanceof ManifestNotReadyError && failureCount < 30,
     retryDelay: 2000,
   });
   const manifest = manifestQ.data;
@@ -187,17 +186,11 @@ export function WatchPage() {
     (from: DecodeTier): DecodeTier => {
       if ((from === "C" || from === "D") && manifest) {
         const primary = manifest.video[0];
-        const isHevc =
-          primary != null && /hevc|hev1|hvc1|h265|x265/i.test(primary.codec);
+        const isHevc = primary != null && /hevc|hev1|hvc1|h265|x265/i.test(primary.codec);
         const within1080p = (primary?.height ?? 0) <= 1080 && (primary?.height ?? 0) > 0;
         const chromiumish =
           /Chrome|Edg/.test(navigator.userAgent) && !/Mobile/.test(navigator.userAgent);
-        if (
-          isHevc &&
-          within1080p &&
-          chromiumish &&
-          !demotedRef.current.has("E")
-        ) {
+        if (isHevc && within1080p && chromiumish && !demotedRef.current.has("E")) {
           return "E";
         }
       }
@@ -224,21 +217,18 @@ export function WatchPage() {
         demotionInProgressRef.current = null;
       }, 250);
       if (manifest) {
-        void fetch(
-          `/api/torrents/${manifest.infohash}/files/${manifest.file_idx}/playback-error`,
-          {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              tier: from,
-              reason,
-              codec: manifest.video[0]?.codec ?? null,
-              browser: navigator.userAgent,
-            }),
-            keepalive: true,
-          },
-        ).catch(() => undefined);
+        void fetch(`/api/torrents/${manifest.infohash}/files/${manifest.file_idx}/playback-error`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tier: from,
+            reason,
+            codec: manifest.video[0]?.codec ?? null,
+            browser: navigator.userAgent,
+          }),
+          keepalive: true,
+        }).catch(() => undefined);
       }
     },
     [manifest, nextDemotionTarget],
@@ -458,7 +448,8 @@ export function WatchPage() {
   // Tier B: Mediabunny demux + remux to fMP4 → MSE.
   // Tier C/D: WebCodecs decode → Canvas2D (rendered via <TierCPlayer>).
   // Tier F: legacy server-side HLS remux, the final fallback.
-  const playSrc = tier === "F" ? torrents.playUrl(infohash, fileIdx) : rawStreamUrl(infohash, fileIdx);
+  const playSrc =
+    tier === "F" ? torrents.playUrl(infohash, fileIdx) : rawStreamUrl(infohash, fileIdx);
   const playSrcType = tier === "F" ? "application/vnd.apple.mpegurl" : "video/mp4";
   // Only Tier F polls /play/status (it's the only path that gates on a
   // server-side remux). Everything else is ready once the manifest is.
@@ -684,8 +675,8 @@ export function WatchPage() {
               <DialogTitle>Next episode available</DialogTitle>
               <DialogDescription>
                 S{nextEp.season.toString().padStart(2, "0")}E
-                {nextEp.episode.toString().padStart(2, "0")} is ready to grab.
-                Prepare it for the next session?
+                {nextEp.episode.toString().padStart(2, "0")} is ready to grab. Prepare it for the
+                next session?
               </DialogDescription>
             </DialogHeader>
             <div className="flex flex-wrap justify-end gap-2">
@@ -704,11 +695,7 @@ export function WatchPage() {
                   if (!nextEp.follow_id) return;
                   setNextEpGrabbing(true);
                   try {
-                    await follows.grabEpisode(
-                      nextEp.follow_id,
-                      nextEp.season,
-                      nextEp.episode,
-                    );
+                    await follows.grabEpisode(nextEp.follow_id, nextEp.season, nextEp.episode);
                     setNextEpModalOpen(false);
                   } catch (e) {
                     console.error("[next-ep grab]", e);
@@ -745,7 +732,6 @@ function StateBadge({ state }: { state: TorrentView["state"] }) {
     </Badge>
   );
 }
-
 
 function PlayerLoadingStatus({
   torrent,

@@ -53,8 +53,7 @@ export async function createAudioScheduler(
   let currentVolume = 1;
   let muted = false;
 
-  const useWorklet =
-    typeof SharedArrayBuffer !== "undefined" && "audioWorklet" in ctx;
+  const useWorklet = typeof SharedArrayBuffer !== "undefined" && "audioWorklet" in ctx;
 
   if (useWorklet) {
     try {
@@ -65,10 +64,7 @@ export async function createAudioScheduler(
   }
   return buildLegacyScheduler(ctx, gain);
 
-  function buildLegacyScheduler(
-    ctx2: AudioContext,
-    gain2: GainNode,
-  ): AudioScheduler {
+  function buildLegacyScheduler(ctx2: AudioContext, gain2: GainNode): AudioScheduler {
     let playbackOrigin: number | null = null;
     const pendingSources: AudioBufferSourceNode[] = [];
     let disposed = false;

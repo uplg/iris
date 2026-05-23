@@ -109,11 +109,7 @@ export function MediaCard(props: MediaCardProps) {
           </div>
         )}
 
-        {badge && (
-          <div className="absolute right-1.5 top-1.5">
-            {badge}
-          </div>
-        )}
+        {badge && <div className="absolute right-1.5 top-1.5">{badge}</div>}
 
         {progress != null && progress > 0 && (
           <>
@@ -127,10 +123,7 @@ export function MediaCard(props: MediaCardProps) {
       </div>
 
       <div className="grid gap-0.5 px-0.5">
-        <span
-          className="line-clamp-2 break-words text-sm font-medium leading-tight"
-          title={title}
-        >
+        <span className="line-clamp-2 break-words text-sm font-medium leading-tight" title={title}>
           {title}
         </span>
         {subtitle && (
@@ -147,10 +140,7 @@ export function MediaCard(props: MediaCardProps) {
   // single focus boundary — matters for keyboard nav.
   if (href) {
     return (
-      <Link
-        to={href}
-        className="group block rounded-lg outline-none focus-visible:outline-none"
-      >
+      <Link to={href} className="group block rounded-lg outline-none focus-visible:outline-none">
         {inner}
       </Link>
     );

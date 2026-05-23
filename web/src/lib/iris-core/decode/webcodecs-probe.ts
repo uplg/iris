@@ -49,12 +49,12 @@ export async function cheapProbeVideoCodec(codec: string): Promise<{
   const hw = await VideoDecoder.isConfigSupported({
     ...baseConfig,
     hardwareAcceleration: "prefer-hardware",
-  }).catch(() => ({ supported: false } as VideoDecoderSupport));
+  }).catch(() => ({ supported: false }) as VideoDecoderSupport);
   if (hw.supported) return { supportedHardware: true, supportedAny: true };
   const sw = await VideoDecoder.isConfigSupported({
     ...baseConfig,
     hardwareAcceleration: "prefer-software",
-  }).catch(() => ({ supported: false } as VideoDecoderSupport));
+  }).catch(() => ({ supported: false }) as VideoDecoderSupport);
   return { supportedHardware: false, supportedAny: sw.supported ?? false };
 }
 
@@ -116,12 +116,7 @@ async function realDecodeTest(
       error: (err) => {
         if (settled) return;
         settled = true;
-        console.debug(
-          "[iris-core] probe decode error",
-          err,
-          "config:",
-          summariseConfig(config),
-        );
+        console.debug("[iris-core] probe decode error", err, "config:", summariseConfig(config));
         resolve(false);
       },
     });
@@ -134,12 +129,7 @@ async function realDecodeTest(
     } catch (e) {
       if (!settled) {
         settled = true;
-        console.debug(
-          "[iris-core] probe configure threw",
-          e,
-          "config:",
-          summariseConfig(config),
-        );
+        console.debug("[iris-core] probe configure threw", e, "config:", summariseConfig(config));
         resolve(false);
       }
     }
@@ -180,11 +170,7 @@ function bufferSourceToBytes(src: AllowSharedBufferSource): Uint8Array {
     return new Uint8Array(new Uint8Array(src)).slice();
   }
   const view = src as ArrayBufferView;
-  return new Uint8Array(
-    view.buffer as ArrayBuffer,
-    view.byteOffset,
-    view.byteLength,
-  ).slice();
+  return new Uint8Array(view.buffer as ArrayBuffer, view.byteOffset, view.byteLength).slice();
 }
 
 /** Produce a brand-new owned `ArrayBuffer` containing the same bytes.
@@ -283,7 +269,7 @@ export async function probeVideoTrack(
       description: descriptionBytes ? freshBuffer(descriptionBytes) : undefined,
     };
     const support = await VideoDecoder.isConfigSupported(tryConfig).catch(
-      () => ({ supported: false } as VideoDecoderSupport),
+      () => ({ supported: false }) as VideoDecoderSupport,
     );
     if (!support.supported) continue;
     const decodes = await realDecodeTest(tryConfig, chunk);

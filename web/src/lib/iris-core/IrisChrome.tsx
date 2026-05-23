@@ -209,7 +209,7 @@ export function IrisChrome(props: IrisChromeProps) {
 
       <div
         data-iris-chrome
-        className={`pointer-events-auto flex flex-col gap-1 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-12 text-white transition-opacity duration-200 ${
+        className={`pointer-events-auto flex flex-col gap-1 bg-gradient-to-t from-black/80 to-transparent px-2 pb-2 pt-10 text-white transition-opacity duration-200 sm:px-3 sm:pt-12 ${
           hovered || paused || menu !== "none" ? "opacity-100" : "opacity-0"
         }`}
       >
@@ -219,7 +219,7 @@ export function IrisChrome(props: IrisChromeProps) {
         {/* Scrub bar */}
         <ScrubBar
           durationSeconds={duration}
-          currentSeconds={scrubbing ? scrubTargetRef.current ?? currentTime : currentTime}
+          currentSeconds={scrubbing ? (scrubTargetRef.current ?? currentTime) : currentTime}
           bufferedRanges={buffered}
           onScrub={(s) => {
             setScrubbing(true);
@@ -233,7 +233,7 @@ export function IrisChrome(props: IrisChromeProps) {
           }}
         />
 
-        <div className="flex items-center gap-1 text-[12px]">
+        <div className="flex items-center gap-0.5 text-[12px] sm:gap-1">
           <Button
             label={paused ? "Play" : "Pause"}
             icon={paused ? <Play className="size-5" /> : <Pause className="size-5" />}
@@ -264,9 +264,7 @@ export function IrisChrome(props: IrisChromeProps) {
           {manifest.subtitles.length > 0 && (
             <MenuButton
               label={`Subs${
-                props.activeSubtitle
-                  ? ` · ${props.activeSubtitle.lang?.toUpperCase() ?? "ON"}`
-                  : ""
+                props.activeSubtitle ? ` · ${props.activeSubtitle.lang?.toUpperCase() ?? "ON"}` : ""
               }`}
               icon={<Captions className="size-4" />}
               open={menu === "subs"}
@@ -365,7 +363,9 @@ function ScrubBar(props: {
   return (
     <div
       ref={trackRef}
-      className="relative h-2 w-full cursor-pointer rounded bg-white/15"
+      // `touch-none` stops the drag from also scrolling the page on a
+      // phone; a slightly taller track on mobile is easier to grab.
+      className="relative h-2.5 w-full cursor-pointer touch-none rounded bg-white/15 sm:h-2"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -387,7 +387,10 @@ function ScrubBar(props: {
         );
       })}
       {/* Playhead progress */}
-      <div className="absolute left-0 top-0 h-full rounded bg-primary" style={{ width: `${pct}%` }} />
+      <div
+        className="absolute left-0 top-0 h-full rounded bg-primary"
+        style={{ width: `${pct}%` }}
+      />
       {/* Knob */}
       <div
         className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow"
@@ -399,8 +402,14 @@ function ScrubBar(props: {
 
 function TimeDisplay({ current, total }: { current: number; total: number | null }) {
   return (
-    <span className="ml-1 select-none font-mono text-[12px] tabular-nums opacity-80">
-      {formatTime(current)} / {total != null ? formatTime(total) : "--:--"}
+    <span className="ml-0.5 shrink-0 select-none font-mono text-[11px] tabular-nums opacity-80 sm:ml-1 sm:text-[12px]">
+      {formatTime(current)}
+      {/* Total time is dropped on mobile to keep the control bar from
+          overflowing a narrow player; shown from `sm` up. */}
+      <span className="hidden sm:inline">
+        {" / "}
+        {total != null ? formatTime(total) : "--:--"}
+      </span>
     </span>
   );
 }
@@ -416,9 +425,7 @@ function VolumeControl(props: {
     <div className="group flex items-center gap-1">
       <Button
         label={props.muted ? "Unmute" : "Mute"}
-        icon={
-          props.muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />
-        }
+        icon={props.muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
         onClick={props.onMute}
       />
       <input
@@ -542,7 +549,7 @@ function Button(props: {
       title={props.label}
       aria-label={props.label}
       onClick={props.onClick}
-      className={`grid size-9 place-items-center rounded transition-colors hover:bg-white/15 ${
+      className={`grid size-8 shrink-0 place-items-center rounded transition-colors hover:bg-white/15 sm:size-9 ${
         props.active ? "bg-white/15" : ""
       }`}
     >

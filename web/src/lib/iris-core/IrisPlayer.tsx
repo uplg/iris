@@ -92,7 +92,8 @@ function classifySubtitles(manifest: Manifest): {
   for (const t of manifest.subtitles) {
     const kind = subtitleOverlayKind(t);
     if (kind === "ass" || kind === "pgs") overlay.push(t);
-    else if (kind === "native") native.push({ ...t, vttUrl: nativeSubtitleUrl(manifest, t.stream_idx) });
+    else if (kind === "native")
+      native.push({ ...t, vttUrl: nativeSubtitleUrl(manifest, t.stream_idx) });
   }
   return { native, overlay };
 }
@@ -155,11 +156,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
   }, [props.manifest]);
   const [audioTrackIndex, setAudioTrackIndex] = useState<number>(() => {
     const restored = props.initialAudioIndex;
-    if (
-      typeof restored === "number" &&
-      restored >= 0 &&
-      restored < props.manifest.audio.length
-    ) {
+    if (typeof restored === "number" && restored >= 0 && restored < props.manifest.audio.length) {
       return restored;
     }
     return defaultAudioIndex;
@@ -168,19 +165,14 @@ export function IrisPlayer(props: IrisPlayerProps) {
   // resume offset; on an audio-track switch that needs a remount
   // (tiers A/B/C/E) we bump it to the current playhead so the
   // user lands back where they were, not at startPosition.
-  const [mountStartPosition, setMountStartPosition] = useState<number>(
-    props.startPosition,
-  );
+  const [mountStartPosition, setMountStartPosition] = useState<number>(props.startPosition);
   // Remount-trigger counter. We can't put `audioTrackIndex` itself
   // in the mount effect's deps: that fires a remount for Tier F too,
   // which would wipe out the live `hls.audioTrack` switch and snap
   // back to hls.js's default audio. Instead we bump this version
   // ONLY for tiers that need a remount (A/B/C/E), and pass the
   // current `audioTrackIndex` to the engine through closure.
-  const [audioRemountVersion, bumpAudioRemount] = useReducer(
-    (x: number) => x + 1,
-    0,
-  );
+  const [audioRemountVersion, bumpAudioRemount] = useReducer((x: number) => x + 1, 0);
 
   const { native: nativeSubs, overlay: overlaySubs } = useMemo(
     () => classifySubtitles(props.manifest),
@@ -205,9 +197,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
     }
     const def = props.manifest.subtitles.find((s) => s.default);
     if (def) return def;
-    const nativeFirst = props.manifest.subtitles.find(
-      (s) => subtitleOverlayKind(s) === "native",
-    );
+    const nativeFirst = props.manifest.subtitles.find((s) => subtitleOverlayKind(s) === "native");
     if (nativeFirst) return nativeFirst;
     return props.manifest.subtitles[0] ?? null;
   });
@@ -234,7 +224,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
   useEffect(() => {
     if (!handle) return;
     const kind = activeSubtitle ? subtitleOverlayKind(activeSubtitle) : "none";
-    const idx = kind === "native" ? activeSubtitle?.stream_idx ?? null : null;
+    const idx = kind === "native" ? (activeSubtitle?.stream_idx ?? null) : null;
     handle.setNativeSubtitle(idx);
     if (activeSubtitle) {
       console.log(
@@ -362,7 +352,6 @@ export function IrisPlayer(props: IrisPlayerProps) {
     return wire.dispose;
   }, [handle, props.manifest, props.title]);
 
-
   // Overlay subtitle: only when the active sub needs overlay rendering.
   // The URL is decorated with the current `subtitleVersion` token so the
   // SubtitleOverlay's URL-watch effect can hot-reload through libass /
@@ -387,31 +376,28 @@ export function IrisPlayer(props: IrisPlayerProps) {
   // clicks, shorter would miss legit double clicks.
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const shouldIgnoreClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>): boolean => {
-      // Ignore clicks that land on (or inside) interactive chrome
-      // bits — the chrome's own play button + scrubber + menus
-      // already handle themselves; toggling here on top would
-      // double-fire (play→pause→play within one click).
-      let n: HTMLElement | null = e.target as HTMLElement;
-      while (n && n !== e.currentTarget) {
-        const tag = n.tagName;
-        if (
-          tag === "BUTTON" ||
-          tag === "INPUT" ||
-          tag === "A" ||
-          tag === "SELECT" ||
-          tag === "TEXTAREA" ||
-          n.dataset.irisChrome !== undefined
-        ) {
-          return true;
-        }
-        n = n.parentElement;
+  const shouldIgnoreClick = useCallback((e: React.MouseEvent<HTMLDivElement>): boolean => {
+    // Ignore clicks that land on (or inside) interactive chrome
+    // bits — the chrome's own play button + scrubber + menus
+    // already handle themselves; toggling here on top would
+    // double-fire (play→pause→play within one click).
+    let n: HTMLElement | null = e.target as HTMLElement;
+    while (n && n !== e.currentTarget) {
+      const tag = n.tagName;
+      if (
+        tag === "BUTTON" ||
+        tag === "INPUT" ||
+        tag === "A" ||
+        tag === "SELECT" ||
+        tag === "TEXTAREA" ||
+        n.dataset.irisChrome !== undefined
+      ) {
+        return true;
       }
-      return false;
-    },
-    [],
-  );
+      n = n.parentElement;
+    }
+    return false;
+  }, []);
 
   const onSurfaceClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -443,19 +429,19 @@ export function IrisPlayer(props: IrisPlayerProps) {
     [shouldIgnoreClick, wrapper],
   );
 
-  useEffect(() => () => {
-    if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+    },
+    [],
+  );
 
   const playerNode = (
     <div
       ref={setWrapper}
       onClick={onSurfaceClick}
       onDoubleClick={onSurfaceDoubleClick}
-      className={
-        "relative h-full w-full bg-black" +
-        (controlsVisible ? "" : " cursor-none")
-      }
+      className={"relative h-full w-full bg-black" + (controlsVisible ? "" : " cursor-none")}
     >
       {/* React-managed slot. The callback ref re-appends our stable
           `videoHostRef` into this slot whenever React mounts a new
@@ -479,8 +465,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
         fullscreenTarget={wrapper}
         onControlsVisibleChange={setControlsVisible}
         documentPip={{
-          supported:
-            typeof window !== "undefined" && "documentPictureInPicture" in window,
+          supported: typeof window !== "undefined" && "documentPictureInPicture" in window,
           isActive: pip.isActive,
           toggle: pip.toggle,
         }}

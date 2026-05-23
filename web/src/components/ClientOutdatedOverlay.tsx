@@ -38,8 +38,7 @@ export function ClientOutdatedOverlay() {
           Update Iris
         </h1>
         <p className="text-muted-foreground">
-          The Iris server requires a newer client. Reload the page to pull
-          the latest bundle.
+          The Iris server requires a newer client. Reload the page to pull the latest bundle.
         </p>
         <p className="text-xs text-muted-foreground">
           Cached version: <code className="font-mono">{IRIS_WEB_VERSION}</code>

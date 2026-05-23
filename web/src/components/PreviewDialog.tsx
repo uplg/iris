@@ -261,9 +261,9 @@ export function PreviewDialog({
           // accidentally ingesting the same episode twice via a
           // different release.
           <div className="mt-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-            You already have this episode in your library. Playing the existing
-            file — use <span className="font-medium">Download anyway</span> below
-            only if you want a different release.
+            You already have this episode in your library. Playing the existing file — use{" "}
+            <span className="font-medium">Download anyway</span> below only if you want a different
+            release.
           </div>
         )}
 
@@ -315,7 +315,11 @@ function pickAutoFile(files: FilePreview[]): number | null {
 // FactsGrid — structured MediaInfo summary.
 // ---------------------------------------------------------------------------
 
-function FactsGrid({ mi }: { mi: { video: VideoInfo | null; audio: AudioInfo[]; subtitles: SubInfo[] } }) {
+function FactsGrid({
+  mi,
+}: {
+  mi: { video: VideoInfo | null; audio: AudioInfo[]; subtitles: SubInfo[] };
+}) {
   if (!mi.video && mi.audio.length === 0 && mi.subtitles.length === 0) return null;
   return (
     <div className="grid gap-3 rounded-md border border-border bg-card/30 p-3 text-sm">
@@ -352,11 +356,13 @@ function FactsGrid({ mi }: { mi: { video: VideoInfo | null; audio: AudioInfo[]; 
                   <span className="text-muted-foreground">{a.codec}</span>
                 ) : null}
                 {a.channels && (
-                  <span className="text-muted-foreground">
-                    {channelLabel(a.channels)}
-                  </span>
+                  <span className="text-muted-foreground">{channelLabel(a.channels)}</span>
                 )}
-                {a.default && <Badge variant="secondary" className="text-[10px]">def</Badge>}
+                {a.default && (
+                  <Badge variant="secondary" className="text-[10px]">
+                    def
+                  </Badge>
+                )}
               </span>
             ))}
           </div>
@@ -375,9 +381,15 @@ function FactsGrid({ mi }: { mi: { video: VideoInfo | null; audio: AudioInfo[]; 
               >
                 <span className="font-medium">{s.lang ?? "?"}</span>
                 {s.format && <span className="text-muted-foreground">{s.format}</span>}
-                {s.forced && <Badge variant="secondary" className="text-[10px]">forced</Badge>}
+                {s.forced && (
+                  <Badge variant="secondary" className="text-[10px]">
+                    forced
+                  </Badge>
+                )}
                 {s.title?.toLowerCase().includes("sdh") && (
-                  <Badge variant="secondary" className="text-[10px]">SDH</Badge>
+                  <Badge variant="secondary" className="text-[10px]">
+                    SDH
+                  </Badge>
                 )}
               </span>
             ))}
@@ -710,9 +722,7 @@ function renderTag(n: Extract<BBNode, { type: "tag" }>, key: number): ReactNode 
 }
 
 function nodesToText(nodes: BBNode[]): string {
-  return nodes
-    .map((n) => (n.type === "text" ? n.value : nodesToText(n.children)))
-    .join("");
+  return nodes.map((n) => (n.type === "text" ? n.value : nodesToText(n.children))).join("");
 }
 
 /** Drop lines that are pure decoration (long runs of unicode separator

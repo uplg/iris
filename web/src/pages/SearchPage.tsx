@@ -164,7 +164,6 @@ export function SearchPage() {
     placeholderData: keepPreviousData,
   });
 
-
   const rows = data?.results ?? [];
   const meta = data?.providers ?? [];
   const totals = useMemo(() => {
@@ -273,9 +272,7 @@ export function SearchPage() {
 
       {error && <ErrorState title="Search failed" error={error} />}
 
-      {data?.parsed_query && (
-        <ParsedQueryBanner info={data.parsed_query} rawQuery={debounced} />
-      )}
+      {data?.parsed_query && <ParsedQueryBanner info={data.parsed_query} rawQuery={debounced} />}
 
       {debounced.length < 2 ? (
         <EmptyState
@@ -298,9 +295,7 @@ export function SearchPage() {
                 key={`${r.provider_id}:${r.external_id}`}
                 result={r}
                 onClick={() => setPicked(r)}
-                onPlayExisting={(infohash, fileIdx) =>
-                  navigate(`/watch/${infohash}/${fileIdx}`)
-                }
+                onPlayExisting={(infohash, fileIdx) => navigate(`/watch/${infohash}/${fileIdx}`)}
               />
             ))}
           </div>
@@ -333,17 +328,13 @@ export function SearchPage() {
  *  response (title + season + episode + year) above the results
  *  grid. Reassures the user that the indexer was queried with the
  *  structured fields, not the raw string. */
-function ParsedQueryBanner({
-  info,
-  rawQuery,
-}: {
-  info: ParsedQueryInfo;
-  rawQuery: string;
-}) {
+function ParsedQueryBanner({ info, rawQuery }: { info: ParsedQueryInfo; rawQuery: string }) {
   const parts: string[] = [];
   if (info.season != null) {
     if (info.episode != null && info.episode > 0) {
-      parts.push(`S${String(info.season).padStart(2, "0")}E${String(info.episode).padStart(2, "0")}`);
+      parts.push(
+        `S${String(info.season).padStart(2, "0")}E${String(info.episode).padStart(2, "0")}`,
+      );
     } else {
       parts.push(`Season ${info.season}`);
     }
@@ -359,8 +350,7 @@ function ParsedQueryBanner({
         {parts.length > 0 && (
           <>
             {" "}
-            ·{" "}
-            <span className="font-mono text-foreground">{parts.join(" · ")}</span>
+            · <span className="font-mono text-foreground">{parts.join(" · ")}</span>
           </>
         )}
       </span>
@@ -413,9 +403,7 @@ function SuggestionsDropdown({
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-medium">
               {s.title}
-              {s.year && (
-                <span className="ml-1.5 text-xs text-muted-foreground">({s.year})</span>
-              )}
+              {s.year && <span className="ml-1.5 text-xs text-muted-foreground">({s.year})</span>}
             </div>
             {s.overview && (
               <div className="truncate text-[11px] text-muted-foreground">{s.overview}</div>
@@ -458,8 +446,7 @@ function ResultCard({
   // Last-resort fallback: a pre-resolved poster URL the indexer
   // sometimes ships (featured items on torr9). We use it only when
   // TMDB resolution genuinely failed.
-  const poster =
-    tmdbImage(tmdbHitQ.data?.poster_path, "w342") ?? result.poster_url ?? null;
+  const poster = tmdbImage(tmdbHitQ.data?.poster_path, "w342") ?? result.poster_url ?? null;
   const Icon = result.kind === "tv" ? Tv : Film;
   const owned = result.already_in_library === true;
   const canPlayExisting =

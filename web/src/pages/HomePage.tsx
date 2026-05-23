@@ -51,10 +51,7 @@ export function HomePage() {
   });
 
   // Library shelf only shows the recent N — full grid lives at /library.
-  const recentLibrary = useMemo(
-    () => (libraryQ.data ?? []).slice(0, 12),
-    [libraryQ.data],
-  );
+  const recentLibrary = useMemo(() => (libraryQ.data ?? []).slice(0, 12), [libraryQ.data]);
 
   return (
     <div className="grid gap-10">
@@ -62,10 +59,7 @@ export function HomePage() {
         title="Continue Watching"
         isEmpty={!continueQ.data || continueQ.data.length === 0}
         emptyState={
-          <span>
-            Once you start watching something, you'll find it here ready to
-            resume.
-          </span>
+          <span>Once you start watching something, you'll find it here ready to resume.</span>
         }
       >
         {continueQ.data?.map((item) => (
@@ -80,12 +74,18 @@ export function HomePage() {
           <div className="grid gap-2">
             <span>No series followed yet.</span>
             <span className="text-xs">
-              Find a series in <Link to="/search" className="underline">search</Link> and click "Follow" to add it here.
+              Find a series in{" "}
+              <Link to="/search" className="underline">
+                search
+              </Link>{" "}
+              and click "Follow" to add it here.
             </span>
           </div>
         }
       >
-        {watchlistQ.data?.map((w) => <WatchlistCard key={w.id} item={w} />)}
+        {watchlistQ.data?.map((w) => (
+          <WatchlistCard key={w.id} item={w} />
+        ))}
       </Shelf>
 
       <Shelf
@@ -114,11 +114,17 @@ export function HomePage() {
         isEmpty={recentLibrary.length === 0}
         emptyState={
           <span>
-            Nothing in the library yet. Start a <Link to="/search" className="underline">search</Link> to add your first title.
+            Nothing in the library yet. Start a{" "}
+            <Link to="/search" className="underline">
+              search
+            </Link>{" "}
+            to add your first title.
           </span>
         }
       >
-        {recentLibrary.map((t) => <LibraryCard key={t.infohash} torrent={t} />)}
+        {recentLibrary.map((t) => (
+          <LibraryCard key={t.infohash} torrent={t} />
+        ))}
       </Shelf>
     </div>
   );
@@ -187,10 +193,7 @@ function FeaturedCard({ result }: { result: SearchResult }) {
 
   const [previewOpen, setPreviewOpen] = useState(false);
 
-  const subtitle = [
-    result.year,
-    result.seeders != null ? `${result.seeders} seeders` : null,
-  ]
+  const subtitle = [result.year, result.seeders != null ? `${result.seeders} seeders` : null]
     .filter(Boolean)
     .join(" · ");
 
@@ -266,13 +269,9 @@ function stripTrailingYear(s: string): string {
   return m[1];
 }
 
-
 function LibraryCard({ torrent }: { torrent: TorrentView }) {
   const videos = torrent.files.filter((f) => VIDEO_RE.test(f.path));
-  const href =
-    videos.length === 1
-      ? `/watch/${torrent.infohash}/${videos[0].index}`
-      : "/library";
+  const href = videos.length === 1 ? `/watch/${torrent.infohash}/${videos[0].index}` : "/library";
   const subtitle = formatSize(torrent.total_size_bytes);
   const downloading = torrent.progress_pct < 99.9;
   const progress = downloading ? torrent.progress_pct / 100 : undefined;

@@ -63,18 +63,15 @@ export function FirefoxWarning() {
           </DialogTitle>
           <DialogDescription>
             For the smoothest playback experience, please use{" "}
-            <span className="text-foreground">Chrome</span> (or any
-            Chromium-based browser).
+            <span className="text-foreground">Chrome</span> (or any Chromium-based browser).
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-3 py-2 text-sm text-muted-foreground">
           <p>
-            Firefox works for most files, but some playback paths — in
-            particular 4K HEVC, Dolby Vision, and seeking on long
-            files — are flaky on it. We're tracking proper Firefox
-            support; in the meantime Chrome gives a far more reliable
-            experience.
+            Firefox works for most files, but some playback paths — in particular 4K HEVC, Dolby
+            Vision, and seeking on long files — are flaky on it. We're tracking proper Firefox
+            support; in the meantime Chrome gives a far more reliable experience.
           </p>
         </div>
 

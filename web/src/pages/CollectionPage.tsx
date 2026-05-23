@@ -86,8 +86,7 @@ export function CollectionPage() {
   // play whatever is on disk. The parser improvement is tracked
   // separately; this is the cheap UX guard until then.
   const tvHasEpisodes =
-    data.kind === "tv" &&
-    (data.episodes.length > 0 || (data.available_episodes?.length ?? 0) > 0);
+    data.kind === "tv" && (data.episodes.length > 0 || (data.available_episodes?.length ?? 0) > 0);
 
   return (
     <div className="grid gap-6">
@@ -128,32 +127,29 @@ function Hero({ collection }: { collection: CollectionDetail }) {
           <div className="absolute inset-0 bg-gradient-to-t from-background via-background/60 to-transparent" />
         </>
       )}
-      <div className="relative flex flex-wrap gap-6 p-6">
+      <div className="relative flex flex-wrap gap-4 p-4 sm:gap-6 sm:p-6">
         {poster ? (
           <img
             src={poster}
             alt={collection.display_title}
-            className="h-56 w-40 shrink-0 rounded-md border border-border object-cover shadow-lg"
+            className="h-40 w-28 shrink-0 rounded-md border border-border object-cover shadow-lg sm:h-56 sm:w-40"
           />
         ) : (
-          <div className="flex h-56 w-40 shrink-0 items-center justify-center rounded-md border border-dashed border-border bg-card text-center text-xs text-muted-foreground">
+          <div className="flex h-40 w-28 shrink-0 items-center justify-center rounded-md border border-dashed border-border bg-card text-center text-xs text-muted-foreground sm:h-56 sm:w-40">
             No poster
           </div>
         )}
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight">
+        <div className="flex min-w-0 flex-1 basis-48 flex-col gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
             {collection.display_title}
           </h1>
           <p className="text-xs text-muted-foreground">
-            {collection.kind === "tv" ? "Series" : "Movie"} ·{" "}
-            {collection.torrents.length} torrent
+            {collection.kind === "tv" ? "Series" : "Movie"} · {collection.torrents.length} torrent
             {collection.torrents.length > 1 ? "s" : ""}
             {newCount > 0 && (
               <>
                 {" · "}
-                <Badge className="bg-emerald-500/80 text-[10px] uppercase">
-                  {newCount} new
-                </Badge>
+                <Badge className="bg-emerald-500/80 text-[10px] uppercase">{newCount} new</Badge>
               </>
             )}
           </p>
@@ -247,9 +243,7 @@ function mergeEpisodes(
       return (a.language ?? "").localeCompare(b.language ?? "");
     });
   }
-  return Array.from(byKey.values()).sort(
-    (a, b) => a.season - b.season || a.episode - b.episode,
-  );
+  return Array.from(byKey.values()).sort((a, b) => a.season - b.season || a.episode - b.episode);
 }
 
 function EpisodeList({
@@ -305,9 +299,7 @@ function EpisodeList({
 
   if (seasons.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        No episodes parsed yet for this collection.
-      </p>
+      <p className="text-sm text-muted-foreground">No episodes parsed yet for this collection.</p>
     );
   }
 
@@ -345,8 +337,8 @@ function EpisodeList({
         // singletons / on-disk episodes yet. The pack banner above
         // is the user's only action; this caption explains why.
         <p className="text-sm text-muted-foreground">
-          No individual episode releases cached. Grab the season pack
-          above to pull every episode in one go.
+          No individual episode releases cached. Grab the season pack above to pull every episode in
+          one go.
         </p>
       )}
     </div>
@@ -417,13 +409,11 @@ function SeasonPackBanner({
   });
   const busy = grab.isPending || prepare.isPending;
   return (
-    <div className="grid grid-cols-[1fr_auto] items-center gap-3 rounded-lg border border-emerald-500/40 bg-gradient-to-r from-emerald-500/15 via-emerald-500/5 to-transparent px-4 py-3">
+    <div className="grid grid-cols-1 items-center gap-3 rounded-lg border border-emerald-500/40 bg-gradient-to-r from-emerald-500/15 via-emerald-500/5 to-transparent px-4 py-3 sm:grid-cols-[1fr_auto]">
       <div className="min-w-0 grid gap-1">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge className="bg-emerald-500/80 text-[10px] uppercase">Season pack</Badge>
-          <span className="text-sm font-medium">
-            Season {pack.season} · full pack available
-          </span>
+          <span className="text-sm font-medium">Season {pack.season} · full pack available</span>
           <LanguageBadge language={pack.language} />
         </div>
         <div className="text-xs text-muted-foreground">
@@ -460,9 +450,7 @@ function EpisodeRow({
   ep: MergedEpisode;
   onPlay: (infohash: string, fileIdx: number) => void;
 }) {
-  const anyWatched = ep.variants.some(
-    (v) => v.status === "downloaded" && v.watched,
-  );
+  const anyWatched = ep.variants.some((v) => v.status === "downloaded" && v.watched);
   return (
     <li className="grid grid-cols-[3rem_1fr] items-start gap-3 px-4 py-3 text-sm">
       <span className="pt-1 text-center font-mono text-muted-foreground">
@@ -471,8 +459,7 @@ function EpisodeRow({
       <div className="min-w-0 grid gap-2">
         <div className="flex items-center gap-2">
           <span className="font-medium">
-            S{ep.season.toString().padStart(2, "0")}E
-            {ep.episode.toString().padStart(2, "0")}
+            S{ep.season.toString().padStart(2, "0")}E{ep.episode.toString().padStart(2, "0")}
           </span>
           {anyWatched && (
             <Badge variant="secondary" className="text-[10px]">
@@ -598,7 +585,11 @@ function RawFileList({
               <span className="truncate font-mono text-xs text-muted-foreground">
                 {f.path.split("/").pop()}
               </span>
-              <Button size="sm" className="ml-auto shrink-0" onClick={() => onPlay(t.infohash, f.index)}>
+              <Button
+                size="sm"
+                className="ml-auto shrink-0"
+                onClick={() => onPlay(t.infohash, f.index)}
+              >
                 <Play className="size-3.5" />
                 Play
               </Button>

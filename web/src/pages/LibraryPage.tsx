@@ -59,7 +59,7 @@ export function LibraryPage() {
     <div className="grid gap-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Library</h1>
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Library</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {view === "collections"
               ? "Movies and series grouped together."
@@ -224,15 +224,9 @@ function CollectionsView() {
         shown={items.length}
       />
       {items.length === 0 ? (
-        <EmptyState
-          title="No matches"
-          body="Adjust the search or filters to see more."
-        />
+        <EmptyState title="No matches" body="Adjust the search or filters to see more." />
       ) : (
-        <VirtualCollectionsGrid
-          items={items}
-          onPick={(c) => routeCollection(c, navigate)}
-        />
+        <VirtualCollectionsGrid items={items} onPick={(c) => routeCollection(c, navigate)} />
       )}
     </div>
   );
@@ -259,7 +253,7 @@ function CollectionsFilters({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <div className="relative min-w-[14rem] flex-1">
+      <div className="relative w-full flex-1 sm:w-auto sm:min-w-[14rem]">
         <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <input
           type="text"
@@ -389,13 +383,8 @@ function VirtualCollectionsGrid({
   });
 
   return (
-    <div
-      ref={parentRef}
-      className="max-h-[calc(100vh-14rem)] overflow-y-auto rounded-lg"
-    >
-      <div
-        style={{ height: virtualizer.getTotalSize(), position: "relative" }}
-      >
+    <div ref={parentRef} className="max-h-[calc(100vh-14rem)] overflow-y-auto rounded-lg">
+      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((vrow) => {
           const start = vrow.index * lanes;
           const slice = items.slice(start, start + lanes);
@@ -496,10 +485,7 @@ function collectionBadge(c: CollectionListItem): React.ReactNode {
   return undefined;
 }
 
-function routeCollection(
-  c: CollectionListItem,
-  navigate: ReturnType<typeof useNavigate>,
-) {
+function routeCollection(c: CollectionListItem, navigate: ReturnType<typeof useNavigate>) {
   // Always land on the collection page. The /series/:tmdb_id route
   // is the Watchlist surface (TMDB-driven episode grid) and only
   // makes sense for shows the user has explicitly followed — when
@@ -551,8 +537,7 @@ function TorrentsView() {
     );
   }, [allItems, filter]);
 
-  const totalUploaded =
-    data && data.view === "torrents" ? data.total_uploaded_bytes : 0;
+  const totalUploaded = data && data.view === "torrents" ? data.total_uploaded_bytes : 0;
 
   if (isLoading) return <SkeletonCard count={3} />;
   if (error) return <ErrorState error={error} />;
@@ -572,7 +557,7 @@ function TorrentsView() {
         items={items}
         progress={cwQ.data ?? []}
         onRemove={(infohash) => remove.mutate(infohash)}
-        removingInfohash={remove.isPending ? remove.variables ?? null : null}
+        removingInfohash={remove.isPending ? (remove.variables ?? null) : null}
       />
     </div>
   );
@@ -663,13 +648,8 @@ function VirtualTorrentList({
   }, [progress]);
 
   return (
-    <div
-      ref={parentRef}
-      className="max-h-[calc(100vh-18rem)] overflow-y-auto rounded-lg"
-    >
-      <div
-        style={{ height: virtualizer.getTotalSize(), position: "relative" }}
-      >
+    <div ref={parentRef} className="max-h-[calc(100vh-18rem)] overflow-y-auto rounded-lg">
+      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((v) => {
           const t = items[v.index]!;
           return (
@@ -700,13 +680,7 @@ function VirtualTorrentList({
   );
 }
 
-function SeedSummary({
-  totalUploaded,
-  items,
-}: {
-  totalUploaded: number;
-  items: TorrentView[];
-}) {
+function SeedSummary({ totalUploaded, items }: { totalUploaded: number; items: TorrentView[] }) {
   const liveUpSpeed = items.reduce((s, t) => s + t.upload_speed_bps, 0);
   const liveDownSpeed = items.reduce((s, t) => s + t.download_speed_bps, 0);
   const downloaded = items.reduce((s, t) => s + t.progress_bytes, 0);
@@ -721,9 +695,7 @@ function SeedSummary({
           {formatSize(totalUploaded)}
         </span>
         {ratio != null && (
-          <span className="text-xs text-emerald-300/80 tabular-nums">
-            ratio {ratio.toFixed(2)}
-          </span>
+          <span className="text-xs text-emerald-300/80 tabular-nums">ratio {ratio.toFixed(2)}</span>
         )}
       </div>
       <div className="flex items-center gap-4 text-xs tabular-nums text-muted-foreground">
@@ -761,27 +733,16 @@ function TorrentRow({
   return (
     <div className="group rounded-lg border border-border/70 bg-card/60 transition hover:border-border">
       <div className="flex gap-4 p-4">
-        <TorrentPoster
-          name={t.name}
-          kind={t.kind}
-          verified={t.tmdb_verified}
-        />
+        <TorrentPoster name={t.name} kind={t.kind} verified={t.tmdb_verified} />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h3
-                className="truncate text-sm font-medium leading-snug"
-                title={t.name ?? undefined}
-              >
+              <h3 className="truncate text-sm font-medium leading-snug" title={t.name ?? undefined}>
                 {t.name ?? t.infohash}
               </h3>
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
                 <StateBadge state={t.state} />
-                <HealthBadge
-                  peers={t.peers}
-                  finished={finished}
-                  state={t.state}
-                />
+                <HealthBadge peers={t.peers} finished={finished} state={t.state} />
                 {ratio != null && (
                   <Badge
                     variant="outline"
@@ -807,11 +768,7 @@ function TorrentRow({
                 </Button>
               )}
               {videos.length > 1 && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setExpanded((v) => !v)}
-                >
+                <Button size="sm" variant="outline" onClick={() => setExpanded((v) => !v)}>
                   {expanded ? (
                     <ChevronUp className="size-3.5" />
                   ) : (
@@ -839,36 +796,26 @@ function TorrentRow({
             <div className="flex items-baseline justify-between gap-2 text-[11px] tabular-nums">
               <span className="text-muted-foreground">
                 {formatSize(t.progress_bytes)} /{" "}
-                <span className="text-foreground">
-                  {formatSize(t.total_size_bytes)}
-                </span>
+                <span className="text-foreground">{formatSize(t.total_size_bytes)}</span>
               </span>
               <span className="text-muted-foreground">
-                <span className="text-sky-300">↓</span>{" "}
-                {formatSize(t.download_speed_bps)}/s
+                <span className="text-sky-300">↓</span> {formatSize(t.download_speed_bps)}/s
                 <span className="mx-1.5">·</span>
-                <span className="text-emerald-300">↑</span>{" "}
-                {formatSize(t.upload_speed_bps)}/s
+                <span className="text-emerald-300">↑</span> {formatSize(t.upload_speed_bps)}/s
                 <span className="mx-1.5">·</span>
                 {t.peers} peers
               </span>
             </div>
-            <Progress
-              value={pct}
-              className={cn("h-1.5", finished && "[&>*]:bg-emerald-500/70")}
-            />
+            <Progress value={pct} className={cn("h-1.5", finished && "[&>*]:bg-emerald-500/70")} />
           </div>
 
           <p className="text-[10px] text-muted-foreground">
-            Added by{" "}
-            <span className="text-foreground/90">{t.added_by_name}</span>
+            Added by <span className="text-foreground/90">{t.added_by_name}</span>
             {" · "}
             {new Date(t.added_at).toLocaleDateString()}
           </p>
 
-          {t.error && (
-            <p className="text-xs text-destructive">{t.error}</p>
-          )}
+          {t.error && <p className="text-xs text-destructive">{t.error}</p>}
         </div>
       </div>
 
@@ -923,10 +870,7 @@ function TorrentPoster({
           src={url}
           alt=""
           loading="lazy"
-          className={cn(
-            "h-full w-full object-cover",
-            !verified && "opacity-70",
-          )}
+          className={cn("h-full w-full object-cover", !verified && "opacity-70")}
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-muted-foreground/60">
@@ -999,9 +943,7 @@ function FileEntry({
               watched
             </span>
           ) : watchedPct != null ? (
-            <span className="text-emerald-300">
-              {watchedPct.toFixed(0)}% watched
-            </span>
+            <span className="text-emerald-300">{watchedPct.toFixed(0)}% watched</span>
           ) : null}
         </div>
         {!watch?.completed && watchedPct != null && (
@@ -1012,16 +954,11 @@ function FileEntry({
         <Button asChild size="sm">
           <Link to={`/watch/${infohash}/${file.index}`}>
             <Play className="size-3.5" />
-            {watchedPct != null && watchedPct > 0 && !watch?.completed
-              ? "Resume"
-              : "Play"}
+            {watchedPct != null && watchedPct > 0 && !watch?.completed ? "Resume" : "Play"}
           </Link>
         </Button>
         <Button asChild size="sm" variant="outline" title="Download">
-          <a
-            href={torrents.downloadUrl(infohash, file.index)}
-            download={fname}
-          >
+          <a href={torrents.downloadUrl(infohash, file.index)} download={fname}>
             <Download className="size-3.5" />
             <span className="sr-only">Download</span>
           </a>
@@ -1039,10 +976,7 @@ function StateBadge({ state }: { state: TorrentView["state"] }) {
     error: "border-rose-500/50 bg-rose-500/10 text-rose-200",
   };
   return (
-    <Badge
-      variant="outline"
-      className={`text-[10px] uppercase ${styles[state]}`}
-    >
+    <Badge variant="outline" className={`text-[10px] uppercase ${styles[state]}`}>
       {state}
     </Badge>
   );

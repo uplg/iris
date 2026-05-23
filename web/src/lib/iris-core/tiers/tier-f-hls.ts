@@ -10,6 +10,7 @@
 
 import Hls from "hls.js";
 
+import { isMobileLike } from "../caps";
 import {
   appendNativeTrack,
   bindVideoCallbacks,
@@ -50,7 +51,9 @@ export const mountTierF: EngineMount = async (opts) => {
     if (errorFired) return;
     errorFired = true;
     const err = video.error;
-    opts.onError(new Error(err ? `media error ${err.code}: ${err.message}` : "video element error"));
+    opts.onError(
+      new Error(err ? `media error ${err.code}: ${err.message}` : "video element error"),
+    );
   };
   video.addEventListener("error", onErr);
 
@@ -76,11 +79,8 @@ export const mountTierF: EngineMount = async (opts) => {
   // browsers. iOS Safari still falls back to native HLS because
   // `Hls.isSupported()` returns false there.
   const useHlsJs = Hls.isSupported();
-  const nativeHls = !useHlsJs &&
-    video.canPlayType("application/vnd.apple.mpegurl") !== "";
-  console.log(
-    `[iris-core] Tier F mount: useHlsJs=${useHlsJs} nativeHls=${nativeHls}`,
-  );
+  const nativeHls = !useHlsJs && video.canPlayType("application/vnd.apple.mpegurl") !== "";
+  console.log(`[iris-core] Tier F mount: useHlsJs=${useHlsJs} nativeHls=${nativeHls}`);
   if (nativeHls) {
     video.src = streamUrl;
     return videoBackedHandle(video, {
@@ -126,12 +126,30 @@ export const mountTierF: EngineMount = async (opts) => {
   // listen for it because our HLS pipeline never embeds subs —
   // shaka-packager serves them as standalone files referenced from
   // the manifest), and our `<track>` elements remain untouched.
+  // Memory ceiling. hls.js defaults `backBufferLength` to Infinity —
+  // it NEVER evicts segments behind the playhead, so a 2-hour film
+  // grows the SourceBuffer monotonically until the tab is OOM-killed
+  // (mobile Chrome's "Aw, Snap!"). Since Tier F is now the universal
+  // mobile fallback (see `pickTier`), an unbounded back buffer would
+  // just relocate the crash here. We cap the back buffer hard, and on
+  // phones/tablets also tighten the forward buffer so the live
+  // footprint stays well under the per-tab budget. Desktop keeps a
+  // roomier forward buffer for scrub resilience.
+  const mobile = isMobileLike();
   const hls = new Hls({
     xhrSetup: (xhr) => {
       xhr.withCredentials = true;
     },
     debug: false,
     renderTextTracksNatively: false,
+    // Evict played-out media; 30 s of scrub-back is plenty.
+    backBufferLength: 30,
+    // Forward buffer caps. Mobile gets a tighter ceiling (both the
+    // duration and the absolute byte size) to keep the renderer alive
+    // across a full feature-length playback.
+    maxBufferLength: mobile ? 20 : 30,
+    maxMaxBufferLength: mobile ? 60 : 600,
+    maxBufferSize: mobile ? 20 * 1000 * 1000 : 60 * 1000 * 1000,
   });
 
   // Match Vidstack's HLSController.setup ordering exactly:
@@ -169,9 +187,7 @@ export const mountTierF: EngineMount = async (opts) => {
       audioTrackIndex < hls.audioTracks.length &&
       hls.audioTrack !== audioTrackIndex
     ) {
-      console.log(
-        `[iris-core] Tier F: applying inherited audio pick ${audioTrackIndex}`,
-      );
+      console.log(`[iris-core] Tier F: applying inherited audio pick ${audioTrackIndex}`);
       hls.audioTrack = audioTrackIndex;
     }
     opts.onAudioTracksChange?.(tracks);
@@ -214,10 +230,7 @@ export const mountTierF: EngineMount = async (opts) => {
     }
     if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
       const now = performance.now();
-      while (
-        recentRecoveries.length > 0 &&
-        now - recentRecoveries[0]! > RECOVER_WINDOW_MS
-      ) {
+      while (recentRecoveries.length > 0 && now - recentRecoveries[0]! > RECOVER_WINDOW_MS) {
         recentRecoveries.shift();
       }
       if (recentRecoveries.length >= MAX_RECOVER) {
@@ -230,8 +243,16 @@ export const mountTierF: EngineMount = async (opts) => {
         // so we go for the lighter `stopLoad()` + `detachMedia()`.
         // Full `destroy()` runs in the engine's `dispose()` path
         // once IrisPlayer / WatchPage react to the surfaced error.
-        try { hls.stopLoad(); } catch { /* idempotent */ }
-        try { hls.detachMedia(); } catch { /* idempotent */ }
+        try {
+          hls.stopLoad();
+        } catch {
+          /* idempotent */
+        }
+        try {
+          hls.detachMedia();
+        } catch {
+          /* idempotent */
+        }
         opts.onError(new Error(`hls.js fatal ${data.type}: ${data.details}`));
         return;
       }
@@ -243,13 +264,21 @@ export const mountTierF: EngineMount = async (opts) => {
         hls.recoverMediaError();
       } catch (e) {
         surfaced = true;
-        try { hls.stopLoad(); } catch { /* idempotent */ }
+        try {
+          hls.stopLoad();
+        } catch {
+          /* idempotent */
+        }
         opts.onError(e instanceof Error ? e : new Error(String(e)));
       }
       return;
     }
     surfaced = true;
-    try { hls.stopLoad(); } catch { /* idempotent */ }
+    try {
+      hls.stopLoad();
+    } catch {
+      /* idempotent */
+    }
     opts.onError(new Error(`hls.js fatal ${data.type}: ${data.details}`));
   });
 
@@ -301,9 +330,7 @@ export const mountTierF: EngineMount = async (opts) => {
         return;
       }
       if (idx === hls.audioTrack) {
-        console.log(
-          `[iris-core] Tier F: setAudioTrack(${idx}) already active, hls.js no-op`,
-        );
+        console.log(`[iris-core] Tier F: setAudioTrack(${idx}) already active, hls.js no-op`);
         return;
       }
       console.log(

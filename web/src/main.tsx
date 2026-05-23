@@ -21,10 +21,7 @@ window.addEventListener("vite:preloadError", (event) => {
   const last = Number(sessionStorage.getItem(STALE_RELOAD_KEY) ?? "0");
   const now = Date.now();
   if (now - last < 10_000) {
-    console.error(
-      "[iris] preload error after recent reload — leaving page intact",
-      event,
-    );
+    console.error("[iris] preload error after recent reload — leaving page intact", event);
     return;
   }
   sessionStorage.setItem(STALE_RELOAD_KEY, String(now));

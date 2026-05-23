@@ -58,14 +58,21 @@ let cachedHeader: string | null = null;
 export async function probeCapabilities(): Promise<ClientCaps> {
   if (cached) return cached;
   const mse = typeof globalThis.MediaSource !== "undefined";
-  const mms = typeof (globalThis as { ManagedMediaSource?: unknown }).ManagedMediaSource !== "undefined";
+  const mms =
+    typeof (globalThis as { ManagedMediaSource?: unknown }).ManagedMediaSource !== "undefined";
   const webcodecs = typeof (globalThis as { VideoDecoder?: unknown }).VideoDecoder !== "undefined";
   const webgpu = typeof (navigator as Navigator & { gpu?: unknown }).gpu !== "undefined";
 
-  const containers = mse ? CONTAINER_PROBES.filter((p) => MediaSource.isTypeSupported(p.mime)).map((p) => p.name) : [];
+  const containers = mse
+    ? CONTAINER_PROBES.filter((p) => MediaSource.isTypeSupported(p.mime)).map((p) => p.name)
+    : [];
   // Phase 0: just MSE-level probing. WebCodecs HW probing comes Phase 2b.
-  const videoDecoders = mse ? VIDEO_PROBES.filter((p) => MediaSource.isTypeSupported(p.mime)).map((p) => p.name) : [];
-  const audioDecoders = mse ? AUDIO_PROBES.filter((p) => MediaSource.isTypeSupported(p.mime)).map((p) => p.name) : [];
+  const videoDecoders = mse
+    ? VIDEO_PROBES.filter((p) => MediaSource.isTypeSupported(p.mime)).map((p) => p.name)
+    : [];
+  const audioDecoders = mse
+    ? AUDIO_PROBES.filter((p) => MediaSource.isTypeSupported(p.mime)).map((p) => p.name)
+    : [];
 
   // Subtitles: WebVTT is always native via <track>. ASS/PGS overlays land
   // Phase 2d (libass-wasm, libpgs-js) — we still advertise them so server
@@ -131,6 +138,31 @@ function detectPlatform(): string {
     ua.match(/Version\/(\d+).*Safari/);
   const version = versionMatch ? versionMatch[1] : "?";
   return `web-${browser}-${version}`;
+}
+
+/**
+ * Coarse "is this a phone / tablet?" check used to gate the decode-tier
+ * cascade. Mobile browsers run in tight per-tab memory budgets and the
+ * OOM killer reaps the renderer with NO recoverable JS error — the tab
+ * just shows Chrome's "Aw, Snap!" page. Because that's unrecoverable at
+ * runtime (the demote cascade can't fire on a dead renderer), the only
+ * defence is to never *select* a memory-heavy engine (WebCodecs canvas
+ * decode, WASM transcode, client-side demux) on these devices in the
+ * first place — see `pickTier`.
+ *
+ * Detection: UA mobile markers OR (touch-capable AND coarse pointer).
+ * The second clause catches Android tablets / UAs that omit "Mobi".
+ * iPadOS Safari masquerades as desktop, but its native `<video>` + HLS
+ * paths (Tier A / F) are exactly the ones we keep, so a false negative
+ * there is harmless.
+ */
+export function isMobileLike(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  if (/Android|iPhone|iPad|iPod|Mobi|Windows Phone/i.test(ua)) return true;
+  const touch = (navigator.maxTouchPoints ?? 0) > 0 || "ontouchstart" in (globalThis as object);
+  const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  return touch && coarse;
 }
 
 /** Test-only hook to reset the memoised result. */

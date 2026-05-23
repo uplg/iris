@@ -31,12 +31,7 @@ export const CLIENT_OUTDATED_EVENT = "iris:client-outdated";
  *  `vite.config.ts`. Used in the `X-Iris-Client` header. */
 export const IRIS_WEB_VERSION: string = __IRIS_WEB_VERSION__;
 
-const NO_RETRY_PATHS = new Set([
-  "/auth/refresh",
-  "/auth/login",
-  "/auth/register",
-  "/auth/logout",
-]);
+const NO_RETRY_PATHS = new Set(["/auth/refresh", "/auth/login", "/auth/register", "/auth/logout"]);
 
 function clientHeaders(extra?: HeadersInit): HeadersInit {
   // X-Iris-Client lands on every outbound API request so the server
@@ -336,9 +331,7 @@ export const metadata = {
    *  same numerical id can refer to two unrelated entries — pass the
    *  collection / search-result kind to land on the right one). */
   tmdb: (id: number, kind?: "movie" | "tv") =>
-    api.get<TmdbMetadata>(
-      kind ? `/metadata/tmdb/${id}?kind=${kind}` : `/metadata/tmdb/${id}`,
-    ),
+    api.get<TmdbMetadata>(kind ? `/metadata/tmdb/${id}?kind=${kind}` : `/metadata/tmdb/${id}`),
   /** Typeahead: TMDB multi-search proxied through the backend. Empty
    *  array on missing config / network failure (best-effort). */
   tmdbSearch: (q: string) =>
@@ -351,9 +344,7 @@ export const metadata = {
    *  it (one source of truth instead of a per-client SCENE parser). */
   tmdbResolve: (title: string, kind?: MediaKind | null) =>
     api.get<TmdbSuggestion | null>(
-      `/metadata/tmdb/resolve?title=${encodeURIComponent(title)}${
-        kind ? `&kind=${kind}` : ""
-      }`,
+      `/metadata/tmdb/resolve?title=${encodeURIComponent(title)}${kind ? `&kind=${kind}` : ""}`,
     ),
 };
 
@@ -902,14 +893,10 @@ export const follows = {
   /** Pass `season` to filter; omit for the full set. */
   episodes: (id: string, season?: number) =>
     api.get<EpisodesResponse>(
-      season != null
-        ? `/me/follows/${id}/episodes?season=${season}`
-        : `/me/follows/${id}/episodes`,
+      season != null ? `/me/follows/${id}/episodes?season=${season}` : `/me/follows/${id}/episodes`,
     ),
   grabEpisode: (id: string, season: number, episode: number) =>
-    api.post<GrabEpisodeResponse>(
-      `/me/follows/${id}/episodes/${season}/${episode}/grab`,
-    ),
+    api.post<GrabEpisodeResponse>(`/me/follows/${id}/episodes/${season}/${episode}/grab`),
   /** Fetch context for the file currently playing — drives the
    *  "Watch next?" modal at episode end. */
   episodeContext: (infohash: string, file_idx: number) =>

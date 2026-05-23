@@ -7,7 +7,7 @@
  * the dual of `iris-media::manifest::Manifest` in Rust.
  */
 
-import { capsHeader, probeCapabilities } from "./caps";
+import { capsHeader, isMobileLike, probeCapabilities } from "./caps";
 import { libavCanDecode } from "./decode/libav-audio-decoder";
 import { cheapProbeVideoCodec } from "./decode/webcodecs-probe";
 
@@ -153,9 +153,7 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
   if (manifest.video.length === 0) return "F";
 
   const codecsMse = manifest.video.every((v) => {
-    const mime = v.codec_string
-      ? `video/mp4; codecs="${v.codec_string}"`
-      : `video/mp4`;
+    const mime = v.codec_string ? `video/mp4; codecs="${v.codec_string}"` : `video/mp4`;
     return MediaSource.isTypeSupported(mime);
   });
   const audioNative = manifest.audio.every((a) => a.browser_native);
@@ -167,11 +165,35 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
   );
   if (!audioNative && !audioTranscodable) return "F";
 
+  // Mobile gate. On phones/tablets we keep the engines whose memory
+  // footprint the *browser* bounds for us — Tier A (native `<video
+  // src>`), Tier B (Mediabunny demux → MSE; its SourceBuffer is hard-
+  // capped at ~30 s ahead / 15 s behind on mobile, see tier-b-mse) and
+  // Tier F (server-side HLS, back-buffer bounded). We refuse the heap-
+  // heavy ones: C/D decode into WebCodecs `VideoFrame`s and render to a
+  // canvas (several MB per frame, in JS-managed queues), and E spins a
+  // second HEVC→H.264 WASM transcoder. Those accumulate enough to trip
+  // mobile Chrome's OOM killer mid-film, which kills the renderer with
+  // NO JS error — so the demote cascade can't recover and the only
+  // defence is to never pick them. Crucially, C/D/E only ever apply
+  // when MSE has already *refused* the codec, so there's no remux to
+  // "dodge" on this path anyway: the safe alternative is the server
+  // HLS remux (F). Tier B, by contrast, IS the way we dodge remux for
+  // native-codec MKV — keep it. (Desktop keeps the full cascade below.)
+  const isMp4Family = /mp4|mov|m4v|isobmff/i.test(manifest.container);
+  if (isMobileLike()) {
+    if (codecsMse && audioNative && isMp4Family) return "A";
+    // `audioTranscodable` is guaranteed true here (the `!audioNative &&
+    // !audioTranscodable` early-return above, plus `audioNative ⟹
+    // audioTranscodable`), so any MSE-decodable video lands on B.
+    if (codecsMse && audioTranscodable) return "B";
+    return "F";
+  }
+
   // Tier A: must be MSE-friendly AND native audio (we can't inject
   // libav.js into a vanilla `<video src>` — the engine is the
   // browser, no hooks). Tier B picks up the libav-transcoded case.
   if (codecsMse && audioNative) {
-    const isMp4Family = /mp4|mov|m4v|isobmff/i.test(manifest.container);
     if (isMp4Family) return "A";
     const tierBContainers = /matroska|webm|avi|mpegts|quicktime|mov/i;
     if (tierBContainers.test(manifest.container)) return "B";
@@ -201,11 +223,7 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
   // neither MSE nor WebCodecs accept the codec. hevc.js transcodes
   // to H.264 in a WASM worker. 4K is excluded because hevc.js hits
   // ~21 fps on 4K.
-  if (
-    primary &&
-    /hevc|hev1|hvc1|h265|x265/i.test(primary.codec) &&
-    (primary.height ?? 0) <= 1080
-  ) {
+  if (primary && /hevc|hev1|hvc1|h265|x265/i.test(primary.codec) && (primary.height ?? 0) <= 1080) {
     const ua = navigator.userAgent;
     const chromiumish = /Chrome|Edg/.test(ua) && !/Mobile/.test(ua);
     if (chromiumish) return "E";
@@ -251,10 +269,7 @@ export function streamUrl(infohash: string, fileIdx: number, tier: DecodeTier): 
  * bytes using the manifest's duration + size (assumes near-constant
  * bitrate — good enough for piece priority hinting).
  */
-export function postSeekHint(
-  manifest: Manifest,
-  playheadSeconds: number,
-): void {
+export function postSeekHint(manifest: Manifest, playheadSeconds: number): void {
   if (manifest.duration_s == null || manifest.duration_s <= 0) return;
   const ratio = Math.max(0, Math.min(1, playheadSeconds / manifest.duration_s));
   const byteOffset = Math.floor(ratio * manifest.size_bytes);
