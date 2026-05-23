@@ -83,6 +83,24 @@ const AHEAD_BYTES_BUDGET_MOBILE = 24 * 1024 * 1024;
 const BEHIND_BYTES_BUDGET = 48 * 1024 * 1024;
 const BEHIND_BYTES_BUDGET_MOBILE = 12 * 1024 * 1024;
 
+/** Firefox-specific desktop budgets. The 96/48 MB desktop window is
+ *  tuned for Chrome, whose SourceBuffer quota is generous and whose MSE
+ *  eviction is strictly playhead-aware. Firefox's per-SourceBuffer
+ *  memory ceiling (`media.mediasource.eviction_threshold.video`) is
+ *  lower, and under pressure Firefox will evict data even AHEAD of the
+ *  playhead — punching a hole the player can't cross, which freezes
+ *  `currentTime` mid-film with no JS error (the "playback dies after a
+ *  while, refresh fixes it" report). Keeping the resident window well
+ *  under Firefox's threshold stops it from forced-evicting forward
+ *  data. Mobile budgets (tighter still) always win when both apply. */
+const AHEAD_BYTES_BUDGET_FIREFOX = 48 * 1024 * 1024;
+const BEHIND_BYTES_BUDGET_FIREFOX = 24 * 1024 * 1024;
+
+/** Match Firefox-proper + Firefox-derived (LibreWolf, Waterfox, …). */
+function isFirefox(): boolean {
+  return typeof navigator !== "undefined" && /Firefox\/\d+/.test(navigator.userAgent);
+}
+
 /** Floors so a very high-bitrate file can't shrink the forward window to
  *  the point of constant rebuffering. The media is served by-range from
  *  the seedbox (already on disk, low latency), so a small forward window
@@ -229,6 +247,19 @@ export const mountTierB: EngineMount = async (opts) => {
   // high-bitrate file — a time-only window would pin hundreds of MB of
   // 4K and OOM-kill the tab on a phone.
   const mobile = isMobileLike();
+  const firefox = isFirefox();
+  // Mobile budgets win (tightest); Firefox desktop gets its own
+  // narrower ceiling; everything else keeps the roomy Chrome window.
+  const aheadByteBudget = mobile
+    ? AHEAD_BYTES_BUDGET_MOBILE
+    : firefox
+      ? AHEAD_BYTES_BUDGET_FIREFOX
+      : AHEAD_BYTES_BUDGET;
+  const behindByteBudget = mobile
+    ? BEHIND_BYTES_BUDGET_MOBILE
+    : firefox
+      ? BEHIND_BYTES_BUDGET_FIREFOX
+      : BEHIND_BYTES_BUDGET;
   const bytesPerSecond =
     manifest.size_bytes > 0 && manifest.duration_s && manifest.duration_s > 0
       ? manifest.size_bytes / manifest.duration_s
@@ -240,16 +271,16 @@ export const mountTierB: EngineMount = async (opts) => {
   const bufferAheadTarget = clampWindow(
     mobile ? AHEAD_SECONDS_CEILING_MOBILE : AHEAD_SECONDS_CEILING,
     MIN_AHEAD_SECONDS,
-    mobile ? AHEAD_BYTES_BUDGET_MOBILE : AHEAD_BYTES_BUDGET,
+    aheadByteBudget,
   );
   const playedKeep = clampWindow(
     mobile ? BEHIND_SECONDS_CEILING_MOBILE : BEHIND_SECONDS_CEILING,
     MIN_BEHIND_SECONDS,
-    mobile ? BEHIND_BYTES_BUDGET_MOBILE : BEHIND_BYTES_BUDGET,
+    behindByteBudget,
   );
   console.log(
     `[iris-core] Tier B buffer window: ahead=${bufferAheadTarget.toFixed(0)}s ` +
-      `behind=${playedKeep.toFixed(0)}s (mobile=${mobile}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
+      `behind=${playedKeep.toFixed(0)}s (mobile=${mobile}, firefox=${firefox}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
   );
 
   if (typeof globalThis.MediaSource === "undefined") {
@@ -406,14 +437,60 @@ export const mountTierB: EngineMount = async (opts) => {
         // budget than `buffered.end` suggests on some browsers. Try
         // to free space; if we can't (playhead at the start), keep
         // the chunk queued and wait for playback to advance — the
-        // back-pressure loop will eventually let us through.
+        // `waiting`-event nudge (see `onWaiting`) re-amorces the
+        // drain once the playhead has moved and eviction can succeed.
         appendQueue.unshift(next);
-        evictPlayedRange(QUOTA_EVICT_SECONDS);
+        const freed = evictPlayedRange(QUOTA_EVICT_SECONDS);
+        console.warn(
+          `[iris-core] Tier B: SourceBuffer QuotaExceededError ` +
+            `(queued=${appendQueue.length}, evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — ` +
+            `appended buffer is at the browser's per-source limit`,
+        );
         return;
       }
       fail(e instanceof Error ? e : new Error(String(e)));
     }
   };
+
+  // ---- stall recovery (event-driven, no timer) --------------------
+  //
+  // A `waiting`/`stalled` event means the playhead ran dry. Two
+  // mid-playback failure modes this rescues — both surfaced as the
+  // "playback dies after a while on Firefox, refresh fixes it" report:
+  //
+  //   1. A swallowed `QuotaExceededError` (see `drainQueue`) left a
+  //      chunk stuck in `appendQueue` with no pending `updateend` to
+  //      re-drive the drain — the feed wedges permanently. The
+  //      playhead has since advanced, so evicting played-out buffer
+  //      now frees space and the re-drain lands the append.
+  //   2. Firefox evicted a chunk AHEAD of the playhead under memory
+  //      pressure, punching a hole the player can't cross. If a
+  //      buffered range resumes just past `currentTime`, nudge across
+  //      the gap — the same trick hls.js applies as `nudgeOnVideoHole`.
+  //
+  // During normal startup buffering this is a harmless no-op: the
+  // queue drains as usual and the gap-jump loop finds no near-ahead
+  // range to skip to.
+  const onWaiting = () => {
+    if (disposed || !sourceBuffer) return;
+    evictPlayedRange(playedKeep);
+    drainQueue();
+    const t = video.currentTime;
+    if (isTimeBuffered(t)) return;
+    for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
+      const start = sourceBuffer.buffered.start(i);
+      if (start > t && start - t < 2) {
+        try {
+          video.currentTime = start + 0.01;
+        } catch {
+          /* swallow */
+        }
+        break;
+      }
+    }
+  };
+  video.addEventListener("waiting", onWaiting);
+  video.addEventListener("stalled", onWaiting);
 
   /** Seek-restart via Mediabunny's **low-level** API instead of
    *  `Conversion`. `Conversion` always forces a video re-encode when
@@ -772,6 +849,8 @@ export const mountTierB: EngineMount = async (opts) => {
     disposed = true;
     unbindVideo();
     video.removeEventListener("error", onErr);
+    video.removeEventListener("waiting", onWaiting);
+    video.removeEventListener("stalled", onWaiting);
     try {
       await conversion?.cancel();
     } catch {
