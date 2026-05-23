@@ -99,9 +99,16 @@ export function WatchPage() {
     enabled: !!infohash,
     refetchInterval: (q) => {
       const d = q.state.data;
-      // Stop polling once the cache is ready OR a sticky failure is
-      // surfaced — both are terminal until the user retries.
-      if (!d || d.ready || d.error) return false as const;
+      // Terminal server states stop the poll: the cache is ready, or prep
+      // hit a sticky failure surfaced in `d.error`.
+      if (d?.ready || d?.error) return false as const;
+      // Otherwise keep polling at 1s — INCLUDING the window where there's
+      // no data yet because the request itself is failing transiently. The
+      // old `!d` guard parked the query permanently the moment the first
+      // fetch erred out (after the 8-retry budget), wedging the Tier F
+      // loading screen until a manual page refresh. Tier F is the only
+      // path gated on /play/status, and Firefox forces all HEVC content to
+      // Tier F — hence the random, Firefox-mostly "stuck loader".
       return 1000;
     },
     retry: 8,
@@ -130,6 +137,19 @@ export function WatchPage() {
       return msg.includes("not yet on disk") && failureCount < 30;
     },
     retryDelay: 2000,
+    // Safety net: the finite `retry` budget above gives up after ~60s. On
+    // a slow swarm the head bytes can take longer than that to land, which
+    // used to wedge the loader on the loading screen until a manual page
+    // refresh reset the retry counter. Once the burst is exhausted React
+    // Query parks the query in a terminal error with no auto-refetch, so
+    // re-poll on the not-ready signal until the disk catches up.
+    refetchInterval: (q) => {
+      if (q.state.data) return false as const;
+      const err = q.state.error;
+      return err instanceof Error && err.message.includes("not yet on disk")
+        ? 2000
+        : (false as const);
+    },
   });
 
   const probe = probeQ.data;
@@ -144,6 +164,15 @@ export function WatchPage() {
     enabled: !!infohash,
     retry: (failureCount, err) => err instanceof ManifestNotReadyError && failureCount < 30,
     retryDelay: 2000,
+    // Same safety net as `probeQ`: don't let the query die permanently when
+    // the head bytes outrun the ~60s retry budget — re-poll on the not-ready
+    // signal so the player self-heals instead of needing a page refresh.
+    refetchInterval: (q) =>
+      q.state.data
+        ? (false as const)
+        : q.state.error instanceof ManifestNotReadyError
+          ? 2000
+          : (false as const),
   });
   const manifest = manifestQ.data;
   const [tier, setTier] = useState<DecodeTier>("F");
