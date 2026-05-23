@@ -201,7 +201,11 @@ export function SearchPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <div className="relative min-w-0 flex-1">
+          {/* Full-width on mobile so the suggestions popover (anchored
+              left-0/right-0 to this box) is usable — otherwise the
+              ToggleGroup shares the row and squeezes the input to a
+              sliver. On sm+ it goes back to sharing the row. */}
+          <div className="relative w-full flex-1 sm:w-auto sm:min-w-0">
             <SearchIcon className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               ref={inputRef}
