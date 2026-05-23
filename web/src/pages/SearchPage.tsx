@@ -201,11 +201,14 @@ export function SearchPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          {/* Full-width on mobile so the suggestions popover (anchored
-              left-0/right-0 to this box) is usable — otherwise the
-              ToggleGroup shares the row and squeezes the input to a
-              sliver. On sm+ it goes back to sharing the row. */}
-          <div className="relative w-full flex-1 sm:w-auto sm:min-w-0">
+          {/* Own row below sm so the suggestions popover (anchored
+              left-0/right-0 to this box) spans the full width and is
+              usable — otherwise the ToggleGroup shares the row and
+              squeezes the input to a sliver. `basis-full` (not w-full)
+              is what actually forces the wrap: on a flex item `flex-1`
+              pins flex-basis to 0% and overrides `width`, so we set the
+              basis directly. `sm:basis-0` restores the shared row. */}
+          <div className="relative grow basis-full sm:min-w-0 sm:basis-0">
             <SearchIcon className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               ref={inputRef}
