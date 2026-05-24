@@ -122,6 +122,10 @@ const MIN_BEHIND_SECONDS = 3;
  *  (at which point the file genuinely can't sustain on this tier). */
 const MIN_RESIDENT_BYTES = 16 * 1024 * 1024;
 
+/** Cap on per-mount GOP-drop log lines (drops are frequent; we only need a
+ *  sample to correlate with the buffered holes). */
+const DROP_LOG_CAP = 80;
+
 /** Max seconds one track's feed may lead the other. Passthrough video runs
  *  far faster than transcoded audio; uncapped, the muxer holds minutes of the
  *  faster track in RAM waiting to interleave. */
@@ -401,6 +405,12 @@ export const mountTierB: EngineMount = async (opts) => {
   // (fedMax frozen / feedEnded) from "decoder stalled with a full buffer".
   let videoFedMax = 0;
   let videoFeedEnded = false;
+  // GOP-drop instrumentation: total frames dropped to satisfy Mediabunny's
+  // muxer, and a capped log of each drop's PTS so we can correlate dropped
+  // ranges with the 1 s holes that appear in `buffered` (hypothesis: dropping
+  // open-GOP leading pictures leaves a hole just before each keyframe).
+  let totalDropped = 0;
+  let dropLogCount = 0;
   // Furthest AUDIO timestamp handed to the muxer. The video feed is gated so
   // it never races more than TRACK_LEAD_CAP seconds ahead of this (and vice
   // versa): without it, fast passthrough video out-runs the slow transcoded
@@ -654,7 +664,7 @@ export const mountTierB: EngineMount = async (opts) => {
         ?.usedJSHeapSize;
       console.log(
         `[iris-core] Tier B mem: ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
-          `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
+          `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} dropped=${totalDropped} ` +
           `resident≈${(residentBytes / 1e6).toFixed(0)}MB budget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
           `queue=${appendQueue.length} ranges=[${bufferedRangesStr()}]` +
           (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
@@ -699,6 +709,8 @@ export const mountTierB: EngineMount = async (opts) => {
     videoFedMax = seekStart;
     audioFedMax = seekStart;
     videoFeedEnded = false;
+    totalDropped = 0;
+    dropLogCount = 0;
     const prevConv = conversion;
     const prevOutput = manualOutput;
     const newGen = conversionGeneration + 1;
@@ -901,7 +913,15 @@ export const mountTierB: EngineMount = async (opts) => {
       const flushGop = async (nextKeyPts: number | null): Promise<void> => {
         for (const pkt of gopBuffer) {
           if (nextKeyPts !== null && pkt.type !== "key" && pkt.timestamp >= nextKeyPts) {
-            continue; // bridge frame — drop
+            // bridge frame — drop
+            totalDropped += 1;
+            if (dropLogCount < DROP_LOG_CAP) {
+              dropLogCount += 1;
+              console.warn(
+                `[iris-core] GOP drop BRIDGE pts=${pkt.timestamp.toFixed(2)} (≥ nextKey=${nextKeyPts.toFixed(2)})`,
+              );
+            }
+            continue;
           }
           // Don't race ahead of the audio feed (else the muxer hoards video).
           await waitTrackBalance(pkt.timestamp, () => audioFedMax);
@@ -922,7 +942,14 @@ export const mountTierB: EngineMount = async (opts) => {
           currentKeyPts = packet.timestamp;
           gopBuffer.push(packet);
         } else if (packet.timestamp < currentKeyPts) {
-          // post-key stray — drop
+          // post-key stray (open-GOP leading picture) — drop
+          totalDropped += 1;
+          if (dropLogCount < DROP_LOG_CAP) {
+            dropLogCount += 1;
+            console.warn(
+              `[iris-core] GOP drop STRAY pts=${packet.timestamp.toFixed(2)} (< curKey=${currentKeyPts.toFixed(2)})`,
+            );
+          }
           continue;
         } else {
           gopBuffer.push(packet);
