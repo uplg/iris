@@ -1003,10 +1003,19 @@ export const mountTierB: EngineMount = async (opts) => {
         : Promise.resolve();
 
     void Promise.all([videoP, audioP])
-      .then(() => newOutput.finalize())
+      .then(() => {
+        // Don't finalize a pipeline that was canceled (dispose / seek-restart
+        // bumped the generation). Calling `finalize()` on a canceled Output
+        // throws "Cannot finalize after canceling." — which the catch below
+        // used to mistake for a real fault and demote to Tier F on every
+        // episode switch.
+        if (disposed || newGen !== conversionGeneration) return;
+        return newOutput.finalize();
+      })
       .catch((e: unknown) => {
-        if (newGen !== conversionGeneration) return;
-        if (e instanceof Error && /canceled/i.test(e.message)) return;
+        if (disposed || newGen !== conversionGeneration) return;
+        // Match canceled / cancelling / "Cannot finalize after canceling".
+        if (e instanceof Error && /cancel/i.test(e.message)) return;
         fail(e instanceof Error ? e : new Error(String(e)));
       });
   };
