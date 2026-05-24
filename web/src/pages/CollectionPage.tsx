@@ -152,7 +152,7 @@ function Hero({ collection }: { collection: CollectionDetail }) {
           className="grid items-end gap-6 pb-8 sm:grid-cols-[auto_1fr] sm:gap-9"
           style={{ paddingTop: "clamp(32px, 6vw, 64px)" }}
         >
-          <div className="relative aspect-[2/3] w-[clamp(120px,28vw,200px)] shrink-0 overflow-hidden rounded-xl border border-border bg-elev shadow-2xl sm:w-[clamp(140px,18vw,220px)]">
+          <div className="relative aspect-2/3 w-[clamp(120px,28vw,200px)] shrink-0 overflow-hidden rounded-xl border border-border bg-elev shadow-2xl sm:w-[clamp(140px,18vw,220px)]">
             {poster ? (
               <img
                 src={poster}
@@ -183,7 +183,7 @@ function Hero({ collection }: { collection: CollectionDetail }) {
               <div className="flex flex-wrap gap-2.5">
                 <Button asChild size="lg" className="h-11">
                   <Link to={`/watch/${firstPlayable.infohash}/${firstPlayable.idx}`}>
-                    <Play className="size-[18px]" />
+                    <Play className="size-4.5" />
                     Play
                   </Link>
                 </Button>

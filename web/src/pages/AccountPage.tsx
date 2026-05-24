@@ -223,7 +223,7 @@ function SettingsRow({
         !first && "border-t border-border",
       )}
     >
-      <div className="grid min-w-[200px] flex-1 gap-0.5">
+      <div className="grid min-w-50 flex-1 gap-0.5">
         <span className="text-sm font-medium text-foreground">{label}</span>
         <span className="text-[12.5px] text-fg-dim">{description}</span>
       </div>
@@ -323,7 +323,7 @@ function IdentityCard() {
               {save.isPending ? "Saving…" : "Save"}
             </Button>
           </div>
-          <div className="flex min-h-[1.25rem] items-center gap-2 text-xs">
+          <div className="flex min-h-5 items-center gap-2 text-xs">
             {errMessage ? (
               <span className="text-destructive">{errMessage}</span>
             ) : justSaved && !dirty ? (

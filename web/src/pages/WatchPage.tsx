@@ -589,10 +589,10 @@ export function WatchPage() {
       <div className="grid gap-6 pt-2">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="heading-2 break-words" title={fileName}>
+            <h1 className="heading-2 wrap-break-word" title={fileName}>
               {fileName}
             </h1>
-            <p className="mt-0.5 break-words text-sm text-muted-foreground">
+            <p className="mt-0.5 wrap-break-word text-sm text-muted-foreground">
               {data.name}
               {data.source_provider && (
                 <span className="ml-2 font-mono text-xs text-fg-dim">

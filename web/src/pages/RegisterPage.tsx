@@ -51,7 +51,7 @@ export function RegisterPage() {
         <div className="absolute right-4 top-4">
           <ThemeToggle />
         </div>
-        <div className="grid w-full max-w-[380px] gap-6">
+        <div className="grid w-full max-w-95 gap-6">
           <div className="lg:hidden">
             <Brand size="md" asLink={false} />
           </div>

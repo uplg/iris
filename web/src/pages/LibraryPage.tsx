@@ -303,7 +303,7 @@ function CollectionsFilters({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <div className="relative grow basis-full sm:min-w-[14rem] sm:basis-0">
+      <div className="relative grow basis-full sm:min-w-56 sm:basis-0">
         <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <input
           type="text"

@@ -84,7 +84,7 @@ export function LoginPage() {
         <div className="absolute right-4 top-4">
           <ThemeToggle />
         </div>
-        <div className="grid w-full max-w-[380px] gap-6">
+        <div className="grid w-full max-w-95 gap-6">
           <div className="lg:hidden">
             <Brand size="md" asLink={false} />
           </div>
@@ -93,7 +93,7 @@ export function LoginPage() {
             <span className="eyebrow">Welcome back</span>
             <h1 className="display text-[40px]">Sign in</h1>
             <p className="text-[14.5px] text-muted-foreground">
-              Use your Iris household credentials.
+              Use your Iris credentials.
             </p>
           </div>
 

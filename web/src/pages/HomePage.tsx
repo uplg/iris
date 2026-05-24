@@ -193,7 +193,7 @@ function HeroLayout({
 
       <Container>
         <div
-          className="grid max-w-[640px] gap-6 pb-14"
+          className="grid max-w-160 gap-6 pb-14"
           style={{ paddingTop: "clamp(40px, 8vw, 96px)" }}
         >
           <div className="flex items-center gap-2.5">{eyebrow}</div>
@@ -204,7 +204,7 @@ function HeroLayout({
             <div className="flex flex-wrap items-center gap-3.5 text-[13.5px] text-muted-foreground">
               {meta.map((m, i) => (
                 <span key={m} className="flex items-center gap-3.5">
-                  {i > 0 && <span className="size-[3px] rounded-full bg-fg-dim" />}
+                  {i > 0 && <span className="size-0.75 rounded-full bg-fg-dim" />}
                   {m}
                 </span>
               ))}
@@ -269,7 +269,7 @@ function ResumeHero({ item }: { item: ContinueWatchingItem }) {
       actions={
         <Button asChild size="lg" className="h-11">
           <Link to={`/watch/${item.infohash}/${item.file_idx}`}>
-            <Play className="size-[18px]" />
+            <Play className="size-4.5" />
             Resume
           </Link>
         </Button>
@@ -277,7 +277,7 @@ function ResumeHero({ item }: { item: ContinueWatchingItem }) {
       footer={
         progress > 0 ? (
           <div className="mt-2 flex items-center gap-3.5 text-[13px] text-fg-dim">
-            <div className="h-[3px] w-[200px] max-w-[60vw] overflow-hidden rounded-full bg-elev-2">
+            <div className="h-0.75 w-50 max-w-[60vw] overflow-hidden rounded-full bg-elev-2">
               <div
                 className="h-full rounded-full bg-primary"
                 style={{ width: `${progress * 100}%` }}
@@ -321,7 +321,7 @@ function FeaturedHero({ result }: { result: SearchResult }) {
         overview={md?.overview}
         actions={
           <Button size="lg" className="h-11" onClick={() => setPreviewOpen(true)}>
-            <ArrowUpRight className="size-[18px]" />
+            <ArrowUpRight className="size-4.5" />
             View release
           </Button>
         }
