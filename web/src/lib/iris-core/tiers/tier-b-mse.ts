@@ -78,9 +78,18 @@ const BEHIND_SECONDS_CEILING = 30;
 const BEHIND_SECONDS_CEILING_MOBILE = 15;
 
 /** Forward resident-byte budget — the real OOM lever (enforced at runtime
- *  on actual appended bytes, see `residentByteBudget`). */
-const AHEAD_BYTES_BUDGET = 96 * 1024 * 1024;
-const AHEAD_BYTES_BUDGET_MOBILE = 24 * 1024 * 1024;
+ *  on actual appended bytes, see `residentByteBudget`). Kept deliberately
+ *  modest: the SourceBuffer budget is only half the memory story — Mediabunny
+ *  reads ~this much SOURCE to fill it PLUS its own read cache (see
+ *  `SOURCE_CACHE_BYTES`), so the resident total is roughly budget + cache.
+ *  96 MB here meant ~160 MB resident, which OOM-tanked the tab. */
+const AHEAD_BYTES_BUDGET = 40 * 1024 * 1024;
+const AHEAD_BYTES_BUDGET_MOBILE = 16 * 1024 * 1024;
+
+/** Cap for Mediabunny's `UrlSource` read cache (default is 64 MiB, which
+ *  stacked on the SourceBuffer budget blew the memory budget). A self-hosted
+ *  seedbox is low-latency, so a small cache costs little. */
+const SOURCE_CACHE_BYTES = 24 * 1024 * 1024;
 
 /** Firefox-specific desktop budgets. The 96/48 MB desktop window is
  *  tuned for Chrome, whose SourceBuffer quota is generous and whose MSE
@@ -92,7 +101,7 @@ const AHEAD_BYTES_BUDGET_MOBILE = 24 * 1024 * 1024;
  *  while, refresh fixes it" report). Keeping the resident window well
  *  under Firefox's threshold stops it from forced-evicting forward
  *  data. Mobile budgets (tighter still) always win when both apply. */
-const AHEAD_BYTES_BUDGET_FIREFOX = 48 * 1024 * 1024;
+const AHEAD_BYTES_BUDGET_FIREFOX = 28 * 1024 * 1024;
 
 /** Match Firefox-proper + Firefox-derived (LibreWolf, Waterfox, …). */
 function isFirefox(): boolean {
@@ -1121,6 +1130,10 @@ export const mountTierB: EngineMount = async (opts) => {
       // still surfaces (and the WatchPage backstop probe can react). The
       // default never gives up; we bound it to ~12 attempts (~70s).
       getRetryDelay: (attempts) => (attempts >= 12 ? null : Math.min(8, 0.5 * 2 ** attempts)),
+      // Cap the source read-ahead cache (default 64 MiB). Stacked on the
+      // SourceBuffer budget this was the bulk of the ~160 MB resident that
+      // tanked memory; a local seedbox makes a small cache cheap.
+      maxCacheSize: SOURCE_CACHE_BYTES,
     }),
     formats: ALL_FORMATS,
   });
