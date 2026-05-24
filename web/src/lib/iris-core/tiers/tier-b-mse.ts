@@ -803,7 +803,15 @@ export const mountTierB: EngineMount = async (opts) => {
     const newOutput = new Output({
       format: new Mp4OutputFormat({
         fastStart: "fragmented",
-        minimumFragmentDuration: 1,
+        // Firefox does NOT coalesce adjacent fMP4 fragments into one buffered
+        // range the way Chrome does (verified: mozilla-central TrackBuffersManager
+        // + video-dev "trapped in a gap"). With 1 s fragments every boundary is a
+        // chance for a non-coalesced gap / stranded zero-width range, and an
+        // open-GOP boundary (PTS/DTS divergence) can wedge `appendBuffer` in
+        // `updating=true` (Firefox bug 1120084) → frozen appends → underrun stall.
+        // Larger GOP-aligned fragments give ~5× fewer boundaries (the documented
+        // Firefox mitigation). Chrome coalesces fine, so keep its snappy 1 s.
+        minimumFragmentDuration: firefox ? 5 : 1,
       }),
       target: new StreamTarget(sink),
     });
