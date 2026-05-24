@@ -409,18 +409,32 @@ export const mountTierB: EngineMount = async (opts) => {
 
   // ---- buffer helpers ----------------------------------------------
 
-  /** Seconds of media buffered after the current playhead (inside the
-   *  range that covers `video.currentTime`). Returns 0 when the
-   *  playhead is outside every range. */
+  /** Seconds of media buffered after the current playhead. CRITICAL: walks
+   *  forward across ADJACENT ranges, bridging the sub-second gaps between
+   *  fMP4 fragments that fail to coalesce into one `buffered` range. Without
+   *  the bridge this returned only the first sub-range (e.g. 8 s) while the
+   *  SourceBuffer actually held 100 s+ in a dozen touching ranges — so the
+   *  back-pressure under-counted wildly, never throttled, and the buffer grew
+   *  until it exhausted memory. The bridge makes the back-pressure see the
+   *  TRUE forward buffer and bound it. */
   const bufferedAheadSeconds = (): number => {
     if (!sourceBuffer || sourceBuffer.buffered.length === 0) return 0;
     const t = video.currentTime;
-    for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
-      const start = sourceBuffer.buffered.start(i);
-      const end = sourceBuffer.buffered.end(i);
-      if (start <= t + 0.5 && end >= t) return Math.max(0, end - t);
+    const b = sourceBuffer.buffered;
+    let coveredEnd = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < b.length; i += 1) {
+      const start = b.start(i);
+      const end = b.end(i);
+      if (coveredEnd === Number.NEGATIVE_INFINITY) {
+        // First range that covers (or sits just after) the playhead.
+        if (start <= t + 0.5 && end >= t) coveredEnd = end;
+      } else if (start - coveredEnd <= 1) {
+        coveredEnd = end; // adjacent fragment (≤1 s gap) — keep walking
+      } else {
+        break; // genuine gap — the contiguous forward buffer ends here
+      }
     }
-    return 0;
+    return coveredEnd === Number.NEGATIVE_INFINITY ? 0 : Math.max(0, coveredEnd - t);
   };
 
   const isTimeBuffered = (t: number): boolean => {
