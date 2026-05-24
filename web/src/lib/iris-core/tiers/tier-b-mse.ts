@@ -91,7 +91,7 @@ const AHEAD_BYTES_BUDGET_MOBILE = 16 * 1024 * 1024;
 /** Cap for Mediabunny's `UrlSource` read cache (default is 64 MiB, which
  *  stacked on the SourceBuffer budget blew the memory budget). A self-hosted
  *  seedbox is low-latency, so a small cache costs little. */
-const SOURCE_CACHE_BYTES = 24 * 1024 * 1024;
+const SOURCE_CACHE_BYTES = 64 * 1024 * 1024;
 
 /** Firefox-specific desktop budgets. The 96/48 MB desktop window is
  *  tuned for Chrome, whose SourceBuffer quota is generous and whose MSE
@@ -103,7 +103,7 @@ const SOURCE_CACHE_BYTES = 24 * 1024 * 1024;
  *  while, refresh fixes it" report). Keeping the resident window well
  *  under Firefox's threshold stops it from forced-evicting forward
  *  data. Mobile budgets (tighter still) always win when both apply. */
-const AHEAD_BYTES_BUDGET_FIREFOX = 28 * 1024 * 1024;
+const AHEAD_BYTES_BUDGET_FIREFOX = 48 * 1024 * 1024;
 
 /** Match Firefox-proper + Firefox-derived (LibreWolf, Waterfox, …). */
 function isFirefox(): boolean {
@@ -309,8 +309,8 @@ export const mountTierB: EngineMount = async (opts) => {
   let residentByteBudget = aheadByteBudget;
   console.log(
     `[iris-core] Tier B buffer window: ahead≤${bufferAheadTarget.toFixed(0)}s ` +
-      `behind=${playedKeep.toFixed(0)}s byteBudget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
-      `(mobile=${mobile}, firefox=${firefox}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
+    `behind=${playedKeep.toFixed(0)}s byteBudget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
+    `(mobile=${mobile}, firefox=${firefox}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
   );
 
   if (typeof globalThis.MediaSource === "undefined") {
@@ -534,9 +534,9 @@ export const mountTierB: EngineMount = async (opts) => {
           lastQuotaLogT = video.currentTime;
           console.warn(
             `[iris-core] Tier B: SourceBuffer byte ceiling ` +
-              `(ahead=${bufferedAheadSeconds().toFixed(0)}s, ~${(residentBytes / 1e6).toFixed(0)}MB, ` +
-              `queued=${appendQueue.length}, evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — ` +
-              `budget→${(residentByteBudget / 1e6).toFixed(0)}MB ranges=[${bufferedRangesStr()}]`,
+            `(ahead=${bufferedAheadSeconds().toFixed(0)}s, ~${(residentBytes / 1e6).toFixed(0)}MB, ` +
+            `queued=${appendQueue.length}, evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — ` +
+            `budget→${(residentByteBudget / 1e6).toFixed(0)}MB ranges=[${bufferedRangesStr()}]`,
           );
         }
         return;
@@ -574,10 +574,10 @@ export const mountTierB: EngineMount = async (opts) => {
     // buffered end with `videoFeedEnded` means the demuxer stopped feeding.
     console.warn(
       `[iris-core] Tier B STALL t=${t.toFixed(1)}s ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
-        `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
-        `readyState=${video.readyState} netState=${video.networkState} ` +
-        `err=${video.error ? `${video.error.code}:${video.error.message}` : "none"} ` +
-        `ranges=[${bufferedRangesStr()}]`,
+      `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
+      `readyState=${video.readyState} netState=${video.networkState} ` +
+      `err=${video.error ? `${video.error.code}:${video.error.message}` : "none"} ` +
+      `ranges=[${bufferedRangesStr()}]`,
     );
     if (isTimeBuffered(t)) return;
     for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
@@ -613,10 +613,10 @@ export const mountTierB: EngineMount = async (opts) => {
         ?.usedJSHeapSize;
       console.log(
         `[iris-core] Tier B mem: ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
-          `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
-          `resident≈${(residentBytes / 1e6).toFixed(0)}MB budget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
-          `queue=${appendQueue.length} ranges=[${bufferedRangesStr()}]` +
-          (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
+        `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
+        `resident≈${(residentBytes / 1e6).toFixed(0)}MB budget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
+        `queue=${appendQueue.length} ranges=[${bufferedRangesStr()}]` +
+        (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
       );
     }
     if (appendQueue.length > 0) {
@@ -646,7 +646,7 @@ export const mountTierB: EngineMount = async (opts) => {
     } catch (e) {
       console.warn(
         "[iris-core] Tier B: manual seek pipeline failed. " +
-          "Keeping current playback alive — rewind to a buffered range to resume.",
+        "Keeping current playback alive — rewind to a buffered range to resume.",
         e,
       );
     }
@@ -888,8 +888,8 @@ export const mountTierB: EngineMount = async (opts) => {
         videoFeedEnded = true;
         console.warn(
           `[iris-core] Tier B: video feed loop ENDED at fedMax=${videoFedMax.toFixed(1)}s ` +
-            `(demuxer reached end-of-stream — if the file isn't fully downloaded or /stream ` +
-            `truncates, this is why playback freezes here)`,
+          `(demuxer reached end-of-stream — if the file isn't fully downloaded or /stream ` +
+          `truncates, this is why playback freezes here)`,
         );
       }
     })();
@@ -897,38 +897,38 @@ export const mountTierB: EngineMount = async (opts) => {
     const audioP =
       audioTrack && audioFeed
         ? (async () => {
-            if (audioFeed.kind === "passthrough") {
-              const packetSink = new EncodedPacketSink(audioTrack);
-              const startPacket = await packetSink.getKeyPacket(seekStart);
-              if (!startPacket) {
-                await audioFeed.source.close();
-                return;
-              }
-              const decoderConfig = await audioTrack.getDecoderConfig();
-              let firstMeta = true;
-              for await (const packet of packetSink.packets(startPacket)) {
-                if (disposed || newGen !== conversionGeneration) break;
-                const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
-                await audioFeed.source.add(packet, meta);
-                firstMeta = false;
-              }
+          if (audioFeed.kind === "passthrough") {
+            const packetSink = new EncodedPacketSink(audioTrack);
+            const startPacket = await packetSink.getKeyPacket(seekStart);
+            if (!startPacket) {
               await audioFeed.source.close();
-            } else {
-              // Transcode: AudioSampleSink uses our registered libav
-              // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
-              // AudioSampleSource encodes them to AAC via WebCodecs.
-              const sampleSink = new AudioSampleSink(audioTrack);
-              for await (const sample of sampleSink.samples(seekStart, Infinity)) {
-                if (disposed || newGen !== conversionGeneration) {
-                  sample.close();
-                  break;
-                }
-                await audioFeed.source.add(sample);
-                sample.close();
-              }
-              await audioFeed.source.close();
+              return;
             }
-          })()
+            const decoderConfig = await audioTrack.getDecoderConfig();
+            let firstMeta = true;
+            for await (const packet of packetSink.packets(startPacket)) {
+              if (disposed || newGen !== conversionGeneration) break;
+              const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
+              await audioFeed.source.add(packet, meta);
+              firstMeta = false;
+            }
+            await audioFeed.source.close();
+          } else {
+            // Transcode: AudioSampleSink uses our registered libav
+            // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
+            // AudioSampleSource encodes them to AAC via WebCodecs.
+            const sampleSink = new AudioSampleSink(audioTrack);
+            for await (const sample of sampleSink.samples(seekStart, Infinity)) {
+              if (disposed || newGen !== conversionGeneration) {
+                sample.close();
+                break;
+              }
+              await audioFeed.source.add(sample);
+              sample.close();
+            }
+            await audioFeed.source.close();
+          }
+        })()
         : Promise.resolve();
 
     void Promise.all([videoP, audioP])
