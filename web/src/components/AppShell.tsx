@@ -1,111 +1,185 @@
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useLocation } from "react-router";
 import {
   Home as HomeIcon,
   Library as LibraryIcon,
-  LogOut,
+  Settings as SettingsIcon,
   Search as SearchIcon,
   ShieldCheck,
-  User as UserIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Brand } from "@/components/Brand";
 import { FirefoxWarning } from "@/components/FirefoxWarning";
-import { ThemeToggle } from "@/components/ThemeToggle";
+import { TweaksDrawer } from "@/components/TweaksDrawer";
 import { useAuth } from "@/lib/auth";
+import { cn } from "@/lib/utils";
+
+type NavEntry = {
+  to: string;
+  label: string;
+  icon: typeof HomeIcon;
+  end?: boolean;
+  adminOnly?: boolean;
+};
 
 export function AppShell() {
   const auth = useAuth();
-  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [scrolled, setScrolled] = useState(false);
+  const [tweaksOpen, setTweaksOpen] = useState(false);
+
+  // Home and the collection detail render a full-bleed backdrop hero that
+  // intentionally tucks under the transparent sticky header — they must NOT
+  // get top padding (it would leave a strip of bg above the artwork). Every
+  // other page starts with a heading, so give it breathing room below the bar.
+  const fullBleedHero = pathname === "/" || pathname.startsWith("/collection/");
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   if (auth.status !== "authenticated") return null;
 
+  const nav: NavEntry[] = [
+    { to: "/", label: "Home", icon: HomeIcon, end: true },
+    { to: "/search", label: "Search", icon: SearchIcon },
+    { to: "/library", label: "Library", icon: LibraryIcon },
+    ...(auth.user.is_admin
+      ? [{ to: "/admin", label: "Admin", icon: ShieldCheck } satisfies NavEntry]
+      : []),
+  ];
+
+  const avatarLetter = (auth.user.display_name || auth.user.email).charAt(0).toUpperCase();
+
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-3 py-3 sm:gap-6 sm:px-6 sm:py-4">
+    <div className="flex min-h-svh flex-col bg-background text-foreground">
+      <header
+        className={cn(
+          "sticky top-0 z-40 backdrop-blur-xl transition-colors duration-200",
+          scrolled ? "border-b border-border bg-surface-blur" : "border-b border-transparent",
+        )}
+        style={{ backdropFilter: "blur(16px) saturate(140%)" }}
+      >
+        <div
+          className="mx-auto flex max-w-[1280px] items-center gap-4 px-4 sm:gap-6 sm:px-6 lg:px-8"
+          style={{ height: "var(--header-h)" }}
+        >
           <Brand />
-          <nav className="flex items-center gap-0.5 text-sm sm:gap-1">
-            <NavItem to="/" end icon={<HomeIcon className="size-4" />}>
-              Home
-            </NavItem>
-            <NavItem to="/search" icon={<SearchIcon className="size-4" />}>
-              Search
-            </NavItem>
-            <NavItem to="/library" icon={<LibraryIcon className="size-4" />}>
-              Library
-            </NavItem>
-            {auth.user.is_admin && (
-              <NavItem to="/admin" icon={<ShieldCheck className="size-4" />}>
-                Admin
-              </NavItem>
-            )}
-            <NavItem to="/account" icon={<UserIcon className="size-4" />} label={auth.user.email}>
-              <span className="hidden max-w-[12ch] truncate lg:inline">{auth.user.email}</span>
-            </NavItem>
-            <ThemeToggle />
+          <nav className="ml-2 hidden items-center gap-0.5 md:flex">
+            {nav.map((item) => (
+              <NavItem key={item.to} item={item} />
+            ))}
+          </nav>
+          <div className="flex-1" />
+          <div className="flex items-center gap-1">
             <Button
               variant="ghost"
-              size="sm"
-              onClick={async () => {
-                await auth.logout();
-                navigate("/login", { replace: true });
-              }}
-              title="Sign out"
+              size="icon-sm"
+              aria-label="Display settings"
+              onClick={() => setTweaksOpen((v) => !v)}
             >
-              <LogOut className="size-4" />
-              <span className="sr-only sm:not-sr-only sm:ml-1">Sign out</span>
+              <SettingsIcon className="size-4" />
             </Button>
-          </nav>
+            <NavLink
+              to="/account"
+              aria-label="Account"
+              className="focus-ring inline-flex h-9 items-center gap-2 rounded-full border border-border bg-elev py-0 pr-1 pl-2.5"
+            >
+              <span className="hidden max-w-[16ch] truncate text-[13px] text-muted-foreground lg:inline">
+                {auth.user.email}
+              </span>
+              <span
+                className="grid size-7 place-items-center rounded-full font-display text-xs font-semibold text-primary-foreground"
+                style={{ background: "linear-gradient(135deg, var(--brand-3), var(--brand))" }}
+              >
+                {avatarLetter}
+              </span>
+            </NavLink>
+          </div>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-3 py-6 sm:px-6 sm:py-10">
+
+      <main className={cn("flex-1 pb-24 md:pb-12", !fullBleedHero && "pt-8 sm:pt-10")}>
         <Outlet />
       </main>
+
+      <BottomBar nav={nav} />
+
+      <TweaksDrawer open={tweaksOpen} onClose={() => setTweaksOpen(false)} />
       <FirefoxWarning />
     </div>
   );
 }
 
-function NavItem({
-  to,
-  end,
-  icon,
-  children,
-  label,
-}: {
-  to: string;
-  end?: boolean;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-  /** Accessible name + tooltip. Defaults to `children` when it's a
-   *  plain string. Required when the label is hidden on mobile so the
-   *  icon-only control still announces itself to screen readers. */
-  label?: string;
-}) {
-  const accessibleName = label ?? (typeof children === "string" ? children : undefined);
+function NavItem({ item }: { item: NavEntry }) {
+  const Icon = item.icon;
   return (
     <NavLink
-      to={to}
-      end={end}
-      title={accessibleName}
-      aria-label={accessibleName}
+      to={item.to}
+      end={item.end}
       className={({ isActive }) =>
-        `inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 transition sm:px-2.5 ${
+        cn(
+          "relative inline-flex items-center gap-2 rounded-[10px] px-3 py-2 text-sm font-medium transition-colors",
           isActive
-            ? "bg-muted text-foreground"
-            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-        }`
+            ? "bg-elev-2 text-foreground"
+            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+        )
       }
     >
-      {icon}
-      {/* Labels collapse to icons-only below `sm` so the bar never
-          overflows a ~390px phone. The account item passes its own
-          nested span (email shown only from `lg`). */}
-      {typeof children === "string" ? (
-        <span className="hidden sm:inline">{children}</span>
-      ) : (
-        children
+      {({ isActive }) => (
+        <>
+          <Icon className="size-4" />
+          <span>{item.label}</span>
+          {isActive && (
+            <span className="absolute inset-x-4 -bottom-px h-0.5 rounded-full bg-primary" />
+          )}
+        </>
       )}
     </NavLink>
+  );
+}
+
+function BottomBar({ nav }: { nav: NavEntry[] }) {
+  return (
+    <nav
+      className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface-blur md:hidden"
+      style={{
+        backdropFilter: "blur(20px) saturate(140%)",
+        paddingBottom: "calc(8px + env(safe-area-inset-bottom))",
+        paddingTop: 8,
+      }}
+    >
+      <div
+        className="mx-auto grid max-w-[520px] gap-1 px-2"
+        style={{ gridTemplateColumns: `repeat(${nav.length}, 1fr)` }}
+      >
+        {nav.map((item) => {
+          const Icon = item.icon;
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                cn(
+                  "grid place-items-center gap-0.5 rounded-xl px-1 py-1.5 text-[11px] font-medium leading-none",
+                  isActive ? "bg-accent text-foreground" : "text-fg-dim",
+                )
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <Icon className={cn("size-5", isActive && "text-primary")} />
+                  <span className="mt-0.5">{item.label}</span>
+                </>
+              )}
+            </NavLink>
+          );
+        })}
+      </div>
+    </nav>
   );
 }

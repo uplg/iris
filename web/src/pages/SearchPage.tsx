@@ -2,6 +2,7 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   Film,
@@ -17,8 +18,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Container } from "@/components/Container";
 import { LanguageBadge } from "@/components/LanguageBadge";
 import { PreviewDialog } from "@/components/PreviewDialog";
+import { Tag } from "@/components/Tag";
 import { EmptyState, ErrorState, LoadingState } from "@/components/State";
 import {
   metadata,
@@ -184,22 +187,29 @@ export function SearchPage() {
   };
 
   return (
-    <div className="grid gap-6">
-      <section className="grid gap-4">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Search</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+    <Container>
+      <div className="grid gap-7">
+        <header className="grid gap-1.5">
+          <span className="eyebrow">Find</span>
+          <h1 className="display" style={{ fontSize: "clamp(36px, 5vw, 56px)" }}>
+            Search
+          </h1>
+          <p className="text-[14.5px] text-muted-foreground">
             {meta.length > 0
-              ? meta
-                  .map((p) =>
-                    p.error
-                      ? `${p.id} (unavailable)`
-                      : `${p.id}${p.total_count != null ? ` (${p.total_count.toLocaleString()})` : ""}`,
-                  )
-                  .join(" · ")
-              : "Search a title — TMDB suggestions appear as you type."}
+              ? meta.map((p, i) => (
+                  <span key={p.id}>
+                    {i > 0 && <span className="mx-2 text-fg-dim">·</span>}
+                    <span className="font-mono text-foreground">{p.id}</span>
+                    {p.error
+                      ? " (unavailable)"
+                      : p.total_count != null
+                        ? ` (${p.total_count.toLocaleString()})`
+                        : ""}
+                  </span>
+                ))
+              : "Search a title, suggestions appear as you type."}
           </p>
-        </div>
+        </header>
         <div className="flex flex-wrap items-center gap-3">
           {/* Own row below sm so the suggestions popover (anchored
               left-0/right-0 to this box) spans the full width and is
@@ -209,12 +219,12 @@ export function SearchPage() {
               pins flex-basis to 0% and overrides `width`, so we set the
               basis directly. `sm:basis-0` restores the shared row. */}
           <div className="relative grow basis-full sm:min-w-0 sm:basis-0">
-            <SearchIcon className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <SearchIcon className="absolute left-4 top-1/2 size-4.5 -translate-y-1/2 text-fg-dim" />
             <Input
               ref={inputRef}
               autoFocus
               placeholder="Title, year, anything…"
-              className="h-12 pl-9 text-base"
+              className="h-13 pl-12 text-base"
               value={q}
               onChange={(e) => {
                 setQ(e.target.value);
@@ -226,6 +236,9 @@ export function SearchPage() {
                 window.setTimeout(() => setShowSuggestions(false), 150);
               }}
             />
+            <kbd className="pointer-events-none absolute right-3.5 top-1/2 hidden -translate-y-1/2 rounded-md border border-border bg-elev-2 px-1.5 py-0.5 font-mono text-[11px] text-fg-dim sm:block">
+              ⌘ K
+            </kbd>
             <SuggestionsDropdown
               open={
                 showSuggestions &&
@@ -257,77 +270,77 @@ export function SearchPage() {
             </ToggleGroupItem>
           </ToggleGroup>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span>Sort</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="eyebrow mr-1">Sort</span>
           {SORT_MODES.map((m) => (
             <button
               key={m.id}
               type="button"
               onClick={() => setSortMode(m.id)}
               className={cn(
-                "rounded-md px-2 py-0.5",
+                "inline-flex h-8 items-center rounded-full border px-3 text-[13px] font-medium transition-colors",
                 sortMode === m.id
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:bg-muted/40",
+                  ? "border-border bg-elev-2 text-foreground"
+                  : "border-transparent text-muted-foreground hover:bg-accent hover:text-foreground",
               )}
             >
               {m.label}
             </button>
           ))}
         </div>
-      </section>
 
-      {error && <ErrorState title="Search failed" error={error} />}
+        {error && <ErrorState title="Search failed" error={error} />}
 
-      {data?.parsed_query && <ParsedQueryBanner info={data.parsed_query} rawQuery={debounced} />}
+        {data?.parsed_query && <ParsedQueryBanner info={data.parsed_query} rawQuery={debounced} />}
 
-      {debounced.length < 2 ? (
-        <EmptyState
-          icon={<SearchIcon className="size-7" />}
-          title="Type at least 2 characters"
-          body="Tip: pick a TMDB suggestion to use a canonical title — better results from the tracker."
-        />
-      ) : isFetching && rows.length === 0 ? (
-        <LoadingState label="Searching…" />
-      ) : rows.length === 0 ? (
-        <EmptyState
-          title="No results"
-          body="Try a different title, drop the year, or switch between Movies / Series in the filter."
-        />
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {rows.map((r) => (
-              <ResultCard
-                key={`${r.provider_id}:${r.external_id}`}
-                result={r}
-                onClick={() => setPicked(r)}
-                onPlayExisting={(infohash, fileIdx) => navigate(`/watch/${infohash}/${fileIdx}`)}
-              />
-            ))}
-          </div>
-
-          <Pagination
-            page={page}
-            totalPages={totals.pages || 1}
-            onPage={setPage}
-            isFetching={isFetching}
+        {debounced.length < 2 ? (
+          <EmptyState
+            icon={<SearchIcon className="size-7" />}
+            title="Type at least 2 characters"
+            body="Tip: pick a TMDB suggestion to use a canonical title — better results from the tracker."
           />
-        </>
-      )}
+        ) : isFetching && rows.length === 0 ? (
+          <LoadingState label="Searching…" />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            title="No results"
+            body="Try a different title, drop the year, or switch between Movies / Series in the filter."
+          />
+        ) : (
+          <>
+            <div className="grid gap-4.5 grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
+              {rows.map((r) => (
+                <ResultCard
+                  key={`${r.provider_id}:${r.external_id}`}
+                  result={r}
+                  onClick={() => setPicked(r)}
+                  onPlayExisting={(infohash, fileIdx) => navigate(`/watch/${infohash}/${fileIdx}`)}
+                />
+              ))}
+            </div>
 
-      <PreviewDialog
-        open={picked != null}
-        onOpenChange={(o) => !o && setPicked(null)}
-        providerId={picked?.provider_id ?? null}
-        externalId={picked?.external_id ?? null}
-        initialTitle={picked?.title}
-        tmdbId={picked?.tmdb_id ?? null}
-        alreadyInLibrary={picked?.already_in_library ?? false}
-        libraryInfohash={picked?.library_infohash ?? null}
-        libraryFileIdx={picked?.library_file_idx ?? null}
-      />
-    </div>
+            <Pagination
+              page={page}
+              totalPages={totals.pages || 1}
+              onPage={setPage}
+              isFetching={isFetching}
+            />
+          </>
+        )}
+
+        <PreviewDialog
+          open={picked != null}
+          onOpenChange={(o) => !o && setPicked(null)}
+          providerId={picked?.provider_id ?? null}
+          externalId={picked?.external_id ?? null}
+          initialTitle={picked?.title}
+          tmdbId={picked?.tmdb_id ?? null}
+          alreadyInLibrary={picked?.already_in_library ?? false}
+          libraryInfohash={picked?.library_infohash ?? null}
+          libraryFileIdx={picked?.library_file_idx ?? null}
+        />
+      </div>
+    </Container>
   );
 }
 
@@ -350,8 +363,8 @@ function ParsedQueryBanner({ info, rawQuery }: { info: ParsedQueryInfo; rawQuery
     parts.push(String(info.year));
   }
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-card/30 px-3 py-2 text-xs text-muted-foreground">
-      <span>
+    <div className="glass flex flex-wrap items-center justify-between gap-3 rounded-xl px-4 py-2.5 text-[13px]">
+      <span className="text-muted-foreground">
         Showing results for{" "}
         <span className="font-medium capitalize text-foreground">{info.title}</span>
         {parts.length > 0 && (
@@ -361,8 +374,8 @@ function ParsedQueryBanner({ info, rawQuery }: { info: ParsedQueryInfo; rawQuery
           </>
         )}
       </span>
-      <span className="hidden text-muted-foreground sm:inline" title={rawQuery}>
-        Parsed from your query
+      <span className="font-mono text-xs text-fg-dim" title={rawQuery}>
+        parsed: title={info.title}
       </span>
     </div>
   );
@@ -472,43 +485,43 @@ function ResultCard({
         }
       }}
       className={cn(
-        "group flex flex-col gap-2 rounded-lg border border-border bg-card/40 p-3 text-left transition hover:border-border/80 hover:bg-card/70",
-        owned && "ring-1 ring-emerald-500/40",
+        "group flex flex-col gap-2.5 rounded-xl border border-border bg-surface p-2.5 text-left transition hover:border-border-strong hover:bg-elev",
+        owned && "ring-1 ring-success/40",
       )}
     >
-      <div className="relative aspect-[2/3] overflow-hidden rounded-md bg-muted/40">
+      <div className="relative aspect-2/3 overflow-hidden rounded-[10px] bg-elev">
         {poster ? (
           <img
             src={poster}
             alt={result.title}
             loading="lazy"
             className={cn(
-              "h-full w-full object-cover transition group-hover:scale-[1.02]",
+              "h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]",
               owned && "opacity-80",
             )}
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center bg-gradient-to-b from-primary/15 to-background/80 text-muted-foreground/60">
+          <div className="poster-fallback flex h-full w-full items-center justify-center text-fg-dim">
             <Icon className="size-8" />
           </div>
         )}
         {owned && (
           // Top-left "already in library" pill. Distinct corner from
           // FL/provider so the two never overlap.
-          <Badge className="absolute left-1.5 top-1.5 bg-emerald-500/95 text-[10px] uppercase text-white shadow-md">
-            In library
-          </Badge>
+          <Tag variant="success" upper className="absolute left-2 top-2">
+            <Check className="size-2.5" /> In library
+          </Tag>
         )}
-        <div className="absolute right-1.5 top-1.5 flex flex-col items-end gap-1">
+        <div className="absolute right-2 top-2 flex flex-col items-end gap-1">
           <LanguageBadge language={result.language} />
           {result.freeleech && (
-            <Badge className="bg-emerald-500/90 text-[10px] uppercase text-white shadow-md">
+            <Tag variant="success" upper>
               FL
-            </Badge>
+            </Tag>
           )}
-          <Badge variant="secondary" className="text-[10px] uppercase shadow-md">
+          <Tag variant="plain" upper>
             {result.provider_id}
-          </Badge>
+          </Tag>
         </div>
       </div>
       <div className="grid gap-1.5">
@@ -516,7 +529,7 @@ function ResultCard({
             metadata on a TV release. Users can spot their episode
             without parsing the full release name with their eyes. */}
         {result.parsed_season != null && (
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-primary">
             {formatSceneMarker(result.parsed_season, result.parsed_episode)}
           </div>
         )}
@@ -529,29 +542,25 @@ function ResultCard({
             dot-separated SCENE names from overflowing horizontally
             on a narrow card. */}
         <div
-          className="line-clamp-3 break-words text-sm font-medium leading-snug"
+          className="line-clamp-3 wrap-break-word font-mono text-xs leading-snug text-foreground"
           title={result.title}
         >
           {result.title}
         </div>
         {(result.year || tmdbHitQ.data?.year) && (
-          <div className="text-[11px] text-muted-foreground">
-            {result.year ?? tmdbHitQ.data?.year}
-          </div>
+          <div className="text-[11px] text-fg-dim">{result.year ?? tmdbHitQ.data?.year}</div>
         )}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-          <span className="text-emerald-400">{result.seeders ?? 0} ↑</span>
-          <span className="text-rose-400">{result.leechers ?? 0} ↓</span>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11.5px] text-fg-dim">
+          <span className="text-success">{result.seeders ?? 0} ↑</span>
+          <span className="text-destructive/85">{result.leechers ?? 0} ↓</span>
           <span>{formatSize(result.size_bytes)}</span>
+          <span className="font-mono">{result.provider_id}</span>
           {result.uploaded_at && <span>{formatRelative(result.uploaded_at)}</span>}
         </div>
         {result.tags.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {result.tags.slice(0, 4).map((t) => (
-              <span
-                key={t}
-                className="rounded bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground"
-              >
+              <span key={t} className="rounded bg-elev-2 px-1.5 py-0.5 text-[10px] text-fg-dim">
                 {t}
               </span>
             ))}

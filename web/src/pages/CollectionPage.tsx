@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Download, Loader2, Play } from "lucide-react";
+import { CheckCircle2, Download, Film, Loader2, Play, Sparkles, Tv } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Container } from "@/components/Container";
 import { LanguageBadge } from "@/components/LanguageBadge";
+import { Tag } from "@/components/Tag";
 import {
   library,
   tmdbImage,
@@ -64,17 +65,21 @@ export function CollectionPage() {
 
   if (isLoading) {
     return (
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="size-3 animate-spin" />
-        Loading collection…
-      </p>
+      <Container>
+        <p className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
+          <Loader2 className="size-3 animate-spin" />
+          Loading collection…
+        </p>
+      </Container>
     );
   }
   if (error) {
     return (
-      <p className="text-sm text-destructive">
-        {error instanceof Error ? error.message : "failed"}
-      </p>
+      <Container>
+        <p className="py-10 text-sm text-destructive">
+          {error instanceof Error ? error.message : "failed"}
+        </p>
+      </Container>
     );
   }
   if (!data) return null;
@@ -89,16 +94,18 @@ export function CollectionPage() {
     data.kind === "tv" && (data.episodes.length > 0 || (data.available_episodes?.length ?? 0) > 0);
 
   return (
-    <div className="grid gap-6">
+    <div>
       <Hero collection={data} />
-      {tvHasEpisodes ? (
-        <EpisodeList collection={data} onPlay={(ih, idx) => navigate(`/watch/${ih}/${idx}`)} />
-      ) : (
-        // Movies, or a TV pack the SCENE parser couldn't break into
-        // episodes. Either way the raw file picker gets the user
-        // unblocked.
-        <RawFileList collection={data} onPlay={(ih, idx) => navigate(`/watch/${ih}/${idx}`)} />
-      )}
+      <Container>
+        {tvHasEpisodes ? (
+          <EpisodeList collection={data} onPlay={(ih, idx) => navigate(`/watch/${ih}/${idx}`)} />
+        ) : (
+          // Movies, or a TV pack the SCENE parser couldn't break into
+          // episodes. Either way the raw file picker gets the user
+          // unblocked.
+          <RawFileList collection={data} onPlay={(ih, idx) => navigate(`/watch/${ih}/${idx}`)} />
+        )}
+      </Container>
     </div>
   );
 }
@@ -110,51 +117,81 @@ export function CollectionPage() {
 function Hero({ collection }: { collection: CollectionDetail }) {
   // Server-resolved poster + backdrop. Both `null` when the
   // collection has no tmdb_id or the TMDB lookup failed — the hero
-  // falls back to a placeholder square without rendering broken
-  // `<img>`. Backdrop fades behind the poster for visual depth.
-  const poster = tmdbImage(collection.poster_path, "w342");
+  // falls back to a placeholder without rendering broken `<img>`.
+  const poster = tmdbImage(collection.poster_path, "w500");
   const backdrop = tmdbImage(collection.backdrop_path, "original");
   const newCount = collection.has_new_since_last_visit ?? 0;
+
+  // First on-disk video → a real "Play / Continue" CTA when we have one.
+  const firstPlayable = useMemo(() => {
+    for (const t of collection.torrents) {
+      const f = t.files.find((x) => VIDEO_RE.test(x.path));
+      if (f) return { infohash: t.infohash, idx: f.index };
+    }
+    return null;
+  }, [collection.torrents]);
+
   return (
-    <section className="relative overflow-hidden rounded-xl border border-border bg-card/30">
-      {backdrop && (
-        <>
-          <img
-            src={backdrop}
-            alt=""
-            className="absolute inset-0 h-full w-full object-cover opacity-30"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-background via-background/60 to-transparent" />
-        </>
-      )}
-      <div className="relative flex flex-wrap gap-4 p-4 sm:gap-6 sm:p-6">
-        {poster ? (
-          <img
-            src={poster}
-            alt={collection.display_title}
-            className="h-40 w-28 shrink-0 rounded-md border border-border object-cover shadow-lg sm:h-56 sm:w-40"
-          />
+    <section className="relative isolate mb-8">
+      <div className="absolute inset-0 -z-10 overflow-hidden">
+        {backdrop ? (
+          <img src={backdrop} alt="" className="h-full w-full object-cover opacity-40" />
         ) : (
-          <div className="flex h-40 w-28 shrink-0 items-center justify-center rounded-md border border-dashed border-border bg-card text-center text-xs text-muted-foreground sm:h-56 sm:w-40">
-            No poster
-          </div>
+          <div className="poster-fallback h-full w-full" />
         )}
-        <div className="flex min-w-0 flex-1 basis-48 flex-col gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-            {collection.display_title}
-          </h1>
-          <p className="text-xs text-muted-foreground">
-            {collection.kind === "tv" ? "Series" : "Movie"} · {collection.torrents.length} torrent
-            {collection.torrents.length > 1 ? "s" : ""}
-            {newCount > 0 && (
-              <>
-                {" · "}
-                <Badge className="bg-emerald-500/80 text-[10px] uppercase">{newCount} new</Badge>
-              </>
-            )}
-          </p>
-        </div>
+        <div
+          className="absolute inset-0"
+          style={{
+            background: "linear-gradient(180deg, oklch(0 0 0 / 0.2) 0%, var(--background) 95%)",
+          }}
+        />
       </div>
+
+      <Container>
+        <div
+          className="grid items-end gap-6 pb-8 sm:grid-cols-[auto_1fr] sm:gap-9"
+          style={{ paddingTop: "clamp(32px, 6vw, 64px)" }}
+        >
+          <div className="relative aspect-[2/3] w-[clamp(120px,28vw,200px)] shrink-0 overflow-hidden rounded-xl border border-border bg-elev shadow-2xl sm:w-[clamp(140px,18vw,220px)]">
+            {poster ? (
+              <img
+                src={poster}
+                alt={collection.display_title}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <div className="poster-fallback grid h-full w-full place-items-center text-fg-dim">
+                {collection.kind === "tv" ? <Tv className="size-9" /> : <Film className="size-9" />}
+              </div>
+            )}
+          </div>
+
+          <div className="grid min-w-0 gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Tag variant="accent" upper>
+                {collection.kind === "tv" ? "Series" : "Movie"}
+              </Tag>
+              <span className="text-[13px] text-muted-foreground">
+                {collection.torrents.length} torrent{collection.torrents.length > 1 ? "s" : ""}
+              </span>
+              {newCount > 0 && <Tag variant="success">{newCount} new</Tag>}
+            </div>
+            <h1 className="display text-foreground" style={{ fontSize: "clamp(40px, 7vw, 76px)" }}>
+              {collection.display_title}
+            </h1>
+            {firstPlayable && (
+              <div className="flex flex-wrap gap-2.5">
+                <Button asChild size="lg" className="h-11">
+                  <Link to={`/watch/${firstPlayable.infohash}/${firstPlayable.idx}`}>
+                    <Play className="size-[18px]" />
+                    Play
+                  </Link>
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      </Container>
     </section>
   );
 }
@@ -305,14 +342,24 @@ function EpisodeList({
 
   const current = seasons.find((s) => s.season === activeSeason) ?? seasons[0];
   const currentPacks = packsBySeason.get(current.season) ?? [];
+  const downloadedCount = current.items.filter((e) =>
+    e.variants.some((v) => v.status === "downloaded"),
+  ).length;
 
   return (
-    <div className="grid gap-4">
-      <SeasonTabs
-        seasons={seasons.map((s) => s.season)}
-        value={current.season}
-        onChange={setActiveSeason}
-      />
+    <div className="grid gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <SeasonTabs
+          seasons={seasons.map((s) => s.season)}
+          value={current.season}
+          onChange={setActiveSeason}
+        />
+        {current.items.length > 0 && (
+          <span className="text-[13px] text-muted-foreground">
+            {current.items.length} episodes · {downloadedCount} downloaded
+          </span>
+        )}
+      </div>
       {currentPacks.map((p) => (
         <SeasonPackBanner
           key={`${p.season}-${p.language ?? "_"}-${p.indexer_torrent_id}`}
@@ -322,7 +369,7 @@ function EpisodeList({
         />
       ))}
       {current.items.length > 0 ? (
-        <ul className="divide-y divide-border rounded-lg border border-border bg-card/30">
+        <ul className="grid gap-2">
           {current.items.map((ep) => (
             <EpisodeRow
               key={`${ep.season}-${ep.episode}`}
@@ -356,17 +403,17 @@ function SeasonTabs({
 }) {
   if (seasons.length <= 1) return null;
   return (
-    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+    <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
       {seasons.map((s) => (
         <button
           key={s}
           type="button"
           onClick={() => onChange(s)}
           className={cn(
-            "rounded-md border px-3 py-1.5 text-sm transition",
+            "inline-flex h-9 items-center rounded-full border px-4 text-sm font-medium transition-colors",
             s === value
-              ? "border-primary bg-primary/10 text-primary"
-              : "border-border text-muted-foreground hover:border-border/80 hover:text-foreground",
+              ? "border-border bg-elev-2 text-foreground"
+              : "border-transparent text-muted-foreground hover:bg-accent hover:text-foreground",
           )}
         >
           Season {s}
@@ -409,14 +456,16 @@ function SeasonPackBanner({
   });
   const busy = grab.isPending || prepare.isPending;
   return (
-    <div className="grid grid-cols-1 items-center gap-3 rounded-lg border border-emerald-500/40 bg-gradient-to-r from-emerald-500/15 via-emerald-500/5 to-transparent px-4 py-3 sm:grid-cols-[1fr_auto]">
+    <div className="grid grid-cols-1 items-center gap-3 rounded-xl border border-success/30 bg-gradient-to-r from-success/12 via-success/5 to-transparent px-4 py-3.5 sm:grid-cols-[1fr_auto]">
       <div className="min-w-0 grid gap-1">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge className="bg-emerald-500/80 text-[10px] uppercase">Season pack</Badge>
+          <Tag variant="success" upper>
+            <Sparkles className="size-2.5" /> Season pack
+          </Tag>
           <span className="text-sm font-medium">Season {pack.season} · full pack available</span>
           <LanguageBadge language={pack.language} />
         </div>
-        <div className="text-xs text-muted-foreground">
+        <div className="text-[12.5px] text-fg-dim">
           {[
             pack.quality,
             pack.seeders != null ? `${pack.seeders} seeders` : null,
@@ -452,19 +501,19 @@ function EpisodeRow({
 }) {
   const anyWatched = ep.variants.some((v) => v.status === "downloaded" && v.watched);
   return (
-    <li className="grid grid-cols-[3rem_1fr] items-start gap-3 px-4 py-3 text-sm">
-      <span className="pt-1 text-center font-mono text-muted-foreground">
+    <li className="glass grid grid-cols-[auto_1fr] items-start gap-4 rounded-xl p-3.5 text-sm">
+      <span className="grid size-11 place-items-center rounded-[10px] bg-elev-2 font-display text-lg text-foreground">
         {ep.episode.toString().padStart(2, "0")}
       </span>
       <div className="min-w-0 grid gap-2">
         <div className="flex items-center gap-2">
-          <span className="font-medium">
+          <span className="font-mono text-[13px] text-muted-foreground">
             S{ep.season.toString().padStart(2, "0")}E{ep.episode.toString().padStart(2, "0")}
           </span>
           {anyWatched && (
-            <Badge variant="secondary" className="text-[10px]">
-              <CheckCircle2 className="mr-1 size-3" /> watched
-            </Badge>
+            <Tag variant="plain" upper>
+              <CheckCircle2 className="size-2.5" /> Watched
+            </Tag>
           )}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -522,7 +571,7 @@ function VariantChip({
       <button
         type="button"
         onClick={() => onPlay(variant.infohash, variant.file_idx)}
-        className="group inline-flex items-center gap-2 rounded-md border border-border bg-card/60 px-2.5 py-1 transition hover:border-primary/60 hover:bg-card"
+        className="group inline-flex items-center gap-2 rounded-full border border-border bg-elev-2 px-2.5 py-1 transition hover:border-primary/60 hover:bg-hover"
       >
         <LanguageBadge language={variant.language} />
         <Play className="size-3.5 text-primary" />
@@ -544,13 +593,13 @@ function VariantChip({
       type="button"
       onClick={() => grab.mutate()}
       disabled={grab.isPending}
-      className="group inline-flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-1 transition hover:border-emerald-500/60 hover:bg-emerald-500/10 disabled:opacity-60"
+      className="group inline-flex items-center gap-2 rounded-full border border-success/30 bg-success/8 px-2.5 py-1 transition hover:border-success/60 hover:bg-success/15 disabled:opacity-60"
     >
       <LanguageBadge language={variant.language} />
       {grab.isPending ? (
-        <Loader2 className="size-3.5 animate-spin text-emerald-300" />
+        <Loader2 className="size-3.5 animate-spin text-success" />
       ) : (
-        <Download className="size-3.5 text-emerald-300" />
+        <Download className="size-3.5 text-success" />
       )}
       {meta && <span className="text-xs text-muted-foreground">{meta}</span>}
     </button>
@@ -570,7 +619,7 @@ function RawFileList({
   onPlay: (infohash: string, fileIdx: number) => void;
 }) {
   return (
-    <ul className="divide-y divide-border rounded-lg border border-border bg-card/30">
+    <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface">
       {collection.torrents.flatMap((t) =>
         // Server already returns files in SCENE-aware order
         // (`compare_video_files` inside the engine snapshot

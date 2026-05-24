@@ -533,6 +533,12 @@ pub struct TorrentView {
     /// this to `/api/metadata/tmdb/{id}?kind=` so TMDB's separate
     /// movie / tv namespaces don't collide on poster lookups.
     pub kind: Option<String>,
+    /// Parent collection UUID, once `collection_assign` has grouped this
+    /// torrent. `None` for orphan torrents (no SCENE identity / not yet
+    /// assigned). Additive field — lets a client deep-link a multi-file
+    /// torrent straight to its collection page rather than a generic
+    /// fallback. Older clients ignore the unknown field.
+    pub collection_id: Option<uuid::Uuid>,
     /// Lifetime upload counter — survives session restarts and GC
     /// evictions, unlike `snapshot.uploaded_bytes`.
     pub uploaded_bytes_total: u64,
@@ -559,6 +565,7 @@ async fn list(
                 tmdb_id: row.tmdb_id,
                 tmdb_verified: row.tmdb_verified,
                 kind: row.kind,
+                collection_id: row.collection_id,
                 uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                 snapshot,
             });
@@ -590,6 +597,7 @@ async fn get_one(
         tmdb_id: row.tmdb_id,
         tmdb_verified: row.tmdb_verified,
         kind: row.kind,
+        collection_id: row.collection_id,
         uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
         snapshot,
     }))

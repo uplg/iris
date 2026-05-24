@@ -1,7 +1,12 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+
+/* Premium type system — Cal Sans (display), Inter (body/UI), JetBrains Mono
+   (paths/codes). All vendored via fontsource, no runtime CDN. */
+@import "@fontsource/cal-sans/400.css";
+@import "@fontsource-variable/inter/index.css";
+@import "@fontsource-variable/jetbrains-mono/index.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -13,17 +18,29 @@ body,
 
 body {
   margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.005em;
+  font-feature-settings: "cv11", "ss01";
 }
 
 @theme inline {
-  --font-heading: var(--font-sans);
-  --font-sans: "Geist Variable", sans-serif;
+  /* Type */
+  --font-display: "Cal Sans", "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-display);
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+
   /* Animation timing tokens. Match Material's "small motion" curve so
      focus / hover transitions feel deliberate without dragging — most
      interactions stay under 200 ms. */
   --ease-soft: cubic-bezier(0.2, 0, 0, 1);
   --duration-quick: 150ms;
   --duration-medium: 220ms;
+
+  /* shadcn surface/semantic tokens (remapped to the premium palette below
+     so every shadcn primitive — button, badge, card, dialog — reskins for
+     free). */
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -55,6 +72,21 @@ body {
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
+
+  /* Premium-redesign extras (distinct names — `--accent` stays the shadcn
+     subtle-hover token; the brand colour is `--brand` / `--primary`). */
+  --color-elev: var(--elev);
+  --color-elev-2: var(--elev-2);
+  --color-surface: var(--surface);
+  --color-fg-dim: var(--fg-dim);
+  --color-border-strong: var(--border-strong);
+  --color-brand: var(--brand);
+  --color-brand-2: var(--brand-2);
+  --color-brand-3: var(--brand-3);
+  --color-brand-soft: var(--brand-soft);
+  --color-success: var(--success);
+  --color-warn: var(--warn);
+
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -64,73 +96,138 @@ body {
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ── Light (default :root) ──────────────────────────────────────────────── */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --background: oklch(0.99 0.004 270);
+  --foreground: oklch(0.18 0.012 270);
+  --card: oklch(0.975 0.005 270);
+  --card-foreground: oklch(0.18 0.012 270);
+  --popover: oklch(0.975 0.005 270);
+  --popover-foreground: oklch(0.18 0.012 270);
+  --primary: var(--brand);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.955 0.006 270);
+  --secondary-foreground: oklch(0.18 0.012 270);
+  --muted: oklch(0.975 0.005 270);
+  --muted-foreground: oklch(0.42 0.01 270);
+  --accent: oklch(0.94 0.007 270);
+  --accent-foreground: oklch(0.18 0.012 270);
+  --destructive: oklch(0.68 0.22 25);
+  --border: oklch(0 0 0 / 0.08);
+  --input: oklch(0 0 0 / 0.08);
+  --ring: oklch(from var(--brand) l c h / 0.4);
+
+  --chart-1: var(--brand);
+  --chart-2: var(--brand-2);
+  --chart-3: var(--brand-3);
+  --chart-4: oklch(0.74 0.14 155);
+  --chart-5: oklch(0.82 0.16 75);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+
+  --sidebar: oklch(0.975 0.005 270);
+  --sidebar-foreground: oklch(0.18 0.012 270);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.94 0.007 270);
+  --sidebar-accent-foreground: oklch(0.18 0.012 270);
+  --sidebar-border: oklch(0 0 0 / 0.08);
+  --sidebar-ring: oklch(from var(--brand) l c h / 0.4);
+
+  /* Premium extras */
+  --elev: oklch(0.975 0.005 270);
+  --elev-2: oklch(0.955 0.006 270);
+  --hover: oklch(0.94 0.007 270);
+  --surface: oklch(1 0 0 / 0.7);
+  --surface-blur: oklch(1 0 0 / 0.78);
+  --fg-dim: oklch(0.58 0.008 270);
+  --border-strong: oklch(0 0 0 / 0.14);
+  --brand: oklch(0.55 0.2 290);
+  --brand-2: oklch(0.55 0.16 240);
+  --brand-3: oklch(0.6 0.2 330);
+  --brand-soft: oklch(from var(--brand) l c h / 0.1);
+  --success: oklch(0.6 0.16 155);
+  --warn: oklch(0.72 0.16 70);
+
+  /* Density rhythm — overridden under [data-density="compact"] */
+  --lane-gap: 3.5rem;
+  --card-pad: 1rem;
+  --header-h: 64px;
 }
 
+/* ── Dark ───────────────────────────────────────────────────────────────── */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: oklch(0.155 0.008 270);
+  --foreground: oklch(0.985 0.003 270);
+  --card: oklch(0.192 0.009 270);
+  --card-foreground: oklch(0.985 0.003 270);
+  --popover: oklch(0.192 0.009 270);
+  --popover-foreground: oklch(0.985 0.003 270);
+  --primary: var(--brand);
+  --primary-foreground: oklch(0.16 0.01 270);
+  --secondary: oklch(0.225 0.01 270);
+  --secondary-foreground: oklch(0.985 0.003 270);
+  --muted: oklch(0.192 0.009 270);
+  --muted-foreground: oklch(0.72 0.008 270);
+  --accent: oklch(0.235 0.012 270);
+  --accent-foreground: oklch(0.985 0.003 270);
+  --destructive: oklch(0.68 0.22 25);
+  --border: oklch(1 0 0 / 0.08);
+  --input: oklch(1 0 0 / 0.1);
+  --ring: oklch(from var(--brand) l c h / 0.55);
+
+  --chart-1: var(--brand);
+  --chart-2: var(--brand-2);
+  --chart-3: var(--brand-3);
+  --chart-4: oklch(0.74 0.14 155);
+  --chart-5: oklch(0.82 0.16 75);
+
+  --sidebar: oklch(0.192 0.009 270);
+  --sidebar-foreground: oklch(0.985 0.003 270);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: oklch(0.16 0.01 270);
+  --sidebar-accent: oklch(0.235 0.012 270);
+  --sidebar-accent-foreground: oklch(0.985 0.003 270);
+  --sidebar-border: oklch(1 0 0 / 0.08);
+  --sidebar-ring: oklch(from var(--brand) l c h / 0.55);
+
+  /* Premium extras */
+  --elev: oklch(0.192 0.009 270);
+  --elev-2: oklch(0.225 0.01 270);
+  --hover: oklch(0.235 0.012 270);
+  --surface: oklch(0.205 0.009 270 / 0.6);
+  --surface-blur: oklch(0.18 0.008 270 / 0.7);
+  --fg-dim: oklch(0.56 0.01 270);
+  --border-strong: oklch(1 0 0 / 0.14);
+  --brand: oklch(0.72 0.18 290);
+  --brand-2: oklch(0.78 0.12 240);
+  --brand-3: oklch(0.78 0.16 330);
+  --brand-soft: oklch(from var(--brand) l c h / 0.14);
+  --success: oklch(0.74 0.14 155);
+  --warn: oklch(0.82 0.16 75);
+}
+
+/* ── Accent variants (apply over either theme) ──────────────────────────── */
+[data-accent="indigo"] {
+  --brand: oklch(0.65 0.2 270);
+  --brand-3: oklch(0.78 0.16 310);
+}
+[data-accent="emerald"] {
+  --brand: oklch(0.72 0.16 165);
+  --brand-3: oklch(0.8 0.14 195);
+}
+[data-accent="amber"] {
+  --brand: oklch(0.78 0.16 70);
+  --brand-3: oklch(0.82 0.15 30);
+}
+[data-accent="rose"] {
+  --brand: oklch(0.7 0.2 10);
+  --brand-3: oklch(0.78 0.16 340);
+}
+
+/* ── Density ────────────────────────────────────────────────────────────── */
+[data-density="compact"] {
+  --lane-gap: 2.25rem;
+  --card-pad: 0.75rem;
 }
 
 @layer base {
@@ -142,6 +239,23 @@ body {
   }
   html {
     @apply font-sans;
+  }
+
+  /* Subtle scrollbars to match the premium chrome. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 99px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
   }
 
   /* Respect reduced-motion across the board — applies to every CSS
@@ -164,18 +278,23 @@ body {
  * Centralising the heading / body / caption combos here keeps callsites
  * visually noiseless AND makes a future restyle a one-file edit instead of
  * a global search-replace. Use these in preference to ad-hoc Tailwind
- * combinations for new code; legacy `text-Nxl font-semibold tracking-tight`
- * blocks can be migrated opportunistically.
+ * combinations for new code.
  * --------------------------------------------------------------------------- */
 
+@utility display {
+  /* Oversized hero / page titles — Cal Sans, very tight tracking. */
+  font-family: var(--font-display);
+  letter-spacing: -0.025em;
+  line-height: 1.02;
+}
 @utility heading-1 {
-  @apply text-3xl font-semibold tracking-tight;
+  @apply font-display text-3xl tracking-tight;
 }
 @utility heading-2 {
-  @apply text-xl font-semibold tracking-tight;
+  @apply font-display text-xl tracking-tight;
 }
 @utility heading-3 {
-  @apply text-base font-semibold tracking-tight;
+  @apply font-display text-base tracking-tight;
 }
 @utility caption {
   @apply text-xs text-muted-foreground;
@@ -183,11 +302,54 @@ body {
 @utility eyebrow {
   /* Section-label style — small, uppercase, muted. Used above shelf
      groups, table headers, etc. */
-  @apply text-[10px] uppercase tracking-wide text-muted-foreground;
+  @apply text-[11px] font-medium uppercase tracking-[0.08em] text-fg-dim;
 }
 @utility focus-ring {
   /* Standard focus state: bright primary ring with a 2 px offset, no
      visible outline by default (mouse use) but visible on keyboard
      navigation. Pair with `outline-none` on the element. */
   @apply outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+}
+
+/* ── Glass surface — translucent blurred panel used by content cards,
+   the sticky header, and the bottom bar. Distinct from the opaque shadcn
+   `Card` so dialogs/popovers stay legible over arbitrary content. */
+@utility glass {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+}
+
+/* ── Brand wordmark gradient ────────────────────────────────────────────── */
+@utility brand-text {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  background: linear-gradient(105deg, var(--brand-3) 0%, var(--brand) 50%, var(--brand-2) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  line-height: 1;
+}
+
+/* ── Vertical rhythm between home/library lanes — density aware. ─────────── */
+@utility lanes {
+  display: grid;
+  gap: var(--lane-gap);
+}
+
+/* Hide scrollbar utility for horizontal shelves. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Placeholder fill for posters with no artwork — soft diagonal accent
+   wash with a faint hatch, behind a kind icon (film / tv). */
+.poster-fallback {
+  background:
+    linear-gradient(135deg, oklch(0.3 0.04 290 / 0.6), oklch(0.22 0.03 240 / 0.6)),
+    repeating-linear-gradient(45deg, oklch(1 0 0 / 0.02) 0 10px, oklch(1 0 0 / 0) 10px 20px);
 }

@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { Container } from "@/components/Container";
+import { Tag } from "@/components/Tag";
 import {
   Dialog,
   DialogContent,
@@ -81,22 +83,21 @@ export function AdminPage() {
   });
 
   return (
-    <div className="grid gap-8">
-      {/* Admin banner — visually distinct from the family-facing UI so
-          it's always clear this isn't where the family should be.
-          Amber border + monospace font for the "this is the engine
-          room" effect. */}
-      <section className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="rounded-md bg-amber-500/15 p-2 text-amber-400">
+    <Container>
+      <div className="grid gap-8">
+        {/* Admin header — visually distinct from the family-facing UI (warn
+          accent + a Terminal chip) so it's always clear this is the
+          "engine room", not where the family should be. */}
+        <header className="flex flex-wrap items-end justify-between gap-4 border-b border-warn/30 pb-5">
+          <div className="flex items-center gap-3">
+            <div className="grid size-11 place-items-center rounded-xl bg-warn/15 text-warn">
               <Terminal className="size-5" />
             </div>
-            <div>
-              <h1 className="font-mono text-2xl font-semibold tracking-tight">Admin · Seedbox</h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Technical panel. The family view lives on the home page.
-              </p>
+            <div className="grid gap-1">
+              <span className="eyebrow text-warn/80">Engine room</span>
+              <h1 className="display" style={{ fontSize: "clamp(32px, 4.5vw, 48px)" }}>
+                Admin
+              </h1>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -113,121 +114,121 @@ export function AdminPage() {
               </Link>
             </Button>
           </div>
-        </div>
-      </section>
+        </header>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Storage</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          {storage.data ? (
-            <StorageView data={storage.data} />
-          ) : storage.isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : null}
-          <div className="flex items-center gap-3">
-            <Button onClick={() => gc.mutate()} disabled={gc.isPending}>
-              <RotateCcw className={`size-4 ${gc.isPending ? "animate-spin" : ""}`} />
-              {gc.isPending ? "Running GC…" : "Run GC now"}
-            </Button>
-            {gc.error && (
-              <span className="text-sm text-destructive">
-                {gc.error instanceof Error ? gc.error.message : "failed"}
-              </span>
-            )}
-          </div>
-          {lastGc && <GcReportView report={lastGc} />}
-        </CardContent>
-      </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Storage</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            {storage.data ? (
+              <StorageView data={storage.data} />
+            ) : storage.isLoading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : null}
+            <div className="flex items-center gap-3">
+              <Button onClick={() => gc.mutate()} disabled={gc.isPending}>
+                <RotateCcw className={`size-4 ${gc.isPending ? "animate-spin" : ""}`} />
+                {gc.isPending ? "Running GC…" : "Run GC now"}
+              </Button>
+              {gc.error && (
+                <span className="text-sm text-destructive">
+                  {gc.error instanceof Error ? gc.error.message : "failed"}
+                </span>
+              )}
+            </div>
+            {lastGc && <GcReportView report={lastGc} />}
+          </CardContent>
+        </Card>
 
-      <UsersCard />
+        <UsersCard />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Invitations</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-6">
-          <div className="flex items-center gap-3">
-            <Button onClick={() => create.mutate()} disabled={create.isPending}>
-              <Plus className="size-4" />
-              {create.isPending ? "Generating…" : "Generate invitation"}
-            </Button>
-            {create.error && (
-              <span className="text-sm text-destructive">{create.error.message}</span>
-            )}
-          </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>Invitations</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-6">
+            <div className="flex items-center gap-3">
+              <Button onClick={() => create.mutate()} disabled={create.isPending}>
+                <Plus className="size-4" />
+                {create.isPending ? "Generating…" : "Generate invitation"}
+              </Button>
+              {create.error && (
+                <span className="text-sm text-destructive">{create.error.message}</span>
+              )}
+            </div>
 
-          {lastCreated && (
-            <div className="rounded-md border border-border bg-muted/30 p-4">
-              <p className="text-sm text-muted-foreground">
-                Token shown ONCE. Share it with the invitee.
-              </p>
-              <code className="mt-2 block break-all rounded bg-background px-3 py-2 text-sm">
-                {lastCreated.token}
-              </code>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Or share this link:{" "}
-                <code className="text-xs">
-                  {window.location.origin}/register?token={lastCreated.token}
+            {lastCreated && (
+              <div className="rounded-md border border-border bg-elev p-4">
+                <p className="text-sm text-muted-foreground">
+                  Token shown ONCE. Share it with the invitee.
+                </p>
+                <code className="mt-2 block break-all rounded bg-background px-3 py-2 text-sm">
+                  {lastCreated.token}
                 </code>
-              </p>
-            </div>
-          )}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Or share this link:{" "}
+                  <code className="text-xs">
+                    {window.location.origin}/register?token={lastCreated.token}
+                  </code>
+                </p>
+              </div>
+            )}
 
-          {invitations.isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : invitations.data?.length ? (
-            <div className="overflow-x-auto rounded-md border border-border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 text-left sm:px-4">Created</th>
-                    <th className="hidden px-3 py-2 text-left sm:table-cell sm:px-4">Expires</th>
-                    <th className="px-3 py-2 text-left sm:px-4">Status</th>
-                    <th className="px-3 py-2 sm:px-4"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {invitations.data.map((inv) => {
-                    const s = status(inv);
-                    return (
-                      <tr key={inv.id} className="border-t border-border">
-                        <td className="px-3 py-2 sm:px-4">
-                          {new Date(inv.created_at).toLocaleString()}
-                        </td>
-                        <td className="hidden px-3 py-2 sm:table-cell sm:px-4">
-                          {new Date(inv.expires_at).toLocaleString()}
-                        </td>
-                        <td className="px-3 py-2 sm:px-4">{s}</td>
-                        <td className="px-3 py-2 text-right sm:px-4">
-                          {s === "active" && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => revoke.mutate(inv.id)}
-                              disabled={revoke.isPending}
-                              title="Revoke"
-                            >
-                              <Trash2 className="size-3.5" />
-                              <span className="sr-only">Revoke</span>
-                            </Button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">No invitations yet.</p>
-          )}
-        </CardContent>
-      </Card>
+            {invitations.isLoading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : invitations.data?.length ? (
+              <div className="overflow-x-auto rounded-md border border-border">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2 text-left sm:px-4">Created</th>
+                      <th className="hidden px-3 py-2 text-left sm:table-cell sm:px-4">Expires</th>
+                      <th className="px-3 py-2 text-left sm:px-4">Status</th>
+                      <th className="px-3 py-2 sm:px-4"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invitations.data.map((inv) => {
+                      const s = status(inv);
+                      return (
+                        <tr key={inv.id} className="border-t border-border">
+                          <td className="px-3 py-2 sm:px-4">
+                            {new Date(inv.created_at).toLocaleString()}
+                          </td>
+                          <td className="hidden px-3 py-2 sm:table-cell sm:px-4">
+                            {new Date(inv.expires_at).toLocaleString()}
+                          </td>
+                          <td className="px-3 py-2 sm:px-4">{s}</td>
+                          <td className="px-3 py-2 text-right sm:px-4">
+                            {s === "active" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => revoke.mutate(inv.id)}
+                                disabled={revoke.isPending}
+                                title="Revoke"
+                              >
+                                <Trash2 className="size-3.5" />
+                                <span className="sr-only">Revoke</span>
+                              </Button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No invitations yet.</p>
+            )}
+          </CardContent>
+        </Card>
 
-      <RemuxCacheCard />
-    </div>
+        <RemuxCacheCard />
+      </div>
+    </Container>
   );
 }
 
@@ -277,7 +278,7 @@ function RemuxCacheCard() {
                       : "empty";
                   const stateClass =
                     stateLabel === "ready"
-                      ? "bg-emerald-500/10 text-emerald-300"
+                      ? "bg-success/10 text-success"
                       : stateLabel === "remuxing"
                         ? "bg-sky-500/10 text-sky-300"
                         : "bg-zinc-500/10 text-zinc-300";
@@ -359,7 +360,7 @@ function StorageView({
           {formatSize(data.used_bytes)} / {formatSize(data.max_storage_bytes)} ·{" "}
           {data.torrent_count} torrent{data.torrent_count > 1 ? "s" : ""}
         </span>
-        <span className={overThreshold ? "text-amber-300" : "text-foreground"}>
+        <span className={overThreshold ? "text-warn" : "text-foreground"}>
           {usedPct.toFixed(1)}%
         </span>
       </div>
@@ -375,9 +376,7 @@ function StorageView({
       <div className="mt-2 flex items-baseline justify-between border-t border-border pt-2 text-sm">
         <span className="text-muted-foreground">Seeded all-time</span>
         <span className="tabular-nums">
-          <span className="font-medium text-emerald-300">
-            {formatSize(data.total_uploaded_bytes)}
-          </span>
+          <span className="font-medium text-success">{formatSize(data.total_uploaded_bytes)}</span>
           {ratio != null && (
             <span className="ml-2 text-[11px] text-muted-foreground">
               · ratio {ratio.toFixed(2)}
@@ -425,13 +424,10 @@ function UsersCard() {
                     <td className="break-all px-3 py-2 sm:px-4">{u.email}</td>
                     <td className="px-3 py-2 sm:px-4">
                       {u.is_admin ? (
-                        <Badge
-                          variant="outline"
-                          className="inline-flex items-center gap-1 border-fuchsia-400/50 text-fuchsia-300"
-                        >
-                          <ShieldCheck className="size-3" />
-                          admin
-                        </Badge>
+                        <Tag variant="accent" upper>
+                          <ShieldCheck className="size-2.5" />
+                          Admin
+                        </Tag>
                       ) : (
                         <span className="text-xs text-muted-foreground">user</span>
                       )}
@@ -547,7 +543,7 @@ function ResetPasswordDialog({
             </p>
           )}
           {done && (
-            <p className="text-sm text-emerald-300">
+            <p className="text-sm text-success">
               Password updated. Hand the new password to {target?.email}.
             </p>
           )}
@@ -572,7 +568,7 @@ function ResetPasswordDialog({
 function GcReportView({ report }: { report: GcReport }) {
   const freed = report.used_bytes_before - report.used_bytes_after;
   return (
-    <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+    <div className="rounded-md border border-border bg-elev p-3 text-sm">
       <p className="text-muted-foreground">
         Freed {formatSize(freed)} ({report.evicted.length} torrent
         {report.evicted.length !== 1 ? "s" : ""} evicted)

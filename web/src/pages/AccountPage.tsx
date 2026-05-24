@@ -1,14 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router";
-import { KeyRound, Link2, Trash2, Tv } from "lucide-react";
+import { KeyRound, Link2, LogOut, Trash2, Tv } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
+import { Container } from "@/components/Container";
+import { AccentSwatches } from "@/components/TweaksDrawer";
+import { Tag } from "@/components/Tag";
 import { ApiError, auth as authApi, devices as devicesApi, type DeviceView } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useTheme } from "@/lib/theme";
+import { cn } from "@/lib/utils";
 
 export function AccountPage() {
   const auth = useAuth();
@@ -54,80 +58,176 @@ export function AccountPage() {
         : null;
 
   return (
-    <div className="grid gap-6">
-      <section>
-        <h1 className="text-3xl font-semibold tracking-tight">Account</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Manage your identity, paired devices, and password.
-        </p>
-      </section>
+    <Container narrow>
+      <div className="grid gap-8">
+        <header className="flex flex-wrap items-end justify-between gap-4">
+          <div className="grid gap-1.5">
+            <span className="eyebrow">Profile</span>
+            <h1 className="display" style={{ fontSize: "clamp(36px, 5vw, 56px)" }}>
+              Account
+            </h1>
+          </div>
+          <Button variant="outline" onClick={() => void auth.logout()}>
+            <LogOut className="size-4" /> Sign out
+          </Button>
+        </header>
 
-      <IdentityCard />
+        <IdentityCard />
 
-      <DevicesCard />
+        <PreferencesCard />
 
-      <Card className="max-w-md">
-        <CardHeader>
-          <CardTitle>Change password</CardTitle>
-          <CardDescription>Other sessions will be signed out automatically.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={onSubmit} className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="oldPwd">Current password</Label>
-              <Input
-                id="oldPwd"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={oldPwd}
-                onChange={(e) => setOldPwd(e.target.value)}
-              />
+        <DevicesCard />
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Change password</CardTitle>
+            <CardDescription>Other sessions will be signed out automatically.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={onSubmit} className="grid gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="oldPwd">Current password</Label>
+                <Input
+                  id="oldPwd"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={oldPwd}
+                  onChange={(e) => setOldPwd(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="newPwd">New password</Label>
+                <Input
+                  id="newPwd"
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={8}
+                  required
+                  value={newPwd}
+                  onChange={(e) => setNewPwd(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="confirm">Confirm new password</Label>
+                <Input
+                  id="confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={8}
+                  required
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                />
+              </div>
+              {(localErr || errMessage) && (
+                <p className="text-sm text-destructive">{localErr ?? errMessage}</p>
+              )}
+              {success && (
+                <p className="text-sm text-success">
+                  Password updated. Other devices have been signed out.
+                </p>
+              )}
+              <Button
+                type="submit"
+                disabled={
+                  change.isPending || !oldPwd || !newPwd || newPwd !== confirm || newPwd.length < 8
+                }
+              >
+                <KeyRound className="size-4" />
+                {change.isPending ? "Updating…" : "Update password"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    </Container>
+  );
+}
+
+function PreferencesCard() {
+  const { resolved, setTheme, accent, setAccent, density, setDensity } = useTheme();
+  return (
+    <section className="grid gap-3">
+      <div className="grid gap-1">
+        <span className="eyebrow">Display</span>
+        <h2 className="heading-3">Preferences</h2>
+      </div>
+      <Card className="overflow-hidden">
+        <CardContent className="grid gap-0 p-0">
+          <SettingsRow label="Theme" description="Choose between dark and light." first>
+            <div className="inline-flex gap-1.5 rounded-[10px] border border-border bg-elev p-1">
+              {(["dark", "light"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTheme(t)}
+                  className={cn(
+                    "rounded-md px-3.5 py-1.5 text-[13px] font-medium capitalize transition",
+                    resolved === t
+                      ? "border border-border bg-elev-2 text-foreground"
+                      : "border border-transparent text-muted-foreground",
+                  )}
+                >
+                  {t}
+                </button>
+              ))}
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="newPwd">New password</Label>
-              <Input
-                id="newPwd"
-                type="password"
-                autoComplete="new-password"
-                minLength={8}
-                required
-                value={newPwd}
-                onChange={(e) => setNewPwd(e.target.value)}
-              />
+          </SettingsRow>
+          <SettingsRow
+            label="Accent color"
+            description="Used for primary actions, focus rings, and highlights."
+          >
+            <AccentSwatches value={accent} onChange={setAccent} />
+          </SettingsRow>
+          <SettingsRow label="Density" description="Spacing rhythm across pages.">
+            <div className="inline-flex gap-1.5 rounded-[10px] border border-border bg-elev p-1">
+              {(["comfortable", "compact"] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setDensity(d)}
+                  className={cn(
+                    "rounded-md px-3.5 py-1.5 text-[13px] font-medium capitalize transition",
+                    density === d
+                      ? "border border-border bg-elev-2 text-foreground"
+                      : "border border-transparent text-muted-foreground",
+                  )}
+                >
+                  {d}
+                </button>
+              ))}
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="confirm">Confirm new password</Label>
-              <Input
-                id="confirm"
-                type="password"
-                autoComplete="new-password"
-                minLength={8}
-                required
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-              />
-            </div>
-            {(localErr || errMessage) && (
-              <p className="text-sm text-destructive">{localErr ?? errMessage}</p>
-            )}
-            {success && (
-              <p className="text-sm text-emerald-300">
-                Password updated. Other devices have been signed out.
-              </p>
-            )}
-            <Button
-              type="submit"
-              disabled={
-                change.isPending || !oldPwd || !newPwd || newPwd !== confirm || newPwd.length < 8
-              }
-            >
-              <KeyRound className="size-4" />
-              {change.isPending ? "Updating…" : "Update password"}
-            </Button>
-          </form>
+          </SettingsRow>
         </CardContent>
       </Card>
+    </section>
+  );
+}
+
+function SettingsRow({
+  label,
+  description,
+  children,
+  first,
+}: {
+  label: string;
+  description: string;
+  children: React.ReactNode;
+  first?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-4 p-4",
+        !first && "border-t border-border",
+      )}
+    >
+      <div className="grid min-w-[200px] flex-1 gap-0.5">
+        <span className="text-sm font-medium text-foreground">{label}</span>
+        <span className="text-[12.5px] text-fg-dim">{description}</span>
+      </div>
+      {children}
     </div>
   );
 }
@@ -168,22 +268,24 @@ function IdentityCard() {
     <Card className="max-w-2xl">
       <CardContent className="grid gap-6 p-6">
         <div className="flex items-center gap-4">
-          <div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-lg font-semibold uppercase text-primary">
+          <div
+            className="grid size-16 shrink-0 place-items-center rounded-[20px] font-display text-2xl font-semibold uppercase text-primary-foreground"
+            style={{
+              background: "linear-gradient(135deg, var(--brand-3), var(--brand), var(--brand-2))",
+            }}
+          >
             {initials}
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <h2 className="truncate text-xl font-semibold leading-tight">{user.display_name}</h2>
+              <h2 className="heading-3 truncate text-xl">{user.display_name}</h2>
               {user.is_admin && (
-                <Badge
-                  variant="outline"
-                  className="border-fuchsia-400/50 text-[10px] uppercase text-fuchsia-300"
-                >
-                  admin
-                </Badge>
+                <Tag variant="accent" upper>
+                  Admin
+                </Tag>
               )}
             </div>
-            <p className="truncate text-sm text-muted-foreground">{user.email}</p>
+            <p className="truncate font-mono text-[13px] text-muted-foreground">{user.email}</p>
           </div>
         </div>
 
@@ -225,7 +327,7 @@ function IdentityCard() {
             {errMessage ? (
               <span className="text-destructive">{errMessage}</span>
             ) : justSaved && !dirty ? (
-              <span className="text-emerald-300">Saved.</span>
+              <span className="text-success">Saved.</span>
             ) : emailDefault && trimmed !== emailDefault ? (
               <span className="text-muted-foreground">
                 Default from email:{" "}
@@ -378,7 +480,7 @@ function DevicesCard() {
             {list.data.map((d: DeviceView) => (
               <li
                 key={d.jti}
-                className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm"
+                className="flex items-center justify-between gap-3 rounded-md border border-border bg-elev px-3 py-2 text-sm"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
@@ -387,9 +489,9 @@ function DevicesCard() {
                       {d.label ?? d.kind ?? "Unnamed device"}
                     </span>
                     {d.kind && (
-                      <Badge variant="outline" className="text-[10px] uppercase">
+                      <Tag variant="plain" upper>
                         {d.kind}
-                      </Badge>
+                      </Tag>
                     )}
                   </div>
                   <span className="text-[11px] text-muted-foreground">

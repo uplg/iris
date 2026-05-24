@@ -557,6 +557,11 @@ export type TorrentView = TorrentSnapshot & {
   /** `"movie"` | `"tv"` from the parent collection — pass to the TMDB
    *  lookup endpoint to disambiguate movie vs tv namespaces. */
   kind: MediaKind | null;
+  /** Parent collection UUID once `collection_assign` has grouped this
+   *  torrent; `null`/absent for orphan torrents. Lets a multi-file
+   *  torrent deep-link to its collection page. Optional — older
+   *  backends don't send it (`#[serde(default)]` on the Rust side). */
+  collection_id?: string | null;
   /** Lifetime upload counter — survives session restarts and GC eviction,
    *  unlike the snapshot's `uploaded_bytes`. */
   uploaded_bytes_total: number;

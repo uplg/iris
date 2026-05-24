@@ -95,17 +95,17 @@ export function MediaCard(props: MediaCardProps) {
 
   const inner = (
     <div className={cn(SIZE_CLASSES[size], "flex flex-col gap-2", className)}>
-      <div className="relative aspect-[2/3] overflow-hidden rounded-lg border border-border bg-muted/40 transition group-hover:border-border/80 group-focus-visible:ring-2 group-focus-visible:ring-ring">
+      <div className="relative aspect-[2/3] overflow-hidden rounded-xl border border-border bg-elev transition group-hover:border-border-strong group-focus-visible:ring-2 group-focus-visible:ring-ring">
         {finalUrl ? (
           <img
             src={finalUrl}
             alt={title}
             loading="lazy"
-            className="h-full w-full object-cover transition group-hover:scale-[1.02]"
+            className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center bg-gradient-to-b from-primary/20 to-background/80 text-muted-foreground/60">
-            <Icon className="size-8" />
+          <div className="poster-fallback flex h-full w-full items-center justify-center text-fg-dim">
+            <Icon className="size-9" />
           </div>
         )}
 
@@ -127,9 +127,7 @@ export function MediaCard(props: MediaCardProps) {
           {title}
         </span>
         {subtitle && (
-          <span className="line-clamp-1 break-words text-[11px] text-muted-foreground">
-            {subtitle}
-          </span>
+          <span className="line-clamp-1 break-words text-[11.5px] text-fg-dim">{subtitle}</span>
         )}
       </div>
     </div>

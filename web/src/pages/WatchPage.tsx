@@ -5,6 +5,7 @@ import { CheckCircle2, Download, Library as LibraryIcon, Loader2, Play } from "l
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Container } from "@/components/Container";
 import {
   follows,
   progress as progressApi,
@@ -532,15 +533,32 @@ export function WatchPage() {
     };
   }, [infohash, fileIdx]);
 
-  if (!infohash) return <p>Missing infohash.</p>;
-  if (torrentQ.isLoading) return <p className="text-muted-foreground">Loading…</p>;
+  if (!infohash)
+    return (
+      <Container>
+        <p className="py-10">Missing infohash.</p>
+      </Container>
+    );
+  if (torrentQ.isLoading)
+    return (
+      <Container>
+        <p className="py-10 text-muted-foreground">Loading…</p>
+      </Container>
+    );
   if (torrentQ.error)
     return (
-      <p className="text-destructive">
-        {torrentQ.error instanceof Error ? torrentQ.error.message : "failed"}
-      </p>
+      <Container>
+        <p className="py-10 text-destructive">
+          {torrentQ.error instanceof Error ? torrentQ.error.message : "failed"}
+        </p>
+      </Container>
     );
-  if (!data) return <p className="text-muted-foreground">Not found.</p>;
+  if (!data)
+    return (
+      <Container>
+        <p className="py-10 text-muted-foreground">Not found.</p>
+      </Container>
+    );
 
   const fileName = file?.path.split("/").pop() ?? data.name ?? "Iris";
   const downBps = data.download_speed_bps;
@@ -567,271 +585,271 @@ export function WatchPage() {
   void hlsUrl; // kept exported for parity; no direct use here yet
 
   return (
-    <div className="grid gap-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="break-words text-xl font-semibold tracking-tight" title={fileName}>
-            {fileName}
-          </h1>
-          <p className="mt-0.5 break-words text-sm text-muted-foreground">
-            {data.name}
-            {data.source_provider && (
-              <span className="ml-2 text-xs text-muted-foreground/70">
-                via {data.source_provider}
-              </span>
-            )}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button asChild variant="outline" size="sm">
-            <a href={torrents.downloadUrl(infohash, fileIdx)} download={fileName}>
-              <Download className="size-4" />
-              Download
-            </a>
-          </Button>
-          <Button asChild variant="ghost" size="sm">
-            <Link to="/library">
-              <LibraryIcon className="size-4" />
-              Library
-            </Link>
-          </Button>
-        </div>
-      </div>
-
-      {playerError && (
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          Player error: {playerError}
-        </div>
-      )}
-
-      {outage && (
-        <div className="flex items-center gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-200">
-          <Loader2 className="size-4 animate-spin" />
-          Server unavailable — reconnecting…
-        </div>
-      )}
-
-      <div className="aspect-video w-full overflow-hidden rounded-lg border border-border bg-black">
-        {playSrc && !progressQ.isPending && sourceReady && manifest ? (
-          <IrisPlayer
-            tier={tier}
-            src={playSrc}
-            srcType={playSrcType}
-            title={fileName}
-            manifest={manifest}
-            startPosition={startPosition}
-            initialAudioIndex={progressQ.data?.audio_track_idx ?? undefined}
-            initialSubtitleStreamIdx={progressQ.data?.subtitle_track_idx ?? undefined}
-            subtitleVersion={subtitleVersion}
-            onAudioTrackChange={(idx) => {
-              audioTrackRef.current = idx;
-            }}
-            onActiveSubtitleChange={(streamIdx) => {
-              subtitleTrackRef.current = streamIdx;
-            }}
-            onTimeUpdate={onTimeUpdate}
-            onDurationChange={onDurationChange}
-            onSeeking={(t) => postSeekHint(manifest, t)}
-            onPause={onPause}
-            onEnded={onEndedCb}
-            onError={(msg) => {
-              // Routed through `handleEngineError`: a transient backend
-              // outage (502/503/504 during a deploy) holds the tier and
-              // reconnects instead of demoting. Genuine errors with the
-              // backend up then either surface the banner (A/F) or demote
-              // to the server-side HLS fallback (B/C/D/E).
-              void handleEngineError(tier, msg);
-            }}
-          />
-        ) : (
-          <PlayerLoadingStatus
-            torrent={data}
-            probeFetching={probeQ.isFetching}
-            probeError={probeQ.error}
-            progressPending={progressQ.isPending}
-            playStatus={playStatusQ.data ?? null}
-            playError={playStatusQ.error}
-          />
-        )}
-      </div>
-
-      {videoFiles.length > 1 && (
-        <section className="grid gap-3 rounded-md border border-border bg-card/40 p-4">
-          <span className="text-xs uppercase tracking-wide text-muted-foreground">
-            Other files in this torrent ({videoFiles.length})
-          </span>
-          <ul className="grid gap-1">
-            {videoFiles.map((f) => {
-              const active = f.index === fileIdx;
-              const fname = f.path.split("/").pop() ?? f.path;
-              const prog = progressByFileIdx.get(f.index);
-              const watchedPct =
-                prog && prog.duration_seconds && prog.duration_seconds > 0
-                  ? Math.min(100, (prog.position_seconds / prog.duration_seconds) * 100)
-                  : null;
-              return (
-                <li
-                  key={f.index}
-                  className={`flex items-center justify-between gap-3 rounded px-2 py-1.5 text-sm ${
-                    active ? "bg-accent text-accent-foreground" : "hover:bg-muted/40"
-                  }`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="break-all font-mono text-xs" title={f.path}>
-                      {f.path}
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <span>{formatSize(f.size_bytes)}</span>
-                      {prog?.completed && (
-                        <span className="inline-flex items-center gap-0.5 text-emerald-300">
-                          <CheckCircle2 className="size-3" />
-                          watched
-                        </span>
-                      )}
-                      {!prog?.completed && watchedPct != null && watchedPct > 0 && (
-                        <span className="text-emerald-300">{watchedPct.toFixed(0)}%</span>
-                      )}
-                      {active && <span className="text-foreground/80">· now playing</span>}
-                    </div>
-                    {!prog?.completed && watchedPct != null && watchedPct > 0 && (
-                      <Progress className="mt-1 h-0.5" value={watchedPct} />
-                    )}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <Button
-                      size="sm"
-                      variant={active ? "secondary" : "default"}
-                      disabled={active}
-                      onClick={() => navigate(`/watch/${infohash}/${f.index}`)}
-                    >
-                      <Play className="size-3.5" />
-                      {watchedPct != null && watchedPct > 0 && !prog?.completed ? "Resume" : "Play"}
-                    </Button>
-                    <Button asChild size="sm" variant="outline">
-                      <a href={torrents.downloadUrl(infohash, f.index)} download={fname}>
-                        <Download className="size-3.5" />
-                        <span className="sr-only">Download</span>
-                      </a>
-                    </Button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
-
-      {probe && probe.subtitle.length > 0 && (
-        <div className="grid gap-3 rounded-md border border-border bg-card/40 p-4 text-sm">
-          <div className="grid gap-1 text-xs">
-            <span className="uppercase tracking-wide text-muted-foreground">
-              Subtitles ({probe.subtitle.length})
-            </span>
-            <ul className="grid gap-0.5 text-muted-foreground">
-              {probe.subtitle.map((s) => (
-                <li key={s.index}>
-                  <span className="text-foreground">
-                    {s.title ?? s.language?.toUpperCase() ?? `Sub ${s.index + 1}`}
-                  </span>
-                  <span className="ml-2 text-[11px]">
-                    {s.codec}
-                    {s.forced ? " · forced" : ""}
-                    {s.default ? " · default" : ""}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            <span className="text-[11px]">
-              Switch subtitles and audio tracks from the player menu.
-            </span>
+    <Container>
+      <div className="grid gap-6 pt-2">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="heading-2 break-words" title={fileName}>
+              {fileName}
+            </h1>
+            <p className="mt-0.5 break-words text-sm text-muted-foreground">
+              {data.name}
+              {data.source_provider && (
+                <span className="ml-2 font-mono text-xs text-fg-dim">
+                  via {data.source_provider}
+                </span>
+              )}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button asChild variant="outline" size="sm">
+              <a href={torrents.downloadUrl(infohash, fileIdx)} download={fileName}>
+                <Download className="size-4" />
+                Download
+              </a>
+            </Button>
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/library">
+                <LibraryIcon className="size-4" />
+                Library
+              </Link>
+            </Button>
           </div>
         </div>
-      )}
 
-      <section className="grid gap-2 rounded-md border border-border bg-card/40 p-4">
-        <div className="flex items-center justify-between text-sm">
-          <StateBadge state={data.state} />
-          <span>
-            {formatSize(data.progress_bytes)} / {formatSize(data.total_size_bytes)} ·{" "}
-            {pct.toFixed(1)}%
-          </span>
-        </div>
-        <Progress value={pct} />
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
-          <span>↓ {formatSize(downBps)}/s</span>
-          <span>↑ {formatSize(upBps)}/s</span>
-          <span>{data.peers} peers</span>
-          {probe?.video[0] && (
-            <span>
-              {probe.video[0].codec.toUpperCase()}{" "}
-              {probe.video[0].width &&
-                probe.video[0].height &&
-                `${probe.video[0].width}×${probe.video[0].height}`}
-            </span>
+        {playerError && (
+          <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            Player error: {playerError}
+          </div>
+        )}
+
+        {outage && (
+          <div className="flex items-center gap-2 rounded-xl border border-warn/50 bg-warn/10 p-3 text-sm text-warn">
+            <Loader2 className="size-4 animate-spin" />
+            Server unavailable — reconnecting…
+          </div>
+        )}
+
+        <div className="aspect-video w-full overflow-hidden rounded-xl border border-border bg-black shadow-2xl">
+          {playSrc && !progressQ.isPending && sourceReady && manifest ? (
+            <IrisPlayer
+              tier={tier}
+              src={playSrc}
+              srcType={playSrcType}
+              title={fileName}
+              manifest={manifest}
+              startPosition={startPosition}
+              initialAudioIndex={progressQ.data?.audio_track_idx ?? undefined}
+              initialSubtitleStreamIdx={progressQ.data?.subtitle_track_idx ?? undefined}
+              subtitleVersion={subtitleVersion}
+              onAudioTrackChange={(idx) => {
+                audioTrackRef.current = idx;
+              }}
+              onActiveSubtitleChange={(streamIdx) => {
+                subtitleTrackRef.current = streamIdx;
+              }}
+              onTimeUpdate={onTimeUpdate}
+              onDurationChange={onDurationChange}
+              onSeeking={(t) => postSeekHint(manifest, t)}
+              onPause={onPause}
+              onEnded={onEndedCb}
+              onError={(msg) => {
+                // Routed through `handleEngineError`: a transient backend
+                // outage (502/503/504 during a deploy) holds the tier and
+                // reconnects instead of demoting. Genuine errors with the
+                // backend up then either surface the banner (A/F) or demote
+                // to the server-side HLS fallback (B/C/D/E).
+                void handleEngineError(tier, msg);
+              }}
+            />
+          ) : (
+            <PlayerLoadingStatus
+              torrent={data}
+              probeFetching={probeQ.isFetching}
+              probeError={probeQ.error}
+              progressPending={progressQ.isPending}
+              playStatus={playStatusQ.data ?? null}
+              playError={playStatusQ.error}
+            />
           )}
-          {probe?.duration_seconds && <span>{formatDuration(probe.duration_seconds)}</span>}
-          {data.error && <span className="text-destructive">error: {data.error}</span>}
         </div>
-      </section>
 
-      {/* "Watch next?" — fired when the user is following the
+        {videoFiles.length > 1 && (
+          <section className="glass grid gap-3 rounded-xl p-4">
+            <span className="eyebrow">Other files in this torrent ({videoFiles.length})</span>
+            <ul className="grid gap-1">
+              {videoFiles.map((f) => {
+                const active = f.index === fileIdx;
+                const fname = f.path.split("/").pop() ?? f.path;
+                const prog = progressByFileIdx.get(f.index);
+                const watchedPct =
+                  prog && prog.duration_seconds && prog.duration_seconds > 0
+                    ? Math.min(100, (prog.position_seconds / prog.duration_seconds) * 100)
+                    : null;
+                return (
+                  <li
+                    key={f.index}
+                    className={`flex items-center justify-between gap-3 rounded px-2 py-1.5 text-sm ${
+                      active ? "bg-accent text-accent-foreground" : "hover:bg-muted/40"
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="break-all font-mono text-xs" title={f.path}>
+                        {f.path}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <span>{formatSize(f.size_bytes)}</span>
+                        {prog?.completed && (
+                          <span className="inline-flex items-center gap-0.5 text-success">
+                            <CheckCircle2 className="size-3" />
+                            watched
+                          </span>
+                        )}
+                        {!prog?.completed && watchedPct != null && watchedPct > 0 && (
+                          <span className="text-success">{watchedPct.toFixed(0)}%</span>
+                        )}
+                        {active && <span className="text-foreground/80">· now playing</span>}
+                      </div>
+                      {!prog?.completed && watchedPct != null && watchedPct > 0 && (
+                        <Progress className="mt-1 h-0.5" value={watchedPct} />
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <Button
+                        size="sm"
+                        variant={active ? "secondary" : "default"}
+                        disabled={active}
+                        onClick={() => navigate(`/watch/${infohash}/${f.index}`)}
+                      >
+                        <Play className="size-3.5" />
+                        {watchedPct != null && watchedPct > 0 && !prog?.completed
+                          ? "Resume"
+                          : "Play"}
+                      </Button>
+                      <Button asChild size="sm" variant="outline">
+                        <a href={torrents.downloadUrl(infohash, f.index)} download={fname}>
+                          <Download className="size-3.5" />
+                          <span className="sr-only">Download</span>
+                        </a>
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        {probe && probe.subtitle.length > 0 && (
+          <div className="glass grid gap-3 rounded-xl p-4 text-sm">
+            <div className="grid gap-1 text-xs">
+              <span className="eyebrow">Subtitles ({probe.subtitle.length})</span>
+              <ul className="grid gap-0.5 text-muted-foreground">
+                {probe.subtitle.map((s) => (
+                  <li key={s.index}>
+                    <span className="text-foreground">
+                      {s.title ?? s.language?.toUpperCase() ?? `Sub ${s.index + 1}`}
+                    </span>
+                    <span className="ml-2 text-[11px]">
+                      {s.codec}
+                      {s.forced ? " · forced" : ""}
+                      {s.default ? " · default" : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <span className="text-[11px]">
+                Switch subtitles and audio tracks from the player menu.
+              </span>
+            </div>
+          </div>
+        )}
+
+        <section className="glass grid gap-2 rounded-xl p-4">
+          <div className="flex items-center justify-between text-sm">
+            <StateBadge state={data.state} />
+            <span>
+              {formatSize(data.progress_bytes)} / {formatSize(data.total_size_bytes)} ·{" "}
+              {pct.toFixed(1)}%
+            </span>
+          </div>
+          <Progress value={pct} />
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
+            <span>↓ {formatSize(downBps)}/s</span>
+            <span>↑ {formatSize(upBps)}/s</span>
+            <span>{data.peers} peers</span>
+            {probe?.video[0] && (
+              <span>
+                {probe.video[0].codec.toUpperCase()}{" "}
+                {probe.video[0].width &&
+                  probe.video[0].height &&
+                  `${probe.video[0].width}×${probe.video[0].height}`}
+              </span>
+            )}
+            {probe?.duration_seconds && <span>{formatDuration(probe.duration_seconds)}</span>}
+            {data.error && <span className="text-destructive">error: {data.error}</span>}
+          </div>
+        </section>
+
+        {/* "Watch next?" — fired when the user is following the
           current series and the next episode is available but not yet
           grabbed. One-shot per file mount; "Later" silences it for
           the rest of the session. */}
-      {nextEp && (
-        <Dialog
-          open={nextEpModalOpen}
-          onOpenChange={(o) => {
-            setNextEpModalOpen(o);
-            if (!o) nextEpDismissedRef.current = true;
-          }}
-        >
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Next episode available</DialogTitle>
-              <DialogDescription>
-                S{nextEp.season.toString().padStart(2, "0")}E
-                {nextEp.episode.toString().padStart(2, "0")} is ready to grab. Prepare it for the
-                next session?
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  nextEpDismissedRef.current = true;
-                  setNextEpModalOpen(false);
-                }}
-              >
-                Later
-              </Button>
-              <Button
-                disabled={nextEpGrabbing}
-                onClick={async () => {
-                  if (!nextEp.follow_id) return;
-                  setNextEpGrabbing(true);
-                  try {
-                    await follows.grabEpisode(nextEp.follow_id, nextEp.season, nextEp.episode);
+        {nextEp && (
+          <Dialog
+            open={nextEpModalOpen}
+            onOpenChange={(o) => {
+              setNextEpModalOpen(o);
+              if (!o) nextEpDismissedRef.current = true;
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Next episode available</DialogTitle>
+                <DialogDescription>
+                  S{nextEp.season.toString().padStart(2, "0")}E
+                  {nextEp.episode.toString().padStart(2, "0")} is ready to grab. Prepare it for the
+                  next session?
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    nextEpDismissedRef.current = true;
                     setNextEpModalOpen(false);
-                  } catch (e) {
-                    console.error("[next-ep grab]", e);
-                  } finally {
-                    setNextEpGrabbing(false);
-                  }
-                }}
-              >
-                {nextEpGrabbing ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Download className="size-4" />
-                )}
-                Prepare
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
-    </div>
+                  }}
+                >
+                  Later
+                </Button>
+                <Button
+                  disabled={nextEpGrabbing}
+                  onClick={async () => {
+                    if (!nextEp.follow_id) return;
+                    setNextEpGrabbing(true);
+                    try {
+                      await follows.grabEpisode(nextEp.follow_id, nextEp.season, nextEp.episode);
+                      setNextEpModalOpen(false);
+                    } catch (e) {
+                      console.error("[next-ep grab]", e);
+                    } finally {
+                      setNextEpGrabbing(false);
+                    }
+                  }}
+                >
+                  {nextEpGrabbing ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Download className="size-4" />
+                  )}
+                  Prepare
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
+      </div>
+    </Container>
   );
 }
 

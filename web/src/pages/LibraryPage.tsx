@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 
+import { Container } from "@/components/Container";
 import { MediaCard } from "@/components/MediaCard";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -55,34 +56,83 @@ export function LibraryPage() {
   const [params, setParams] = useSearchParams();
   const view = params.get("view") === "torrents" ? "torrents" : "collections";
 
+  // Read-only stats off the (already-cached on Home) torrents list, for
+  // the header stat cards. Cheap — shared query key.
+  const statsQ = useQuery({ queryKey: ["torrents"], queryFn: torrents.list, staleTime: 5_000 });
+  const stats = useMemo(() => {
+    const list = statsQ.data ?? [];
+    return {
+      count: list.length,
+      size: list.reduce((s, t) => s + (t.total_size_bytes ?? 0), 0),
+      downloading: list.filter((t) => t.progress_pct < 99.9).length,
+    };
+  }, [statsQ.data]);
+
   return (
-    <div className="grid gap-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Library</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+    <Container>
+      <div className="grid gap-7">
+        <header className="flex flex-wrap items-end justify-between gap-4">
+          <div className="grid gap-1.5">
+            <span className="eyebrow">On disk</span>
+            <h1 className="display" style={{ fontSize: "clamp(36px, 5vw, 56px)" }}>
+              Library
+            </h1>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <Stat label="Items" value={stats.count.toLocaleString()} />
+            <Stat label="Storage" value={formatSize(stats.size)} />
+            <Stat label="Downloading" value={String(stats.downloading)} sub="in flight" accent />
+          </div>
+        </header>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">
             {view === "collections"
               ? "Movies and series grouped together."
               : "Every torrent (raw view)."}
           </p>
+          <div className="flex items-center gap-1 rounded-[10px] border border-border bg-elev p-1">
+            <ViewToggleButton
+              active={view === "collections"}
+              onClick={() => setParams({}, { replace: true })}
+              icon={<LayoutGrid className="size-3.5" />}
+              label="Collections"
+            />
+            <ViewToggleButton
+              active={view === "torrents"}
+              onClick={() => setParams({ view: "torrents" }, { replace: true })}
+              icon={<List className="size-3.5" />}
+              label="Torrents"
+            />
+          </div>
         </div>
-        <div className="flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5">
-          <ViewToggleButton
-            active={view === "collections"}
-            onClick={() => setParams({}, { replace: true })}
-            icon={<LayoutGrid className="size-3.5" />}
-            label="Collections"
-          />
-          <ViewToggleButton
-            active={view === "torrents"}
-            onClick={() => setParams({ view: "torrents" }, { replace: true })}
-            icon={<List className="size-3.5" />}
-            label="Torrents"
-          />
-        </div>
-      </header>
 
-      {view === "collections" ? <CollectionsView /> : <TorrentsView />}
+        {view === "collections" ? <CollectionsView /> : <TorrentsView />}
+      </div>
+    </Container>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent?: boolean;
+}) {
+  return (
+    <div className="grid min-w-[120px] gap-0.5 rounded-[10px] border border-border bg-surface px-4 py-3">
+      <span className="eyebrow">{label}</span>
+      <div className="flex items-baseline gap-1.5">
+        <span className={cn("display text-[22px]", accent ? "text-primary" : "text-foreground")}>
+          {value}
+        </span>
+        {sub && <span className="text-[11.5px] text-fg-dim">{sub}</span>}
+      </div>
     </div>
   );
 }
@@ -103,10 +153,10 @@ function ViewToggleButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1.5 rounded px-3 py-1 text-xs transition",
+        "flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition",
         active
-          ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+          ? "bg-brand-soft text-primary"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground",
       )}
     >
       {icon}

@@ -9,21 +9,30 @@
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <title>Iris</title>
     <script>
-      // Apply persisted theme preference before React mounts so we never
-      // flash the wrong color scheme. Mirrors the logic in src/lib/theme.tsx;
-      // the React provider takes over after hydration and reacts to changes.
+      // Apply persisted display preferences (theme + accent + density) before
+      // React mounts so we never flash the wrong color scheme or accent.
+      // Mirrors the logic in src/lib/theme.tsx; the React provider takes over
+      // after hydration and reacts to changes.
       (function () {
-        const KEY = "iris-theme";
-        let stored = null;
-        try {
-          stored = localStorage.getItem(KEY);
-        } catch (_) {}
-        if (stored !== "light" && stored !== "dark" && stored !== "system") {
-          stored = "system";
-        }
+        const read = (key, allowed, fallback) => {
+          let v = null;
+          try {
+            v = localStorage.getItem(key);
+          } catch (_) {}
+          return allowed.includes(v) ? v : fallback;
+        };
+        const theme = read("iris-theme", ["light", "dark", "system"], "system");
+        const accent = read(
+          "iris-accent",
+          ["violet", "indigo", "emerald", "amber", "rose"],
+          "violet",
+        );
+        const density = read("iris-density", ["comfortable", "compact"], "comfortable");
         const mql = window.matchMedia("(prefers-color-scheme: dark)");
-        const dark = stored === "dark" || (stored === "system" && mql.matches);
-        document.documentElement.classList.toggle("dark", dark);
+        const root = document.documentElement;
+        root.classList.toggle("dark", theme === "dark" || (theme === "system" && mql.matches));
+        root.dataset.accent = accent;
+        root.dataset.density = density;
       })();
     </script>
   </head>

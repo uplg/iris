@@ -2,7 +2,8 @@ import { Link } from "react-router";
 
 /**
  * The Iris wordmark — used as the logo in the header and as a focal point
- * on the auth pages.
+ * on the auth pages. The gradient tracks the active accent (`brand-text`
+ * utility) so it stays in sync with the user's chosen colour.
  */
 export function Brand({
   size = "md",
@@ -11,19 +12,24 @@ export function Brand({
   size?: "sm" | "md" | "lg";
   asLink?: boolean;
 }) {
-  const sizeClass = size === "lg" ? "text-4xl" : size === "sm" ? "text-base" : "text-lg";
+  const fontSize = size === "lg" ? 40 : size === "sm" ? 16 : 22;
 
   const inner = (
-    <span
-      className={`${sizeClass} font-semibold tracking-tight inline-flex items-baseline gap-1.5`}
-    >
-      <span className="bg-linear-to-r from-fuchsia-400 via-violet-400 to-sky-400 bg-clip-text text-transparent">
-        Iris
+    <span className="brand-text inline-flex items-baseline gap-1" style={{ fontSize }}>
+      Iris
+      <span
+        className="font-normal text-fg-dim"
+        style={{ fontSize: fontSize * 0.55, WebkitTextFillColor: "currentcolor" }}
+      >
+        /
       </span>
-      <span className="font-light text-muted-foreground">/</span>
     </span>
   );
 
   if (!asLink) return inner;
-  return <Link to="/">{inner}</Link>;
+  return (
+    <Link to="/" className="focus-ring inline-flex rounded-md">
+      {inner}
+    </Link>
+  );
 }

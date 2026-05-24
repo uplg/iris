@@ -97,6 +97,7 @@ async fn list_library(
                     tmdb_id: row.tmdb_id,
                     tmdb_verified: row.tmdb_verified,
                     kind: row.kind,
+                    collection_id: row.collection_id,
                     uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                     snapshot,
                 });
@@ -252,6 +253,7 @@ async fn collection_detail(
                 tmdb_id: row.tmdb_id,
                 tmdb_verified: row.tmdb_verified,
                 kind: row.kind.clone(),
+                collection_id: row.collection_id,
                 uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                 snapshot,
             });

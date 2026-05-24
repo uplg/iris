@@ -50,7 +50,7 @@ export function Poster({
   });
 
   const url = tmdbImage(data?.poster_path, TMDB_SIZE[size]);
-  const wrapper = "shrink-0 overflow-hidden rounded-md border border-border bg-muted/40";
+  const wrapper = "shrink-0 overflow-hidden rounded-md border border-border bg-elev";
 
   if (url) {
     return (
@@ -68,7 +68,7 @@ export function Poster({
   const Icon = kind === "tv" ? Tv : Film;
   return (
     <div
-      className={`${wrapper} ${SIZE_CLASSES[size]} flex items-center justify-center text-muted-foreground/60`}
+      className={`${wrapper} ${SIZE_CLASSES[size]} poster-fallback flex items-center justify-center text-fg-dim`}
     >
       <Icon className="size-5" />
     </div>

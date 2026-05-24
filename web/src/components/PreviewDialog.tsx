@@ -254,18 +254,19 @@ export function PreviewDialog({
           )}
         </div>
 
-        {alreadyInLibrary && libraryInfohash != null && (
-          // Server-side dedup hit — surface a clear banner so the
-          // user understands why the Play CTA points at the existing
-          // file rather than re-downloading. Without it people kept
-          // accidentally ingesting the same episode twice via a
-          // different release.
-          <div className="mt-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-            You already have this episode in your library. Playing the existing file — use{" "}
-            <span className="font-medium">Download anyway</span> below only if you want a different
-            release.
-          </div>
-        )}
+        {alreadyInLibrary &&
+          libraryInfohash != null && (
+            // Server-side dedup hit — surface a clear banner so the
+            // user understands why the Play CTA points at the existing
+            // file rather than re-downloading. Without it people kept
+            // accidentally ingesting the same episode twice via a
+            // different release.
+            <div className="mt-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+              You already have this episode in your library. Playing the existing file — use{" "}
+              <span className="font-medium">Download anyway</span> below only if you want a
+              different release.
+            </div>
+          )}
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
