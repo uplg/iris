@@ -244,8 +244,25 @@ Reboot once to verify. The unit comes up before any login because
 ```bash
 cd /srv/iris
 git pull
-docker compose --profile cloudflared up -d --build   # rebuilds iris:dev
+make deploy ARGS="--profile cloudflared"   # rebuilds iris:dev, stamps the build with the commit
 ```
+
+`make deploy` injects `IRIS_WEB_BUILD_ID=$(git rev-parse --short HEAD)` as a
+Docker build arg. The web build bakes it into the bundle **and** writes it to
+`dist/version.json` (served `no-cache`), so browser tabs already open on the
+old bundle poll it, see the mismatch, and show a non-blocking "new version —
+reload" banner. `.git` is excluded from the Docker build context, so Vite
+can't read the sha itself — it has to come from the host like this.
+
+No `make`? The raw equivalent is:
+
+```bash
+IRIS_WEB_BUILD_ID=$(git rev-parse --short HEAD) docker compose --profile cloudflared up -d --build
+```
+
+Plain `docker compose up -d --build` (no build arg) still works — Vite then
+falls back to a build timestamp, which is still unique per build, so the
+reload banner still fires; you just don't get the readable commit in the id.
 
 Migrations apply automatically on container start. Worst case (failed
 migration), the container exits and the previous version stays in the

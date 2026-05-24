@@ -80,6 +80,15 @@ COPY web/ ./
 COPY --from=libav-builder /libav-iris.wasm public/libavjs/libav-6.8.8.0-iris.wasm.wasm
 COPY --from=libav-builder /libav-iris.wasm.mjs public/libavjs/libav-6.8.8.0-iris.wasm.mjs
 COPY --from=libav-builder /libav-iris.wasm.js public/libavjs/libav-6.8.8.0-iris.wasm.js
+# Per-deploy build id baked into the bundle + emitted to dist/version.json so
+# already-open tabs can detect a redeploy and offer a reload. `.git` is excluded
+# from the build context, so Vite can't read the sha itself — pass it as a build
+# arg (e.g. `--build-arg IRIS_WEB_BUILD_ID=$(git rev-parse --short HEAD)`). If
+# left empty, Vite falls back to a build timestamp (still unique per build, so a
+# deploy is still detected). The ARG also busts the build cache when it changes,
+# forcing version.json to regenerate.
+ARG IRIS_WEB_BUILD_ID=""
+ENV IRIS_WEB_BUILD_ID=${IRIS_WEB_BUILD_ID}
 RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
     bun run build
 

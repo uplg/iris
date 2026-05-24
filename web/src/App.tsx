@@ -4,6 +4,7 @@ import { AuthProvider } from "@/lib/auth";
 import { ThemeProvider } from "@/lib/theme";
 import { AppShell } from "@/components/AppShell";
 import { ClientOutdatedOverlay } from "@/components/ClientOutdatedOverlay";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { LoginPage } from "@/pages/LoginPage";
 import { RegisterPage } from "@/pages/RegisterPage";
@@ -57,6 +58,7 @@ export default function App() {
               </Route>
             </Routes>
             <ClientOutdatedOverlay />
+            <UpdateBanner />
           </BrowserRouter>
         </AuthProvider>
       </QueryClientProvider>
