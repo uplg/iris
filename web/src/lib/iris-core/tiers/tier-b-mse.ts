@@ -289,11 +289,6 @@ export const mountTierB: EngineMount = async (opts) => {
     aheadByteBudget,
   );
   const aheadCeiling = bufferAheadTarget;
-  // Floor for the playhead throttle: the position the current feed starts
-  // from (start/seek target). Guarantees the first `bufferAheadTarget`
-  // seconds always feed even before `video.currentTime` reflects the seek
-  // at startup; `video.currentTime` takes over once playback passes it.
-  let feedStartFloor = 0;
   const playedKeep = clampWindow(
     mobile ? BEHIND_SECONDS_CEILING_MOBILE : BEHIND_SECONDS_CEILING,
     MIN_BEHIND_SECONDS,
@@ -432,38 +427,6 @@ export const mountTierB: EngineMount = async (opts) => {
       sourceBuffer.addEventListener("updateend", () => resolve(), { once: true });
     });
 
-  /** Per-track back-pressure on the PLAYHEAD (not on `SourceBuffer.buffered`,
-   *  which is the *intersection* of the track ranges). Resolves once the
-   *  packet at `ts` is within `bufferAheadTarget` seconds of the playhead.
-   *  Without this, a cheap track (e.g. audio while video transcodes / a
-   *  high-bitrate video stretch) races far ahead and fills the SourceBuffer
-   *  with data the intersection-based gate can't see — the other track then
-   *  can't append (QuotaExceededError) and its buffer starves. Event-driven
-   *  off `timeupdate` (advances with playback); resolves immediately when
-   *  disposed so feed loops can unwind. */
-  // Wakeups registered by in-flight `waitForPlayheadWindow` calls so
-  // `dispose()` can release any feed loop parked on a playhead that will
-  // never advance again (the video element stops firing `timeupdate` once
-  // torn down — and we use no timers here).
-  const playheadWaiters = new Set<() => void>();
-  const waitForPlayheadWindow = (ts: number): Promise<void> =>
-    new Promise<void>((resolve) => {
-      const ready = () =>
-        disposed || Math.max(video.currentTime, feedStartFloor) + bufferAheadTarget >= ts;
-      if (ready()) {
-        resolve();
-        return;
-      }
-      const check = () => {
-        if (!ready()) return;
-        video.removeEventListener("timeupdate", check);
-        playheadWaiters.delete(check);
-        resolve();
-      };
-      playheadWaiters.add(check);
-      video.addEventListener("timeupdate", check);
-    });
-
   const evictPlayedRange = (keepSeconds: number): boolean => {
     if (!sourceBuffer || sourceBuffer.updating) return false;
     const evictBefore = Math.max(0, video.currentTime - keepSeconds);
@@ -598,7 +561,6 @@ export const mountTierB: EngineMount = async (opts) => {
   /** Low-level pipeline that handles seek without going through
    *  `Conversion`. See the comment on `restartConversionFromSeek`. */
   const runManualPipeline = async (seekStart: number): Promise<void> => {
-    feedStartFloor = seekStart;
     const prevConv = conversion;
     const prevOutput = manualOutput;
     const newGen = conversionGeneration + 1;
@@ -812,9 +774,6 @@ export const mountTierB: EngineMount = async (opts) => {
 
       for await (const packet of packetSink.packets(startPacket)) {
         if (disposed || newGen !== conversionGeneration) break;
-        // Don't let video race more than the window ahead of the playhead.
-        await waitForPlayheadWindow(packet.timestamp);
-        if (disposed || newGen !== conversionGeneration) break;
         if (packet.type === "key") {
           await flushGop(packet.timestamp);
           currentKeyPts = packet.timestamp;
@@ -844,10 +803,6 @@ export const mountTierB: EngineMount = async (opts) => {
               let firstMeta = true;
               for await (const packet of packetSink.packets(startPacket)) {
                 if (disposed || newGen !== conversionGeneration) break;
-                // Keep audio from racing ahead of the playhead window and
-                // hogging the SourceBuffer while video starves.
-                await waitForPlayheadWindow(packet.timestamp);
-                if (disposed || newGen !== conversionGeneration) break;
                 const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
                 await audioFeed.source.add(packet, meta);
                 firstMeta = false;
@@ -859,12 +814,6 @@ export const mountTierB: EngineMount = async (opts) => {
               // AudioSampleSource encodes them to AAC via WebCodecs.
               const sampleSink = new AudioSampleSink(audioTrack);
               for await (const sample of sampleSink.samples(seekStart, Infinity)) {
-                if (disposed || newGen !== conversionGeneration) {
-                  sample.close();
-                  break;
-                }
-                // Same playhead throttle as the passthrough path.
-                await waitForPlayheadWindow(sample.timestamp);
                 if (disposed || newGen !== conversionGeneration) {
                   sample.close();
                   break;
@@ -938,10 +887,6 @@ export const mountTierB: EngineMount = async (opts) => {
   const dispose = async (): Promise<void> => {
     if (disposed) return;
     disposed = true;
-    // Release any feed loop parked in `waitForPlayheadWindow` (ready() is
-    // now true via `disposed`); the loops then break on their gen check.
-    for (const wake of playheadWaiters) wake();
-    playheadWaiters.clear();
     unbindVideo();
     video.removeEventListener("error", onErr);
     video.removeEventListener("waiting", onWaiting);
