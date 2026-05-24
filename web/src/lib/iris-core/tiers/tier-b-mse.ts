@@ -561,6 +561,17 @@ export const mountTierB: EngineMount = async (opts) => {
 
   const evictPlayedRange = (keepSeconds: number): boolean => {
     if (!sourceBuffer || sourceBuffer.updating) return false;
+    // Firefox: do NOT run our own `remove()`. Confirmed via telemetry that a
+    // `SourceBuffer.remove()` wedges Firefox in `updating=true` forever (no
+    // `updateend`/`error` — same swallow as bug 1120084), leaving a stranded
+    // zero-width range and freezing every later append → underrun stall. We
+    // don't NEED to evict on FF anyway: resident sits ~40 MB while Firefox's
+    // native eviction threshold is 150 MiB (`media.mediasource.eviction_
+    // threshold.video`), and FF auto-evicts the side FURTHEST from the playhead
+    // — always the back buffer, since our feed gate caps the forward buffer at
+    // ~24 s. So we leave eviction entirely to Firefox. Chrome keeps our manual
+    // eviction (its remove() is reliable and its quota is what we must respect).
+    if (firefox) return false;
     const evictBefore = Math.max(0, video.currentTime - keepSeconds);
     if (evictBefore <= 0) return false;
     if (sourceBuffer.buffered.length === 0) return false;
