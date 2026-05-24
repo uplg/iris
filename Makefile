@@ -17,4 +17,4 @@ export IRIS_WEB_BUILD_ID := $(shell git rev-parse --short HEAD 2>/dev/null)
 
 .PHONY: deploy
 deploy:
-	docker compose $(ARGS) up -d --build
+	docker compose $(ARGS) --profile cloudflared up -d --build
