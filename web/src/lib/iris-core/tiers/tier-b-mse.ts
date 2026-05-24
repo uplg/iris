@@ -70,9 +70,11 @@ import {
 // desktop split.
 
 /** Forward-buffer time ceiling (upper bound; the byte budget can make
- *  the effective window smaller). */
-const AHEAD_SECONDS_CEILING = 60;
-const AHEAD_SECONDS_CEILING_MOBILE = 30;
+ *  the effective window smaller). This is the RELIABLE bound (gated on
+ *  `bufferedAheadSeconds`, deadlock-free) — kept modest so the common
+ *  low-bitrate case can't pin much memory even if the byte estimate drifts. */
+const AHEAD_SECONDS_CEILING = 30;
+const AHEAD_SECONDS_CEILING_MOBILE = 20;
 /** Played-out time we keep behind the playhead for instant scrub-back. */
 const BEHIND_SECONDS_CEILING = 30;
 const BEHIND_SECONDS_CEILING_MOBILE = 15;
@@ -388,6 +390,7 @@ export const mountTierB: EngineMount = async (opts) => {
   // the last quota log line (throttles the console).
   let lastQuotaT = -Infinity;
   let lastQuotaLogT = -Infinity;
+  let lastTelemetryT = -Infinity;
   const appendQueue: Uint8Array[] = [];
 
   // One-shot. Firefox can fire `error` on `<video>` repeatedly
@@ -566,9 +569,25 @@ export const mountTierB: EngineMount = async (opts) => {
   // so a quota episode self-heals smoothly instead of wedging. No-op when
   // the queue is empty (the healthy case).
   const onTimeUpdate = () => {
-    if (disposed || !sourceBuffer || appendQueue.length === 0) return;
-    evictPlayedRange(playedKeep);
-    drainQueue();
+    if (disposed || !sourceBuffer) return;
+    // Telemetry every ~10 s of playback (gated on currentTime, not a timer):
+    // tells us whether resident memory is BOUNDED (buffer too big for the
+    // machine) or CLIMBING (a leak), and whether the byte budget engages.
+    if (video.currentTime - lastTelemetryT > 10) {
+      lastTelemetryT = video.currentTime;
+      const heap = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory
+        ?.usedJSHeapSize;
+      console.log(
+        `[iris-core] Tier B mem: ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
+          `resident≈${(residentBytes / 1e6).toFixed(0)}MB budget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
+          `queue=${appendQueue.length} ranges=[${bufferedRangesStr()}]` +
+          (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
+      );
+    }
+    if (appendQueue.length > 0) {
+      evictPlayedRange(playedKeep);
+      drainQueue();
+    }
   };
   video.addEventListener("timeupdate", onTimeUpdate);
 
