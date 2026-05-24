@@ -523,17 +523,25 @@ export const mountTierB: EngineMount = async (opts) => {
     });
 
   /** Absolute forward back-pressure — THE memory bound. Holds a feed loop
-   *  before it hands the next packet to the muxer while the SourceBuffer
-   *  already has more than `bufferAheadTarget` seconds buffered ahead of the
-   *  playhead. Gating the SOURCE (not the muxer output) is what actually
-   *  bounds memory: Mediabunny's `Output` does NOT propagate the StreamTarget
-   *  write back-pressure all the way back to `source.add()`, so a sink-only
-   *  gate let the feed race to 150 s+ ahead (~220 MB resident, heap climbing).
-   *  Wakes when playback drains the buffer (`notifyBufferRoom` on `timeupdate`)
-   *  or on dispose — never on a timer, so it can't deadlock. */
-  const waitBufferRoom = (): Promise<void> =>
+   *  before it hands the muxer a packet whose timestamp `ts` is more than
+   *  `bufferAheadTarget` seconds ahead of the PLAYHEAD.
+   *
+   *  CRITICAL: it gates on `ts - currentTime` (how far the FEED has run ahead
+   *  of playback), NOT on `bufferedAheadSeconds()` (the appended buffer). Two
+   *  reasons: (1) Mediabunny's `Output` does NOT propagate StreamTarget write
+   *  back-pressure back to `source.add()`, so the source must self-throttle;
+   *  (2) when appends lag/stall (Firefox under memory pressure), the appended
+   *  metric FREEZES — gating on it let the feed race 150 s+ past the playhead,
+   *  piling that media inside the muxer (`fedMax=1770s` while `buffered.end`
+   *  was 1614 → 156 s hoarded → heap climbed, then the over-produced append
+   *  queue wedged Firefox's SourceBuffer and playback stalled). Bounding
+   *  `fed − playhead` caps the muxer backlog regardless of append health.
+   *
+   *  Wakes when playback advances (`notifyBufferRoom` on `timeupdate`) or on
+   *  dispose — never on a timer, so it can't deadlock. */
+  const waitBufferRoom = (ts: number): Promise<void> =>
     new Promise<void>((resolve) => {
-      const ready = () => disposed || bufferedAheadSeconds() <= bufferAheadTarget;
+      const ready = () => disposed || ts - video.currentTime <= bufferAheadTarget;
       if (ready()) {
         resolve();
         return;
@@ -932,7 +940,7 @@ export const mountTierB: EngineMount = async (opts) => {
         await waitTrackBalance(packet.timestamp, () => audioFedMax);
         if (disposed || newGen !== conversionGeneration) break;
         // Absolute forward bound: don't out-run playback past the window.
-        await waitBufferRoom();
+        await waitBufferRoom(packet.timestamp);
         if (disposed || newGen !== conversionGeneration) break;
         const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
         await videoSrc.add(packet, meta);
@@ -978,7 +986,7 @@ export const mountTierB: EngineMount = async (opts) => {
                 // Don't race ahead of the video feed.
                 await waitTrackBalance(packet.timestamp, () => videoFedMax);
                 if (disposed || newGen !== conversionGeneration) break;
-                await waitBufferRoom();
+                await waitBufferRoom(packet.timestamp);
                 if (disposed || newGen !== conversionGeneration) break;
                 const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
                 await audioFeed.source.add(packet, meta);
@@ -1002,7 +1010,7 @@ export const mountTierB: EngineMount = async (opts) => {
                   sample.close();
                   break;
                 }
-                await waitBufferRoom();
+                await waitBufferRoom(sample.timestamp);
                 if (disposed || newGen !== conversionGeneration) {
                   sample.close();
                   break;
