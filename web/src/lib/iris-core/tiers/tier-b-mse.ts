@@ -391,6 +391,11 @@ export const mountTierB: EngineMount = async (opts) => {
   let lastQuotaT = -Infinity;
   let lastQuotaLogT = -Infinity;
   let lastTelemetryT = -Infinity;
+  // Diagnostics: furthest video timestamp handed to the muxer, and whether
+  // the video feed loop has finished. Distinguishes "demux/feed stopped"
+  // (fedMax frozen / feedEnded) from "decoder stalled with a full buffer".
+  let videoFedMax = 0;
+  let videoFeedEnded = false;
   const appendQueue: Uint8Array[] = [];
 
   // One-shot. Firefox can fire `error` on `<video>` repeatedly
@@ -559,6 +564,16 @@ export const mountTierB: EngineMount = async (opts) => {
     evictPlayedRange(playedKeep);
     drainQueue();
     const t = video.currentTime;
+    // Diagnostic: a stall WITH a healthy forward buffer means the decoder
+    // choked (bad frame in this rip) — not starvation. A stall AT the
+    // buffered end with `videoFeedEnded` means the demuxer stopped feeding.
+    console.warn(
+      `[iris-core] Tier B STALL t=${t.toFixed(1)}s ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
+        `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
+        `readyState=${video.readyState} netState=${video.networkState} ` +
+        `err=${video.error ? `${video.error.code}:${video.error.message}` : "none"} ` +
+        `ranges=[${bufferedRangesStr()}]`,
+    );
     if (isTimeBuffered(t)) return;
     for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
       const start = sourceBuffer.buffered.start(i);
@@ -593,6 +608,7 @@ export const mountTierB: EngineMount = async (opts) => {
         ?.usedJSHeapSize;
       console.log(
         `[iris-core] Tier B mem: ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
+          `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
           `resident≈${(residentBytes / 1e6).toFixed(0)}MB budget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
           `queue=${appendQueue.length} ranges=[${bufferedRangesStr()}]` +
           (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
@@ -634,6 +650,8 @@ export const mountTierB: EngineMount = async (opts) => {
   /** Low-level pipeline that handles seek without going through
    *  `Conversion`. See the comment on `restartConversionFromSeek`. */
   const runManualPipeline = async (seekStart: number): Promise<void> => {
+    videoFedMax = 0;
+    videoFeedEnded = false;
     const prevConv = conversion;
     const prevOutput = manualOutput;
     const newGen = conversionGeneration + 1;
@@ -841,6 +859,7 @@ export const mountTierB: EngineMount = async (opts) => {
           const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
           await videoSrc.add(pkt, meta);
           firstMeta = false;
+          if (pkt.timestamp > videoFedMax) videoFedMax = pkt.timestamp;
         }
         gopBuffer = [];
       };
@@ -860,6 +879,14 @@ export const mountTierB: EngineMount = async (opts) => {
       }
       await flushGop(null);
       await videoSrc.close();
+      if (newGen === conversionGeneration && !disposed) {
+        videoFeedEnded = true;
+        console.warn(
+          `[iris-core] Tier B: video feed loop ENDED at fedMax=${videoFedMax.toFixed(1)}s ` +
+            `(demuxer reached end-of-stream — if the file isn't fully downloaded or /stream ` +
+            `truncates, this is why playback freezes here)`,
+        );
+      }
     })();
 
     const audioP =
