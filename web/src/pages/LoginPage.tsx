@@ -92,9 +92,7 @@ export function LoginPage() {
           <div className="grid gap-1.5">
             <span className="eyebrow">Welcome back</span>
             <h1 className="display text-[40px]">Sign in</h1>
-            <p className="text-[14.5px] text-muted-foreground">
-              Use your Iris credentials.
-            </p>
+            <p className="text-[14.5px] text-muted-foreground">Use your Iris credentials.</p>
           </div>
 
           <form onSubmit={onSubmit} className="grid gap-4">

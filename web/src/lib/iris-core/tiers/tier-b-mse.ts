@@ -237,6 +237,14 @@ function relaxMediabunnyGopCheck(output: Output): void {
  *  back-pressure didn't keep us under the limit — should be rare). */
 const QUOTA_EVICT_SECONDS = 5;
 
+/** Hard cap on undrained append chunks held in RAM. When the drain stalls
+ *  (a swallowed QuotaExceededError on a VBR bitrate spike, where the
+ *  seconds-derived window holds more bytes than the browser's per-source
+ *  ceiling), the producer blocks on this instead of piling decoded GOPs into
+ *  memory until the tab OOMs — the failure the Firefox "spam then freeze"
+ *  report came from. */
+const MAX_QUEUED_CHUNKS = 16;
+
 export const mountTierB: EngineMount = async (opts) => {
   const { container, manifest, streamUrl, nativeSubs, audioTrackIndex } = opts;
   const fail = (err: Error) => opts.onError(err);
@@ -268,7 +276,10 @@ export const mountTierB: EngineMount = async (opts) => {
     bytesPerSecond > 0
       ? Math.min(secondsCeiling, Math.max(minSeconds, byteBudget / bytesPerSecond))
       : secondsCeiling;
-  const bufferAheadTarget = clampWindow(
+  // Mutable: shrinks reactively when a QuotaExceededError proves the
+  // seconds-derived window is holding more bytes than the browser allows
+  // (VBR spike). See the quota handler in `drainQueue`.
+  let bufferAheadTarget = clampWindow(
     mobile ? AHEAD_SECONDS_CEILING_MOBILE : AHEAD_SECONDS_CEILING,
     MIN_AHEAD_SECONDS,
     aheadByteBudget,
@@ -432,20 +443,30 @@ export const mountTierB: EngineMount = async (opts) => {
       sourceBuffer.appendBuffer(next.slice().buffer);
     } catch (e) {
       if (e instanceof DOMException && e.name === "QuotaExceededError") {
-        // The back-pressure loop should normally keep us under the
-        // quota, but the SourceBuffer reports a slightly tighter
-        // budget than `buffered.end` suggests on some browsers. Try
-        // to free space; if we can't (playhead at the start), keep
-        // the chunk queued and wait for playback to advance — the
-        // `waiting`-event nudge (see `onWaiting`) re-amorces the
-        // drain once the playhead has moved and eviction can succeed.
+        // Keep the chunk and free room behind the playhead.
         appendQueue.unshift(next);
         const freed = evictPlayedRange(QUOTA_EVICT_SECONDS);
-        console.warn(
-          `[iris-core] Tier B: SourceBuffer QuotaExceededError ` +
-            `(queued=${appendQueue.length}, evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — ` +
-            `appended buffer is at the browser's per-source limit`,
-        );
+        // Root cause on a "gros film": the ahead window is derived from the
+        // file's AVERAGE bitrate, but a high-bitrate (VBR) scene packs more
+        // bytes into those seconds than the browser's per-SourceBuffer
+        // ceiling — acute on Firefox, whose ceiling is lower. The buffered
+        // range then can't grow, so the seconds-based back-pressure gate
+        // never trips and the producer spams the queue → RAM blow-up + a
+        // wedged playhead. Permanently shrink the ahead target below where
+        // we actually hit the wall so the producer parks at the real byte
+        // ceiling and lets playback drain the forward buffer to free space.
+        const ahead = bufferedAheadSeconds();
+        const shrunk = Math.max(MIN_AHEAD_SECONDS, Math.min(bufferAheadTarget, ahead - 2));
+        if (shrunk < bufferAheadTarget) {
+          // Log only on an actual shrink — not once per stuck chunk — so a
+          // sustained quota episode doesn't flood the console.
+          console.warn(
+            `[iris-core] Tier B: SourceBuffer quota at ~${ahead.toFixed(0)}s ahead ` +
+              `(t=${video.currentTime.toFixed(1)}s, evicted=${freed}) — ` +
+              `shrinking ahead target ${bufferAheadTarget.toFixed(0)}s → ${shrunk.toFixed(0)}s`,
+          );
+          bufferAheadTarget = shrunk;
+        }
         return;
       }
       fail(e instanceof Error ? e : new Error(String(e)));
@@ -491,6 +512,20 @@ export const mountTierB: EngineMount = async (opts) => {
   };
   video.addEventListener("waiting", onWaiting);
   video.addEventListener("stalled", onWaiting);
+
+  // Re-drive the drain as the playhead advances. A swallowed
+  // QuotaExceededError leaves a chunk queued with no pending `updateend`,
+  // so the `updateend` pump goes silent — without this, recovery would
+  // wait for a full stall (`onWaiting`). Each `timeupdate` (~4 Hz while
+  // playing) evicts the freshly played-out buffer and retries the append,
+  // so a quota episode self-heals smoothly instead of wedging. No-op when
+  // the queue is empty (the healthy case).
+  const onTimeUpdate = () => {
+    if (disposed || !sourceBuffer || appendQueue.length === 0) return;
+    evictPlayedRange(playedKeep);
+    drainQueue();
+  };
+  video.addEventListener("timeupdate", onTimeUpdate);
 
   /** Seek-restart via Mediabunny's **low-level** API instead of
    *  `Conversion`. `Conversion` always forces a video re-encode when
@@ -807,7 +842,7 @@ export const mountTierB: EngineMount = async (opts) => {
         while (
           !disposed &&
           generation === conversionGeneration &&
-          bufferedAheadSeconds() > bufferAheadTarget
+          (bufferedAheadSeconds() > bufferAheadTarget || appendQueue.length > MAX_QUEUED_CHUNKS)
         ) {
           await new Promise<void>((resolve) => {
             if (!sourceBuffer) {
@@ -851,6 +886,7 @@ export const mountTierB: EngineMount = async (opts) => {
     video.removeEventListener("error", onErr);
     video.removeEventListener("waiting", onWaiting);
     video.removeEventListener("stalled", onWaiting);
+    video.removeEventListener("timeupdate", onTimeUpdate);
     try {
       await conversion?.cancel();
     } catch {
