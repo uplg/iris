@@ -401,6 +401,10 @@ export const mountTierB: EngineMount = async (opts) => {
   let lastQuotaT = -Infinity;
   let lastQuotaLogT = -Infinity;
   let lastTelemetryT = -Infinity;
+  // Wall-clock (performance.now) of the last conversion (re)start — lets the
+  // media-error diagnostic tell "errored right after mount/seek" from
+  // "errored deep into steady playback".
+  let lastConversionStartWall = 0;
   // Diagnostics for the Firefox "appendBuffer wedges in updating=true with no
   // updateend/error" failure (FF bug 1120084). Records which op is in flight; a
   // STALL showing `pendingOp=append updating=true` means the append is wedged
@@ -446,6 +450,19 @@ export const mountTierB: EngineMount = async (opts) => {
     if (errorFired) return;
     errorFired = true;
     const err = video.error;
+    // Diagnostics for the intermittent Firefox-macOS VideoToolbox decode error
+    // (`media error 3` / AppleVTDecoder). The context tells us WHERE it fires:
+    //   - `t≈startPos` + small `fedMax` → at mount/seek start (likely orphan
+    //     open-GOP RASL leading pictures of the first keyframe, fixable with
+    //     `appendWindowStart`);
+    //   - `t` deep into playback → mid-stream (a genuinely VT-hostile frame).
+    // `sinceConvMs` = wall-clock since the last conversion (re)start.
+    console.warn(
+      `[iris-core] Tier B media error: code=${err?.code} t=${video.currentTime.toFixed(1)}s ` +
+        `fedMax=${videoFedMax.toFixed(1)}s gen=${conversionGeneration} ` +
+        `sinceConvMs=${(performance.now() - lastConversionStartWall).toFixed(0)} ` +
+        `readyState=${video.readyState} ranges=[${bufferedRangesStr()}] msg=${err?.message ?? ""}`,
+    );
     fail(new Error(err ? `media error ${err.code}: ${err.message}` : "video element error"));
   };
   video.addEventListener("error", onErr);
@@ -793,6 +810,7 @@ export const mountTierB: EngineMount = async (opts) => {
   /** Low-level pipeline that handles seek without going through
    *  `Conversion`. See the comment on `restartConversionFromSeek`. */
   const runManualPipeline = async (seekStart: number): Promise<void> => {
+    lastConversionStartWall = performance.now();
     videoFedMax = seekStart;
     audioFedMax = seekStart;
     videoFeedEnded = false;
