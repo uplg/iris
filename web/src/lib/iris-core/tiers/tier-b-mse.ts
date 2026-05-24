@@ -993,6 +993,27 @@ export const mountTierB: EngineMount = async (opts) => {
       const packetSink = new EncodedPacketSink(videoTrack);
       const startPacket = await packetSink.getKeyPacket(seekStart);
       if (!startPacket) return;
+      // Drop this first keyframe's open-GOP RASL leading pictures. On an open
+      // GOP the random-access keyframe is a CRA whose leading (RASL) pictures
+      // decode AFTER it but present BEFORE it and reference the PREVIOUS GOP —
+      // which isn't buffered after a seek/resume. Firefox-macOS's VideoToolbox
+      // HW HEVC decoder errors on them (`media error 3` / `AppleVTDecoder`,
+      // readyState=1, right after a resume into an open GOP — confirmed by the
+      // media-error diagnostic: t≈resume pos, fedMax≈+10s, sinceConv≈1s).
+      // `appendWindowStart` = the keyframe's PTS makes the SourceBuffer drop
+      // every frame presenting before it (the RASL pics) while keeping the
+      // keyframe itself — the spec-correct way to seek into an open GOP.
+      // timestampOffset is 0, so source PTS == the buffer timeline. Await any
+      // in-flight init-segment append first (setting it while `updating` throws).
+      if (sourceBuffer) {
+        await waitForUpdateEnd();
+        if (disposed || newGen !== conversionGeneration || !sourceBuffer) return;
+        try {
+          sourceBuffer.appendWindowStart = Math.max(0, startPacket.timestamp);
+        } catch {
+          /* best-effort; a stray RASL just risks the decode error we had before */
+        }
+      }
       const decoderConfig = await videoTrack.getDecoderConfig();
       let firstMeta = true;
 
