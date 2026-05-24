@@ -404,6 +404,11 @@ export const mountTierB: EngineMount = async (opts) => {
   let lastQuotaT = -Infinity;
   let lastQuotaLogT = -Infinity;
   let lastTelemetryT = -Infinity;
+  // Diagnostics for the Firefox "appendBuffer wedges in updating=true with no
+  // updateend/error" failure (FF bug 1120084). Records which op is in flight; a
+  // STALL showing `pendingOp=append updating=true` means the append is wedged
+  // (the recovery in `onWaiting` aborts it).
+  let pendingOp: "append" | "remove" | null = null;
   // Diagnostics: furthest video timestamp handed to the muxer, and whether
   // the video feed loop has finished. Distinguishes "demux/feed stopped"
   // (fedMax frozen / feedEnded) from "decoder stalled with a full buffer".
@@ -564,6 +569,7 @@ export const mountTierB: EngineMount = async (opts) => {
     const bufferedEnd = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
     try {
       sourceBuffer.remove(firstBufferedStart, evictBefore);
+      pendingOp = "remove";
       // Reduce the resident-byte telemetry estimate proportionally to the span
       // removed (approximate; for diagnostics only — not a back-pressure input).
       const span = bufferedEnd - firstBufferedStart;
@@ -599,6 +605,7 @@ export const mountTierB: EngineMount = async (opts) => {
     if (!next) return;
     try {
       sourceBuffer.appendBuffer(next.slice().buffer);
+      pendingOp = "append";
       residentBytes += next.byteLength;
     } catch (e) {
       if (e instanceof DOMException && e.name === "QuotaExceededError") {
@@ -653,23 +660,48 @@ export const mountTierB: EngineMount = async (opts) => {
   // range to skip to.
   const onWaiting = () => {
     if (disposed || !sourceBuffer) return;
-    evictPlayedRange(playedKeep);
-    drainQueue();
     const t = video.currentTime;
+    const wedged = sourceBuffer.updating;
     // Diagnostic: a stall WITH a healthy forward buffer means the decoder
     // choked (bad frame in this rip) — not starvation. A stall AT the
     // buffered end with `videoFeedEnded` means the demuxer stopped feeding.
+    // `pendingOp=append updating=true` = the append wedged (FF bug 1120084).
     console.warn(
       `[iris-core] Tier B STALL t=${t.toFixed(1)}s ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
         `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
         `readyState=${video.readyState} netState=${video.networkState} ` +
+        `pendingOp=${pendingOp ?? "none"} updating=${sourceBuffer.updating} queue=${appendQueue.length} ` +
         `err=${video.error ? `${video.error.code}:${video.error.message}` : "none"} ` +
         `ranges=[${bufferedRangesStr()}]`,
     );
+    // RECOVERY for a wedged op: if we're starved (`waiting`) yet the SourceBuffer
+    // is still `updating` (no `updateend`/`error` ever fired — Firefox bug
+    // 1120084 on an open-GOP fragment boundary), the append/remove is hung.
+    // `abort()` is the spec-defined reset: it ends the running append/remove
+    // algorithm, clears `updating`, and resets the segment parser so the next
+    // `appendBuffer` lands. The half-parsed fragment is discarded → a gap we
+    // jump below. Without this the pipeline stays frozen until a reload.
+    if (wedged) {
+      try {
+        sourceBuffer.abort();
+        pendingOp = null;
+        console.warn("[iris-core] Tier B: aborted wedged SourceBuffer op (FF unwedge)");
+      } catch {
+        /* MediaSource not open — dispose path will clean up */
+      }
+    }
+    evictPlayedRange(playedKeep);
+    drainQueue();
     if (isTimeBuffered(t)) return;
+    // Jump across a forward gap to the next buffered range. Tolerance is wide
+    // enough to clear a whole discarded fragment (Firefox fragments are ~5 s),
+    // since after an `abort()` unwedge the buffer resumes a fragment ahead.
     for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
       const start = sourceBuffer.buffered.start(i);
-      if (start > t && start - t < 2) {
+      const end = sourceBuffer.buffered.end(i);
+      // Skip stranded zero-width ranges Firefox leaves behind after remove().
+      if (end - start < 0.05) continue;
+      if (start > t && start - t < 8) {
         try {
           video.currentTime = start + 0.01;
         } catch {
@@ -702,7 +734,8 @@ export const mountTierB: EngineMount = async (opts) => {
         `[iris-core] Tier B mem: ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
           `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
           `resident≈${(residentBytes / 1e6).toFixed(0)}MB window=${bufferAheadTarget.toFixed(0)}s ` +
-          `queue=${appendQueue.length} ranges=[${bufferedRangesStr()}]` +
+          `queue=${appendQueue.length} upd=${sourceBuffer.updating} op=${pendingOp ?? "none"} ` +
+          `ranges=[${bufferedRangesStr()}]` +
           (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
       );
     }
@@ -1266,6 +1299,7 @@ export const mountTierB: EngineMount = async (opts) => {
   }
 
   sourceBuffer.addEventListener("updateend", () => {
+    pendingOp = null;
     evictPlayedRange(playedKeep);
     // Grow the forward window + seek-back window back toward their ceilings
     // once we've been quota-free for a while — restores deep buffering after a
