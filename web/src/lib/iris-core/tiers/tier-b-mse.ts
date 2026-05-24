@@ -276,11 +276,24 @@ export const mountTierB: EngineMount = async (opts) => {
     bytesPerSecond > 0
       ? Math.min(secondsCeiling, Math.max(minSeconds, byteBudget / bytesPerSecond))
       : secondsCeiling;
-  const bufferAheadTarget = clampWindow(
+  // The live ahead window, in seconds. Derived from the file's AVERAGE
+  // bitrate, so it is only a guess on VBR content: a high-bitrate stretch
+  // packs more BYTES into those seconds than the browser's per-SourceBuffer
+  // ceiling allows. `bufferAheadTarget` therefore SHRINKS reactively on a
+  // QuotaExceededError (down to what currently fits) and grows back toward
+  // `aheadCeiling` once the stretch passes — see the quota handler and the
+  // `updateend` pump.
+  let bufferAheadTarget = clampWindow(
     mobile ? AHEAD_SECONDS_CEILING_MOBILE : AHEAD_SECONDS_CEILING,
     MIN_AHEAD_SECONDS,
     aheadByteBudget,
   );
+  const aheadCeiling = bufferAheadTarget;
+  // Floor for the playhead throttle: the position the current feed starts
+  // from (start/seek target). Guarantees the first `bufferAheadTarget`
+  // seconds always feed even before `video.currentTime` reflects the seek
+  // at startup; `video.currentTime` takes over once playback passes it.
+  let feedStartFloor = 0;
   const playedKeep = clampWindow(
     mobile ? BEHIND_SECONDS_CEILING_MOBILE : BEHIND_SECONDS_CEILING,
     MIN_BEHIND_SECONDS,
@@ -364,11 +377,9 @@ export const mountTierB: EngineMount = async (opts) => {
   // not supported, MediaSource error, …).
   let input: Input | null = null;
   let conversionGeneration = 0;
-  // True while a stranded-playhead re-feed is in flight, so a burst of
-  // `waiting`/`stalled` events triggers one demuxer restart, not a storm.
-  let recovering = false;
-  // Playback time of the last throttled quota log (keeps a sustained quota
-  // episode from flooding the console).
+  // Playback time of the last quota event (gates window re-growth) and of
+  // the last quota log line (throttles the console).
+  let lastQuotaT = -Infinity;
   let lastQuotaLogT = -Infinity;
   const appendQueue: Uint8Array[] = [];
 
@@ -421,6 +432,38 @@ export const mountTierB: EngineMount = async (opts) => {
       sourceBuffer.addEventListener("updateend", () => resolve(), { once: true });
     });
 
+  /** Per-track back-pressure on the PLAYHEAD (not on `SourceBuffer.buffered`,
+   *  which is the *intersection* of the track ranges). Resolves once the
+   *  packet at `ts` is within `bufferAheadTarget` seconds of the playhead.
+   *  Without this, a cheap track (e.g. audio while video transcodes / a
+   *  high-bitrate video stretch) races far ahead and fills the SourceBuffer
+   *  with data the intersection-based gate can't see — the other track then
+   *  can't append (QuotaExceededError) and its buffer starves. Event-driven
+   *  off `timeupdate` (advances with playback); resolves immediately when
+   *  disposed so feed loops can unwind. */
+  // Wakeups registered by in-flight `waitForPlayheadWindow` calls so
+  // `dispose()` can release any feed loop parked on a playhead that will
+  // never advance again (the video element stops firing `timeupdate` once
+  // torn down — and we use no timers here).
+  const playheadWaiters = new Set<() => void>();
+  const waitForPlayheadWindow = (ts: number): Promise<void> =>
+    new Promise<void>((resolve) => {
+      const ready = () =>
+        disposed || Math.max(video.currentTime, feedStartFloor) + bufferAheadTarget >= ts;
+      if (ready()) {
+        resolve();
+        return;
+      }
+      const check = () => {
+        if (!ready()) return;
+        video.removeEventListener("timeupdate", check);
+        playheadWaiters.delete(check);
+        resolve();
+      };
+      playheadWaiters.add(check);
+      video.addEventListener("timeupdate", check);
+    });
+
   const evictPlayedRange = (keepSeconds: number): boolean => {
     if (!sourceBuffer || sourceBuffer.updating) return false;
     const evictBefore = Math.max(0, video.currentTime - keepSeconds);
@@ -446,23 +489,24 @@ export const mountTierB: EngineMount = async (opts) => {
       sourceBuffer.appendBuffer(next.slice().buffer);
     } catch (e) {
       if (e instanceof DOMException && e.name === "QuotaExceededError") {
-        // VBR spike: the seconds-derived window holds more BYTES than the
-        // browser's per-SourceBuffer ceiling right now. Keep the chunk and
-        // free room behind the playhead; the producer's queue cap (see the
-        // back-pressure loop) blocks further feeding until the drain catches
-        // up, and the `timeupdate` re-drive lands this append as playback
-        // consumes the forward buffer. This self-regulates the live window
-        // to whatever the browser actually tolerates — WITHOUT permanently
-        // shrinking it (which starved Chrome's healthy 60 s buffer).
+        // We've hit the browser's real per-SourceBuffer BYTE ceiling for the
+        // current (high-bitrate) region. Keep the chunk, free room behind the
+        // playhead, and cap the window to just under what currently fits so
+        // the producer stops hammering append — the per-track playhead
+        // throttle then holds both tracks here and playback proceeds on the
+        // buffer we can actually hold. Grows back later once the stretch ends.
         appendQueue.unshift(next);
         const freed = evictPlayedRange(QUOTA_EVICT_SECONDS);
-        // Throttle: at most one line per ~5 s of playback.
+        const ahead = bufferedAheadSeconds();
+        bufferAheadTarget = Math.max(MIN_AHEAD_SECONDS, Math.min(bufferAheadTarget, ahead - 2));
+        lastQuotaT = video.currentTime;
+        // Throttle the log: at most one line per ~5 s of playback.
         if (video.currentTime - lastQuotaLogT > 5) {
           lastQuotaLogT = video.currentTime;
           console.warn(
-            `[iris-core] Tier B: SourceBuffer quota ` +
-              `(ahead=${bufferedAheadSeconds().toFixed(0)}s, queued=${appendQueue.length}, ` +
-              `evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — throttling feed`,
+            `[iris-core] Tier B: SourceBuffer byte ceiling ` +
+              `(ahead=${ahead.toFixed(0)}s, queued=${appendQueue.length}, evicted=${freed}, ` +
+              `t=${video.currentTime.toFixed(1)}s) — window→${bufferAheadTarget.toFixed(0)}s`,
           );
         }
         return;
@@ -504,25 +548,9 @@ export const mountTierB: EngineMount = async (opts) => {
         } catch {
           /* swallow */
         }
-        return;
+        break;
       }
     }
-    // Stranded: the playhead sits in an unbuffered region with no range
-    // within nudge reach. On Firefox this is the terminal "tank" — under
-    // memory pressure it force-evicts around the playhead, and the demuxer
-    // has already pumped past, so nothing will ever re-fill this spot.
-    // Re-seek the demuxer to the playhead to re-feed from here (same path
-    // as an out-of-buffer scrub). Gated so it can't fire during startup
-    // (t≈0 / no buffer yet) or while paused, and debounced via `recovering`
-    // so a burst of stall events triggers one restart, not a storm.
-    if (recovering || video.paused || t < 1 || sourceBuffer.buffered.length === 0) return;
-    recovering = true;
-    console.warn(
-      `[iris-core] Tier B: playhead stranded at t=${t.toFixed(1)}s (no buffer ahead) — re-feeding from playhead`,
-    );
-    void restartConversionFromSeek(t).finally(() => {
-      recovering = false;
-    });
   };
   video.addEventListener("waiting", onWaiting);
   video.addEventListener("stalled", onWaiting);
@@ -570,6 +598,7 @@ export const mountTierB: EngineMount = async (opts) => {
   /** Low-level pipeline that handles seek without going through
    *  `Conversion`. See the comment on `restartConversionFromSeek`. */
   const runManualPipeline = async (seekStart: number): Promise<void> => {
+    feedStartFloor = seekStart;
     const prevConv = conversion;
     const prevOutput = manualOutput;
     const newGen = conversionGeneration + 1;
@@ -783,6 +812,9 @@ export const mountTierB: EngineMount = async (opts) => {
 
       for await (const packet of packetSink.packets(startPacket)) {
         if (disposed || newGen !== conversionGeneration) break;
+        // Don't let video race more than the window ahead of the playhead.
+        await waitForPlayheadWindow(packet.timestamp);
+        if (disposed || newGen !== conversionGeneration) break;
         if (packet.type === "key") {
           await flushGop(packet.timestamp);
           currentKeyPts = packet.timestamp;
@@ -812,6 +844,10 @@ export const mountTierB: EngineMount = async (opts) => {
               let firstMeta = true;
               for await (const packet of packetSink.packets(startPacket)) {
                 if (disposed || newGen !== conversionGeneration) break;
+                // Keep audio from racing ahead of the playhead window and
+                // hogging the SourceBuffer while video starves.
+                await waitForPlayheadWindow(packet.timestamp);
+                if (disposed || newGen !== conversionGeneration) break;
                 const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
                 await audioFeed.source.add(packet, meta);
                 firstMeta = false;
@@ -823,6 +859,12 @@ export const mountTierB: EngineMount = async (opts) => {
               // AudioSampleSource encodes them to AAC via WebCodecs.
               const sampleSink = new AudioSampleSink(audioTrack);
               for await (const sample of sampleSink.samples(seekStart, Infinity)) {
+                if (disposed || newGen !== conversionGeneration) {
+                  sample.close();
+                  break;
+                }
+                // Same playhead throttle as the passthrough path.
+                await waitForPlayheadWindow(sample.timestamp);
                 if (disposed || newGen !== conversionGeneration) {
                   sample.close();
                   break;
@@ -896,6 +938,10 @@ export const mountTierB: EngineMount = async (opts) => {
   const dispose = async (): Promise<void> => {
     if (disposed) return;
     disposed = true;
+    // Release any feed loop parked in `waitForPlayheadWindow` (ready() is
+    // now true via `disposed`); the loops then break on their gen check.
+    for (const wake of playheadWaiters) wake();
+    playheadWaiters.clear();
     unbindVideo();
     video.removeEventListener("error", onErr);
     video.removeEventListener("waiting", onWaiting);
@@ -1049,6 +1095,16 @@ export const mountTierB: EngineMount = async (opts) => {
 
   sourceBuffer.addEventListener("updateend", () => {
     evictPlayedRange(playedKeep);
+    // Grow the window back toward the ceiling once we've been quota-free for
+    // a while and the buffer is comfortably full to the current target —
+    // restores deep buffering after a transient high-bitrate stretch ends.
+    if (
+      bufferAheadTarget < aheadCeiling &&
+      video.currentTime - lastQuotaT > 10 &&
+      bufferedAheadSeconds() > bufferAheadTarget - 2
+    ) {
+      bufferAheadTarget = Math.min(aheadCeiling, bufferAheadTarget + 4);
+    }
     drainQueue();
     if (!opts.onReady) return;
     if (sourceBuffer && sourceBuffer.buffered.length > 0) {
