@@ -846,15 +846,17 @@ export const mountTierB: EngineMount = async (opts) => {
     const newOutput = new Output({
       format: new Mp4OutputFormat({
         fastStart: "fragmented",
-        // Firefox does NOT coalesce adjacent fMP4 fragments into one buffered
-        // range the way Chrome does (verified: mozilla-central TrackBuffersManager
-        // + video-dev "trapped in a gap"). With 1 s fragments every boundary is a
-        // chance for a non-coalesced gap / stranded zero-width range, and an
-        // open-GOP boundary (PTS/DTS divergence) can wedge `appendBuffer` in
-        // `updating=true` (Firefox bug 1120084) → frozen appends → underrun stall.
-        // Larger GOP-aligned fragments give ~5× fewer boundaries (the documented
-        // Firefox mitigation). Chrome coalesces fine, so keep its snappy 1 s.
-        minimumFragmentDuration: firefox ? 5 : 1,
+        // 1 s fragments on BOTH browsers. We tried 5 s on Firefox (fewer
+        // non-coalescing range boundaries) but it made Firefox-macOS's
+        // VideoToolbox HARDWARE HEVC decoder throw `media error 3`
+        // (`AppleVTDecoder::OnDecodeError`): a 5 s fragment spans several
+        // open-GOP boundaries, and the per-GOP composition offsets our muxer
+        // patch carries (clamped monotonic DTS) make VT reject a frame. The
+        // Firefox STALL we were actually chasing was our own `remove()`
+        // wedging `updating=true` (see `evictPlayedRange`), now fixed by NOT
+        // evicting on FF — so the larger fragments were never the real lever.
+        // 1 s matches Chrome, which decodes the same stream cleanly.
+        minimumFragmentDuration: 1,
       }),
       target: new StreamTarget(sink),
     });
