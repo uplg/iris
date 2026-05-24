@@ -276,10 +276,7 @@ export const mountTierB: EngineMount = async (opts) => {
     bytesPerSecond > 0
       ? Math.min(secondsCeiling, Math.max(minSeconds, byteBudget / bytesPerSecond))
       : secondsCeiling;
-  // Mutable: shrinks reactively when a QuotaExceededError proves the
-  // seconds-derived window is holding more bytes than the browser allows
-  // (VBR spike). See the quota handler in `drainQueue`.
-  let bufferAheadTarget = clampWindow(
+  const bufferAheadTarget = clampWindow(
     mobile ? AHEAD_SECONDS_CEILING_MOBILE : AHEAD_SECONDS_CEILING,
     MIN_AHEAD_SECONDS,
     aheadByteBudget,
@@ -367,6 +364,12 @@ export const mountTierB: EngineMount = async (opts) => {
   // not supported, MediaSource error, …).
   let input: Input | null = null;
   let conversionGeneration = 0;
+  // True while a stranded-playhead re-feed is in flight, so a burst of
+  // `waiting`/`stalled` events triggers one demuxer restart, not a storm.
+  let recovering = false;
+  // Playback time of the last throttled quota log (keeps a sustained quota
+  // episode from flooding the console).
+  let lastQuotaLogT = -Infinity;
   const appendQueue: Uint8Array[] = [];
 
   // One-shot. Firefox can fire `error` on `<video>` repeatedly
@@ -443,29 +446,24 @@ export const mountTierB: EngineMount = async (opts) => {
       sourceBuffer.appendBuffer(next.slice().buffer);
     } catch (e) {
       if (e instanceof DOMException && e.name === "QuotaExceededError") {
-        // Keep the chunk and free room behind the playhead.
+        // VBR spike: the seconds-derived window holds more BYTES than the
+        // browser's per-SourceBuffer ceiling right now. Keep the chunk and
+        // free room behind the playhead; the producer's queue cap (see the
+        // back-pressure loop) blocks further feeding until the drain catches
+        // up, and the `timeupdate` re-drive lands this append as playback
+        // consumes the forward buffer. This self-regulates the live window
+        // to whatever the browser actually tolerates — WITHOUT permanently
+        // shrinking it (which starved Chrome's healthy 60 s buffer).
         appendQueue.unshift(next);
         const freed = evictPlayedRange(QUOTA_EVICT_SECONDS);
-        // Root cause on a "gros film": the ahead window is derived from the
-        // file's AVERAGE bitrate, but a high-bitrate (VBR) scene packs more
-        // bytes into those seconds than the browser's per-SourceBuffer
-        // ceiling — acute on Firefox, whose ceiling is lower. The buffered
-        // range then can't grow, so the seconds-based back-pressure gate
-        // never trips and the producer spams the queue → RAM blow-up + a
-        // wedged playhead. Permanently shrink the ahead target below where
-        // we actually hit the wall so the producer parks at the real byte
-        // ceiling and lets playback drain the forward buffer to free space.
-        const ahead = bufferedAheadSeconds();
-        const shrunk = Math.max(MIN_AHEAD_SECONDS, Math.min(bufferAheadTarget, ahead - 2));
-        if (shrunk < bufferAheadTarget) {
-          // Log only on an actual shrink — not once per stuck chunk — so a
-          // sustained quota episode doesn't flood the console.
+        // Throttle: at most one line per ~5 s of playback.
+        if (video.currentTime - lastQuotaLogT > 5) {
+          lastQuotaLogT = video.currentTime;
           console.warn(
-            `[iris-core] Tier B: SourceBuffer quota at ~${ahead.toFixed(0)}s ahead ` +
-              `(t=${video.currentTime.toFixed(1)}s, evicted=${freed}) — ` +
-              `shrinking ahead target ${bufferAheadTarget.toFixed(0)}s → ${shrunk.toFixed(0)}s`,
+            `[iris-core] Tier B: SourceBuffer quota ` +
+              `(ahead=${bufferedAheadSeconds().toFixed(0)}s, queued=${appendQueue.length}, ` +
+              `evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — throttling feed`,
           );
-          bufferAheadTarget = shrunk;
         }
         return;
       }
@@ -506,9 +504,25 @@ export const mountTierB: EngineMount = async (opts) => {
         } catch {
           /* swallow */
         }
-        break;
+        return;
       }
     }
+    // Stranded: the playhead sits in an unbuffered region with no range
+    // within nudge reach. On Firefox this is the terminal "tank" — under
+    // memory pressure it force-evicts around the playhead, and the demuxer
+    // has already pumped past, so nothing will ever re-fill this spot.
+    // Re-seek the demuxer to the playhead to re-feed from here (same path
+    // as an out-of-buffer scrub). Gated so it can't fire during startup
+    // (t≈0 / no buffer yet) or while paused, and debounced via `recovering`
+    // so a burst of stall events triggers one restart, not a storm.
+    if (recovering || video.paused || t < 1 || sourceBuffer.buffered.length === 0) return;
+    recovering = true;
+    console.warn(
+      `[iris-core] Tier B: playhead stranded at t=${t.toFixed(1)}s (no buffer ahead) — re-feeding from playhead`,
+    );
+    void restartConversionFromSeek(t).finally(() => {
+      recovering = false;
+    });
   };
   video.addEventListener("waiting", onWaiting);
   video.addEventListener("stalled", onWaiting);
