@@ -317,9 +317,6 @@ export const mountTierB: EngineMount = async (opts) => {
   let playedKeep = mobile ? BEHIND_SECONDS_CEILING_MOBILE : BEHIND_SECONDS_CEILING;
   const behindCeiling = playedKeep;
 
-  // Rough resident-byte estimate for telemetry only (summed on append, reduced
-  // proportionally on eviction) — NOT used for back-pressure (see above).
-  let residentBytes = 0;
   console.log(
     `[iris-core] Tier B buffer window: ahead≤${bufferAheadTarget.toFixed(0)}s ` +
       `behind=${playedKeep.toFixed(0)}s (byteBudget=${(aheadByteBudget / 1e6).toFixed(0)}MB sizes window) ` +
@@ -577,19 +574,9 @@ export const mountTierB: EngineMount = async (opts) => {
     if (sourceBuffer.buffered.length === 0) return false;
     const firstBufferedStart = sourceBuffer.buffered.start(0);
     if (firstBufferedStart >= evictBefore) return false;
-    const bufferedEnd = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
     try {
       sourceBuffer.remove(firstBufferedStart, evictBefore);
       pendingOp = "remove";
-      // Reduce the resident-byte telemetry estimate proportionally to the span
-      // removed (approximate; for diagnostics only — not a back-pressure input).
-      const span = bufferedEnd - firstBufferedStart;
-      if (span > 0) {
-        residentBytes = Math.max(
-          0,
-          residentBytes * (1 - (evictBefore - firstBufferedStart) / span),
-        );
-      }
       return true;
     } catch {
       return false;
@@ -608,6 +595,19 @@ export const mountTierB: EngineMount = async (opts) => {
     return parts.join(" ");
   };
 
+  /** Rough bytes resident in the SourceBuffer: total buffered duration ×
+   *  average bitrate. Tracks eviction on BOTH browsers — including Firefox's
+   *  NATIVE eviction, which our code doesn't drive — unlike a hand-kept
+   *  accumulator (which would only ever grow on FF). Approximate on VBR;
+   *  diagnostics only, never a back-pressure input. */
+  const residentBytesEstimate = (): number => {
+    if (!sourceBuffer || bytesPerSecond <= 0) return 0;
+    const b = sourceBuffer.buffered;
+    let span = 0;
+    for (let i = 0; i < b.length; i += 1) span += b.end(i) - b.start(i);
+    return span * bytesPerSecond;
+  };
+
   // ---- queue drain ------------------------------------------------
 
   const drainQueue = () => {
@@ -617,7 +617,6 @@ export const mountTierB: EngineMount = async (opts) => {
     try {
       sourceBuffer.appendBuffer(next.slice().buffer);
       pendingOp = "append";
-      residentBytes += next.byteLength;
     } catch (e) {
       if (e instanceof DOMException && e.name === "QuotaExceededError") {
         // We hit the browser's real per-SourceBuffer byte ceiling — this is the
@@ -639,7 +638,7 @@ export const mountTierB: EngineMount = async (opts) => {
           lastQuotaLogT = video.currentTime;
           console.warn(
             `[iris-core] Tier B: SourceBuffer byte ceiling ` +
-              `(ahead=${bufferedAheadSeconds().toFixed(0)}s, ~${(residentBytes / 1e6).toFixed(0)}MB, ` +
+              `(ahead=${bufferedAheadSeconds().toFixed(0)}s, ~${(residentBytesEstimate() / 1e6).toFixed(0)}MB, ` +
               `queued=${appendQueue.length}, evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — ` +
               `window→${bufferAheadTarget.toFixed(0)}s ranges=[${bufferedRangesStr()}]`,
           );
@@ -744,7 +743,7 @@ export const mountTierB: EngineMount = async (opts) => {
       console.log(
         `[iris-core] Tier B mem: ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
           `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
-          `resident≈${(residentBytes / 1e6).toFixed(0)}MB window=${bufferAheadTarget.toFixed(0)}s ` +
+          `resident≈${(residentBytesEstimate() / 1e6).toFixed(0)}MB window=${bufferAheadTarget.toFixed(0)}s ` +
           `queue=${appendQueue.length} upd=${sourceBuffer.updating} op=${pendingOp ?? "none"} ` +
           `ranges=[${bufferedRangesStr()}]` +
           (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
