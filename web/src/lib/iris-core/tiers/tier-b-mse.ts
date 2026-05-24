@@ -122,6 +122,11 @@ const MIN_BEHIND_SECONDS = 3;
  *  (at which point the file genuinely can't sustain on this tier). */
 const MIN_RESIDENT_BYTES = 16 * 1024 * 1024;
 
+/** Max seconds one track's feed may lead the other. Passthrough video runs
+ *  far faster than transcoded audio; uncapped, the muxer holds minutes of the
+ *  faster track in RAM waiting to interleave. */
+const TRACK_LEAD_CAP = 4;
+
 /** Result of probing `WebCodecs.AudioEncoder`: which target codec
  *  works at what channel count for the given source. Returns null
  *  when neither AAC nor Opus encoding works (caller fails the
@@ -309,8 +314,8 @@ export const mountTierB: EngineMount = async (opts) => {
   let residentByteBudget = aheadByteBudget;
   console.log(
     `[iris-core] Tier B buffer window: ahead≤${bufferAheadTarget.toFixed(0)}s ` +
-    `behind=${playedKeep.toFixed(0)}s byteBudget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
-    `(mobile=${mobile}, firefox=${firefox}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
+      `behind=${playedKeep.toFixed(0)}s byteBudget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
+      `(mobile=${mobile}, firefox=${firefox}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
   );
 
   if (typeof globalThis.MediaSource === "undefined") {
@@ -396,6 +401,22 @@ export const mountTierB: EngineMount = async (opts) => {
   // (fedMax frozen / feedEnded) from "decoder stalled with a full buffer".
   let videoFedMax = 0;
   let videoFeedEnded = false;
+  // Furthest AUDIO timestamp handed to the muxer. The video feed is gated so
+  // it never races more than TRACK_LEAD_CAP seconds ahead of this (and vice
+  // versa): without it, fast passthrough video out-runs the slow transcoded
+  // audio by minutes, and the muxer HOLDS all that video in memory waiting to
+  // interleave it with audio → jsHeap explodes (300 MB+) while the SourceBuffer
+  // itself stays small. The output-side back-pressure can't see that pile-up.
+  let audioFedMax = 0;
+  // Wakeups for in-flight `waitTrackBalance` calls (resolved when the OTHER
+  // track advances, or on dispose). No timers → deadlock-free.
+  const trackWaiters = new Set<() => void>();
+  const notifyTrackProgress = () => {
+    // Each `w()` deletes itself on resolve; deleting the current element
+    // during Set iteration is safe, and resolves are async (no waiter is
+    // added synchronously during this loop).
+    for (const w of trackWaiters) w();
+  };
   const appendQueue: Uint8Array[] = [];
 
   // One-shot. Firefox can fire `error` on `<video>` repeatedly
@@ -466,6 +487,26 @@ export const mountTierB: EngineMount = async (opts) => {
       sourceBuffer.addEventListener("updateend", () => resolve(), { once: true });
     });
 
+  /** Hold a feed loop until its packet `ts` is within `TRACK_LEAD_CAP` of the
+   *  OTHER track's furthest fed timestamp. Keeps fast (passthrough) video from
+   *  racing minutes ahead of slow (transcoded) audio and piling up inside the
+   *  muxer. Wakes when the other track advances (`notifyTrackProgress`) or on
+   *  dispose — never on a timer, so it can't deadlock playback. */
+  const waitTrackBalance = (ts: number, otherFedMax: () => number): Promise<void> =>
+    new Promise<void>((resolve) => {
+      const ready = () => disposed || ts <= otherFedMax() + TRACK_LEAD_CAP;
+      if (ready()) {
+        resolve();
+        return;
+      }
+      const w = () => {
+        if (!ready()) return;
+        trackWaiters.delete(w);
+        resolve();
+      };
+      trackWaiters.add(w);
+    });
+
   const evictPlayedRange = (keepSeconds: number): boolean => {
     if (!sourceBuffer || sourceBuffer.updating) return false;
     const evictBefore = Math.max(0, video.currentTime - keepSeconds);
@@ -534,9 +575,9 @@ export const mountTierB: EngineMount = async (opts) => {
           lastQuotaLogT = video.currentTime;
           console.warn(
             `[iris-core] Tier B: SourceBuffer byte ceiling ` +
-            `(ahead=${bufferedAheadSeconds().toFixed(0)}s, ~${(residentBytes / 1e6).toFixed(0)}MB, ` +
-            `queued=${appendQueue.length}, evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — ` +
-            `budget→${(residentByteBudget / 1e6).toFixed(0)}MB ranges=[${bufferedRangesStr()}]`,
+              `(ahead=${bufferedAheadSeconds().toFixed(0)}s, ~${(residentBytes / 1e6).toFixed(0)}MB, ` +
+              `queued=${appendQueue.length}, evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — ` +
+              `budget→${(residentByteBudget / 1e6).toFixed(0)}MB ranges=[${bufferedRangesStr()}]`,
           );
         }
         return;
@@ -574,10 +615,10 @@ export const mountTierB: EngineMount = async (opts) => {
     // buffered end with `videoFeedEnded` means the demuxer stopped feeding.
     console.warn(
       `[iris-core] Tier B STALL t=${t.toFixed(1)}s ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
-      `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
-      `readyState=${video.readyState} netState=${video.networkState} ` +
-      `err=${video.error ? `${video.error.code}:${video.error.message}` : "none"} ` +
-      `ranges=[${bufferedRangesStr()}]`,
+        `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
+        `readyState=${video.readyState} netState=${video.networkState} ` +
+        `err=${video.error ? `${video.error.code}:${video.error.message}` : "none"} ` +
+        `ranges=[${bufferedRangesStr()}]`,
     );
     if (isTimeBuffered(t)) return;
     for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
@@ -613,10 +654,10 @@ export const mountTierB: EngineMount = async (opts) => {
         ?.usedJSHeapSize;
       console.log(
         `[iris-core] Tier B mem: ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
-        `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
-        `resident≈${(residentBytes / 1e6).toFixed(0)}MB budget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
-        `queue=${appendQueue.length} ranges=[${bufferedRangesStr()}]` +
-        (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
+          `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
+          `resident≈${(residentBytes / 1e6).toFixed(0)}MB budget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
+          `queue=${appendQueue.length} ranges=[${bufferedRangesStr()}]` +
+          (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
       );
     }
     if (appendQueue.length > 0) {
@@ -646,7 +687,7 @@ export const mountTierB: EngineMount = async (opts) => {
     } catch (e) {
       console.warn(
         "[iris-core] Tier B: manual seek pipeline failed. " +
-        "Keeping current playback alive — rewind to a buffered range to resume.",
+          "Keeping current playback alive — rewind to a buffered range to resume.",
         e,
       );
     }
@@ -655,7 +696,8 @@ export const mountTierB: EngineMount = async (opts) => {
   /** Low-level pipeline that handles seek without going through
    *  `Conversion`. See the comment on `restartConversionFromSeek`. */
   const runManualPipeline = async (seekStart: number): Promise<void> => {
-    videoFedMax = 0;
+    videoFedMax = seekStart;
+    audioFedMax = seekStart;
     videoFeedEnded = false;
     const prevConv = conversion;
     const prevOutput = manualOutput;
@@ -861,10 +903,14 @@ export const mountTierB: EngineMount = async (opts) => {
           if (nextKeyPts !== null && pkt.type !== "key" && pkt.timestamp >= nextKeyPts) {
             continue; // bridge frame — drop
           }
+          // Don't race ahead of the audio feed (else the muxer hoards video).
+          await waitTrackBalance(pkt.timestamp, () => audioFedMax);
+          if (disposed || newGen !== conversionGeneration) return;
           const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
           await videoSrc.add(pkt, meta);
           firstMeta = false;
           if (pkt.timestamp > videoFedMax) videoFedMax = pkt.timestamp;
+          notifyTrackProgress();
         }
         gopBuffer = [];
       };
@@ -884,51 +930,76 @@ export const mountTierB: EngineMount = async (opts) => {
       }
       await flushGop(null);
       await videoSrc.close();
+      // Video done — stop gating audio against a frozen videoFedMax.
+      videoFedMax = Number.POSITIVE_INFINITY;
+      notifyTrackProgress();
       if (newGen === conversionGeneration && !disposed) {
         videoFeedEnded = true;
         console.warn(
           `[iris-core] Tier B: video feed loop ENDED at fedMax=${videoFedMax.toFixed(1)}s ` +
-          `(demuxer reached end-of-stream — if the file isn't fully downloaded or /stream ` +
-          `truncates, this is why playback freezes here)`,
+            `(demuxer reached end-of-stream — if the file isn't fully downloaded or /stream ` +
+            `truncates, this is why playback freezes here)`,
         );
       }
     })();
 
+    // No audio track → never gate the video feed on audio.
+    if (!(audioTrack && audioFeed)) {
+      audioFedMax = Number.POSITIVE_INFINITY;
+      notifyTrackProgress();
+    }
     const audioP =
       audioTrack && audioFeed
         ? (async () => {
-          if (audioFeed.kind === "passthrough") {
-            const packetSink = new EncodedPacketSink(audioTrack);
-            const startPacket = await packetSink.getKeyPacket(seekStart);
-            if (!startPacket) {
-              await audioFeed.source.close();
-              return;
-            }
-            const decoderConfig = await audioTrack.getDecoderConfig();
-            let firstMeta = true;
-            for await (const packet of packetSink.packets(startPacket)) {
-              if (disposed || newGen !== conversionGeneration) break;
-              const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
-              await audioFeed.source.add(packet, meta);
-              firstMeta = false;
-            }
-            await audioFeed.source.close();
-          } else {
-            // Transcode: AudioSampleSink uses our registered libav
-            // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
-            // AudioSampleSource encodes them to AAC via WebCodecs.
-            const sampleSink = new AudioSampleSink(audioTrack);
-            for await (const sample of sampleSink.samples(seekStart, Infinity)) {
-              if (disposed || newGen !== conversionGeneration) {
-                sample.close();
-                break;
+            if (audioFeed.kind === "passthrough") {
+              const packetSink = new EncodedPacketSink(audioTrack);
+              const startPacket = await packetSink.getKeyPacket(seekStart);
+              if (!startPacket) {
+                await audioFeed.source.close();
+                audioFedMax = Number.POSITIVE_INFINITY;
+                notifyTrackProgress();
+                return;
               }
-              await audioFeed.source.add(sample);
-              sample.close();
+              const decoderConfig = await audioTrack.getDecoderConfig();
+              let firstMeta = true;
+              for await (const packet of packetSink.packets(startPacket)) {
+                if (disposed || newGen !== conversionGeneration) break;
+                // Don't race ahead of the video feed.
+                await waitTrackBalance(packet.timestamp, () => videoFedMax);
+                if (disposed || newGen !== conversionGeneration) break;
+                const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
+                await audioFeed.source.add(packet, meta);
+                firstMeta = false;
+                if (packet.timestamp > audioFedMax) audioFedMax = packet.timestamp;
+                notifyTrackProgress();
+              }
+              await audioFeed.source.close();
+            } else {
+              // Transcode: AudioSampleSink uses our registered libav
+              // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
+              // AudioSampleSource encodes them to AAC via WebCodecs.
+              const sampleSink = new AudioSampleSink(audioTrack);
+              for await (const sample of sampleSink.samples(seekStart, Infinity)) {
+                if (disposed || newGen !== conversionGeneration) {
+                  sample.close();
+                  break;
+                }
+                await waitTrackBalance(sample.timestamp, () => videoFedMax);
+                if (disposed || newGen !== conversionGeneration) {
+                  sample.close();
+                  break;
+                }
+                await audioFeed.source.add(sample);
+                if (sample.timestamp > audioFedMax) audioFedMax = sample.timestamp;
+                notifyTrackProgress();
+                sample.close();
+              }
+              await audioFeed.source.close();
             }
-            await audioFeed.source.close();
-          }
-        })()
+            // Audio done — stop gating video against a frozen audioFedMax.
+            audioFedMax = Number.POSITIVE_INFINITY;
+            notifyTrackProgress();
+          })()
         : Promise.resolve();
 
     void Promise.all([videoP, audioP])
@@ -996,6 +1067,10 @@ export const mountTierB: EngineMount = async (opts) => {
   const dispose = async (): Promise<void> => {
     if (disposed) return;
     disposed = true;
+    // Release any feed loop parked in `waitTrackBalance` (ready() is now true
+    // via `disposed`); the loops then break on their generation check.
+    for (const w of trackWaiters) w();
+    trackWaiters.clear();
     unbindVideo();
     video.removeEventListener("error", onErr);
     video.removeEventListener("waiting", onWaiting);
