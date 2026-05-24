@@ -77,11 +77,10 @@ const AHEAD_SECONDS_CEILING_MOBILE = 30;
 const BEHIND_SECONDS_CEILING = 30;
 const BEHIND_SECONDS_CEILING_MOBILE = 15;
 
-/** Byte budgets for the same two windows — the real OOM lever. */
+/** Forward resident-byte budget — the real OOM lever (enforced at runtime
+ *  on actual appended bytes, see `residentByteBudget`). */
 const AHEAD_BYTES_BUDGET = 96 * 1024 * 1024;
 const AHEAD_BYTES_BUDGET_MOBILE = 24 * 1024 * 1024;
-const BEHIND_BYTES_BUDGET = 48 * 1024 * 1024;
-const BEHIND_BYTES_BUDGET_MOBILE = 12 * 1024 * 1024;
 
 /** Firefox-specific desktop budgets. The 96/48 MB desktop window is
  *  tuned for Chrome, whose SourceBuffer quota is generous and whose MSE
@@ -94,7 +93,6 @@ const BEHIND_BYTES_BUDGET_MOBILE = 12 * 1024 * 1024;
  *  under Firefox's threshold stops it from forced-evicting forward
  *  data. Mobile budgets (tighter still) always win when both apply. */
 const AHEAD_BYTES_BUDGET_FIREFOX = 48 * 1024 * 1024;
-const BEHIND_BYTES_BUDGET_FIREFOX = 24 * 1024 * 1024;
 
 /** Match Firefox-proper + Firefox-derived (LibreWolf, Waterfox, …). */
 function isFirefox(): boolean {
@@ -107,6 +105,11 @@ function isFirefox(): boolean {
  *  is acceptable. */
 const MIN_AHEAD_SECONDS = 6;
 const MIN_BEHIND_SECONDS = 3;
+
+/** Floor for the adaptive resident-byte budget — below this we'd rebuffer
+ *  constantly, so we stop shrinking even if the browser keeps complaining
+ *  (at which point the file genuinely can't sustain on this tier). */
+const MIN_RESIDENT_BYTES = 16 * 1024 * 1024;
 
 /** Result of probing `WebCodecs.AudioEncoder`: which target codec
  *  works at what channel count for the given source. Returns null
@@ -259,11 +262,6 @@ export const mountTierB: EngineMount = async (opts) => {
     : firefox
       ? AHEAD_BYTES_BUDGET_FIREFOX
       : AHEAD_BYTES_BUDGET;
-  const behindByteBudget = mobile
-    ? BEHIND_BYTES_BUDGET_MOBILE
-    : firefox
-      ? BEHIND_BYTES_BUDGET_FIREFOX
-      : BEHIND_BYTES_BUDGET;
   const bytesPerSecond =
     manifest.size_bytes > 0 && manifest.duration_s && manifest.duration_s > 0
       ? manifest.size_bytes / manifest.duration_s
@@ -272,32 +270,36 @@ export const mountTierB: EngineMount = async (opts) => {
     bytesPerSecond > 0
       ? Math.min(secondsCeiling, Math.max(minSeconds, byteBudget / bytesPerSecond))
       : secondsCeiling;
-  // The live ahead window, in seconds. Derived from the file's AVERAGE
-  // bitrate, so it is only a guess on VBR content: a high-bitrate stretch
-  // packs more BYTES into those seconds than the browser's per-SourceBuffer
-  // ceiling allows. `bufferAheadTarget` therefore SHRINKS reactively on a
-  // QuotaExceededError (down to what currently fits) and grows back toward
-  // `aheadCeiling` once the stretch passes — see the quota handler and the
-  // `updateend` pump.
-  let bufferAheadTarget = clampWindow(
+  // Forward window as a SECONDS upper bound only (stops a low-bitrate file
+  // from buffering tens of minutes). The real memory lever is the BYTE
+  // budget enforced at runtime below — a seconds window can't bound bytes on
+  // VBR content (60 s at a 30 Mbps stretch is ~225 MB even though the file
+  // averages 5 Mbps, which is what exhausted memory and froze playback).
+  const bufferAheadTarget = clampWindow(
     mobile ? AHEAD_SECONDS_CEILING_MOBILE : AHEAD_SECONDS_CEILING,
     MIN_AHEAD_SECONDS,
-    aheadByteBudget,
+    // Use the full time ceiling here (byte capping is done at runtime).
+    Number.POSITIVE_INFINITY,
   );
-  const aheadCeiling = bufferAheadTarget;
-  // The seek-back (behind) window. Also shrinks on a byte-ceiling hit — it's
-  // pure nice-to-have, so under memory pressure we dump it FIRST to leave the
-  // byte budget for the forward buffer that playback actually needs. Grows
-  // back toward `behindCeiling` once the high-bitrate stretch passes.
-  let playedKeep = clampWindow(
-    mobile ? BEHIND_SECONDS_CEILING_MOBILE : BEHIND_SECONDS_CEILING,
-    MIN_BEHIND_SECONDS,
-    behindByteBudget,
-  );
+  // The seek-back (behind) window. Shrinks to the floor on memory pressure —
+  // it's pure nice-to-have, so we dump it FIRST to leave the byte budget for
+  // the forward buffer that playback actually needs. Grows back when quiet.
+  let playedKeep = mobile ? BEHIND_SECONDS_CEILING_MOBILE : BEHIND_SECONDS_CEILING;
   const behindCeiling = playedKeep;
+
+  // ── Runtime byte budget — the actual memory bound. ───────────────────────
+  // `residentBytes` tracks the bytes currently in the SourceBuffer (summed on
+  // append, reduced proportionally on eviction). The producer stops feeding
+  // once it exceeds `residentByteBudget`. The budget starts at the browser's
+  // tuned ceiling and ADAPTS DOWN on a real QuotaExceededError (learning the
+  // true per-content ceiling), growing back once the high-bitrate stretch
+  // passes. This bounds memory regardless of VBR — unlike a seconds window.
+  let residentBytes = 0;
+  let residentByteBudget = aheadByteBudget;
   console.log(
-    `[iris-core] Tier B buffer window: ahead=${bufferAheadTarget.toFixed(0)}s ` +
-      `behind=${playedKeep.toFixed(0)}s (mobile=${mobile}, firefox=${firefox}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
+    `[iris-core] Tier B buffer window: ahead≤${bufferAheadTarget.toFixed(0)}s ` +
+      `behind=${playedKeep.toFixed(0)}s byteBudget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
+      `(mobile=${mobile}, firefox=${firefox}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
   );
 
   if (typeof globalThis.MediaSource === "undefined") {
@@ -435,12 +437,35 @@ export const mountTierB: EngineMount = async (opts) => {
     if (sourceBuffer.buffered.length === 0) return false;
     const firstBufferedStart = sourceBuffer.buffered.start(0);
     if (firstBufferedStart >= evictBefore) return false;
+    const bufferedEnd = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
     try {
       sourceBuffer.remove(firstBufferedStart, evictBefore);
+      // Reduce the resident-byte estimate proportionally to the span removed
+      // (assumes ~uniform bitrate across the buffer — approximate, but the
+      // adaptive budget self-calibrates to whatever scale this produces).
+      const span = bufferedEnd - firstBufferedStart;
+      if (span > 0) {
+        residentBytes = Math.max(
+          0,
+          residentBytes * (1 - (evictBefore - firstBufferedStart) / span),
+        );
+      }
       return true;
     } catch {
       return false;
     }
+  };
+
+  /** Buffered ranges, for diagnostics — reveals a gap/island (timestamp
+   *  issue) vs one contiguous range (pure memory). */
+  const bufferedRangesStr = (): string => {
+    if (!sourceBuffer || sourceBuffer.buffered.length === 0) return "empty";
+    const b = sourceBuffer.buffered;
+    const parts: string[] = [];
+    for (let i = 0; i < b.length; i += 1) {
+      parts.push(`${b.start(i).toFixed(0)}-${b.end(i).toFixed(0)}`);
+    }
+    return parts.join(" ");
   };
 
   // ---- queue drain ------------------------------------------------
@@ -451,19 +476,21 @@ export const mountTierB: EngineMount = async (opts) => {
     if (!next) return;
     try {
       sourceBuffer.appendBuffer(next.slice().buffer);
+      residentBytes += next.byteLength;
     } catch (e) {
       if (e instanceof DOMException && e.name === "QuotaExceededError") {
-        // The browser's real per-SourceBuffer BYTE ceiling for the current
-        // (high-bitrate) region. The seek-back buffer competes with the
-        // forward buffer for that budget, so free it FIRST (it's pure
-        // nice-to-have) — keeping a fat behind window while starving the
-        // forward buffer is what wedged playback. Then cap the forward window
-        // to just under what currently fits so the producer stops hammering
-        // append. Both grow back later (see the `updateend` pump).
+        // We hit the browser's real per-SourceBuffer byte ceiling — the
+        // runtime budget over-shot it. LEARN it: pull the budget down to just
+        // under what's resident now, so the producer parks below the ceiling
+        // from here on (the seconds window can't do this on VBR). Also dump
+        // the seek-back buffer (pure nice-to-have) to free the most room for
+        // the forward buffer. Both grow back when the stretch passes.
         appendQueue.unshift(next);
-        const ahead = bufferedAheadSeconds();
+        residentByteBudget = Math.max(
+          MIN_RESIDENT_BYTES,
+          Math.min(residentByteBudget, residentBytes * 0.85),
+        );
         playedKeep = MIN_BEHIND_SECONDS;
-        bufferAheadTarget = Math.max(MIN_AHEAD_SECONDS, Math.min(bufferAheadTarget, ahead - 2));
         const freed = evictPlayedRange(playedKeep);
         lastQuotaT = video.currentTime;
         // Throttle the log: at most one line per ~5 s of playback.
@@ -471,8 +498,9 @@ export const mountTierB: EngineMount = async (opts) => {
           lastQuotaLogT = video.currentTime;
           console.warn(
             `[iris-core] Tier B: SourceBuffer byte ceiling ` +
-              `(ahead=${ahead.toFixed(0)}s, queued=${appendQueue.length}, evicted=${freed}, ` +
-              `t=${video.currentTime.toFixed(1)}s) — window→${bufferAheadTarget.toFixed(0)}s/behind→${playedKeep.toFixed(0)}s`,
+              `(ahead=${bufferedAheadSeconds().toFixed(0)}s, ~${(residentBytes / 1e6).toFixed(0)}MB, ` +
+              `queued=${appendQueue.length}, evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — ` +
+              `budget→${(residentByteBudget / 1e6).toFixed(0)}MB ranges=[${bufferedRangesStr()}]`,
           );
         }
         return;
@@ -850,7 +878,11 @@ export const mountTierB: EngineMount = async (opts) => {
         while (
           !disposed &&
           generation === conversionGeneration &&
-          (bufferedAheadSeconds() > bufferAheadTarget || appendQueue.length > MAX_QUEUED_CHUNKS)
+          // Stop feeding when ANY bound is hit: the seconds upper-bound, the
+          // real BYTE budget (the memory lever), or the in-flight queue cap.
+          (bufferedAheadSeconds() > bufferAheadTarget ||
+            residentBytes > residentByteBudget ||
+            appendQueue.length > MAX_QUEUED_CHUNKS)
         ) {
           await new Promise<void>((resolve) => {
             if (!sourceBuffer) {
@@ -1043,16 +1075,15 @@ export const mountTierB: EngineMount = async (opts) => {
 
   sourceBuffer.addEventListener("updateend", () => {
     evictPlayedRange(playedKeep);
-    // Grow both windows back toward their ceilings once we've been quota-free
-    // for a while — restores the seek-back buffer and deep forward buffering
-    // after a transient high-bitrate stretch ends. Forward growth also waits
-    // until the buffer is comfortably full to the current target.
+    // Grow the byte budget + seek-back window back toward their ceilings once
+    // we've been quota-free for a while — restores deep buffering after a
+    // transient high-bitrate stretch ends.
     if (video.currentTime - lastQuotaT > 10) {
       if (playedKeep < behindCeiling) {
         playedKeep = Math.min(behindCeiling, playedKeep + 2);
       }
-      if (bufferAheadTarget < aheadCeiling && bufferedAheadSeconds() > bufferAheadTarget - 2) {
-        bufferAheadTarget = Math.min(aheadCeiling, bufferAheadTarget + 4);
+      if (residentByteBudget < aheadByteBudget) {
+        residentByteBudget = Math.min(aheadByteBudget, residentByteBudget + 8 * 1024 * 1024);
       }
     }
     drainQueue();
