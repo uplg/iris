@@ -72,8 +72,8 @@ import {
  *  the effective window smaller). This is the RELIABLE bound (gated on
  *  `bufferedAheadSeconds`, deadlock-free) — kept modest so the common
  *  low-bitrate case can't pin much memory even if the byte estimate drifts. */
-const AHEAD_SECONDS_CEILING = 30;
-const AHEAD_SECONDS_CEILING_MOBILE = 20;
+const AHEAD_SECONDS_CEILING = 45;
+const AHEAD_SECONDS_CEILING_MOBILE = 25;
 /** Played-out time we keep behind the playhead for instant scrub-back. */
 const BEHIND_SECONDS_CEILING = 30;
 const BEHIND_SECONDS_CEILING_MOBILE = 15;
@@ -84,8 +84,8 @@ const BEHIND_SECONDS_CEILING_MOBILE = 15;
  *  reads ~this much SOURCE to fill it PLUS its own read cache (see
  *  `SOURCE_CACHE_BYTES`), so the resident total is roughly budget + cache.
  *  96 MB here meant ~160 MB resident, which OOM-tanked the tab. */
-const AHEAD_BYTES_BUDGET = 40 * 1024 * 1024;
-const AHEAD_BYTES_BUDGET_MOBILE = 16 * 1024 * 1024;
+const AHEAD_BYTES_BUDGET = 64 * 1024 * 1024;
+const AHEAD_BYTES_BUDGET_MOBILE = 20 * 1024 * 1024;
 
 /** Cap for Mediabunny's `UrlSource` read cache (default is 64 MiB, which
  *  stacked on the SourceBuffer budget blew the memory budget). A self-hosted
@@ -659,10 +659,15 @@ export const mountTierB: EngineMount = async (opts) => {
           (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
       );
     }
-    if (appendQueue.length > 0) {
-      evictPlayedRange(playedKeep);
-      drainQueue();
-    }
+    // ALWAYS trim the behind-buffer as the playhead advances — NOT only when
+    // there's a queue. If we gate this on `queue > 0`, then once the producer
+    // is blocked (byte budget full of un-evicted behind-buffer) the queue
+    // drains to empty, no more `updateend` fires, eviction never runs, the
+    // behind-buffer keeps growing, the byte budget stays full, the forward
+    // buffer starves → underrun/stall. Evicting here frees the budget so the
+    // producer can keep the forward buffer alive.
+    evictPlayedRange(playedKeep);
+    if (appendQueue.length > 0) drainQueue();
   };
   video.addEventListener("timeupdate", onTimeUpdate);
 
