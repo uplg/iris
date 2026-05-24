@@ -993,27 +993,6 @@ export const mountTierB: EngineMount = async (opts) => {
       const packetSink = new EncodedPacketSink(videoTrack);
       const startPacket = await packetSink.getKeyPacket(seekStart);
       if (!startPacket) return;
-      // Drop this first keyframe's open-GOP RASL leading pictures. On an open
-      // GOP the random-access keyframe is a CRA whose leading (RASL) pictures
-      // decode AFTER it but present BEFORE it and reference the PREVIOUS GOP —
-      // which isn't buffered after a seek/resume. Firefox-macOS's VideoToolbox
-      // HW HEVC decoder errors on them (`media error 3` / `AppleVTDecoder`,
-      // readyState=1, right after a resume into an open GOP — confirmed by the
-      // media-error diagnostic: t≈resume pos, fedMax≈+10s, sinceConv≈1s).
-      // `appendWindowStart` = the keyframe's PTS makes the SourceBuffer drop
-      // every frame presenting before it (the RASL pics) while keeping the
-      // keyframe itself — the spec-correct way to seek into an open GOP.
-      // timestampOffset is 0, so source PTS == the buffer timeline. Await any
-      // in-flight init-segment append first (setting it while `updating` throws).
-      if (sourceBuffer) {
-        await waitForUpdateEnd();
-        if (disposed || newGen !== conversionGeneration || !sourceBuffer) return;
-        try {
-          sourceBuffer.appendWindowStart = Math.max(0, startPacket.timestamp);
-        } catch {
-          /* best-effort; a stray RASL just risks the decode error we had before */
-        }
-      }
       const decoderConfig = await videoTrack.getDecoderConfig();
       let firstMeta = true;
 
@@ -1026,8 +1005,23 @@ export const mountTierB: EngineMount = async (opts) => {
       // clamp the decode timestamp monotonic across GOP boundaries and carry
       // the difference in the signed `trun` composition offset — so we keep
       // every frame and presentation is unchanged.
+      //
+      // ONE exception: the FIRST keyframe's own RASL leading pictures (open-GOP
+      // "Random Access Skipped Leading" — they decode after the CRA but present
+      // BEFORE it, `PTS < startPacket.timestamp`). After a seek/resume their
+      // references (the previous GOP) aren't buffered, so they're undecodable —
+      // the HEVC spec literally says to SKIP them at random access. Firefox-macOS
+      // VideoToolbox errors on them (`media error 3`, readyState=1 right after a
+      // resume) instead of dropping them like Chrome. We skip ONLY these: every
+      // later frame (this GOP's trailing pics, and all later GOPs incl. their
+      // own RASL) has `PTS ≥ startPacket.timestamp`, so this filter is scoped to
+      // the first GOP and never touches a valid mid-stream reference. (We can't
+      // use `appendWindowStart` — RASL decode AFTER the keyframe, so dropping
+      // them via the append window trips MSE's need-random-access-point and
+      // kills the whole GOP's trailing pics → a buffer hole → stall.)
       for await (const packet of packetSink.packets(startPacket)) {
         if (disposed || newGen !== conversionGeneration) break;
+        if (packet.timestamp < startPacket.timestamp) continue;
         // Don't race ahead of the audio feed (else the muxer hoards video).
         await waitTrackBalance(packet.timestamp, () => audioFedMax);
         if (disposed || newGen !== conversionGeneration) break;
