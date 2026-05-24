@@ -233,10 +233,6 @@ function relaxMediabunnyGopCheck(output: Output): void {
   };
 }
 
-/** Floor for reactive quota eviction (only used when proactive
- *  back-pressure didn't keep us under the limit — should be rare). */
-const QUOTA_EVICT_SECONDS = 5;
-
 /** Hard cap on undrained append chunks held in RAM. When the drain stalls
  *  (a swallowed QuotaExceededError on a VBR bitrate spike, where the
  *  seconds-derived window holds more bytes than the browser's per-source
@@ -289,11 +285,16 @@ export const mountTierB: EngineMount = async (opts) => {
     aheadByteBudget,
   );
   const aheadCeiling = bufferAheadTarget;
-  const playedKeep = clampWindow(
+  // The seek-back (behind) window. Also shrinks on a byte-ceiling hit — it's
+  // pure nice-to-have, so under memory pressure we dump it FIRST to leave the
+  // byte budget for the forward buffer that playback actually needs. Grows
+  // back toward `behindCeiling` once the high-bitrate stretch passes.
+  let playedKeep = clampWindow(
     mobile ? BEHIND_SECONDS_CEILING_MOBILE : BEHIND_SECONDS_CEILING,
     MIN_BEHIND_SECONDS,
     behindByteBudget,
   );
+  const behindCeiling = playedKeep;
   console.log(
     `[iris-core] Tier B buffer window: ahead=${bufferAheadTarget.toFixed(0)}s ` +
       `behind=${playedKeep.toFixed(0)}s (mobile=${mobile}, firefox=${firefox}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
@@ -452,16 +453,18 @@ export const mountTierB: EngineMount = async (opts) => {
       sourceBuffer.appendBuffer(next.slice().buffer);
     } catch (e) {
       if (e instanceof DOMException && e.name === "QuotaExceededError") {
-        // We've hit the browser's real per-SourceBuffer BYTE ceiling for the
-        // current (high-bitrate) region. Keep the chunk, free room behind the
-        // playhead, and cap the window to just under what currently fits so
-        // the producer stops hammering append — the per-track playhead
-        // throttle then holds both tracks here and playback proceeds on the
-        // buffer we can actually hold. Grows back later once the stretch ends.
+        // The browser's real per-SourceBuffer BYTE ceiling for the current
+        // (high-bitrate) region. The seek-back buffer competes with the
+        // forward buffer for that budget, so free it FIRST (it's pure
+        // nice-to-have) — keeping a fat behind window while starving the
+        // forward buffer is what wedged playback. Then cap the forward window
+        // to just under what currently fits so the producer stops hammering
+        // append. Both grow back later (see the `updateend` pump).
         appendQueue.unshift(next);
-        const freed = evictPlayedRange(QUOTA_EVICT_SECONDS);
         const ahead = bufferedAheadSeconds();
+        playedKeep = MIN_BEHIND_SECONDS;
         bufferAheadTarget = Math.max(MIN_AHEAD_SECONDS, Math.min(bufferAheadTarget, ahead - 2));
+        const freed = evictPlayedRange(playedKeep);
         lastQuotaT = video.currentTime;
         // Throttle the log: at most one line per ~5 s of playback.
         if (video.currentTime - lastQuotaLogT > 5) {
@@ -469,7 +472,7 @@ export const mountTierB: EngineMount = async (opts) => {
           console.warn(
             `[iris-core] Tier B: SourceBuffer byte ceiling ` +
               `(ahead=${ahead.toFixed(0)}s, queued=${appendQueue.length}, evicted=${freed}, ` +
-              `t=${video.currentTime.toFixed(1)}s) — window→${bufferAheadTarget.toFixed(0)}s`,
+              `t=${video.currentTime.toFixed(1)}s) — window→${bufferAheadTarget.toFixed(0)}s/behind→${playedKeep.toFixed(0)}s`,
           );
         }
         return;
@@ -1040,15 +1043,17 @@ export const mountTierB: EngineMount = async (opts) => {
 
   sourceBuffer.addEventListener("updateend", () => {
     evictPlayedRange(playedKeep);
-    // Grow the window back toward the ceiling once we've been quota-free for
-    // a while and the buffer is comfortably full to the current target —
-    // restores deep buffering after a transient high-bitrate stretch ends.
-    if (
-      bufferAheadTarget < aheadCeiling &&
-      video.currentTime - lastQuotaT > 10 &&
-      bufferedAheadSeconds() > bufferAheadTarget - 2
-    ) {
-      bufferAheadTarget = Math.min(aheadCeiling, bufferAheadTarget + 4);
+    // Grow both windows back toward their ceilings once we've been quota-free
+    // for a while — restores the seek-back buffer and deep forward buffering
+    // after a transient high-bitrate stretch ends. Forward growth also waits
+    // until the buffer is comfortably full to the current target.
+    if (video.currentTime - lastQuotaT > 10) {
+      if (playedKeep < behindCeiling) {
+        playedKeep = Math.min(behindCeiling, playedKeep + 2);
+      }
+      if (bufferAheadTarget < aheadCeiling && bufferedAheadSeconds() > bufferAheadTarget - 2) {
+        bufferAheadTarget = Math.min(aheadCeiling, bufferAheadTarget + 4);
+      }
     }
     drainQueue();
     if (!opts.onReady) return;
