@@ -413,6 +413,13 @@ export const mountTierB: EngineMount = async (opts) => {
     // added synchronously during this loop).
     for (const w of trackWaiters) w();
   };
+  // Wakeups for feed loops parked in `waitBufferRoom` (the absolute forward
+  // back-pressure). Resolved when playback drains the buffer (`timeupdate`)
+  // or on dispose. No timers → deadlock-free.
+  const bufferRoomWaiters = new Set<() => void>();
+  const notifyBufferRoom = () => {
+    for (const w of bufferRoomWaiters) w();
+  };
   const appendQueue: Uint8Array[] = [];
 
   // One-shot. Firefox can fire `error` on `<video>` repeatedly
@@ -501,6 +508,30 @@ export const mountTierB: EngineMount = async (opts) => {
         resolve();
       };
       trackWaiters.add(w);
+    });
+
+  /** Absolute forward back-pressure — THE memory bound. Holds a feed loop
+   *  before it hands the next packet to the muxer while the SourceBuffer
+   *  already has more than `bufferAheadTarget` seconds buffered ahead of the
+   *  playhead. Gating the SOURCE (not the muxer output) is what actually
+   *  bounds memory: Mediabunny's `Output` does NOT propagate the StreamTarget
+   *  write back-pressure all the way back to `source.add()`, so a sink-only
+   *  gate let the feed race to 150 s+ ahead (~220 MB resident, heap climbing).
+   *  Wakes when playback drains the buffer (`notifyBufferRoom` on `timeupdate`)
+   *  or on dispose — never on a timer, so it can't deadlock. */
+  const waitBufferRoom = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      const ready = () => disposed || bufferedAheadSeconds() <= bufferAheadTarget;
+      if (ready()) {
+        resolve();
+        return;
+      }
+      const w = () => {
+        if (!ready()) return;
+        bufferRoomWaiters.delete(w);
+        resolve();
+      };
+      bufferRoomWaiters.add(w);
     });
 
   const evictPlayedRange = (keepSeconds: number): boolean => {
@@ -664,6 +695,9 @@ export const mountTierB: EngineMount = async (opts) => {
     // producer can keep the forward buffer alive.
     evictPlayedRange(playedKeep);
     if (appendQueue.length > 0) drainQueue();
+    // Playback just advanced → the forward buffer shrank. Release any feed loop
+    // parked in `waitBufferRoom` so it tops the buffer back up to the target.
+    notifyBufferRoom();
   };
   video.addEventListener("timeupdate", onTimeUpdate);
 
@@ -885,6 +919,9 @@ export const mountTierB: EngineMount = async (opts) => {
         // Don't race ahead of the audio feed (else the muxer hoards video).
         await waitTrackBalance(packet.timestamp, () => audioFedMax);
         if (disposed || newGen !== conversionGeneration) break;
+        // Absolute forward bound: don't out-run playback past the window.
+        await waitBufferRoom();
+        if (disposed || newGen !== conversionGeneration) break;
         const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
         await videoSrc.add(packet, meta);
         firstMeta = false;
@@ -929,6 +966,8 @@ export const mountTierB: EngineMount = async (opts) => {
                 // Don't race ahead of the video feed.
                 await waitTrackBalance(packet.timestamp, () => videoFedMax);
                 if (disposed || newGen !== conversionGeneration) break;
+                await waitBufferRoom();
+                if (disposed || newGen !== conversionGeneration) break;
                 const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
                 await audioFeed.source.add(packet, meta);
                 firstMeta = false;
@@ -947,6 +986,11 @@ export const mountTierB: EngineMount = async (opts) => {
                   break;
                 }
                 await waitTrackBalance(sample.timestamp, () => videoFedMax);
+                if (disposed || newGen !== conversionGeneration) {
+                  sample.close();
+                  break;
+                }
+                await waitBufferRoom();
                 if (disposed || newGen !== conversionGeneration) {
                   sample.close();
                   break;
@@ -1040,6 +1084,8 @@ export const mountTierB: EngineMount = async (opts) => {
     // via `disposed`); the loops then break on their generation check.
     for (const w of trackWaiters) w();
     trackWaiters.clear();
+    for (const w of bufferRoomWaiters) w();
+    bufferRoomWaiters.clear();
     unbindVideo();
     video.removeEventListener("error", onErr);
     video.removeEventListener("waiting", onWaiting);
