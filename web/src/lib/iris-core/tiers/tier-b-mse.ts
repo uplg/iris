@@ -25,7 +25,6 @@ import {
   AudioSampleSource,
   Conversion,
   EncodedAudioPacketSource,
-  type EncodedPacket,
   EncodedPacketSink,
   EncodedVideoPacketSource,
   Input,
@@ -121,10 +120,6 @@ const MIN_BEHIND_SECONDS = 3;
  *  constantly, so we stop shrinking even if the browser keeps complaining
  *  (at which point the file genuinely can't sustain on this tier). */
 const MIN_RESIDENT_BYTES = 16 * 1024 * 1024;
-
-/** Cap on per-mount GOP-drop log lines (drops are frequent; we only need a
- *  sample to correlate with the buffered holes). */
-const DROP_LOG_CAP = 80;
 
 /** Max seconds one track's feed may lead the other. Passthrough video runs
  *  far faster than transcoded audio; uncapped, the muxer holds minutes of the
@@ -405,12 +400,6 @@ export const mountTierB: EngineMount = async (opts) => {
   // (fedMax frozen / feedEnded) from "decoder stalled with a full buffer".
   let videoFedMax = 0;
   let videoFeedEnded = false;
-  // GOP-drop instrumentation: total frames dropped to satisfy Mediabunny's
-  // muxer, and a capped log of each drop's PTS so we can correlate dropped
-  // ranges with the 1 s holes that appear in `buffered` (hypothesis: dropping
-  // open-GOP leading pictures leaves a hole just before each keyframe).
-  let totalDropped = 0;
-  let dropLogCount = 0;
   // Furthest AUDIO timestamp handed to the muxer. The video feed is gated so
   // it never races more than TRACK_LEAD_CAP seconds ahead of this (and vice
   // versa): without it, fast passthrough video out-runs the slow transcoded
@@ -664,7 +653,7 @@ export const mountTierB: EngineMount = async (opts) => {
         ?.usedJSHeapSize;
       console.log(
         `[iris-core] Tier B mem: ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
-          `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} dropped=${totalDropped} ` +
+          `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
           `resident≈${(residentBytes / 1e6).toFixed(0)}MB budget=${(residentByteBudget / 1e6).toFixed(0)}MB ` +
           `queue=${appendQueue.length} ranges=[${bufferedRangesStr()}]` +
           (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
@@ -709,8 +698,6 @@ export const mountTierB: EngineMount = async (opts) => {
     videoFedMax = seekStart;
     audioFedMax = seekStart;
     videoFeedEnded = false;
-    totalDropped = 0;
-    dropLogCount = 0;
     const prevConv = conversion;
     const prevOutput = manualOutput;
     const newGen = conversionGeneration + 1;
@@ -883,79 +870,26 @@ export const mountTierB: EngineMount = async (opts) => {
       const decoderConfig = await videoTrack.getDecoderConfig();
       let firstMeta = true;
 
-      // Open-GOP straggler filter. x265's default settings (open GOP
-      // + b-pyramid) produce two kinds of frames that violate
-      // Mediabunny's MP4 muxer assumption that "keyframe PTS == min
-      // PTS in its GOP":
-      //
-      //   (1) Post-key strays: packets that decode AFTER a keyframe
-      //       but whose PTS is BELOW the keyframe (they present
-      //       before the keyframe, referencing the previous GOP).
-      //       Detection: PTS < currentKeyPts when received.
-      //
-      //   (2) Bridge frames: packets that decode at the END of GOP
-      //       N but whose PTS is ABOVE GOP N+1's keyframe (they
-      //       present after the next keyframe). We only learn the
-      //       next keyframe's PTS when it arrives — so we buffer
-      //       the current GOP and drop any pkt with PTS ≥ nextKey
-      //       on flush.
-      //
-      // Mediabunny's `processTimestamps` asserts `delta >= 0` when
-      // its sorted-PTS DTS assignment dips below `lastTimescaleUnits`
-      // from the prev GOP. The two cases above are the only ways
-      // this happens for trustworthy demux output. Dropping them
-      // loses ~0.7% of frames at GOP boundaries — invisible in
-      // playback.
-
-      let currentKeyPts = -Infinity;
-      let gopBuffer: EncodedPacket[] = [];
-
-      const flushGop = async (nextKeyPts: number | null): Promise<void> => {
-        for (const pkt of gopBuffer) {
-          if (nextKeyPts !== null && pkt.type !== "key" && pkt.timestamp >= nextKeyPts) {
-            // bridge frame — drop
-            totalDropped += 1;
-            if (dropLogCount < DROP_LOG_CAP) {
-              dropLogCount += 1;
-              console.warn(
-                `[iris-core] GOP drop BRIDGE pts=${pkt.timestamp.toFixed(2)} (≥ nextKey=${nextKeyPts.toFixed(2)})`,
-              );
-            }
-            continue;
-          }
-          // Don't race ahead of the audio feed (else the muxer hoards video).
-          await waitTrackBalance(pkt.timestamp, () => audioFedMax);
-          if (disposed || newGen !== conversionGeneration) return;
-          const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
-          await videoSrc.add(pkt, meta);
-          firstMeta = false;
-          if (pkt.timestamp > videoFedMax) videoFedMax = pkt.timestamp;
-          notifyTrackProgress();
-        }
-        gopBuffer = [];
-      };
-
+      // Feed every packet in decode order. We used to DROP open-GOP "stray"
+      // (PTS < keyframe) and "bridge" (PTS ≥ next keyframe) frames to dodge
+      // Mediabunny's MP4 muxer `assert(delta >= 0)` — but those are decode
+      // references for the open GOP, so dropping them stalled the browser
+      // decoder (readyState stuck, no error, on x265 open-GOP rips). The muxer
+      // is now patched (iris patch in `mediabunny/.../isobmff-muxer.js`) to
+      // clamp the decode timestamp monotonic across GOP boundaries and carry
+      // the difference in the signed `trun` composition offset — so we keep
+      // every frame and presentation is unchanged.
       for await (const packet of packetSink.packets(startPacket)) {
         if (disposed || newGen !== conversionGeneration) break;
-        if (packet.type === "key") {
-          await flushGop(packet.timestamp);
-          currentKeyPts = packet.timestamp;
-          gopBuffer.push(packet);
-        } else if (packet.timestamp < currentKeyPts) {
-          // post-key stray (open-GOP leading picture) — drop
-          totalDropped += 1;
-          if (dropLogCount < DROP_LOG_CAP) {
-            dropLogCount += 1;
-            console.warn(
-              `[iris-core] GOP drop STRAY pts=${packet.timestamp.toFixed(2)} (< curKey=${currentKeyPts.toFixed(2)})`,
-            );
-          }
-          continue;
-        } else {
-          gopBuffer.push(packet);
-        }
+        // Don't race ahead of the audio feed (else the muxer hoards video).
+        await waitTrackBalance(packet.timestamp, () => audioFedMax);
+        if (disposed || newGen !== conversionGeneration) break;
+        const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
+        await videoSrc.add(packet, meta);
+        firstMeta = false;
+        if (packet.timestamp > videoFedMax) videoFedMax = packet.timestamp;
+        notifyTrackProgress();
       }
-      await flushGop(null);
       await videoSrc.close();
       // Video done — stop gating audio against a frozen videoFedMax.
       videoFedMax = Number.POSITIVE_INFINITY;

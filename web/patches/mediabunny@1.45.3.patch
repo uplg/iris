@@ -1,3 +1,6 @@
+diff --git a/node_modules/mediabunny/.bun-tag-fcb3587c0db22042 b/.bun-tag-fcb3587c0db22042
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/mediabunny.d.ts b/dist/mediabunny.d.ts
 index b9cec087d4014ffa0dd7eab15ddd03229d6b3d09..255a3ac20fbec0635a9e5f73995fe0fc7e893c3a 100644
 --- a/dist/mediabunny.d.ts
@@ -79,6 +82,44 @@ index 039b9fc16ab7336e2a8cee553cb0833c72c9341a..39b2cb9000bd444e20cefd4d11c647dd
      else if (codec && PCM_AUDIO_CODECS.includes(codec)) {
          return codec;
      }
+diff --git a/dist/modules/src/isobmff/isobmff-muxer.js b/dist/modules/src/isobmff/isobmff-muxer.js
+index 1a1381839f3cf776cf39186c5c326de20286e670..1a8d5654dba06bf7dd08e41bb5a60de6d0a493fb 100644
+--- a/dist/modules/src/isobmff/isobmff-muxer.js
++++ b/dist/modules/src/isobmff/isobmff-muxer.js
+@@ -575,13 +575,31 @@ export class IsobmffMuxer extends Muxer {
+             // (presentation timestamp & decode order are all you need), but it is a concept in ISOBMFF so we need to
+             // model it.
+             sample.decodeTimestamp = sortedTimestamps[i];
++            // [iris patch] Open-GOP fix. A new GOP's leading pictures present before
++            // the previous GOP's max PTS, so the sorted-PTS->DTS heuristic above
++            // produces a decode timestamp that moves BACKWARDS across the GOP
++            // boundary, which trips the `assert(delta >= 0)` below. Iris's Tier B
++            // worked around it by DROPPING those frames upstream, but they are decode
++            // references for the open GOP, so dropping them stalls the browser decoder
++            // (readyState stuck, no error). Instead, clamp the decode timestamp to stay
++            // monotonic; the per-sample composition offset emitted in `trun` (signed,
++            // version 1) is recomputed from this decodeTimestamp at write time, so the
++            // presentation timestamp (PTS) is unchanged. This is how ffmpeg muxes
++            // open-GOP HEVC into MP4.
++            if (trackData.lastTimescaleUnits !== null) {
++                const minDecodeTimestamp = trackData.lastTimescaleUnits / trackData.timescale;
++                if (sample.decodeTimestamp < minDecodeTimestamp) {
++                    sample.decodeTimestamp = minDecodeTimestamp;
++                }
++            }
+             const sampleCompositionTimeOffset = intoTimescale(sample.timestamp - sample.decodeTimestamp, trackData.timescale);
+             const durationInTimescale = intoTimescale(sample.duration, trackData.timescale);
+             if (trackData.lastTimescaleUnits !== null) {
+                 assert(trackData.lastSample);
+                 const timescaleUnits = intoTimescale(sample.decodeTimestamp, trackData.timescale, false);
+-                const delta = Math.round(timescaleUnits - trackData.lastTimescaleUnits);
+-                assert(delta >= 0);
++                // [iris patch] Clamp (belt-and-suspenders for float drift); the
++                // decodeTimestamp clamp above already keeps this non-negative.
++                const delta = Math.max(0, Math.round(timescaleUnits - trackData.lastTimescaleUnits));
+                 trackData.lastTimescaleUnits += delta;
+                 trackData.lastSample.timescaleUnitsToNextSample = delta;
+                 if (!this.isFragmented) {
 diff --git a/dist/modules/src/matroska/ebml.js b/dist/modules/src/matroska/ebml.js
 index 50cfea7ec0a82b9360dec35174a2c14789241513..06e73c63d53c1b78d75d150e86f4b09de95261a5 100644
 --- a/dist/modules/src/matroska/ebml.js
