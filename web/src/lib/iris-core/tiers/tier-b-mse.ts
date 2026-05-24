@@ -73,6 +73,14 @@ import {
  *  low-bitrate case can't pin much memory even if the byte estimate drifts. */
 const AHEAD_SECONDS_CEILING = 45;
 const AHEAD_SECONDS_CEILING_MOBILE = 25;
+/** Firefox desktop ceiling — much lower than Chrome's. Firefox's
+ *  per-SourceBuffer eviction threshold is low (it force-evicts, even AHEAD of
+ *  the playhead, once resident climbs past ~60 MB — punching holes and wedging
+ *  appends in `updating`, which freezes the queue → underrun stall). Chrome's
+ *  45 s window can hit ~64 MB on a dense VBR stretch (clampWindow sizes from
+ *  the AVERAGE bitrate, which undershoots dense regions), so Firefox gets a
+ *  shallow window that keeps resident well under its threshold. */
+const AHEAD_SECONDS_CEILING_FIREFOX = 24;
 /** Played-out time we keep behind the playhead for instant scrub-back. */
 const BEHIND_SECONDS_CEILING = 30;
 const BEHIND_SECONDS_CEILING_MOBILE = 15;
@@ -293,7 +301,11 @@ export const mountTierB: EngineMount = async (opts) => {
   // byte estimate drifted badly (read ~67 MB for a 28 s buffer), pinned the
   // producer at the budget, and starved the forward buffer into underruns.
   let bufferAheadTarget = clampWindow(
-    mobile ? AHEAD_SECONDS_CEILING_MOBILE : AHEAD_SECONDS_CEILING,
+    mobile
+      ? AHEAD_SECONDS_CEILING_MOBILE
+      : firefox
+        ? AHEAD_SECONDS_CEILING_FIREFOX
+        : AHEAD_SECONDS_CEILING,
     MIN_AHEAD_SECONDS,
     aheadByteBudget,
   );
