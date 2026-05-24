@@ -62,8 +62,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ClickableSurfaceDefaults
@@ -85,10 +83,18 @@ import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
+import studio.kahn.iris.tv.ui.components.Eyebrow
+import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 import studio.kahn.iris.tv.ui.components.LanguageBadge
 import studio.kahn.iris.tv.ui.components.TvIconButton
+import studio.kahn.iris.tv.ui.components.irisPosterPlaceholder
+import studio.kahn.iris.tv.ui.theme.Focus
+import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
+import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.theme.irisAmbient
 import kotlin.math.sqrt
 
 private const val PAGE_SIZE = 30
@@ -317,10 +323,12 @@ fun SearchScreen(
     val focusManager: FocusManager = LocalFocusManager.current
     val keyboard: SoftwareKeyboardController? = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
-    Column(
+    Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
+        // Ambient backlight wash (web `.ambient`) — fixed, faint, decorative.
+        Box(Modifier.fillMaxSize().background(irisAmbient()))
+        Column(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
             .padding(horizontal = layout.gutterHorizontal, vertical = Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
@@ -529,6 +537,7 @@ fun SearchScreen(
                 )
             }
         }
+        }
     }
 }
 
@@ -575,11 +584,7 @@ private fun <T> ChipGroup(
     onChange: (T) -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Text(
-            label.uppercase(),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Eyebrow(label)
         options.forEach { opt ->
             Chip(
                 label = labelOf(opt),
@@ -590,37 +595,38 @@ private fun <T> ChipGroup(
     }
 }
 
+/**
+ * Segmented-toggle chip (web `.toggle-item`): the active option fills with the
+ * raised surface tint, the rest stay quiet; D-pad focus is the shared
+ * design-system brand ring + glow rather than a hard brand fill, so a focused
+ * option never gets mistaken for the selected one.
+ */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun Chip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val container = if (selected) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.surfaceVariant
-    val onContainer = if (selected) MaterialTheme.colorScheme.onPrimary
-    else MaterialTheme.colorScheme.onSurface
+    val pill = RoundedCornerShape(Radius.pill)
     Surface(
         onClick = onClick,
-        shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(999.dp)),
+        shape = ClickableSurfaceDefaults.shape(shape = pill),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = container,
-            contentColor = onContainer,
-            focusedContainerColor = MaterialTheme.colorScheme.primary,
-            focusedContentColor = MaterialTheme.colorScheme.onPrimary,
+            containerColor = if (selected) IrisColors.Elev2 else IrisColors.Overlay06,
+            contentColor = if (selected) IrisColors.Foreground else IrisColors.MutedForeground,
+            focusedContainerColor = if (selected) IrisColors.Elev2 else IrisColors.Overlay12,
+            focusedContentColor = IrisColors.Foreground,
         ),
         border = ClickableSurfaceDefaults.border(
             border = Border.None,
             focusedBorder = Border(
-                border = androidx.compose.foundation.BorderStroke(
-                    width = 2.dp,
-                    color = MaterialTheme.colorScheme.primary,
-                ),
-                shape = RoundedCornerShape(999.dp),
+                border = androidx.compose.foundation.BorderStroke(Focus.ring, IrisColors.Brand),
+                shape = pill,
             ),
         ),
     ) {
         Text(
             label,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
     }
 }
@@ -684,16 +690,23 @@ private fun ResultCard(
     val parsed = remember(result) { parseTags(result) }
     val poster: String? = tmdbPosterUrl(resolvedPoster, "w342") ?: result.posterUrl
     var focused by remember { mutableStateOf(false) }
+    val cardShape = RoundedCornerShape(Radius.poster)
     Card(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused || it.hasFocus },
-        shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
-        // tv-material3's default focusedScale is 1.1 — on a tight
-        // poster grid the edge cards blow past the gutter. A subtle
-        // 1.05 keeps the focus cue without overflowing.
-        scale = CardDefaults.scale(focusedScale = 1.05f),
+        shape = CardDefaults.shape(shape = cardShape),
+        // No focus zoom in the dense results grid — even a small scale made
+        // edge cards spill past the gutter. The brand ring is the cue.
+        scale = CardDefaults.scale(focusedScale = 1f),
+        colors = CardDefaults.colors(containerColor = IrisColors.Card),
+        border = CardDefaults.border(
+            focusedBorder = Border(
+                androidx.compose.foundation.BorderStroke(Focus.ring, IrisColors.Brand),
+                shape = cardShape,
+            ),
+        ),
     ) {
         Column {
             Box(
@@ -709,21 +722,19 @@ private fun ResultCard(
                         contentScale = ContentScale.Crop,
                     )
                 } else {
+                    Box(Modifier.fillMaxSize().background(irisPosterPlaceholder()))
                     Box(
-                        Modifier.fillMaxSize().background(
-                            androidx.compose.ui.graphics.Brush.verticalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
-                                    Color(0xFF0B0D12),
-                                ),
-                            ),
-                        ),
-                        contentAlignment = Alignment.Center,
+                        Modifier.fillMaxSize().padding(10.dp),
+                        contentAlignment = Alignment.BottomStart,
                     ) {
                         Text(
-                            if (result.kind == "tv") "📺" else "🎬",
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = Color.White.copy(alpha = 0.55f),
+                            result.title,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontFamily = studio.kahn.iris.tv.ui.theme.FontDisplay,
+                            ),
+                            color = Color.White.copy(alpha = 0.9f),
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -779,24 +790,24 @@ private fun ResultCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                // Stats line: seeders / leechers / size.
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "↑ ${result.seeders ?: 0}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFF34D399),
-                    )
-                    Text(
-                        "↓ ${result.leechers ?: 0}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFFFB7185),
-                    )
+                // Stats — stacked onto their own lines rather than crammed
+                // across one row, so they stay legible in a narrow grid card.
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            "↑ ${result.seeders ?: 0}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0xFF34D399),
+                        )
+                        Text(
+                            "↓ ${result.leechers ?: 0}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0xFFFB7185),
+                        )
+                    }
                     result.sizeBytes?.let {
                         Text(
-                            "·  ${formatSizeShort(it)}",
+                            formatSizeShort(it),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -845,16 +856,27 @@ private fun ResultRow(
     val parsed = remember(result) { parseTags(result) }
     val poster: String? = tmdbPosterUrl(resolvedPoster, "w185") ?: result.posterUrl
     var focused by remember { mutableStateOf(false) }
+    val rowShape = RoundedCornerShape(Radius.button)
     Card(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused || it.hasFocus },
-        shape = CardDefaults.shape(shape = RoundedCornerShape(10.dp)),
+        shape = CardDefaults.shape(shape = rowShape),
         // Full-width row: any focusedScale > 1 overflows horizontally
         // by definition. Disable the zoom; focus is shown via the
-        // card's focused container colour instead.
+        // brand ring + glow + raised container instead.
         scale = CardDefaults.scale(focusedScale = 1f),
+        colors = CardDefaults.colors(
+            containerColor = IrisColors.Overlay06,
+            focusedContainerColor = IrisColors.Overlay12,
+        ),
+        border = CardDefaults.border(
+            focusedBorder = Border(
+                androidx.compose.foundation.BorderStroke(Focus.ring, IrisColors.Brand),
+                shape = rowShape,
+            ),
+        ),
     ) {
         Row(
             Modifier
@@ -878,23 +900,7 @@ private fun ResultRow(
                         contentScale = ContentScale.Crop,
                     )
                 } else {
-                    Box(
-                        Modifier.fillMaxSize().background(
-                            androidx.compose.ui.graphics.Brush.verticalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
-                                    Color(0xFF0B0D12),
-                                ),
-                            ),
-                        ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            if (result.kind == "tv") "📺" else "🎬",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Color.White.copy(alpha = 0.55f),
-                        )
-                    }
+                    Box(Modifier.fillMaxSize().background(irisPosterPlaceholder()))
                 }
             }
             Column(
@@ -1082,11 +1088,7 @@ private fun ErrorBlock(message: String, onRetry: () -> Unit) {
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.error,
         )
-        Button(
-            onClick = onRetry,
-            shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-        ) { Text("Retry") }
+        IrisButton("Retry", onRetry, variant = IrisButtonVariant.Ghost)
     }
 }
 
@@ -1110,18 +1112,18 @@ private fun Pagination(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            Button(
-                onClick = onPrev,
+            IrisButton(
+                "← Prev",
+                onPrev,
+                variant = IrisButtonVariant.Ghost,
                 enabled = !pending && page > 1,
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            ) { Text("← Prev") }
-            Button(
-                onClick = onNext,
+            )
+            IrisButton(
+                "Next →",
+                onNext,
+                variant = IrisButtonVariant.Ghost,
                 enabled = !pending && page < totalPages,
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            ) { Text("Next →") }
+            )
         }
     }
 }

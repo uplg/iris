@@ -1,9 +1,10 @@
 package studio.kahn.iris.tv.ui.screens
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -23,10 +26,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
+import androidx.tv.material3.Border
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -42,8 +43,17 @@ import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.TmdbMetadata
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.components.Chip
+import studio.kahn.iris.tv.ui.components.Eyebrow
+import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.irisPosterPlaceholder
+import studio.kahn.iris.tv.ui.theme.Focus
+import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
+import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.theme.irisAmbient
 
 private val VIDEO_EXTS_DETAIL = listOf(
     ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
@@ -99,16 +109,14 @@ fun DetailScreen(
         Box(
             Modifier
                 .fillMaxSize()
+                .background(IrisColors.Background)
                 .padding(layout.gutterHorizontal),
             contentAlignment = Alignment.Center,
         ) {
             if (error != null) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(error!!, color = MaterialTheme.colorScheme.error)
-                    Button(
-                        onClick = onBack,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    ) { Text("Back") }
+                    IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost, icon = Icons.AutoMirrored.Filled.ArrowBack)
                 }
             } else {
                 Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -123,101 +131,103 @@ fun DetailScreen(
             .sortedBy { it.path }
     }
 
-    Row(
-        Modifier
-            .fillMaxSize()
-            .padding(
-                horizontal = layout.gutterHorizontal,
-                vertical = layout.gutterVertical,
-            ),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.xxl),
-    ) {
-        // Left rail: poster + metadata.
-        Column(
-            Modifier.width(layout.detailRail),
-            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+    Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
+        // Ambient backlight wash behind the detail, matching Home (web `.ambient`).
+        Box(Modifier.fillMaxSize().background(irisAmbient()))
+        Row(
+            Modifier
+                .fillMaxSize()
+                .padding(
+                    horizontal = layout.gutterHorizontal,
+                    vertical = layout.gutterVertical,
+                ),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xxl),
         ) {
-            val poster = tmdbPosterUrl(meta?.posterPath, "w500")
-            // Non-clickable Surface — the poster has no useful tap
-            // action (the previous `onClick = {}` was a placeholder)
-            // but Card's default focus scale (~1.1×) was zooming
-            // the already-2:3 poster off-screen.
-            Surface(
-                modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f),
-                shape = RoundedCornerShape(12.dp),
+            // Left rail: poster + metadata.
+            Column(
+                Modifier.width(layout.detailRail),
+                verticalArrangement = Arrangement.spacedBy(Spacing.lg),
             ) {
-                val displayTitle = t.name ?: t.infohash.take(12)
-                if (poster != null) {
-                    AsyncImage(
-                        model = poster,
-                        contentDescription = displayTitle,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            displayTitle.take(2).uppercase(),
-                            style = MaterialTheme.typography.headlineLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                val poster = tmdbPosterUrl(meta?.posterPath, "w500")
+                val posterShape = RoundedCornerShape(Radius.poster)
+                // Non-clickable Surface — the poster has no useful tap
+                // action (the previous `onClick = {}` was a placeholder)
+                // but Card's default focus scale (~1.1×) was zooming
+                // the already-2:3 poster off-screen.
+                Surface(
+                    modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f),
+                    shape = posterShape,
+                    border = Border(BorderStroke(1.dp, IrisColors.BorderStrong), shape = posterShape),
+                    colors = androidx.tv.material3.SurfaceDefaults.colors(containerColor = IrisColors.Card),
+                ) {
+                    val displayTitle = t.name ?: t.infohash.take(12)
+                    if (poster != null) {
+                        AsyncImage(
+                            model = poster,
+                            contentDescription = displayTitle,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
                         )
+                    } else {
+                        Box(Modifier.fillMaxSize().background(irisPosterPlaceholder()))
+                        Box(
+                            Modifier.fillMaxSize().padding(16.dp),
+                            contentAlignment = Alignment.BottomStart,
+                        ) {
+                            Text(
+                                displayTitle,
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.92f),
+                                maxLines = 4,
+                            )
+                        }
                     }
                 }
-            }
-            Text(
-                // We *don't* substitute meta?.title here — TMDB resolution
-                // can be wrong (same year, same family of names) and the
-                // user gets a confidently-displayed title that mismatches
-                // the file. Filename is the source of truth.
-                t.name ?: t.infohash.take(12),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            meta?.year?.let {
-                Text("$it", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            meta?.overview?.let {
+                Eyebrow(if (t.kind == "tv") "Series" else "Movie", color = IrisColors.Brand)
                 Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 8,
+                    // We *don't* substitute meta?.title here — TMDB resolution
+                    // can be wrong (same year, same family of names) and the
+                    // user gets a confidently-displayed title that mismatches
+                    // the file. Filename is the source of truth.
+                    t.name ?: t.infohash.take(12),
+                    style = MaterialTheme.typography.headlineSmall,
                 )
-            }
-            if (t.addedByName.isNotBlank()) {
-                Text(
-                    "Added by ${t.addedByName}" +
-                        if (t.addedAt.length >= 10) " · ${t.addedAt.substring(0, 10)}" else "",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Button(
-                onClick = onBack,
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
-            ) {
-                Text("Back")
-            }
-        }
-
-        // Right rail: file list.
-        Column(
-            Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                "Files (${videoFiles.size})".uppercase(),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(videoFiles, key = { it.index }) { f ->
-                    FileRow(
-                        file = f,
-                        progress = progressByIdx[f.index],
-                        onClick = { onPickFile(t.infohash, f.index) },
+                meta?.year?.let {
+                    Chip("$it")
+                }
+                meta?.overview?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 8,
                     )
+                }
+                if (t.addedByName.isNotBlank()) {
+                    Text(
+                        "Added by ${t.addedByName}" +
+                            if (t.addedAt.length >= 10) " · ${t.addedAt.substring(0, 10)}" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = IrisColors.FgDim,
+                    )
+                }
+                IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost, icon = Icons.AutoMirrored.Filled.ArrowBack)
+            }
+
+            // Right rail: file list.
+            Column(
+                Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Eyebrow("Files · ${videoFiles.size}")
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(videoFiles, key = { it.index }) { f ->
+                        FileRow(
+                            file = f,
+                            progress = progressByIdx[f.index],
+                            onClick = { onPickFile(t.infohash, f.index) },
+                        )
+                    }
                 }
             }
         }
@@ -242,17 +252,22 @@ private fun FileRow(
     // Keep the focused colors inside the dark palette. The default
     // `CardDefaults.colors()` inverts to `inverseSurface` /
     // `inverseOnSurface` on focus, which renders as a bright card
-    // with BLACK text on our dark theme — illegible.
+    // with BLACK text on our dark theme — illegible. Focus instead
+    // reads as the shared design-system brand ring + glow.
+    val rowShape = RoundedCornerShape(Radius.button)
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().height(72.dp),
-        shape = CardDefaults.shape(shape = RoundedCornerShape(8.dp)),
+        shape = CardDefaults.shape(shape = rowShape),
         scale = CardDefaults.scale(focusedScale = 1f),
         colors = CardDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            containerColor = IrisColors.Overlay06,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            focusedContainerColor = IrisColors.Overlay12,
             focusedContentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+        border = CardDefaults.border(
+            focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = rowShape),
         ),
     ) {
         Row(

@@ -38,6 +38,31 @@ object Radius {
     val md = 8.dp
     val lg = 12.dp
     val xl = 16.dp
+    /** Poster / large card corner (web `.poster` 18px, `.detail-poster` 24px). */
+    val poster = 18.dp
+    /** Buttons (web `.btn` 14px). */
+    val button = 14.dp
+    /** Glass panels / search bar (web `.search-bar` 22px). */
+    val panel = 20.dp
+    /** Pill / fully-rounded (chips, progress bars). */
+    val pill = 999.dp
+}
+
+/**
+ * Focus treatment constants shared by the focusable design-system
+ * components, so the brand ring + lift + glow read identically whether the
+ * focused thing is a poster, a button, or an icon chip (web: `box-shadow:
+ * 0 0 0 3px brand, 0 0 0 7px brand-soft` + `translateY` + glow).
+ */
+object Focus {
+    /** Brand ring stroke width on focus. */
+    val ring = 3.dp
+    /** Poster pop on focus (web `.card[data-focused] scale(1.06)`). */
+    const val posterScale = 1.06f
+    /** Button / chip pop (web `.btn` `scale(1.02)`). */
+    const val controlScale = 1.04f
+    /** Brand glow elevation behind a focused surface. */
+    val glow = 16.dp
 }
 
 /**

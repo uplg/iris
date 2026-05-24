@@ -66,6 +66,9 @@ import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
 import studio.kahn.iris.tv.data.installIrisTrackNameProvider
+import studio.kahn.iris.tv.ui.components.Eyebrow
+import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 
 /**
  * Full-screen Media3 PlayerView. Pre-mount we poll `/play/status` so
@@ -1041,11 +1044,7 @@ private fun UpNextPill(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                "Up next".uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Eyebrow("Up next")
             Text(
                 "S%02dE%02d".format(next.season, next.episode),
                 style = MaterialTheme.typography.titleMedium,
@@ -1056,24 +1055,15 @@ private fun UpNextPill(
                 modifier = Modifier.padding(top = 4.dp),
             ) {
                 if (downloaded) {
-                    Button(
-                        onClick = onPlay,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    ) { Text("Play next") }
+                    IrisButton("Play next", onPlay)
                 } else {
-                    Button(
-                        onClick = onPrepare,
+                    IrisButton(
+                        if (grabbing) "Preparing…" else "Prepare",
+                        onPrepare,
                         enabled = !grabbing && next.followId != null,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    ) { Text(if (grabbing) "Preparing…" else "Prepare") }
+                    )
                 }
-                Button(
-                    onClick = onDismiss,
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                ) { Text("Dismiss") }
+                IrisButton("Dismiss", onDismiss, variant = IrisButtonVariant.Ghost)
             }
         }
     }
@@ -1145,22 +1135,13 @@ private fun EndOfSeriesPill(onBack: () -> Unit) {
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                "You're all caught up".uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Eyebrow("You're all caught up")
             Text(
                 "No more episodes available.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Button(
-                onClick = onBack,
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                modifier = Modifier.padding(top = 4.dp),
-            ) { Text("Back to Home") }
+            IrisButton("Back to Home", onBack, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }
@@ -1190,20 +1171,8 @@ private fun LoadingOverlay(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.padding(top = 12.dp),
                 ) {
-                    Button(
-                        onClick = onRetry,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
-                    ) {
-                        Text("Retry")
-                    }
-                    Button(
-                        onClick = onBack,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
-                    ) {
-                        Text("Back")
-                    }
+                    IrisButton("Retry", onRetry)
+                    IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost)
                 }
                 return@Column
             }

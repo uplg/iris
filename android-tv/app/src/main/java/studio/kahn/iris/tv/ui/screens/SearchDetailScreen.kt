@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,8 +28,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
@@ -51,6 +50,10 @@ import studio.kahn.iris.tv.data.TorrentDetails
 import studio.kahn.iris.tv.data.VideoInfoDetails
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.TvIconButton
+import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
 
@@ -114,20 +117,27 @@ fun SearchDetailScreen(
 
     val layout = LocalTvLayout.current
 
-    // Without this, Compose-TV hands initial focus to the first
-    // focusable in the tree — the "Back" button, which sat at the very
-    // bottom of the body. The LazyColumn then scrolled all the way down
-    // to it on entry, hiding the title. We park focus on the primary
-    // action instead (now rendered directly under the title), so the
-    // screen opens on the title with the remote ready on "play".
-    val playFocus = remember { FocusRequester() }
-    LaunchedEffect(details) {
-        if (details != null) runCatching { playFocus.requestFocus() }
-    }
+    // Park initial focus on the top-left Back (overlaid on the hero) so the
+    // screen opens at the TOP with the title fully readable, and pressing ↑
+    // from the Download action returns here. Auto-focusing the Download button
+    // instead scrolled the title off-screen and trapped focus at the bottom
+    // with nothing focusable above to scroll back up to.
+    val backFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { backFocus.requestFocus() } }
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item(key = "hero") {
-            Hero(meta = meta, tmdbId = tmdbId, fallbackTitle = details?.title ?: externalId)
+            Hero(
+                meta = meta,
+                tmdbId = tmdbId,
+                fallbackTitle = details?.title ?: externalId,
+                onBack = onBack,
+                backFocus = backFocus,
+                // Keep the hero to under half the viewport so the title +
+                // Download action sit together on screen — no scrolling the
+                // title out of view to reach the button.
+                modifier = Modifier.fillParentMaxHeight(0.46f),
+            )
         }
 
         item(key = "body") {
@@ -151,10 +161,10 @@ fun SearchDetailScreen(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 if (details?.freeleech == true) {
-                    BadgeChip("Freeleech", color = androidx.compose.ui.graphics.Color(0xFF10B981))
+                    BadgeChip("Freeleech", color = IrisColors.Success)
                 }
                 if (details?.exclusive == true) {
-                    BadgeChip("Exclusive", color = androidx.compose.ui.graphics.Color(0xFFF59E0B))
+                    BadgeChip("Exclusive", color = IrisColors.Warn)
                 }
             }
 
@@ -194,17 +204,13 @@ fun SearchDetailScreen(
                     )
                 }
                 Box(Modifier.weight(1f))
-                Button(
-                    onClick = onBack,
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
-                ) { Text("Back") }
                 if (kind == "tv") {
-                    Button(
-                        onClick = {
-                            if (following) return@Button
+                    IrisButton(
+                        if (following) "Following…" else "♥  Follow",
+                        {
+                            if (following) return@IrisButton
                             val title = details?.title
-                            if (title.isNullOrBlank()) return@Button
+                            if (title.isNullOrBlank()) return@IrisButton
                             following = true
                             error = null
                             scope.launch {
@@ -230,14 +236,14 @@ fun SearchDetailScreen(
                                 }
                             }
                         },
+                        variant = IrisButtonVariant.Ghost,
                         enabled = details != null && !following && !ingesting,
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
-                    ) { Text(if (following) "Following…" else "♥  Follow") }
+                    )
                 }
-                Button(
-                    onClick = {
-                        if (ingesting) return@Button
+                IrisButton(
+                    if (ingesting) "Starting…" else "▶  Download & play",
+                    {
+                        if (ingesting) return@IrisButton
                         ingesting = true
                         error = null
                         scope.launch {
@@ -273,13 +279,8 @@ fun SearchDetailScreen(
                             }
                         }
                     },
-                    modifier = Modifier.focusRequester(playFocus),
                     enabled = details != null && !ingesting,
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp),
-                ) {
-                    Text(if (ingesting) "Starting…" else "▶  Download & play")
-                }
+                )
             }
 
             if (loading) {
@@ -321,15 +322,18 @@ fun SearchDetailScreen(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun Hero(meta: TmdbMetadata?, tmdbId: Long?, fallbackTitle: String) {
+private fun Hero(
+    meta: TmdbMetadata?,
+    tmdbId: Long?,
+    fallbackTitle: String,
+    onBack: () -> Unit,
+    backFocus: FocusRequester,
+    modifier: Modifier = Modifier,
+) {
     val backdrop = tmdbBackdropUrl(meta?.backdropPath, "w1280")
     val poster = tmdbPosterUrl(meta?.posterPath, "w342")
     val layout = LocalTvLayout.current
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .aspectRatio(layout.heroAspect),
-    ) {
+    Box(modifier.fillMaxWidth()) {
         if (backdrop != null) {
             AsyncImage(
                 model = backdrop,
@@ -355,8 +359,8 @@ private fun Hero(meta: TmdbMetadata?, tmdbId: Long?, fallbackTitle: String) {
                     .background(
                         androidx.compose.ui.graphics.Brush.verticalGradient(
                             colors = listOf(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
-                                androidx.compose.ui.graphics.Color(0xFF0B0D12),
+                                IrisColors.Brand.copy(alpha = 0.30f),
+                                IrisColors.BackgroundDeep,
                             ),
                         ),
                     ),
@@ -369,11 +373,22 @@ private fun Hero(meta: TmdbMetadata?, tmdbId: Long?, fallbackTitle: String) {
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(start = layout.gutterHorizontal, bottom = Spacing.xl)
-                    .width(if (layout.gutterHorizontal >= 32.dp) 140.dp else 110.dp)
+                    .width(if (layout.gutterHorizontal >= 32.dp) 104.dp else 84.dp)
                     .aspectRatio(2f / 3f),
                 contentScale = ContentScale.Crop,
             )
         }
+        // Focusable Back at the top-left — holds initial focus so the screen
+        // opens at the top (title readable) and ↑ from the actions returns here.
+        TvIconButton(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Back",
+            onClick = onBack,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = layout.gutterHorizontal, top = Spacing.lg)
+                .focusRequester(backFocus),
+        )
     }
 }
 
@@ -396,7 +411,10 @@ private fun VideoFacts(v: VideoInfoDetails) {
         v.resolution?.let { ChipText(it) }
         v.fps?.let { ChipText("${"%.2f".format(it)} fps") }
         v.bitrateKbps?.let { ChipText("${it.formatThousands()} kb/s") }
-        v.hdr?.let { ChipText(it, accent = true) }
+        // HDR/DV: keep just the format name (the raw field can be
+        // "Dolby Vision, Version 1.0, dvhe.08…") and render it as a normal
+        // chip — the old amber accent looked garish on a 10-foot screen.
+        v.hdr?.takeIf { it.isNotBlank() }?.let { ChipText(it.substringBefore(",").trim()) }
         v.durationSecs?.let {
             Text(
                 "· ${formatRuntime(it)}",
@@ -469,11 +487,7 @@ private fun SectionLabel(label: String) {
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun ChipText(text: String, accent: Boolean = false) {
-    val bg = if (accent) {
-        androidx.compose.ui.graphics.Color(0xFFF59E0B)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant
-    }
+    val bg = if (accent) IrisColors.Warn else MaterialTheme.colorScheme.surfaceVariant
     Surface(
         shape = RoundedCornerShape(6.dp),
         colors = SurfaceDefaults.colors(containerColor = bg),
@@ -481,7 +495,7 @@ private fun ChipText(text: String, accent: Boolean = false) {
         Text(
             text,
             style = MaterialTheme.typography.labelLarge,
-            color = if (accent) androidx.compose.ui.graphics.Color.Black else MaterialTheme.colorScheme.onSurface,
+            color = if (accent) IrisColors.OnBrand else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
         )
     }

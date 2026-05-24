@@ -20,15 +20,16 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import androidx.tv.material3.Button
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.screens.CollectionScreen
 import studio.kahn.iris.tv.ui.screens.DetailScreen
 import studio.kahn.iris.tv.ui.screens.HomeScreen
+import studio.kahn.iris.tv.ui.screens.LibraryScreen
 import studio.kahn.iris.tv.ui.screens.PairingScreen
 import studio.kahn.iris.tv.ui.screens.SearchDetailScreen
 import studio.kahn.iris.tv.ui.screens.SearchScreen
@@ -42,6 +43,7 @@ object Routes {
     const val PAIRING = "pairing"
     const val SETUP = "setup"
     const val HOME = "home"
+    const val LIBRARY = "library"
     const val DETAIL = "detail/{infohash}"
     const val SETTINGS = "settings"
     const val TORRENTS = "torrents"
@@ -149,6 +151,9 @@ fun IrisRoot(
                     onOpenSearch = { query ->
                         navController.navigate(Routes.search(query))
                     },
+                    onOpenLibrary = {
+                        navController.navigate(Routes.LIBRARY)
+                    },
                     onPickResult = { providerId, externalId, tmdbId, kind ->
                         navController.navigate(
                             Routes.searchDetail(providerId, externalId, tmdbId, kind),
@@ -160,6 +165,15 @@ fun IrisRoot(
                     onOpenCollection = { collectionId ->
                         navController.navigate(Routes.collection(collectionId))
                     },
+                )
+            }
+            composable(Routes.LIBRARY) {
+                LibraryScreen(
+                    container = container,
+                    onOpenCollection = { collectionId ->
+                        navController.navigate(Routes.collection(collectionId))
+                    },
+                    onBack = { navController.popBackStack() },
                 )
             }
             composable(
@@ -399,9 +413,7 @@ private fun ClientOutdatedOverlay(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(onClick = onOpenSettings) {
-                Text("Open Settings")
-            }
+            IrisButton("Open Settings", onOpenSettings)
         }
     }
 }

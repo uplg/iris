@@ -6,9 +6,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.background
@@ -34,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
@@ -57,12 +65,32 @@ import studio.kahn.iris.tv.data.TmdbMetadata
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
+import studio.kahn.iris.tv.data.tmdbBackdropUrl
+import studio.kahn.iris.tv.ui.components.Eyebrow
+import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.MetaDot
+import studio.kahn.iris.tv.ui.components.IrisWordmark
+import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.TvIconButton
+import studio.kahn.iris.tv.ui.components.irisPosterBorder
+import studio.kahn.iris.tv.ui.components.irisPosterGlow
+import studio.kahn.iris.tv.ui.components.irisPosterPlaceholder
+import studio.kahn.iris.tv.ui.components.irisPosterScale
+import studio.kahn.iris.tv.ui.components.irisPosterShape
+import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
+import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.theme.irisAmbient
 
 /**
  * SCENE-normalisation kept in sync with iris-media's `normalize_title`
@@ -106,6 +134,9 @@ fun HomeScreen(
     /** Open the search screen. When `query` is non-null the search runs
      *  immediately with that string pre-filled. */
     onOpenSearch: (query: String?) -> Unit,
+    /** Open the full Library grid (search + filters + sort). The Home
+     *  shelf below is just a recent-N preview. */
+    onOpenLibrary: () -> Unit,
     /** Route to the detail screen for a (provider, externalId) pair —
      *  same destination as picking a search result. Used by Featured
      *  cards so the user previews before deciding to follow / play.
@@ -219,53 +250,99 @@ fun HomeScreen(
     }
 
     val layout = LocalTvLayout.current
+    Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
+        // Ambient backlight wash (web `.ambient`) — a fixed, faint violet
+        // glow behind the scrolling content. Decorative only.
+        Box(Modifier.fillMaxSize().background(irisAmbient()))
+        HomeContent(
+            layout = layout,
+            error = error,
+            loading = loading,
+            continueWatching = continueWatching,
+            downloading = downloading,
+            library = library,
+            watchlist = watchlist,
+            featured = featured,
+            collections = collections,
+            container = container,
+            onPickFile = onPickFile,
+            onPickTorrent = onPickTorrent,
+            onPickResult = onPickResult,
+            onOpenSettings = onOpenSettings,
+            onOpenTorrents = onOpenTorrents,
+            onOpenSearch = onOpenSearch,
+            onOpenLibrary = onOpenLibrary,
+            onOpenCollection = onOpenCollection,
+            onRetry = { loadVersion++ },
+        )
+    }
+
+    @Suppress("UNUSED_EXPRESSION") scope
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun HomeContent(
+    layout: studio.kahn.iris.tv.ui.theme.TvLayout,
+    error: String?,
+    loading: Boolean,
+    continueWatching: List<ContinueWatchingItem>,
+    downloading: List<TorrentView>,
+    library: List<TorrentView>,
+    watchlist: List<WatchlistItem>,
+    featured: FeaturedResponse?,
+    collections: List<CollectionListItem>,
+    container: AppContainer,
+    onPickFile: (String, Int) -> Unit,
+    onPickTorrent: (String) -> Unit,
+    onPickResult: (String, String, Long?, String?) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenTorrents: () -> Unit,
+    onOpenSearch: (String?) -> Unit,
+    onOpenLibrary: () -> Unit,
+    onOpenCollection: (String) -> Unit,
+    onRetry: () -> Unit,
+) {
     LazyColumn(
         modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        // Vertical-only contentPadding here. Horizontal gutter is
-        // applied per-item: shelves manage it themselves (so the
-        // first card's focus scale can bleed outside the title's
-        // column without being clipped to the LazyColumn bounds),
-        // and the non-shelf items (header / error / loading) wear
-        // it via a Modifier.padding below.
-        contentPadding = PaddingValues(vertical = layout.gutterVertical),
+            .fillMaxSize(),
+        // No TOP inset: the hero's backdrop bleeds to the screen's top edge
+        // (the top bar rides on it). Bottom inset only. Horizontal gutter is
+        // applied per-item (shelves manage their own so a focused card can
+        // scale past the title column without clipping).
+        contentPadding = PaddingValues(bottom = layout.gutterVertical),
         verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
     ) {
-        // Brand on the left, action chips (Search / Settings) pinned to the
-        // right edge — TV remotes lose any button that lives at the bottom of
-        // a vertical list once the focus drops into the shelves below.
-        item(key = "header") {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = layout.gutterHorizontal),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    "Iris  /",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold,
+        // When there's a resume pick, the brand + actions ride ON the hero
+        // backdrop at the top, with the resume content pushed to the bottom of
+        // the (tall) billboard — backdrop stuck to the screen top, no seam.
+        // Otherwise the top bar is a standalone header.
+        val resumePick = continueWatching.firstOrNull()
+        val topBar: @Composable () -> Unit = {
+            HomeTopBar(
+                onOpenSearch = onOpenSearch,
+                onOpenLibrary = onOpenLibrary,
+                onOpenTorrents = onOpenTorrents,
+                onOpenSettings = onOpenSettings,
+            )
+        }
+        if (resumePick != null) {
+            item(key = "hero") {
+                ResumeHero(
+                    container = container,
+                    item = resumePick,
+                    onResume = { onPickFile(resumePick.infohash, resumePick.fileIdx) },
+                    topBar = topBar,
+                    modifier = Modifier.fillParentMaxHeight(0.78f),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TvIconButton(
-                        icon = Icons.Filled.Search,
-                        contentDescription = "Search",
-                        onClick = { onOpenSearch(null) },
-                    )
-                    TvIconButton(
-                        icon = Icons.Filled.Storage,
-                        contentDescription = "Seedbox / Torrents",
-                        onClick = onOpenTorrents,
-                    )
-                    TvIconButton(
-                        icon = Icons.Filled.Settings,
-                        contentDescription = "Settings",
-                        onClick = onOpenSettings,
-                    )
-                }
+            }
+        } else {
+            item(key = "header") {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = layout.gutterHorizontal, vertical = layout.gutterVertical),
+                ) { topBar() }
             }
         }
 
@@ -276,9 +353,9 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(error!!, color = MaterialTheme.colorScheme.error)
+                    Text(error, color = MaterialTheme.colorScheme.error)
                     Button(
-                        onClick = { loadVersion++ },
+                        onClick = onRetry,
                         shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     ) {
@@ -299,7 +376,7 @@ fun HomeScreen(
 
         if (continueWatching.isNotEmpty()) {
             item(key = "shelf-cw") {
-                Shelf(title = "Continue watching") {
+                Shelf(title = "Continue Watching", eyebrow = "For you") {
                     items(continueWatching, key = { "${it.infohash}:${it.fileIdx}" }) { item ->
                         ContinueWatchingCard(
                             container = container,
@@ -317,8 +394,16 @@ fun HomeScreen(
         // discovery shelves.
         if (collections.isNotEmpty()) {
             item(key = "shelf-library") {
-                Shelf(title = "Library · ${collections.size}") {
-                    items(collections, key = { it.id }) { c ->
+                // Recent-N preview only — the full, searchable/sortable grid
+                // lives on the dedicated Library screen, opened from the
+                // "See all" action on the shelf title (↑ from the row) or the
+                // header icon. One horizontal row doesn't scale to a big lib.
+                Shelf(
+                    title = "My Library",
+                    eyebrow = "On disk · ${collections.size}",
+                    onSeeAll = onOpenLibrary,
+                ) {
+                    items(collections.take(12), key = { it.id }) { c ->
                         CollectionCard(
                             container = container,
                             collection = c,
@@ -338,7 +423,7 @@ fun HomeScreen(
 
         if (watchlist.isNotEmpty()) {
             item(key = "shelf-watchlist") {
-                Shelf(title = "My Watchlist · ${watchlist.size}") {
+                Shelf(title = "My Watchlist", eyebrow = "Following · ${watchlist.size}") {
                     items(watchlist, key = { it.id }) { w ->
                         // Post-0.4: the Watchlist item's `id` IS
                         // the collection id (sourced from
@@ -361,7 +446,7 @@ fun HomeScreen(
         featured?.let { f ->
             if (f.movies.isNotEmpty()) {
                 item(key = "shelf-featured-movies") {
-                    Shelf(title = "New Movies · ${f.movies.size}") {
+                    Shelf(title = "New Movies", eyebrow = "Fresh · ${f.movies.size}") {
                         items(f.movies, key = { "${it.providerId}:${it.externalId}" }) { r ->
                             FeaturedCard(
                                 container = container,
@@ -376,7 +461,7 @@ fun HomeScreen(
             }
             if (f.series.isNotEmpty()) {
                 item(key = "shelf-featured-series") {
-                    Shelf(title = "New Series · ${f.series.size}") {
+                    Shelf(title = "New Series", eyebrow = "Fresh · ${f.series.size}") {
                         items(f.series, key = { "${it.providerId}:${it.externalId}" }) { r ->
                             FeaturedCard(
                                 container = container,
@@ -403,7 +488,7 @@ fun HomeScreen(
 
         if (downloading.isNotEmpty()) {
             item(key = "shelf-downloading") {
-                Shelf(title = "Downloading · ${downloading.size}") {
+                Shelf(title = "Downloading", eyebrow = "Active · ${downloading.size}") {
                     items(downloading, key = { it.infohash }) { t ->
                         DownloadingCard(
                             container = container,
@@ -416,8 +501,6 @@ fun HomeScreen(
         }
 
     }
-
-    @Suppress("UNUSED_EXPRESSION") scope
 }
 
 private val VIDEO_EXTS = listOf(".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv")
@@ -486,10 +569,15 @@ private fun routeTorrent(
  * Callers pass a `LazyListScope` block — just `items(...) { … }` —
  * keeping the call sites short.
  */
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun Shelf(
     title: String,
+    eyebrow: String? = null,
+    /** When set, renders a focusable "See all →" action on the right of the
+     *  shelf title (web `.shelf-head` link / the design's shelf-head arrows).
+     *  Reached by pressing ↑ from the row — no walk to the end of the cards. */
+    onSeeAll: (() -> Unit)? = null,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
     val layout = LocalTvLayout.current
@@ -505,17 +593,266 @@ private fun Shelf(
             },
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        Text(
-            title.uppercase(),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = layout.gutterHorizontal),
-        )
+        // Eyebrow (Inter, uppercase, tracked) + display title (Cal Sans), with
+        // an optional compact "See all →" on the right (web `.shelf-head`
+        // link). Only that button is focusable — pressing ↑ from any card is
+        // redirected to it via `focusProperties` on the row, so it's reachable
+        // without a card-walk and without a heavy full-width focus border.
+        val seeAllFocus = remember { FocusRequester() }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = layout.gutterHorizontal),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (eyebrow != null) Eyebrow(eyebrow)
+                SectionTitle(title)
+            }
+            if (onSeeAll != null) {
+                IrisButton(
+                    "See all →",
+                    onSeeAll,
+                    variant = IrisButtonVariant.Ghost,
+                    focusedScale = 1.04f,
+                    modifier = Modifier.focusRequester(seeAllFocus),
+                )
+            }
+        }
         LazyRow(
+            // Redirect ↑ out of the row to the "See all" button. `up` only
+            // catches the card spatially under the button (the last one); the
+            // `exit` lambda fires for ANY child leaving the group upward, so
+            // every card can reach it. Needs `focusGroup()` to take effect.
+            modifier = if (onSeeAll != null) {
+                Modifier
+                    .focusGroup()
+                    .focusProperties {
+                        onExit = {
+                            if (requestedFocusDirection == FocusDirection.Up) {
+                                seeAllFocus.requestFocus()
+                            }
+                        }
+                    }
+            } else {
+                Modifier
+            },
             contentPadding = PaddingValues(horizontal = layout.gutterHorizontal),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             content = content,
         )
+    }
+}
+
+/**
+ * Brand wordmark + persistent action icons. Rendered either as a standalone
+ * home header or overlaid on the resume hero's backdrop (see [ResumeHero]).
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun HomeTopBar(
+    onOpenSearch: (String?) -> Unit,
+    onOpenLibrary: () -> Unit,
+    onOpenTorrents: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        IrisWordmark(fontSize = 34.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TvIconButton(
+                icon = Icons.Filled.Search,
+                contentDescription = "Search",
+                onClick = { onOpenSearch(null) },
+            )
+            TvIconButton(
+                icon = Icons.Filled.VideoLibrary,
+                contentDescription = "Library",
+                onClick = onOpenLibrary,
+            )
+            TvIconButton(
+                icon = Icons.Filled.Storage,
+                contentDescription = "Seedbox / Torrents",
+                onClick = onOpenTorrents,
+            )
+            TvIconButton(
+                icon = Icons.Filled.Settings,
+                contentDescription = "Settings",
+                onClick = onOpenSettings,
+            )
+        }
+    }
+}
+
+/**
+ * Full-bleed resume billboard — the latest Continue-Watching pick.
+ * 1:1 port of the web `ResumeHero` (`web/src/pages/HomePage.tsx`): backdrop
+ * at 50% opacity under bottom + left scrims, eyebrow "Continue tonight ·
+ * Resume", display title, dotted meta, overview, a Resume CTA, and a thin
+ * progress bar with "Xh Ym left". TMDB art is only pulled once the server
+ * has *verified* the match — a wrong backdrop on the giant hero is worse
+ * than the bare release name.
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun ResumeHero(
+    container: AppContainer,
+    item: ContinueWatchingItem,
+    onResume: () -> Unit,
+    topBar: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val layout = LocalTvLayout.current
+    // Trust the server's tmdb_id (ignore the runtime-verified flag) — the same
+    // pattern the Continue-Watching shelf cards and Detail use. Gating on
+    // tmdb_verified left the hero backdrop blank almost every time, since the
+    // flag is usually false even when the id is good (it's COALESCEd from the
+    // parent collection's resolved id).
+    var meta by remember(item.tmdbId) { mutableStateOf<TmdbMetadata?>(null) }
+    LaunchedEffect(item.tmdbId, item.kind) {
+        if (item.tmdbId == null) return@LaunchedEffect
+        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
+        meta = runCatching { container.apiFor(url).tmdbMetadata(item.tmdbId, item.kind) }.getOrNull()
+    }
+    val backdrop = tmdbBackdropUrl(meta?.backdropPath, "w1280")
+    val title = meta?.title
+        ?: prettifyFilename(item.filePath?.substringAfterLast('/') ?: item.torrentName)
+    val progress = item.durationSeconds?.takeIf { it > 0 }
+        ?.let { (item.positionSeconds / it).toFloat().coerceIn(0f, 1f) } ?: 0f
+    val remaining = item.durationSeconds?.takeIf { it > 0 }
+        ?.let { (it - item.positionSeconds).coerceAtLeast(0.0) } ?: 0.0
+    val metaParts = listOfNotNull(
+        meta?.year?.toString(),
+        if (item.kind == "tv") "Series" else "Movie",
+        meta?.numberOfSeasons?.let { "$it seasons" },
+    )
+
+    // The backdrop fills the whole hero (stuck to the screen's top edge). The
+    // top bar rides at the very top; a `Spacer(weight)` pushes the resume
+    // content to the BOTTOM so it never collides with the branding/nav.
+    Box(modifier.fillMaxWidth()) {
+        if (backdrop != null) {
+            AsyncImage(
+                model = backdrop,
+                contentDescription = title,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                alpha = 0.5f,
+            )
+        } else {
+            Box(Modifier.fillMaxSize().background(irisPosterPlaceholder()))
+        }
+        // Top fade (keeps the overlaid top bar legible), bottom fade (grounds
+        // the content), left fade (web hero gradients).
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    0.0f to IrisColors.Background.copy(alpha = 0.65f),
+                    0.25f to Color.Transparent,
+                    0.55f to Color.Transparent,
+                    1.0f to IrisColors.Background,
+                ),
+            ),
+        )
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.horizontalGradient(0f to IrisColors.Background, 0.7f to Color.Transparent),
+            ),
+        )
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(
+                    start = layout.gutterHorizontal,
+                    end = layout.gutterHorizontal,
+                    top = layout.gutterVertical,
+                    bottom = layout.gutterVertical,
+                ),
+        ) {
+            topBar()
+            Spacer(Modifier.weight(1f))
+            Column(
+                Modifier.fillMaxWidth(0.62f),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Eyebrow("Continue tonight", color = IrisColors.Brand)
+                    Eyebrow("· Resume")
+                }
+                Text(
+                    title,
+                    style = MaterialTheme.typography.displaySmall,
+                    color = IrisColors.Foreground,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (metaParts.isNotEmpty()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        metaParts.forEachIndexed { i, m ->
+                            if (i > 0) MetaDot()
+                            Text(m, style = MaterialTheme.typography.bodyMedium, color = IrisColors.MutedForeground)
+                        }
+                    }
+                }
+                meta?.overview?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = IrisColors.MutedForeground,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                IrisButton("Resume", onResume, icon = Icons.Filled.PlayArrow)
+                if (progress > 0f) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Box(
+                            Modifier
+                                .width(220.dp)
+                                .height(4.dp)
+                                .background(IrisColors.Elev2, RoundedCornerShape(Radius.pill)),
+                        ) {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth(progress)
+                                    .height(4.dp)
+                                    .background(IrisColors.Brand, RoundedCornerShape(Radius.pill)),
+                            )
+                        }
+                        if (remaining > 0) {
+                            Text(
+                                fmtLeft(remaining),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = IrisColors.FgDim,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun fmtLeft(seconds: Double): String {
+    val total = seconds.toLong()
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return if (h > 0) {
+        "${h}h ${m.toString().padStart(2, '0')}m left"
+    } else {
+        "$m:${s.toString().padStart(2, '0')} left"
     }
 }
 
@@ -805,10 +1142,15 @@ private fun PosterCard(
     val barColor = progressColor ?: MaterialTheme.colorScheme.primary
 
     val layout = LocalTvLayout.current
+    val posterShape = RoundedCornerShape(Radius.poster)
     Card(
         onClick = onClick,
         modifier = Modifier.width(layout.shelfPosterWidth),
-        shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
+        shape = irisPosterShape(posterShape),
+        scale = irisPosterScale(),
+        border = irisPosterBorder(posterShape),
+        glow = irisPosterGlow(),
+        colors = CardDefaults.colors(containerColor = IrisColors.Card),
     ) {
         Column {
             Box(
@@ -825,41 +1167,24 @@ private fun PosterCard(
                         contentScale = ContentScale.Crop,
                     )
                 } else {
-                    // No-poster placeholder: the previous version showed a
-                    // huge 2-letter monogram which looked broken. We now
-                    // mimic a real poster — vertical gradient + a discrete
-                    // film-strip icon, with the title typeset in the lower
-                    // half so the card's identity is the *title*, not a
-                    // letter.
+                    // No-poster placeholder (web `.poster .fallback`): a
+                    // brand-tinted diagonal wash with the title typeset in the
+                    // Cal Sans display face along the lower edge, so the card's
+                    // identity is the *title*, not a monogram.
                     Box(
                         Modifier
                             .fillMaxSize()
-                            .background(
-                                androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    colors = listOf(
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
-                                        androidx.compose.ui.graphics.Color(0xFF0B0D12),
-                                    ),
-                                ),
-                            ),
+                            .background(irisPosterPlaceholder()),
                     )
-                    Column(
-                        Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 16.dp),
-                        verticalArrangement = Arrangement.SpaceBetween,
-                        horizontalAlignment = Alignment.CenterHorizontally,
+                    Box(
+                        Modifier.fillMaxSize().padding(14.dp),
+                        contentAlignment = Alignment.BottomStart,
                     ) {
                         Text(
-                            "🎬",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.55f),
-                        )
-                        Text(
                             displayTitle,
-                            style = MaterialTheme.typography.titleSmall,
+                            style = MaterialTheme.typography.headlineSmall,
                             color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.92f),
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 4,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            maxLines = 3,
                         )
                     }
                 }
@@ -913,8 +1238,10 @@ private fun PosterCard(
                 }
                 Text(
                     subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = studio.kahn.iris.tv.ui.theme.FontMono,
+                    ),
+                    color = IrisColors.FgDim,
                 )
             }
         }

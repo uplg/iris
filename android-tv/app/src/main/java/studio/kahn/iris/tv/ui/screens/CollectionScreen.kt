@@ -31,6 +31,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.BorderStroke
+import androidx.tv.material3.Border
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
@@ -55,8 +57,14 @@ import studio.kahn.iris.tv.data.SeasonPackEntry
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.components.Eyebrow
+import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 import studio.kahn.iris.tv.ui.components.LanguageBadge
+import studio.kahn.iris.tv.ui.theme.Focus
+import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
+import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
 
 private val VIDEO_EXTS_C = listOf(
@@ -212,10 +220,8 @@ fun CollectionScreen(
             // SCENE-aware inside the snapshot, so no client-side reorder
             // is needed.
             item(key = "files-header") {
-                Text(
-                    "Files".uppercase(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Eyebrow(
+                    "Files",
                     modifier = Modifier.padding(
                         horizontal = layout.gutterHorizontal,
                         vertical = Spacing.md,
@@ -486,11 +492,7 @@ private fun CollectionHero(
                     }
                 }
             }
-            Button(
-                onClick = onBack,
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-            ) { Text("← Back") }
+            IrisButton("← Back", onBack, variant = IrisButtonVariant.Ghost)
         }
     }
 }
@@ -513,32 +515,29 @@ private fun SeasonTabs(seasons: List<Int>, value: Int, onChange: (Int) -> Unit) 
             // D-pad landed on it; fix by giving every state an
             // explicit colour. Same for `contentColor` so the text
             // stays readable on every surface.
-            val resting = if (selected) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.surfaceVariant
-            val focused = if (selected) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-            val textOnResting = if (selected) MaterialTheme.colorScheme.onPrimary
-            else MaterialTheme.colorScheme.onSurface
-            val textOnFocused = MaterialTheme.colorScheme.onPrimary
+            val pill = RoundedCornerShape(Radius.pill)
             Surface(
                 onClick = { onChange(s) },
-                shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                shape = ClickableSurfaceDefaults.shape(shape = pill),
                 // Disable the default focus scale — the tabs sit in a
                 // dense LazyRow and a 1.1× pop on focus shoves
-                // neighbours around.
+                // neighbours around. Focus reads as the brand ring + glow.
                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
                 colors = ClickableSurfaceDefaults.colors(
-                    containerColor = resting,
-                    focusedContainerColor = focused,
-                    pressedContainerColor = focused,
-                    contentColor = textOnResting,
-                    focusedContentColor = textOnFocused,
+                    containerColor = if (selected) IrisColors.Elev2 else IrisColors.Overlay06,
+                    focusedContainerColor = if (selected) IrisColors.Elev2 else IrisColors.Overlay12,
+                    contentColor = if (selected) IrisColors.Foreground else IrisColors.MutedForeground,
+                    focusedContentColor = IrisColors.Foreground,
+                ),
+                border = ClickableSurfaceDefaults.border(
+                    border = Border.None,
+                    focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = pill),
                 ),
             ) {
                 Text(
                     "Season $s",
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
         }
@@ -562,9 +561,9 @@ private fun EpisodeRow(
     // works for pack banners.
     Surface(
         modifier = Modifier.fillMaxWidth().height(72.dp),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(Radius.button),
         colors = SurfaceDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            containerColor = IrisColors.Overlay06,
             contentColor = MaterialTheme.colorScheme.onSurface,
         ),
     ) {
@@ -617,14 +616,18 @@ private fun VariantChip(
 ) {
     when (variant) {
         is EpisodeVariant.Downloaded -> {
+            val chipShape = RoundedCornerShape(Radius.button)
             Button(
                 onClick = { onPlay(variant.infohash, variant.fileIdx) },
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                shape = ButtonDefaults.shape(shape = chipShape),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 // Disable the default focused-scale pop — the chips
                 // sit in a dense row, a 1.1× zoom pushes neighbours
-                // off-screen on every D-pad move.
+                // off-screen on every D-pad move. Focus = brand ring + glow.
                 scale = ButtonDefaults.scale(focusedScale = 1f),
+                border = ButtonDefaults.border(
+                    focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = chipShape),
+                ),
             ) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -650,19 +653,23 @@ private fun VariantChip(
                 variant.seeders?.let { "${it}↑" },
                 variant.sizeBytes?.let { formatFileSize(it) },
             ).joinToString(" · ")
+            val grabShape = RoundedCornerShape(Radius.button)
             Button(
                 onClick = { onGrab(variant) },
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                shape = ButtonDefaults.shape(shape = grabShape),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 scale = ButtonDefaults.scale(focusedScale = 1f),
                 colors = ButtonDefaults.colors(
                     // Emerald tone for "available" so it visually
                     // reads different from the primary "Play"
                     // chip even though the focus mechanics match.
-                    containerColor = Color(0xFF10B981).copy(alpha = 0.20f),
-                    focusedContainerColor = Color(0xFF10B981).copy(alpha = 0.55f),
+                    containerColor = IrisColors.Success.copy(alpha = 0.20f),
+                    focusedContainerColor = IrisColors.Success.copy(alpha = 0.55f),
                     contentColor = MaterialTheme.colorScheme.onSurface,
                     focusedContentColor = Color.White,
+                ),
+                border = ButtonDefaults.border(
+                    focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = grabShape),
                 ),
             ) {
                 Row(
@@ -744,18 +751,8 @@ private fun SeasonPackBanner(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                Button(
-                    onClick = onPrepare,
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                    scale = ButtonDefaults.scale(focusedScale = 1f),
-                ) { Text("Prepare") }
-                Button(
-                    onClick = onGrab,
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-                    scale = ButtonDefaults.scale(focusedScale = 1f),
-                ) { Text("Grab & play") }
+                IrisButton("Prepare", onPrepare, variant = IrisButtonVariant.Ghost, focusedScale = 1f)
+                IrisButton("Grab & play", onGrab, focusedScale = 1f)
             }
         }
     }
@@ -769,16 +766,20 @@ private fun SeasonPackBanner(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun FileRow(file: FileEntry, onClick: () -> Unit) {
+    val rowShape = RoundedCornerShape(Radius.button)
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().height(64.dp),
-        shape = CardDefaults.shape(shape = RoundedCornerShape(8.dp)),
+        shape = CardDefaults.shape(shape = rowShape),
         scale = CardDefaults.scale(focusedScale = 1f),
         colors = CardDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            containerColor = IrisColors.Overlay06,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            focusedContainerColor = IrisColors.Overlay12,
             focusedContentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+        border = CardDefaults.border(
+            focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = rowShape),
         ),
     ) {
         Row(
@@ -829,10 +830,7 @@ private fun LoadingOrError(error: String?, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(error, color = MaterialTheme.colorScheme.error)
-                Button(
-                    onClick = onBack,
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                ) { Text("Back") }
+                IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost)
             }
         } else {
             Text("Loading collection…", color = MaterialTheme.colorScheme.onSurfaceVariant)

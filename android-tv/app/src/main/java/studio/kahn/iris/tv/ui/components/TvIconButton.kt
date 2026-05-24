@@ -14,14 +14,16 @@ import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
-import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
+import studio.kahn.iris.tv.ui.theme.Focus
+import studio.kahn.iris.tv.ui.theme.IrisColors
 
 /**
- * Circular icon-only button styled like the Android TV system shell:
- * a discreet surface chip that fills with primary on focus. Use it for
- * persistent actions on top bars (search, voice, settings) where the
- * label would compete with the rest of the UI.
+ * Circular icon-only button (web `.icon-btn`): fully transparent at rest, it
+ * fills with a faint white overlay and gains the design's brand focus ring +
+ * glow + lift on D-pad focus — discreet so it never competes with content.
+ * Use it for persistent top-bar actions (search, settings, seedbox) where a
+ * label would be noise.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -39,18 +41,19 @@ fun TvIconButton(
         enabled = enabled,
         modifier = modifier.size(size),
         shape = ClickableSurfaceDefaults.shape(shape = CircleShape),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            focusedContainerColor = MaterialTheme.colorScheme.primary,
-            focusedContentColor = MaterialTheme.colorScheme.onPrimary,
-            pressedContainerColor = MaterialTheme.colorScheme.primary,
-            pressedContentColor = MaterialTheme.colorScheme.onPrimary,
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            contentColor = IrisColors.MutedForeground,
+            focusedContainerColor = IrisColors.Overlay12,
+            focusedContentColor = IrisColors.Foreground,
+            pressedContainerColor = IrisColors.Overlay12,
+            pressedContentColor = IrisColors.Foreground,
         ),
         border = ClickableSurfaceDefaults.border(
             border = Border.None,
             focusedBorder = Border(
-                border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary),
+                border = BorderStroke(Focus.ring, IrisColors.Brand),
                 shape = CircleShape,
             ),
         ),
