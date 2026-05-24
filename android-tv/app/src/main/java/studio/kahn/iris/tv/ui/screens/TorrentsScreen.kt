@@ -46,6 +46,9 @@ import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.LibraryResponse
 import studio.kahn.iris.tv.data.TorrentView
+import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
 
@@ -53,13 +56,13 @@ private val VIDEO_EXTS = listOf(
     ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
 )
 
-// Fully-opaque surfaces — the screen background is near-black, so any
-// alpha-blended surface vanishes into it.
-private val CardBg = Color(0xFF1B1B20)
-private val PanelBg = Color(0xFF141418)
-private val Accent = Color(0xFFC084FC)
-private val Good = Color(0xFF34D399)
-private val Danger = Color(0xFFF87171)
+// Fully-opaque surfaces sourced from the shared design tokens so the
+// seedbox view reads as the same product as every other screen.
+private val CardBg = IrisColors.Card
+private val PanelBg = IrisColors.Elev2
+private val Accent = IrisColors.Brand
+private val Good = IrisColors.Success
+private val Danger = IrisColors.Destructive
 
 /**
  * Seedbox / raw-torrents management view. Reached from the Home top
@@ -167,7 +170,7 @@ fun TorrentsScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(IrisColors.Background),
     ) {
         // ---- Fixed top bar (never scrolls) ----
         Column(
@@ -203,12 +206,7 @@ fun TorrentsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Button(
-                    onClick = onBack,
-                    scale = ButtonDefaults.scale(focusedScale = 1f),
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-                ) { Text("← Back") }
+                IrisButton("← Back", onBack, variant = IrisButtonVariant.Ghost, focusedScale = 1f)
             }
             list?.let { SummaryStrip(it, totalUploaded) }
             error?.let {
@@ -499,7 +497,7 @@ private fun ProgressBar(pct: Float, finished: Boolean) {
         Modifier
             .fillMaxWidth()
             .height(6.dp)
-            .background(Color(0xFF3A3A42), RoundedCornerShape(3.dp)),
+            .background(IrisColors.Elev2, RoundedCornerShape(3.dp)),
     ) {
         Box(
             Modifier
@@ -515,9 +513,9 @@ private fun ProgressBar(pct: Float, finished: Boolean) {
 private fun StateBadge(state: String) {
     val (label, color) = when (state) {
         "live" -> "live" to Good
-        "paused" -> "paused" to Color(0xFFF59E0B)
+        "paused" -> "paused" to IrisColors.Warn
         "error" -> "error" to Danger
-        else -> "starting" to Color(0xFF8B8B95)
+        else -> "starting" to IrisColors.FgDim
     }
     Surface(
         shape = RoundedCornerShape(5.dp),
@@ -527,7 +525,7 @@ private fun StateBadge(state: String) {
             label.uppercase(),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
-            color = Color(0xFF0B0D12),
+            color = IrisColors.OnBrand,
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
         )
     }

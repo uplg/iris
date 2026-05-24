@@ -1,13 +1,12 @@
 package studio.kahn.iris.tv.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -21,8 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -33,6 +31,11 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.DeviceCodeRequest
 import studio.kahn.iris.tv.data.DeviceCodeResponse
 import studio.kahn.iris.tv.data.IrisSession
+import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.IrisWordmark
+import studio.kahn.iris.tv.ui.theme.IrisColors
+import studio.kahn.iris.tv.ui.theme.irisAmbient
 
 /**
  * Default unauthenticated screen on TV. Asks for the Iris URL, then walks
@@ -106,7 +109,8 @@ fun PairingScreen(
         }
     }
 
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(IrisColors.Background), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().background(irisAmbient()))
         if (pairing == null) {
             // Step 1: ask for the URL, generate code.
             Column(
@@ -114,11 +118,7 @@ fun PairingScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(
-                    "Iris  /",
-                    style = MaterialTheme.typography.displayMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                IrisWordmark(fontSize = 52.sp)
                 Text(
                     "Pair this TV with your Iris account",
                     style = MaterialTheme.typography.bodyMedium,
@@ -137,9 +137,10 @@ fun PairingScreen(
                 error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error)
                 }
-                Button(
-                    onClick = {
-                        if (pending) return@Button
+                IrisButton(
+                    if (pending) "Generating…" else "Generate pairing code",
+                    {
+                        if (pending) return@IrisButton
                         pending = true
                         error = null
                         scope.launch {
@@ -156,11 +157,7 @@ fun PairingScreen(
                         }
                     },
                     enabled = !pending && serverUrl.isNotBlank(),
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
-                ) {
-                    Text(if (pending) "Generating…" else "Generate pairing code")
-                }
+                )
                 androidx.compose.material3.TextButton(
                     onClick = onUsePassword,
                     modifier = Modifier.padding(top = 24.dp),
@@ -211,12 +208,7 @@ fun PairingScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Button(
-                    onClick = { pairing = null },
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                ) {
-                    Text("Cancel")
-                }
+                IrisButton("Cancel", { pairing = null }, variant = IrisButtonVariant.Ghost)
             }
         }
     }

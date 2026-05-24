@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,8 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
+import androidx.compose.foundation.BorderStroke
+import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
@@ -47,7 +46,12 @@ import studio.kahn.iris.tv.data.EpisodesResponse
 import studio.kahn.iris.tv.data.FollowSummary
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.theme.Focus
+import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
+import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
 
 /**
@@ -249,8 +253,8 @@ private fun Hero(
                 Modifier.fillMaxSize().background(
                     androidx.compose.ui.graphics.Brush.verticalGradient(
                         colors = listOf(
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
-                            androidx.compose.ui.graphics.Color(0xFF0B0D12),
+                            IrisColors.Brand.copy(alpha = 0.30f),
+                            IrisColors.BackgroundDeep,
                         ),
                     ),
                 ),
@@ -304,17 +308,13 @@ private fun Hero(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Button(
-                    onClick = onUnfollow,
+                IrisButton(
+                    "Unfollow",
+                    onUnfollow,
+                    variant = IrisButtonVariant.Ghost,
                     enabled = !unfollowBusy && follow != null,
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-                ) { Text("Unfollow") }
-                Button(
-                    onClick = onBack,
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                ) { Text("Back") }
+                )
+                IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost)
             }
         }
     }
@@ -326,20 +326,26 @@ private fun SeasonTabs(seasons: List<Int>, value: Int, onChange: (Int) -> Unit) 
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(seasons) { s ->
             val selected = s == value
+            val pill = RoundedCornerShape(Radius.pill)
             Surface(
                 onClick = { onChange(s) },
-                shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                shape = ClickableSurfaceDefaults.shape(shape = pill),
+                scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
                 colors = ClickableSurfaceDefaults.colors(
-                    containerColor = if (selected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.surfaceVariant,
+                    containerColor = if (selected) IrisColors.Elev2 else IrisColors.Overlay06,
+                    focusedContainerColor = if (selected) IrisColors.Elev2 else IrisColors.Overlay12,
+                    contentColor = if (selected) IrisColors.Foreground else IrisColors.MutedForeground,
+                    focusedContentColor = IrisColors.Foreground,
+                ),
+                border = ClickableSurfaceDefaults.border(
+                    border = Border.None,
+                    focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = pill),
                 ),
             ) {
                 Text(
                     "Season $s",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (selected) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
         }
@@ -355,9 +361,9 @@ private fun EpisodeRow(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(Radius.button),
         colors = SurfaceDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            containerColor = IrisColors.Overlay06,
         ),
     ) {
         Row(
@@ -434,23 +440,15 @@ private fun EpisodeAction(
     onGrab: (EpisodeItem, Boolean) -> Unit,
 ) {
     if (ep.status == "downloaded" && ep.infohash != null && ep.fileIdx != null) {
-        Button(
-            onClick = { onPlay(ep.infohash, ep.fileIdx) },
-            shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-        ) { Text(if (ep.watched) "Watch again" else "Play") }
+        IrisButton(
+            if (ep.watched) "Watch again" else "Play",
+            { onPlay(ep.infohash, ep.fileIdx) },
+            focusedScale = 1f,
+        )
         return
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-            onClick = { onGrab(ep, false) },
-            shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-        ) { Text("Prepare") }
-        Button(
-            onClick = { onGrab(ep, true) },
-            shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
-        ) { Text("Play") }
+        IrisButton("Prepare", { onGrab(ep, false) }, variant = IrisButtonVariant.Ghost, focusedScale = 1f)
+        IrisButton("Play", { onGrab(ep, true) }, focusedScale = 1f)
     }
 }
