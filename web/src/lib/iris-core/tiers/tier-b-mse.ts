@@ -405,6 +405,10 @@ export const mountTierB: EngineMount = async (opts) => {
   // media-error diagnostic tell "errored right after mount/seek" from
   // "errored deep into steady playback".
   let lastConversionStartWall = 0;
+  // Wall-clock when the tab was last hidden — used to re-init the decode
+  // pipeline on return (Firefox/macOS drops the VideoToolbox HW decoder when
+  // backgrounded; see the `visibilitychange` handler).
+  let hiddenAtWall = 0;
   // Diagnostics for the Firefox "appendBuffer wedges in updating=true with no
   // updateend/error" failure (FF bug 1120084). Records which op is in flight; a
   // STALL showing `pendingOp=append updating=true` means the append is wedged
@@ -1181,6 +1185,35 @@ export const mountTierB: EngineMount = async (opts) => {
     });
   }
 
+  // Firefox/macOS releases the VideoToolbox HW HEVC decoder when the tab is
+  // backgrounded for a while; on return it throws `media error 3` on the next
+  // frame (the decoder session is gone — confirmed: `readyState=4`, deep into
+  // steady playback, right after a tab switch). Pre-empt it: when the tab
+  // becomes visible again after being hidden a moment, re-init the decode
+  // pipeline from the current position (clears the SourceBuffer + re-feeds from
+  // a keyframe → a fresh decoder session) BEFORE Firefox decodes a frame with
+  // the dead one. Reuses the seek-restart path — no MediaSource teardown, and
+  // the orphan-RASL drop in `videoP` keeps the restart keyframe clean. Chrome
+  // doesn't drop the decoder, so this is Firefox-only.
+  const onVisibility = () => {
+    if (disposed) return;
+    if (document.hidden) {
+      hiddenAtWall = performance.now();
+      return;
+    }
+    if (!firefox) return;
+    const hiddenMs = performance.now() - hiddenAtWall;
+    if (hiddenMs < 2000) return; // a quick glance — the decoder almost surely survived
+    const t = video.currentTime;
+    if (!Number.isFinite(t)) return;
+    console.warn(
+      `[iris-core] Tier B: tab visible after ${(hiddenMs / 1000).toFixed(0)}s hidden — ` +
+        `re-init decode pipeline at ${t.toFixed(1)}s (Firefox VideoToolbox decoder may be gone)`,
+    );
+    void restartConversionFromSeek(t);
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+
   // ---- Public handle ---------------------------------------------
 
   const dispose = async (): Promise<void> => {
@@ -1197,6 +1230,7 @@ export const mountTierB: EngineMount = async (opts) => {
     video.removeEventListener("waiting", onWaiting);
     video.removeEventListener("stalled", onWaiting);
     video.removeEventListener("timeupdate", onTimeUpdate);
+    document.removeEventListener("visibilitychange", onVisibility);
     try {
       await conversion?.cancel();
     } catch {
