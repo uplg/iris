@@ -433,8 +433,13 @@ export const mountTierB: EngineMount = async (opts) => {
       if (coveredEnd === Number.NEGATIVE_INFINITY) {
         // First range that covers (or sits just after) the playhead.
         if (start <= t + 0.5 && end >= t) coveredEnd = end;
-      } else if (start - coveredEnd <= 1) {
-        coveredEnd = end; // adjacent fragment (≤1 s gap) — keep walking
+      } else if (start - coveredEnd <= 2) {
+        // Adjacent fragment (≤2 s gap — fMP4 fragments often don't coalesce
+        // into one range). Bridge it so the back-pressure counts the TRUE
+        // forward buffer and throttles promptly (a ≤1 s under-bridge let it
+        // overshoot to ~100 s before settling). A genuine hole that wedges
+        // playback is larger than this and the playhead can't cross it anyway.
+        coveredEnd = end;
       } else {
         break; // genuine gap — the contiguous forward buffer ends here
       }
