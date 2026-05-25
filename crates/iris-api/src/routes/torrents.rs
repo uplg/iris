@@ -187,11 +187,12 @@ async fn put_progress(
     if body.completed {
         state.presence().remove(user.id.into()).await;
     } else {
-        let client = headers
+        let parsed = headers
             .get(crate::client_version::CLIENT_HEADER)
             .and_then(|h| h.to_str().ok())
-            .and_then(crate::client_version::ClientVersion::parse)
-            .map(|c| c.kind);
+            .and_then(crate::client_version::ClientVersion::parse);
+        let client = parsed.as_ref().map(|c| c.kind);
+        let client_version = parsed.as_ref().map(|c| c.version.to_string());
         let play_state = if body.playing.unwrap_or(true) {
             crate::presence::PlaybackState::Playing
         } else {
@@ -207,6 +208,7 @@ async fn put_progress(
                 duration_seconds: body.duration_seconds,
                 state: play_state,
                 client,
+                client_version,
             })
             .await;
     }

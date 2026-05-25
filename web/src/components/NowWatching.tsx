@@ -66,9 +66,13 @@ function SessionCard({ s }: { s: ActiveSession }) {
                 Paused
               </Badge>
             )}
-            <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-              <ClientIcon client={s.client} />
-              {elapsed(s.started_at)}
+            <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1" title={s.client ?? undefined}>
+                <ClientIcon client={s.client} />
+                {s.client_version ?? ""}
+              </span>
+              <span>·</span>
+              <span>{elapsed(s.started_at)}</span>
             </span>
           </div>
           <span className="truncate text-sm text-muted-foreground" title={s.torrent_name ?? ""}>

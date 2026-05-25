@@ -189,6 +189,7 @@ export type ActiveSession = {
   duration_seconds: number | null;
   state: "playing" | "paused";
   client: "web" | "tv" | null;
+  client_version: string | null;
   started_at: string;
   last_seen_at: string;
 };

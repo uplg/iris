@@ -50,6 +50,8 @@ struct ActiveSessionView {
     state: &'static str,
     /// `"web"` / `"tv"` when the client identified itself, else null.
     client: Option<&'static str>,
+    /// Semver of that client (the `version` half of `X-Iris-Client`).
+    client_version: Option<String>,
     started_at: chrono::DateTime<Utc>,
     last_seen_at: chrono::DateTime<Utc>,
 }
@@ -81,6 +83,7 @@ async fn active_sessions(
             duration_seconds: s.duration_seconds,
             state: s.state.as_str(),
             client: s.client.map(crate::client_version::ClientKind::as_str),
+            client_version: s.client_version,
             started_at: s.started_at,
             last_seen_at: s.last_seen_at,
         });

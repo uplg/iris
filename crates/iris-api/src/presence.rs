@@ -50,6 +50,10 @@ pub struct LiveSession {
     pub duration_seconds: Option<f64>,
     pub state: PlaybackState,
     pub client: Option<ClientKind>,
+    /// Semver of the client that sent the last heartbeat (the `version`
+    /// half of `X-Iris-Client: kind/version`). `None` for legacy clients
+    /// that don't stamp the header.
+    pub client_version: Option<String>,
     /// When this user started the *current* `(infohash, file_idx)`. Reset
     /// when they switch titles, preserved across heartbeats of the same one.
     pub started_at: DateTime<Utc>,
@@ -68,6 +72,7 @@ pub struct Heartbeat {
     pub duration_seconds: Option<f64>,
     pub state: PlaybackState,
     pub client: Option<ClientKind>,
+    pub client_version: Option<String>,
 }
 
 #[derive(Clone)]
@@ -104,6 +109,9 @@ impl Presence {
                 if hb.client.is_some() {
                     s.client = hb.client;
                 }
+                if hb.client_version.is_some() {
+                    s.client_version = hb.client_version;
+                }
                 s.last_seen_at = now_utc;
                 s.last_seen = now;
             }
@@ -118,6 +126,7 @@ impl Presence {
                         duration_seconds: hb.duration_seconds,
                         state: hb.state,
                         client: hb.client,
+                        client_version: hb.client_version,
                         started_at: now_utc,
                         last_seen_at: now_utc,
                         last_seen: now,
@@ -164,6 +173,7 @@ mod tests {
             duration_seconds: Some(100.0),
             state: PlaybackState::Playing,
             client: Some(ClientKind::Web),
+            client_version: Some("0.3.0".to_owned()),
         }
     }
 
