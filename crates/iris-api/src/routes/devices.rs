@@ -38,7 +38,6 @@ pub fn me_router() -> Router<AppState> {
 }
 
 const DEVICE_CODE_TTL_SECS: i64 = 600; // 10 minutes
-const DEVICE_REFRESH_TTL_SECS: i64 = 90 * 24 * 3600; // 90 days
 
 #[derive(Debug, Deserialize)]
 pub struct CreateCodeRequest {
@@ -125,7 +124,7 @@ async fn poll(
         &jar,
         user.id,
         user.is_admin,
-        Some(DEVICE_REFRESH_TTL_SECS),
+        Some(state.cfg().auth.device_refresh_ttl_secs),
         row.label.as_deref(),
         Some(&row.kind),
     )

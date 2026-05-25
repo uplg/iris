@@ -13,7 +13,6 @@ import okhttp3.Route
 import okhttp3.logging.HttpLoggingInterceptor
 import studio.kahn.iris.tv.BuildConfig
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 
 /** Standard `X-Iris-Client: <kind>/<semver>` header. Parsed server-side
  *  by `client_version::client_version_layer` for telemetry + the
@@ -132,7 +131,13 @@ fun deriveMediaOkHttpClient(api: OkHttpClient): OkHttpClient =
 class IrisAuthenticator(private val sessionStore: SessionStore) : Authenticator {
 
     @Volatile private var refreshClient: OkHttpClient? = null
-    private val refreshing = AtomicBoolean(false)
+    private val lock = Any()
+    // Bumped on every SUCCESSFUL refresh. A 401 thread reads it before taking
+    // the lock; if it advanced while the thread waited, another thread already
+    // refreshed → replay with the new cookie instead of burning a second
+    // refresh (a redundant refresh rotates the token again and can 401 the
+    // stragglers that are still mid-flight on the previous token).
+    @Volatile private var refreshGeneration = 0
 
     /** Wired by [buildOkHttpClient] once the client itself exists. */
     fun bind(client: OkHttpClient) {
@@ -153,29 +158,54 @@ class IrisAuthenticator(private val sessionStore: SessionStore) : Authenticator 
         // tried once, give up to avoid infinite retries.
         if (response.priorResponse != null) return null
 
-        if (!refreshing.compareAndSet(false, true)) {
-            // Another thread is already refreshing — let it finish, then just
-            // replay our original request which will pick up the new cookie.
-            return response.request.newBuilder().build()
-        }
-        try {
-            val baseUrl = runBlocking { sessionStore.serverUrl.first() } ?: return null
+        val genAtEntry = refreshGeneration
+        // Serialize concurrent 401s through one refresh. The OLD code used a
+        // non-blocking flag and replayed the other threads IMMEDIATELY — they
+        // re-sent the still-expired access token before the refresh landed,
+        // 401'd again, and surfaced as a spurious error. Holding the lock means
+        // stragglers wait for the in-flight refresh, then replay with the fresh
+        // cookie.
+        synchronized(lock) {
+            // Someone refreshed while we waited → just replay, don't refresh
+            // again.
+            if (refreshGeneration != genAtEntry) {
+                return response.request.newBuilder().build()
+            }
             val client = refreshClient ?: return null
+            val baseUrl = runBlocking { sessionStore.serverUrl.first() } ?: return null
             val refreshUrl = (if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/") + "api/auth/refresh"
             val refreshReq = Request.Builder()
                 .url(refreshUrl)
                 .post(ByteArray(0).toRequestBody())
                 .build()
-            val refreshRes = client.newCall(refreshReq).execute()
-            refreshRes.use { res ->
-                if (!res.isSuccessful) return null
+            val code = try {
+                client.newCall(refreshReq).execute().use { it.code }
+            } catch (_: Exception) {
+                // Network / IO error — NOT an auth failure. Leave the session
+                // intact so a retry (or the next launch) recovers; nuking it
+                // here would log the TV out on every Wi-Fi blip.
+                return null
             }
-            // CookieJar.saveFromResponse already persisted the new cookies.
-            return response.request.newBuilder().build()
-        } catch (_: Exception) {
-            return null
-        } finally {
-            refreshing.set(false)
+            return when {
+                code in 200..299 -> {
+                    // CookieJar.saveFromResponse already persisted the rotated
+                    // cookies.
+                    refreshGeneration++
+                    response.request.newBuilder().build()
+                }
+                code == 401 || code == 403 -> {
+                    // The refresh token itself is dead (expired / revoked /
+                    // server secret rotated). Replaying it forever is exactly
+                    // the "401 + Retry that never reconnects" trap. Drop the
+                    // session so the nav root routes the TV back to device
+                    // pairing instead of stranding the user.
+                    runBlocking { runCatching { sessionStore.clear() } }
+                    null
+                }
+                // 5xx / other: transient server-side, keep the session so the
+                // user can retry once the backend is back.
+                else -> null
+            }
         }
     }
 }

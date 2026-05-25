@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -100,6 +101,23 @@ fun IrisRoot(
         pendingWatch != null -> Routes.watch(pendingWatch.first, pendingWatch.second)
         pendingVoiceQuery != null -> Routes.search(pendingVoiceQuery, autoPlay = true)
         else -> Routes.HOME
+    }
+
+    // Session dropped underneath us — the refresh token died (expired / revoked)
+    // and the Authenticator cleared the stored session. `startDestination` is
+    // only honoured on first composition, so when `isAuthenticated` flips to
+    // false mid-session we must navigate explicitly; otherwise the TV is
+    // stranded on a screen that can only 401 (the "401 + Retry that never
+    // reconnects" report). Route back to pairing so the user can re-link.
+    LaunchedEffect(isAuthenticated) {
+        if (!isAuthenticated) {
+            val current = navController.currentDestination?.route
+            if (current != null && current != Routes.PAIRING) {
+                navController.navigate(Routes.PAIRING) {
+                    popUpTo(0) { inclusive = true }
+                }
+            }
+        }
     }
 
     val clientOutdated by container.clientOutdated.collectAsState()

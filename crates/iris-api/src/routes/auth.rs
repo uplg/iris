@@ -176,14 +176,24 @@ async fn refresh(
         .map(|c| c.value().to_owned())
         .ok_or(ApiError::Unauthorized)?;
 
-    let claims = state
-        .jwt()
-        .verify_refresh(&token)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let claims = state.jwt().verify_refresh(&token).map_err(|e| {
+        // Distinguishes a JWT-level failure (expired token / bad signature /
+        // rotated server secret) from a DB-level revocation below. Without
+        // this, an early "401 that never reconnects" on a paired TV is
+        // undiagnosable — we can't tell whether the token aged out, was
+        // rotated away, or the secret changed under it.
+        tracing::warn!(error = %e, "refresh rejected: token verify failed");
+        ApiError::Unauthorized
+    })?;
 
     let Some(prev) =
         iris_db::refresh_tokens::get_active_device_info(state.db(), claims.jti).await?
     else {
+        // Token is well-formed but not active in the DB: already rotated
+        // (its jti was revoked by a prior refresh), explicitly revoked, or
+        // expired server-side. This is the branch a rotation race / double
+        // refresh would hit.
+        tracing::warn!(jti = %claims.jti, "refresh rejected: refresh-token row not active (revoked/rotated/expired)");
         return Err(ApiError::Unauthorized);
     };
 
@@ -195,13 +205,18 @@ async fn refresh(
     iris_db::refresh_tokens::revoke(state.db(), claims.jti).await?;
     // Carry the device tagging forward across the rotation. Without this,
     // a paired TV's first refresh strips `device_kind` from the row and
-    // it disappears from the account-page device list. We also preserve
-    // the original token's longer lifetime by passing the remaining TTL
-    // — paired devices use a 90-day refresh, browsers use the configured
-    // default; either way, rotating shouldn't shorten what was issued.
-    let remaining_ttl = (prev.expires_at - chrono::Utc::now()).num_seconds().max(60);
+    // it disappears from the account-page device list.
+    //
+    // SLIDING window for devices: re-issue the FULL device TTL on every
+    // refresh rather than carrying the remaining lifetime. The old code
+    // passed `remaining_ttl`, which pinned the expiry to the original pairing
+    // — so a TV in daily use still hard-expired at pairing+90d and dumped the
+    // user onto a dead "401 / Retry" screen. A fresh full window means a TV in
+    // regular use never expires; only one left off for longer than the entire
+    // window needs re-pairing. Browsers keep `None` (the configured default,
+    // which is already re-issued fresh each refresh → also sliding).
     let ttl_override = if prev.device_kind.is_some() {
-        Some(remaining_ttl)
+        Some(state.cfg().auth.device_refresh_ttl_secs)
     } else {
         None
     };

@@ -21,6 +21,11 @@ torrent_port = 45100
 jwt_secret = "change-me-in-production"
 access_ttl_secs = 3600
 refresh_ttl_secs = 604800
+# Refresh-token lifetime for paired devices (Android TV). Sliding: every
+# refresh re-issues the full window, so a TV in regular use never logs out;
+# only one left off longer than this whole window needs re-pairing. Default
+# 1 year. Bump higher (e.g. 1095 days) for TVs that sit idle for months.
+device_refresh_ttl_secs = 31536000
 invitation_ttl_secs = 604800
 
 # The bootstrap admin user — created on first boot if the users table is

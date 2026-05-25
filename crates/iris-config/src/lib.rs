@@ -91,6 +91,15 @@ pub struct AuthConfig {
     pub access_ttl_secs: i64,
     #[serde(default = "default_refresh_ttl")]
     pub refresh_ttl_secs: i64,
+    /// Refresh-token lifetime for device-paired sessions (Android TV).
+    /// Much longer than the browser default: a TV is a trusted appliance on
+    /// the household LAN, the token is revocable from the account UI, and a
+    /// living-room device that 401s with a useless "Retry" is a terrible UX.
+    /// The window is SLIDING — every refresh re-issues the full TTL — so a
+    /// TV in regular use never expires; only one left off longer than this
+    /// whole window needs re-pairing.
+    #[serde(default = "default_device_refresh_ttl")]
+    pub device_refresh_ttl_secs: i64,
     #[serde(default = "default_invite_ttl")]
     pub invitation_ttl_secs: i64,
     #[serde(default)]
@@ -106,6 +115,9 @@ fn default_access_ttl() -> i64 {
 }
 fn default_refresh_ttl() -> i64 {
     7 * 24 * 3600
+}
+fn default_device_refresh_ttl() -> i64 {
+    365 * 24 * 3600 // 1 year, sliding
 }
 fn default_invite_ttl() -> i64 {
     7 * 24 * 3600
