@@ -140,6 +140,25 @@ fn spawn_background_jobs(
     // to run once at boot.
     tmdb_backfill::spawn(app_state.clone());
 
+    // One-shot at boot: complete episodes left stuck in-progress (e.g. "97 %")
+    // because the viewer skipped the credits and jumped ahead before the
+    // per-heartbeat "moved on ⇒ previous done" hook existed. Sweeps the whole
+    // backlog, including episodes several behind the current frontier (the
+    // live hook only reaches the immediate predecessor). Idempotent — a no-op
+    // once converged.
+    {
+        let db = app_state.db().clone();
+        tokio::spawn(async move {
+            match iris_db::playback::backfill_complete_superseded_episodes(&db).await {
+                Ok(n) if n > 0 => {
+                    tracing::info!(completed = n, "backfilled superseded-episode completions");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "superseded-episode backfill failed"),
+            }
+        });
+    }
+
     // Collection assignment backfill — attaches a `collections` row to
     // every existing torrent that lacks one. Runs at boot AND every
     // 5 min after that — the engine's snapshot list isn't fully

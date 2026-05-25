@@ -67,6 +67,95 @@ pub async fn list_for_torrent(
     .await
 }
 
+/// "Moved on to the next episode" ⇒ the previous one is done.
+///
+/// Given the episode the user just sent a heartbeat for (`current_*`), find the
+/// LATEST earlier episode of the same collection that the user had STARTED but
+/// not finished, and mark it completed. This is what stops an episode lingering
+/// at "97 %" when the viewer skips the credits and jumps to the next one — the
+/// `position >= duration - 30s` rule never fires for a long outro.
+///
+/// Scoped to episodes the user actually has an in-progress row for, so it never
+/// fabricates completion for a skipped/unwatched episode, and it's idempotent
+/// (the `completed = 0` guards make it a no-op once the predecessor is done).
+/// Runs server-side in the progress handler, so web AND TV get it for free.
+/// No-op for movies / the first episode (no matching `episode_files` row).
+pub async fn complete_previous_episode(
+    pool: &SqlitePool,
+    user_id: UserId,
+    current_infohash: &str,
+    current_file_idx: i64,
+) -> Result<bool, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    // 1. Find the latest earlier episode (same collection) the user STARTED
+    //    but hasn't finished. Plain multi-column SELECT — no exotic SQL.
+    let prev: Option<(String, i64)> = sqlx::query_as(
+        "SELECT prev.infohash, prev.file_idx \
+         FROM episode_files cur \
+         JOIN episode_files prev ON prev.collection_id = cur.collection_id \
+         JOIN playback_progress p \
+           ON p.infohash = prev.infohash AND p.file_idx = prev.file_idx \
+         WHERE cur.infohash = ?2 AND cur.file_idx = ?3 \
+           AND p.user_id = ?1 AND p.completed = 0 \
+           AND (prev.season < cur.season \
+                OR (prev.season = cur.season AND prev.episode < cur.episode)) \
+         ORDER BY prev.season DESC, prev.episode DESC \
+         LIMIT 1",
+    )
+    .bind(user)
+    .bind(current_infohash)
+    .bind(current_file_idx)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((infohash, file_idx)) = prev else {
+        return Ok(false);
+    };
+
+    // 2. Mark it completed (idempotent via the `completed = 0` guard).
+    let res = sqlx::query(
+        "UPDATE playback_progress SET completed = 1 \
+         WHERE user_id = ?1 AND infohash = ?2 AND file_idx = ?3 AND completed = 0",
+    )
+    .bind(user)
+    .bind(&infohash)
+    .bind(file_idx)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// One-shot historical cleanup: complete every in-progress episode the user
+/// has since moved PAST — i.e. there's a LATER episode of the same collection
+/// that the same user has any playback for. Sweeps the backlog of episodes
+/// left stuck at e.g. "97 %" before [`complete_previous_episode`] existed,
+/// including ones several episodes behind the current frontier (which the
+/// per-heartbeat hook, scoped to the immediate predecessor, won't reach).
+///
+/// Idempotent (the `completed = 0` guard) — safe to run on every boot; a no-op
+/// once everything has converged. Returns the number of rows completed.
+pub async fn backfill_complete_superseded_episodes(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE playback_progress SET completed = 1 \
+         WHERE completed = 0 \
+           AND EXISTS ( \
+             SELECT 1 \
+             FROM episode_files ef \
+             JOIN episode_files later ON later.collection_id = ef.collection_id \
+             JOIN playback_progress lp \
+               ON lp.infohash = later.infohash AND lp.file_idx = later.file_idx \
+             WHERE ef.infohash = playback_progress.infohash \
+               AND ef.file_idx = playback_progress.file_idx \
+               AND lp.user_id = playback_progress.user_id \
+               AND (later.season > ef.season \
+                    OR (later.season = ef.season AND later.episode > ef.episode)) \
+           )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 pub async fn upsert(pool: &SqlitePool, p: UpsertProgress) -> Result<(), sqlx::Error> {
     let user: Uuid = p.user_id.into();
     sqlx::query(

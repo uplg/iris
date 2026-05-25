@@ -182,6 +182,17 @@ async fn put_progress(
     )
     .await?;
 
+    // "Moved on to the next episode" ⇒ the one before it is done. Skipping the
+    // credits and jumping to the next episode otherwise leaves the prior one
+    // stuck at e.g. 97 % (the `position >= duration - 30s` completion rule
+    // never fires for a long outro). Server-side so web + TV both get it.
+    // Best-effort: a failure here must never fail the progress save.
+    if let Err(e) =
+        iris_db::playback::complete_previous_episode(state.db(), user.id, &infohash, file_idx).await
+    {
+        tracing::debug!(error = %e, "complete_previous_episode failed");
+    }
+
     // Live presence: a completed playback leaves the "now watching" set;
     // any other heartbeat refreshes it.
     if body.completed {
