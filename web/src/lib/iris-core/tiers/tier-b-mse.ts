@@ -1089,27 +1089,67 @@ export const mountTierB: EngineMount = async (opts) => {
               // Transcode: AudioSampleSink uses our registered libav
               // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
               // AudioSampleSource encodes them to AAC via WebCodecs.
+              //
+              // DIAGNOSTIC (AC-3-in-MP4 silent-stall hunt): these logs pin
+              // WHERE the audio feed dies when `audioFedMax` stays 0 and the
+              // muxer never emits a fragment. The three signatures:
+              //   • "transcode start" but NEVER "first sample" + NEVER "ended"
+              //       → the sink is BLOCKED before yielding (byte-read hang on a
+              //         non-interleaved MP4 whose audio bytes aren't downloaded,
+              //         or a decoder deadlock). [hypothesis 3 / decode-hang]
+              //   • "ended after 0 samples" → the decode produced nothing without
+              //         throwing (data/codec issue swallowed by mediabunny). [1]
+              //   • "first sample decoded" but audioFedMax stays 0 → the ENCODER
+              //         (`source.add`) hangs on the first sample. [2]
               const sampleSink = new AudioSampleSink(audioTrack);
-              for await (const sample of sampleSink.samples(seekStart, Infinity)) {
-                if (disposed || newGen !== conversionGeneration) {
+              console.log(
+                `[iris-core] Tier B: audio transcode start — src=${chosenAudio?.codec} ` +
+                  `ch=${chosenAudio?.channels} sr=${chosenAudio?.sample_rate} → ` +
+                  `${encoderChoice?.codec} ${encoderChoice?.channels}ch (seek=${seekStart.toFixed(1)}s)`,
+              );
+              let audioSamples = 0;
+              try {
+                for await (const sample of sampleSink.samples(seekStart, Infinity)) {
+                  if (audioSamples === 0) {
+                    console.log(
+                      `[iris-core] Tier B: first audio sample decoded — fmt=${sample.format} ` +
+                        `ch=${sample.numberOfChannels} sr=${sample.sampleRate} t=${sample.timestamp.toFixed(2)}s`,
+                    );
+                  }
+                  if (disposed || newGen !== conversionGeneration) {
+                    sample.close();
+                    break;
+                  }
+                  await waitTrackBalance(sample.timestamp, () => videoFedMax);
+                  if (disposed || newGen !== conversionGeneration) {
+                    sample.close();
+                    break;
+                  }
+                  await waitBufferRoom(sample.timestamp);
+                  if (disposed || newGen !== conversionGeneration) {
+                    sample.close();
+                    break;
+                  }
+                  if (audioSamples === 0) console.log("[iris-core] Tier B: encoding first audio sample…");
+                  await audioFeed.source.add(sample);
+                  if (audioSamples === 0) console.log("[iris-core] Tier B: first audio sample encoded + queued");
+                  audioSamples += 1;
+                  if (sample.timestamp > audioFedMax) audioFedMax = sample.timestamp;
+                  notifyTrackProgress();
                   sample.close();
-                  break;
                 }
-                await waitTrackBalance(sample.timestamp, () => videoFedMax);
-                if (disposed || newGen !== conversionGeneration) {
-                  sample.close();
-                  break;
-                }
-                await waitBufferRoom(sample.timestamp);
-                if (disposed || newGen !== conversionGeneration) {
-                  sample.close();
-                  break;
-                }
-                await audioFeed.source.add(sample);
-                if (sample.timestamp > audioFedMax) audioFedMax = sample.timestamp;
-                notifyTrackProgress();
-                sample.close();
+              } catch (e) {
+                // mediabunny swallows CustomAudioDecoder failures inside the
+                // sample iterator on some paths → the loop ends silently and we
+                // stall forever. Surface it so it propagates to the Promise.all
+                // catch → clean demote to Tier F instead of an eternal stall.
+                console.error("[iris-core] Tier B: audio transcode loop threw", e);
+                throw e;
               }
+              console.log(
+                `[iris-core] Tier B: audio sink ended after ${audioSamples} samples ` +
+                  `(audioFedMax=${audioFedMax.toFixed(1)}s)`,
+              );
               await audioFeed.source.close();
             }
             // Audio done — stop gating video against a frozen audioFedMax.

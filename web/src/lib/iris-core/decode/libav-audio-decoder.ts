@@ -169,6 +169,13 @@ class LibavAudioDecoder extends CustomAudioDecoder {
   async init(): Promise<void> {
     this.libav = await getLibav();
     const name = mediabunnyToLibavCodecName(this.codec);
+    // DIAGNOSTIC: confirms our libav decoder was actually selected for the
+    // track (vs a native WebCodecs decoder mediabunny preferred), and with
+    // which config — part of the AC-3-in-MP4 silent-stall hunt.
+    console.log(
+      `[iris-core] libav decode init: codec=${this.codec}→${name} ` +
+        `sr=${this.config.sampleRate ?? "?"} ch=${this.config.numberOfChannels ?? "?"}`,
+    );
     const [ret, c, pkt, frame] = await this.libav.ff_init_decoder(name);
     if (ret < 0) {
       throw new Error(`libav: ff_init_decoder(${name}) returned ${ret}`);
