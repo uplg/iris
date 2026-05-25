@@ -146,25 +146,34 @@ pub struct ProgressUpdate {
     pub subtitle_track_idx: Option<i64>,
     #[serde(default)]
     pub completed: bool,
+    /// Whether the player is actively playing (vs paused) at the moment of
+    /// this heartbeat. Drives the admin "Now watching" presence state.
+    /// Additive + optional so legacy clients (which only heartbeat while
+    /// playing anyway) default to `Playing`.
+    #[serde(default)]
+    pub playing: Option<bool>,
 }
 
 async fn put_progress(
     State(state): State<AppState>,
     user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
+    headers: HeaderMap,
     Json(body): Json<ProgressUpdate>,
 ) -> ApiResult<StatusCode> {
     let infohash = infohash.to_ascii_lowercase();
     if !infohash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(ApiError::BadRequest("invalid infohash".into()));
     }
+    let file_idx = file_idx_to_i64(idx);
+    let position_seconds = body.position_seconds.max(0.0);
     iris_db::playback::upsert(
         state.db(),
         iris_db::playback::UpsertProgress {
             user_id: user.id,
-            infohash,
-            file_idx: file_idx_to_i64(idx),
-            position_seconds: body.position_seconds.max(0.0),
+            infohash: infohash.clone(),
+            file_idx,
+            position_seconds,
             duration_seconds: body.duration_seconds,
             audio_track_idx: body.audio_track_idx,
             subtitle_track_idx: body.subtitle_track_idx,
@@ -172,6 +181,35 @@ async fn put_progress(
         },
     )
     .await?;
+
+    // Live presence: a completed playback leaves the "now watching" set;
+    // any other heartbeat refreshes it.
+    if body.completed {
+        state.presence().remove(user.id.into()).await;
+    } else {
+        let client = headers
+            .get(crate::client_version::CLIENT_HEADER)
+            .and_then(|h| h.to_str().ok())
+            .and_then(crate::client_version::ClientVersion::parse)
+            .map(|c| c.kind);
+        let play_state = if body.playing.unwrap_or(true) {
+            crate::presence::PlaybackState::Playing
+        } else {
+            crate::presence::PlaybackState::Paused
+        };
+        state
+            .presence()
+            .touch(crate::presence::Heartbeat {
+                user_id: user.id.into(),
+                infohash,
+                file_idx,
+                position_seconds,
+                duration_seconds: body.duration_seconds,
+                state: play_state,
+                client,
+            })
+            .await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -175,6 +175,40 @@ export type RemuxJobView = {
   mtime: number | null;
 };
 
+/** A live "who's watching what" entry from `/admin/active-sessions`. */
+export type ActiveSession = {
+  user_id: string;
+  display_name: string;
+  infohash: string;
+  file_idx: number;
+  torrent_name: string | null;
+  tmdb_id: number | null;
+  tmdb_verified: boolean;
+  kind: MediaKind | null;
+  position_seconds: number;
+  duration_seconds: number | null;
+  state: "playing" | "paused";
+  client: "web" | "tv" | null;
+  started_at: string;
+  last_seen_at: string;
+};
+
+/** A recent playback row from `/admin/watch-history` (all users). */
+export type WatchHistoryEntry = {
+  user_id: string;
+  display_name: string;
+  infohash: string;
+  file_idx: number;
+  torrent_name: string;
+  tmdb_id: number | null;
+  tmdb_verified: boolean;
+  kind: MediaKind | null;
+  position_seconds: number;
+  duration_seconds: number | null;
+  completed: boolean;
+  last_watched_at: string;
+};
+
 export const admin = {
   listInvitations: () => api.get<Invitation[]>("/admin/invitations"),
   createInvitation: (ttl_secs?: number) =>
@@ -187,6 +221,9 @@ export const admin = {
     api.post<void>(`/admin/users/${userId}/password`, { new_password }),
   listRemux: () => api.get<RemuxJobView[]>("/admin/remux"),
   wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${key}`),
+  activeSessions: () => api.get<ActiveSession[]>("/admin/active-sessions"),
+  watchHistory: (limit?: number) =>
+    api.get<WatchHistoryEntry[]>(`/admin/watch-history${limit ? `?limit=${limit}` : ""}`),
 };
 
 export type DeviceView = {
@@ -493,6 +530,9 @@ export const progress = {
       audio_track_idx?: number | null;
       subtitle_track_idx?: number | null;
       completed?: boolean;
+      /** Whether the player is actively playing (vs paused) at this
+       *  heartbeat. Feeds the admin "Now watching" presence state. */
+      playing?: boolean;
     },
   ) => api.put<void>(`/torrents/${infohash}/files/${idx}/progress`, body),
 };

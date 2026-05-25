@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Container } from "@/components/Container";
+import { NowWatching } from "@/components/NowWatching";
 import { Tag } from "@/components/Tag";
 import {
   Dialog,
@@ -115,6 +116,8 @@ export function AdminPage() {
             </Button>
           </div>
         </header>
+
+        <NowWatching />
 
         <Card>
           <CardHeader>

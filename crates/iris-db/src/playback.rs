@@ -144,3 +144,75 @@ pub async fn continue_watching(
     .fetch_all(pool)
     .await
 }
+
+/// One row of cross-user recent playback activity for the admin view.
+/// Mirrors [`ContinueWatchingRow`] but spans every user (joined with
+/// `users` for the display name) and keeps completed items so the admin
+/// sees finished watches too.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct RecentActivityRow {
+    pub user_id: Uuid,
+    pub display_name: String,
+    pub infohash: String,
+    pub torrent_name: String,
+    pub tmdb_id: Option<i64>,
+    pub tmdb_verified: bool,
+    pub file_idx: i64,
+    pub position_seconds: f64,
+    pub duration_seconds: Option<f64>,
+    pub last_watched_at: DateTime<Utc>,
+    pub completed: bool,
+    pub kind: Option<String>,
+}
+
+/// Poster/title metadata for a single torrent, resolved with the same
+/// `COALESCE(collection, torrent)` tmdb precedence as the watch shelves.
+/// Used to decorate live presence sessions in the admin view.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct SessionCardRow {
+    pub torrent_name: String,
+    pub tmdb_id: Option<i64>,
+    pub tmdb_verified: bool,
+    pub kind: Option<String>,
+}
+
+pub async fn session_card(
+    pool: &SqlitePool,
+    infohash: &str,
+) -> Result<Option<SessionCardRow>, sqlx::Error> {
+    sqlx::query_as::<_, SessionCardRow>(
+        "SELECT t.name as torrent_name, \
+            COALESCE(c.tmdb_id, t.tmdb_id) as tmdb_id, \
+            t.tmdb_verified, c.kind as kind \
+         FROM torrents t \
+         LEFT JOIN collections c ON c.id = t.collection_id \
+         WHERE t.infohash = ?1 AND t.deleted_at IS NULL",
+    )
+    .bind(infohash)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Most-recent playback activity across all users, newest first. Powers the
+/// admin "Recent activity" list.
+pub async fn recent_activity(
+    pool: &SqlitePool,
+    limit: i64,
+) -> Result<Vec<RecentActivityRow>, sqlx::Error> {
+    sqlx::query_as::<_, RecentActivityRow>(
+        "SELECT p.user_id, u.display_name, p.infohash, t.name as torrent_name, \
+            COALESCE(c.tmdb_id, t.tmdb_id) as tmdb_id, \
+            t.tmdb_verified, p.file_idx, \
+            p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
+            c.kind as kind \
+         FROM playback_progress p \
+         JOIN users u ON u.id = p.user_id \
+         JOIN torrents t ON t.infohash = p.infohash AND t.deleted_at IS NULL \
+         LEFT JOIN collections c ON c.id = t.collection_id \
+         ORDER BY p.last_watched_at DESC \
+         LIMIT ?1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}

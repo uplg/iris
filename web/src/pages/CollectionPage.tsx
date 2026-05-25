@@ -176,7 +176,10 @@ function Hero({ collection }: { collection: CollectionDetail }) {
               </span>
               {newCount > 0 && <Tag variant="success">{newCount} new</Tag>}
             </div>
-            <h1 className="display text-foreground" style={{ fontSize: "clamp(40px, 7vw, 76px)" }}>
+            <h1
+              className="display text-foreground [overflow-wrap:anywhere]"
+              style={{ fontSize: "clamp(40px, 7vw, 76px)" }}
+            >
               {collection.display_title}
             </h1>
             {firstPlayable && (

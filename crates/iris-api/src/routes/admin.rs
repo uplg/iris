@@ -26,6 +26,115 @@ pub fn router() -> Router<AppState> {
         .route("/remux", get(list_remux_jobs))
         .route("/remux/{key}", axum::routing::delete(wipe_remux_job))
         .route("/tmdb/diagnose/{infohash}", get(diagnose_tmdb))
+        .route("/active-sessions", get(active_sessions))
+        .route("/watch-history", get(watch_history))
+}
+
+/// One live "who's watching what" row for `GET /admin/active-sessions`.
+#[derive(Debug, Serialize)]
+struct ActiveSessionView {
+    user_id: Uuid,
+    display_name: String,
+    infohash: String,
+    file_idx: i64,
+    torrent_name: Option<String>,
+    /// COALESCE(collection, torrent) tmdb id — only trust it for posters
+    /// when `tmdb_verified` (mirrors the watch shelves).
+    tmdb_id: Option<i64>,
+    tmdb_verified: bool,
+    /// `"movie"` / `"tv"` collection hint for the TMDB poster lookup.
+    kind: Option<String>,
+    position_seconds: f64,
+    duration_seconds: Option<f64>,
+    /// `"playing"` / `"paused"`.
+    state: &'static str,
+    /// `"web"` / `"tv"` when the client identified itself, else null.
+    client: Option<&'static str>,
+    started_at: chrono::DateTime<Utc>,
+    last_seen_at: chrono::DateTime<Utc>,
+}
+
+async fn active_sessions(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> ApiResult<Json<Vec<ActiveSessionView>>> {
+    let sessions = state.presence().snapshot().await;
+    let mut out = Vec::with_capacity(sessions.len());
+    for s in sessions {
+        // Tiny N (≤ household size): per-session lookups are fine and reuse
+        // the exact poster precedence of the watch shelves.
+        let display_name =
+            iris_db::users::find_by_id(state.db(), iris_core::ids::UserId::from(s.user_id))
+                .await?
+                .map_or_else(|| "unknown".to_owned(), |u| u.display_name);
+        let card = iris_db::playback::session_card(state.db(), &s.infohash).await?;
+        out.push(ActiveSessionView {
+            user_id: s.user_id,
+            display_name,
+            infohash: s.infohash,
+            file_idx: s.file_idx,
+            torrent_name: card.as_ref().map(|c| c.torrent_name.clone()),
+            tmdb_id: card.as_ref().and_then(|c| c.tmdb_id),
+            tmdb_verified: card.as_ref().is_some_and(|c| c.tmdb_verified),
+            kind: card.as_ref().and_then(|c| c.kind.clone()),
+            position_seconds: s.position_seconds,
+            duration_seconds: s.duration_seconds,
+            state: s.state.as_str(),
+            client: s.client.map(crate::client_version::ClientKind::as_str),
+            started_at: s.started_at,
+            last_seen_at: s.last_seen_at,
+        });
+    }
+    Ok(Json(out))
+}
+
+/// One row for `GET /admin/watch-history` — recent playback across all users.
+#[derive(Debug, Serialize)]
+struct WatchHistoryView {
+    user_id: Uuid,
+    display_name: String,
+    infohash: String,
+    file_idx: i64,
+    torrent_name: String,
+    tmdb_id: Option<i64>,
+    tmdb_verified: bool,
+    kind: Option<String>,
+    position_seconds: f64,
+    duration_seconds: Option<f64>,
+    completed: bool,
+    last_watched_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WatchHistoryQuery {
+    limit: Option<i64>,
+}
+
+async fn watch_history(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    axum::extract::Query(q): axum::extract::Query<WatchHistoryQuery>,
+) -> ApiResult<Json<Vec<WatchHistoryView>>> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let rows = iris_db::playback::recent_activity(state.db(), limit).await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| WatchHistoryView {
+                user_id: r.user_id,
+                display_name: r.display_name,
+                infohash: r.infohash,
+                file_idx: r.file_idx,
+                torrent_name: r.torrent_name,
+                tmdb_id: r.tmdb_id,
+                tmdb_verified: r.tmdb_verified,
+                kind: r.kind,
+                position_seconds: r.position_seconds,
+                duration_seconds: r.duration_seconds,
+                completed: r.completed,
+                last_watched_at: r.last_watched_at,
+            })
+            .collect(),
+    ))
 }
 
 #[derive(Debug, Serialize)]

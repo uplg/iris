@@ -197,7 +197,15 @@ function HeroLayout({
           style={{ paddingTop: "clamp(40px, 8vw, 96px)" }}
         >
           <div className="flex items-center gap-2.5">{eyebrow}</div>
-          <h1 className="display text-foreground" style={{ fontSize: "clamp(44px, 9vw, 88px)" }}>
+          {/* min-w-0 + overflow-wrap:anywhere so a raw release name with no
+            spaces (e.g. "Mercato.2025.FRENCH.1080p.WEB.H265-BOUBA.mkv") wraps
+            instead of overflowing the hero to the right — grid items default
+            to min-width:auto, which otherwise lets the giant unbreakable
+            token blow past the container. */}
+          <h1
+            className="display min-w-0 text-foreground [overflow-wrap:anywhere]"
+            style={{ fontSize: "clamp(44px, 9vw, 88px)" }}
+          >
             {title}
           </h1>
           {meta.length > 0 && (
@@ -316,7 +324,9 @@ function FeaturedHero({ result }: { result: SearchResult }) {
           </span>
         }
         backdropUrl={tmdbImage(md?.backdrop_path, "original")}
-        title={result.title}
+        // Prefer the clean TMDB title; fall back to the raw release name only
+        // until (or unless) the metadata resolves — mirrors ResumeHero.
+        title={md?.title ?? result.title}
         meta={meta}
         overview={md?.overview}
         actions={

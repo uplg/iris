@@ -423,6 +423,7 @@ export function WatchPage() {
           audio_track_idx: audioTrackRef.current,
           subtitle_track_idx: subtitleTrackRef.current,
           completed,
+          playing: true,
         });
       }
       // Next-episode prompt at >= 95 % of duration. Belt-and-suspenders
@@ -457,6 +458,7 @@ export function WatchPage() {
         audio_track_idx: audioTrackRef.current,
         subtitle_track_idx: subtitleTrackRef.current,
         completed: false,
+        playing: false,
       });
     },
     [infohash, fileIdx],
