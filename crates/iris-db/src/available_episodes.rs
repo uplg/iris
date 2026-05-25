@@ -203,7 +203,6 @@ pub async fn upsert(
             quality      = excluded.quality, \
             seeders      = excluded.seeders, \
             size_bytes   = excluded.size_bytes, \
-            found_at     = excluded.found_at, \
             language     = excluded.language, \
             download_url = excluded.download_url",
     )

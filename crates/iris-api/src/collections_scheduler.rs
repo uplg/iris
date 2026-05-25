@@ -220,36 +220,15 @@ async fn check_one(
     }
 
     for ((season, episode, lang), result) in best {
-        // Skip if we've already cached this exact (S, E, language).
-        // The upsert would refresh seeders / found_at but we'd waste
-        // a write if nothing changed.
-        if availability_exists(pool, normalized, season, episode, lang).await? {
-            continue;
-        }
+        // Always upsert — re-recording refreshes the cached seeders/size on
+        // an offer we've seen before. Without this, seeders are frozen at
+        // first-seen: a pack that since died to 0 would keep being offered,
+        // and the 0-seeder filter in `list_season_packs_for_series` would
+        // never catch it. `upsert` preserves the original `found_at`, so
+        // refreshing an existing offer doesn't re-flag it "new".
         record_availability(pool, providers, normalized, season, episode, lang, &result).await;
     }
     Ok(())
-}
-
-async fn availability_exists(
-    pool: &SqlitePool,
-    normalized_name: &str,
-    season: i64,
-    episode: i64,
-    language: Language,
-) -> Result<bool, sqlx::Error> {
-    let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM available_episodes \
-         WHERE normalized_name = ?1 AND season = ?2 AND episode = ?3 \
-           AND COALESCE(language, '') = ?4",
-    )
-    .bind(normalized_name)
-    .bind(season)
-    .bind(episode)
-    .bind(language.as_str())
-    .fetch_one(pool)
-    .await?;
-    Ok(row.0 > 0)
 }
 
 async fn record_availability(
@@ -289,12 +268,15 @@ async fn record_availability(
     if let Err(e) = iris_db::available_episodes::upsert(pool, upsert).await {
         tracing::warn!(error = %e, "scheduler: upsert availability failed");
     } else {
-        tracing::info!(
+        // Debug, not info: this now fires for every (S, E, language) on every
+        // scan (we re-record to refresh seeders), so info would spam the log
+        // every 4 h with the whole library.
+        tracing::debug!(
             normalized_name, season, episode,
             provider = %best.provider_id,
             seeders = best.seeders.unwrap_or(0),
             language = language.as_str(),
-            "scheduler: cached new episode",
+            "scheduler: recorded/refreshed episode availability",
         );
     }
 }
