@@ -256,7 +256,21 @@ class LibavAudioDecoder extends CustomAudioDecoder {
       bytes = new Uint8Array(view.buffer as ArrayBuffer, view.byteOffset, view.byteLength);
       bytes = bytes.slice();
     }
-    const ptsMicro = (f.ptshi >>> 0) * 4_294_967_296 + (f.pts >>> 0);
+    // Reconstruct a SIGNED 64-bit pts. libav.js returns the high word as a
+    // 32-bit int that can be negative and the low word as unsigned. Doing an
+    // UNSIGNED reconstruction (`f.ptshi >>> 0`) turned a negative pts — e.g.
+    // the first AC-3 packet's -1 µs priming / edit-list timestamp on some MP4s
+    // — into ≈2^64 µs (1.8e13 s). That astronomical timestamp poisoned Tier B's
+    // `waitTrackBalance` interleave gate (the huge-ts audio sample blocks
+    // against the video feed, which can never reach it), deadlocking the muxer
+    // at t=0 → eternal stall until the user seeks past the first sample.
+    const hi = f.ptshi | 0; // signed high word
+    const lo = f.pts >>> 0; // unsigned low word
+    let ptsMicro = hi * 4_294_967_296 + lo;
+    // A sub-zero (priming / edit-list) or NOPTS sentinel timestamp clamps to 0:
+    // audio can't legitimately present before the stream start, and a negative
+    // value would just poison the interleave gate in the other direction.
+    if (!Number.isFinite(ptsMicro) || ptsMicro < 0) ptsMicro = 0;
     return new AudioSample({
       data: bytes.buffer,
       format: format as AudioSample["format"],

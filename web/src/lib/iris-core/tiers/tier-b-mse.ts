@@ -1130,9 +1130,7 @@ export const mountTierB: EngineMount = async (opts) => {
                     sample.close();
                     break;
                   }
-                  if (audioSamples === 0) console.log("[iris-core] Tier B: encoding first audio sample…");
                   await audioFeed.source.add(sample);
-                  if (audioSamples === 0) console.log("[iris-core] Tier B: first audio sample encoded + queued");
                   audioSamples += 1;
                   if (sample.timestamp > audioFedMax) audioFedMax = sample.timestamp;
                   notifyTrackProgress();
