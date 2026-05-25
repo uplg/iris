@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Banner background: slate ground + the violet/blue ambient wash (matches
+     the in-app `irisAmbient`). Pure vector so the gradients render perfectly
+     smooth at any size — no 8-bit banding. The Cal Sans wordmark is layered on
+     top as a bitmap (see banner.xml + scripts/gen_banner.py). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <!-- Ground -->
+    <path
+        android:fillColor="#0B0C10"
+        android:pathData="M0,0h320v180h-320z" />
+
+    <!-- Violet glow, upper-right -->
+    <path android:pathData="M0,0h320v180h-320z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="252"
+                android:centerY="34"
+                android:gradientRadius="210">
+                <item android:offset="0" android:color="#42A58DFF" />
+                <item android:offset="1" android:color="#00A58DFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Blue pool, lower-left -->
+    <path android:pathData="M0,0h320v180h-320z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="36"
+                android:centerY="172"
+                android:gradientRadius="170">
+                <item android:offset="0" android:color="#2C69C1FC" />
+                <item android:offset="1" android:color="#0069C1FC" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+</vector>

@@ -1,65 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Placeholder TV banner (320x180dp). Required by Android TV for app
-     surfacing on the home screen. Replace with a real PNG before Play Store
-     submission; this vector keeps the build green for now. -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="320dp"
-    android:height="180dp"
-    android:viewportWidth="320"
-    android:viewportHeight="180">
-
-    <!-- Background -->
-    <path
-        android:fillColor="#0B0D12"
-        android:pathData="M0,0h320v180h-320z" />
-
-    <!-- Diamond -->
-    <path
-        android:fillColor="#C084FC"
-        android:pathData="M40,90 L60,70 L80,90 L60,110 Z" />
-
-    <!--
-        "Iris" centré entre x=80 et x=320 (cx=200), centré verticalement (cy=91)
-        Hauteur lettres : 28px (y=77 à y=105)
-        Total largeur : I(8) + gap(5) + r(14) + gap(5) + i(6) + gap(5) + s(14) = 57px
-        Start x = 200 - 57/2 = 171
-    -->
-
-    <!-- I (x=171) -->
-    <path
-        android:fillColor="#A78BFA"
-        android:pathData="M171,77 L179,77 L179,105 L171,105 Z" />
-
-    <!-- r (x=184) -->
-    <path
-        android:fillColor="#A78BFA"
-        android:pathData="M184,87 L184,105 L190,105 L190,93 Q190,89 194,89 L198,89 L198,87 Q192,85 190,89 L190,87 Z" />
-
-    <!-- i — point + tige (x=203) -->
-    <path
-        android:fillColor="#A78BFA"
-        android:pathData="M203,77 L209,77 L209,82 L203,82 Z M203,87 L209,87 L209,105 L203,105 Z" />
-
-    <!-- s — 5 rectangles (x=214) -->
-    <!-- barre haut -->
-    <path
-        android:fillColor="#A78BFA"
-        android:pathData="M214,87 L228,87 L228,90 L214,90 Z" />
-    <!-- montant gauche haut -->
-    <path
-        android:fillColor="#A78BFA"
-        android:pathData="M214,87 L217,87 L217,95 L214,95 Z" />
-    <!-- barre milieu -->
-    <path
-        android:fillColor="#A78BFA"
-        android:pathData="M214,93 L228,93 L228,96 L214,96 Z" />
-    <!-- montant droit bas -->
-    <path
-        android:fillColor="#A78BFA"
-        android:pathData="M225,93 L228,93 L228,105 L225,105 Z" />
-    <!-- barre bas -->
-    <path
-        android:fillColor="#A78BFA"
-        android:pathData="M214,102 L228,102 L228,105 L214,105 Z" />
-
-</vector>
+<!-- Android TV launcher banner. Hybrid, fully driven from XML: the smooth
+     vector gradient ground (banner_bg) with the real Cal Sans "Iris /"
+     wordmark layered on top as a transparent bitmap. A VectorDrawable can't
+     embed a font, so the wordmark is rasterised from res/font by
+     scripts/gen_banner.py (run it to regenerate / add densities). -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/banner_bg" />
+    <item android:drawable="@drawable/banner_wordmark" />
+</layer-list>
