@@ -182,6 +182,9 @@ export type ActiveSession = {
   infohash: string;
   file_idx: number;
   torrent_name: string | null;
+  /** On-disk path of the exact file watched — the episode within a season
+   *  pack. Null when the torrent snapshot isn't live. */
+  file_path: string | null;
   tmdb_id: number | null;
   tmdb_verified: boolean;
   kind: MediaKind | null;
@@ -201,6 +204,8 @@ export type WatchHistoryEntry = {
   infohash: string;
   file_idx: number;
   torrent_name: string;
+  /** On-disk path of the watched file (episode within a season pack). */
+  file_path: string | null;
   tmdb_id: number | null;
   tmdb_verified: boolean;
   kind: MediaKind | null;

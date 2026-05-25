@@ -9,6 +9,7 @@ import { LanguageBadge } from "@/components/LanguageBadge";
 import { Tag } from "@/components/Tag";
 import {
   library,
+  me,
   tmdbImage,
   type AvailableEpisodeEntry,
   type CollectionDetail,
@@ -122,14 +123,48 @@ function Hero({ collection }: { collection: CollectionDetail }) {
   const backdrop = tmdbImage(collection.backdrop_path, "original");
   const newCount = collection.has_new_since_last_visit ?? 0;
 
-  // First on-disk video → a real "Play / Continue" CTA when we have one.
+  // The episode to start from when there's NO resume point. Pick the first
+  // ON-DISK episode by (season, episode) — NOT `files[0]`, which on a season
+  // pack is often a sample / extra / out-of-order file and sent "Play" to the
+  // wrong episode. `episodes` carries the SCENE-parsed (S,E) → (infohash,
+  // file_idx) mapping; we mirror EpisodeList's sort. `episode === 0` is the
+  // season-pack sentinel — skip it in favour of real episodes.
   const firstPlayable = useMemo(() => {
+    const owned = collection.episodes
+      .filter((e) => e.episode > 0)
+      .sort((a, b) => a.season - b.season || a.episode - b.episode);
+    if (owned.length > 0) {
+      return { infohash: owned[0].infohash, idx: owned[0].file_idx };
+    }
+    // Fallback (movie, or a pack the SCENE parser couldn't split into
+    // episodes): first video file on disk.
     for (const t of collection.torrents) {
       const f = t.files.find((x) => VIDEO_RE.test(x.path));
       if (f) return { infohash: t.infohash, idx: f.index };
     }
     return null;
-  }, [collection.torrents]);
+  }, [collection.episodes, collection.torrents]);
+
+  // Resume point: the most-recently-watched IN-PROGRESS episode of THIS
+  // collection (continue-watching only carries incomplete items). When present
+  // the CTA resumes that episode rather than restarting at episode 1.
+  const cw = useQuery({
+    queryKey: ["continue-watching"],
+    queryFn: me.continueWatching,
+    staleTime: 30_000,
+  });
+  const resume = useMemo(() => {
+    if (!cw.data) return null;
+    const owned = new Set(collection.torrents.map((t) => t.infohash));
+    const here = cw.data
+      .filter((it) => !it.completed && owned.has(it.infohash))
+      .sort((a, b) => Date.parse(b.last_watched_at) - Date.parse(a.last_watched_at));
+    const top = here[0];
+    return top ? { infohash: top.infohash, idx: top.file_idx } : null;
+  }, [cw.data, collection.torrents]);
+
+  // Resume wins when we have one; otherwise start from the first episode.
+  const playTarget = resume ?? firstPlayable;
 
   return (
     <section className="relative isolate mb-8">
@@ -182,12 +217,12 @@ function Hero({ collection }: { collection: CollectionDetail }) {
             >
               {collection.display_title}
             </h1>
-            {firstPlayable && (
+            {playTarget && (
               <div className="flex flex-wrap gap-2.5">
                 <Button asChild size="lg" className="h-11">
-                  <Link to={`/watch/${firstPlayable.infohash}/${firstPlayable.idx}`}>
+                  <Link to={`/watch/${playTarget.infohash}/${playTarget.idx}`}>
                     <Play className="size-4.5" />
-                    Play
+                    {resume ? "Resume" : "Play"}
                   </Link>
                 </Button>
               </div>

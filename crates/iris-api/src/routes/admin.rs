@@ -30,6 +30,21 @@ pub fn router() -> Router<AppState> {
         .route("/watch-history", get(watch_history))
 }
 
+/// Resolve the on-disk file name for `(infohash, file_idx)` from the live
+/// torrent snapshot. For season packs this disambiguates the episode being
+/// watched — the torrent name alone can't. Mirrors the lookup
+/// `me::continue_watching` does for the home shelf.
+fn resolve_file_path(state: &AppState, infohash: &str, file_idx: i64) -> Option<String> {
+    let idx = usize::try_from(file_idx).ok()?;
+    state
+        .engine()
+        .get_by_infohash(infohash)?
+        .files
+        .into_iter()
+        .find(|f| f.index == idx)
+        .map(|f| f.path)
+}
+
 /// One live "who's watching what" row for `GET /admin/active-sessions`.
 #[derive(Debug, Serialize)]
 struct ActiveSessionView {
@@ -38,6 +53,10 @@ struct ActiveSessionView {
     infohash: String,
     file_idx: i64,
     torrent_name: Option<String>,
+    /// On-disk path of the exact file being watched. For season packs this
+    /// is the only way to tell WHICH episode — the torrent name is the whole
+    /// pack. `None` when the torrent snapshot isn't live (evicted).
+    file_path: Option<String>,
     /// COALESCE(collection, torrent) tmdb id — only trust it for posters
     /// when `tmdb_verified` (mirrors the watch shelves).
     tmdb_id: Option<i64>,
@@ -73,6 +92,7 @@ async fn active_sessions(
         out.push(ActiveSessionView {
             user_id: s.user_id,
             display_name,
+            file_path: resolve_file_path(&state, &s.infohash, s.file_idx),
             infohash: s.infohash,
             file_idx: s.file_idx,
             torrent_name: card.as_ref().map(|c| c.torrent_name.clone()),
@@ -99,6 +119,8 @@ struct WatchHistoryView {
     infohash: String,
     file_idx: i64,
     torrent_name: String,
+    /// On-disk path of the watched file (episode within a season pack).
+    file_path: Option<String>,
     tmdb_id: Option<i64>,
     tmdb_verified: bool,
     kind: Option<String>,
@@ -125,6 +147,7 @@ async fn watch_history(
             .map(|r| WatchHistoryView {
                 user_id: r.user_id,
                 display_name: r.display_name,
+                file_path: resolve_file_path(&state, &r.infohash, r.file_idx),
                 infohash: r.infohash,
                 file_idx: r.file_idx,
                 torrent_name: r.torrent_name,

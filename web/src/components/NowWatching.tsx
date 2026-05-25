@@ -16,6 +16,13 @@ function pct(position: number, duration: number | null): number {
   return duration && duration > 0 ? Math.min(100, (position / duration) * 100) : 0;
 }
 
+/** What the user is actually watching: the file's basename (the episode,
+ *  for a season pack) when we have it, else the torrent name. */
+function watchedLabel(filePath: string | null, torrentName: string | null): string {
+  const base = filePath ? (filePath.split("/").pop() ?? filePath) : null;
+  return base ?? torrentName ?? "Unknown";
+}
+
 /** Short "2m ago" / "just now" relative time. Recomputed on each render
  *  (the queries refetch on an interval), so no timer of our own. */
 function relTime(iso: string): string {
@@ -75,8 +82,11 @@ function SessionCard({ s }: { s: ActiveSession }) {
               <span>{elapsed(s.started_at)}</span>
             </span>
           </div>
-          <span className="truncate text-sm text-muted-foreground" title={s.torrent_name ?? ""}>
-            {s.torrent_name ?? s.infohash}
+          <span
+            className="truncate text-sm text-muted-foreground"
+            title={watchedLabel(s.file_path, s.torrent_name)}
+          >
+            {watchedLabel(s.file_path, s.torrent_name)}
           </span>
         </div>
         <div className="grid gap-1">
@@ -99,7 +109,10 @@ function HistoryRow({ h }: { h: WatchHistoryEntry }) {
       <div className="grid min-w-0 flex-1">
         <span className="truncate text-sm">
           <span className="font-medium">{h.display_name}</span>
-          <span className="text-muted-foreground"> · {h.torrent_name}</span>
+          <span className="text-muted-foreground">
+            {" · "}
+            {watchedLabel(h.file_path, h.torrent_name)}
+          </span>
         </span>
         <span className="text-xs text-muted-foreground">
           {h.completed ? "Finished" : `${progress.toFixed(0)}%`} · {relTime(h.last_watched_at)}
