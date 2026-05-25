@@ -31,6 +31,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -130,19 +131,45 @@ fun LibraryScreen(
         }
     }
 
-    // Land initial focus on the first poster, NOT the search field — otherwise
-    // the leanback keyboard pops open on entry. Wait until item 0 is actually
-    // laid out, then request (a too-early request no-ops and the text field
-    // wins the default focus).
+    // Land initial focus on a poster, NOT the search field — otherwise the
+    // leanback keyboard pops open on entry. On return-from-detail we restore
+    // focus to the card the user opened; on a fresh entry it's the first card.
     val gridState = rememberLazyGridState()
-    val firstCardFocus = remember { FocusRequester() }
+    val restoreFocus = remember { FocusRequester() }
     var didInitialFocus by remember { mutableStateOf(false) }
+    // The collection the user opened. `rememberSaveable` survives navigation
+    // (the NavBackStackEntry's SaveableStateHolder), so pressing Back from a
+    // detail lands focus on THAT card instead of snapping to the first one.
+    var lastOpenedId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Card to focus: the one we came from when it's still present under the
+    // current filter, else the first card.
+    val targetIndex = remember(visible, lastOpenedId) {
+        lastOpenedId?.let { id -> visible.indexOfFirst { it.id == id } }?.takeIf { it >= 0 } ?: 0
+    }
     LaunchedEffect(visible.isNotEmpty()) {
         if (didInitialFocus || visible.isEmpty()) return@LaunchedEffect
-        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.any { it.index == 0 } }.first { it }
-        runCatching { firstCardFocus.requestFocus() }
+        // Bring the target into view first — a card far down the grid isn't
+        // composed (so isn't focusable) until scrolled to. Then wait for it to
+        // be laid out and request focus (a too-early request no-ops and the
+        // text field wins the default focus).
+        if (targetIndex > 0) runCatching { gridState.scrollToItem(targetIndex) }
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex } }
+            .first { it }
+        runCatching { restoreFocus.requestFocus() }
         didInitialFocus = true
     }
+
+    // The search field must NOT be focusable during the window where we're
+    // about to land initial focus on the first card. Otherwise it's the first
+    // focusable in the layout, grabs the default focus during the load+layout
+    // gap, and pops the leanback IME before the card-focus request lands. This
+    // hit on return-from-detail too: Back re-mounts the screen and re-fetches,
+    // re-creating the gap (and `didInitialFocus` resets, so we re-lock). It
+    // STAYS focusable when there's genuinely no card to focus — still loading
+    // is locked, but an empty library / zero search matches keeps it usable so
+    // the user can edit the query. Device-independent: removes the timing race
+    // (a fast TV just never noticed the IME flash).
+    val searchFocusable = !loading && (visible.isEmpty() || didInitialFocus)
 
     Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
         Column(
@@ -192,7 +219,9 @@ fun LibraryScreen(
                         unfocusedContainerColor = IrisColors.Card,
                         cursorColor = IrisColors.Brand,
                     ),
-                    modifier = Modifier.width(260.dp),
+                    modifier = Modifier
+                        .width(260.dp)
+                        .focusProperties { canFocus = searchFocusable },
                 )
                 LibKind.entries.forEach { k ->
                     FilterChip(label = k.label, selected = kind == k) { kind = k }
@@ -236,9 +265,14 @@ fun LibraryScreen(
                         LibraryGridCard(
                             container = container,
                             collection = c,
-                            onClick = { onOpenCollection(c.id) },
-                            modifier = if (index == 0) {
-                                Modifier.focusRequester(firstCardFocus)
+                            // Remember which card we leave from so Back can
+                            // restore focus to it.
+                            onClick = {
+                                lastOpenedId = c.id
+                                onOpenCollection(c.id)
+                            },
+                            modifier = if (index == targetIndex) {
+                                Modifier.focusRequester(restoreFocus)
                             } else {
                                 Modifier
                             },
