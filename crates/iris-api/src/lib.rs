@@ -5,6 +5,7 @@ pub mod collections_scheduler;
 pub mod error;
 pub mod middleware;
 pub mod observability;
+pub mod presence;
 pub mod ranking;
 pub mod rate_limit;
 pub mod routes;

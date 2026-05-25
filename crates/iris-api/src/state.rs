@@ -7,6 +7,7 @@ use iris_media::{ProbeCache, RemuxManager};
 use iris_providers::ProviderRegistry;
 use iris_torrent::{Engine, Gc};
 
+use crate::presence::Presence;
 use crate::tmdb::TmdbClient;
 
 #[derive(Clone)]
@@ -24,6 +25,7 @@ struct Inner {
     pub gc: Gc,
     pub probes: ProbeCache,
     pub tmdb: Option<TmdbClient>,
+    pub presence: Presence,
 }
 
 impl AppState {
@@ -62,6 +64,7 @@ impl AppState {
                 gc,
                 probes: ProbeCache::new(),
                 tmdb,
+                presence: Presence::new(),
             }),
         }
     }
@@ -92,6 +95,9 @@ impl AppState {
     }
     pub fn tmdb(&self) -> Option<&TmdbClient> {
         self.inner.tmdb.as_ref()
+    }
+    pub fn presence(&self) -> &Presence {
+        &self.inner.presence
     }
 }
 
