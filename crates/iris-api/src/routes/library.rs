@@ -404,8 +404,9 @@ async fn build_available_singletons(
             continue;
         }
         // Dead offer (0 seeders, or unknown count): undownloadable
-        // and only clutters the grid. Pack offers stay regardless —
-        // a quiet pack still beats no pack when no singletons exist.
+        // and only clutters the grid. Season packs are filtered
+        // separately at the query source (`list_season_packs_for_series`
+        // drops exactly-0-seeder packs), so this only governs singletons.
         if o.seeders.unwrap_or(0) <= 0 {
             continue;
         }

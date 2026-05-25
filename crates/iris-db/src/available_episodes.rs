@@ -89,6 +89,11 @@ pub async fn list_best_for_series(
 /// row per (season, language) so the household's anglophone +
 /// francophone users can both find a coverable pack for the
 /// season they want, without one language masking the other.
+///
+/// Packs with exactly **0 seeders are excluded** (`seeders IS NOT 0`):
+/// they're un-grabbable, so they must never surface as a "Grab full
+/// Season N" affordance nor be picked by the grab fallback. Unknown
+/// (NULL) seeder counts are kept — we can't confirm those are dead.
 pub async fn list_season_packs_for_series(
     pool: &SqlitePool,
     normalized_name: &str,
@@ -99,6 +104,7 @@ pub async fn list_season_packs_for_series(
          FROM available_episodes a \
          WHERE normalized_name = ?1 \
            AND episode = 0 \
+           AND seeders IS NOT 0 \
            AND seeders IS (SELECT MAX(seeders) FROM available_episodes \
                            WHERE normalized_name = a.normalized_name \
                              AND season = a.season \
