@@ -250,7 +250,7 @@ function ResumeHero({ item }: { item: ContinueWatchingItem }) {
     staleTime: 5 * 60_000,
   });
   const md = metaQ.data;
-  const title = md?.title ?? item.torrent_name;
+  const title = md?.title ?? prettySceneName(item.torrent_name);
   const remaining =
     item.duration_seconds && item.duration_seconds > 0
       ? Math.max(0, item.duration_seconds - item.position_seconds)
