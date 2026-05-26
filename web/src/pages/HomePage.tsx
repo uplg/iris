@@ -20,7 +20,7 @@ import {
   type TorrentView,
   type WatchlistItem,
 } from "@/lib/api";
-import { formatSize } from "@/lib/format";
+import { formatSize, prettySceneName } from "@/lib/format";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
@@ -56,12 +56,18 @@ export function HomePage() {
   const recentLibrary = useMemo(() => (libraryQ.data ?? []).slice(0, 12), [libraryQ.data]);
 
   const resumePick = continueQ.data?.[0];
+  // Hero fallback: the freshest library title reads better than a raw
+  // featured release (verified TMDB art/name, no overflow), so prefer it.
+  // Featured stays as the last resort for a brand-new, empty library.
+  const libraryPick = libraryQ.data?.[0];
   const featuredPick = featuredQ.data?.movies[0] ?? featuredQ.data?.series[0];
 
   return (
     <div>
       {resumePick ? (
         <ResumeHero item={resumePick} />
+      ) : libraryPick ? (
+        <LibraryHero torrent={libraryPick} />
       ) : featuredPick ? (
         <FeaturedHero result={featuredPick} />
       ) : null}
@@ -156,6 +162,7 @@ function HeroLayout({
   eyebrow,
   backdropUrl,
   title,
+  titlePending,
   meta,
   overview,
   actions,
@@ -164,6 +171,10 @@ function HeroLayout({
   eyebrow: ReactNode;
   backdropUrl: string | null;
   title: string;
+  /** While the TMDB title is still resolving we show a skeleton bar
+   *  rather than the raw release name — a giant unbreakable SCENE token
+   *  overflows the hero and looks broken for the half-second it's up. */
+  titlePending?: boolean;
   meta: string[];
   overview?: string | null;
   actions: ReactNode;
@@ -202,12 +213,20 @@ function HeroLayout({
             instead of overflowing the hero to the right — grid items default
             to min-width:auto, which otherwise lets the giant unbreakable
             token blow past the container. */}
-          <h1
-            className="display min-w-0 text-foreground [overflow-wrap:anywhere]"
-            style={{ fontSize: "clamp(44px, 9vw, 88px)" }}
-          >
-            {title}
-          </h1>
+          {titlePending ? (
+            <div
+              className="h-[0.9em] w-[min(70%,28rem)] animate-pulse rounded-lg bg-muted/40"
+              style={{ height: "clamp(44px, 9vw, 88px)" }}
+              aria-hidden
+            />
+          ) : (
+            <h1
+              className="display min-w-0 text-foreground [overflow-wrap:anywhere]"
+              style={{ fontSize: "clamp(44px, 9vw, 88px)" }}
+            >
+              {title}
+            </h1>
+          )}
           {meta.length > 0 && (
             <div className="flex flex-wrap items-center gap-3.5 text-[13.5px] text-muted-foreground">
               {meta.map((m, i) => (
@@ -272,6 +291,7 @@ function ResumeHero({ item }: { item: ContinueWatchingItem }) {
       }
       backdropUrl={tmdbImage(md?.backdrop_path, "original")}
       title={title}
+      titlePending={metaQ.isLoading}
       meta={meta}
       overview={md?.overview}
       actions={
@@ -324,9 +344,13 @@ function FeaturedHero({ result }: { result: SearchResult }) {
           </span>
         }
         backdropUrl={tmdbImage(md?.backdrop_path, "original")}
-        // Prefer the clean TMDB title; fall back to the raw release name only
-        // until (or unless) the metadata resolves — mirrors ResumeHero.
-        title={md?.title ?? result.title}
+        // Prefer the clean TMDB title; otherwise tidy the raw SCENE name.
+        // We can't gate on `tmdb_verified` here (featured carries the
+        // indexer's unverified, often-null tmdb_id), so the fallback is a
+        // best-effort prettified release name rather than a guaranteed
+        // clean title.
+        title={md?.title ?? prettySceneName(result.title)}
+        titlePending={metaQ.isLoading}
         meta={meta}
         overview={md?.overview}
         actions={
@@ -345,6 +369,65 @@ function FeaturedHero({ result }: { result: SearchResult }) {
         tmdbId={result.tmdb_id}
       />
     </>
+  );
+}
+
+function LibraryHero({ torrent }: { torrent: TorrentView }) {
+  // Only trust TMDB art/title once the server has verified the match —
+  // same discipline as ResumeHero (a wrong giant backdrop is worse than
+  // the bare name).
+  const metaQ = useQuery({
+    queryKey: ["tmdb", torrent.tmdb_id, torrent.kind],
+    queryFn: () => metadata.tmdb(torrent.tmdb_id!, torrent.kind ?? undefined),
+    enabled: torrent.tmdb_id != null && torrent.tmdb_verified,
+    staleTime: 5 * 60_000,
+  });
+  const md = metaQ.data;
+  const title = md?.title
+    ? md.title
+    : torrent.name
+      ? prettySceneName(torrent.name)
+      : torrent.infohash.slice(0, 12);
+
+  // Mirror LibraryCard's landing logic: collection page if grouped,
+  // else play the largest video, else the library grid.
+  const videos = torrent.files.filter((f) => VIDEO_RE.test(f.path));
+  const largestVideo =
+    videos.length > 0 ? videos.reduce((a, b) => (b.size_bytes > a.size_bytes ? b : a)) : null;
+  const href = torrent.collection_id
+    ? `/collection/${torrent.collection_id}`
+    : largestVideo
+      ? `/watch/${torrent.infohash}/${largestVideo.index}`
+      : "/library";
+
+  const meta = [
+    md?.year ? String(md.year) : null,
+    torrent.kind === "tv" ? "Series" : "Movie",
+    formatSize(torrent.total_size_bytes),
+  ].filter((x): x is string => Boolean(x));
+
+  return (
+    <HeroLayout
+      eyebrow={
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-primary">
+          <Sparkles className="size-3.5" />
+          In your library
+        </span>
+      }
+      backdropUrl={tmdbImage(md?.backdrop_path, "original")}
+      title={title}
+      titlePending={metaQ.isLoading}
+      meta={meta}
+      overview={md?.overview}
+      actions={
+        <Button asChild size="lg" className="h-11">
+          <Link to={href}>
+            <Play className="size-4.5" />
+            {torrent.collection_id ? "Open" : "Play"}
+          </Link>
+        </Button>
+      }
+    />
   );
 }
 
