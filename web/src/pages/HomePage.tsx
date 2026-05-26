@@ -162,7 +162,6 @@ function HeroLayout({
   eyebrow,
   backdropUrl,
   title,
-  titlePending,
   meta,
   overview,
   actions,
@@ -171,10 +170,6 @@ function HeroLayout({
   eyebrow: ReactNode;
   backdropUrl: string | null;
   title: string;
-  /** While the TMDB title is still resolving we show a skeleton bar
-   *  rather than the raw release name — a giant unbreakable SCENE token
-   *  overflows the hero and looks broken for the half-second it's up. */
-  titlePending?: boolean;
   meta: string[];
   overview?: string | null;
   actions: ReactNode;
@@ -213,20 +208,12 @@ function HeroLayout({
             instead of overflowing the hero to the right — grid items default
             to min-width:auto, which otherwise lets the giant unbreakable
             token blow past the container. */}
-          {titlePending ? (
-            <div
-              className="h-[0.9em] w-[min(70%,28rem)] animate-pulse rounded-lg bg-muted/40"
-              style={{ height: "clamp(44px, 9vw, 88px)" }}
-              aria-hidden
-            />
-          ) : (
-            <h1
-              className="display min-w-0 text-foreground [overflow-wrap:anywhere]"
-              style={{ fontSize: "clamp(44px, 9vw, 88px)" }}
-            >
-              {title}
-            </h1>
-          )}
+          <h1
+            className="display min-w-0 text-foreground [overflow-wrap:anywhere]"
+            style={{ fontSize: "clamp(44px, 9vw, 88px)" }}
+          >
+            {title}
+          </h1>
           {meta.length > 0 && (
             <div className="flex flex-wrap items-center gap-3.5 text-[13.5px] text-muted-foreground">
               {meta.map((m, i) => (
@@ -291,7 +278,6 @@ function ResumeHero({ item }: { item: ContinueWatchingItem }) {
       }
       backdropUrl={tmdbImage(md?.backdrop_path, "original")}
       title={title}
-      titlePending={metaQ.isLoading}
       meta={meta}
       overview={md?.overview}
       actions={
@@ -350,7 +336,6 @@ function FeaturedHero({ result }: { result: SearchResult }) {
         // best-effort prettified release name rather than a guaranteed
         // clean title.
         title={md?.title ?? prettySceneName(result.title)}
-        titlePending={metaQ.isLoading}
         meta={meta}
         overview={md?.overview}
         actions={
@@ -416,7 +401,6 @@ function LibraryHero({ torrent }: { torrent: TorrentView }) {
       }
       backdropUrl={tmdbImage(md?.backdrop_path, "original")}
       title={title}
-      titlePending={metaQ.isLoading}
       meta={meta}
       overview={md?.overview}
       actions={
