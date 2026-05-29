@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod ids;
+pub mod ranking;
 pub mod search;
 pub mod user;
 

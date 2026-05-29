@@ -30,11 +30,12 @@
 //! "Smallest" / "Title", we honour that and skip the relevance
 //! re-sort — the dedup flag still gets set regardless.
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use iris_core::search::{SearchQuery, SearchResult};
 use iris_db::episode_files::LibraryEpisodeKey;
-use iris_media::filename::{parse, series_key};
+use iris_media::filename::{Language, detect_language, parse, series_key};
 use iris_providers::registry::{AggregatedResults, ParsedQueryInfo};
 use sqlx::SqlitePool;
 
@@ -149,13 +150,17 @@ pub fn rerank_results(agg: &mut AggregatedResults, q: &SearchQuery, lib: &Librar
     // User-chosen sort wins; we only own the default "relevance" mode.
     let relevance_mode = q.sort_by.is_none();
 
-    let mut scored: Vec<(f64, SearchResult)> = Vec::with_capacity(agg.results.len());
+    let mut scored: Vec<(f64, iris_core::ranking::Candidate, SearchResult)> =
+        Vec::with_capacity(agg.results.len());
     for mut r in agg.results.drain(..) {
         let parsed = parse(&r.title);
         let result_title = parsed.as_ref().map(|p| series_key(&p.title));
         let result_season = parsed.as_ref().and_then(|p| p.season);
         let result_episode = parsed.as_ref().and_then(|p| p.episode);
         let result_year = parsed.as_ref().and_then(|p| p.year).or(r.year);
+        // Compute the recommended-ordering view once here (it scans the
+        // title for the MULTi tag) rather than on every sort comparison.
+        let cand = candidate(&r);
 
         // Dedup is infohash-only: flag the result solely when it is the
         // exact torrent already on disk. A different release/language of
@@ -179,7 +184,7 @@ pub fn rerank_results(agg: &mut AggregatedResults, q: &SearchQuery, lib: &Librar
         r.parsed_season = result_season;
         r.parsed_episode = result_episode;
 
-        let score = compute_score(
+        let score = relevance_score(
             q,
             &r,
             result_title.as_deref(),
@@ -187,33 +192,52 @@ pub fn rerank_results(agg: &mut AggregatedResults, q: &SearchQuery, lib: &Librar
             result_episode,
             result_year,
         );
-        scored.push((score, r));
+        scored.push((score, cand, r));
     }
 
     if relevance_mode {
-        // Stable-ish sort: NaN never happens in our score path
-        // (composite is always finite), but guard against a future
-        // arithmetic surprise by treating equal/non-comparable as Equal.
-        scored.sort_by(|(a, _), (b, _)| {
-            b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
+        // Order: relevance first, then the shared "recommended" policy
+        // (smallest size first, seeders as garde-fou, MULTi discounted)
+        // as the tie-break, then title for a deterministic result. NaN
+        // never happens in our score path (relevance is always finite),
+        // but treat non-comparable as Equal defensively.
+        scored.sort_by(|(sa, ca, ra), (sb, cb, rb)| {
+            sb.partial_cmp(sa)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| iris_core::ranking::recommended_cmp(ca, cb))
+                .then_with(|| ra.title.cmp(&rb.title))
         });
     }
 
-    agg.results = scored.into_iter().map(|(_, r)| r).collect();
+    agg.results = scored.into_iter().map(|(_, _, r)| r).collect();
 }
 
-/// Score breakdown (additive, no normalisation — we only need a
-/// stable ordering, not a bounded probability):
+/// Build the [`iris_core::ranking::Candidate`] view of a result for the
+/// recommended tie-break: seeders + size + whether it's a `MULTi` release
+/// (so `MULTi` gets the effective-size discount). Language is read from the
+/// SCENE title via the shared `detect_language`.
+fn candidate(r: &SearchResult) -> iris_core::ranking::Candidate {
+    iris_core::ranking::Candidate {
+        seeders: r.seeders.map(i64::from),
+        size_bytes: r.size_bytes.map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
+        is_multi: detect_language(&r.title) == Language::Multi,
+    }
+}
+
+/// Pure **relevance** score (additive, no normalisation — we only need a
+/// stable ordering). Popularity is deliberately NOT folded in here: size
+/// and seeders are handled by [`iris_core::ranking::recommended_cmp`] as
+/// the tie-break *after* relevance, so a relevant-but-huge season pack no
+/// longer out-scores a relevant, lighter release on raw seeders.
 ///
 /// - title match: +200 exact, +80 substring, 0 unrelated
 /// - `SxxExx` match: +150 both, +80 season-only / pack accept,
 ///   -50 conflicting S/E
 /// - year match: +30
-/// - popularity: `seeders / √max(size_GiB, 0.5)`
 /// - non-video penalty: -100 when size < 200 MB and kind is unknown
 /// - dedup penalty: -250 when already in library (keep visible,
 ///   but well below fresh candidates)
-fn compute_score(
+fn relevance_score(
     q: &SearchQuery,
     r: &SearchResult,
     result_title: Option<&str>,
@@ -260,13 +284,6 @@ fn compute_score(
             score += 30.0;
         }
     }
-
-    let seeders = f64::from(r.seeders.unwrap_or(0));
-    let size_gib = r
-        .size_bytes
-        .map_or(0.0, |b| b as f64 / 1_073_741_824.0);
-    let denom = size_gib.max(0.5).sqrt();
-    score += seeders / denom;
 
     let likely_non_video =
         r.size_bytes.is_some_and(|b| b < 200 * 1024 * 1024) && r.kind.is_none();
@@ -393,6 +410,44 @@ mod tests {
             agg.results[0].title,
             "Classroom.of.the.Elite.S04E11.MULTi.1080p.WEB.AAC.x264-Tsundere-Raws",
             "exact SxxExx must outrank the season pack even with fewer seeders",
+        );
+    }
+
+    #[test]
+    fn lighter_release_wins_when_relevance_ties() {
+        // Two exact-title movie matches → identical relevance. The
+        // lighter, still-alive release wins even with far fewer seeders:
+        // the size-first "recommended" tie-break, so a 50 GB 4K rip no
+        // longer beats an 8 GB 1080p one on raw seeders.
+        let q = mk_query("the matrix", None, None);
+        let monster = mk_result("The.Matrix.2160p.UHD.BluRay.x265-GRP", 800, 50.0, Some(MediaKind::Movie));
+        let light = mk_result("The.Matrix.1080p.BluRay.x264-GRP", 40, 8.0, Some(MediaKind::Movie));
+        let mut agg = AggregatedResults {
+            results: vec![monster, light],
+            ..Default::default()
+        };
+        rerank_results(&mut agg, &q, &LibraryIndex::empty());
+        assert!(
+            agg.results[0].title.contains("1080p"),
+            "lighter alive release must win the relevance tie",
+        );
+    }
+
+    #[test]
+    fn multi_wins_tie_against_same_size_single_language() {
+        // Same title, same size, comparable seeders: MULTi edges ahead
+        // via the effective-size discount.
+        let q = mk_query("dune part two", None, None);
+        let single = mk_result("Dune.Part.Two.2024.VOSTFR.1080p.BluRay.x264-GRP", 100, 10.0, Some(MediaKind::Movie));
+        let multi = mk_result("Dune.Part.Two.2024.MULTi.1080p.BluRay.x264-GRP", 90, 10.0, Some(MediaKind::Movie));
+        let mut agg = AggregatedResults {
+            results: vec![single, multi],
+            ..Default::default()
+        };
+        rerank_results(&mut agg, &q, &LibraryIndex::empty());
+        assert!(
+            agg.results[0].title.contains("MULTi"),
+            "MULTi must win a same-size, same-relevance tie",
         );
     }
 

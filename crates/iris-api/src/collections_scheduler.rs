@@ -46,6 +46,17 @@ use iris_media::filename::Language;
 use iris_providers::ProviderRegistry;
 use uuid::Uuid;
 
+/// View a search result through the shared "recommended" ordering lens
+/// (seeders + size + `MULTi`). `is_multi` is passed in because the caller
+/// already resolved the language for the `(S, E, language)` bucket.
+fn candidate_of(r: &SearchResult, is_multi: bool) -> iris_core::ranking::Candidate {
+    iris_core::ranking::Candidate {
+        seeders: r.seeders.map(i64::from),
+        size_bytes: r.size_bytes.map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
+        is_multi,
+    }
+}
+
 /// How often to scan all TV collections. Most series ship a new
 /// episode once a week, so 4 h means we surface a release within
 /// hours of it landing on a tracker.
@@ -210,12 +221,19 @@ async fn check_one(
             detected
         };
         let key = (i64::from(s), i64::from(e), lang);
-        let cur_seeders = r.seeders.unwrap_or(0);
-        match best.get(&key) {
-            Some(existing) if existing.seeders.unwrap_or(0) >= cur_seeders => {}
-            _ => {
-                best.insert(key, r);
-            }
+        // Keep the recommended-best per (S, E, language): smallest sane
+        // size first, seeders only as a garde-fou. Without this a 51 GB
+        // 4K pack with the most seeders would displace a healthy 8 GB
+        // 1080p one *before* it ever reached `available_episodes`.
+        let is_multi = lang == Language::Multi;
+        let replace = best.get(&key).is_none_or(|existing| {
+            iris_core::ranking::recommended_cmp(
+                &candidate_of(&r, is_multi),
+                &candidate_of(existing, is_multi),
+            ) == std::cmp::Ordering::Less
+        });
+        if replace {
+            best.insert(key, r);
         }
     }
 

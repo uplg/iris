@@ -43,11 +43,35 @@ pub struct AvailableEpisodeRow {
     pub download_url: Option<String>,
 }
 
-/// Best-quality offer per `(normalized_name, season, episode,
-/// language)` — one row per (episode × language) so the UI can
-/// render FR + EN side-by-side and the user picks. When multiple
-/// torrents share the same (S, E, language), prefer the one with
-/// most seeders.
+/// SQL `ORDER BY` fragment mirroring `iris_core::ranking::recommended_cmp`,
+/// so the DB grab path ranks releases exactly like the in-memory search
+/// path. Both read the thresholds from `iris_core::ranking`, so the SQL
+/// and the Rust comparator can't drift:
+///   1. sane (alive + not junk-sized) before anything dodgy,
+///   2. smallest effective size first (unknown size last; `MULTi`
+///      discounted so it edges out a same-size single-language release),
+///   3. more seeders as the tie-break.
+fn recommended_order_sql() -> String {
+    use iris_core::ranking::{MIN_SANE_BYTES, MULTI_SIZE_DISCOUNT, SEED_FLOOR};
+    format!(
+        "CASE WHEN (seeders IS NULL OR seeders >= {SEED_FLOOR}) \
+              AND (size_bytes IS NULL OR size_bytes >= {MIN_SANE_BYTES}) \
+             THEN 0 ELSE 1 END ASC, \
+         (size_bytes IS NULL) ASC, \
+         CASE WHEN language = 'multi' \
+              THEN CAST(size_bytes AS REAL) / {MULTI_SIZE_DISCOUNT} \
+              ELSE size_bytes END ASC, \
+         COALESCE(seeders, 0) DESC"
+    )
+}
+
+/// Best offer per `(normalized_name, season, episode, language)` — one
+/// row per (episode × language) so the UI can render FR + EN side-by-side
+/// and the user picks. The per-group winner is the **recommended-best**
+/// (smallest sane size first, seeders as garde-fou, `MULTi` discounted),
+/// picked in a single SQL pass via a `ROW_NUMBER` window — see
+/// [`recommended_order_sql`]. This stops a 51 GB 4K release out-ranking a
+/// healthy 8 GB 1080p one just because it has more seeders.
 ///
 /// Legacy rows without a language tag fall into the `Unknown`
 /// bucket (the column reads as NULL → grouped together → no
@@ -59,23 +83,22 @@ pub async fn list_best_for_series(
     pool: &SqlitePool,
     normalized_name: &str,
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
-    sqlx::query_as::<_, AvailableEpisodeRow>(
+    let sql = format!(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
                 magnet, quality, seeders, size_bytes, found_at, language, download_url \
-         FROM available_episodes a \
-         WHERE normalized_name = ?1 \
-           AND episode > 0 \
-           AND seeders IS (SELECT MAX(seeders) FROM available_episodes \
-                           WHERE normalized_name = a.normalized_name \
-                             AND season = a.season \
-                             AND episode = a.episode \
-                             AND COALESCE(language, '') = COALESCE(a.language, '')) \
-         GROUP BY normalized_name, season, episode, COALESCE(language, '') \
+         FROM (SELECT *, ROW_NUMBER() OVER ( \
+                   PARTITION BY season, episode, COALESCE(language, '') \
+                   ORDER BY {order}) AS _rn \
+               FROM available_episodes \
+               WHERE normalized_name = ?1 AND episode > 0) \
+         WHERE _rn = 1 \
          ORDER BY season, episode, language",
-    )
-    .bind(normalized_name)
-    .fetch_all(pool)
-    .await
+        order = recommended_order_sql(),
+    );
+    sqlx::query_as::<_, AvailableEpisodeRow>(&sql)
+        .bind(normalized_name)
+        .fetch_all(pool)
+        .await
 }
 
 /// Best-quality season-pack offers (episode == 0 sentinel) for a
@@ -85,10 +108,12 @@ pub async fn list_best_for_series(
 /// API exposes packs in their own `season_packs` field — the UI
 /// never renders them as episode rows.
 ///
-/// Same dedup-by-language semantics as `list_best_for_series`: one
-/// row per (season, language) so the household's anglophone +
-/// francophone users can both find a coverable pack for the
-/// season they want, without one language masking the other.
+/// Same dedup-by-language semantics as `list_best_for_series` — one row
+/// per (season, language) so the household's anglophone + francophone
+/// users can both find a coverable pack — but the winner per group is
+/// the **recommended-best** (smallest sane pack, seeders as garde-fou,
+/// `MULTi` discounted), picked in one SQL pass. A lighter `MULTi`/1080p
+/// pack beats a 4K monster.
 ///
 /// Packs with exactly **0 seeders are excluded** (`seeders IS NOT 0`):
 /// they're un-grabbable, so they must never surface as a "Grab full
@@ -98,48 +123,54 @@ pub async fn list_season_packs_for_series(
     pool: &SqlitePool,
     normalized_name: &str,
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
-    sqlx::query_as::<_, AvailableEpisodeRow>(
+    let sql = format!(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
                 magnet, quality, seeders, size_bytes, found_at, language, download_url \
-         FROM available_episodes a \
-         WHERE normalized_name = ?1 \
-           AND episode = 0 \
-           AND seeders IS NOT 0 \
-           AND seeders IS (SELECT MAX(seeders) FROM available_episodes \
-                           WHERE normalized_name = a.normalized_name \
-                             AND season = a.season \
-                             AND episode = 0 \
-                             AND COALESCE(language, '') = COALESCE(a.language, '')) \
-         GROUP BY normalized_name, season, COALESCE(language, '') \
+         FROM (SELECT *, ROW_NUMBER() OVER ( \
+                   PARTITION BY season, COALESCE(language, '') \
+                   ORDER BY {order}) AS _rn \
+               FROM available_episodes \
+               WHERE normalized_name = ?1 AND episode = 0 AND seeders IS NOT 0) \
+         WHERE _rn = 1 \
          ORDER BY season, language",
-    )
-    .bind(normalized_name)
-    .fetch_all(pool)
-    .await
+        order = recommended_order_sql(),
+    );
+    sqlx::query_as::<_, AvailableEpisodeRow>(&sql)
+        .bind(normalized_name)
+        .fetch_all(pool)
+        .await
 }
 
 /// Find the best season-pack offer for a specific `(normalized_name,
 /// season)` — used by the grab path to ingest a pack covering an
-/// episode that has no singleton offer. Prefers `language_pref`
-/// when set; falls back to whichever pack has the most seeders.
+/// episode that has no singleton offer. When `language_pref` is set we
+/// honour it exactly (no cross-language fallback, same contract as the
+/// singleton grab); otherwise we take the **recommended-best** pack
+/// across languages. Either way the ordering is the shared size-first /
+/// seeders-garde-fou / `MULTi`-discounted policy, in one SQL pass, so we
+/// never auto-ingest a 51 GB 4K season.
 pub async fn find_pack_for_season(
     pool: &SqlitePool,
     normalized_name: &str,
     season: i64,
     language_pref: Option<&str>,
 ) -> Result<Option<AvailableEpisodeRow>, sqlx::Error> {
-    let packs = list_season_packs_for_series(pool, normalized_name).await?;
-    let same_season: Vec<_> = packs.into_iter().filter(|p| p.season == season).collect();
-    // If the caller specified a language, honour it exactly — no
-    // cross-language fallback, same contract as the singleton grab.
-    if let Some(lang) = language_pref {
-        return Ok(same_season
-            .into_iter()
-            .find(|p| p.language.as_deref() == Some(lang)));
-    }
-    Ok(same_season
-        .into_iter()
-        .max_by_key(|p| p.seeders.unwrap_or(0)))
+    let sql = format!(
+        "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url \
+         FROM available_episodes \
+         WHERE normalized_name = ?1 AND episode = 0 AND season = ?2 AND seeders IS NOT 0 \
+           AND (?3 IS NULL OR language = ?3) \
+         ORDER BY {order} \
+         LIMIT 1",
+        order = recommended_order_sql(),
+    );
+    sqlx::query_as::<_, AvailableEpisodeRow>(&sql)
+        .bind(normalized_name)
+        .bind(season)
+        .bind(language_pref)
+        .fetch_optional(pool)
+        .await
 }
 
 /// Count of distinct episodes whose `found_at` is newer than
