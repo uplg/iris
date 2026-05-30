@@ -54,6 +54,10 @@ async fn search(
         year: parsed.as_ref().and_then(|p| p.year),
     };
     let mut agg = state.providers().search_all(&q).await;
+    // Drop non-video releases (games, music, books, software) — Iris can't
+    // play them, so they're noise on the search page.
+    agg.results
+        .retain(iris_core::search::SearchResult::is_probably_video);
     // Library dedup index is a single round-trip per /api/search call;
     // if the DB hiccups we degrade gracefully (no dedup flags rather
     // than failing the search).

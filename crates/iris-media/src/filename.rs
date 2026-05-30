@@ -30,6 +30,10 @@ pub struct Parsed {
     pub quality: Option<String>,
     pub source: Option<String>,
     pub group: Option<String>,
+    /// Absolute episode number from an anime release
+    /// (`[Group] Title - NN [tags]`). Only set when the strict anime
+    /// branch matched — never for SXXEXX or year-tagged releases.
+    pub absolute_episode: Option<u32>,
 }
 
 impl Parsed {
@@ -336,8 +340,21 @@ pub fn parse(filename: &str) -> Option<Parsed> {
     // Find the structural boundary that separates the title from the
     // metadata tail. Priority: SXXEXX > year > quality > end-of-stem.
     let (title_end_byte, season, episode, year) = find_title_boundary(stem);
-    let title_part = &stem[..title_end_byte];
-    let title = humanise(title_part);
+    let mut title = humanise(&stem[..title_end_byte]);
+
+    // Anime fallback (absolute numbering): only when this is neither a
+    // SXXEXX TV release nor a year-tagged movie, and only for the
+    // bracketed-group `[Group] Title - NN [tags]` shape. Strictly gated so
+    // normal SCENE names never reach it and SXXEXX / year releases keep
+    // their existing parse untouched.
+    let mut absolute_episode = None;
+    if season.is_none() && year.is_none() {
+        if let Some(am) = parse_anime(stem) {
+            title = am.title;
+            absolute_episode = Some(am.episode);
+        }
+    }
+
     if title.is_empty() {
         return None;
     }
@@ -354,7 +371,61 @@ pub fn parse(filename: &str) -> Option<Parsed> {
         quality,
         source,
         group,
+        absolute_episode,
     })
+}
+
+struct AnimeMatch {
+    title: String,
+    episode: u32,
+}
+
+/// Parse the anime fansub shape `[Group] Title - NN [tags]` (absolute
+/// episode numbering). Requires the leading `[group]` bracket and a
+/// ` - NN` episode marker — deliberately strict so it only fires on real
+/// anime releases, never on dotted SCENE names.
+fn parse_anime(stem: &str) -> Option<AnimeMatch> {
+    let s = stem.trim();
+    if !s.starts_with('[') {
+        return None;
+    }
+    let close = s.find(']')?;
+    let after_group = strip_trailing_tag_groups(s[close + 1..].trim());
+    // `Title - NN` — the episode marker is the last ` - ` before digits.
+    let dash = after_group.rfind(" - ")?;
+    let ep_part = after_group[dash + 3..].trim_start();
+    let digits: String = ep_part.chars().take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let episode: u32 = digits.parse().ok()?;
+    let title = humanise(&after_group[..dash]);
+    if title.is_empty() {
+        return None;
+    }
+    Some(AnimeMatch { title, episode })
+}
+
+/// Strip trailing `[...]` / `(...)` tag groups (quality, codec, CRC …) so
+/// the episode marker becomes the last token. Idempotent.
+fn strip_trailing_tag_groups(s: &str) -> String {
+    let mut s = s.trim();
+    loop {
+        if s.ends_with(']') {
+            if let Some(open) = s.rfind('[') {
+                s = s[..open].trim_end();
+                continue;
+            }
+        }
+        if s.ends_with(')') {
+            if let Some(open) = s.rfind('(') {
+                s = s[..open].trim_end();
+                continue;
+            }
+        }
+        break;
+    }
+    s.to_string()
 }
 
 /// Locate the byte index in `stem` where the title ends. Priority:
@@ -626,6 +697,48 @@ mod tests {
         assert_eq!(p.source.as_deref(), Some("WEB"));
         assert_eq!(p.group.as_deref(), Some("BULiTT"));
         assert!(p.is_movie());
+    }
+
+    #[test]
+    fn parses_anime_absolute_episode() {
+        let p = parse("[SubsPlease] Frieren - 12 [1080p][HEVC].mkv").unwrap();
+        assert_eq!(p.title, "Frieren");
+        assert_eq!(p.absolute_episode, Some(12));
+        assert_eq!(p.season, None);
+        assert_eq!(p.episode, None);
+        assert_eq!(p.year, None);
+    }
+
+    #[test]
+    fn anime_handles_version_and_long_episode() {
+        let v = parse("[Group] Mob Psycho 100 - 05v2 [720p].mkv").unwrap();
+        assert_eq!(v.title, "Mob Psycho 100");
+        assert_eq!(v.absolute_episode, Some(5));
+
+        let long = parse("[Erai-raws] One Piece - 1080 [1080p].mkv").unwrap();
+        assert_eq!(long.title, "One Piece");
+        assert_eq!(long.absolute_episode, Some(1080));
+    }
+
+    #[test]
+    fn anime_branch_is_strictly_gated() {
+        // SXXEXX TV release: anime branch must not fire.
+        let tv = parse("Squid.Game.S02E03.1080p.NF.WEB-DL.x264-BULiTT.mkv").unwrap();
+        assert_eq!(tv.absolute_episode, None);
+        assert_eq!(tv.season, Some(2));
+
+        // Year-tagged movie: anime branch must not fire.
+        let movie = parse("Dune.Part.Two.2024.1080p.WEB.H265-GRP.mkv").unwrap();
+        assert_eq!(movie.absolute_episode, None);
+        assert_eq!(movie.year, Some(2024));
+
+        // Bracketed but year-tagged → year wins, no absolute episode.
+        let bracket_year = parse("[Grp] Some Movie 2020 1080p.mkv").unwrap();
+        assert_eq!(bracket_year.absolute_episode, None);
+
+        // No leading group bracket → not treated as anime.
+        let dashed = parse("Some Show - Special.mkv").unwrap();
+        assert_eq!(dashed.absolute_episode, None);
     }
 
     #[test]

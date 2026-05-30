@@ -42,7 +42,9 @@ pub fn build_router(state: AppState) -> Router {
         .layer(GovernorLayer::new(auth_governor));
     let me = routes::me::router()
         .nest("/devices", routes::devices::me_router())
-        .nest("/follows", routes::follows::router());
+        .nest("/follows", routes::follows::router())
+        .nest("/preferences", routes::preferences::router())
+        .nest("/for-you", routes::foryou::router());
 
     // Apply the Iris-Caps parser + telemetry on /torrents only — that's
     // where capability negotiation matters, and the middleware reads the DB
@@ -62,6 +64,8 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/admin", routes::admin::router())
         .nest("/me", me)
         .nest("/search", routes::search::router())
+        .nest("/genres", routes::preferences::genres_router())
+        .nest("/languages", routes::preferences::languages_router())
         .nest("/discover", routes::discover::router())
         .nest("/library", routes::library::router())
         .nest("/torrents", torrents)

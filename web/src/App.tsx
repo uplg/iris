@@ -9,6 +9,7 @@ import { RequireAuth } from "@/components/RequireAuth";
 import { LoginPage } from "@/pages/LoginPage";
 import { RegisterPage } from "@/pages/RegisterPage";
 import { HomePage } from "@/pages/HomePage";
+import { ForYouPage } from "@/pages/ForYouPage";
 import { SearchPage } from "@/pages/SearchPage";
 import { CollectionPage } from "@/pages/CollectionPage";
 import { AdminPage } from "@/pages/AdminPage";
@@ -45,6 +46,7 @@ export default function App() {
               <Route element={<RequireAuth />}>
                 <Route element={<AppShell />}>
                   <Route index element={<HomePage />} />
+                  <Route path="/for-you" element={<ForYouPage />} />
                   <Route path="/search" element={<SearchPage />} />
                   <Route path="/series/:followId" element={<SeriesAlias />} />
                   <Route path="/collection/:id" element={<CollectionPage />} />

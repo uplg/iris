@@ -7,9 +7,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Container } from "@/components/Container";
+import { PreferencesEditor } from "@/components/PreferencesEditor";
 import { AccentSwatches } from "@/components/TweaksDrawer";
 import { Tag } from "@/components/Tag";
-import { ApiError, auth as authApi, devices as devicesApi, type DeviceView } from "@/lib/api";
+import {
+  ApiError,
+  auth as authApi,
+  devices as devicesApi,
+  discover,
+  me as meApi,
+  type DeviceView,
+  type Preferences,
+} from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -75,6 +84,8 @@ export function AccountPage() {
         <IdentityCard />
 
         <PreferencesCard />
+
+        <RecommendationsCard />
 
         <DevicesCard />
 
@@ -203,6 +214,113 @@ function PreferencesCard() {
       </Card>
     </section>
   );
+}
+
+function RecommendationsCard() {
+  const qc = useQueryClient();
+  const prefsQ = useQuery({
+    queryKey: ["preferences"],
+    queryFn: meApi.preferences,
+    staleTime: 5 * 60_000,
+  });
+  const genresQ = useQuery({
+    queryKey: ["genres"],
+    queryFn: discover.genres,
+    staleTime: 24 * 60 * 60_000,
+  });
+  const languagesQ = useQuery({
+    queryKey: ["languages"],
+    queryFn: discover.languages,
+    staleTime: 24 * 60 * 60_000,
+  });
+
+  const [languages, setLanguages] = useState<string[]>([]);
+  const [genres, setGenres] = useState<number[]>([]);
+  const [includeAnime, setIncludeAnime] = useState(false);
+  const [seeded, setSeeded] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+
+  // One-shot seed from server prefs (derive-state-from-data pattern,
+  // no effect/timer).
+  if (!seeded && prefsQ.data) {
+    setSeeded(true);
+    setLanguages(prefsQ.data.languages);
+    setGenres(prefsQ.data.genres);
+    setIncludeAnime(prefsQ.data.include_anime);
+  }
+
+  const save = useMutation({
+    mutationFn: (body: Preferences) => meApi.savePreferences(body),
+    onSuccess: (data) => {
+      qc.setQueryData(["preferences"], data);
+      setJustSaved(true);
+    },
+  });
+
+  const dirty = prefsQ.data
+    ? !arraysEqual(languages, prefsQ.data.languages) ||
+      !arraysEqual(genres, prefsQ.data.genres) ||
+      includeAnime !== prefsQ.data.include_anime
+    : false;
+
+  const touch = () => setJustSaved(false);
+  const toggleLanguage = (value: string) => {
+    touch();
+    setLanguages((cur) => (cur.includes(value) ? cur.filter((x) => x !== value) : [...cur, value]));
+  };
+  const toggleGenre = (id: number) => {
+    touch();
+    setGenres((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  };
+  const toggleAnime = () => {
+    touch();
+    setIncludeAnime((v) => !v);
+  };
+
+  return (
+    <section className="grid gap-3">
+      <div className="grid gap-1">
+        <span className="eyebrow">For You</span>
+        <h2 className="heading-3">Recommendations</h2>
+      </div>
+      <Card>
+        <CardContent className="grid gap-6 p-6">
+          <PreferencesEditor
+            languages={languages}
+            genres={genres}
+            includeAnime={includeAnime}
+            languageOptions={languagesQ.data?.languages ?? []}
+            languagesLoading={languagesQ.isLoading}
+            genreOptions={genresQ.data?.genres ?? []}
+            genresLoading={genresQ.isLoading}
+            onToggleLanguage={toggleLanguage}
+            onToggleGenre={toggleGenre}
+            onToggleAnime={toggleAnime}
+          />
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={() =>
+                save.mutate({
+                  languages,
+                  genres,
+                  include_anime: includeAnime,
+                  onboarding_completed: prefsQ.data?.onboarding_completed ?? true,
+                })
+              }
+              disabled={!dirty || save.isPending}
+            >
+              {save.isPending ? "Saving…" : "Save"}
+            </Button>
+            {justSaved && !dirty && <span className="text-sm text-success">Saved.</span>}
+          </div>
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function arraysEqual<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 function SettingsRow({

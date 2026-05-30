@@ -234,6 +234,28 @@ pub async fn continue_watching(
     .await
 }
 
+/// Distinct TMDB ids the user has any playback record for (watched or
+/// in-progress), preferring the parent collection id. Used to exclude
+/// already-seen titles from the recommendation shelves. Soft-deleted
+/// torrents still count — the user saw it even if it's since been GC'd.
+pub async fn watched_tmdb_ids(
+    pool: &SqlitePool,
+    user_id: UserId,
+) -> Result<Vec<i64>, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT DISTINCT COALESCE(c.tmdb_id, t.tmdb_id) AS tmdb_id \
+         FROM playback_progress p \
+         JOIN torrents t ON t.infohash = p.infohash \
+         LEFT JOIN collections c ON c.id = t.collection_id \
+         WHERE p.user_id = ?1 AND COALESCE(c.tmdb_id, t.tmdb_id) IS NOT NULL",
+    )
+    .bind(user)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 /// One row of cross-user recent playback activity for the admin view.
 /// Mirrors [`ContinueWatchingRow`] but spans every user (joined with
 /// `users` for the display name) and keeps completed items so the admin

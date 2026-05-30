@@ -152,6 +152,21 @@ pub async fn list_active_infohashes(pool: &SqlitePool) -> Result<Vec<String>, sq
     Ok(rows.into_iter().map(|(h,)| h).collect())
 }
 
+/// Distinct TMDB ids currently in the library (not soft-deleted),
+/// preferring a torrent's parent collection id over its own. Used to
+/// exclude already-owned titles from the recommendation shelves.
+pub async fn library_tmdb_ids(pool: &SqlitePool) -> Result<Vec<i64>, sqlx::Error> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT DISTINCT COALESCE(c.tmdb_id, t.tmdb_id) AS tmdb_id \
+         FROM torrents t \
+         LEFT JOIN collections c ON c.id = t.collection_id \
+         WHERE t.deleted_at IS NULL AND COALESCE(c.tmdb_id, t.tmdb_id) IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 pub async fn soft_delete(
     pool: &SqlitePool,
     id: TorrentId,

@@ -1,3 +1,4 @@
+pub mod anilist;
 pub mod app;
 pub mod client_version;
 pub mod collection_assign;
@@ -8,6 +9,8 @@ pub mod observability;
 pub mod presence;
 pub mod ranking;
 pub mod rate_limit;
+pub mod reco;
+pub mod reco_scheduler;
 pub mod routes;
 pub mod seed_stats;
 pub mod state;
@@ -126,6 +129,15 @@ fn spawn_background_jobs(
     // clicks go through the fast path. No TMDB call. Never ingests
     // on its own.
     collections_scheduler::spawn(pool.clone(), provider_registry);
+
+    // Recommendation catalogue scheduler: every 6 h, pull the TMDB +
+    // AniList catalogue the onboarded household wants into `catalog_items`,
+    // then prune stale rows. Metadata sources only — it never queries the
+    // torrent trackers (availability is resolved at click time). Only
+    // useful with TMDB configured.
+    if let Some(tmdb) = app_state.tmdb() {
+        reco_scheduler::spawn(pool.clone(), tmdb.clone());
+    }
 
     // Lifetime-upload reconciler — every 30 s, merge librqbit's session
     // upload counters into `torrents.uploaded_bytes_total` so the value

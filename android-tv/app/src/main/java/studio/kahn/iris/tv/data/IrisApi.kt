@@ -36,6 +36,38 @@ interface IrisApi {
     @GET("api/me/continue-watching")
     suspend fun continueWatching(): List<ContinueWatchingItem>
 
+    /** Per-user recommendation preferences (languages / genres / anime).
+     *  A never-onboarded user gets the all-empty default with
+     *  `onboarding_completed = false`. */
+    @GET("api/me/preferences")
+    suspend fun preferences(): Preferences
+
+    @retrofit2.http.PUT("api/me/preferences")
+    suspend fun savePreferences(@Body body: Preferences): Preferences
+
+    /** Merged movie + TV genre taxonomy for the onboarding picker. Anime
+     *  is NOT in here — it's a distinct category driven by
+     *  [Preferences.includeAnime]. */
+    @GET("api/genres")
+    suspend fun genres(): GenresResponse
+
+    /** Server-driven selectable languages for onboarding — fetched so a
+     *  new language never requires an APK release. */
+    @GET("api/languages")
+    suspend fun languages(): LanguagesResponse
+
+    /** The home blended "For You" shelf. */
+    @GET("api/me/for-you")
+    suspend fun forYou(): ForYouResponse
+
+    /** The organized "For You" page (top picks + per-genre + anime). */
+    @GET("api/me/for-you/page")
+    suspend fun forYouPage(): ForYouResponse
+
+    /** Hide a recommendation candidate from future shelves. */
+    @POST("api/me/for-you/dismiss")
+    suspend fun dismissForYou(@Body body: DismissForYouRequest)
+
     @GET("api/torrents")
     suspend fun listTorrents(): List<TorrentView>
 
@@ -254,6 +286,82 @@ data class UserResponse(
     @SerialName("display_name") val displayName: String = "",
     @SerialName("is_admin") val isAdmin: Boolean,
 )
+
+/**
+ * Per-user recommendation preferences (Slice 1 of "For You"). Every field
+ * defaults so an older server (no preferences endpoint) or a partial
+ * payload deserialises cleanly — `languages` uses the backend `Language`
+ * vocabulary ("french" / "english"); `genres` holds TMDB genre ids;
+ * `includeAnime` is the distinct Anime category (NOT TMDB "Animation"),
+ * later fed by the AniList pipeline.
+ */
+@Serializable
+data class Preferences(
+    val languages: List<String> = emptyList(),
+    val genres: List<Long> = emptyList(),
+    @SerialName("include_anime") val includeAnime: Boolean = false,
+    @SerialName("onboarding_completed") val onboardingCompleted: Boolean = false,
+)
+
+@Serializable
+data class GenreOption(
+    val id: Long,
+    val name: String = "",
+)
+
+@Serializable
+data class GenresResponse(
+    val genres: List<GenreOption> = emptyList(),
+)
+
+@Serializable
+data class LanguageOption(
+    val value: String,
+    val label: String = "",
+)
+
+@Serializable
+data class LanguagesResponse(
+    val languages: List<LanguageOption> = emptyList(),
+)
+
+/** A recommendation candidate as rendered on a "For You" shelf. Posters
+ *  are pre-resolved server-side (TMDB CDN or AniList cover), so render
+ *  [posterUrl] directly. `new_count`/`collection_id` are set on
+ *  "new episodes" cards (a followed series with new content). */
+@Serializable
+data class CatalogCard(
+    @SerialName("catalog_id") val catalogId: String,
+    @SerialName("tmdb_id") val tmdbId: Long? = null,
+    val kind: String = "movie",
+    val title: String = "",
+    @SerialName("poster_url") val posterUrl: String? = null,
+    @SerialName("backdrop_url") val backdropUrl: String? = null,
+    val overview: String? = null,
+    @SerialName("is_anime") val isAnime: Boolean = false,
+    val availability: String = "unknown",
+    val year: Int? = null,
+    @SerialName("already_in_library") val alreadyInLibrary: Boolean = false,
+    @SerialName("library_infohash") val libraryInfohash: String? = null,
+    @SerialName("new_count") val newCount: Long? = null,
+    @SerialName("collection_id") val collectionId: String? = null,
+)
+
+@Serializable
+data class ForYouShelf(
+    val key: String = "",
+    val title: String = "",
+    val kind: String? = null,
+    val items: List<CatalogCard> = emptyList(),
+)
+
+@Serializable
+data class ForYouResponse(
+    val shelves: List<ForYouShelf> = emptyList(),
+)
+
+@Serializable
+data class DismissForYouRequest(@SerialName("catalog_id") val catalogId: String)
 
 @Serializable
 data class ContinueWatchingItem(
