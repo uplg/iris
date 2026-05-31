@@ -717,7 +717,7 @@ export function WatchPage() {
         <div
           className={cn(
             "grid gap-6",
-            videoFiles.length > 1 && "lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start",
+            sideRows.length > 1 && "lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start",
           )}
         >
           <div className="grid min-w-0 gap-6">
