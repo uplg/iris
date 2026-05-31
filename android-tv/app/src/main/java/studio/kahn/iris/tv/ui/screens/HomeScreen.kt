@@ -933,6 +933,12 @@ internal fun CatalogCardTv(
     onClick: () -> Unit,
 ) {
     val newCount = card.newCount ?: 0
+    // Always say what it is — Movie / Series, prefixed with "Anime" for the
+    // anime catalogue (which mixes movies and series). Solves "can't tell a
+    // series from a film" on the blended shelves.
+    val kindLabel = if (card.kind == "tv") "Series" else "Movie"
+    val typeLabel = if (card.isAnime) "Anime · $kindLabel" else kindLabel
+    val subtitle = listOfNotNull(typeLabel, card.year?.toString()).joinToString(" · ")
     PosterCard(
         container = container,
         tmdbId = card.tmdbId,
@@ -940,13 +946,13 @@ internal fun CatalogCardTv(
         // only fall back to a kind-safe TMDB lookup when the URL is missing.
         tmdbVerified = card.posterUrl == null && card.tmdbId != null,
         title = card.title,
-        subtitle = card.year?.toString() ?: "",
+        subtitle = subtitle,
         progress = null,
         progressColor = null,
         onClick = onClick,
         kindHint = card.kind,
         posterUrlOverride = card.posterUrl,
-        topBadge = if (newCount > 0 || card.isAnime) {
+        topBadge = if (newCount > 0) {
             {
                 androidx.tv.material3.Surface(
                     shape = RoundedCornerShape(4.dp),
@@ -955,7 +961,7 @@ internal fun CatalogCardTv(
                     ),
                 ) {
                     Text(
-                        if (newCount > 0) "$newCount new" else "Anime",
+                        "$newCount new",
                         style = MaterialTheme.typography.labelSmall,
                         color = IrisColors.OnBrand,
                         fontWeight = FontWeight.Bold,
