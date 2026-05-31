@@ -9,6 +9,7 @@ import { Container } from "@/components/Container";
 import { cn } from "@/lib/utils";
 import {
   follows,
+  library,
   progress as progressApi,
   torrents,
   type FileEntry,
@@ -36,6 +37,30 @@ import {
 import { IrisPlayer } from "@/lib/iris-core/IrisPlayer";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
+
+/** One row of the watch-page side panel — either an episode of the parent
+ *  collection (possibly in a different torrent) or a file of the current
+ *  torrent. Keyed on `(infohash, fileIdx)` since episodes can span
+ *  torrents. */
+type SideRow = {
+  key: string;
+  infohash: string;
+  fileIdx: number;
+  /** "S02E01" for collection episodes, the filename for raw files. */
+  primary: string;
+  /** Language tag (episodes) or file size (raw files). */
+  secondary: string;
+  mono: boolean;
+  watched: boolean;
+  watchedPct: number | null;
+  active: boolean;
+};
+
+function watchedPctOf(p?: FileProgressEntry): number | null {
+  return p && p.duration_seconds && p.duration_seconds > 0
+    ? Math.min(100, (p.position_seconds / p.duration_seconds) * 100)
+    : null;
+}
 
 export function WatchPage() {
   const { infohash, idx } = useParams<{ infohash: string; idx: string }>();
@@ -360,6 +385,62 @@ export function WatchPage() {
     }
     return map;
   }, [torrentProgressQ.data]);
+
+  // Parent collection — the source of sibling episodes. A season pack
+  // carries every episode as a file of THIS torrent (covered by
+  // `videoFiles`), but a season grabbed as separate per-episode torrents
+  // spreads them across many torrents; those siblings live on the
+  // collection's merged episode list, not on `data.files`. Pulling the
+  // collection lets the side panel offer the rest of the season either way.
+  const collectionId = data?.collection_id ?? null;
+  const collectionQ = useQuery({
+    queryKey: ["collection", collectionId],
+    queryFn: () => library.collection(collectionId!),
+    enabled: !!collectionId && data?.kind === "tv",
+  });
+  const collectionEpisodes = collectionQ.data?.episodes;
+
+  // Side-panel rows: the collection's episodes when this is a TV
+  // collection (so separate-episode torrents list the whole season), else
+  // the current torrent's video files (season pack / movie extras /
+  // orphan). Episode rows link to their own `(infohash, fileIdx)`.
+  const sideRows = useMemo<SideRow[]>(() => {
+    if (collectionEpisodes && collectionEpisodes.length > 0) {
+      return [...collectionEpisodes]
+        .sort((a, b) => a.season - b.season || a.episode - b.episode)
+        .map((e) => {
+          const prog = e.infohash === infohash ? progressByFileIdx.get(e.file_idx) : undefined;
+          const lang = e.language && e.language !== "unknown" ? e.language : "";
+          return {
+            key: `${e.infohash}:${e.file_idx}`,
+            infohash: e.infohash,
+            fileIdx: e.file_idx,
+            primary: `S${String(e.season).padStart(2, "0")}E${String(e.episode).padStart(2, "0")}`,
+            secondary: lang,
+            mono: false,
+            watched: e.watched || !!prog?.completed,
+            watchedPct: watchedPctOf(prog),
+            active: e.infohash === infohash && e.file_idx === fileIdx,
+          };
+        });
+    }
+    return videoFiles.map((f) => {
+      const prog = progressByFileIdx.get(f.index);
+      return {
+        key: `f:${f.index}`,
+        infohash: infohash ?? "",
+        fileIdx: f.index,
+        primary: f.path.split("/").pop() ?? f.path,
+        secondary: formatSize(f.size_bytes),
+        mono: true,
+        watched: !!prog?.completed,
+        watchedPct: watchedPctOf(prog),
+        active: f.index === fileIdx,
+      };
+    });
+  }, [collectionEpisodes, videoFiles, progressByFileIdx, infohash, fileIdx]);
+  const sidePanelTitle =
+    collectionEpisodes && collectionEpisodes.length > 0 ? "Episodes" : "Other files";
 
   // First-load resume position. Applied once via `onCanPlay` (see below) —
   // we want a single deterministic seek before playback starts, not a
@@ -736,70 +817,69 @@ export function WatchPage() {
             </section>
           </div>
 
-          {videoFiles.length > 1 && (
+          {sideRows.length > 1 && (
             <aside className="glass grid h-fit gap-3 self-start rounded-xl p-4 lg:sticky lg:top-20 lg:max-h-[calc(100svh-5.5rem)] lg:overflow-auto">
-              <span className="eyebrow">Other files ({videoFiles.length})</span>
+              <span className="eyebrow">
+                {sidePanelTitle} ({sideRows.length})
+              </span>
               <ul className="grid gap-1">
-                {videoFiles.map((f) => {
-                  const active = f.index === fileIdx;
-                  const fname = f.path.split("/").pop() ?? f.path;
-                  const prog = progressByFileIdx.get(f.index);
-                  const watchedPct =
-                    prog && prog.duration_seconds && prog.duration_seconds > 0
-                      ? Math.min(100, (prog.position_seconds / prog.duration_seconds) * 100)
-                      : null;
-                  return (
-                    <li
-                      key={f.index}
-                      className={cn(
-                        "grid gap-2 rounded-lg px-2.5 py-2 text-sm",
-                        active ? "bg-accent text-accent-foreground" : "hover:bg-hover",
-                      )}
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-mono text-xs" title={f.path}>
-                          {fname}
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-                          <span>{formatSize(f.size_bytes)}</span>
-                          {prog?.completed && (
-                            <span className="inline-flex items-center gap-0.5 text-success">
-                              <CheckCircle2 className="size-3" />
-                              watched
-                            </span>
-                          )}
-                          {!prog?.completed && watchedPct != null && watchedPct > 0 && (
-                            <span className="text-success">{watchedPct.toFixed(0)}%</span>
-                          )}
-                          {active && <span className="text-foreground/80">· now playing</span>}
-                        </div>
-                        {!prog?.completed && watchedPct != null && watchedPct > 0 && (
-                          <Progress className="mt-1 h-0.5" value={watchedPct} />
+                {sideRows.map((row) => (
+                  <li
+                    key={row.key}
+                    className={cn(
+                      "grid gap-2 rounded-lg px-2.5 py-2 text-sm",
+                      row.active ? "bg-accent text-accent-foreground" : "hover:bg-hover",
+                    )}
+                  >
+                    <div className="min-w-0">
+                      <div
+                        className={cn("truncate", row.mono ? "font-mono text-xs" : "font-medium")}
+                        title={row.primary}
+                      >
+                        {row.primary}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        {row.secondary && <span>{row.secondary}</span>}
+                        {row.watched && (
+                          <span className="inline-flex items-center gap-0.5 text-success">
+                            <CheckCircle2 className="size-3" />
+                            watched
+                          </span>
                         )}
+                        {!row.watched && row.watchedPct != null && row.watchedPct > 0 && (
+                          <span className="text-success">{row.watchedPct.toFixed(0)}%</span>
+                        )}
+                        {row.active && <span className="text-foreground/80">· now playing</span>}
                       </div>
-                      <div className="flex items-center gap-1.5">
-                        <Button
-                          size="sm"
-                          variant={active ? "secondary" : "default"}
-                          disabled={active}
-                          className="flex-1"
-                          onClick={() => navigate(`/watch/${infohash}/${f.index}`)}
+                      {!row.watched && row.watchedPct != null && row.watchedPct > 0 && (
+                        <Progress className="mt-1 h-0.5" value={row.watchedPct} />
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        size="sm"
+                        variant={row.active ? "secondary" : "default"}
+                        disabled={row.active}
+                        className="flex-1"
+                        onClick={() => navigate(`/watch/${row.infohash}/${row.fileIdx}`)}
+                      >
+                        <Play className="size-3.5" />
+                        {row.watchedPct != null && row.watchedPct > 0 && !row.watched
+                          ? "Resume"
+                          : "Play"}
+                      </Button>
+                      <Button asChild size="sm" variant="outline">
+                        <a
+                          href={torrents.downloadUrl(row.infohash, row.fileIdx)}
+                          download={row.primary}
                         >
-                          <Play className="size-3.5" />
-                          {watchedPct != null && watchedPct > 0 && !prog?.completed
-                            ? "Resume"
-                            : "Play"}
-                        </Button>
-                        <Button asChild size="sm" variant="outline">
-                          <a href={torrents.downloadUrl(infohash, f.index)} download={fname}>
-                            <Download className="size-3.5" />
-                            <span className="sr-only">Download</span>
-                          </a>
-                        </Button>
-                      </div>
-                    </li>
-                  );
-                })}
+                          <Download className="size-3.5" />
+                          <span className="sr-only">Download</span>
+                        </a>
+                      </Button>
+                    </div>
+                  </li>
+                ))}
               </ul>
             </aside>
           )}
