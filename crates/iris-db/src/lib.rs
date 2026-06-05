@@ -10,6 +10,7 @@ pub mod invitations;
 pub mod migrate;
 pub mod playback;
 pub mod playback_caps;
+pub mod playback_preferences;
 pub mod pool;
 pub mod preferences;
 pub mod reco_feedback;

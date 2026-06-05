@@ -341,6 +341,27 @@ pub async fn watched_genre_signals(
     .await
 }
 
+/// The persisted pre-signed `.torrent` URL for a recorded rolling-window
+/// release, by `(provider_id, external_id)`. Lets the preview / grab paths
+/// bypass the provider's per-process link cache — cold after a restart or FIFO
+/// eviction, which otherwise broke c411/torznab catalogue previews + grabs
+/// ("no cached download URL for …").
+pub async fn download_url_for(
+    pool: &SqlitePool,
+    provider_id: &str,
+    external_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT download_url FROM catalog_items \
+         WHERE provider_id = ?1 AND external_id = ?2 AND download_url IS NOT NULL LIMIT 1",
+    )
+    .bind(provider_id)
+    .bind(external_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|(u,)| u))
+}
+
 /// Look up a single non-anime catalogue row by `tmdb_id` — used to
 /// rebuild a "because you watched" shelf from its key (the seed's genres
 /// + title).

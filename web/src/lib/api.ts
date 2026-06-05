@@ -495,6 +495,15 @@ export type ProgressView = {
   last_watched_at: string;
 };
 
+/** Per-user playback language preferences (cross-file / cross-device). Applied
+ *  by matching the file's tracks: per-file saved index wins, else this, else
+ *  the file default. `subtitle_language: "off"` = subtitles disabled; null =
+ *  no preference. Volume is NOT here — it's persisted device-locally. */
+export type PlaybackPrefs = {
+  audio_language: string | null;
+  subtitle_language: string | null;
+};
+
 export type ContinueWatchingItem = {
   infohash: string;
   torrent_name: string;
@@ -609,6 +618,12 @@ export const me = {
   forYouPage: () => api.get<ForYouResponse>("/me/for-you/page"),
   /** Hide a recommendation candidate from future shelves. */
   dismissForYou: (catalog_id: string) => api.post<void>("/me/for-you/dismiss", { catalog_id }),
+  /** The user's preferred audio + subtitle language (applied across episodes
+   *  / devices). */
+  playbackPreferences: () => api.get<PlaybackPrefs>("/me/playback-preferences"),
+  /** Save preferred audio + subtitle language. Send the full current state. */
+  savePlaybackPreferences: (body: PlaybackPrefs) =>
+    api.put<void>("/me/playback-preferences", body),
 };
 
 export type FilePreview = {

@@ -61,6 +61,9 @@ export type IrisChromeProps = {
    *  while playback is uninterrupted — matches the cursor-hide
    *  behaviour every native fullscreen player has. */
   onControlsVisibleChange?: (visible: boolean) => void;
+  /** Notified when the user changes volume or mute (slider, mute button, or
+   *  keyboard). Lets the parent persist volume device-locally. */
+  onVolumeChange?: (volume: number, muted: boolean) => void;
 };
 
 export function IrisChrome(props: IrisChromeProps) {
@@ -127,6 +130,20 @@ export function IrisChrome(props: IrisChromeProps) {
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
   }, [handle, scrubbing]);
+
+  // Surface volume / mute changes to the parent so it can persist them
+  // device-locally. Driven off the polled state, so it fires once for every
+  // change regardless of source (slider, mute button, keyboard).
+  const onVolumeChange = props.onVolumeChange;
+  const lastVolRef = useRef<{ v: number; m: boolean } | null>(null);
+  useEffect(() => {
+    if (!onVolumeChange) return;
+    const last = lastVolRef.current;
+    if (last && (last.v !== volume || last.m !== muted)) {
+      onVolumeChange(volume, muted);
+    }
+    lastVolRef.current = { v: volume, m: muted };
+  }, [volume, muted, onVolumeChange]);
 
   // Keyboard shortcuts on the fullscreen container.
   useEffect(() => {

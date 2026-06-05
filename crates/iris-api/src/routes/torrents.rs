@@ -248,10 +248,7 @@ async fn preview(
         .providers()
         .get(&body.provider_id)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown provider `{}`", body.provider_id)))?;
-    let source = provider
-        .resolve(&body.external_id)
-        .await
-        .map_err(map_provider_err)?;
+    let source = resolve_release(&state, &provider, &body.provider_id, &body.external_id).await?;
     let bytes = match source {
         TorrentSource::TorrentFile(b) => b,
         TorrentSource::Magnet(_) => {
@@ -290,6 +287,43 @@ async fn is_dead(provider: &Arc<dyn iris_providers::SearchProvider>, external_id
     matches!(provider.details(external_id).await, Ok(Some(d)) if d.seeders == Some(0))
 }
 
+/// Resolve a release to a [`TorrentSource`], preferring the persisted
+/// pre-signed `.torrent` URL recorded in the discovery catalogue
+/// (restart/cache-proof) over the provider's in-memory link cache. The link
+/// cache is cold after a restart and FIFO-evicts under load, which broke
+/// c411/torznab catalogue previews + grabs ("no cached download URL …").
+/// Search hits (not in the catalogue) fall straight through to `resolve()`,
+/// whose cache is hot from the search the user just ran.
+async fn resolve_release(
+    state: &AppState,
+    provider: &Arc<dyn iris_providers::SearchProvider>,
+    provider_id: &str,
+    external_id: &str,
+) -> ApiResult<TorrentSource> {
+    if let Some(url) =
+        iris_db::catalog::download_url_for(state.db(), provider_id, external_id).await?
+    {
+        match provider.fetch_bytes(&url).await {
+            Ok(bytes) => {
+                // Almost always a .torrent; tolerate a magnet body just in case.
+                if bytes.starts_with(b"magnet:") {
+                    if let Ok(s) = std::str::from_utf8(&bytes) {
+                        return Ok(TorrentSource::Magnet(s.trim().to_string()));
+                    }
+                }
+                return Ok(TorrentSource::TorrentFile(bytes.to_vec()));
+            }
+            Err(e) => tracing::warn!(
+                url,
+                provider = provider_id,
+                error = %e,
+                "catalog download_url fetch failed; falling back to resolve()",
+            ),
+        }
+    }
+    provider.resolve(external_id).await.map_err(map_provider_err)
+}
+
 /// Core grab path shared by the search ingest endpoint and the For-You preview
 /// dialog (which ingests the catalogue card's recommended-best release through
 /// the same path): refuse a dead torrent, resolve the release, add it to the
@@ -312,10 +346,7 @@ pub(crate) async fn ingest_core(
         return Err(ApiError::DeadTorrent);
     }
 
-    let source = provider
-        .resolve(&external_id)
-        .await
-        .map_err(map_provider_err)?;
+    let source = resolve_release(state, &provider, &provider_id, &external_id).await?;
     let result = match source {
         TorrentSource::TorrentFile(bytes) => state.engine().add_from_bytes(bytes).await,
         TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,

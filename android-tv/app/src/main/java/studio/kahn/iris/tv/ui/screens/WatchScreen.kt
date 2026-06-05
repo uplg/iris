@@ -61,6 +61,7 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.EpisodePoint
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.MediaProbe
+import studio.kahn.iris.tv.data.PlaybackPrefs
 import studio.kahn.iris.tv.data.ProgressUpdate
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.buildMediaItem
@@ -107,6 +108,11 @@ fun WatchScreen(
     // `default` flag" (initial-mount behaviour for first-time watches).
     var savedAudioIdx by remember { mutableStateOf<Int?>(null) }
     var savedSubIdx by remember { mutableStateOf<Int?>(null) }
+    // Per-user preferred audio + subtitle LANGUAGE (cross-episode / device).
+    // Used only when this file has no per-file saved track (see ReadyPlayer):
+    // per-file index wins, else this language pref, else the source default.
+    var prefAudioLang by remember { mutableStateOf<String?>(null) }
+    var prefSubLang by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var probeVersion by remember { mutableStateOf(0) }
 
@@ -151,6 +157,9 @@ fun WatchScreen(
                 // picks; safe to ignore failures (first-time watch).
                 val saved = runCatching { api.getProgress(infohash, fileIdx) }
                     .getOrNull()
+                // Per-user language preference (cross-episode). Best-effort —
+                // an older server without the endpoint just yields null.
+                val prefs = runCatching { api.playbackPreferences() }.getOrNull()
                 // Commit atomically. The order here matters: write
                 // `resumePositionSec` BEFORE `probe` so the very
                 // first recomposition that sees `probe != null`
@@ -158,6 +167,8 @@ fun WatchScreen(
                 resumePositionSec = resume
                 savedAudioIdx = saved?.audioTrackIdx
                 savedSubIdx = saved?.subtitleTrackIdx
+                prefAudioLang = prefs?.audioLanguage
+                prefSubLang = prefs?.subtitleLanguage
                 probe = freshProbe
                 return@LaunchedEffect
             } catch (e: retrofit2.HttpException) {
@@ -235,6 +246,8 @@ fun WatchScreen(
                 startPositionSec = resumePositionSec,
                 initialAudioIdx = savedAudioIdx,
                 initialSubIdx = savedSubIdx,
+                prefAudioLang = prefAudioLang,
+                prefSubLang = prefSubLang,
                 onPositionUpdate = { resumePositionSec = it },
                 onPlayerError = { error = it },
                 onBack = onBack,
@@ -267,6 +280,8 @@ private fun ReadyPlayer(
     startPositionSec: Double,
     initialAudioIdx: Int?,
     initialSubIdx: Int?,
+    prefAudioLang: String?,
+    prefSubLang: String?,
     onPositionUpdate: (Double) -> Unit,
     onPlayerError: (String) -> Unit,
     onBack: () -> Unit,
@@ -400,9 +415,13 @@ private fun ReadyPlayer(
     // — `setPreferredAudioLanguage` collapses multi-track ambiguity,
     // so the authoritative pin is the `TrackSelectionOverride` we apply
     // on the first `onTracksChanged` event further below.
-    LaunchedEffect(player, probe, initialAudioIdx, initialSubIdx) {
+    LaunchedEffect(player, probe, initialAudioIdx, initialSubIdx, prefAudioLang, prefSubLang) {
         val savedAudioLang = savedAudioOrdinal?.let { probe.audio[it].language }
+        // Audio precedence: this file's saved track, else the per-user
+        // language preference (carries across episodes), else the source
+        // default. A missing language just lets Media3 fall back.
         val initialAudio = savedAudioLang
+            ?: prefAudioLang
             ?: probe.audio.firstOrNull { it.default }?.language
             ?: probe.audio.firstOrNull()?.language
         val savedSubLang = savedSubOrdinal
@@ -410,16 +429,26 @@ private fun ReadyPlayer(
             ?.let { probe.subtitle[it].language }
         val params = player.trackSelectionParameters.buildUpon()
         if (initialAudio != null) params.setPreferredAudioLanguage(initialAudio)
-        if (savedSubLang != null) {
-            params.setPreferredTextLanguage(savedSubLang)
-            params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-        } else if (savedSubOrdinal == -1) {
-            params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-        } else {
-            // No saved preference: keep subs off by default (matches
-            // the previous behaviour — the source `default` flag is
-            // surfaced via the gear menu but we don't auto-enable it).
-            params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+        when {
+            // This file's saved subtitle pick (a specific language).
+            savedSubLang != null -> {
+                params.setPreferredTextLanguage(savedSubLang)
+                params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            }
+            // This file's explicit "off".
+            savedSubOrdinal == -1 -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            // No per-file pick → per-user subtitle preference.
+            prefSubLang == "off" -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            // Enable only when the preferred language is actually present —
+            // never force a different language onto the user.
+            prefSubLang != null &&
+                probe.subtitle.any { it.language.equals(prefSubLang, ignoreCase = true) } -> {
+                params.setPreferredTextLanguage(prefSubLang)
+                params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            }
+            // No preference (or preferred language absent): subs off (matches
+            // the previous default — the gear menu still lets the user enable).
+            else -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
         }
         player.trackSelectionParameters = params.build()
     }
@@ -481,6 +510,21 @@ private fun ReadyPlayer(
                             subtitleTrackIdx = currentSubIdxRef.get(),
                             completed = dur != null && pos >= dur - 30_000,
                         ),
+                    )
+                }
+                // Also remember the chosen LANGUAGES per-user so they carry to
+                // the next episode / device. Resolved from the current track
+                // selection; "off" when subtitles are disabled.
+                val audioLang = currentAudioIdxRef.get()
+                    ?.let { idx -> probe.audio.firstOrNull { it.index == idx }?.language }
+                val subLang = when (val s = currentSubIdxRef.get()) {
+                    null -> null
+                    -1 -> "off"
+                    else -> probe.subtitle.firstOrNull { it.index == s }?.language
+                }
+                runCatching {
+                    container.apiFor(serverUrl).savePlaybackPreferences(
+                        PlaybackPrefs(audioLanguage = audioLang, subtitleLanguage = subLang),
                     )
                 }
             }

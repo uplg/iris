@@ -68,6 +68,15 @@ interface IrisApi {
     @POST("api/me/for-you/dismiss")
     suspend fun dismissForYou(@Body body: DismissForYouRequest)
 
+    /** The user's preferred audio + subtitle language (applied across episodes
+     *  / devices). */
+    @GET("api/me/playback-preferences")
+    suspend fun playbackPreferences(): PlaybackPrefs
+
+    /** Save preferred audio + subtitle language. Send the full current state. */
+    @retrofit2.http.PUT("api/me/playback-preferences")
+    suspend fun savePlaybackPreferences(@Body body: PlaybackPrefs)
+
     @GET("api/torrents")
     suspend fun listTorrents(): List<TorrentView>
 
@@ -370,6 +379,15 @@ data class ForYouResponse(
 
 @Serializable
 data class DismissForYouRequest(@SerialName("catalog_id") val catalogId: String)
+
+/** Per-user playback language preferences (GET response + PUT body).
+ *  `subtitleLanguage == "off"` means subtitles disabled; null = no
+ *  preference. Volume isn't here — Android TV uses the system volume. */
+@Serializable
+data class PlaybackPrefs(
+    @SerialName("audio_language") val audioLanguage: String? = null,
+    @SerialName("subtitle_language") val subtitleLanguage: String? = null,
+)
 
 @Serializable
 data class ContinueWatchingItem(
