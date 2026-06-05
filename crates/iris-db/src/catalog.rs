@@ -31,9 +31,27 @@ pub struct NewCatalogItem {
     pub popularity: Option<f64>,
     pub vote_average: Option<f64>,
     pub release_date: Option<String>,
-    /// Which slice produced this row (e.g. `tmdb:trending`,
-    /// `tmdb:discover:fr`) — diagnostic only.
+    /// Which slice produced this row (e.g. `freshness:torr9:movie`,
+    /// `reco:similar`) — diagnostic only.
     pub source: Option<String>,
+    /// `'available'` for a tracker-confirmed rolling-window row, `'unknown'`
+    /// for a lazy recommendation candidate (resolved on click).
+    pub availability: String,
+    /// Best recorded release's seeder count. The dead-torrent guard never
+    /// stores a 0-seeder release; re-checked at grab time.
+    pub seeders: Option<i64>,
+    /// Best recorded release's grab facts — enough to ingest the exact release
+    /// directly without a fresh search. `None` for lazy reco candidates.
+    pub provider_id: Option<String>,
+    pub external_id: Option<String>,
+    pub download_url: Option<String>,
+    pub infohash: Option<String>,
+    /// Coarse language tag of the recorded release (`"french"` / `"english"` /
+    /// `"multi"` / …), so a per-language household can prefer its own.
+    pub language: Option<String>,
+    /// Tracker upload time of the recorded release — basis for the sliding
+    /// window ordering + GC. `None` for lazy reco candidates.
+    pub released_at: Option<DateTime<Utc>>,
 }
 
 /// A catalogue row as queried for the recommendation shelves.
@@ -56,13 +74,21 @@ pub struct CatalogItem {
     pub release_date: Option<String>,
     pub availability: String,
     pub available_provider: Option<String>,
+    pub seeders: Option<i64>,
+    pub provider_id: Option<String>,
+    pub external_id: Option<String>,
+    pub download_url: Option<String>,
+    pub infohash: Option<String>,
+    pub language: Option<String>,
+    pub released_at: Option<DateTime<Utc>>,
 }
 
 /// Column list for `CatalogItem` reads — shared so the row queries can't
 /// drift from the struct's `FromRow` field order.
 const SELECT_COLUMNS: &str = "id, tmdb_id, anilist_id, kind, title, original_language, genres, \
      is_anime, poster_path, backdrop_path, overview, popularity, vote_average, release_date, \
-     availability, available_provider";
+     availability, available_provider, seeders, provider_id, external_id, download_url, infohash, \
+     language, released_at";
 
 /// Ordering for a catalogue query.
 #[derive(Debug, Clone, Copy, Default)]
@@ -74,6 +100,9 @@ pub enum CatalogOrder {
     FirstSeen,
     /// Newest release / air date first (freshest content).
     ReleaseDate,
+    /// Most recently uploaded to a tracker first — the rolling-window
+    /// "what just dropped" ordering (NULLs sort last).
+    Released,
 }
 
 /// Per-request catalogue filter. Empty `languages` = any language.
@@ -102,8 +131,11 @@ pub async fn upsert_item(pool: &SqlitePool, item: &NewCatalogItem) -> Result<(),
         "INSERT INTO catalog_items \
             (id, tmdb_id, anilist_id, kind, title, original_language, genres, is_anime, \
              poster_path, backdrop_path, overview, popularity, vote_average, release_date, \
-             source, first_seen_at, last_refreshed_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16) \
+             source, first_seen_at, last_refreshed_at, \
+             availability, seeders, provider_id, external_id, download_url, infohash, \
+             language, released_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, \
+                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24) \
          ON CONFLICT(tmdb_id, kind) WHERE tmdb_id IS NOT NULL AND is_anime = 0 DO UPDATE SET \
             title = excluded.title, \
             original_language = excluded.original_language, \
@@ -116,7 +148,15 @@ pub async fn upsert_item(pool: &SqlitePool, item: &NewCatalogItem) -> Result<(),
             vote_average = excluded.vote_average, \
             release_date = excluded.release_date, \
             source = excluded.source, \
-            last_refreshed_at = excluded.last_refreshed_at",
+            last_refreshed_at = excluded.last_refreshed_at, \
+            availability = excluded.availability, \
+            seeders = excluded.seeders, \
+            provider_id = excluded.provider_id, \
+            external_id = excluded.external_id, \
+            download_url = excluded.download_url, \
+            infohash = excluded.infohash, \
+            language = excluded.language, \
+            released_at = excluded.released_at",
     )
     .bind(id)
     .bind(item.tmdb_id)
@@ -134,6 +174,14 @@ pub async fn upsert_item(pool: &SqlitePool, item: &NewCatalogItem) -> Result<(),
     .bind(&item.release_date)
     .bind(&item.source)
     .bind(now)
+    .bind(&item.availability)
+    .bind(item.seeders)
+    .bind(&item.provider_id)
+    .bind(&item.external_id)
+    .bind(&item.download_url)
+    .bind(&item.infohash)
+    .bind(&item.language)
+    .bind(item.released_at)
     .execute(pool)
     .await?;
     Ok(())
@@ -153,8 +201,11 @@ pub async fn upsert_anime(pool: &SqlitePool, item: &NewCatalogItem) -> Result<()
         "INSERT INTO catalog_items \
             (id, tmdb_id, anilist_id, kind, title, original_language, genres, is_anime, \
              poster_path, backdrop_path, overview, popularity, vote_average, release_date, \
-             source, first_seen_at, last_refreshed_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16) \
+             source, first_seen_at, last_refreshed_at, \
+             availability, seeders, provider_id, external_id, download_url, infohash, \
+             language, released_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, \
+                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24) \
          ON CONFLICT(anilist_id) WHERE anilist_id IS NOT NULL DO UPDATE SET \
             tmdb_id = excluded.tmdb_id, \
             kind = excluded.kind, \
@@ -169,7 +220,15 @@ pub async fn upsert_anime(pool: &SqlitePool, item: &NewCatalogItem) -> Result<()
             vote_average = excluded.vote_average, \
             release_date = excluded.release_date, \
             source = excluded.source, \
-            last_refreshed_at = excluded.last_refreshed_at",
+            last_refreshed_at = excluded.last_refreshed_at, \
+            availability = excluded.availability, \
+            seeders = excluded.seeders, \
+            provider_id = excluded.provider_id, \
+            external_id = excluded.external_id, \
+            download_url = excluded.download_url, \
+            infohash = excluded.infohash, \
+            language = excluded.language, \
+            released_at = excluded.released_at",
     )
     .bind(id)
     .bind(item.tmdb_id)
@@ -187,29 +246,14 @@ pub async fn upsert_anime(pool: &SqlitePool, item: &NewCatalogItem) -> Result<()
     .bind(&item.release_date)
     .bind(&item.source)
     .bind(now)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Flip a candidate's availability (the tracker-confirmation pass, Slice
-/// 3). Stamps `available_checked_at`.
-pub async fn set_availability(
-    pool: &SqlitePool,
-    catalog_id: Uuid,
-    availability: &str,
-    provider: Option<&str>,
-) -> Result<(), sqlx::Error> {
-    let now = Utc::now();
-    sqlx::query(
-        "UPDATE catalog_items \
-         SET availability = ?1, available_provider = ?2, available_checked_at = ?3 \
-         WHERE id = ?4",
-    )
-    .bind(availability)
-    .bind(provider)
-    .bind(now)
-    .bind(catalog_id)
+    .bind(&item.availability)
+    .bind(item.seeders)
+    .bind(&item.provider_id)
+    .bind(&item.external_id)
+    .bind(&item.download_url)
+    .bind(&item.infohash)
+    .bind(&item.language)
+    .bind(item.released_at)
     .execute(pool)
     .await?;
     Ok(())
@@ -251,31 +295,11 @@ pub async fn query_for_user(
         // NULL release_date sorts last under SQLite DESC (films without a
         // date drop to the bottom rather than the top).
         CatalogOrder::ReleaseDate => " ORDER BY release_date DESC LIMIT ",
+        // Same NULLs-last behaviour for the tracker upload time.
+        CatalogOrder::Released => " ORDER BY released_at DESC LIMIT ",
     };
     qb.push(order).push_bind(q.limit);
     qb.build_query_as::<CatalogItem>().fetch_all(pool).await
-}
-
-/// Candidates needing a tracker-availability check: never-checked
-/// `unknown` rows first, then anything last checked before `cutoff`
-/// (stale re-checks). Bounded by `limit` so a pass does a fixed amount
-/// of work regardless of catalogue size.
-pub async fn pending_confirmation(
-    pool: &SqlitePool,
-    cutoff: DateTime<Utc>,
-    limit: i64,
-) -> Result<Vec<CatalogItem>, sqlx::Error> {
-    let sql = format!(
-        "SELECT {SELECT_COLUMNS} FROM catalog_items \
-         WHERE availability = 'unknown' OR available_checked_at IS NULL OR available_checked_at < ?1 \
-         ORDER BY (availability = 'unknown') DESC, popularity DESC \
-         LIMIT ?2"
-    );
-    sqlx::query_as::<_, CatalogItem>(&sql)
-        .bind(cutoff)
-        .bind(limit)
-        .fetch_all(pool)
-        .await
 }
 
 /// One watched title that reconciles to a (non-anime) catalogue row —
@@ -284,6 +308,9 @@ pub async fn pending_confirmation(
 pub struct WatchedSignal {
     pub tmdb_id: i64,
     pub title: String,
+    /// `"movie"` | `"tv"` — needed to hit the right TMDB recommendations
+    /// endpoint for "Because you watched X".
+    pub kind: String,
     /// JSON array of TMDB genre ids.
     pub genres: String,
     pub watched_at: DateTime<Utc>,
@@ -298,7 +325,7 @@ pub async fn watched_genre_signals(
 ) -> Result<Vec<WatchedSignal>, sqlx::Error> {
     let user: Uuid = user_id.into();
     sqlx::query_as::<_, WatchedSignal>(
-        "SELECT ci.tmdb_id AS tmdb_id, ci.title AS title, ci.genres AS genres, \
+        "SELECT ci.tmdb_id AS tmdb_id, ci.title AS title, ci.kind AS kind, ci.genres AS genres, \
                 MAX(p.last_watched_at) AS watched_at \
          FROM playback_progress p \
          JOIN torrents t ON t.infohash = p.infohash \
@@ -312,27 +339,6 @@ pub async fn watched_genre_signals(
     .bind(user)
     .fetch_all(pool)
     .await
-}
-
-/// Recently-added anime not yet confirmed available. The hourly anime
-/// fast-path re-checks these so a release surfaces as soon as any
-/// provider has it. Bounded by `limit`.
-pub async fn pending_anime_confirmation(
-    pool: &SqlitePool,
-    since: DateTime<Utc>,
-    limit: i64,
-) -> Result<Vec<CatalogItem>, sqlx::Error> {
-    let sql = format!(
-        "SELECT {SELECT_COLUMNS} FROM catalog_items \
-         WHERE is_anime = 1 AND availability != 'available' AND first_seen_at >= ?1 \
-         ORDER BY first_seen_at DESC \
-         LIMIT ?2"
-    );
-    sqlx::query_as::<_, CatalogItem>(&sql)
-        .bind(since)
-        .bind(limit)
-        .fetch_all(pool)
-        .await
 }
 
 /// Look up a single non-anime catalogue row by `tmdb_id` — used to
@@ -365,6 +371,40 @@ pub async fn prune_stale(
     Ok(res.rows_affected())
 }
 
+/// Slide the rolling window. Removes rolling-window rows whose tracker upload
+/// time predates `released_before` (the retention edge), plus lazy
+/// recommendation candidates (no `released_at`) gone cold before `lazy_before`.
+/// Titles currently in the library or followed by any user are spared — their
+/// catalogue row may still matter (e.g. a followed series getting new episodes).
+/// AniList-only rows (no `tmdb_id`) are always eligible. Returns rows removed.
+pub async fn prune_window(
+    pool: &SqlitePool,
+    released_before: DateTime<Utc>,
+    lazy_before: DateTime<Utc>,
+) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        "DELETE FROM catalog_items \
+         WHERE ( \
+             (released_at IS NOT NULL AND released_at < ?1) \
+          OR (released_at IS NULL AND last_refreshed_at < ?2) \
+         ) \
+         AND ( \
+             tmdb_id IS NULL OR tmdb_id NOT IN ( \
+                 SELECT COALESCE(c.tmdb_id, t.tmdb_id) FROM torrents t \
+                   LEFT JOIN collections c ON c.id = t.collection_id \
+                   WHERE t.deleted_at IS NULL AND COALESCE(c.tmdb_id, t.tmdb_id) IS NOT NULL \
+                 UNION \
+                 SELECT tmdb_id FROM series_follows \
+             ) \
+         )",
+    )
+    .bind(released_before)
+    .bind(lazy_before)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +427,35 @@ mod tests {
             vote_average: Some(0.8),
             release_date: Some("2001-04-25".to_string()),
             source: Some("test".to_string()),
+            availability: "unknown".to_string(),
+            seeders: None,
+            provider_id: None,
+            external_id: None,
+            download_url: None,
+            infohash: None,
+            language: None,
+            released_at: None,
+        }
+    }
+
+    /// A rolling-window movie: `availability='available'` with grab facts and
+    /// a tracker upload time.
+    fn movie_release(
+        tmdb_id: i64,
+        title: &str,
+        seeders: i64,
+        released_at: DateTime<Utc>,
+    ) -> NewCatalogItem {
+        NewCatalogItem {
+            availability: "available".to_string(),
+            seeders: Some(seeders),
+            provider_id: Some("torr9".to_string()),
+            external_id: Some(format!("ext-{tmdb_id}")),
+            download_url: Some(format!("https://t/{tmdb_id}.torrent")),
+            infohash: Some(format!("{tmdb_id:040x}")),
+            language: Some("french".to_string()),
+            released_at: Some(released_at),
+            ..movie(tmdb_id, title, "fr", 10.0)
         }
     }
 
@@ -414,11 +483,6 @@ mod tests {
         upsert_item(&pool, &updated).await.unwrap();
         upsert_item(&pool, &movie(2, "Heat", "en", 15.0)).await.unwrap();
 
-        // Both start 'unknown' → both pending, unknowns ordered by popularity.
-        let pending = pending_confirmation(&pool, Utc::now(), 10).await.unwrap();
-        assert_eq!(pending.len(), 2);
-        assert_eq!(pending[0].title, "Amelie (updated)");
-
         // Language filter resolves to the single, updated French row.
         let fr = query_for_user(
             &pool,
@@ -436,32 +500,71 @@ mod tests {
             .unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].title, "Amelie (updated)");
+    }
 
-        // Availability starts 'unknown' → only_available excludes everything…
-        let none_available = query_for_user(
+    #[tokio::test]
+    async fn release_facts_persist_and_order_by_released() {
+        let pool = migrated_pool().await;
+        let old = Utc::now() - chrono::Duration::days(40);
+        let fresh = Utc::now() - chrono::Duration::days(2);
+
+        upsert_item(&pool, &movie_release(1, "Old Drop", 5, old)).await.unwrap();
+        upsert_item(&pool, &movie_release(2, "Fresh Drop", 12, fresh)).await.unwrap();
+
+        // Release facts round-trip + freshest-first ordering.
+        let rows = query_for_user(
             &pool,
-            &CatalogQuery { only_available: true, limit: 10, ..Default::default() },
+            &CatalogQuery { order: CatalogOrder::Released, limit: 10, ..Default::default() },
         )
         .await
         .unwrap();
-        assert!(none_available.is_empty());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].title, "Fresh Drop");
+        assert_eq!(rows[0].availability, "available");
+        assert_eq!(rows[0].seeders, Some(12));
+        assert_eq!(rows[0].provider_id.as_deref(), Some("torr9"));
+        assert_eq!(rows[0].external_id.as_deref(), Some("ext-2"));
+        assert!(rows[0].released_at.is_some());
 
-        // …until a tracker confirmation flips one.
-        set_availability(&pool, fr[0].id, "available", Some("torznab")).await.unwrap();
+        // only_available passes (rolling-window rows are 'available').
         let available = query_for_user(
             &pool,
             &CatalogQuery { only_available: true, limit: 10, ..Default::default() },
         )
         .await
         .unwrap();
-        assert_eq!(available.len(), 1);
-        assert_eq!(available[0].available_provider.as_deref(), Some("torznab"));
+        assert_eq!(available.len(), 2);
+    }
 
-        // The just-confirmed row is no longer pending (checked_at is recent);
-        // the still-unknown one is.
-        let yesterday = Utc::now() - chrono::Duration::days(1);
-        let pending_after = pending_confirmation(&pool, yesterday, 10).await.unwrap();
-        assert_eq!(pending_after.len(), 1);
-        assert_eq!(pending_after[0].title, "Heat");
+    #[tokio::test]
+    async fn prune_window_slides_and_spares_nulls() {
+        let pool = migrated_pool().await;
+        let old = Utc::now() - chrono::Duration::days(40);
+        let fresh = Utc::now() - chrono::Duration::days(2);
+
+        upsert_item(&pool, &movie_release(1, "Old Drop", 5, old)).await.unwrap();
+        upsert_item(&pool, &movie_release(2, "Fresh Drop", 12, fresh)).await.unwrap();
+        // A lazy reco candidate: no released_at, AniList-only (always
+        // GC-eligible). Backdate last_refreshed_at so it reads as cold.
+        let mut lazy = movie(3, "Lazy Rec", "fr", 8.0);
+        lazy.tmdb_id = None;
+        lazy.anilist_id = Some(999);
+        upsert_anime(&pool, &lazy).await.unwrap();
+        sqlx::query("UPDATE catalog_items SET last_refreshed_at = ?1 WHERE anilist_id = 999")
+            .bind(Utc::now() - chrono::Duration::days(5))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let released_cutoff = Utc::now() - chrono::Duration::days(28);
+        let lazy_cutoff = Utc::now() - chrono::Duration::days(1);
+        let removed = prune_window(&pool, released_cutoff, lazy_cutoff).await.unwrap();
+        assert_eq!(removed, 2, "old drop + cold lazy candidate pruned");
+
+        let rows = query_for_user(&pool, &CatalogQuery { limit: 10, ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Fresh Drop");
     }
 }

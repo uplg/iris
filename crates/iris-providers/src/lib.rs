@@ -21,7 +21,8 @@ mod util;
 use async_trait::async_trait;
 use iris_core::Result;
 use iris_core::search::{
-    ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, TorrentDetails, TorrentSource,
+    MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, SortField, SortOrder,
+    TorrentDetails, TorrentSource,
 };
 
 use iris_core::Error;
@@ -34,6 +35,32 @@ pub trait SearchProvider: Send + Sync {
     fn capabilities(&self) -> ProviderCapabilities;
     async fn search(&self, q: &SearchQuery) -> Result<ProviderPage>;
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource>;
+
+    /// Latest releases the provider has indexed — a query-less "rolling
+    /// window" feed of what just dropped, narrowed to `kind` when the
+    /// provider supports it. `page` is 1-based. This is what the freshness
+    /// scheduler polls to build the discovery catalogue.
+    ///
+    /// Default: a query-less `search()`, which trackers whose search returns
+    /// the newest items on an empty query (UNIT3D's empty `name=` sorted
+    /// `created_at desc`, generic Torznab) satisfy directly. Providers with a
+    /// dedicated RSS/latest endpoint (torr9) or that need the query omitted
+    /// entirely (Torznab) override this.
+    async fn latest(&self, kind: Option<MediaKind>, page: u32) -> Result<ProviderPage> {
+        self.search(&SearchQuery {
+            q: String::new(),
+            page: Some(page.max(1)),
+            limit: Some(100),
+            sort_by: Some(SortField::Uploaded),
+            order: Some(SortOrder::Desc),
+            kind,
+            parsed_title: None,
+            season: None,
+            episode: None,
+            year: None,
+        })
+        .await
+    }
 
     /// Curated/featured carousel for the discovery shelves. Default is
     /// empty — providers without a "featured" concept simply contribute

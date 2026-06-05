@@ -30,36 +30,6 @@ struct Inner {
     cache: RwLock<HashMap<String, (Instant, Vec<AniListMedia>)>>,
 }
 
-/// The four broadcast seasons AniList buckets anime into.
-#[derive(Debug, Clone, Copy)]
-pub enum AniSeason {
-    Winter,
-    Spring,
-    Summer,
-    Fall,
-}
-
-impl AniSeason {
-    fn as_str(self) -> &'static str {
-        match self {
-            AniSeason::Winter => "WINTER",
-            AniSeason::Spring => "SPRING",
-            AniSeason::Summer => "SUMMER",
-            AniSeason::Fall => "FALL",
-        }
-    }
-
-    /// The broadcast season covering a calendar month (1–12).
-    pub fn from_month(month: u32) -> Self {
-        match month {
-            12 | 1 | 2 => AniSeason::Winter,
-            3..=5 => AniSeason::Spring,
-            6..=8 => AniSeason::Summer,
-            _ => AniSeason::Fall,
-        }
-    }
-}
-
 /// A normalized AniList title — ready to reconcile to TMDB or fall back
 /// to an AniList-only catalogue row.
 #[derive(Debug, Clone)]
@@ -87,21 +57,21 @@ pub struct AniListMedia {
     pub is_movie: bool,
 }
 
-const SEASONAL_QUERY: &str = "\
-query ($season: MediaSeason, $seasonYear: Int) {
-  Page(page: 1, perPage: 50) {
-    media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: POPULARITY_DESC) {
+const SEARCH_QUERY: &str = "\
+query ($search: String) {
+  Page(page: 1, perPage: 10) {
+    media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
       id title { romaji english } startDate { year month day } coverImage { large } bannerImage
       description(asHtml: false) genres popularity averageScore format
     }
   }
 }";
 
-const AIRING_QUERY: &str = "\
-query ($from: Int, $to: Int) {
-  Page(page: 1, perPage: 50) {
-    airingSchedules(airingAt_greater: $from, airingAt_lesser: $to, sort: TIME) {
-      media {
+const RECOMMENDATIONS_QUERY: &str = "\
+query ($mediaId: Int) {
+  Page(page: 1, perPage: 25) {
+    recommendations(mediaId: $mediaId, sort: RATING_DESC) {
+      mediaRecommendation {
         id title { romaji english } startDate { year month day } coverImage { large } bannerImage
         description(asHtml: false) genres popularity averageScore format
       }
@@ -123,19 +93,24 @@ impl AniListClient {
         })
     }
 
-    /// The season's most popular anime.
-    pub async fn seasonal(&self, season: AniSeason, year: i32) -> Vec<AniListMedia> {
-        let key = format!("seasonal:{}:{year}", season.as_str());
-        let vars = serde_json::json!({ "season": season.as_str(), "seasonYear": year });
-        self.fetch(key, SEASONAL_QUERY, vars).await
+    /// Search anime by title — reconciles a tracker release (or a watched
+    /// title) to its AniList entry for a precise anime poster + `is_anime`.
+    pub async fn search(&self, title: &str) -> Vec<AniListMedia> {
+        let trimmed = title.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+        let key = format!("anisearch:{}", trimmed.to_lowercase());
+        let vars = serde_json::json!({ "search": trimmed });
+        self.fetch(key, SEARCH_QUERY, vars).await
     }
 
-    /// Anime with an episode airing in `[from, to]` (unix seconds) —
-    /// upcoming + just-released. Deduped to one entry per series.
-    pub async fn airing_window(&self, from_unix: i64, to_unix: i64) -> Vec<AniListMedia> {
-        let key = format!("airing:{from_unix}:{to_unix}");
-        let vars = serde_json::json!({ "from": from_unix, "to": to_unix });
-        self.fetch(key, AIRING_QUERY, vars).await
+    /// Anime AniList recommends for `anilist_id` — the anime counterpart of
+    /// TMDB's `recommendations`, for the "Because you watched X" shelf.
+    pub async fn recommendations(&self, anilist_id: i64) -> Vec<AniListMedia> {
+        let key = format!("anirec:{anilist_id}");
+        let vars = serde_json::json!({ "mediaId": anilist_id });
+        self.fetch(key, RECOMMENDATIONS_QUERY, vars).await
     }
 
     async fn fetch(
@@ -176,8 +151,12 @@ impl AniListClient {
         for m in page.media {
             push_unique(&mut out, &mut seen, m.into_media());
         }
-        for a in page.airing_schedules {
-            push_unique(&mut out, &mut seen, a.media.and_then(RawMedia::into_media));
+        for r in page.recommendations {
+            push_unique(
+                &mut out,
+                &mut seen,
+                r.media_recommendation.and_then(RawMedia::into_media),
+            );
         }
         self.inner
             .cache
@@ -211,13 +190,14 @@ struct GqlData {
 struct GqlPage {
     #[serde(default)]
     media: Vec<RawMedia>,
-    #[serde(default, rename = "airingSchedules")]
-    airing_schedules: Vec<RawAiring>,
+    #[serde(default)]
+    recommendations: Vec<RawRecommendation>,
 }
 
 #[derive(Deserialize)]
-struct RawAiring {
-    media: Option<RawMedia>,
+struct RawRecommendation {
+    #[serde(rename = "mediaRecommendation")]
+    media_recommendation: Option<RawMedia>,
 }
 
 #[derive(Deserialize)]

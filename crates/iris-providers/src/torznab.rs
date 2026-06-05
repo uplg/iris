@@ -182,6 +182,70 @@ impl TorznabProvider {
             .join(&self.api_path)
             .map_err(|e| Error::Provider(format!("torznab join api path: {e}")))
     }
+
+    /// Issue a Torznab request, parse the RSS-with-attrs envelope, prime the
+    /// link cache, and build a [`ProviderPage`]. Shared by `search` (with a
+    /// `q=`) and `latest` (query-less rolling-window feed).
+    async fn fetch(
+        &self,
+        url: Url,
+        qs: Vec<(&'static str, String)>,
+        page: u32,
+        limit: u32,
+    ) -> Result<ProviderPage> {
+        let body = self
+            .http
+            .get(url)
+            .query(&qs)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("torznab request: {e}")))?
+            .error_for_status()
+            .map_err(|e| Error::Provider(format!("torznab status: {e}")))?
+            .text()
+            .await
+            .map_err(|e| Error::Provider(format!("torznab body: {e}")))?;
+
+        let parsed = parse_torznab_xml(&body).map_err(|e| {
+            tracing::warn!(
+                provider = %self.id,
+                error = %e,
+                body_preview = %body.chars().take(400).collect::<String>(),
+                "torznab parse failed",
+            );
+            e
+        })?;
+
+        let mut results = Vec::with_capacity(parsed.items.len());
+        {
+            let mut cache = self.link_cache.lock().await;
+            for item in &parsed.items {
+                if let Some(link) = &item.download_url {
+                    cache.put(item.external_id.clone(), link.clone());
+                }
+            }
+            for item in parsed.items {
+                results.push(item.into_search_result(&self.id));
+            }
+        }
+
+        // Torznab `<response offset total />` is optional. When the indexer
+        // gives us a total we compute pages; otherwise we leave them
+        // unknown and the UI shows "load more" instead of a paginator.
+        let total_count = parsed.total;
+        let total_pages = total_count.map(|t| {
+            let l = u64::from(limit.max(1));
+            u32::try_from(t.div_ceil(l)).unwrap_or(u32::MAX)
+        });
+
+        Ok(ProviderPage {
+            results,
+            current_page: page,
+            limit,
+            total_count,
+            total_pages,
+        })
+    }
 }
 
 #[async_trait]
@@ -260,58 +324,34 @@ impl SearchProvider for TorznabProvider {
             }
         }
 
-        let body = self
-            .http
-            .get(url)
-            .query(&qs)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("torznab request: {e}")))?
-            .error_for_status()
-            .map_err(|e| Error::Provider(format!("torznab status: {e}")))?
-            .text()
-            .await
-            .map_err(|e| Error::Provider(format!("torznab body: {e}")))?;
+        self.fetch(url, qs, page, limit).await
+    }
 
-        let parsed = parse_torznab_xml(&body).map_err(|e| {
-            tracing::warn!(
-                provider = %self.id,
-                error = %e,
-                body_preview = %body.chars().take(400).collect::<String>(),
-                "torznab parse failed",
-            );
-            e
-        })?;
+    async fn latest(&self, kind: Option<MediaKind>, page: u32) -> Result<ProviderPage> {
+        let url = self.api_url()?;
+        let limit = 100u32;
+        let page = page.max(1);
+        let offset = (page - 1) * limit;
 
-        let mut results = Vec::with_capacity(parsed.items.len());
-        {
-            let mut cache = self.link_cache.lock().await;
-            for item in &parsed.items {
-                if let Some(link) = &item.download_url {
-                    cache.put(item.external_id.clone(), link.clone());
-                }
-            }
-            for item in parsed.items {
-                results.push(item.into_search_result(&self.id));
-            }
+        // Torznab's search ops return the indexer's newest items when called
+        // with no `q=`. Pick the op + category bucket for the kind; omit `q`
+        // entirely (rather than send an empty one) for broad compatibility.
+        let (t_op, cats) = match kind {
+            Some(MediaKind::Movie) => ("movie", self.movie_categories.as_str()),
+            Some(MediaKind::Tv) => ("tvsearch", self.tv_categories.as_str()),
+            None => ("search", ""),
+        };
+        let mut qs: Vec<(&'static str, String)> = vec![
+            ("t", t_op.to_string()),
+            ("apikey", self.api_key.clone()),
+            ("limit", limit.to_string()),
+            ("offset", offset.to_string()),
+        ];
+        if !cats.is_empty() {
+            qs.push(("cat", cats.to_string()));
         }
 
-        // Torznab `<response offset total />` is optional. When the indexer
-        // gives us a total we compute pages; otherwise we leave them
-        // unknown and the UI shows "load more" instead of a paginator.
-        let total_count = parsed.total;
-        let total_pages = total_count.map(|t| {
-            let l = u64::from(limit.max(1));
-            u32::try_from(t.div_ceil(l)).unwrap_or(u32::MAX)
-        });
-
-        Ok(ProviderPage {
-            results,
-            current_page: page,
-            limit,
-            total_count,
-            total_pages,
-        })
+        self.fetch(url, qs, page, limit).await
     }
 
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource> {

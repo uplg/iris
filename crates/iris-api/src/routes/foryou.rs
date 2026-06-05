@@ -1,6 +1,13 @@
 //! `GET  /api/me/for-you`        — the home blended shelf.
 //! `GET  /api/me/for-you/page`   — the organized "see all" page (sections).
 //! `POST /api/me/for-you/dismiss`— hide a candidate from future shelves.
+//!
+//! Grabbing a card is NOT a dedicated endpoint: the client opens the same
+//! preview dialog as a search hit (a rolling-window card carries its
+//! recommended-best release's `provider_id`/`external_id`; a lazy
+//! recommendation falls back to a title search), then grabs via the normal
+//! `/api/torrents` ingest path — so the dead-torrent guard + recommended
+//! selection are shared with search.
 
 use axum::Json;
 use axum::Router;

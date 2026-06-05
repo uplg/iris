@@ -462,12 +462,11 @@ private fun HomeContent(
                             CatalogCardTv(
                                 container = container,
                                 card = card,
+                                // Same flow as the web: follow → collection,
+                                // rolling-window card → detail/preview, lazy
+                                // recommendation → title search.
                                 onClick = {
-                                    // "New episodes" follows route to the
-                                    // collection; plain candidates search the
-                                    // trackers by title (no catalogue-grab flow).
-                                    val cid = card.collectionId
-                                    if (cid != null) onOpenCollection(cid) else onOpenSearch(card.title)
+                                    routeCatalogClick(card, onOpenCollection, onPickResult, onOpenSearch)
                                 },
                             )
                         }
@@ -952,27 +951,72 @@ internal fun CatalogCardTv(
         onClick = onClick,
         kindHint = card.kind,
         posterUrlOverride = card.posterUrl,
-        topBadge = if (newCount > 0) {
-            {
-                androidx.tv.material3.Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    colors = androidx.tv.material3.SurfaceDefaults.colors(
-                        containerColor = IrisColors.Brand.copy(alpha = 0.9f),
-                    ),
-                ) {
-                    Text(
-                        "$newCount new",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = IrisColors.OnBrand,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                    )
+        topBadge = when {
+            newCount > 0 -> {
+                {
+                    androidx.tv.material3.Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        colors = androidx.tv.material3.SurfaceDefaults.colors(
+                            containerColor = IrisColors.Brand.copy(alpha = 0.9f),
+                        ),
+                    ) {
+                        Text(
+                            "$newCount new",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = IrisColors.OnBrand,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                        )
+                    }
                 }
             }
-        } else {
-            null
+            // Discreet seeder count for rolling-window cards (1 seeder is fine
+            // — we never warn, only block 0 at grab). Mirrors the web card.
+            (card.seeders ?: 0) > 0 -> {
+                {
+                    androidx.tv.material3.Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        colors = androidx.tv.material3.SurfaceDefaults.colors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                        ),
+                    ) {
+                        Text(
+                            "${card.seeders}↑",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                        )
+                    }
+                }
+            }
+            else -> null
         },
     )
+}
+
+/**
+ * Route a "For You" card click, identically on the home shelf and the
+ * organized For-You page. A followed series with new episodes opens its
+ * collection; a rolling-window card (with a recommended-best release) opens
+ * the same detail/preview screen as a search hit so the user sees it before
+ * downloading; a lazy recommendation (no resolved release) falls back to a
+ * title search.
+ */
+internal fun routeCatalogClick(
+    card: CatalogCard,
+    onOpenCollection: (String) -> Unit,
+    onPickResult: (String, String, Long?, String?) -> Unit,
+    onOpenSearch: (String) -> Unit,
+) {
+    val collectionId = card.collectionId
+    val providerId = card.providerId
+    val externalId = card.externalId
+    when {
+        collectionId != null -> onOpenCollection(collectionId)
+        card.availability == "available" && providerId != null && externalId != null ->
+            onPickResult(providerId, externalId, card.tmdbId, card.kind)
+        else -> onOpenSearch(card.title)
+    }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)

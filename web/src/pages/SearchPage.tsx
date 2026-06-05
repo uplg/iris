@@ -335,6 +335,7 @@ export function SearchPage() {
           externalId={picked?.external_id ?? null}
           initialTitle={picked?.title}
           tmdbId={picked?.tmdb_id ?? null}
+          seeders={picked?.seeders ?? null}
           alreadyInLibrary={picked?.already_in_library ?? false}
           libraryInfohash={picked?.library_infohash ?? null}
           libraryFileIdx={picked?.library_file_idx ?? null}

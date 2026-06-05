@@ -340,6 +340,14 @@ data class CatalogCard(
     val overview: String? = null,
     @SerialName("is_anime") val isAnime: Boolean = false,
     val availability: String = "unknown",
+    /** Seeder count of the recorded release (rolling-window rows). null for
+     *  lazy reco candidates / torr9 RSS rows (re-checked at grab). */
+    val seeders: Int? = null,
+    /** The recorded release's provider + id — lets the TV open the same
+     *  detail/preview screen as a search hit. null for lazy reco candidates
+     *  (the TV falls back to a title search). */
+    @SerialName("provider_id") val providerId: String? = null,
+    @SerialName("external_id") val externalId: String? = null,
     val year: Int? = null,
     @SerialName("already_in_library") val alreadyInLibrary: Boolean = false,
     @SerialName("library_infohash") val libraryInfohash: String? = null,

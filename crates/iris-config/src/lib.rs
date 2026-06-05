@@ -30,12 +30,65 @@ pub struct AppConfig {
     #[serde(default)]
     pub tmdb: Option<TmdbConfig>,
     #[serde(default)]
+    pub discovery: DiscoveryConfig,
+    #[serde(default)]
     pub providers_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmdbConfig {
     pub api_key: String,
+}
+
+/// Tuning for the discovery "rolling window" freshness scheduler. The
+/// scheduler polls each provider's latest-releases feed one slice at a time
+/// (provider × kind) so tracker load stays spread out, keeps a sliding window
+/// of recent releases correlated to TMDB, and GCs anything past retention.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryConfig {
+    /// How far back (in weeks) a release may be and still enter the window.
+    #[serde(default = "default_poll_window_weeks")]
+    pub poll_window_weeks: i64,
+    /// How long (in weeks) a windowed release is kept before the GC slides it
+    /// out. Should be ≤ `poll_window_weeks`.
+    #[serde(default = "default_retain_weeks")]
+    pub retain_weeks: i64,
+    /// Minutes between slices. One (provider × kind) slice runs per tick, so a
+    /// full refresh cycle takes `slice_interval_minutes × providers × 2`.
+    #[serde(default = "default_slice_interval_minutes")]
+    pub slice_interval_minutes: u64,
+    /// Max age (in years) of a MOVIE's content to enter the discovery window.
+    /// The window is about recent *releases*: a 1972 film freshly re-uploaded
+    /// is a fresh upload but not a fresh release, so it's kept out of the
+    /// discovery shelves (it can still surface via recommendations / search).
+    /// TV is exempt — a long-running series airing a new episode is legit
+    /// regardless of its first-air year.
+    #[serde(default = "default_max_content_age_years")]
+    pub max_content_age_years: i64,
+}
+
+fn default_poll_window_weeks() -> i64 {
+    8
+}
+fn default_retain_weeks() -> i64 {
+    4
+}
+fn default_slice_interval_minutes() -> u64 {
+    10
+}
+fn default_max_content_age_years() -> i64 {
+    10
+}
+
+impl Default for DiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            poll_window_weeks: default_poll_window_weeks(),
+            retain_weeks: default_retain_weeks(),
+            slice_interval_minutes: default_slice_interval_minutes(),
+            max_content_age_years: default_max_content_age_years(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{Datelike, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use iris_core::ids::UserId;
 use iris_db::SqlitePool;
 use iris_db::catalog::{CatalogItem, CatalogOrder, CatalogQuery, WatchedSignal};
@@ -28,7 +28,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::state::AppState;
-use crate::tmdb::TmdbKind;
+use crate::tmdb::{MediaMetadata, TmdbKind};
 
 /// Per-user cache window for the home shelf.
 const RECO_CACHE_TTL: Duration = Duration::from_secs(60);
@@ -65,6 +65,14 @@ pub struct CatalogCard {
     pub overview: Option<String>,
     pub is_anime: bool,
     pub availability: String,
+    /// Seeder count of the recorded release (rolling-window rows). `None` for
+    /// lazy reco candidates and for torr9 RSS rows (re-checked at grab).
+    pub seeders: Option<i64>,
+    /// The recorded release's provider + id — enough for the client to open
+    /// the same preview dialog as a search hit. `None` for lazy reco
+    /// candidates (no resolved release yet → the client falls back to search).
+    pub provider_id: Option<String>,
+    pub external_id: Option<String>,
     pub year: Option<i32>,
     pub already_in_library: bool,
     pub library_infohash: Option<String>,
@@ -96,9 +104,11 @@ struct Ctx<'a> {
     dismissed: &'a HashSet<Uuid>,
     /// genre id → weight.
     affinity: &'a HashMap<i64, f64>,
-    now_year: i32,
     /// ISO 639-1 language filter; empty = any.
     languages: &'a [String],
+    /// Movies whose content year is below this are excluded from the discovery
+    /// shelves (very old films freshly re-uploaded). TV is exempt.
+    movie_cutoff_year: i32,
 }
 
 /// Map a user's language preference token to a TMDB ISO 639-1 code. Kept
@@ -155,15 +165,23 @@ fn ctx_of<'a>(
     pool: &'a SqlitePool,
     data: &'a UserData,
     languages: &'a [String],
+    movie_cutoff_year: i32,
 ) -> Ctx<'a> {
     Ctx {
         pool,
         excluded: &data.excluded,
         dismissed: &data.dismissed,
         affinity: &data.affinity,
-        now_year: Utc::now().year(),
         languages,
+        movie_cutoff_year,
     }
+}
+
+/// The oldest content year a MOVIE may have to appear in discovery, from the
+/// configured `discovery.max_content_age_years` (TV is never gated by this).
+fn movie_cutoff_year(state: &AppState) -> i32 {
+    Utc::now().year()
+        - i32::try_from(state.cfg().discovery.max_content_age_years.max(0)).unwrap_or(0)
 }
 
 /// HOME — a single blended "For You" shelf. Cached per user.
@@ -175,7 +193,7 @@ pub async fn for_you(state: &AppState, user_id: UserId) -> Result<ForYou, sqlx::
     let pool = state.db();
     let data = load_user_data(pool, user_id).await?;
     let languages = languages_of(&data.prefs);
-    let ctx = ctx_of(pool, &data, &languages);
+    let ctx = ctx_of(pool, &data, &languages, movie_cutoff_year(state));
 
     let mut shown = HashSet::new();
     let items = blended_feed(&ctx, data.prefs.include_anime, &mut shown).await?;
@@ -202,7 +220,7 @@ pub async fn for_you_page(state: &AppState, user_id: UserId) -> Result<ForYou, s
     let pool = state.db();
     let data = load_user_data(pool, user_id).await?;
     let languages = languages_of(&data.prefs);
-    let ctx = ctx_of(pool, &data, &languages);
+    let ctx = ctx_of(pool, &data, &languages, movie_cutoff_year(state));
 
     let mut shown = HashSet::new();
     let mut shelves = Vec::new();
@@ -221,7 +239,7 @@ pub async fn for_you_page(state: &AppState, user_id: UserId) -> Result<ForYou, s
 
     let genre_names = genre_name_map(state).await;
     shelves.extend(genre_shelves(&ctx, &mut shown, &genre_names).await?);
-    if let Some(s) = because_you_watched(&ctx, &mut shown, &data.signals).await? {
+    if let Some(s) = because_you_watched(state, &ctx, &mut shown, &data.signals).await? {
         shelves.push(s);
     }
     if data.prefs.include_anime {
@@ -246,7 +264,10 @@ async fn blended_feed(
         &CatalogQuery {
             languages: ctx.languages.to_vec(),
             is_anime: Some(false),
-            order: CatalogOrder::Popularity,
+            // Rolling window only: the discovery feed shows what a tracker
+            // actually has right now. Freshest uploads first, then re-ranked.
+            only_available: true,
+            order: CatalogOrder::Released,
             limit: BLEND_WINDOW,
             ..Default::default()
         },
@@ -260,7 +281,8 @@ async fn blended_feed(
                 ctx.pool,
                 &CatalogQuery {
                     is_anime: Some(true),
-                    order: CatalogOrder::Popularity,
+                    only_available: true,
+                    order: CatalogOrder::Released,
                     limit: BLEND_WINDOW,
                     ..Default::default()
                 },
@@ -301,7 +323,8 @@ async fn genre_shelves(
                 languages: ctx.languages.to_vec(),
                 is_anime: Some(false),
                 genre: Some(gid),
-                order: CatalogOrder::ReleaseDate,
+                only_available: true,
+                order: CatalogOrder::Released,
                 limit: FETCH_LIMIT,
                 ..Default::default()
             },
@@ -323,8 +346,15 @@ async fn genre_shelves(
     Ok(out)
 }
 
-/// "Because you watched <most recent>" — similar by its primary genre.
+/// "Because you watched <most recent>" — driven by TMDB's own
+/// recommendations + similar lists, not a genre proxy. These embrace older
+/// titles on purpose: an established title is a strong availability signal,
+/// and the grab resolves it lazily at click time (with the dead-torrent
+/// guard). Each candidate is reconciled to a catalogue row (created lazily,
+/// `availability='unknown'`, if not already present) so the card has a stable
+/// id for grab/dismiss and shows `available` when it's also in the window.
 async fn because_you_watched(
+    state: &AppState,
     ctx: &Ctx<'_>,
     shown: &mut HashSet<Uuid>,
     signals: &[WatchedSignal],
@@ -332,32 +362,110 @@ async fn because_you_watched(
     let Some(seed) = signals.first() else {
         return Ok(None);
     };
-    let Some(primary_genre) = parse_genre_ids(&seed.genres).first().copied() else {
+    let Some(tmdb) = state.tmdb() else {
         return Ok(None);
     };
-    let mut seed_excluded = ctx.excluded.clone();
-    seed_excluded.insert(seed.tmdb_id);
-    let seed_ctx = Ctx {
-        excluded: &seed_excluded,
-        ..*ctx
+    let Ok(seed_id) = u64::try_from(seed.tmdb_id) else {
+        return Ok(None);
     };
-    let cards = scored_shelf(
-        &seed_ctx,
-        shown,
-        CatalogQuery {
-            is_anime: Some(false),
-            genre: Some(primary_genre),
-            limit: FETCH_LIMIT,
-            ..Default::default()
-        },
-    )
-    .await?;
+    let kind = if seed.kind == "tv" {
+        TmdbKind::Tv
+    } else {
+        TmdbKind::Movie
+    };
+    // Collaborative ("also liked") + content-based ("similar") candidates.
+    let mut metas = tmdb.recommendations(kind, seed_id).await;
+    metas.extend(tmdb.similar(kind, seed_id).await);
+
+    // Content-age floor: "old = probably available" stays a feature, but a
+    // very old film (e.g. 1972) is dropped from recommendations too (TV
+    // exempt). The availability benefit still holds within the cap.
+    let mut cards = Vec::new();
+    let mut seen_ids: HashSet<i64> = HashSet::new();
+    for m in metas {
+        let Ok(tmdb_id) = i64::try_from(m.tmdb_id) else {
+            continue;
+        };
+        if tmdb_id == seed.tmdb_id || !seen_ids.insert(tmdb_id) {
+            continue;
+        }
+        if ctx.excluded.contains(&tmdb_id) {
+            continue;
+        }
+        if m.kind == TmdbKind::Movie
+            && m.year
+                .and_then(|y| i32::try_from(y).ok())
+                .is_some_and(|y| y < ctx.movie_cutoff_year)
+        {
+            continue;
+        }
+        let Some(row) = get_or_create_lazy(ctx.pool, &m, kind).await? else {
+            continue;
+        };
+        if ctx.dismissed.contains(&row.id) || !shown.insert(row.id) {
+            continue;
+        }
+        cards.push(card_from_row(row));
+        if cards.len() >= SHELF_LIMIT {
+            break;
+        }
+    }
     Ok((!cards.is_empty()).then(|| Shelf {
         key: format!("because_you_watched:{}", seed.tmdb_id),
         title: format!("Because you watched {}", seed.title),
         kind: None,
         items: cards,
     }))
+}
+
+/// Fetch the catalogue row for a recommendation candidate, creating a lazy
+/// (`availability='unknown'`, no release facts) row from TMDB metadata when it
+/// isn't in the catalogue yet. An existing row — whether a confirmed
+/// rolling-window row or a prior lazy one — is returned untouched, so we never
+/// clobber a tracker-confirmed availability with 'unknown'.
+async fn get_or_create_lazy(
+    pool: &SqlitePool,
+    m: &MediaMetadata,
+    kind: TmdbKind,
+) -> Result<Option<CatalogItem>, sqlx::Error> {
+    let Ok(tmdb_id) = i64::try_from(m.tmdb_id) else {
+        return Ok(None);
+    };
+    if let Some(row) = iris_db::catalog::find_by_tmdb(pool, tmdb_id).await? {
+        return Ok(Some(row));
+    }
+    let item = iris_db::catalog::NewCatalogItem {
+        tmdb_id: Some(tmdb_id),
+        anilist_id: None,
+        kind: match kind {
+            TmdbKind::Movie => "movie",
+            TmdbKind::Tv => "tv",
+        }
+        .to_string(),
+        title: m.title.clone(),
+        original_language: m.original_language.clone(),
+        genres: m.genre_ids.iter().map(|&g| i64::from(g)).collect(),
+        is_anime: false,
+        poster_path: m.poster_path.clone(),
+        backdrop_path: m.backdrop_path.clone(),
+        overview: m.overview.clone(),
+        popularity: m.popularity,
+        vote_average: m.vote_score,
+        release_date: m.release_date.clone(),
+        source: Some("reco:tmdb".to_string()),
+        // Lazy candidate: availability resolved at click time (old = likely
+        // available); no release facts until then.
+        availability: "unknown".to_string(),
+        seeders: None,
+        provider_id: None,
+        external_id: None,
+        download_url: None,
+        infohash: None,
+        language: None,
+        released_at: None,
+    };
+    iris_db::catalog::upsert_item(pool, &item).await?;
+    iris_db::catalog::find_by_tmdb(pool, tmdb_id).await
 }
 
 /// New anime, most-recently-added (not language-filtered — anime is VO).
@@ -367,7 +475,8 @@ async fn new_anime_shelf(ctx: &Ctx<'_>, shown: &mut HashSet<Uuid>) -> Result<Opt
         shown,
         CatalogQuery {
             is_anime: Some(true),
-            order: CatalogOrder::ReleaseDate,
+            only_available: true,
+            order: CatalogOrder::Released,
             limit: FETCH_LIMIT,
             ..Default::default()
         },
@@ -388,33 +497,14 @@ async fn collect_shelf(
     shown: &mut HashSet<Uuid>,
     q: CatalogQuery,
 ) -> Result<Vec<CatalogCard>, sqlx::Error> {
-    let rows = iris_db::catalog::query_for_user(ctx.pool, &q).await?;
-    let cards: Vec<CatalogCard> = rows
-        .into_iter()
-        .filter(|r| !ctx.dismissed.contains(&r.id) && !shown.contains(&r.id))
-        .filter(|r| r.tmdb_id.is_none_or(|id| !ctx.excluded.contains(&id)))
-        .map(card_from_row)
-        .take(SHELF_LIMIT)
-        .collect();
-    for c in &cards {
-        shown.insert(c.catalog_id);
-    }
-    Ok(cards)
-}
-
-/// Like [`collect_shelf`] but re-ranks by the blended recommendation
-/// score (popularity · recency · genre affinity).
-async fn scored_shelf(
-    ctx: &Ctx<'_>,
-    shown: &mut HashSet<Uuid>,
-    q: CatalogQuery,
-) -> Result<Vec<CatalogCard>, sqlx::Error> {
     let rows: Vec<CatalogItem> = iris_db::catalog::query_for_user(ctx.pool, &q)
         .await?
         .into_iter()
         .filter(|r| !ctx.dismissed.contains(&r.id) && !shown.contains(&r.id))
         .filter(|r| r.tmdb_id.is_none_or(|id| !ctx.excluded.contains(&id)))
         .collect();
+    // Rank by the fresh score (upload + content recency × affinity × pop) so
+    // very-old movies sink even within a genre/anime shelf.
     let cards: Vec<CatalogCard> = score_and_sort(rows, ctx)
         .into_iter()
         .take(SHELF_LIMIT)
@@ -426,18 +516,26 @@ async fn scored_shelf(
     Ok(cards)
 }
 
-/// Rank candidates by the blended score, descending. Normalisation is
-/// over the supplied set, so it's relative within a shelf.
+/// Rank rolling-window candidates by the fresh score, descending.
+/// Normalisation is over the supplied set, so it's relative within a shelf.
 fn score_and_sort(rows: Vec<CatalogItem>, ctx: &Ctx<'_>) -> Vec<CatalogItem> {
+    // Hard content-age floor for discovery: drop very old movies — including
+    // rows already in the catalogue from before the cap, so the effect is
+    // immediate, not after the next GC. TV is exempt.
+    let rows: Vec<CatalogItem> = rows
+        .into_iter()
+        .filter(|r| r.kind != "movie" || item_year(r).is_none_or(|y| y >= ctx.movie_cutoff_year))
+        .collect();
     let max_pop = rows.iter().filter_map(|r| r.popularity).fold(0.0_f64, f64::max);
     let max_aff = rows
         .iter()
         .map(|r| item_affinity(&r.genres, ctx.affinity))
         .fold(0.0_f64, f64::max);
+    let now = Utc::now();
     let mut scored: Vec<(f64, CatalogItem)> = rows
         .into_iter()
         .map(|r| {
-            let s = blended_score(&r, max_pop, max_aff, ctx.affinity, ctx.now_year);
+            let s = fresh_score(&r, max_pop, max_aff, ctx.affinity, now);
             (s, r)
         })
         .collect();
@@ -445,47 +543,72 @@ fn score_and_sort(rows: Vec<CatalogItem>, ctx: &Ctx<'_>) -> Vec<CatalogItem> {
     scored.into_iter().map(|(_, r)| r).collect()
 }
 
-/// Blended recommendation score: `0.4·popularity + 0.35·recency +
-/// 0.25·affinity`, each normalised to 0..1 within the candidate set.
-fn blended_score(
+/// Rolling-window score: `0.4·upload-recency + 0.25·content-recency +
+/// 0.2·affinity + 0.15·popularity`, each normalised to 0..1. Upload-freshness
+/// (how recently the release dropped on a tracker) leads, but **content age**
+/// now tempers it for movies — a 1972 film freshly re-uploaded sinks instead
+/// of riding upload-recency to the top. TV is exempt (a long-running series
+/// airing now isn't penalised for its first-air year).
+fn fresh_score(
     item: &CatalogItem,
     max_pop: f64,
     max_aff: f64,
     affinity: &HashMap<i64, f64>,
-    now_year: i32,
+    now: DateTime<Utc>,
 ) -> f64 {
     let pop_n = if max_pop > 0.0 {
         item.popularity.unwrap_or(0.0) / max_pop
     } else {
         0.0
     };
-    let year = item
-        .release_date
-        .as_deref()
-        .and_then(|d| d.split('-').next())
-        .and_then(|y| y.parse().ok());
-    let rec = recency_score(year, now_year);
     let aff_n = if max_aff > 0.0 {
         item_affinity(&item.genres, affinity) / max_aff
     } else {
         0.0
     };
-    0.4 * pop_n + 0.35 * rec + 0.25 * aff_n
+    let upload_rec = upload_recency(item.released_at, now);
+    let content_rec = if item.kind == "movie" {
+        content_recency(item_year(item), now.year())
+    } else {
+        1.0
+    };
+    0.4 * upload_rec + 0.25 * content_rec + 0.2 * aff_n + 0.15 * pop_n
 }
 
-/// 1.0 for the last year, decaying linearly to 0 at ~6 years old.
-fn recency_score(year: Option<i32>, now_year: i32) -> f64 {
-    let Some(y) = year else {
-        return 0.0;
+/// 1.0 for a just-uploaded release, decaying linearly to 0 at ~4 weeks (the
+/// retention window). A row with no upload time scores neutral.
+fn upload_recency(released_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> f64 {
+    let Some(up) = released_at else {
+        return 0.5;
     };
-    let age = now_year - y;
-    if age <= 1 {
+    let days = (now - up).num_days().max(0);
+    let days = f64::from(i32::try_from(days).unwrap_or(i32::MAX));
+    (1.0 - days / 28.0).clamp(0.0, 1.0)
+}
+
+/// Content-age weight: 1.0 for the last ~2 years, decaying to a 0.1 floor by
+/// ~20 years old (so a classic can still appear, just far down). Unknown year
+/// scores neutral.
+fn content_recency(year: Option<i32>, now_year: i32) -> f64 {
+    let Some(y) = year else {
+        return 0.5;
+    };
+    let age = (now_year - y).max(0);
+    if age <= 2 {
         1.0
-    } else if age >= 6 {
-        0.0
+    } else if age >= 20 {
+        0.1
     } else {
-        1.0 - f64::from(age - 1) / 5.0
+        1.0 - (f64::from(age - 2) / 18.0) * 0.9
     }
+}
+
+/// Parse the `YYYY` content year from a catalogue row's release date.
+fn item_year(item: &CatalogItem) -> Option<i32> {
+    item.release_date
+        .as_deref()
+        .and_then(|d| d.split('-').next())
+        .and_then(|y| y.parse().ok())
 }
 
 /// Sum of the user's genre weights over an item's genres.
@@ -585,6 +708,9 @@ fn card_from_row(row: CatalogItem) -> CatalogCard {
         overview: row.overview,
         is_anime: row.is_anime,
         availability: row.availability,
+        seeders: row.seeders,
+        provider_id: row.provider_id,
+        external_id: row.external_id,
         year,
         already_in_library: false,
         library_infohash: None,

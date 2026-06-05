@@ -12,6 +12,17 @@ cleanup_threshold_pct = 90
 cleanup_target_pct = 75
 torrent_port = 45100
 
+[discovery]
+poll_window_weeks = 8        # how far back (upload time) a release may be and still enter the window
+retain_weeks = 4             # how long a windowed release is kept before the GC slides it out
+slice_interval_minutes = 10  # minutes between slices (full cycle ≈ this × providers × 2)
+# Max age (years) of a MOVIE's *content* allowed in the discovery shelves. A
+# 1972 film freshly re-uploaded is a fresh upload but not a fresh release, so
+# it's kept out of discovery (still reachable via recommendations / search).
+# TV is exempt (a long-running series airing a new episode is legit). Raise it
+# to embrace older catalogue, lower it for a stricter "recent only" feel.
+max_content_age_years = 10
+
 [auth]
 jwt_secret = "dev-only-secret-do-not-use-in-prod-please-rotate-aaaaaaaaaaaaaaaaa"
 access_ttl_secs = 3600

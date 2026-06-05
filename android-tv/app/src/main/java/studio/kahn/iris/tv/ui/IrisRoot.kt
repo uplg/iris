@@ -196,6 +196,11 @@ fun IrisRoot(
                     onOpenCollection = { collectionId ->
                         navController.navigate(Routes.collection(collectionId))
                     },
+                    onPickResult = { providerId, externalId, tmdbId, kind ->
+                        navController.navigate(
+                            Routes.searchDetail(providerId, externalId, tmdbId, kind),
+                        )
+                    },
                     onOpenSearch = { query ->
                         navController.navigate(Routes.search(query))
                     },

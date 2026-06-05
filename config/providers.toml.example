@@ -8,6 +8,11 @@ enabled = true
 base_url = "https://api.torr9.net"
 username_env = "TORR9_USERNAME"
 password_env = "TORR9_PASSWORD"
+# Passkey for the public RSS feeds the discovery rolling window polls
+# (https://api.torr9.net/api/v1/rss/Films + /api/v1/rss/Séries). Distinct from
+# the username/password JWT used for search/grab — without it torr9 simply
+# contributes nothing to the freshness catalogue (search/grab still work).
+passkey_env = "TORR9_PASSKEY"
 # optional overrides:
 # referer = "https://torr9.net/"
 # origin  = "https://torr9.net"

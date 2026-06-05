@@ -29,6 +29,9 @@ use crate::nfo;
 use reqwest::header::{
     ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, HeaderMap, HeaderValue, ORIGIN, REFERER, USER_AGENT,
 };
+use quick_xml::Reader;
+use quick_xml::escape::unescape as xml_unescape;
+use quick_xml::events::Event;
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use serde::Deserialize;
 use tokio::sync::Mutex;
@@ -60,6 +63,10 @@ pub struct Torr9 {
     base_url: Url,
     username: String,
     password: String,
+    /// Passkey for the public RSS feeds (`/api/v1/rss/{Films,Séries}`) —
+    /// distinct from the JWT used everywhere else. `None` disables the
+    /// provider's rolling-window contribution (search/grab still work).
+    passkey: Option<String>,
     http: Client,
     token: Mutex<Option<CachedToken>>,
     featured_movies_cache: Mutex<Option<CachedFeatured>>,
@@ -89,6 +96,9 @@ impl Torr9 {
             .map_err(|e| Error::Provider(format!("torr9 base_url invalid: {e}")))?;
         let username = field_or_env(entry, "username")?;
         let password = field_or_env(entry, "password")?;
+        // Optional: only the RSS rolling-window feeds need it. Any failure
+        // (unset env, missing field) just disables that contribution.
+        let passkey = field_or_env(entry, "passkey").ok();
         let referer = entry
             .fields
             .get("referer")
@@ -126,6 +136,7 @@ impl Torr9 {
             base_url,
             username,
             password,
+            passkey,
             http,
             token: Mutex::new(None),
             featured_movies_cache: Mutex::new(None),
@@ -361,6 +372,71 @@ impl SearchProvider for Torr9 {
             limit: resp.limit.unwrap_or(limit),
             total_count: resp.total_count,
             total_pages: resp.total_pages,
+        })
+    }
+
+    async fn latest(&self, kind: Option<MediaKind>, page: u32) -> Result<ProviderPage> {
+        // The RSS feeds are a single un-paginated snapshot of the newest
+        // items; page > 1 has nothing more to give.
+        let empty = || ProviderPage {
+            results: Vec::new(),
+            current_page: page.max(1),
+            limit: 0,
+            total_count: Some(0),
+            total_pages: Some(1),
+        };
+        if page > 1 {
+            return Ok(empty());
+        }
+        let Some(passkey) = self.passkey.as_deref() else {
+            return Ok(empty()); // RSS not configured — no contribution.
+        };
+
+        // One feed per category. `Séries` percent-encodes through Url::join.
+        let feeds: &[(&str, MediaKind)] = match kind {
+            Some(MediaKind::Movie) => &[("Films", MediaKind::Movie)],
+            Some(MediaKind::Tv) => &[("Séries", MediaKind::Tv)],
+            None => &[("Films", MediaKind::Movie), ("Séries", MediaKind::Tv)],
+        };
+
+        let mut results = Vec::new();
+        for (feed, feed_kind) in feeds {
+            let url = self
+                .base_url
+                .join(&format!("/api/v1/rss/{feed}"))
+                .map_err(|e| Error::Provider(format!("torr9 join rss url: {e}")))?;
+            let body = self
+                .http
+                .get(url)
+                .query(&[("passkey", passkey)])
+                .send()
+                .await
+                .map_err(|e| Error::Provider(format!("torr9 rss request: {e}")))?
+                .error_for_status()
+                .map_err(|e| Error::Provider(format!("torr9 rss status: {e}")))?
+                .text()
+                .await
+                .map_err(|e| Error::Provider(format!("torr9 rss body: {e}")))?;
+
+            let items = parse_torr9_rss(&body, &self.id, *feed_kind);
+            if items.is_empty() {
+                tracing::warn!(
+                    provider = %self.id,
+                    feed,
+                    body_preview = %body.chars().take(200).collect::<String>(),
+                    "torr9 rss yielded no items — shape may have changed",
+                );
+            }
+            results.extend(items);
+        }
+
+        let limit = u32::try_from(results.len()).unwrap_or(u32::MAX);
+        Ok(ProviderPage {
+            results,
+            current_page: 1,
+            limit,
+            total_count: Some(u64::from(limit)),
+            total_pages: Some(1),
         })
     }
 
@@ -734,4 +810,237 @@ fn derive_kind(parent: Option<&str>, leaf: Option<&str>) -> Option<MediaKind> {
         None
     };
     parent.and_then(test).or_else(|| leaf.and_then(test))
+}
+
+// ===========================================================================
+// RSS rolling-window feed parsing (`/api/v1/rss/{Films,Séries}`).
+//
+// Plain RSS 2.0 — one `<item>` per release. Sample:
+//   <title>Scream.7.2026.MULTi.2160p...-SURCODE</title>
+//   <link>https://torr9.net/torrents/293422</link>          ← numeric id
+//   <description>Uploaded by Knroad | Size: 60.9 GB | Category: Films</description>
+//   <pubDate>Fri, 05 Jun 2026 18:09:46 +0000</pubDate>      ← RFC2822
+//   <category>Films</category>
+//   <guid>https://torr9.net/torrents/293422</guid>
+//   <enclosure url="…/293422/download?passkey=…" length="65443659776"
+//              type="application/x-bittorrent"></enclosure>  ← signed .torrent
+//
+// Seeders are NOT in the feed — the freshness scheduler backfills them via
+// details() for the release it actually keeps, then drops dead (0-seeder) ones.
+// ===========================================================================
+
+#[derive(Default)]
+struct RssItem {
+    title: Option<String>,
+    /// `<link>`/`<guid>` URL — we extract the trailing numeric id from it.
+    page_url: Option<String>,
+    /// `<enclosure url=…>` — the passkey-signed .torrent (default
+    /// `fetch_bytes` downloads it directly; the passkey lives in the URL).
+    enclosure_url: Option<String>,
+    /// `<enclosure length=…>` — exact size in bytes.
+    length: Option<u64>,
+    pub_date: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum RssTag {
+    Title,
+    Link,
+    Guid,
+    PubDate,
+}
+
+impl RssItem {
+    fn into_search_result(self, provider_id: &str, kind: MediaKind) -> Option<SearchResult> {
+        // The numeric torrent id (from the link/guid path) is the external_id
+        // torr9's resolve()/details() expect; without it we can't grab.
+        let external_id = self.page_url.as_deref().and_then(torr9_id_from_url)?;
+        let title = self.title.filter(|s| !s.is_empty())?;
+        let year = extract_year(&title);
+        let uploaded_at = self
+            .pub_date
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc2822(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+        Some(SearchResult {
+            provider_id: provider_id.to_string(),
+            external_id,
+            title,
+            year,
+            size_bytes: self.length,
+            // Not in the RSS — backfilled by the scheduler via details().
+            seeders: None,
+            leechers: None,
+            infohash: None,
+            magnet: None,
+            category: Some(match kind {
+                MediaKind::Movie => "Films".to_string(),
+                MediaKind::Tv => "Séries".to_string(),
+            }),
+            tags: Vec::new(),
+            freeleech: false,
+            uploader: None,
+            uploaded_at,
+            tmdb_id: None,
+            kind: Some(kind),
+            poster_url: None,
+            already_in_library: false,
+            library_infohash: None,
+            library_file_idx: None,
+            language: None,
+            // The signed .torrent URL — restart-safe grab via fetch_bytes.
+            download_url: self.enclosure_url,
+            parsed_season: None,
+            parsed_episode: None,
+        })
+    }
+}
+
+/// Extract the trailing numeric id from a torr9 torrent URL
+/// (`https://torr9.net/torrents/293489` → `"293489"`). `None` for any URL
+/// whose last path segment isn't all digits.
+fn torr9_id_from_url(url: &str) -> Option<String> {
+    let last = url.trim_end_matches('/').rsplit('/').next()?;
+    (!last.is_empty() && last.bytes().all(|b| b.is_ascii_digit())).then(|| last.to_string())
+}
+
+/// Parse a torr9 RSS feed body into search results, stamping every item with
+/// the feed's `kind`. Tolerant: unknown elements are ignored and a malformed
+/// item is skipped rather than failing the whole feed.
+fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<SearchResult> {
+    let mut reader = Reader::from_str(body);
+    reader.config_mut().trim_text(true);
+    let mut out = Vec::new();
+    let mut buf = Vec::new();
+    let mut cur: Option<RssItem> = None;
+    let mut tag: Option<RssTag> = None;
+
+    let read_enclosure = |e: &quick_xml::events::BytesStart, item: &mut RssItem| {
+        for attr in e.attributes().flatten() {
+            let Ok(raw) = std::str::from_utf8(&attr.value) else {
+                continue;
+            };
+            let val = xml_unescape(raw).map_or_else(|_| raw.to_string(), std::borrow::Cow::into_owned);
+            match attr.key.as_ref() {
+                b"url" => item.enclosure_url = Some(val),
+                b"length" => item.length = val.parse().ok(),
+                _ => {}
+            }
+        }
+    };
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => match e.name().as_ref() {
+                b"item" => cur = Some(RssItem::default()),
+                b"title" => tag = Some(RssTag::Title),
+                b"link" => tag = Some(RssTag::Link),
+                b"guid" => tag = Some(RssTag::Guid),
+                b"pubDate" => tag = Some(RssTag::PubDate),
+                b"enclosure" => {
+                    if let Some(item) = cur.as_mut() {
+                        read_enclosure(&e, item);
+                    }
+                    tag = None;
+                }
+                _ => tag = None,
+            },
+            Ok(Event::Empty(e)) => {
+                if e.name().as_ref() == b"enclosure" {
+                    if let Some(item) = cur.as_mut() {
+                        read_enclosure(&e, item);
+                    }
+                }
+            }
+            Ok(Event::Text(t)) => {
+                if let (Some(item), Some(tg)) = (cur.as_mut(), tag) {
+                    if let Ok(decoded) = t.decode() {
+                        let text = xml_unescape(decoded.as_ref())
+                            .map_or_else(|_| decoded.to_string(), std::borrow::Cow::into_owned);
+                        let text = text.trim().to_string();
+                        if !text.is_empty() {
+                            match tg {
+                                RssTag::Title => item.title = Some(text),
+                                // link wins, but accept guid as a fallback id.
+                                RssTag::Link => item.page_url = Some(text),
+                                RssTag::Guid => {
+                                    item.page_url.get_or_insert(text);
+                                }
+                                RssTag::PubDate => item.pub_date = Some(text),
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                if e.name().as_ref() == b"item" {
+                    if let Some(r) = cur.take().and_then(|i| i.into_search_result(provider_id, kind))
+                    {
+                        out.push(r);
+                    }
+                }
+                tag = None;
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Torr9 - Films</title>
+  <item>
+    <title>Scream.7.2026.MULTi.2160p.Full.BluRay.DV.HDR.HEVC.TrueHD.Atmos.7.1-SURCODE</title>
+    <link>https://torr9.net/torrents/293422</link>
+    <description>Uploaded by Knroad | Size: 60.9 GB | Category: Films</description>
+    <pubDate>Fri, 05 Jun 2026 18:09:46 +0000</pubDate>
+    <category>Films</category>
+    <guid>https://torr9.net/torrents/293422</guid>
+    <enclosure url="https://api.torr9.net/api/v1/rss/torrents/293422/download?passkey=ad9c" length="65443659776" type="application/x-bittorrent"></enclosure>
+  </item>
+  <item>
+    <title>Miss.Boots.2024.FRENCH.1080p.WEB.x264-BULiTT</title>
+    <link>https://torr9.net/torrents/293467</link>
+    <pubDate>Fri, 05 Jun 2026 18:37:15 +0000</pubDate>
+    <guid>https://torr9.net/torrents/293467</guid>
+    <enclosure url="https://api.torr9.net/api/v1/rss/torrents/293467/download?passkey=ad9c" length="2387674349" type="application/x-bittorrent"/>
+  </item>
+</channel></rss>"#;
+
+    #[test]
+    fn parses_torr9_rss_items() {
+        let items = parse_torr9_rss(SAMPLE, "torr9", MediaKind::Movie);
+        assert_eq!(items.len(), 2);
+
+        let first = &items[0];
+        assert_eq!(first.external_id, "293422");
+        assert_eq!(first.provider_id, "torr9");
+        assert_eq!(first.year, Some(2026));
+        assert_eq!(first.size_bytes, Some(65_443_659_776));
+        assert_eq!(first.kind, Some(MediaKind::Movie));
+        assert!(first.seeders.is_none());
+        assert_eq!(
+            first.download_url.as_deref(),
+            Some("https://api.torr9.net/api/v1/rss/torrents/293422/download?passkey=ad9c")
+        );
+        assert!(first.uploaded_at.is_some());
+
+        // Self-closing <enclosure/> form is handled too.
+        assert_eq!(items[1].external_id, "293467");
+        assert!(items[1].download_url.is_some());
+    }
+
+    #[test]
+    fn id_from_url_rejects_non_numeric() {
+        assert_eq!(torr9_id_from_url("https://torr9.net/torrents/42"), Some("42".to_string()));
+        assert_eq!(torr9_id_from_url("https://torr9.net/torrents/42/"), Some("42".to_string()));
+        assert_eq!(torr9_id_from_url("https://torr9.net/about"), None);
+    }
 }

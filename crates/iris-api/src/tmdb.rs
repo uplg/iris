@@ -6,7 +6,6 @@
 //! id, so this is harmless).
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -46,16 +45,11 @@ struct Inner {
     /// onboarding picker should still pick up the rare addition without
     /// a process restart.
     genres_cache: RwLock<HashMap<&'static str, (Instant, Vec<Genre>)>>,
-    /// Request-keyed cache for the catalogue list endpoints (discover /
-    /// trending / `now_playing` / `on_the_air`). Keyed by a string built from
-    /// the call + params, expires after `DISCOVER_CACHE_TTL`. The reco
-    /// scheduler only hits these every few hours, but the TTL keeps a
-    /// burst of overlapping passes from re-fetching identical slices.
+    /// Request-keyed cache for the list endpoints (`recommendations` /
+    /// `similar`). Keyed by a string built from the call + params, expires
+    /// after `DISCOVER_CACHE_TTL`, so repeated For-You renders don't re-fetch
+    /// the same recommendation slice.
     discover_cache: RwLock<HashMap<String, (Instant, Vec<MediaMetadata>)>>,
-    /// movie `tmdb_id` → whether it has an at-home (digital/physical)
-    /// release already out. Keeps theatrical-only new releases out of the
-    /// catalogue.
-    home_release_cache: RwLock<HashMap<u64, (Instant, bool)>>,
 }
 
 /// TTL for the cached TMDB genre taxonomy. The list changes maybe once
@@ -63,14 +57,9 @@ struct Inner {
 /// onboarding picker current.
 const GENRE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// TTL for cached catalogue list slices. The scheduler runs on a 6 h
-/// cadence, so matching the cache window means at most one fetch per
-/// slice per pass.
+/// TTL for cached list slices (`recommendations` / `similar`). A few hours
+/// keeps the "Because you watched" shelf cheap across repeated renders.
 const DISCOVER_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
-
-/// TTL for the per-movie at-home-release check. Release dates can gain a
-/// digital/physical entry day-to-day, so re-check daily.
-const HOME_RELEASE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Clone)]
 enum CacheEntry {
@@ -103,20 +92,6 @@ pub struct TmdbSuggestion {
 pub struct Genre {
     pub id: u32,
     pub name: String,
-}
-
-/// Parameters for a `/discover` query. All optional; the scheduler builds
-/// one per language (and later per genre) slice it actually wants.
-#[derive(Debug, Clone, Default)]
-pub struct DiscoverParams {
-    /// TMDB genre ids → `with_genres` (comma-joined).
-    pub genres: Vec<u32>,
-    /// ISO 639-1 code → `with_original_language`.
-    pub original_language: Option<String>,
-    /// TMDB `sort_by` (defaults to `popularity.desc`).
-    pub sort_by: Option<String>,
-    /// Lower bound on release / first-air date (`YYYY-MM-DD`).
-    pub date_gte: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,7 +160,6 @@ impl TmdbClient {
                 searches: RwLock::new(HashMap::new()),
                 genres_cache: RwLock::new(HashMap::new()),
                 discover_cache: RwLock::new(HashMap::new()),
-                home_release_cache: RwLock::new(HashMap::new()),
             }),
         })
     }
@@ -326,131 +300,35 @@ impl TmdbClient {
         genres
     }
 
-    /// `/discover/{movie,tv}` — the parameterised catalogue query the reco
-    /// scheduler uses to pull popular titles per language / genre.
-    pub async fn discover(&self, kind: TmdbKind, params: &DiscoverParams) -> Vec<MediaMetadata> {
-        let endpoint = kind_marker(kind);
-        let sort_by = params.sort_by.as_deref().unwrap_or("popularity.desc");
-        let mut url = format!(
-            "https://api.themoviedb.org/3/discover/{endpoint}?api_key={}\
-             &include_adult=false&page=1&sort_by={sort_by}",
-            self.inner.api_key
-        );
-        let mut key = format!("discover:{endpoint}:{sort_by}");
-        if !params.genres.is_empty() {
-            let g = params
-                .genres
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            let _ = write!(url, "&with_genres={g}");
-            let _ = write!(key, ":g={g}");
-        }
-        if let Some(lang) = &params.original_language {
-            let _ = write!(url, "&with_original_language={lang}");
-            let _ = write!(key, ":l={lang}");
-        }
-        if let Some(date_gte) = &params.date_gte {
-            let field = match kind {
-                TmdbKind::Movie => "primary_release_date.gte",
-                TmdbKind::Tv => "first_air_date.gte",
-            };
-            let _ = write!(url, "&{field}={date_gte}");
-            let _ = write!(key, ":d={date_gte}");
-        }
-        self.fetch_list(key, url, kind).await
-    }
-
-    /// `/trending/{movie,tv}/week` — the week's trending titles of a kind.
-    pub async fn trending(&self, kind: TmdbKind) -> Vec<MediaMetadata> {
+    /// `/{movie,tv}/{id}/recommendations` — TMDB's collaborative "people who
+    /// liked this also liked" list. Powers the taste-based "Because you
+    /// watched X" shelf; an older recommendation is itself a strong
+    /// availability signal (it has had time to be indexed + seeded).
+    pub async fn recommendations(&self, kind: TmdbKind, tmdb_id: u64) -> Vec<MediaMetadata> {
         let endpoint = kind_marker(kind);
         let url = format!(
-            "https://api.themoviedb.org/3/trending/{endpoint}/week?api_key={}",
+            "https://api.themoviedb.org/3/{endpoint}/{tmdb_id}/recommendations?api_key={}&page=1",
             self.inner.api_key
         );
-        self.fetch_list(format!("trending:{endpoint}"), url, kind).await
-    }
-
-    /// `/movie/now_playing` — movies currently in theatres.
-    pub async fn now_playing(&self) -> Vec<MediaMetadata> {
-        let url = format!(
-            "https://api.themoviedb.org/3/movie/now_playing?api_key={}&page=1",
-            self.inner.api_key
-        );
-        self.fetch_list("now_playing".to_string(), url, TmdbKind::Movie)
+        self.fetch_list(format!("recommendations:{endpoint}:{tmdb_id}"), url, kind)
             .await
     }
 
-    /// `/tv/on_the_air` — series airing in the next week.
-    pub async fn on_the_air(&self) -> Vec<MediaMetadata> {
+    /// `/{movie,tv}/{id}/similar` — content-based (keyword/genre) neighbours.
+    /// Complements [`Self::recommendations`] for the same shelf.
+    pub async fn similar(&self, kind: TmdbKind, tmdb_id: u64) -> Vec<MediaMetadata> {
+        let endpoint = kind_marker(kind);
         let url = format!(
-            "https://api.themoviedb.org/3/tv/on_the_air?api_key={}&page=1",
+            "https://api.themoviedb.org/3/{endpoint}/{tmdb_id}/similar?api_key={}&page=1",
             self.inner.api_key
         );
-        self.fetch_list("on_the_air".to_string(), url, TmdbKind::Tv)
+        self.fetch_list(format!("similar:{endpoint}:{tmdb_id}"), url, kind)
             .await
     }
 
-    /// Whether a movie has an at-home (digital type 4 / physical type 5)
-    /// release dated on or before `today` (`YYYY-MM-DD`). This is the
-    /// reliable "can we actually get this?" gate — a film still only in
-    /// cinemas has no past digital/physical release and is excluded.
-    /// Cached; returns `false` on error / no data so an unverifiable title
-    /// isn't surfaced as grabbable (re-checked next pass, not cached).
-    pub async fn has_home_release(&self, movie_id: u64, today: &str) -> bool {
-        if let Some((fetched, value)) =
-            self.inner.home_release_cache.read().await.get(&movie_id).copied()
-        {
-            if fetched.elapsed() < HOME_RELEASE_TTL {
-                return value;
-            }
-        }
-        let Some(dates) = self.fetch_release_dates(movie_id).await else {
-            return false;
-        };
-        let at_home = dates.iter().any(|(release_type, date)| {
-            matches!(release_type, 4 | 5)
-                && date
-                    .split('T')
-                    .next()
-                    .is_some_and(|d| !d.is_empty() && d <= today)
-        });
-        self.inner
-            .home_release_cache
-            .write()
-            .await
-            .insert(movie_id, (Instant::now(), at_home));
-        at_home
-    }
-
-    /// Flatten `/movie/{id}/release_dates` to `(type, date)` pairs across
-    /// all countries. `None` on any error (caller treats as unverified).
-    async fn fetch_release_dates(&self, movie_id: u64) -> Option<Vec<(u8, String)>> {
-        let url = format!(
-            "https://api.themoviedb.org/3/movie/{movie_id}/release_dates?api_key={}",
-            self.inner.api_key
-        );
-        let res = self.inner.http.get(&url).send().await.ok()?;
-        if !res.status().is_success() {
-            return None;
-        }
-        let raw: TmdbReleaseDatesRaw = res.json().await.ok()?;
-        let mut out = Vec::new();
-        for country in raw.results {
-            for entry in country.release_dates {
-                if let Some(date) = entry.release_date {
-                    out.push((entry.release_type, date));
-                }
-            }
-        }
-        Some(out)
-    }
-
-    /// Shared cached fetch for the list endpoints. All of discover /
-    /// trending / `now_playing` / `on_the_air` return the same paged
-    /// `{ results: [...] }` envelope of list items, so they share one
-    /// cache + parse path. Returns empty on any error.
+    /// Shared cached fetch for the list endpoints. `recommendations` /
+    /// `similar` return the same paged `{ results: [...] }` envelope of list
+    /// items, so they share one cache + parse path. Returns empty on any error.
     async fn fetch_list(
         &self,
         cache_key: String,
@@ -711,27 +589,6 @@ struct TmdbGenreListEntry {
 struct TmdbDiscoverRaw {
     #[serde(default)]
     results: Vec<TmdbDiscoverResult>,
-}
-
-#[derive(Deserialize)]
-struct TmdbReleaseDatesRaw {
-    #[serde(default)]
-    results: Vec<TmdbCountryReleases>,
-}
-
-#[derive(Deserialize)]
-struct TmdbCountryReleases {
-    #[serde(default)]
-    release_dates: Vec<TmdbReleaseDateEntry>,
-}
-
-#[derive(Deserialize)]
-struct TmdbReleaseDateEntry {
-    /// TMDB release type: 1 Premiere, 2 Theatrical (limited), 3 Theatrical,
-    /// 4 Digital, 5 Physical, 6 TV.
-    #[serde(rename = "type", default)]
-    release_type: u8,
-    release_date: Option<String>,
 }
 
 /// A single list item from discover / trending / `now_playing` / `on_the_air`.

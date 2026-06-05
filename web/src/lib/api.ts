@@ -571,6 +571,14 @@ export type CatalogCard = {
   is_anime: boolean;
   /** "unknown" | "available" | "imminent" | "unavailable". */
   availability: string;
+  /** Seeder count of the recorded release (rolling-window rows). null for
+   *  lazy reco candidates / torr9 RSS rows (re-checked at grab). */
+  seeders: number | null;
+  /** The recorded release's provider + id — lets the client open the same
+   *  preview dialog as a search hit. null for lazy reco candidates (the
+   *  client falls back to a title search). */
+  provider_id: string | null;
+  external_id: string | null;
   year: number | null;
   already_in_library: boolean;
   library_infohash: string | null;

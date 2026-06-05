@@ -40,6 +40,7 @@ import studio.kahn.iris.tv.ui.theme.irisAmbient
 fun ForYouScreen(
     container: AppContainer,
     onOpenCollection: (String) -> Unit,
+    onPickResult: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
     onOpenSearch: (String) -> Unit,
 ) {
     var data by remember { mutableStateOf<ForYouResponse?>(null) }
@@ -103,8 +104,7 @@ fun ForYouScreen(
                                     container = container,
                                     card = card,
                                     onClick = {
-                                        val cid = card.collectionId
-                                        if (cid != null) onOpenCollection(cid) else onOpenSearch(card.title)
+                                        routeCatalogClick(card, onOpenCollection, onPickResult, onOpenSearch)
                                     },
                                 )
                             }
