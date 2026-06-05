@@ -15,6 +15,24 @@ cleanup_target_pct = 75
 # router/firewall.
 torrent_port = 45100
 
+# Discovery "rolling window". The freshness scheduler polls each provider's
+# latest-releases feed (torr9 RSS, UNIT3D `created_at`, Torznab query-less),
+# one provider × kind slice per tick so tracker load stays spread out, then
+# correlates each fresh release to TMDB/AniList and keeps a sliding window of
+# recent, guaranteed-grabbable titles for the "For You" shelves. Needs [tmdb]
+# configured (poster/genre enrichment) + at least one provider. All values are
+# optional — the defaults shown below are used when the section is absent.
+[discovery]
+poll_window_weeks = 8        # how far back (upload time) a release may be and still enter the window
+retain_weeks = 4             # how long a windowed release is kept before the GC slides it out
+slice_interval_minutes = 10  # minutes between slices (full cycle ≈ this × providers × 2)
+# Max age (years) of a MOVIE's *content* allowed in the discovery shelves. A
+# 1972 film freshly re-uploaded is a fresh upload but not a fresh release, so
+# it's kept out of discovery (still reachable via recommendations / search).
+# TV is exempt (a long-running series airing a new episode is legit). Raise it
+# to embrace older catalogue, lower it for a stricter "recent only" feel.
+max_content_age_years = 10
+
 [auth]
 # Override every value below with IRIS_AUTH__<KEY> environment variables in
 # production. The JWT secret in particular MUST come from the environment.

@@ -189,6 +189,11 @@ fun SearchDetailScreen(
                 }
             }
 
+            // Dead-torrent guard: a confirmed 0-seeder release can't be
+            // grabbed (its pieces never fully assemble). The server blocks it
+            // too; the UI just reflects that. 1 seeder is fine — no warning.
+            val dead = details?.seeders == 0
+
             // Stats line + action buttons.
             Row(
                 Modifier.fillMaxWidth(),
@@ -241,9 +246,9 @@ fun SearchDetailScreen(
                     )
                 }
                 IrisButton(
-                    if (ingesting) "Starting…" else "▶  Download & play",
+                    if (dead) "Dead torrent" else if (ingesting) "Starting…" else "▶  Download & play",
                     {
-                        if (ingesting) return@IrisButton
+                        if (ingesting || dead) return@IrisButton
                         ingesting = true
                         error = null
                         scope.launch {
@@ -279,7 +284,7 @@ fun SearchDetailScreen(
                             }
                         }
                     },
-                    enabled = details != null && !ingesting,
+                    enabled = details != null && !ingesting && !dead,
                 )
             }
 

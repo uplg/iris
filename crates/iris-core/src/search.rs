@@ -166,6 +166,66 @@ pub struct SearchResult {
     pub parsed_episode: Option<u32>,
 }
 
+/// Named (non-numeric) categories that mean "not a playable video".
+/// Substring match, lowercased — covers EN + FR fork category names
+/// (UNIT3D forks like theoldschool label categories "Jeux/Windows",
+/// "Other", "Musique", …). `jeux`/`jeu ` (not bare `jeu`, which would hit
+/// "jeunesse" = kids video) and `windows`/`logiciel` catch games + PC
+/// software; `other`/`autre`/`divers` catch the misc buckets the user
+/// can't play.
+const NON_VIDEO_CATEGORIES: [&str; 18] = [
+    "game",
+    "jeux",
+    "windows",
+    "logiciel",
+    "software",
+    "application",
+    "music",
+    "musique",
+    "audio",
+    "flac",
+    "book",
+    "livre",
+    "ebook",
+    "epub",
+    "comic",
+    "podcast",
+    "other",
+    "autre",
+];
+
+impl SearchResult {
+    /// Heuristic: is this a video release Iris can actually play? Drops
+    /// obvious non-video categories (games, music, books, software) so the
+    /// search page never surfaces an unplayable torrent. Conservative —
+    /// keeps anything it can't classify (provider already tagged it
+    /// movie/TV, or the category is empty/unknown).
+    #[must_use]
+    pub fn is_probably_video(&self) -> bool {
+        // Provider classified it as movie/TV → definitely video.
+        if self.kind.is_some() {
+            return true;
+        }
+        let cat = self.category.as_deref().unwrap_or("").trim();
+        if cat.is_empty() {
+            return true;
+        }
+        // Torznab numeric buckets: 2xxx Movies, 5xxx TV, 6xxx XXX (all
+        // video); 1xxx console, 3xxx audio, 4xxx PC/apps, 7xxx books,
+        // 8xxx other (non-video).
+        if let Some(code) = cat
+            .split([' ', '/', ',', '-'])
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+        {
+            return matches!(code / 1000, 2 | 5 | 6);
+        }
+        // Named categories (UNIT3D etc.) — deny known non-video kinds.
+        let lc = cat.to_lowercase();
+        !NON_VIDEO_CATEGORIES.iter().any(|kw| lc.contains(kw))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TorrentSource {
     Magnet(String),
@@ -285,4 +345,58 @@ pub struct SubInfo {
     pub default: bool,
     #[serde(default)]
     pub forced: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(category: Option<&str>, kind: Option<MediaKind>) -> SearchResult {
+        SearchResult {
+            provider_id: "p".to_string(),
+            external_id: "1".to_string(),
+            title: "x".to_string(),
+            year: None,
+            size_bytes: None,
+            seeders: None,
+            leechers: None,
+            infohash: None,
+            magnet: None,
+            category: category.map(str::to_string),
+            tags: Vec::new(),
+            freeleech: false,
+            uploader: None,
+            uploaded_at: None,
+            tmdb_id: None,
+            kind,
+            poster_url: None,
+            already_in_library: false,
+            library_infohash: None,
+            library_file_idx: None,
+            language: None,
+            download_url: None,
+            parsed_season: None,
+            parsed_episode: None,
+        }
+    }
+
+    #[test]
+    fn video_filter_keeps_video_drops_the_rest() {
+        // Provider-tagged movie/TV is always kept.
+        assert!(result(Some("Films"), Some(MediaKind::Movie)).is_probably_video());
+        // Torznab numeric buckets: 2xxx movies, 5xxx TV (video); 1xxx
+        // console, 4xxx PC (not).
+        assert!(result(Some("2040"), None).is_probably_video());
+        assert!(result(Some("5040"), None).is_probably_video());
+        assert!(!result(Some("1040"), None).is_probably_video());
+        assert!(!result(Some("4050"), None).is_probably_video());
+        // UNIT3D / French-fork named categories the user reported.
+        assert!(!result(Some("Jeux/Windows"), None).is_probably_video());
+        assert!(!result(Some("Other"), None).is_probably_video());
+        assert!(!result(Some("Musique"), None).is_probably_video());
+        assert!(!result(Some("E-Books"), None).is_probably_video());
+        // Unknown / empty / genuine video names are kept (conservative).
+        assert!(result(None, None).is_probably_video());
+        assert!(result(Some("Documentaire"), None).is_probably_video());
+    }
 }

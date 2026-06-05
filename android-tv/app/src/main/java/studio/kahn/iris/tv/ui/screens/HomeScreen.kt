@@ -56,11 +56,12 @@ import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
-import studio.kahn.iris.tv.data.FeaturedResponse
+import studio.kahn.iris.tv.data.CatalogCard
+import studio.kahn.iris.tv.data.ForYouResponse
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.LibraryResponse
+import studio.kahn.iris.tv.data.Preferences
 import studio.kahn.iris.tv.data.WatchlistItem
-import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.TmdbMetadata
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
@@ -68,6 +69,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.ui.graphics.Brush
@@ -91,28 +93,6 @@ import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
 import studio.kahn.iris.tv.ui.theme.irisAmbient
-
-/**
- * SCENE-normalisation kept in sync with iris-media's `normalize_title`
- * (lowercase → keep alnum → collapse non-alnum to single space → trim).
- * Used to detect "do I already follow this Featured TV result?" before
- * issuing an add — avoids creating duplicate follows when the user
- * clicks a card whose title matches an existing follow.
- */
-private fun normalizeForMatch(s: String): String {
-    val out = StringBuilder()
-    var lastSpace = true
-    for (c in s) {
-        if (c.isLetterOrDigit()) {
-            out.append(c.lowercaseChar())
-            lastSpace = false
-        } else if (!lastSpace) {
-            out.append(' ')
-            lastSpace = true
-        }
-    }
-    return out.toString().trim()
-}
 
 /**
  * Home screen with two horizontal shelves. Selecting a card jumps to
@@ -148,6 +128,8 @@ fun HomeScreen(
     /** Open the CollectionScreen for a Library collection. Lists all
      *  torrents + episodes belonging to that collection. */
     onOpenCollection: (collectionId: String) -> Unit,
+    /** Open the organized "For You" page. */
+    onOpenForYou: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var continueWatching by remember { mutableStateOf<List<ContinueWatchingItem>>(emptyList()) }
@@ -157,8 +139,13 @@ fun HomeScreen(
     var downloading by remember { mutableStateOf<List<TorrentView>>(emptyList()) }
     var library by remember { mutableStateOf<List<TorrentView>>(emptyList()) }
     var watchlist by remember { mutableStateOf<List<WatchlistItem>>(emptyList()) }
-    var featured by remember { mutableStateOf<FeaturedResponse?>(null) }
+    var forYou by remember { mutableStateOf<ForYouResponse?>(null) }
     var collections by remember { mutableStateOf<List<CollectionListItem>>(emptyList()) }
+    // First-run onboarding: null until prefs load (or stays null on an
+    // older server with no endpoint). `onboardingDismissed` lets the user
+    // leave onboarding for this session without a refetch race.
+    var preferences by remember { mutableStateOf<Preferences?>(null) }
+    var onboardingDismissed by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var loadVersion by remember { mutableIntStateOf(0) }
@@ -180,8 +167,9 @@ fun HomeScreen(
                 val cw: Result<List<ContinueWatchingItem>>,
                 val tor: Result<List<TorrentView>>,
                 val watchlist: Result<List<WatchlistItem>>,
-                val featured: Result<FeaturedResponse>,
+                val forYou: Result<ForYouResponse>,
                 val collections: Result<LibraryResponse>,
+                val prefs: Result<Preferences>,
             )
             val fetch = withContext(Dispatchers.IO) {
                 // Discovery / watchlist / library failures shouldn't
@@ -195,14 +183,17 @@ fun HomeScreen(
                     // grab). Replaces the legacy `listFollows()` which
                     // returned the same data through the C1 façade.
                     watchlist = runCatching { api.watchlist() },
-                    featured = runCatching { api.discoverFeatured() },
+                    forYou = runCatching { api.forYou() },
                     collections = runCatching { api.library("collections") },
+                    // Onboarding gate. A 404 on an older server → failure
+                    // → null → onboarding simply never shows.
+                    prefs = runCatching { api.preferences() },
                 )
             }
             val cw = fetch.cw
             val tor = fetch.tor
             val wl = fetch.watchlist
-            val feat = fetch.featured
+            val fy = fetch.forYou
             val coll = fetch.collections
             continueWatching = cw.getOrDefault(emptyList())
             val fresh = tor.getOrDefault(emptyList())
@@ -210,8 +201,9 @@ fun HomeScreen(
             downloading = newDl
             library = newLib
             watchlist = wl.getOrDefault(emptyList())
-            featured = feat.getOrNull()
+            forYou = fy.getOrNull()
             collections = (coll.getOrNull() as? LibraryResponse.Collections)?.items.orEmpty()
+            preferences = fetch.prefs.getOrNull()
             val fail = listOfNotNull(cw.exceptionOrNull(), tor.exceptionOrNull()).firstOrNull()
             if (fail != null && fresh.isEmpty() && continueWatching.isEmpty()) {
                 error = fail.message ?: "Failed to load library"
@@ -250,31 +242,44 @@ fun HomeScreen(
     }
 
     val layout = LocalTvLayout.current
+    // First-run gate: a freshly-onboarded server returns prefs with
+    // onboarding_completed=false → show the full-screen onboarding step in
+    // place of Home until the user saves or skips.
+    val needsOnboarding = preferences?.let { !it.onboardingCompleted } == true && !onboardingDismissed
     Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
         // Ambient backlight wash (web `.ambient`) — a fixed, faint violet
         // glow behind the scrolling content. Decorative only.
         Box(Modifier.fillMaxSize().background(irisAmbient()))
-        HomeContent(
-            layout = layout,
-            error = error,
-            loading = loading,
-            continueWatching = continueWatching,
-            downloading = downloading,
-            library = library,
-            watchlist = watchlist,
-            featured = featured,
-            collections = collections,
-            container = container,
-            onPickFile = onPickFile,
-            onPickTorrent = onPickTorrent,
-            onPickResult = onPickResult,
-            onOpenSettings = onOpenSettings,
-            onOpenTorrents = onOpenTorrents,
-            onOpenSearch = onOpenSearch,
-            onOpenLibrary = onOpenLibrary,
-            onOpenCollection = onOpenCollection,
-            onRetry = { loadVersion++ },
-        )
+        if (needsOnboarding) {
+            OnboardingScreen(
+                container = container,
+                initialPrefs = preferences!!,
+                onDone = { onboardingDismissed = true },
+            )
+        } else {
+            HomeContent(
+                layout = layout,
+                error = error,
+                loading = loading,
+                continueWatching = continueWatching,
+                downloading = downloading,
+                library = library,
+                watchlist = watchlist,
+                forYou = forYou,
+                collections = collections,
+                container = container,
+                onPickFile = onPickFile,
+                onPickTorrent = onPickTorrent,
+                onPickResult = onPickResult,
+                onOpenSettings = onOpenSettings,
+                onOpenTorrents = onOpenTorrents,
+                onOpenSearch = onOpenSearch,
+                onOpenLibrary = onOpenLibrary,
+                onOpenCollection = onOpenCollection,
+                onOpenForYou = onOpenForYou,
+                onRetry = { loadVersion++ },
+            )
+        }
     }
 
     @Suppress("UNUSED_EXPRESSION") scope
@@ -290,7 +295,7 @@ private fun HomeContent(
     downloading: List<TorrentView>,
     library: List<TorrentView>,
     watchlist: List<WatchlistItem>,
-    featured: FeaturedResponse?,
+    forYou: ForYouResponse?,
     collections: List<CollectionListItem>,
     container: AppContainer,
     onPickFile: (String, Int) -> Unit,
@@ -301,6 +306,7 @@ private fun HomeContent(
     onOpenSearch: (String?) -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenCollection: (String) -> Unit,
+    onOpenForYou: () -> Unit,
     onRetry: () -> Unit,
 ) {
     LazyColumn(
@@ -320,6 +326,7 @@ private fun HomeContent(
         val resumePick = continueWatching.firstOrNull()
         val topBar: @Composable () -> Unit = {
             HomeTopBar(
+                onOpenForYou = onOpenForYou,
                 onOpenSearch = onOpenSearch,
                 onOpenLibrary = onOpenLibrary,
                 onOpenTorrents = onOpenTorrents,
@@ -443,41 +450,23 @@ private fun HomeContent(
             }
         }
 
-        featured?.let { f ->
-            if (f.movies.isNotEmpty()) {
-                item(key = "shelf-featured-movies") {
-                    Shelf(title = "New Movies", eyebrow = "Fresh · ${f.movies.size}") {
-                        items(f.movies, key = { "${it.providerId}:${it.externalId}" }) { r ->
-                            FeaturedCard(
+        forYou?.shelves?.forEach { shelf ->
+            if (shelf.items.isNotEmpty()) {
+                item(key = "shelf-${shelf.key}") {
+                    Shelf(
+                        title = shelf.title,
+                        eyebrow = "Recommended",
+                        onSeeAll = onOpenForYou,
+                    ) {
+                        items(shelf.items, key = { it.catalogId }) { card ->
+                            CatalogCardTv(
                                 container = container,
-                                result = r,
+                                card = card,
+                                // Same flow as the web: follow → collection,
+                                // rolling-window card → detail/preview, lazy
+                                // recommendation → title search.
                                 onClick = {
-                                    onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-            if (f.series.isNotEmpty()) {
-                item(key = "shelf-featured-series") {
-                    Shelf(title = "New Series", eyebrow = "Fresh · ${f.series.size}") {
-                        items(f.series, key = { "${it.providerId}:${it.externalId}" }) { r ->
-                            FeaturedCard(
-                                container = container,
-                                result = r,
-                                onClick = {
-                                    val existing = watchlist.firstOrNull {
-                                        it.normalizedName == normalizeForMatch(r.title)
-                                    }
-                                    if (existing != null) {
-                                        // Already in Watchlist → straight to
-                                        // its CollectionScreen (skip the
-                                        // search-result detail round-trip).
-                                        onOpenCollection(existing.id)
-                                    } else {
-                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
-                                    }
+                                    routeCatalogClick(card, onOpenCollection, onPickResult, onOpenSearch)
                                 },
                             )
                         }
@@ -571,7 +560,7 @@ private fun routeTorrent(
  */
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
-private fun Shelf(
+internal fun Shelf(
     title: String,
     eyebrow: String? = null,
     /** When set, renders a focusable "See all →" action on the right of the
@@ -650,6 +639,7 @@ private fun Shelf(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun HomeTopBar(
+    onOpenForYou: () -> Unit,
     onOpenSearch: (String?) -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenTorrents: () -> Unit,
@@ -662,6 +652,11 @@ private fun HomeTopBar(
     ) {
         IrisWordmark(fontSize = 34.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TvIconButton(
+                icon = Icons.Filled.Star,
+                contentDescription = "For You",
+                onClick = onOpenForYou,
+            )
             TvIconButton(
                 icon = Icons.Filled.Search,
                 contentDescription = "Search",
@@ -931,48 +926,97 @@ private fun WatchlistCard(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun FeaturedCard(
+internal fun CatalogCardTv(
     container: AppContainer,
-    result: SearchResult,
+    card: CatalogCard,
     onClick: () -> Unit,
 ) {
-    val subtitle = listOfNotNull(
-        result.year?.toString(),
-        result.seeders?.let { "$it seeders" },
-    ).joinToString(" · ")
+    val newCount = card.newCount ?: 0
+    // Always say what it is — Movie / Series, prefixed with "Anime" for the
+    // anime catalogue (which mixes movies and series). Solves "can't tell a
+    // series from a film" on the blended shelves.
+    val kindLabel = if (card.kind == "tv") "Series" else "Movie"
+    val typeLabel = if (card.isAnime) "Anime · $kindLabel" else kindLabel
+    val subtitle = listOfNotNull(typeLabel, card.year?.toString()).joinToString(" · ")
     PosterCard(
         container = container,
-        // Featured items ship a pre-resolved poster URL from torr9 —
-        // trust it directly, never fall back to a TMDB id lookup
-        // (which can mis-match for the same reasons we no longer use
-        // it on Library cards).
-        tmdbId = null,
-        tmdbVerified = false,
-        posterUrlOverride = result.posterUrl,
-        title = result.title,
-        subtitle = subtitle.ifEmpty { result.providerId },
+        tmdbId = card.tmdbId,
+        // Posters are pre-resolved server-side (TMDB CDN / AniList cover);
+        // only fall back to a kind-safe TMDB lookup when the URL is missing.
+        tmdbVerified = card.posterUrl == null && card.tmdbId != null,
+        title = card.title,
+        subtitle = subtitle,
         progress = null,
         progressColor = null,
         onClick = onClick,
-        topBadge = if (result.freeleech) {
-            {
-                androidx.tv.material3.Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    colors = androidx.tv.material3.SurfaceDefaults.colors(
-                        containerColor = androidx.compose.ui.graphics.Color(0xFF10B981).copy(alpha = 0.85f),
-                    ),
-                ) {
-                    Text(
-                        "FL",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = androidx.compose.ui.graphics.Color.White,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                    )
+        kindHint = card.kind,
+        posterUrlOverride = card.posterUrl,
+        topBadge = when {
+            newCount > 0 -> {
+                {
+                    androidx.tv.material3.Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        colors = androidx.tv.material3.SurfaceDefaults.colors(
+                            containerColor = IrisColors.Brand.copy(alpha = 0.9f),
+                        ),
+                    ) {
+                        Text(
+                            "$newCount new",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = IrisColors.OnBrand,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                        )
+                    }
                 }
             }
-        } else null,
+            // Discreet seeder count for rolling-window cards (1 seeder is fine
+            // — we never warn, only block 0 at grab). Mirrors the web card.
+            (card.seeders ?: 0) > 0 -> {
+                {
+                    androidx.tv.material3.Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        colors = androidx.tv.material3.SurfaceDefaults.colors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                        ),
+                    ) {
+                        Text(
+                            "${card.seeders}↑",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                        )
+                    }
+                }
+            }
+            else -> null
+        },
     )
+}
+
+/**
+ * Route a "For You" card click, identically on the home shelf and the
+ * organized For-You page. A followed series with new episodes opens its
+ * collection; a rolling-window card (with a recommended-best release) opens
+ * the same detail/preview screen as a search hit so the user sees it before
+ * downloading; a lazy recommendation (no resolved release) falls back to a
+ * title search.
+ */
+internal fun routeCatalogClick(
+    card: CatalogCard,
+    onOpenCollection: (String) -> Unit,
+    onPickResult: (String, String, Long?, String?) -> Unit,
+    onOpenSearch: (String) -> Unit,
+) {
+    val collectionId = card.collectionId
+    val providerId = card.providerId
+    val externalId = card.externalId
+    when {
+        collectionId != null -> onOpenCollection(collectionId)
+        card.availability == "available" && providerId != null && externalId != null ->
+            onPickResult(providerId, externalId, card.tmdbId, card.kind)
+        else -> onOpenSearch(card.title)
+    }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)

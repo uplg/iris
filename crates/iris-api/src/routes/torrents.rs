@@ -10,6 +10,7 @@ use iris_core::search::TorrentSource;
 use iris_torrent::{TorrentPreview, TorrentSnapshot};
 use serde::{Deserialize, Serialize};
 use std::io::SeekFrom;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
@@ -247,10 +248,7 @@ async fn preview(
         .providers()
         .get(&body.provider_id)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown provider `{}`", body.provider_id)))?;
-    let source = provider
-        .resolve(&body.external_id)
-        .await
-        .map_err(map_provider_err)?;
+    let source = resolve_release(&state, &provider, &body.provider_id, &body.external_id).await?;
     let bytes = match source {
         TorrentSource::TorrentFile(b) => b,
         TorrentSource::Magnet(_) => {
@@ -276,19 +274,81 @@ async fn ingest(
     user: AuthUser,
     Json(body): Json<ResolveBody>,
 ) -> ApiResult<Json<IngestResponse>> {
+    Ok(Json(
+        ingest_core(&state, user.id, body.provider_id, body.external_id, body.tmdb_id).await?,
+    ))
+}
+
+/// Is this release a dead torrent (a confirmed 0 seeders)? Re-checks live via
+/// the provider's details endpoint right before a grab. Only a confirmed 0
+/// blocks — 1 seeder is often plenty, and providers that don't expose
+/// `details()` / seeders can't be verified so they're allowed through.
+async fn is_dead(provider: &Arc<dyn iris_providers::SearchProvider>, external_id: &str) -> bool {
+    matches!(provider.details(external_id).await, Ok(Some(d)) if d.seeders == Some(0))
+}
+
+/// Resolve a release to a [`TorrentSource`], preferring the persisted
+/// pre-signed `.torrent` URL recorded in the discovery catalogue
+/// (restart/cache-proof) over the provider's in-memory link cache. The link
+/// cache is cold after a restart and FIFO-evicts under load, which broke
+/// c411/torznab catalogue previews + grabs ("no cached download URL …").
+/// Search hits (not in the catalogue) fall straight through to `resolve()`,
+/// whose cache is hot from the search the user just ran.
+async fn resolve_release(
+    state: &AppState,
+    provider: &Arc<dyn iris_providers::SearchProvider>,
+    provider_id: &str,
+    external_id: &str,
+) -> ApiResult<TorrentSource> {
+    if let Some(url) =
+        iris_db::catalog::download_url_for(state.db(), provider_id, external_id).await?
+    {
+        match provider.fetch_bytes(&url).await {
+            Ok(bytes) => {
+                // Almost always a .torrent; tolerate a magnet body just in case.
+                if bytes.starts_with(b"magnet:") {
+                    if let Ok(s) = std::str::from_utf8(&bytes) {
+                        return Ok(TorrentSource::Magnet(s.trim().to_string()));
+                    }
+                }
+                return Ok(TorrentSource::TorrentFile(bytes.to_vec()));
+            }
+            Err(e) => tracing::warn!(
+                url,
+                provider = provider_id,
+                error = %e,
+                "catalog download_url fetch failed; falling back to resolve()",
+            ),
+        }
+    }
+    provider.resolve(external_id).await.map_err(map_provider_err)
+}
+
+/// Core grab path shared by the search ingest endpoint and the For-You preview
+/// dialog (which ingests the catalogue card's recommended-best release through
+/// the same path): refuse a dead torrent, resolve the release, add it to the
+/// engine, and persist + classify it.
+pub(crate) async fn ingest_core(
+    state: &AppState,
+    user_id: iris_core::ids::UserId,
+    provider_id: String,
+    external_id: String,
+    tmdb_id_hint: Option<i64>,
+) -> ApiResult<IngestResponse> {
     let provider = state
         .providers()
-        .get(&body.provider_id)
-        .ok_or_else(|| ApiError::BadRequest(format!("unknown provider `{}`", body.provider_id)))?;
-    let source = provider
-        .resolve(&body.external_id)
-        .await
-        .map_err(map_provider_err)?;
+        .get(&provider_id)
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown provider `{provider_id}`")))?;
 
+    // Dead-torrent guard: a 0-seeder release can never assemble all its
+    // pieces. Block only a confirmed-0 (see `is_dead`).
+    if is_dead(&provider, &external_id).await {
+        return Err(ApiError::DeadTorrent);
+    }
+
+    let source = resolve_release(state, &provider, &provider_id, &external_id).await?;
     let result = match source {
-        TorrentSource::TorrentFile(bytes) => {
-            state.engine().add_from_bytes(bytes).await
-        }
+        TorrentSource::TorrentFile(bytes) => state.engine().add_from_bytes(bytes).await,
         TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,
     }
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
@@ -297,7 +357,7 @@ async fn ingest(
     // trusting the indexer's value — torr9 mistags Silicon Valley
     // releases with The Burning Bed's id, etc. Server-side cache makes
     // this cheap on repeat ingestions of the same series. Falls back to
-    // the indexer's `body.tmdb_id` when the resolver finds nothing.
+    // the caller's `tmdb_id_hint` when the resolver finds nothing.
     let release_name = result
         .snapshot
         .name
@@ -310,7 +370,7 @@ async fn ingest(
     } else {
         None
     };
-    let final_tmdb_id = resolved_tmdb_id.or(body.tmdb_id);
+    let final_tmdb_id = resolved_tmdb_id.or(tmdb_id_hint);
 
     let row = iris_db::torrents::upsert(
         state.db(),
@@ -318,10 +378,10 @@ async fn ingest(
             infohash: result.snapshot.infohash.clone(),
             name: result.snapshot.name.clone().unwrap_or_else(|| "<unnamed>".into()),
             total_size_bytes: result.snapshot.total_size_bytes,
-            source_provider: Some(body.provider_id),
-            source_external_id: Some(body.external_id),
+            source_provider: Some(provider_id),
+            source_external_id: Some(external_id),
             tmdb_id: final_tmdb_id,
-            added_by: user.id,
+            added_by: user_id,
         },
     )
     .await?;
@@ -347,7 +407,7 @@ async fn ingest(
         let providers = state.providers().clone();
         let infohash = result.snapshot.infohash.clone();
         let name = result.snapshot.name.clone().unwrap_or_default();
-        let tmdb_id = body.tmdb_id;
+        let tmdb_id = tmdb_id_hint;
         let files: Vec<(usize, String)> = result
             .snapshot
             .files
@@ -368,11 +428,11 @@ async fn ingest(
         });
     }
 
-    Ok(Json(IngestResponse {
+    Ok(IngestResponse {
         id: row.id,
         already_managed: result.already_managed,
         snapshot: result.snapshot,
-    }))
+    })
 }
 
 async fn prewarm_default_remux(state: &AppState, infohash: &str) {

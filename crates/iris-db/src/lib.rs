@@ -1,6 +1,7 @@
 //! `SQLite` persistence layer for Iris.
 
 pub mod available_episodes;
+pub mod catalog;
 pub mod collections;
 pub mod device_codes;
 pub mod episode_files;
@@ -9,7 +10,10 @@ pub mod invitations;
 pub mod migrate;
 pub mod playback;
 pub mod playback_caps;
+pub mod playback_preferences;
 pub mod pool;
+pub mod preferences;
+pub mod reco_feedback;
 pub mod refresh_tokens;
 pub mod tmdb_cache;
 pub mod torrents;

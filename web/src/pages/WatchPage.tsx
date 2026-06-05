@@ -10,10 +10,12 @@ import { cn } from "@/lib/utils";
 import {
   follows,
   library,
+  me as meApi,
   progress as progressApi,
   torrents,
   type FileEntry,
   type FileProgressEntry,
+  type PlaybackPrefs,
   type PlayStatus,
   type TorrentView,
 } from "@/lib/api";
@@ -60,6 +62,24 @@ function watchedPctOf(p?: FileProgressEntry): number | null {
   return p && p.duration_seconds && p.duration_seconds > 0
     ? Math.min(100, (p.position_seconds / p.duration_seconds) * 100)
     : null;
+}
+
+// Volume is device-specific, so it's persisted locally (not per-user on the
+// server like the audio/subtitle language preference). Survives episodes +
+// sessions on this device.
+const VOLUME_KEY = "iris:volume";
+
+function readStoredVolume(): number | undefined {
+  if (typeof localStorage === "undefined") return undefined;
+  const raw = localStorage.getItem(VOLUME_KEY);
+  if (raw == null) return undefined;
+  const v = Number(raw);
+  return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : undefined;
+}
+
+function writeStoredVolume(v: number): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(VOLUME_KEY, String(Math.max(0, Math.min(1, v))));
 }
 
 export function WatchPage() {
@@ -369,6 +389,24 @@ export function WatchPage() {
     queryFn: () => progressApi.get(infohash!, fileIdx),
     enabled: !!infohash,
   });
+
+  // Per-user preferred audio + subtitle LANGUAGE (cross-episode / cross-device).
+  // Applied only when this file has no saved per-file track (see IrisPlayer):
+  // per-file index wins, else this language pref, else the file default.
+  const playbackPrefsQ = useQuery({
+    queryKey: ["playback-prefs"],
+    queryFn: meApi.playbackPreferences,
+    staleTime: 5 * 60 * 1000,
+  });
+  // Latest known language prefs, mirrored in a ref so the track-change
+  // handlers send the full current state without re-rendering the player.
+  const playbackPrefsRef = useRef<PlaybackPrefs>({
+    audio_language: null,
+    subtitle_language: null,
+  });
+  useEffect(() => {
+    if (playbackPrefsQ.data) playbackPrefsRef.current = playbackPrefsQ.data;
+  }, [playbackPrefsQ.data]);
 
   // All progress for this torrent (powers the "watched %" per episode in the
   // other-files panel).
@@ -732,12 +770,36 @@ export function WatchPage() {
                   startPosition={startPosition}
                   initialAudioIndex={progressQ.data?.audio_track_idx ?? undefined}
                   initialSubtitleStreamIdx={progressQ.data?.subtitle_track_idx ?? undefined}
+                  preferredAudioLang={playbackPrefsQ.data?.audio_language ?? null}
+                  preferredSubtitleLang={playbackPrefsQ.data?.subtitle_language ?? null}
+                  initialVolume={readStoredVolume()}
+                  onVolumeChange={(v) => writeStoredVolume(v)}
                   subtitleVersion={subtitleVersion}
                   onAudioTrackChange={(idx) => {
                     audioTrackRef.current = idx;
+                    // Remember the chosen audio LANGUAGE per-user so it carries
+                    // to the next episode / device (best-effort: a track may
+                    // have no language tag → leave the pref unchanged).
+                    const lang = manifest.audio[idx]?.lang;
+                    if (lang) {
+                      const next = { ...playbackPrefsRef.current, audio_language: lang };
+                      playbackPrefsRef.current = next;
+                      void meApi.savePlaybackPreferences(next);
+                    }
                   }}
                   onActiveSubtitleChange={(streamIdx) => {
                     subtitleTrackRef.current = streamIdx;
+                    // Persist the subtitle LANGUAGE preference: "off" when the
+                    // user disabled subs, else the picked track's language.
+                    const lang =
+                      streamIdx == null
+                        ? "off"
+                        : (manifest.subtitles.find((s) => s.stream_idx === streamIdx)?.lang ?? null);
+                    if (lang) {
+                      const next = { ...playbackPrefsRef.current, subtitle_language: lang };
+                      playbackPrefsRef.current = next;
+                      void meApi.savePlaybackPreferences(next);
+                    }
                   }}
                   onTimeUpdate={onTimeUpdate}
                   onDurationChange={onDurationChange}

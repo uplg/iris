@@ -6,6 +6,7 @@ import {
   Settings as SettingsIcon,
   Search as SearchIcon,
   ShieldCheck,
+  Sparkles as ForYouIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Brand } from "@/components/Brand";
@@ -45,6 +46,7 @@ export function AppShell() {
 
   const nav: NavEntry[] = [
     { to: "/", label: "Home", icon: HomeIcon, end: true },
+    { to: "/for-you", label: "For You", icon: ForYouIcon },
     { to: "/search", label: "Search", icon: SearchIcon },
     { to: "/library", label: "Library", icon: LibraryIcon },
     ...(auth.user.is_admin

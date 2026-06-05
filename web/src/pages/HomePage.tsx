@@ -3,8 +3,10 @@ import { type ReactNode, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { ArrowUpRight, Bookmark, Play, Sparkles } from "lucide-react";
 
+import { CatalogCardView } from "@/components/CatalogCardView";
 import { Container } from "@/components/Container";
 import { MediaCard } from "@/components/MediaCard";
+import { OnboardingDialog } from "@/components/OnboardingDialog";
 import { PreviewDialog } from "@/components/PreviewDialog";
 import { Shelf } from "@/components/Shelf";
 import { Tag } from "@/components/Tag";
@@ -46,6 +48,11 @@ export function HomePage() {
     queryFn: discover.featured,
     staleTime: 5 * 60_000,
   });
+  const forYouQ = useQuery({
+    queryKey: ["for-you"],
+    queryFn: meApi.forYou,
+    staleTime: 60_000,
+  });
   const libraryQ = useQuery({
     queryKey: ["torrents"],
     queryFn: torrents.list,
@@ -64,6 +71,8 @@ export function HomePage() {
 
   return (
     <div>
+      <OnboardingDialog />
+
       {resumePick ? (
         <ResumeHero item={resumePick} />
       ) : libraryPick ? (
@@ -109,27 +118,19 @@ export function HomePage() {
             ))}
           </Shelf>
 
-          <Shelf
-            eyebrow="Fresh"
-            title="New Movies"
-            isEmpty={!featuredQ.data || featuredQ.data.movies.length === 0}
-            emptyState={<span>No movie releases found yet.</span>}
-          >
-            {featuredQ.data?.movies.map((r) => (
-              <FeaturedCard key={`${r.provider_id}:${r.external_id}`} result={r} />
-            ))}
-          </Shelf>
-
-          <Shelf
-            eyebrow="Fresh"
-            title="New Series"
-            isEmpty={!featuredQ.data || featuredQ.data.series.length === 0}
-            emptyState={<span>No series releases found yet.</span>}
-          >
-            {featuredQ.data?.series.map((r) => (
-              <FeaturedCard key={`${r.provider_id}:${r.external_id}`} result={r} />
-            ))}
-          </Shelf>
+          {forYouQ.data?.shelves.map((shelf) => (
+            <Shelf
+              key={shelf.key}
+              eyebrow="Recommended"
+              title={shelf.title}
+              href="/for-you"
+              isEmpty={shelf.items.length === 0}
+            >
+              {shelf.items.map((card) => (
+                <CatalogCardView key={card.catalog_id} card={card} />
+              ))}
+            </Shelf>
+          ))}
 
           <Shelf
             eyebrow="On disk"
@@ -467,97 +468,6 @@ function WatchlistCard({ item }: { item: WatchlistItem }) {
       }
     />
   );
-}
-
-function FeaturedCard({ result }: { result: SearchResult }) {
-  // Detect whether the user already follows this series — only TV
-  // results matter for the Watchlist bookmark badge. We DON'T
-  // auto-follow on click anymore (was a usability foot-gun); the
-  // explicit Follow action lives inside PreviewDialog.
-  const watchlistQ = useQuery({
-    queryKey: ["watchlist"],
-    queryFn: meApi.watchlist,
-    staleTime: 60_000,
-  });
-  const existing = useMemo(() => {
-    if (result.kind !== "tv") return undefined;
-    const norm = normalizeForMatch(result.title);
-    return watchlistQ.data?.find((f) => f.normalized_name === norm);
-  }, [watchlistQ.data, result.title, result.kind]);
-
-  const [previewOpen, setPreviewOpen] = useState(false);
-
-  const subtitle = [result.year, result.seeders != null ? `${result.seeders} seeders` : null]
-    .filter(Boolean)
-    .join(" · ");
-
-  // If the household already has this series in their Watchlist
-  // (= a collection with on-disk episodes), the card body links
-  // straight to the unified collection view (skips the dialog
-  // round-trip). Otherwise the click opens PreviewDialog where the
-  // Play / Download CTA lives.
-  const cardOnClick = existing ? undefined : () => setPreviewOpen(true);
-  const cardHref = existing ? `/collection/${existing.id}` : undefined;
-
-  return (
-    <>
-      <MediaCard
-        href={cardHref}
-        onClick={cardOnClick}
-        title={result.title}
-        subtitle={subtitle || undefined}
-        posterUrl={result.poster_url}
-        kind={result.kind}
-        badge={
-          existing ? (
-            <Bookmark className="size-3.5 text-white/85 drop-shadow" />
-          ) : result.freeleech ? (
-            <Tag variant="success" upper>
-              FL
-            </Tag>
-          ) : undefined
-        }
-      />
-      <PreviewDialog
-        open={previewOpen}
-        onOpenChange={setPreviewOpen}
-        providerId={result.provider_id}
-        externalId={result.external_id}
-        initialTitle={result.title}
-        tmdbId={result.tmdb_id}
-      />
-    </>
-  );
-}
-
-/// SCENE normalisation kept in sync with iris-media's
-/// `normalize_title` + the TV-side trailing-year strip from
-/// `Parsed::collection_key(true)`. Used for client-side "do I
-/// already follow this?" lookups so we don't double-follow the
-/// same series with different surface titles, and so a card
-/// titled "Lucky Luke" matches a follow whose underlying SCENE
-/// torrents normalise to "lucky luke 1991".
-function normalizeForMatch(s: string): string {
-  let out = "";
-  let lastSpace = true;
-  for (const c of s) {
-    if (/[a-z0-9]/i.test(c)) {
-      out += c.toLowerCase();
-      lastSpace = false;
-    } else if (!lastSpace) {
-      out += " ";
-      lastSpace = true;
-    }
-  }
-  return stripTrailingYear(out.trim());
-}
-
-function stripTrailingYear(s: string): string {
-  const m = /^(.*) (\d{4})$/.exec(s);
-  if (!m) return s;
-  const y = parseInt(m[2], 10);
-  if (y < 1900 || y > 2099) return s;
-  return m[1];
 }
 
 function LibraryCard({ torrent }: { torrent: TorrentView }) {

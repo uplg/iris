@@ -1415,6 +1415,9 @@ async fn find_via_indexer_for_identity(
     // continuation order then accepts the top result, `Any` takes the
     // most-seeded.
     let mut results = agg.results;
+    // Dead-torrent guard: never offer a confirmed 0-seeder release (its pieces
+    // would never fully assemble). Unknown / ≥1 seeders pass through.
+    results.retain(|r| r.seeders != Some(0));
     results.sort_by_key(|r| std::cmp::Reverse(r.seeders.unwrap_or(0)));
     let tagged: Vec<(Language, iris_core::search::SearchResult)> = results
         .into_iter()

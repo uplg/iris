@@ -1,13 +1,16 @@
+pub mod anilist;
 pub mod app;
 pub mod client_version;
 pub mod collection_assign;
 pub mod collections_scheduler;
 pub mod error;
+pub mod freshness_scheduler;
 pub mod middleware;
 pub mod observability;
 pub mod presence;
 pub mod ranking;
 pub mod rate_limit;
+pub mod reco;
 pub mod routes;
 pub mod seed_stats;
 pub mod state;
@@ -126,6 +129,21 @@ fn spawn_background_jobs(
     // clicks go through the fast path. No TMDB call. Never ingests
     // on its own.
     collections_scheduler::spawn(pool.clone(), provider_registry);
+
+    // Discovery freshness scheduler: the tracker RSS rolling window. Polls
+    // each provider's latest-releases feed one (provider × kind) slice per
+    // tick, correlates each fresh release to TMDB, and upserts grabbable
+    // candidates into `catalog_items` (availability='available'), GCing the
+    // window each cycle. Tracker-first — TMDB is correlation only. Needs TMDB
+    // configured (for poster/genre enrichment) and at least one provider.
+    if let Some(tmdb) = app_state.tmdb() {
+        freshness_scheduler::spawn(
+            pool.clone(),
+            tmdb.clone(),
+            app_state.providers().clone(),
+            app_state.cfg().discovery.clone(),
+        );
+    }
 
     // Lifetime-upload reconciler — every 30 s, merge librqbit's session
     // upload counters into `torrents.uploaded_bytes_total` so the value

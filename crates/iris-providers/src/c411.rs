@@ -329,6 +329,13 @@ impl SearchProvider for C411 {
         self.torznab.search(q).await
     }
 
+    async fn latest(&self, kind: Option<MediaKind>, page: u32) -> Result<ProviderPage> {
+        // c411 is Torznab under the hood — reuse the query-less rolling-window
+        // feed (the editorial /api/homepage carousel carries no upload dates,
+        // so it can't drive a time-windowed catalogue).
+        self.torznab.latest(kind, page).await
+    }
+
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource> {
         // Fast path: the Torznab link cache already has the signed
         // download URL for this infohash (populated either by an

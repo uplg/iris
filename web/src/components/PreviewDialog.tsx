@@ -33,6 +33,10 @@ type Props = {
   externalId: string | null;
   initialTitle?: string;
   tmdbId?: number | null;
+  /** Seeder count from the search hit. 0 = dead torrent → grab disabled (its
+   *  pieces would never fully assemble). null/≥1 grabs normally (1 seeder is
+   *  often plenty; we never warn, only block a confirmed 0). */
+  seeders?: number | null;
   /** Server-flagged dedup: the result's SCENE identity matches an
    *  episode already on disk. UI surfaces a "you already have this"
    *  banner and promotes "Play existing" over "Download anyway",
@@ -50,6 +54,7 @@ export function PreviewDialog({
   externalId,
   initialTitle,
   tmdbId,
+  seeders = null,
   alreadyInLibrary = false,
   libraryInfohash = null,
   libraryFileIdx = null,
@@ -105,8 +110,13 @@ export function PreviewDialog({
     });
   }, [preview]);
 
+  // Dead-torrent guard: prefer the freshly-loaded details' seeders, fall back
+  // to the search-hit count. A confirmed 0 blocks the grab (its pieces would
+  // never fully assemble); unknown / ≥1 grabs normally.
+  const dead = (details?.seeders ?? seeders) === 0;
+
   const onPlay = async () => {
-    if (!preview || pickedIdx == null || !providerId || !externalId) return;
+    if (dead || !preview || pickedIdx == null || !providerId || !externalId) return;
     setIngesting(true);
     setError(null);
     try {
@@ -268,6 +278,15 @@ export function PreviewDialog({
             </div>
           )}
 
+        {dead && (
+          // Dead-torrent guard: the chosen release has no seeders, so the
+          // grab is disabled. We never warn on a merely-low count (1 seeder is
+          // often plenty) — only a confirmed 0 blocks.
+          <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            Dead torrent — no seeders. This release can't be downloaded; try another.
+          </div>
+        )}
+
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
@@ -277,7 +296,7 @@ export function PreviewDialog({
               <Button
                 variant="secondary"
                 onClick={onPlay}
-                disabled={pickedIdx == null || ingesting || !preview}
+                disabled={pickedIdx == null || ingesting || !preview || dead}
               >
                 {ingesting ? "Starting…" : "Download anyway"}
               </Button>
@@ -292,9 +311,9 @@ export function PreviewDialog({
               </Button>
             </>
           ) : (
-            <Button onClick={onPlay} disabled={pickedIdx == null || ingesting || !preview}>
+            <Button onClick={onPlay} disabled={pickedIdx == null || ingesting || !preview || dead}>
               <Play className="size-4" />
-              {ingesting ? "Starting…" : "Play"}
+              {dead ? "Dead torrent" : ingesting ? "Starting…" : "Play"}
             </Button>
           )}
         </DialogFooter>

@@ -49,6 +49,19 @@ export type IrisPlayerProps = {
    *  parent can re-write them on every change. */
   initialAudioIndex?: number;
   initialSubtitleStreamIdx?: number | null;
+  /** Per-user preferred audio language (ISO 639-1 / BCP-47). Applied only
+   *  when there's no per-file `initialAudioIndex`, by matching `manifest.audio`
+   *  — so "French audio" carries across episodes. Missing → file default. */
+  preferredAudioLang?: string | null;
+  /** Per-user preferred subtitle language, or `"off"` for disabled. Applied
+   *  only when there's no per-file `initialSubtitleStreamIdx`. A language not
+   *  present in this file falls back to off (never a wrong language). */
+  preferredSubtitleLang?: string | null;
+  /** Device-local starting volume (0..1) restored from localStorage. */
+  initialVolume?: number;
+  /** Fires when the user changes volume / mute so the parent can persist it
+   *  device-locally. */
+  onVolumeChange?: (volume: number, muted: boolean) => void;
 
   onTimeUpdate: (seconds: number) => void;
   onDurationChange: (seconds: number) => void;
@@ -135,6 +148,10 @@ export function IrisPlayer(props: IrisPlayerProps) {
   }, []);
   const handleRef = useRef<EngineHandle | null>(null);
   const [handle, setHandle] = useState<EngineHandle | null>(null);
+  // Device-local volume (0..1). Seeded from the restored value and updated on
+  // every user change, so it's re-applied across engine remounts (an
+  // audio-track switch re-spins the `<video>` at its default volume).
+  const volumeRef = useRef<number | null>(props.initialVolume ?? null);
   const currentTimeRef = useRef<number>(props.startPosition);
   // Latched "were we playing right before the last engine teardown?"
   // The mount-effect cleanup snapshots `!handle.paused()` here so the
@@ -158,6 +175,12 @@ export function IrisPlayer(props: IrisPlayerProps) {
     const restored = props.initialAudioIndex;
     if (typeof restored === "number" && restored >= 0 && restored < props.manifest.audio.length) {
       return restored;
+    }
+    // No per-file pick → honour the per-user preferred audio language.
+    const pref = props.preferredAudioLang?.toLowerCase();
+    if (pref) {
+      const match = props.manifest.audio.findIndex((a) => a.lang?.toLowerCase() === pref);
+      if (match >= 0) return match;
     }
     return defaultAudioIndex;
   });
@@ -194,6 +217,15 @@ export function IrisPlayer(props: IrisPlayerProps) {
     if (typeof restored === "number") {
       const match = props.manifest.subtitles.find((s) => s.stream_idx === restored);
       if (match) return match;
+    }
+    // No per-file pick → honour the per-user preferred subtitle language.
+    const pref = props.preferredSubtitleLang?.toLowerCase();
+    if (pref === "off") return null;
+    if (pref) {
+      const match = props.manifest.subtitles.find((s) => s.lang?.toLowerCase() === pref);
+      // Preferred language absent → leave subs off rather than forcing a
+      // different language onto the user.
+      return match ?? null;
     }
     const def = props.manifest.subtitles.find((s) => s.default);
     if (def) return def;
@@ -273,6 +305,11 @@ export function IrisPlayer(props: IrisPlayerProps) {
         } else {
           handleRef.current = h;
           setHandle(h);
+          // Re-apply the device-local volume onto the fresh engine (a new
+          // `<video>` starts at 1.0).
+          if (volumeRef.current != null) {
+            h.setVolume(Math.max(0, Math.min(1, volumeRef.current)));
+          }
           // Auto-resume if the previous engine was playing right
           // before this remount fired (typically an audio-track
           // switch on Tier B/C/E). The first play attempt might
@@ -464,6 +501,10 @@ export function IrisPlayer(props: IrisPlayerProps) {
         onAudioPick={onAudioPick}
         fullscreenTarget={wrapper}
         onControlsVisibleChange={setControlsVisible}
+        onVolumeChange={(v, m) => {
+          volumeRef.current = v;
+          props.onVolumeChange?.(v, m);
+        }}
         documentPip={{
           supported: typeof window !== "undefined" && "documentPictureInPicture" in window,
           isActive: pip.isActive,

@@ -495,6 +495,15 @@ export type ProgressView = {
   last_watched_at: string;
 };
 
+/** Per-user playback language preferences (cross-file / cross-device). Applied
+ *  by matching the file's tracks: per-file saved index wins, else this, else
+ *  the file default. `subtitle_language: "off"` = subtitles disabled; null =
+ *  no preference. Volume is NOT here — it's persisted device-locally. */
+export type PlaybackPrefs = {
+  audio_language: string | null;
+  subtitle_language: string | null;
+};
+
 export type ContinueWatchingItem = {
   infohash: string;
   torrent_name: string;
@@ -543,9 +552,78 @@ export const progress = {
   ) => api.put<void>(`/torrents/${infohash}/files/${idx}/progress`, body),
 };
 
+/** Per-user recommendation preferences (Slice 1 of "For You"). The
+ *  `languages` list uses the backend `Language` vocabulary
+ *  ("french" / "english"), ordered most-preferred first; `genres`
+ *  holds TMDB genre ids. `onboarding_completed` gates the first-login
+ *  onboarding dialog. */
+export type Preferences = {
+  languages: string[];
+  genres: number[];
+  include_anime: boolean;
+  onboarding_completed: boolean;
+};
+
+/** A recommendation candidate as rendered on a "For You" shelf. Shape is
+ *  kept close to SearchResult / WatchlistItem so the same card renders it. */
+export type CatalogCard = {
+  catalog_id: string;
+  tmdb_id: number | null;
+  kind: MediaKind;
+  title: string;
+  /** Fully-resolved poster URL (TMDB CDN path or AniList cover) — render
+   *  directly, no tmdbImage() needed. */
+  poster_url: string | null;
+  /** Fully-resolved backdrop URL (wider; for a hero/preview). */
+  backdrop_url: string | null;
+  overview: string | null;
+  is_anime: boolean;
+  /** "unknown" | "available" | "imminent" | "unavailable". */
+  availability: string;
+  /** Seeder count of the recorded release (rolling-window rows). null for
+   *  lazy reco candidates / torr9 RSS rows (re-checked at grab). */
+  seeders: number | null;
+  /** The recorded release's provider + id — lets the client open the same
+   *  preview dialog as a search hit. null for lazy reco candidates (the
+   *  client falls back to a title search). */
+  provider_id: string | null;
+  external_id: string | null;
+  year: number | null;
+  already_in_library: boolean;
+  library_infohash: string | null;
+  /** Set on "new episodes" cards — distinct new (S, E) since last visit. */
+  new_count: number | null;
+  /** Set on "new episodes" cards — routes to the collection. */
+  collection_id: string | null;
+};
+
+export type ForYouShelf = {
+  key: string;
+  title: string;
+  kind: MediaKind | null;
+  items: CatalogCard[];
+};
+
+export type ForYouResponse = {
+  shelves: ForYouShelf[];
+};
 export const me = {
   continueWatching: () => api.get<ContinueWatchingItem[]>("/me/continue-watching"),
   watchlist: () => api.get<WatchlistItem[]>("/me/watchlist"),
+  preferences: () => api.get<Preferences>("/me/preferences"),
+  savePreferences: (body: Preferences) => api.put<Preferences>("/me/preferences", body),
+  /** The home blended "For You" shelf. */
+  forYou: () => api.get<ForYouResponse>("/me/for-you"),
+  /** The organized "For You" page (top picks + per-genre + anime sections). */
+  forYouPage: () => api.get<ForYouResponse>("/me/for-you/page"),
+  /** Hide a recommendation candidate from future shelves. */
+  dismissForYou: (catalog_id: string) => api.post<void>("/me/for-you/dismiss", { catalog_id }),
+  /** The user's preferred audio + subtitle language (applied across episodes
+   *  / devices). */
+  playbackPreferences: () => api.get<PlaybackPrefs>("/me/playback-preferences"),
+  /** Save preferred audio + subtitle language. Send the full current state. */
+  savePlaybackPreferences: (body: PlaybackPrefs) =>
+    api.put<void>("/me/playback-preferences", body),
 };
 
 export type FilePreview = {
@@ -714,8 +792,37 @@ export type FeaturedResponse = {
   series: SearchResult[];
 };
 
+/** One entry of TMDB's genre taxonomy (merged movie+TV, deduped). The
+ *  `id` is what we persist in a user's `genres` preference. */
+export type GenreOption = {
+  id: number;
+  name: string;
+};
+
+export type GenresResponse = {
+  genres: GenreOption[];
+};
+
+/** A user-selectable language: `value` is the backend `Language` wire
+ *  token ("french"/"english"), `label` the display string. Served by the
+ *  backend so adding a language needs no client redeploy. */
+export type LanguageOption = {
+  value: string;
+  label: string;
+};
+
+export type LanguagesResponse = {
+  languages: LanguageOption[];
+};
+
 export const discover = {
   featured: () => api.get<FeaturedResponse>("/discover/featured"),
+  /** Merged movie + TV genre taxonomy — feeds the onboarding picker.
+   *  Note: served at the top-level `/api/genres`, not under /discover. */
+  genres: () => api.get<GenresResponse>("/genres"),
+  /** Server-driven selectable languages for onboarding. Top-level
+   *  `/api/languages`. */
+  languages: () => api.get<LanguagesResponse>("/languages"),
 };
 
 // ---------------------------------------------------------------------------

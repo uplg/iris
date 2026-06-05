@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -39,11 +39,32 @@ struct Inner {
     /// DB round-trip on the hot path. Empty results are cached too so
     /// "no hits" doesn't re-issue.
     searches: RwLock<HashMap<String, Vec<TmdbSuggestion>>>,
+    /// Genre taxonomy per kind, keyed by `kind_marker`. Unlike the id
+    /// caches above this one carries a fetched-at stamp and expires
+    /// after `GENRE_CACHE_TTL`: the taxonomy is near-static but the
+    /// onboarding picker should still pick up the rare addition without
+    /// a process restart.
+    genres_cache: RwLock<HashMap<&'static str, (Instant, Vec<Genre>)>>,
+    /// Request-keyed cache for the list endpoints (`recommendations` /
+    /// `similar`). Keyed by a string built from the call + params, expires
+    /// after `DISCOVER_CACHE_TTL`, so repeated For-You renders don't re-fetch
+    /// the same recommendation slice.
+    discover_cache: RwLock<HashMap<String, (Instant, Vec<MediaMetadata>)>>,
 }
+
+/// TTL for the cached TMDB genre taxonomy. The list changes maybe once
+/// a year; a daily refresh costs one request per kind and keeps the
+/// onboarding picker current.
+const GENRE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// TTL for cached list slices (`recommendations` / `similar`). A few hours
+/// keeps the "Because you watched" shelf cheap across repeated renders.
+const DISCOVER_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
 #[derive(Clone)]
 enum CacheEntry {
-    Found(MediaMetadata),
+    // Boxed: MediaMetadata is much larger than the empty NotFound variant.
+    Found(Box<MediaMetadata>),
     NotFound,
 }
 
@@ -62,6 +83,15 @@ pub struct TmdbSuggestion {
     pub year: Option<u32>,
     pub overview: Option<String>,
     pub poster_path: Option<String>,
+}
+
+/// One entry of TMDB's genre taxonomy (`/genre/{movie,tv}/list`). Powers
+/// the onboarding genre picker; the `id` is what we persist in a user's
+/// `genres` preference and later feed to `/discover` as `with_genres`.
+#[derive(Debug, Clone, Serialize)]
+pub struct Genre {
+    pub id: u32,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,6 +132,18 @@ pub struct MediaMetadata {
     /// snapshot how many seasons we expect, so the Series page can pre-
     /// render season tabs without waiting on a fresh TMDB lookup.
     pub number_of_seasons: Option<u32>,
+    /// TMDB popularity score (relative, unbounded). Ranks catalogue
+    /// candidates in the recommendation pipeline.
+    pub popularity: Option<f64>,
+    /// ISO 639-1 original language ("fr" / "en" / …). Drives per-user
+    /// language filtering of the catalogue.
+    pub original_language: Option<String>,
+    /// TMDB genre ids. Always present from list endpoints (discover /
+    /// trending); derived from the full genre objects on detail lookups.
+    pub genre_ids: Vec<u32>,
+    /// `YYYY-MM-DD` release / first-air date, kept raw alongside the
+    /// parsed `year`.
+    pub release_date: Option<String>,
 }
 
 impl TmdbClient {
@@ -116,6 +158,8 @@ impl TmdbClient {
                 typed_cache: RwLock::new(HashMap::new()),
                 seasons: RwLock::new(HashMap::new()),
                 searches: RwLock::new(HashMap::new()),
+                genres_cache: RwLock::new(HashMap::new()),
+                discover_cache: RwLock::new(HashMap::new()),
             }),
         })
     }
@@ -210,6 +254,120 @@ impl TmdbClient {
         out
     }
 
+    /// Fetch TMDB's canonical genre taxonomy for `kind` (movies or TV).
+    /// Powers the onboarding genre picker. Cached in-memory per kind for
+    /// `GENRE_CACHE_TTL`; returns an empty list on any error or when the
+    /// client is unconfigured (the caller renders an empty picker rather
+    /// than failing onboarding).
+    pub async fn genre_list(&self, kind: TmdbKind) -> Vec<Genre> {
+        let marker = kind_marker(kind);
+        if let Some((fetched, genres)) = self.inner.genres_cache.read().await.get(marker).cloned() {
+            if fetched.elapsed() < GENRE_CACHE_TTL {
+                return genres;
+            }
+        }
+        let url = format!(
+            "https://api.themoviedb.org/3/genre/{marker}/list?api_key={}&language=en-US",
+            self.inner.api_key
+        );
+        let res = match self.inner.http.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, ?kind, "tmdb genre list fetch failed");
+                return Vec::new();
+            }
+        };
+        if !res.status().is_success() {
+            return Vec::new();
+        }
+        let raw: TmdbGenreListRaw = match res.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, ?kind, "tmdb genre list parse failed");
+                return Vec::new();
+            }
+        };
+        let genres: Vec<Genre> = raw
+            .genres
+            .into_iter()
+            .map(|g| Genre { id: g.id, name: g.name })
+            .collect();
+        self.inner
+            .genres_cache
+            .write()
+            .await
+            .insert(marker, (Instant::now(), genres.clone()));
+        genres
+    }
+
+    /// `/{movie,tv}/{id}/recommendations` — TMDB's collaborative "people who
+    /// liked this also liked" list. Powers the taste-based "Because you
+    /// watched X" shelf; an older recommendation is itself a strong
+    /// availability signal (it has had time to be indexed + seeded).
+    pub async fn recommendations(&self, kind: TmdbKind, tmdb_id: u64) -> Vec<MediaMetadata> {
+        let endpoint = kind_marker(kind);
+        let url = format!(
+            "https://api.themoviedb.org/3/{endpoint}/{tmdb_id}/recommendations?api_key={}&page=1",
+            self.inner.api_key
+        );
+        self.fetch_list(format!("recommendations:{endpoint}:{tmdb_id}"), url, kind)
+            .await
+    }
+
+    /// `/{movie,tv}/{id}/similar` — content-based (keyword/genre) neighbours.
+    /// Complements [`Self::recommendations`] for the same shelf.
+    pub async fn similar(&self, kind: TmdbKind, tmdb_id: u64) -> Vec<MediaMetadata> {
+        let endpoint = kind_marker(kind);
+        let url = format!(
+            "https://api.themoviedb.org/3/{endpoint}/{tmdb_id}/similar?api_key={}&page=1",
+            self.inner.api_key
+        );
+        self.fetch_list(format!("similar:{endpoint}:{tmdb_id}"), url, kind)
+            .await
+    }
+
+    /// Shared cached fetch for the list endpoints. `recommendations` /
+    /// `similar` return the same paged `{ results: [...] }` envelope of list
+    /// items, so they share one cache + parse path. Returns empty on any error.
+    async fn fetch_list(
+        &self,
+        cache_key: String,
+        url: String,
+        kind: TmdbKind,
+    ) -> Vec<MediaMetadata> {
+        if let Some((fetched, items)) = self.inner.discover_cache.read().await.get(&cache_key).cloned()
+        {
+            if fetched.elapsed() < DISCOVER_CACHE_TTL {
+                return items;
+            }
+        }
+        let res = match self.inner.http.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, cache_key, "tmdb list fetch failed");
+                return Vec::new();
+            }
+        };
+        if !res.status().is_success() {
+            return Vec::new();
+        }
+        let raw: TmdbDiscoverRaw = match res.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, cache_key, "tmdb list parse failed");
+                return Vec::new();
+            }
+        };
+        let items: Vec<MediaMetadata> =
+            raw.results.into_iter().map(|r| r.into_meta(kind)).collect();
+        self.inner
+            .discover_cache
+            .write()
+            .await
+            .insert(cache_key, (Instant::now(), items.clone()));
+        items
+    }
+
     /// List the episodes TMDB has on file for a given TV season. Used by the
     /// notify scheduler to know what episodes to expect (and by the Series
     /// detail page to render the season layout). Returns an empty Vec on
@@ -295,7 +453,7 @@ impl TmdbClient {
             .cloned()
         {
             return match hit {
-                CacheEntry::Found(m) => Some(m),
+                CacheEntry::Found(m) => Some(*m),
                 CacheEntry::NotFound => None,
             };
         }
@@ -315,7 +473,7 @@ impl TmdbClient {
                     .typed_cache
                     .write()
                     .await
-                    .insert(cache_key, CacheEntry::Found(m.clone()));
+                    .insert(cache_key, CacheEntry::Found(Box::new(m.clone())));
                 return Some(m);
             }
         }
@@ -353,12 +511,11 @@ impl TmdbClient {
             .and_then(|d| d.split('-').next())
             .and_then(|y| y.parse().ok());
         let title = raw.title.or(raw.name).unwrap_or_default();
-        let genres = raw
-            .genres
-            .unwrap_or_default()
-            .into_iter()
-            .map(|g| g.name)
-            .collect();
+        // Detail endpoints return full genre objects; keep both the names
+        // (for display) and the ids (for catalogue filtering).
+        let raw_genres = raw.genres.unwrap_or_default();
+        let genre_ids = raw_genres.iter().map(|g| g.id).collect();
+        let genres = raw_genres.into_iter().map(|g| g.name).collect();
         // For movies TMDB returns a single `runtime` (minutes); for TV
         // shows it's `episode_run_time: [N, N, …]` — we pick the first
         // entry as a representative episode length. Either way the
@@ -380,6 +537,10 @@ impl TmdbClient {
             genres,
             runtime_minutes,
             number_of_seasons: raw.number_of_seasons,
+            popularity: raw.popularity,
+            original_language: raw.original_language,
+            genre_ids,
+            release_date: date,
         })
     }
 }
@@ -402,11 +563,83 @@ struct TmdbRaw {
     episode_run_time: Option<Vec<u32>>,
     /// TV shows only.
     number_of_seasons: Option<u32>,
+    popularity: Option<f64>,
+    original_language: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct TmdbGenre {
+    id: u32,
     name: String,
+}
+
+#[derive(Deserialize)]
+struct TmdbGenreListRaw {
+    #[serde(default)]
+    genres: Vec<TmdbGenreListEntry>,
+}
+
+#[derive(Deserialize)]
+struct TmdbGenreListEntry {
+    id: u32,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct TmdbDiscoverRaw {
+    #[serde(default)]
+    results: Vec<TmdbDiscoverResult>,
+}
+
+/// A single list item from discover / trending / `now_playing` / `on_the_air`.
+/// These carry `genre_ids` (ints) + `popularity` + `original_language`
+/// directly, but no full genre objects / runtime / season counts.
+#[derive(Deserialize)]
+struct TmdbDiscoverResult {
+    id: u64,
+    title: Option<String>,
+    name: Option<String>,
+    overview: Option<String>,
+    release_date: Option<String>,
+    first_air_date: Option<String>,
+    poster_path: Option<String>,
+    backdrop_path: Option<String>,
+    vote_average: Option<f64>,
+    vote_count: Option<u32>,
+    popularity: Option<f64>,
+    original_language: Option<String>,
+    #[serde(default)]
+    genre_ids: Vec<u32>,
+}
+
+impl TmdbDiscoverResult {
+    fn into_meta(self, kind: TmdbKind) -> MediaMetadata {
+        let date = self.release_date.or(self.first_air_date);
+        let year = date
+            .as_deref()
+            .and_then(|d| d.split('-').next())
+            .and_then(|y| y.parse().ok());
+        let title = self.title.or(self.name).unwrap_or_default();
+        MediaMetadata {
+            kind,
+            tmdb_id: self.id,
+            title,
+            overview: self.overview.filter(|s| !s.is_empty()),
+            year,
+            poster_path: self.poster_path,
+            backdrop_path: self.backdrop_path,
+            vote_score: self.vote_average.map(|v| v / 10.0),
+            vote_count: self.vote_count,
+            // List endpoints don't return genre names or runtime/season counts.
+            genres: Vec::new(),
+            runtime_minutes: None,
+            number_of_seasons: None,
+            popularity: self.popularity,
+            original_language: self.original_language,
+            genre_ids: self.genre_ids,
+            release_date: date,
+        }
+    }
 }
 
 #[derive(Deserialize)]
