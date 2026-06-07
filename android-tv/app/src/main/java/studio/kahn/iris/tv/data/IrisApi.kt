@@ -992,6 +992,14 @@ data class CollectionDetail(
     @SerialName("tmdb_id") val tmdbId: Long? = null,
     @SerialName("display_title") val displayTitle: String,
     val kind: String,
+    /** True for anime collections (AniList-enriched, split from a
+     *  same-titled live-action show). Defaulted for forward-compat. */
+    @SerialName("is_anime") val isAnime: Boolean = false,
+    /** Episode layout: `"seasonal"` (season tabs, default) or
+     *  `"absolute"` (one flat "Episode N" list — fleuve anime).
+     *  Derived server-side from the episode data, NOT from `isAnime`.
+     *  Defaulted so older servers / payloads keep the seasonal layout. */
+    val numbering: String = "seasonal",
     val torrents: List<TorrentView> = emptyList(),
     val episodes: List<CollectionEpisode> = emptyList(),
     /** Server-resolved TMDB poster/backdrop (TMDB convention,
@@ -1030,6 +1038,10 @@ data class CollectionEpisode(
      *  row, downloaded or not, carries one. `null` only when the
      *  parent torrent is no longer registered (defensive). */
     val language: String? = null,
+    /** Absolute episode number for fleuve anime (`One Piece S01E1156`
+     *  → 1156). `null` for seasonal episodes. Rendered as "Episode N"
+     *  when the collection's `numbering` is `"absolute"`. */
+    @SerialName("absolute_episode") val absoluteEpisode: Long? = null,
 )
 
 /** Indexer offer the scheduler cached for an episode that isn't
@@ -1066,6 +1078,9 @@ data class AvailableEpisodeEntry(
     /** `"french"` / `"english"` / `"multi"` / `"unknown"`. Drives
      *  the FR / EN / MULTi pill on the episode row. */
     val language: String? = null,
+    /** Absolute episode number for fleuve anime offers. `null` for
+     *  seasonal releases. */
+    @SerialName("absolute_episode") val absoluteEpisode: Long? = null,
 )
 
 @Serializable
@@ -1074,6 +1089,7 @@ data class CollectionListItem(
     @SerialName("tmdb_id") val tmdbId: Long? = null,
     @SerialName("display_title") val displayTitle: String,
     val kind: String,
+    @SerialName("is_anime") val isAnime: Boolean = false,
     @SerialName("torrent_count") val torrentCount: Long = 0,
     @SerialName("total_size_bytes") val totalSizeBytes: Long = 0,
     @SerialName("episode_count") val episodeCount: Long = 0,

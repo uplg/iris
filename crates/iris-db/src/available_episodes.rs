@@ -41,6 +41,11 @@ pub struct AvailableEpisodeRow {
     /// (torr9's JSON API), or on legacy rows pre-migration 0018.
     #[serde(default)]
     pub download_url: Option<String>,
+    /// Absolute episode number for fleuve anime offers
+    /// (`One Piece S01E1156` → 1156). `NULL` for ordinary seasonal
+    /// releases and for packs. Powers the flat anime list.
+    #[serde(default)]
+    pub absolute_episode: Option<i64>,
 }
 
 /// SQL `ORDER BY` fragment mirroring `iris_core::ranking::recommended_cmp`,
@@ -85,7 +90,7 @@ pub async fn list_best_for_series(
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
     let sql = format!(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode \
          FROM (SELECT *, ROW_NUMBER() OVER ( \
                    PARTITION BY season, episode, COALESCE(language, '') \
                    ORDER BY {order}) AS _rn \
@@ -125,7 +130,7 @@ pub async fn list_season_packs_for_series(
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
     let sql = format!(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode \
          FROM (SELECT *, ROW_NUMBER() OVER ( \
                    PARTITION BY season, COALESCE(language, '') \
                    ORDER BY {order}) AS _rn \
@@ -157,7 +162,7 @@ pub async fn find_pack_for_season(
 ) -> Result<Option<AvailableEpisodeRow>, sqlx::Error> {
     let sql = format!(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode \
          FROM available_episodes \
          WHERE normalized_name = ?1 AND episode = 0 AND season = ?2 AND seeders IS NOT 0 \
            AND (?3 IS NULL OR language = ?3) \
@@ -217,6 +222,9 @@ pub struct UpsertAvailableEpisode {
     /// grab path stay alive across server restarts that wipe the
     /// providers' in-memory link caches.
     pub download_url: Option<String>,
+    /// Absolute episode number for fleuve anime offers (`None` for
+    /// seasonal releases and packs).
+    pub absolute_episode: Option<i64>,
 }
 
 pub async fn upsert(
@@ -226,16 +234,17 @@ pub async fn upsert(
     sqlx::query(
         "INSERT INTO available_episodes \
             (id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-             magnet, quality, seeders, size_bytes, found_at, language, download_url) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
+             magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
          ON CONFLICT(normalized_name, season, episode, indexer_provider, indexer_torrent_id) \
          DO UPDATE SET \
-            magnet       = excluded.magnet, \
-            quality      = excluded.quality, \
-            seeders      = excluded.seeders, \
-            size_bytes   = excluded.size_bytes, \
-            language     = excluded.language, \
-            download_url = excluded.download_url",
+            magnet           = excluded.magnet, \
+            quality          = excluded.quality, \
+            seeders          = excluded.seeders, \
+            size_bytes       = excluded.size_bytes, \
+            language         = excluded.language, \
+            download_url     = excluded.download_url, \
+            absolute_episode = excluded.absolute_episode",
     )
     .bind(Uuid::new_v4())
     .bind(&a.normalized_name)
@@ -250,7 +259,25 @@ pub async fn upsert(
     .bind(Utc::now())
     .bind(a.language)
     .bind(a.download_url)
+    .bind(a.absolute_episode)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Hard-delete every cached offer for a normalised series name. Used by
+/// the boot self-heal after it splits a mixed collection (e.g. the
+/// anime + live-action `"one piece"` amalgam): the stale rows recorded
+/// under the old shared name would otherwise keep surfacing on the
+/// post-split collections. The scheduler re-records correctly-keyed
+/// offers on its next scan. Returns the number of rows removed.
+pub async fn delete_for_series(
+    pool: &SqlitePool,
+    normalized_name: &str,
+) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query("DELETE FROM available_episodes WHERE normalized_name = ?1")
+        .bind(normalized_name)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
 }

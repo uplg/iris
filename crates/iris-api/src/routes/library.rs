@@ -63,6 +63,11 @@ struct CollectionListItem {
     tmdb_id: Option<i64>,
     display_title: String,
     kind: String,
+    /// `true` for anime collections (drives AniList-sourced metadata and
+    /// keeps the anime / live-action split visible). Additive field —
+    /// older clients ignore it.
+    #[serde(default)]
+    is_anime: bool,
     /// Number of torrents currently attached. ≥ 1 — the listing already
     /// filters out empty collections.
     torrent_count: i64,
@@ -121,6 +126,7 @@ async fn list_library(
             tmdb_id: s.tmdb_id,
             display_title: s.display_title,
             kind: s.kind,
+            is_anime: s.is_anime,
             torrent_count: s.torrent_count,
             total_size_bytes: s.total_size_bytes,
             episode_count: s.episode_count,
@@ -136,6 +142,17 @@ struct CollectionDetail {
     tmdb_id: Option<i64>,
     display_title: String,
     kind: String,
+    /// `true` for anime collections. Additive — older clients ignore it.
+    #[serde(default)]
+    is_anime: bool,
+    /// How the client should lay out episodes: `"seasonal"` (the
+    /// default — season tabs) or `"absolute"` (one flat ordered
+    /// "Episode N" list, for fleuve anime whose releases cram the
+    /// absolute number into a fake `S01`). Derived from the episode set,
+    /// NOT from `is_anime`: a season-cut anime stays `"seasonal"`.
+    /// Additive — older clients ignore it and keep season tabs.
+    #[serde(default = "default_numbering")]
+    numbering: String,
     /// Server-resolved poster path (TMDB convention — pass through
     /// `tmdbImage(path, size)` client-side). `None` when no TMDB id
     /// is attached or the lookup fails. Looked up here (rather than
@@ -191,6 +208,12 @@ struct EpisodeEntry {
     /// when the parent torrent is no longer registered in the
     /// engine (shouldn't happen but defensive).
     language: Option<String>,
+    /// Absolute episode number for fleuve anime (`One Piece S01E1156` →
+    /// 1156). `null` for ordinary seasonal episodes. The client renders
+    /// "Episode N" from this when the collection's `numbering` is
+    /// `"absolute"`. Additive — older clients ignore it.
+    #[serde(default)]
+    absolute_episode: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -209,6 +232,10 @@ struct AvailableEpisodeEntry {
     /// releases at a glance. `null` only on legacy DB rows from
     /// before migration 0017 (they read as "unknown" downstream).
     language: Option<String>,
+    /// Absolute episode number for fleuve anime offers. `null` for
+    /// seasonal releases. Additive — older clients ignore it.
+    #[serde(default)]
+    absolute_episode: Option<i64>,
 }
 
 /// Season-pack offer the indexer scanner cached for this collection.
@@ -227,6 +254,47 @@ struct SeasonPackEntry {
     size_bytes: Option<i64>,
     found_at: DateTime<Utc>,
     language: Option<String>,
+}
+
+/// serde default for the additive `numbering` field — absent on old
+/// payloads, which must keep their season-tab layout.
+fn default_numbering() -> String {
+    "seasonal".to_string()
+}
+
+/// Decide the client episode layout from the evidence, NOT from
+/// `is_anime`: `"absolute"` when the absolute-numbered (fleuve) episodes
+/// dominate, else `"seasonal"`. On-disk episodes (what's actually in the
+/// library) drive the call; cached offers only break a tie when nothing
+/// is downloaded yet. A season-cut anime — whose episodes carry no
+/// absolute number — correctly stays `"seasonal"`.
+fn derive_numbering(episodes: &[EpisodeEntry], available: &[AvailableEpisodeEntry]) -> String {
+    let (mut total, mut absolute) = (0usize, 0usize);
+    for e in episodes {
+        if e.episode == 0 {
+            continue; // season-pack sentinel
+        }
+        total += 1;
+        if e.absolute_episode.is_some() {
+            absolute += 1;
+        }
+    }
+    if total == 0 {
+        for a in available {
+            if a.episode == 0 {
+                continue;
+            }
+            total += 1;
+            if a.absolute_episode.is_some() {
+                absolute += 1;
+            }
+        }
+    }
+    if total > 0 && absolute * 2 >= total {
+        "absolute".to_string()
+    } else {
+        default_numbering()
+    }
 }
 
 async fn collection_detail(
@@ -317,11 +385,14 @@ async fn collection_detail(
         _ => (None, None),
     };
 
+    let numbering = derive_numbering(&episodes, &available_episodes);
     Ok(Json(CollectionDetail {
         id: collection.id,
         tmdb_id: collection.tmdb_id,
         display_title: collection.display_title,
         kind: collection.kind,
+        is_anime: collection.is_anime,
+        numbering,
         poster_path,
         backdrop_path,
         torrents,
@@ -423,6 +494,7 @@ async fn build_available_singletons(
             size_bytes: o.size_bytes,
             found_at: o.found_at,
             language: o.language,
+            absolute_episode: o.absolute_episode,
         });
     }
     out.sort_by_key(|e| (e.season, e.episode));
@@ -538,6 +610,7 @@ async fn build_tv_episode_view(
             file_idx: f.file_idx,
             watched,
             language,
+            absolute_episode: f.absolute_episode,
         });
     }
     episodes_out.sort_by_key(|e| (e.season, e.episode, e.file_idx));

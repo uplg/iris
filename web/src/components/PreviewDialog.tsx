@@ -104,8 +104,17 @@ export function PreviewDialog({
 
   const sortedFiles = useMemo(() => {
     if (!preview) return [] as FilePreview[];
+    // Videos first, then episodes in SCENE order (E01, E02, …) so a season
+    // pack reads naturally and the auto-selected episode 1 sits on top.
+    // Files without an SxxExx marker (movies / extras) fall back to
+    // largest-first; non-video trails.
     return [...preview.files].sort((a, b) => {
       if (a.is_video !== b.is_video) return a.is_video ? -1 : 1;
+      const sa = parseSe(a.path);
+      const sb = parseSe(b.path);
+      if (sa && sb) return sa.season - sb.season || sa.episode - sb.episode;
+      if (sa) return -1;
+      if (sb) return 1;
       return b.size_bytes - a.size_bytes;
     });
   }, [preview]);
@@ -322,12 +331,41 @@ export function PreviewDialog({
   );
 }
 
+/** SCENE `SxxExx` marker from a file's basename (handles `S01E02`,
+ *  `S1E2`, `S01.E02`, and the fleuve `S01E1156`). `null` when absent. */
+function parseSe(path: string): { season: number; episode: number } | null {
+  const base = path.split("/").pop() ?? path;
+  const m = /\bS(\d{1,4})[._ -]*E(\d{1,4})\b/i.exec(base);
+  if (!m) return null;
+  return { season: Number.parseInt(m[1], 10), episode: Number.parseInt(m[2], 10) };
+}
+
+/** SCENE samples are tagged video files we must never auto-select —
+ *  matches the backend's `is_main_video_file` exclusion. */
+function isSampleFile(path: string): boolean {
+  const p = path.toLowerCase();
+  return p.includes("/sample/") || p.includes(".sample.") || /\bsample\b/.test(p);
+}
+
 function pickAutoFile(files: FilePreview[]): number | null {
-  // Prefer the largest video file (typical season pack: pick biggest single
-  // episode). If no video, take the largest file overall.
-  const videos = files.filter((f) => f.is_video);
+  const videos = files.filter((f) => f.is_video && !isSampleFile(f.path));
   const pool = videos.length ? videos : files;
   if (!pool.length) return null;
+  // Season pack: land on the FIRST episode (lowest season, then episode)
+  // so the post-grab "Play" opens episode 1 — not whatever episode happens
+  // to have the biggest file. The Watch page then chains to the next.
+  const withSe = pool
+    .map((f) => ({ f, se: parseSe(f.path) }))
+    .filter((x): x is { f: FilePreview; se: { season: number; episode: number } } => x.se != null);
+  if (withSe.length > 0) {
+    return withSe.reduce((best, x) =>
+      x.se.season < best.se.season ||
+      (x.se.season === best.se.season && x.se.episode < best.se.episode)
+        ? x
+        : best,
+    ).f.index;
+  }
+  // Movie / single unparseable file: largest video wins.
   return pool.reduce((best, f) => (f.size_bytes > best.size_bytes ? f : best), pool[0])!.index;
 }
 

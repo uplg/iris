@@ -31,7 +31,19 @@ use iris_db::collections::{self, CollectionRow, Kind};
 use iris_db::episode_files::{self, DerivedFrom, UpsertEpisodeFile};
 use iris_media::filename;
 
+use crate::anilist::AniListClient;
 use crate::tmdb::TmdbClient;
+
+/// Optional external-service handles threaded through the collection-
+/// assignment + backfill paths. Bundled into one struct so the public
+/// entry-points stay under clippy's argument-count bar and so adding a
+/// future enrichment source doesn't churn every call site.
+#[derive(Clone, Copy)]
+pub struct EnrichDeps<'a> {
+    pub tmdb: Option<&'a TmdbClient>,
+    pub anilist: Option<&'a AniListClient>,
+    pub providers: Option<&'a iris_providers::ProviderRegistry>,
+}
 
 /// Run after every successful ingest. Picks (or creates) the right
 /// collection from SCENE-parsed identity, attaches the torrent, and
@@ -48,8 +60,7 @@ use crate::tmdb::TmdbClient;
 /// for symmetry with future hooks; currently unused.
 pub async fn assign_after_ingest(
     pool: &SqlitePool,
-    tmdb: Option<&TmdbClient>,
-    providers: Option<&iris_providers::ProviderRegistry>,
+    deps: EnrichDeps<'_>,
     infohash: &str,
     name: &str,
     tmdb_id: Option<i64>,
@@ -79,7 +90,22 @@ pub async fn assign_after_ingest(
     let kind = guess_kind(parsed_name.as_ref(), &parsed_files);
     let identity = pick_identity(kind, parsed_name.as_ref(), &parsed_files);
 
-    let collection = match resolve_collection(pool, kind, name, identity).await {
+    // Anime classification (offline, naming-gated). Decided here because
+    // it's baked into the collection identity key at create-time — an
+    // anime and a live-action show sharing a title must not merge. The
+    // async AniList/TMDB confirm step only ever strengthens this later.
+    // Check the torrent name plus every video leaf so a fansub group
+    // token on either surface counts.
+    let id_season = identity.and_then(|p| p.season);
+    let id_episode = identity.and_then(|p| p.episode);
+    let is_anime = kind == Kind::Tv
+        && (filename::looks_like_anime_release(name, id_season, id_episode)
+            || files.iter().any(|(_, path)| {
+                let leaf = path.rsplit('/').next().unwrap_or(path);
+                filename::looks_like_anime_release(leaf, id_season, id_episode)
+            }));
+
+    let collection = match resolve_collection(pool, kind, name, identity, is_anime).await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, infohash, "collection assign: resolve failed");
@@ -117,6 +143,10 @@ pub async fn assign_after_ingest(
                     infohash: infohash.to_string(),
                     file_idx: *file_idx as i64,
                     derived_from: DerivedFrom::SceneParse,
+                    // Absolute number only for genuinely-fleuve releases
+                    // (threshold-gated inside the helper); seasonal anime
+                    // and ordinary TV stay `None`.
+                    absolute_episode: filename::absolute_from_parsed(parsed).map(i64::from),
                 },
             )
             .await;
@@ -132,7 +162,7 @@ pub async fn assign_after_ingest(
         //   * A one-shot scan against the indexers populates
         //     `available_episodes` so the "next episodes" picker
         //     has data on first render.
-        prewarm_tv_collection(pool, tmdb, providers, &collection, name).await;
+        prewarm_tv_collection(pool, deps, &collection, name).await;
     }
 }
 
@@ -148,13 +178,32 @@ pub async fn assign_after_ingest(
 /// minutes to seconds.
 async fn prewarm_tv_collection(
     pool: &SqlitePool,
-    tmdb: Option<&TmdbClient>,
-    providers: Option<&iris_providers::ProviderRegistry>,
+    deps: EnrichDeps<'_>,
     collection: &iris_db::collections::CollectionRow,
     release_name: &str,
 ) {
+    // Anime enrichment: when the offline classifier already flagged
+    // this collection anime, attach an AniList id (poster /
+    // recommendations metadata). AniList matches a *title*, not a
+    // specific release, so it can only enrich here — the per-release
+    // anime/live-action split is decided by the offline signal at
+    // ingest. Best-effort; missing AniList just leaves `anilist_id` null.
+    if collection.is_anime && collection.anilist_id.is_none() {
+        if let Some(id) = anilist_id_for(deps.anilist, &collection.display_title).await {
+            if let Err(e) = iris_db::collections::set_is_anime(pool, collection.id, true, Some(id)).await
+            {
+                tracing::warn!(error = %e, collection_id = %collection.id, "prewarm: set anilist_id failed");
+            } else {
+                tracing::info!(
+                    collection_id = %collection.id,
+                    anilist_id = id,
+                    "prewarm: enriched anime collection with AniList id",
+                );
+            }
+        }
+    }
     if collection.tmdb_id.is_none() {
-        if let Some(client) = tmdb {
+        if let Some(client) = deps.tmdb {
             if let Some(resolved) = crate::tmdb_resolve::resolve_release_name(
                 pool,
                 client,
@@ -193,7 +242,7 @@ async fn prewarm_tv_collection(
             }
         }
     }
-    if let Some(reg) = providers {
+    if let Some(reg) = deps.providers {
         if let Err(e) =
             crate::collections_scheduler::scan_collection(pool, reg, collection.id).await
         {
@@ -204,6 +253,22 @@ async fn prewarm_tv_collection(
             );
         }
     }
+}
+
+/// Best AniList media id for a series title, or `None`. AniList's
+/// `SEARCH_MATCH` sort already ranks the closest title first; we only
+/// accept a hit whose normalised title actually matches the query so a
+/// fuzzy near-miss doesn't attach the wrong show's id. TV shows only
+/// (`!is_movie`).
+async fn anilist_id_for(anilist: Option<&AniListClient>, title: &str) -> Option<i64> {
+    let client = anilist?;
+    let want = filename::series_key(title);
+    client
+        .search(title)
+        .await
+        .into_iter()
+        .find(|m| !m.is_movie && filename::series_key(&m.title) == want)
+        .map(|m| m.anilist_id)
 }
 
 /// True when `path` is a real video file we'd want to play —
@@ -295,12 +360,13 @@ async fn resolve_collection(
     kind: Kind,
     torrent_name: &str,
     identity: Option<&filename::Parsed>,
+    is_anime: bool,
 ) -> Result<CollectionRow, sqlx::Error> {
     if let Some(p) = identity {
-        let key = p.collection_key(kind == Kind::Tv);
+        let key = p.collection_key_kind(kind == Kind::Tv, is_anime);
         if !key.is_empty() {
             let display = p.display_with_year(kind == Kind::Tv);
-            return collections::find_or_create(pool, &key, &display, kind).await;
+            return collections::find_or_create(pool, &key, &display, kind, is_anime).await;
         }
     }
     // Truly nothing parseable — standalone collection (one entry,
@@ -468,14 +534,261 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
     );
 }
 
+/// Boot/periodic self-heal for the anime/live-action amalgam. Before
+/// the anime-aware identity work an anime fansub release and a
+/// same-titled live-action show collapsed into one `collections` row
+/// (the reported *One Piece* bug). This re-classifies a torrent and,
+/// when its anime-aware key disagrees with the collection it currently
+/// sits in, either renames the row in place (a pure, mis-keyed anime
+/// collection) or moves just this torrent out of a mixed row into the
+/// correct `anime:`-prefixed collection — then re-homes its episode
+/// files (with absolute numbers) and rebuilds the stale offer cache.
+///
+/// Only ever invoked for torrents the offline classifier flags anime,
+/// so it never touches non-anime identities (those keep going through
+/// [`heal_tv_collection_identity`]). Conservative + idempotent: once a
+/// torrent is in its correct collection the early return fires and the
+/// expensive availability rebuild never runs again.
+async fn heal_anime_collection_identity(
+    pool: &SqlitePool,
+    providers: Option<&iris_providers::ProviderRegistry>,
+    infohash: &str,
+    files: &[(usize, String)],
+) {
+    let Ok(Some(torrent)) = iris_db::torrents::find_by_infohash(pool, infohash).await else {
+        return;
+    };
+    let Some(collection_id) = torrent.collection_id else { return };
+    let Ok(Some(collection)) = collections::get(pool, collection_id).await else {
+        return;
+    };
+    if collection.kind != "tv" {
+        return;
+    }
+    let Some(parsed) = filename::parse(&torrent.name) else { return };
+    if parsed.season.is_none() {
+        return; // no season marker → no canonical TV key to write
+    }
+    let is_anime =
+        filename::looks_like_anime_release(&torrent.name, parsed.season, parsed.episode);
+    let new_key = parsed.collection_key_kind(true, is_anime);
+    if new_key.is_empty() {
+        return;
+    }
+    let current_key = collection.parsed_title_normalized.clone().unwrap_or_default();
+
+    // Already in the correct collection — keep the denormalised flag and
+    // absolute numbers current, nothing else to do (steady state).
+    if current_key == new_key {
+        if collection.is_anime != is_anime {
+            let _ = collections::set_is_anime(pool, collection_id, is_anime, None).await;
+        }
+        backfill_episode_absolutes(pool, infohash, files).await;
+        return;
+    }
+
+    AnimeHeal {
+        pool,
+        providers,
+        infohash,
+        files,
+        parsed,
+        is_anime,
+        new_key,
+        source_id: collection_id,
+        current_key,
+    }
+    .relocate()
+    .await;
+}
+
+/// Bundled context for the anime/live-action heal so the rename / move
+/// branch helpers stay under clippy's argument-count bar.
+struct AnimeHeal<'a> {
+    pool: &'a SqlitePool,
+    providers: Option<&'a iris_providers::ProviderRegistry>,
+    infohash: &'a str,
+    files: &'a [(usize, String)],
+    parsed: filename::Parsed,
+    is_anime: bool,
+    new_key: String,
+    source_id: uuid::Uuid,
+    current_key: String,
+}
+
+impl AnimeHeal<'_> {
+    /// Decide rename-in-place vs move-out and run it. Rename only when
+    /// the WHOLE source collection resolves to the new key (every
+    /// sibling) and nothing else already owns it — otherwise a mixed row
+    /// (anime + live-action) would drag the live-action along.
+    async fn relocate(self) {
+        let siblings = iris_db::torrents::list_in_collection(self.pool, self.source_id)
+            .await
+            .unwrap_or_default();
+        let all_match_new = siblings.iter().all(|t| {
+            filename::parse(&t.name).is_some_and(|p| {
+                p.season.is_some()
+                    && p.collection_key_kind(
+                        true,
+                        filename::looks_like_anime_release(&t.name, p.season, p.episode),
+                    ) == self.new_key
+            })
+        });
+        let existing_target = collections::find_by_parsed_title(self.pool, &self.new_key, Kind::Tv)
+            .await
+            .ok()
+            .flatten();
+        if all_match_new && existing_target.is_none() {
+            self.rename_in_place().await;
+        } else {
+            self.move_out(existing_target).await;
+        }
+    }
+
+    /// Pure, uncollided source row → rewrite its key / title / flag.
+    async fn rename_in_place(&self) {
+        let display = self.parsed.display_with_year(true);
+        if collections::set_parsed_title_normalized(self.pool, self.source_id, &self.new_key)
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let _ = collections::set_display_title(self.pool, self.source_id, &display).await;
+        let _ = collections::set_is_anime(self.pool, self.source_id, self.is_anime, None).await;
+        backfill_episode_absolutes(self.pool, self.infohash, self.files).await;
+        tracing::info!(
+            collection_id = %self.source_id,
+            old_key = %self.current_key,
+            new_key = %self.new_key,
+            is_anime = self.is_anime,
+            "anime identity self-healed (renamed in place)",
+        );
+        rebuild_availability(self.pool, self.providers, &self.current_key, self.source_id).await;
+    }
+
+    /// Mixed row / target exists → move just this torrent + its files
+    /// into the correct collection.
+    async fn move_out(&self, existing_target: Option<CollectionRow>) {
+        let target = match existing_target {
+            Some(c) => c,
+            None => match collections::find_or_create(
+                self.pool,
+                &self.new_key,
+                &self.parsed.display_with_year(true),
+                Kind::Tv,
+                self.is_anime,
+            )
+            .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(error = %e, "anime heal: create target collection failed");
+                    return;
+                }
+            },
+        };
+        if target.id == self.source_id {
+            return;
+        }
+        if iris_db::torrents::set_collection(self.pool, self.infohash, Some(target.id))
+            .await
+            .is_err()
+        {
+            return;
+        }
+        // Re-home episode files: drop the rows under the old collection
+        // and re-derive them (with absolutes) under the new one.
+        let _ = episode_files::delete_for_infohash(self.pool, self.infohash).await;
+        for (file_idx, path) in self.files {
+            if !is_main_video_file(path) {
+                continue;
+            }
+            let leaf = path.rsplit('/').next().unwrap_or(path);
+            let Some(p) = filename::parse(leaf) else { continue };
+            let (Some(season), Some(episode)) = (p.season, p.episode) else {
+                continue;
+            };
+            let _ = episode_files::upsert(
+                self.pool,
+                UpsertEpisodeFile {
+                    collection_id: target.id,
+                    season: i64::from(season),
+                    episode: i64::from(episode),
+                    infohash: self.infohash.to_string(),
+                    file_idx: *file_idx as i64,
+                    derived_from: DerivedFrom::SceneParse,
+                    absolute_episode: filename::absolute_from_parsed(&p).map(i64::from),
+                },
+            )
+            .await;
+        }
+        tracing::info!(
+            infohash = self.infohash,
+            from = %self.source_id,
+            to = %target.id,
+            new_key = %self.new_key,
+            is_anime = self.is_anime,
+            "anime identity self-healed (torrent moved out of mixed collection)",
+        );
+        // The old shared name carried cross-entity offers — wipe both
+        // sides and rescan under their now-correct identities.
+        rebuild_availability(self.pool, self.providers, &self.current_key, self.source_id).await;
+        rebuild_availability(self.pool, self.providers, &self.new_key, target.id).await;
+    }
+}
+
+/// Back-fill `absolute_episode` on a torrent's already-stored
+/// `scene_parse` episode rows. Idempotent — a no-op once the absolute
+/// numbers have converged (the SQL guard returns 0 rows affected).
+async fn backfill_episode_absolutes(pool: &SqlitePool, infohash: &str, files: &[(usize, String)]) {
+    for (idx, path) in files {
+        if !is_main_video_file(path) {
+            continue;
+        }
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let Some(p) = filename::parse(leaf) else { continue };
+        let (Some(season), Some(episode)) = (p.season, p.episode) else {
+            continue;
+        };
+        let _ = episode_files::correct_scene_parsed_with_absolute(
+            pool,
+            infohash,
+            *idx as i64,
+            i64::from(season),
+            i64::from(episode),
+            filename::absolute_from_parsed(&p).map(i64::from),
+        )
+        .await;
+    }
+}
+
+/// Drop the stale cached offers stored under `normalized` and trigger an
+/// immediate re-scan of `collection_id` so availability repopulates
+/// under the correct (possibly newly-split) identity. Only called from
+/// the heal transition, never in steady state.
+async fn rebuild_availability(
+    pool: &SqlitePool,
+    providers: Option<&iris_providers::ProviderRegistry>,
+    normalized: &str,
+    collection_id: uuid::Uuid,
+) {
+    let _ = iris_db::available_episodes::delete_for_series(pool, normalized).await;
+    if let Some(reg) = providers {
+        if let Err(e) = crate::collections_scheduler::scan_collection(pool, reg, collection_id).await
+        {
+            tracing::warn!(error = %e, collection_id = %collection_id, "anime heal: rescan failed");
+        }
+    }
+}
+
 /// Walk every torrent currently in the library and assign a collection
 /// to any that doesn't have one yet. Runs at boot to backfill the
 /// existing library after the SCENE-first migration. Idempotent —
 /// safe to call repeatedly.
 pub async fn run_backfill(
     pool: &SqlitePool,
-    tmdb: Option<&TmdbClient>,
-    providers: Option<&iris_providers::ProviderRegistry>,
+    deps: EnrichDeps<'_>,
     engine: &iris_torrent::Engine,
 ) {
     let rows = match iris_db::torrents::list_active(pool).await {
@@ -499,18 +812,34 @@ pub async fn run_backfill(
             // parser. Needs the engine file list; torrents not yet
             // loaded are retried on a later tick (same as the
             // assignment path below).
-            if let Some(snap) = engine.get_by_infohash(&row.infohash) {
-                let files: Vec<(usize, String)> =
-                    snap.files.into_iter().map(|f| (f.index, f.path)).collect();
-                reconcile_scene_episodes(pool, &row.infohash, &files).await;
+            let files: Option<Vec<(usize, String)>> = engine
+                .get_by_infohash(&row.infohash)
+                .map(|snap| snap.files.into_iter().map(|f| (f.index, f.path)).collect());
+            if let Some(files) = &files {
+                reconcile_scene_episodes(pool, &row.infohash, files).await;
             }
-            // Self-heal TV collection identity. Earlier builds picked
-            // the first file's parse without checking for a season
-            // marker, so Plex-style `NxNN` filenames produced junk
-            // `display_title` like "Silicon Valley - 1x01 - Minimum
-            // Viable Product Multi Papaya" when the torrent name
-            // (`Silicon.Valley.S01.…`) was the right answer.
-            heal_tv_collection_identity(pool, &row.infohash).await;
+            // Route by anime classification so the two heals never fight
+            // over the same key: an anime release goes through the
+            // anime-aware split/rename + absolute backfill; everything
+            // else keeps the original junk-title repair.
+            let is_anime_torrent = filename::parse(&row.name).is_some_and(|p| {
+                filename::looks_like_anime_release(&row.name, p.season, p.episode)
+            });
+            if is_anime_torrent {
+                // Needs the file list; torrents whose engine state isn't
+                // loaded yet are retried on a later tick.
+                if let Some(files) = &files {
+                    heal_anime_collection_identity(pool, deps.providers, &row.infohash, files).await;
+                }
+            } else {
+                // Self-heal TV collection identity. Earlier builds picked
+                // the first file's parse without checking for a season
+                // marker, so Plex-style `NxNN` filenames produced junk
+                // `display_title` like "Silicon Valley - 1x01 - Minimum
+                // Viable Product Multi Papaya" when the torrent name
+                // (`Silicon.Valley.S01.…`) was the right answer.
+                heal_tv_collection_identity(pool, &row.infohash).await;
+            }
             continue;
         }
         // Need the file list to detect TV-vs-movie via SCENE parsing.
@@ -525,16 +854,7 @@ pub async fn run_backfill(
             .into_iter()
             .map(|f| (f.index, f.path))
             .collect();
-        assign_after_ingest(
-            pool,
-            tmdb,
-            providers,
-            &row.infohash,
-            &row.name,
-            row.tmdb_id,
-            &files,
-        )
-        .await;
+        assign_after_ingest(pool, deps, &row.infohash, &row.name, row.tmdb_id, &files).await;
         if row.tmdb_verified {
             enrich_after_verify(pool, &row.infohash).await;
         }

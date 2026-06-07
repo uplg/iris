@@ -7,6 +7,7 @@ use iris_media::{ProbeCache, RemuxManager};
 use iris_providers::ProviderRegistry;
 use iris_torrent::{Engine, Gc};
 
+use crate::anilist::AniListClient;
 use crate::presence::Presence;
 use crate::tmdb::TmdbClient;
 
@@ -25,6 +26,7 @@ struct Inner {
     pub gc: Gc,
     pub probes: ProbeCache,
     pub tmdb: Option<TmdbClient>,
+    pub anilist: Option<AniListClient>,
     pub presence: Presence,
 }
 
@@ -53,6 +55,17 @@ impl AppState {
             cfg.auth.access_ttl_secs,
             cfg.auth.refresh_ttl_secs,
         );
+        // Keyless public GraphQL client — used to enrich anime
+        // collections with an AniList id (poster / recommendations) and
+        // to corroborate the offline anime classifier. Best-effort: a
+        // build failure just disables the enrichment.
+        let anilist = match AniListClient::new() {
+            Ok(client) => Some(client),
+            Err(e) => {
+                tracing::warn!(error = %e, "anilist client init failed; anime enrichment disabled");
+                None
+            }
+        };
         Self {
             inner: Arc::new(Inner {
                 cfg,
@@ -64,6 +77,7 @@ impl AppState {
                 gc,
                 probes: ProbeCache::new(),
                 tmdb,
+                anilist,
                 presence: Presence::new(),
             }),
         }
@@ -95,6 +109,9 @@ impl AppState {
     }
     pub fn tmdb(&self) -> Option<&TmdbClient> {
         self.inner.tmdb.as_ref()
+    }
+    pub fn anilist(&self) -> Option<&AniListClient> {
+        self.inner.anilist.as_ref()
     }
     pub fn presence(&self) -> &Presence {
         &self.inner.presence

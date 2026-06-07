@@ -247,6 +247,11 @@ function Hero({ collection }: { collection: CollectionDetail }) {
 type MergedEpisode = {
   season: number;
   episode: number;
+  /** Absolute episode number for fleuve anime — set only in the
+   *  absolute-numbering layout. When present the row renders as
+   *  "Episode N" instead of SxxExx. `season`/`episode` still carry the
+   *  fansub coordinate (`S01`/absolute) used for the grab call. */
+  absolute?: number | null;
   variants: EpisodeVariant[];
 };
 
@@ -321,6 +326,77 @@ function mergeEpisodes(
   return Array.from(byKey.values()).sort((a, b) => a.season - b.season || a.episode - b.episode);
 }
 
+/** Absolute-numbering merge for fleuve anime (One Piece): one flat list
+ *  keyed on the *absolute* episode number, no seasons.
+ *
+ *  A long-running anime is released two ways at once — the fleuve
+ *  fansubs (`S01E1156`, absolute number known) AND season-cut releases
+ *  (`S23E07`, no derivable absolute). The season-cut ones have no valid
+ *  position on the absolute axis, so we MUST NOT fold them in under
+ *  their raw `episode` — that's what made unrelated cuts show up as a
+ *  bogus "Episode 1..7". Rule:
+ *    - owned (downloaded) episodes always appear (never hide what's on
+ *      disk) — by absolute when known, else by their `SxxExx` coord;
+ *    - available offers appear only when they carry an absolute number;
+ *      season-cut offers are left out of this axis (still in the DB,
+ *      surfaced if the collection is ever shown seasonally).
+ *  `absolute` drives the "Episode N" label; rows keep (season, episode)
+ *  for the grab call. */
+function mergeEpisodesAbsolute(
+  on_disk: CollectionEpisodeEntry[],
+  available: AvailableEpisodeEntry[] | undefined,
+): MergedEpisode[] {
+  const byKey = new Map<string, MergedEpisode>();
+  const ensure = (abs: number | null, season: number, episode: number): MergedEpisode => {
+    const key = abs != null ? `a:${abs}` : `s:${season}:${episode}`;
+    let row = byKey.get(key);
+    if (!row) {
+      row = { season, episode, absolute: abs, variants: [] };
+      byKey.set(key, row);
+    }
+    return row;
+  };
+  for (const d of on_disk) {
+    if (d.episode === 0) continue;
+    ensure(d.absolute_episode ?? null, d.season, d.episode).variants.push({
+      status: "downloaded",
+      language: d.language ?? null,
+      infohash: d.infohash,
+      file_idx: d.file_idx,
+      watched: d.watched,
+    });
+  }
+  for (const a of available ?? []) {
+    if (a.episode === 0) continue;
+    // Skip season-cut offers with no absolute — they can't be placed on
+    // the absolute axis and would otherwise alias onto low episode rows.
+    if (a.absolute_episode == null) continue;
+    ensure(a.absolute_episode, a.season, a.episode).variants.push({
+      status: "available",
+      language: a.language ?? null,
+      indexer_provider: a.indexer_provider,
+      indexer_torrent_id: a.indexer_torrent_id,
+      quality: a.quality,
+      seeders: a.seeders,
+      size_bytes: a.size_bytes,
+    });
+  }
+  for (const row of byKey.values()) {
+    row.variants.sort((a, b) => {
+      if (a.status !== b.status) return a.status === "downloaded" ? -1 : 1;
+      return (a.language ?? "").localeCompare(b.language ?? "");
+    });
+  }
+  // Absolute-numbered rows first (ascending); any owned-without-absolute
+  // rows trail, ordered by their (season, episode).
+  return Array.from(byKey.values()).sort((a, b) => {
+    if (a.absolute != null && b.absolute != null) return a.absolute - b.absolute;
+    if (a.absolute != null) return -1;
+    if (b.absolute != null) return 1;
+    return a.season - b.season || a.episode - b.episode;
+  });
+}
+
 function EpisodeList({
   collection,
   onPlay,
@@ -330,6 +406,15 @@ function EpisodeList({
 }) {
   const episodes = useMemo(
     () => mergeEpisodes(collection.episodes, collection.available_episodes),
+    [collection.episodes, collection.available_episodes],
+  );
+
+  // Fleuve anime (One Piece): one flat absolute-numbered list, no
+  // season tabs. The server derives this from the episode data, so a
+  // season-cut anime still renders the seasonal layout below.
+  const isAbsolute = collection.numbering === "absolute";
+  const absoluteEpisodes = useMemo(
+    () => mergeEpisodesAbsolute(collection.episodes, collection.available_episodes),
     [collection.episodes, collection.available_episodes],
   );
 
@@ -372,6 +457,36 @@ function EpisodeList({
     }
   }, [activeSeason, seasons]);
 
+  if (isAbsolute) {
+    if (absoluteEpisodes.length === 0) {
+      return (
+        <p className="text-sm text-muted-foreground">No episodes parsed yet for this collection.</p>
+      );
+    }
+    const downloadedCount = absoluteEpisodes.filter((e) =>
+      e.variants.some((v) => v.status === "downloaded"),
+    ).length;
+    return (
+      <div className="grid gap-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <span className="text-[13px] text-muted-foreground">
+            {absoluteEpisodes.length} episodes · {downloadedCount} downloaded
+          </span>
+        </div>
+        <ul className="grid gap-2">
+          {absoluteEpisodes.map((ep) => (
+            <EpisodeRow
+              key={ep.absolute ?? ep.episode}
+              collectionId={collection.id}
+              ep={ep}
+              onPlay={onPlay}
+            />
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
   if (seasons.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">No episodes parsed yet for this collection.</p>
@@ -385,8 +500,8 @@ function EpisodeList({
   ).length;
 
   return (
-    <div className="grid gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <div className="grid min-w-0 gap-6">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-4">
         <SeasonTabs
           seasons={seasons.map((s) => s.season)}
           value={current.season}
@@ -441,7 +556,11 @@ function SeasonTabs({
 }) {
   if (seasons.length <= 1) return null;
   return (
-    <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+    // `min-w-0 flex-1 max-w-full` is what makes `overflow-x-auto` actually
+    // engage: without a bounded width the flex item grows to its content
+    // and a 20+ season strip pushes the whole page wide instead of
+    // scrolling within the row.
+    <div className="no-scrollbar -mx-1 flex min-w-0 max-w-full flex-1 gap-2 overflow-x-auto px-1 pb-1">
       {seasons.map((s) => (
         <button
           key={s}
@@ -538,15 +657,20 @@ function EpisodeRow({
   onPlay: (infohash: string, fileIdx: number) => void;
 }) {
   const anyWatched = ep.variants.some((v) => v.status === "downloaded" && v.watched);
+  // Absolute (fleuve anime) rows show "Episode 1156"; seasonal rows
+  // keep the SxxExx label. The big badge mirrors whichever number leads.
+  const badgeNumber = ep.absolute ?? ep.episode;
   return (
     <li className="glass grid grid-cols-[auto_1fr] items-start gap-4 rounded-xl p-3.5 text-sm">
       <span className="grid size-11 place-items-center rounded-[10px] bg-elev-2 font-display text-lg text-foreground">
-        {ep.episode.toString().padStart(2, "0")}
+        {badgeNumber.toString().padStart(2, "0")}
       </span>
       <div className="min-w-0 grid gap-2">
         <div className="flex items-center gap-2">
           <span className="font-mono text-[13px] text-muted-foreground">
-            S{ep.season.toString().padStart(2, "0")}E{ep.episode.toString().padStart(2, "0")}
+            {ep.absolute != null
+              ? `Episode ${ep.absolute}`
+              : `S${ep.season.toString().padStart(2, "0")}E${ep.episode.toString().padStart(2, "0")}`}
           </span>
           {anyWatched && (
             <Tag variant="plain" upper>

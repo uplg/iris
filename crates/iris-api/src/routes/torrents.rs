@@ -404,6 +404,7 @@ pub(crate) async fn ingest_core(
     {
         let pool = state.db().clone();
         let tmdb = state.tmdb().cloned();
+        let anilist = state.anilist().cloned();
         let providers = state.providers().clone();
         let infohash = result.snapshot.infohash.clone();
         let name = result.snapshot.name.clone().unwrap_or_default();
@@ -417,8 +418,11 @@ pub(crate) async fn ingest_core(
         tokio::spawn(async move {
             crate::collection_assign::assign_after_ingest(
                 &pool,
-                tmdb.as_ref(),
-                Some(&providers),
+                crate::collection_assign::EnrichDeps {
+                    tmdb: tmdb.as_ref(),
+                    anilist: anilist.as_ref(),
+                    providers: Some(&providers),
+                },
                 &infohash,
                 &name,
                 tmdb_id,

@@ -1032,8 +1032,11 @@ async fn finalise_grabbed_episode(
         .collect();
     crate::collection_assign::assign_after_ingest(
         state.db(),
-        state.tmdb(),
-        Some(state.providers()),
+        crate::collection_assign::EnrichDeps {
+            tmdb: state.tmdb(),
+            anilist: state.anilist(),
+            providers: Some(state.providers()),
+        },
         &result.snapshot.infohash,
         &result.snapshot.name.clone().unwrap_or_default(),
         tmdb_id,
@@ -1045,6 +1048,12 @@ async fn finalise_grabbed_episode(
         iris_db::torrents::find_by_infohash(state.db(), &result.snapshot.infohash).await?
     {
         if let Some(collection_id) = t.collection_id {
+            // Mirror the parser's SxxExx absolute rule: a fleuve grab
+            // arrives as `season=1, episode=<absolute>`, so a high
+            // episode under season 1 carries the absolute number.
+            let absolute_episode = (season == 1
+                && episode > i64::from(iris_media::filename::ABSOLUTE_EPISODE_THRESHOLD))
+                .then_some(episode);
             let _ = iris_db::episode_files::upsert(
                 state.db(),
                 iris_db::episode_files::UpsertEpisodeFile {
@@ -1054,6 +1063,7 @@ async fn finalise_grabbed_episode(
                     infohash: result.snapshot.infohash.clone(),
                     file_idx,
                     derived_from: iris_db::episode_files::DerivedFrom::TmdbMatch,
+                    absolute_episode,
                 },
             )
             .await;
@@ -1427,6 +1437,10 @@ async fn find_via_indexer_for_identity(
         return Ok(None);
     };
     let lang = detect_language(&best.title);
+    let absolute_episode = iris_media::filename::parse(&best.title)
+        .as_ref()
+        .and_then(iris_media::filename::absolute_from_parsed)
+        .map(i64::from);
     let _ = iris_db::available_episodes::upsert(
         state.db(),
         iris_db::available_episodes::UpsertAvailableEpisode {
@@ -1441,6 +1455,7 @@ async fn find_via_indexer_for_identity(
             size_bytes: best.size_bytes.map(|s| s as i64),
             language: Some(lang.as_str().to_string()),
             download_url: best.download_url.clone(),
+            absolute_episode,
         },
     )
     .await;

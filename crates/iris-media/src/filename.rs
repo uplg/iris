@@ -76,6 +76,24 @@ impl Parsed {
         }
     }
 
+    /// Anime-aware variant of [`Self::collection_key`]. An anime and a
+    /// live-action show can share a title (the anime *One Piece* vs the
+    /// Netflix live-action *One Piece*) yet are different entities that
+    /// must never land in the same collection. We carry the distinction
+    /// *inside* the normalised key as an `anime:` prefix:
+    /// `normalize_title` strips every non-alphanumeric, so a real title
+    /// can never produce a `:` — the prefix is collision-proof and needs
+    /// no change to the `(parsed_title_normalized, kind)` unique index.
+    /// Only applies to TV (movies keep year-based disambiguation).
+    pub fn collection_key_kind(&self, is_tv: bool, is_anime: bool) -> String {
+        let base = self.collection_key(is_tv);
+        if is_anime && is_tv && !base.is_empty() {
+            format!("anime:{base}")
+        } else {
+            base
+        }
+    }
+
     /// Display variant of [`Self::collection_key`] — preserves casing
     /// and renders the year as `Title (YYYY)` for movies. Used for
     /// the `display_title` column on the `collections` table.
@@ -99,6 +117,84 @@ impl Parsed {
 /// `collections`. Idempotent.
 pub fn series_key(s: &str) -> String {
     strip_trailing_year(&normalize_title(s))
+}
+
+/// Episode numbers at or below this are treated as ordinary
+/// per-season numbering; anything above it (under a single season) is
+/// the anime "fleuve" convention where the *absolute* episode number is
+/// crammed into a fake `S01` (`One Piece S01E1156`). A real broadcast
+/// season essentially never exceeds ~100 episodes, so this cleanly
+/// separates `S01E1156` (absolute) from `S02E05` / `S01E61` (seasonal).
+pub const ABSOLUTE_EPISODE_THRESHOLD: u32 = 100;
+
+/// Known anime release / fansub group tokens. Their presence as a
+/// bounded token in a release name is a strong, anime-specific signal
+/// (these groups only ever ship anime). Uppercase to match
+/// [`has_token`], which is called against the upper-cased name.
+const ANIME_GROUP_TOKENS: &[&str] = &[
+    "TSUNDERE-RAWS",
+    "ERAI-RAWS",
+    "SUBSPLEASE",
+    "HORRIBLESUBS",
+    "ANIME-TIME",
+    "BEATRICE-RAWS",
+    "TENRAI-SENSEI",
+    "KAWAIIKA-RAWS",
+    "NANDESUKA",
+    "JUDAS",
+    "EMBER",
+    "FOXEN",
+    "COMMIE",
+    "YAMEII",
+    "NANAMI",
+    "CLEO",
+    "ASW",
+];
+
+/// Best-effort, **offline** "is this an anime release?" classifier, run
+/// at ingest to decide collection identity (see
+/// [`Parsed::collection_key_kind`]). Deliberately conservative — it
+/// only fires on anime-specific naming, never on a raw high episode
+/// count alone, so a long-running Western show isn't mis-split:
+///
+///   * a known fansub group token (`-Tsundere-Raws`, `[Erai-raws]`, …),
+///   * the bracketed `[Group] …` fansub shape, or
+///   * the fleuve pattern (`S01` with an episode number above the
+///     [`ABSOLUTE_EPISODE_THRESHOLD`]) **corroborated** by a `VOSTFR`
+///     subbing tag.
+///
+/// AniList / TMDB confirmation happens asynchronously after ingest and
+/// only ever *strengthens* the flag (fills `anilist_id`); it never
+/// flips it back, because the flag is baked into the collection key the
+/// moment the row is created.
+pub fn looks_like_anime_release(name: &str, season: Option<u32>, episode: Option<u32>) -> bool {
+    let upper = name.to_ascii_uppercase();
+    if ANIME_GROUP_TOKENS.iter().any(|g| has_token(&upper, g)) {
+        return true;
+    }
+    if name.trim_start().starts_with('[') {
+        return true;
+    }
+    let fleuve = season == Some(1) && episode.is_some_and(|e| e > ABSOLUTE_EPISODE_THRESHOLD);
+    fleuve && has_token(&upper, "VOSTFR")
+}
+
+/// Derive the *absolute* episode number for an anime release, or `None`
+/// when the release uses ordinary seasonal numbering. Only meaningful
+/// for collections already classified anime — callers gate on that.
+///
+///   * `[Group] Title - NN` → the bracket-form absolute (always).
+///   * `S01E1156` (fleuve) → the episode number, but only when it
+///     exceeds [`ABSOLUTE_EPISODE_THRESHOLD`], so a genuine seasonal
+///     anime (`Demon.Slayer.S02E05`) stays seasonal.
+pub fn absolute_from_parsed(p: &Parsed) -> Option<u32> {
+    if let Some(abs) = p.absolute_episode {
+        return Some(abs);
+    }
+    match (p.season, p.episode) {
+        (Some(_), Some(e)) if e > ABSOLUTE_EPISODE_THRESHOLD => Some(e),
+        _ => None,
+    }
 }
 
 /// SCENE-aware ordering for raw torrent file lists. Compares two
@@ -1054,5 +1150,56 @@ mod tests {
         assert_eq!(p.season, None);
         assert_eq!(p.year, None);
         assert!(p.is_movie());
+    }
+
+    #[test]
+    fn fleuve_anime_classifies_and_keys_apart() {
+        // The reported bug: a fansub fleuve release with the absolute
+        // episode crammed into a fake S01.
+        let name = "One Piece S01E1156 VOSTFR 1080p WEB x264 AAC -Tsundere-Raws (CR).mkv";
+        let p = parse(name).unwrap();
+        assert_eq!(p.title, "One Piece");
+        assert_eq!(p.season, Some(1));
+        assert_eq!(p.episode, Some(1156));
+
+        assert!(looks_like_anime_release(name, p.season, p.episode));
+        assert_eq!(absolute_from_parsed(&p), Some(1156));
+
+        // Anime and live-action with the same title must key apart.
+        let anime_key = p.collection_key_kind(true, true);
+        let live_action_key = p.collection_key_kind(true, false);
+        assert_eq!(anime_key, "anime:one piece");
+        assert_eq!(live_action_key, "one piece");
+        assert_ne!(anime_key, live_action_key);
+    }
+
+    #[test]
+    fn seasonal_anime_stays_seasonal() {
+        // A modern season-cut anime: classified anime (group token) but
+        // NOT absolute-numbered — it must keep ordinary seasonal display.
+        let name = "[SubsPlease] Demon Slayer S02E05 1080p.mkv";
+        let p = parse(name).unwrap();
+        assert!(looks_like_anime_release(name, p.season, p.episode));
+        assert_eq!(absolute_from_parsed(&p), None);
+    }
+
+    #[test]
+    fn non_anime_is_not_flagged() {
+        let name = "Squid.Game.S02E03.1080p.NF.WEB-DL.x264-BULiTT.mkv";
+        let p = parse(name).unwrap();
+        assert!(!looks_like_anime_release(name, p.season, p.episode));
+        assert_eq!(absolute_from_parsed(&p), None);
+        // Non-anime never gets the prefix even if is_anime is wrongly true
+        // for a non-TV call.
+        assert_eq!(p.collection_key_kind(true, false), "squid game");
+    }
+
+    #[test]
+    fn high_episode_count_alone_does_not_flag_anime() {
+        // A daily/long-running NON-anime show with absolute-ish numbering
+        // and no anime naming signal must NOT be classified anime.
+        let name = "Some.Daily.Show.S01E812.1080p.WEB.x264-GRP.mkv";
+        let p = parse(name).unwrap();
+        assert!(!looks_like_anime_release(name, p.season, p.episode));
     }
 }

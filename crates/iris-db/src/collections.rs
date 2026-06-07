@@ -40,6 +40,18 @@ pub struct CollectionRow {
     /// this stamp` that aren't already in `episode_files`.
     #[serde(default)]
     pub last_visited_at: Option<DateTime<Utc>>,
+    /// `true` when this collection holds an anime (fansub-style
+    /// release detected at ingest, optionally confirmed via
+    /// AniList/TMDB). Baked into `parsed_title_normalized` as an
+    /// `anime:` prefix so an anime and a live-action show sharing a
+    /// title (the anime *One Piece* vs the Netflix live-action one)
+    /// never merge. See `iris_media::filename::collection_key_kind`.
+    #[serde(default)]
+    pub is_anime: bool,
+    /// AniList media id when the async confirm step matched one —
+    /// enrichment only (poster / recommendations), never identity.
+    #[serde(default)]
+    pub anilist_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +80,7 @@ pub async fn list_by_tmdb(
 ) -> Result<Vec<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
         "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at \
+                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
          FROM collections WHERE tmdb_id = ?1 ORDER BY created_at",
     )
     .bind(tmdb_id)
@@ -83,7 +95,7 @@ pub async fn find_by_parsed_title(
 ) -> Result<Option<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
         "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at \
+                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
          FROM collections \
          WHERE parsed_title_normalized = ?1 AND kind = ?2",
     )
@@ -100,7 +112,7 @@ pub async fn find_by_parsed_title(
 pub async fn list_all(pool: &SqlitePool) -> Result<Vec<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
         "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at \
+                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
          FROM collections \
          ORDER BY created_at",
     )
@@ -111,7 +123,7 @@ pub async fn list_all(pool: &SqlitePool) -> Result<Vec<CollectionRow>, sqlx::Err
 pub async fn get(pool: &SqlitePool, id: Uuid) -> Result<Option<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
         "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at \
+                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
          FROM collections WHERE id = ?1",
     )
     .bind(id)
@@ -127,6 +139,7 @@ pub async fn find_or_create(
     normalized: &str,
     display_title: &str,
     kind: Kind,
+    is_anime: bool,
 ) -> Result<CollectionRow, sqlx::Error> {
     if let Some(existing) = find_by_parsed_title(pool, normalized, kind).await? {
         return Ok(existing);
@@ -139,8 +152,8 @@ pub async fn find_or_create(
     // form catches the only unique violation that can fire here (the
     // tmdb_id partial index was dropped in 0009).
     sqlx::query(
-        "INSERT INTO collections (id, tmdb_id, parsed_title_normalized, display_title, kind, created_at) \
-         VALUES (?1, NULL, ?2, ?3, ?4, ?5) \
+        "INSERT INTO collections (id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, is_anime) \
+         VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6) \
          ON CONFLICT DO NOTHING",
     )
     .bind(id)
@@ -148,11 +161,33 @@ pub async fn find_or_create(
     .bind(display_title)
     .bind(kind.as_str())
     .bind(now)
+    .bind(is_anime)
     .execute(pool)
     .await?;
     find_by_parsed_title(pool, normalized, kind)
         .await?
         .ok_or(sqlx::Error::RowNotFound)
+}
+
+/// Set / clear the anime flag and (optionally) the AniList id on a
+/// collection. Used by the async confirm step after ingest and by the
+/// boot self-heal. `is_anime` is normally only ever turned *on* (the
+/// flag is baked into the identity key at creation); callers must not
+/// flip a live anime collection back to non-anime without also
+/// re-keying it, or its `episode_files` would orphan.
+pub async fn set_is_anime(
+    pool: &SqlitePool,
+    id: Uuid,
+    is_anime: bool,
+    anilist_id: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE collections SET is_anime = ?1, anilist_id = COALESCE(?2, anilist_id) WHERE id = ?3")
+        .bind(is_anime)
+        .bind(anilist_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Attach a `tmdb_id` to a collection for enrichment (poster /
@@ -287,6 +322,8 @@ pub struct CollectionSummary {
     pub tmdb_id: Option<i64>,
     pub display_title: String,
     pub kind: String,
+    #[serde(default)]
+    pub is_anime: bool,
     pub created_at: DateTime<Utc>,
     pub torrent_count: i64,
     pub total_size_bytes: i64,
@@ -309,7 +346,7 @@ pub async fn list_tv_with_episodes(
 ) -> Result<Vec<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
         "SELECT c.id, c.tmdb_id, c.parsed_title_normalized, c.display_title, c.kind, \
-                c.created_at, c.last_indexer_scan_at, c.last_visited_at \
+                c.created_at, c.last_indexer_scan_at, c.last_visited_at, c.is_anime, c.anilist_id \
          FROM collections c \
          WHERE c.kind = 'tv' \
            AND c.parsed_title_normalized IS NOT NULL \
@@ -334,7 +371,7 @@ pub async fn list_due_for_scan(
 ) -> Result<Vec<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
         "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at \
+                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
          FROM collections \
          WHERE kind = 'tv' \
            AND parsed_title_normalized IS NOT NULL \
@@ -393,7 +430,7 @@ pub async fn list_summaries(
               ORDER BY t3.tmdb_verified DESC, COALESCE(t3.last_played_at, t3.added_at) DESC \
               LIMIT 1 \
             )) AS tmdb_id, \
-            c.display_title, c.kind, c.created_at, \
+            c.display_title, c.kind, c.is_anime, c.created_at, \
             COUNT(DISTINCT t.id) AS torrent_count, \
             COALESCE(SUM(t.total_size_bytes), 0) AS total_size_bytes, \
             (SELECT COUNT(*) FROM episode_files ef WHERE ef.collection_id = c.id) AS episode_count, \

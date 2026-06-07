@@ -196,12 +196,19 @@ async fn check_one(
         let Some(parsed) = filename::parse(&r.title) else {
             continue;
         };
-        // Use the TV-side `collection_key` so a SCENE name like
-        // `Lucky.Luke.1991.S01E01...` (which normalises to
+        // Use the TV-side anime-aware `collection_key_kind` so a SCENE
+        // name like `Lucky.Luke.1991.S01E01...` (which normalises to
         // `"lucky luke 1991"`) still matches a collection whose
         // `parsed_title_normalized` was derived from the original
-        // ingest filename (= `"lucky luke"`).
-        if parsed.collection_key(true) != normalized {
+        // ingest filename (= `"lucky luke"`), AND so an anime
+        // collection only ingests anime offers: a live-action
+        // `One Piece S01E01` keys to `"one piece"` while the anime
+        // collection is `"anime:one piece"` (and vice-versa). This
+        // per-result identity check is what stops the cross-entity
+        // 23-"season" dump.
+        let result_is_anime =
+            filename::looks_like_anime_release(&r.title, parsed.season, parsed.episode);
+        if parsed.collection_key_kind(true, result_is_anime) != normalized {
             continue;
         }
         let Some(s) = parsed.season else { continue };
@@ -261,6 +268,13 @@ async fn record_availability(
     if !providers.ids().iter().any(|id| id == &best.provider_id) {
         return;
     }
+    // Absolute number for fleuve anime offers (threshold-gated in the
+    // helper); seasonal anime + ordinary TV stay `None`. Powers the
+    // flat "Episode N" list on the collection page.
+    let absolute_episode = filename::parse(&best.title)
+        .as_ref()
+        .and_then(filename::absolute_from_parsed)
+        .map(i64::from);
     let upsert = iris_db::available_episodes::UpsertAvailableEpisode {
         normalized_name: normalized_name.to_string(),
         season,
@@ -282,6 +296,7 @@ async fn record_availability(
         // in-memory link cache evaporated. torr9 will be None
         // here — its resolve() fetches per-id anyway.
         download_url: best.download_url.clone(),
+        absolute_episode,
     };
     if let Err(e) = iris_db::available_episodes::upsert(pool, upsert).await {
         tracing::warn!(error = %e, "scheduler: upsert availability failed");

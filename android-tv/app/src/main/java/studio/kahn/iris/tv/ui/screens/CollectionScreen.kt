@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +16,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,8 +27,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -124,6 +130,11 @@ fun CollectionScreen(
     // entries carry a language tag so the same (S, E) can render as
     // FR + EN side by side; downloaded entries get one row regardless.
     val merged = remember(d) { mergeEpisodes(d.episodes, d.availableEpisodes) }
+    // Fleuve anime (One Piece): one flat absolute-numbered list, no
+    // season tabs. Derived server-side, so a season-cut anime keeps the
+    // seasonal layout below.
+    val isAbsolute = d.numbering == "absolute"
+    val absoluteRows = remember(d) { mergeEpisodesAbsolute(d.episodes, d.availableEpisodes) }
     // Seasons that have either episodes OR a pack offer — a brand
     // new follow whose only signal is a pack still gets its season
     // tab so the user has a "Grab full Season N" affordance.
@@ -142,12 +153,85 @@ fun CollectionScreen(
     }
     val activeSeason = selectedSeason
 
-    LazyColumn(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    // An absolute (fleuve) list can be 1000+ episodes — landing focus on
+    // episode 1 would mean D-padding to the bottom forever. Land on the
+    // last episode the household ALREADY HAS on disk (where the user is in
+    // their watch-through), not the newest available. Fall back to the
+    // latest row only when nothing is downloaded yet.
+    val listState = rememberLazyListState()
+    val focusTarget = remember(collectionId) { FocusRequester() }
+    val focusRowIdx = remember(absoluteRows) {
+        absoluteRows
+            .indexOfLast { row -> row.variants.any { it is EpisodeVariant.Downloaded } }
+            .let { if (it >= 0) it else absoluteRows.lastIndex }
+    }
+    // Keyed on (collection, the target row) so it fires once per load and
+    // again only if the owned-up-to point actually moves (a new grab).
+    LaunchedEffect(collectionId, isAbsolute, focusRowIdx) {
+        if (isAbsolute && focusRowIdx >= 0) {
+            // hero is item 0, so episode i sits at LazyColumn index 1 + i.
+            listState.scrollToItem(1 + focusRowIdx)
+            // The scrolled-in row's focus node may attach a frame or two
+            // later — retry across a few frames for robustness.
+            repeat(6) {
+                withFrameNanos { }
+                if (runCatching { focusTarget.requestFocus() }.isSuccess) return@LaunchedEffect
+            }
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+    ) {
         item(key = "hero") {
             CollectionHero(detail = d, onBack = onBack)
         }
 
-        if (d.kind == "tv" && (merged.isNotEmpty() || d.seasonPacks.isNotEmpty())) {
+        if (d.kind == "tv" && isAbsolute && absoluteRows.isNotEmpty()) {
+            // Flat absolute list — no season tabs, no packs (a fleuve
+            // anime numbers continuously; "Season N" packs don't apply).
+            itemsIndexed(
+                absoluteRows,
+                key = { _, it -> it.absolute?.let { a -> "abs:$a" } ?: "se:${it.season}:${it.episode}" },
+            ) { index, ep ->
+                Box(
+                    Modifier
+                        .padding(
+                            horizontal = layout.gutterHorizontal,
+                            vertical = Spacing.xs,
+                        )
+                        // Focus target for the "land on last owned episode"
+                        // effect — focusGroup forwards the request to the
+                        // row's first chip.
+                        .then(
+                            if (index == focusRowIdx) {
+                                Modifier.focusRequester(focusTarget).focusGroup()
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
+                    EpisodeRow(
+                        ep = ep,
+                        onPlay = onPickFile,
+                        onGrabVariant = { variant ->
+                            scope.launch {
+                                doGrabVariant(
+                                    container,
+                                    collectionId,
+                                    ep.season,
+                                    ep.episode,
+                                    variant,
+                                    onPickFile,
+                                )
+                                reload()
+                            }
+                        },
+                    )
+                }
+            }
+        } else if (d.kind == "tv" && (merged.isNotEmpty() || d.seasonPacks.isNotEmpty())) {
             if (seasons.size > 1) {
                 item(key = "season-tabs") {
                     Box(Modifier.padding(horizontal = layout.gutterHorizontal, vertical = Spacing.md)) {
@@ -259,6 +343,11 @@ fun CollectionScreen(
 private data class MergedEpisode(
     val season: Long,
     val episode: Long,
+    /** Absolute episode number for fleuve anime — set only in the
+     *  absolute-numbering layout. When non-null the row renders as
+     *  "Episode N"; `season`/`episode` still carry the fansub
+     *  coordinate used for the grab call. */
+    val absolute: Long? = null,
     val variants: List<EpisodeVariant>,
 )
 
@@ -333,6 +422,70 @@ private fun mergeEpisodes(
             MergedEpisode(season = key.first, episode = key.second, variants = sorted)
         }
         .sortedWith(compareBy({ it.season }, { it.episode }))
+}
+
+/** Absolute-numbering merge for fleuve anime (One Piece): group by the
+ *  absolute episode number (falling back to `episode`, since a fansub
+ *  `S01E1156` stores 1156 there too) into one flat ordered list — no
+ *  seasons. Each row keeps the underlying (season, episode) for the
+ *  grab call; `absolute` drives the "Episode N" label. Mirrors the
+ *  web client's `mergeEpisodesAbsolute`. */
+private fun mergeEpisodesAbsolute(
+    onDisk: List<CollectionEpisode>,
+    available: List<AvailableEpisodeEntry>,
+): List<MergedEpisode> {
+    // A long-running anime ships fleuve fansubs (`S01E1156`, absolute
+    // known) AND season-cut releases (`S23E07`, no derivable absolute)
+    // at once. Season-cut entries have no valid position on the absolute
+    // axis, so they must NOT be folded in under their raw `episode` (that
+    // aliased unrelated cuts onto a bogus "Episode 1..7"). Owned episodes
+    // always appear (never hide what's on disk) — by absolute when known,
+    // else by their (season, episode); available offers appear only when
+    // they carry an absolute number. Mirrors web `mergeEpisodesAbsolute`.
+    data class Row(val season: Long, val episode: Long, val absolute: Long?, val variants: MutableList<EpisodeVariant>)
+    val buckets = linkedMapOf<String, Row>()
+    val ensure = { abs: Long?, season: Long, episode: Long ->
+        val key = if (abs != null) "a:$abs" else "s:$season:$episode"
+        buckets.getOrPut(key) { Row(season, episode, abs, mutableListOf()) }
+    }
+    for (d in onDisk) {
+        if (d.episode == 0L) continue
+        ensure(d.absoluteEpisode, d.season, d.episode).variants.add(
+            EpisodeVariant.Downloaded(
+                infohash = d.infohash,
+                fileIdx = d.fileIdx,
+                watched = d.watched,
+                language = d.language,
+            ),
+        )
+    }
+    for (a in available) {
+        if (a.episode == 0L) continue
+        // Skip season-cut offers with no absolute — unplaceable here.
+        val abs = a.absoluteEpisode ?: continue
+        ensure(abs, a.season, a.episode).variants.add(
+            EpisodeVariant.Available(
+                quality = a.quality,
+                seeders = a.seeders,
+                sizeBytes = a.sizeBytes,
+                language = a.language,
+            ),
+        )
+    }
+    return buckets.values
+        .map { row ->
+            val sorted = row.variants.sortedWith(
+                compareBy(
+                    { if (it is EpisodeVariant.Downloaded) 0 else 1 },
+                    { it.language ?: "" },
+                ),
+            )
+            MergedEpisode(season = row.season, episode = row.episode, absolute = row.absolute, variants = sorted)
+        }
+        // Absolute-numbered rows first (ascending); owned-without-absolute trail.
+        .sortedWith(
+            compareBy({ it.absolute == null }, { it.absolute ?: Long.MAX_VALUE }, { it.season }, { it.episode }),
+        )
 }
 
 private suspend fun doGrabVariant(
@@ -578,7 +731,10 @@ private fun EpisodeRow(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(
-                    "S%02dE%02d".format(ep.season, ep.episode),
+                    // Fleuve anime rows show "Episode 1156"; seasonal
+                    // rows keep the SxxExx label.
+                    ep.absolute?.let { "Episode %d".format(it) }
+                        ?: "S%02dE%02d".format(ep.season, ep.episode),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )

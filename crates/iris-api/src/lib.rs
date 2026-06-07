@@ -186,6 +186,7 @@ fn spawn_background_jobs(
     // nothing's left to assign.
     let bf_pool = pool;
     let bf_tmdb = app_state.tmdb().cloned();
+    let bf_anilist = app_state.anilist().cloned();
     let bf_providers = app_state.providers().clone();
     let bf_engine = app_state.engine().clone();
     tokio::spawn(async move {
@@ -194,8 +195,11 @@ fn spawn_background_jobs(
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         collection_assign::run_backfill(
             &bf_pool,
-            bf_tmdb.as_ref(),
-            Some(&bf_providers),
+            collection_assign::EnrichDeps {
+                tmdb: bf_tmdb.as_ref(),
+                anilist: bf_anilist.as_ref(),
+                providers: Some(&bf_providers),
+            },
             &bf_engine,
         )
         .await;
@@ -207,8 +211,11 @@ fn spawn_background_jobs(
             ticker.tick().await;
             collection_assign::run_backfill(
             &bf_pool,
-            bf_tmdb.as_ref(),
-            Some(&bf_providers),
+            collection_assign::EnrichDeps {
+                tmdb: bf_tmdb.as_ref(),
+                anilist: bf_anilist.as_ref(),
+                providers: Some(&bf_providers),
+            },
             &bf_engine,
         )
         .await;

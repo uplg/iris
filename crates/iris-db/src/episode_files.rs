@@ -27,6 +27,13 @@ pub struct EpisodeFileRow {
     pub file_idx: i64,
     pub derived_from: String,
     pub created_at: DateTime<Utc>,
+    /// Absolute episode number for fleuve-style anime releases
+    /// (`One Piece S01E1156` → 1156). `NULL` for ordinary seasonal
+    /// releases — the client renders a flat "Episode N" list only when
+    /// a collection's episodes are absolute-numbered. See
+    /// `iris_media::filename::absolute_from_parsed`.
+    #[serde(default)]
+    pub absolute_episode: Option<i64>,
 }
 
 /// All known files for a collection. Used by the Series detail page
@@ -37,7 +44,7 @@ pub async fn list_for_collection(
     collection_id: Uuid,
 ) -> Result<Vec<EpisodeFileRow>, sqlx::Error> {
     sqlx::query_as::<_, EpisodeFileRow>(
-        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at \
+        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at, absolute_episode \
          FROM episode_files \
          WHERE collection_id = ?1 \
            AND EXISTS (SELECT 1 FROM torrents t \
@@ -57,7 +64,7 @@ pub async fn list_for_collection_season(
     season: i64,
 ) -> Result<Vec<EpisodeFileRow>, sqlx::Error> {
     sqlx::query_as::<_, EpisodeFileRow>(
-        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at \
+        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at, absolute_episode \
          FROM episode_files \
          WHERE collection_id = ?1 AND season = ?2 \
            AND EXISTS (SELECT 1 FROM torrents t \
@@ -80,7 +87,7 @@ pub async fn list_for_normalized(
 ) -> Result<Vec<EpisodeFileRow>, sqlx::Error> {
     sqlx::query_as::<_, EpisodeFileRow>(
         "SELECT ef.id, ef.collection_id, ef.season, ef.episode, ef.infohash, ef.file_idx, \
-                ef.derived_from, ef.created_at \
+                ef.derived_from, ef.created_at, ef.absolute_episode \
          FROM episode_files ef \
          JOIN collections c ON c.id = ef.collection_id \
          WHERE c.parsed_title_normalized = ?1 AND c.kind = 'tv' \
@@ -135,7 +142,7 @@ pub async fn find_by_file(
     file_idx: i64,
 ) -> Result<Option<EpisodeFileRow>, sqlx::Error> {
     sqlx::query_as::<_, EpisodeFileRow>(
-        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at \
+        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at, absolute_episode \
          FROM episode_files \
          WHERE infohash = ?1 AND file_idx = ?2 \
            AND EXISTS (SELECT 1 FROM torrents t \
@@ -174,6 +181,8 @@ pub struct UpsertEpisodeFile {
     pub infohash: String,
     pub file_idx: i64,
     pub derived_from: DerivedFrom,
+    /// Absolute episode number for fleuve anime (`None` for seasonal).
+    pub absolute_episode: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -241,8 +250,8 @@ pub async fn correct_scene_parsed(
 pub async fn upsert(pool: &SqlitePool, ef: UpsertEpisodeFile) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO episode_files \
-            (id, collection_id, season, episode, infohash, file_idx, derived_from, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+            (id, collection_id, season, episode, infohash, file_idx, derived_from, created_at, absolute_episode) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
          ON CONFLICT(infohash, file_idx) DO NOTHING",
     )
     .bind(Uuid::new_v4())
@@ -253,7 +262,39 @@ pub async fn upsert(pool: &SqlitePool, ef: UpsertEpisodeFile) -> Result<(), sqlx
     .bind(ef.file_idx)
     .bind(ef.derived_from.as_str())
     .bind(Utc::now())
+    .bind(ef.absolute_episode)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Variant of [`correct_scene_parsed`] that also re-derives the
+/// `absolute_episode`. Used by the boot self-heal to back-fill the
+/// absolute number on already-ingested anime files (the original
+/// insert predates the column). Same `scene_parse`-only scoping; the
+/// guard makes the converged state a no-op. Returns `true` on a change.
+pub async fn correct_scene_parsed_with_absolute(
+    pool: &SqlitePool,
+    infohash: &str,
+    file_idx: i64,
+    season: i64,
+    episode: i64,
+    absolute_episode: Option<i64>,
+) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE episode_files \
+            SET season = ?3, episode = ?4, absolute_episode = ?5 \
+          WHERE infohash = ?1 AND file_idx = ?2 \
+            AND derived_from = 'scene_parse' \
+            AND (season <> ?3 OR episode <> ?4 \
+                 OR absolute_episode IS NOT ?5)",
+    )
+    .bind(infohash)
+    .bind(file_idx)
+    .bind(season)
+    .bind(episode)
+    .bind(absolute_episode)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
 }

@@ -834,6 +834,9 @@ export type CollectionListItem = {
   tmdb_id: number | null;
   display_title: string;
   kind: "tv" | "movie";
+  /** True for anime collections (kept distinct from a same-titled
+   *  live-action show). Additive field — absent on older servers. */
+  is_anime?: boolean;
   torrent_count: number;
   total_size_bytes: number;
   episode_count: number;
@@ -861,6 +864,10 @@ export type CollectionEpisodeEntry = {
    *  Rendered as a row badge so a household with anglophone +
    *  francophone viewers can tell which dub they have on disk. */
   language?: string | null;
+  /** Absolute episode number for fleuve anime (`One Piece S01E1156`
+   *  → 1156). Null for ordinary seasonal episodes. Rendered as
+   *  "Episode N" when `CollectionDetail.numbering === "absolute"`. */
+  absolute_episode?: number | null;
 };
 
 /** Cached season-pack offer the indexer scanner stashed for this
@@ -899,6 +906,9 @@ export type AvailableEpisodeEntry = {
    *  `unknown`). Rendered as a row badge so anglophone users can
    *  spot a Seedpool EN release on a francophone-watched show. */
   language?: string | null;
+  /** Absolute episode number for fleuve anime offers. Null for
+   *  seasonal releases. */
+  absolute_episode?: number | null;
 };
 
 export type CollectionDetail = {
@@ -906,6 +916,16 @@ export type CollectionDetail = {
   tmdb_id: number | null;
   display_title: string;
   kind: "tv" | "movie";
+  /** True for anime collections (AniList-enriched, split from a
+   *  same-titled live-action show). Additive — absent on older servers. */
+  is_anime?: boolean;
+  /** How to lay out episodes: `"seasonal"` (season tabs, the default)
+   *  or `"absolute"` (one flat "Episode N" list — fleuve anime whose
+   *  releases cram the absolute number into a fake S01). Derived
+   *  server-side from the episode data, NOT from `is_anime`: a
+   *  season-cut anime stays `"seasonal"`. Absent on older servers →
+   *  treat as `"seasonal"`. */
+  numbering?: "seasonal" | "absolute";
   /** Server-resolved TMDB poster_path / backdrop_path (`/abc123.jpg`
    *  form). Pass through `tmdbImage(path, size)` to get a URL.
    *  Null when no tmdb_id is attached or the TMDB lookup failed. */
