@@ -317,10 +317,36 @@ export type ParsedQueryInfo = {
   year: number | null;
 };
 
+/** A library item matching the search query — pinned by the UI above
+ *  tracker results ("you already have this"). Matched on the
+ *  SCENE-normalised collection key server-side, so ANY release of the
+ *  same work matches — unlike `SearchResult.already_in_library`, which
+ *  is infohash-exact on purpose. Episode-shaped queries only produce a
+ *  match when the exact episode (or ≥1 episode of the season) is owned. */
+export type LibraryMatch = {
+  collection_id: string;
+  display_title: string;
+  kind: "movie" | "tv";
+  tmdb_id: number | null;
+  is_anime: boolean;
+  torrent_count: number;
+  episode_count: number;
+  representative_infohash: string | null;
+  /** Exact owned episode (episode-shaped query) — direct watch target. */
+  episode_season: number | null;
+  episode_number: number | null;
+  episode_infohash: string | null;
+  episode_file_idx: number | null;
+  /** Season-shaped query: owned episodes in that season. */
+  season_episode_count: number | null;
+};
+
 export type AggregatedResults = {
   results: SearchResult[];
   providers: ProviderResultMeta[];
   parsed_query?: ParsedQueryInfo | null;
+  /** Optional with fallback — predates servers ≤ 0.7.0. */
+  library_matches?: LibraryMatch[];
 };
 
 export type SearchOpts = {

@@ -410,6 +410,59 @@ pub async fn touch_visited(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Erro
     Ok(())
 }
 
+/// Collections whose SCENE-normalised title contains `needle` (itself
+/// produced by `iris_media::filename::series_key` on the user's search
+/// query — the same normaliser that wrote `parsed_title_normalized`, so
+/// matching is consistent by construction). Powers the "already in your
+/// library" rows pinned above tracker results on the search page.
+/// Exact key matches sort first, then most recently played. Substring
+/// containment also covers the `anime:` identity prefix and the
+/// year-suffixed movie keys transparently.
+pub async fn search_summaries(
+    pool: &SqlitePool,
+    needle: &str,
+    limit: i64,
+) -> Result<Vec<CollectionSummary>, sqlx::Error> {
+    // `series_key` output is lowercase alphanumerics + spaces, but escape
+    // LIKE metacharacters defensively — the needle is user-derived.
+    let escaped = needle
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    sqlx::query_as::<_, CollectionSummary>(
+        "SELECT \
+            c.id, \
+            COALESCE(c.tmdb_id, ( \
+              SELECT t3.tmdb_id FROM torrents t3 \
+              WHERE t3.collection_id = c.id \
+                AND t3.deleted_at IS NULL \
+                AND t3.tmdb_id IS NOT NULL \
+              ORDER BY t3.tmdb_verified DESC, COALESCE(t3.last_played_at, t3.added_at) DESC \
+              LIMIT 1 \
+            )) AS tmdb_id, \
+            c.display_title, c.kind, c.is_anime, c.created_at, \
+            COUNT(DISTINCT t.id) AS torrent_count, \
+            COALESCE(SUM(t.total_size_bytes), 0) AS total_size_bytes, \
+            (SELECT COUNT(*) FROM episode_files ef WHERE ef.collection_id = c.id) AS episode_count, \
+            (SELECT t2.infohash FROM torrents t2 \
+             WHERE t2.collection_id = c.id AND t2.deleted_at IS NULL \
+             ORDER BY COALESCE(t2.last_played_at, t2.added_at) DESC LIMIT 1) AS representative_infohash \
+         FROM collections c \
+         LEFT JOIN torrents t ON t.collection_id = c.id AND t.deleted_at IS NULL \
+         WHERE c.parsed_title_normalized LIKE '%' || ?1 || '%' ESCAPE '\\' \
+         GROUP BY c.id \
+         HAVING torrent_count > 0 \
+         ORDER BY (c.parsed_title_normalized = ?2) DESC, \
+                  MAX(t.last_played_at) DESC NULLS LAST, c.created_at DESC \
+         LIMIT ?3",
+    )
+    .bind(&escaped)
+    .bind(needle)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn list_summaries(
     pool: &SqlitePool,
 ) -> Result<Vec<CollectionSummary>, sqlx::Error> {

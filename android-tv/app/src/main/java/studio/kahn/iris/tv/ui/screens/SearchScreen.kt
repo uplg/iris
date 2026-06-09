@@ -76,6 +76,7 @@ import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AggregatedResults
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.IrisApi
+import studio.kahn.iris.tv.data.LibraryMatch
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.SearchViewMode
 import studio.kahn.iris.tv.data.TmdbSuggestion
@@ -144,6 +145,7 @@ fun SearchScreen(
     onPickResult: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onPickTorrent: (infohash: String) -> Unit,
+    onPickCollection: (collectionId: String) -> Unit,
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -302,15 +304,18 @@ fun SearchScreen(
     // poster_url / placeholder gradient inside ResultCard.
     LaunchedEffect(data) {
         val results = data?.results.orEmpty()
-        if (results.isEmpty()) return@LaunchedEffect
+        val libs = data?.libraryMatches.orEmpty()
+        if (results.isEmpty() && libs.isEmpty()) return@LaunchedEffect
         val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
         val api = container.apiFor(url)
         // One resolve call per distinct (release title, kind). The
         // backend parses + scores by kind + year and caches 30d, so this
         // is both correct (no more "Pride" → "Pride and Prejudice"
         // popularity collisions) and cheap (shared server-side cache).
-        val unresolved = results
-            .map { it.title to it.kind }
+        // Library matches resolve through the same cache keyed on their
+        // clean display title — same poster pipeline as everything else.
+        val unresolved = (results.map { it.title to it.kind } +
+            libs.map { it.displayTitle to it.kind })
             .filter { (title, _) -> title.isNotBlank() }
             .filter { it !in tmdbCache }
             .distinct()
@@ -461,6 +466,10 @@ fun SearchScreen(
 
         // --- Results ---
         val rows = data?.results.orEmpty()
+        // Library items matching the query — the FIRST entries of the
+        // same grid/list ("you already have this"). Page 1 only: the
+        // server repeats them on every page.
+        val libMatches = if (page == 1) data?.libraryMatches.orEmpty() else emptyList()
         when {
             submittedQuery.length < 2 -> EmptyHint(
                 title = "Type a title, then press Search",
@@ -470,8 +479,8 @@ fun SearchScreen(
                 submittedQuery = query.trim().ifEmpty { submittedQuery }
                 page = 1
             }
-            pending && rows.isEmpty() -> SkeletonGrid(110.dp)
-            !pending && rows.isEmpty() -> EmptyHint(
+            pending && rows.isEmpty() && libMatches.isEmpty() -> SkeletonGrid(110.dp)
+            !pending && rows.isEmpty() && libMatches.isEmpty() -> EmptyHint(
                 title = "No results",
                 body = "Try a different title or switch the kind / sort filters.",
             )
@@ -497,6 +506,16 @@ fun SearchScreen(
                             ),
                         ) {
                             items(
+                                libMatches,
+                                key = { "lib:${it.collectionId}" },
+                            ) { m ->
+                                LibraryMatchCard(
+                                    match = m,
+                                    resolvedPoster = tmdbCache[m.displayTitle to m.kind]?.posterPath,
+                                    onClick = { openLibraryMatch(m, onPickFile, onPickCollection) },
+                                )
+                            }
+                            items(
                                 rows,
                                 key = { "${it.providerId}:${it.externalId}" },
                             ) { r ->
@@ -513,6 +532,16 @@ fun SearchScreen(
                             verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                             contentPadding = PaddingValues(vertical = Spacing.xs),
                         ) {
+                            lazyListItems(
+                                libMatches,
+                                key = { "lib:${it.collectionId}" },
+                            ) { m ->
+                                LibraryMatchRow(
+                                    match = m,
+                                    resolvedPoster = tmdbCache[m.displayTitle to m.kind]?.posterPath,
+                                    onClick = { openLibraryMatch(m, onPickFile, onPickCollection) },
+                                )
+                            }
                             lazyListItems(
                                 rows,
                                 key = { "${it.providerId}:${it.externalId}" },
@@ -671,6 +700,219 @@ private fun ResultsHeader(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/** Route a library-match click: an exact owned episode jumps straight
+ *  to playback; anything else opens the collection page, where the
+ *  user picks a release / language (mirrors the web behavior). */
+private fun openLibraryMatch(
+    match: LibraryMatch,
+    onPickFile: (infohash: String, fileIdx: Int) -> Unit,
+    onPickCollection: (collectionId: String) -> Unit,
+) {
+    val infohash = match.episodeInfohash
+    val fileIdx = match.episodeFileIdx
+    if (infohash != null && fileIdx != null) {
+        onPickFile(infohash, fileIdx.toInt())
+    } else {
+        onPickCollection(match.collectionId)
+    }
+}
+
+/** Ownership line under a library-match title — honest about WHAT is
+ *  owned: the exact episode, N episodes of the queried season, the
+ *  series' episode count, or the movie's release count. */
+private fun libraryMatchSubtitle(match: LibraryMatch): String {
+    val s = match.episodeSeason
+    val e = match.episodeNumber
+    return when {
+        match.episodeInfohash != null && s != null && e != null ->
+            "S%02dE%02d · Watch now".format(s, e)
+        match.seasonEpisodeCount != null && s != null ->
+            "S%02d · %d episode%s owned".format(
+                s,
+                match.seasonEpisodeCount,
+                if (match.seasonEpisodeCount > 1) "s" else "",
+            )
+        match.kind == "tv" ->
+            "${match.episodeCount} episode${if (match.episodeCount > 1) "s" else ""} owned"
+        match.torrentCount > 1 -> "${match.torrentCount} releases owned"
+        else -> "In your library"
+    }
+}
+
+/** "Already in your library" card pinned ahead of tracker results in
+ *  the grid. Same poster/focus language as [ResultCard], minus the
+ *  torrent stats (a library item has no seeders) plus the green
+ *  IN LIBRARY pill. */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun LibraryMatchCard(
+    match: LibraryMatch,
+    resolvedPoster: String?,
+    onClick: () -> Unit,
+) {
+    val poster: String? = tmdbPosterUrl(resolvedPoster, "w342")
+    var focused by remember { mutableStateOf(false) }
+    val cardShape = RoundedCornerShape(Radius.poster)
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused || it.hasFocus },
+        shape = CardDefaults.shape(shape = cardShape),
+        scale = CardDefaults.scale(focusedScale = 1f),
+        colors = CardDefaults.colors(containerColor = IrisColors.Card),
+        border = CardDefaults.border(
+            focusedBorder = Border(
+                androidx.compose.foundation.BorderStroke(Focus.ring, IrisColors.Brand),
+                shape = cardShape,
+            ),
+        ),
+    ) {
+        Column {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(2f / 3f),
+            ) {
+                if (poster != null) {
+                    AsyncImage(
+                        model = poster,
+                        contentDescription = match.displayTitle,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize().background(irisPosterPlaceholder()))
+                    Box(
+                        Modifier.fillMaxSize().padding(10.dp),
+                        contentAlignment = Alignment.BottomStart,
+                    ) {
+                        Text(
+                            match.displayTitle,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontFamily = studio.kahn.iris.tv.ui.theme.FontDisplay,
+                            ),
+                            color = Color.White.copy(alpha = 0.9f),
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                BadgePill(
+                    "IN LIBRARY",
+                    Color(0xFF10B981),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp),
+                )
+                BadgePill(
+                    label = if (match.kind == "tv") "TV" else "Movie",
+                    bg = Color.Black.copy(alpha = 0.65f),
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(6.dp),
+                )
+            }
+            Column(
+                Modifier.padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    match.displayTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = if (focused) 1 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (focused) Modifier.basicMarquee() else Modifier,
+                )
+                Text(
+                    libraryMatchSubtitle(match),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF34D399),
+                )
+            }
+        }
+    }
+}
+
+/** List-mode twin of [LibraryMatchCard] — same layout grammar as
+ *  [ResultRow] (thumb + texts) with the ownership line instead of
+ *  torrent stats. */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun LibraryMatchRow(
+    match: LibraryMatch,
+    resolvedPoster: String?,
+    onClick: () -> Unit,
+) {
+    val poster: String? = tmdbPosterUrl(resolvedPoster, "w185")
+    var focused by remember { mutableStateOf(false) }
+    val rowShape = RoundedCornerShape(Radius.button)
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused || it.hasFocus },
+        shape = CardDefaults.shape(shape = rowShape),
+        scale = CardDefaults.scale(focusedScale = 1f),
+        colors = CardDefaults.colors(
+            containerColor = IrisColors.Overlay06,
+            focusedContainerColor = IrisColors.Overlay12,
+        ),
+        border = CardDefaults.border(
+            focusedBorder = Border(
+                androidx.compose.foundation.BorderStroke(Focus.ring, IrisColors.Brand),
+                shape = rowShape,
+            ),
+        ),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .width(46.dp)
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(6.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (poster != null) {
+                    AsyncImage(
+                        model = poster,
+                        contentDescription = match.displayTitle,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize().background(irisPosterPlaceholder()))
+                }
+            }
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    match.displayTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = if (focused) 1 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (focused) Modifier.basicMarquee() else Modifier,
+                )
+                Text(
+                    libraryMatchSubtitle(match),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF34D399),
+                )
+            }
+            BadgePill("IN LIBRARY", Color(0xFF10B981))
         }
     }
 }

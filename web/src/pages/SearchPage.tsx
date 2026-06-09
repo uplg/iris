@@ -23,10 +23,12 @@ import { LanguageBadge } from "@/components/LanguageBadge";
 import { PreviewDialog } from "@/components/PreviewDialog";
 import { Tag } from "@/components/Tag";
 import { EmptyState, ErrorState, LoadingState } from "@/components/State";
+import { MediaCard } from "@/components/MediaCard";
 import {
   metadata,
   search,
   tmdbImage,
+  type LibraryMatch,
   type MediaKind,
   type ParsedQueryInfo,
   type SearchResult,
@@ -168,6 +170,10 @@ export function SearchPage() {
   });
 
   const rows = data?.results ?? [];
+  // Library items matching the query — rendered as the FIRST cards of
+  // the same grid ("you already have this"). Page 1 only: the server
+  // returns them with every page and repeating them is noise.
+  const libMatches = page === 1 ? (data?.library_matches ?? []) : [];
   const meta = data?.providers ?? [];
   const totals = useMemo(() => {
     let count = 0;
@@ -299,9 +305,9 @@ export function SearchPage() {
             title="Type at least 2 characters"
             body="Tip: pick a TMDB suggestion to use a canonical title — better results from the tracker."
           />
-        ) : isFetching && rows.length === 0 ? (
+        ) : isFetching && rows.length === 0 && libMatches.length === 0 ? (
           <LoadingState label="Searching…" />
-        ) : rows.length === 0 ? (
+        ) : rows.length === 0 && libMatches.length === 0 ? (
           <EmptyState
             title="No results"
             body="Try a different title, drop the year, or switch between Movies / Series in the filter."
@@ -309,6 +315,13 @@ export function SearchPage() {
         ) : (
           <>
             <div className="grid gap-4.5 grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
+              {libMatches.map((m) => (
+                <LibraryMatchCard
+                  key={`lib:${m.collection_id}`}
+                  match={m}
+                  onOpen={(path) => navigate(path)}
+                />
+              ))}
               {rows.map((r) => (
                 <ResultCard
                   key={`${r.provider_id}:${r.external_id}`}
@@ -342,6 +355,50 @@ export function SearchPage() {
         />
       </div>
     </Container>
+  );
+}
+
+/** "Already in your library" card, pinned ahead of the tracker results
+ *  in the same grid. Episode-specific matches deep-link straight to the
+ *  player; everything else lands on the collection page where the user
+ *  picks a release/language. Poster comes from the collection's
+ *  server-derived `tmdb_id` (same trust level as the Library page). */
+function LibraryMatchCard({
+  match,
+  onOpen,
+}: {
+  match: LibraryMatch;
+  onOpen: (path: string) => void;
+}) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const watchTarget =
+    match.episode_infohash != null && match.episode_file_idx != null
+      ? `/watch/${match.episode_infohash}/${match.episode_file_idx}`
+      : null;
+  let subtitle: string;
+  if (watchTarget && match.episode_season != null && match.episode_number != null) {
+    subtitle = `S${pad(match.episode_season)}E${pad(match.episode_number)} · Watch now`;
+  } else if (match.season_episode_count != null && match.episode_season != null) {
+    subtitle = `S${pad(match.episode_season)} · ${match.season_episode_count} episode${match.season_episode_count > 1 ? "s" : ""} owned`;
+  } else if (match.kind === "tv") {
+    subtitle = `${match.episode_count} episode${match.episode_count > 1 ? "s" : ""} owned`;
+  } else {
+    subtitle =
+      match.torrent_count > 1 ? `${match.torrent_count} releases owned` : "In your library";
+  }
+  return (
+    <MediaCard
+      title={match.display_title}
+      subtitle={subtitle}
+      tmdbId={match.tmdb_id}
+      kind={match.kind}
+      badge={
+        <Tag variant="success" upper>
+          <Check className="size-2.5" /> In library
+        </Tag>
+      }
+      onClick={() => onOpen(watchTarget ?? `/collection/${match.collection_id}`)}
+    />
   );
 }
 

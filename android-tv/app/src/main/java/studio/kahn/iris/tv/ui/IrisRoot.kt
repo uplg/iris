@@ -296,6 +296,9 @@ fun IrisRoot(
                     onPickTorrent = { infohash ->
                         navController.navigate(Routes.detail(infohash))
                     },
+                    onPickCollection = { collectionId ->
+                        navController.navigate(Routes.collection(collectionId))
+                    },
                     onBack = { navController.popBackStack() },
                 )
             }

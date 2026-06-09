@@ -728,6 +728,35 @@ data class AggregatedResults(
     val results: List<SearchResult>,
     val providers: List<ProviderResultMeta>,
     @SerialName("parsed_query") val parsedQuery: ParsedQueryInfo? = null,
+    /** Library items matching the query — pinned by the UI above tracker
+     *  results. Default keeps responses from older servers parseable. */
+    @SerialName("library_matches") val libraryMatches: List<LibraryMatch> = emptyList(),
+)
+
+/**
+ * A library item matching the search query. Mirrors `LibraryMatch` in
+ * `iris-api`: matched on the SCENE-normalised collection key, so ANY
+ * release of the same work matches (unlike the infohash-exact
+ * `already_in_library` flag on individual results). Episode-shaped
+ * queries only match when the exact episode is owned — then the
+ * `episode*` fields carry a direct watch target.
+ */
+@Serializable
+data class LibraryMatch(
+    @SerialName("collection_id") val collectionId: String,
+    @SerialName("display_title") val displayTitle: String,
+    /** `"movie"` | `"tv"`. */
+    val kind: String,
+    @SerialName("tmdb_id") val tmdbId: Long? = null,
+    @SerialName("is_anime") val isAnime: Boolean = false,
+    @SerialName("torrent_count") val torrentCount: Long = 0,
+    @SerialName("episode_count") val episodeCount: Long = 0,
+    @SerialName("representative_infohash") val representativeInfohash: String? = null,
+    @SerialName("episode_season") val episodeSeason: Long? = null,
+    @SerialName("episode_number") val episodeNumber: Long? = null,
+    @SerialName("episode_infohash") val episodeInfohash: String? = null,
+    @SerialName("episode_file_idx") val episodeFileIdx: Long? = null,
+    @SerialName("season_episode_count") val seasonEpisodeCount: Long? = null,
 )
 
 @Serializable

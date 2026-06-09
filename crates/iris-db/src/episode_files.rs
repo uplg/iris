@@ -101,6 +101,57 @@ pub async fn list_for_normalized(
 }
 
 
+/// The owned file for one exact episode of a collection — seasonal
+/// `(season, episode)` match, or absolute-numbered match for fleuve
+/// anime (`One Piece 1156` → `absolute_episode = 1156`). When the
+/// query carried no season, only the absolute branch can hit, which
+/// keeps a bare trailing number from matching `E05` of every season.
+/// Seasonal hits win over absolute ones when both exist. Backs the
+/// "you already have this exact episode" row on the search page.
+pub async fn find_owned_episode(
+    pool: &SqlitePool,
+    collection_id: Uuid,
+    season: Option<i64>,
+    episode: i64,
+) -> Result<Option<EpisodeFileRow>, sqlx::Error> {
+    sqlx::query_as::<_, EpisodeFileRow>(
+        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at, absolute_episode \
+         FROM episode_files \
+         WHERE collection_id = ?1 \
+           AND ((?2 IS NOT NULL AND season = ?2 AND episode = ?3) OR absolute_episode = ?3) \
+           AND EXISTS (SELECT 1 FROM torrents t \
+                       WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL) \
+         ORDER BY (season IS ?2 AND episode = ?3) DESC \
+         LIMIT 1",
+    )
+    .bind(collection_id)
+    .bind(season)
+    .bind(episode)
+    .fetch_optional(pool)
+    .await
+}
+
+/// How many episodes of one season the library holds (live torrents
+/// only). Lets a season-scoped search query ("vikings s03") surface
+/// the collection with an honest "N episodes of S03" instead of a
+/// blanket "in library".
+pub async fn count_owned_in_season(
+    pool: &SqlitePool,
+    collection_id: Uuid,
+    season: i64,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM episode_files \
+         WHERE collection_id = ?1 AND season = ?2 \
+           AND EXISTS (SELECT 1 FROM torrents t \
+                       WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL)",
+    )
+    .bind(collection_id)
+    .bind(season)
+    .fetch_one(pool)
+    .await
+}
+
 /// Library-wide `(collection_normalized_title, season, episode) → infohash`
 /// index. Used by the search ranker to flag results whose SCENE
 /// identity already maps to a file on disk, so the UI can disable
