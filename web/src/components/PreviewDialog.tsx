@@ -752,7 +752,7 @@ function renderTag(n: Extract<BBNode, { type: "tag" }>, key: number): ReactNode 
       return (
         <a
           key={key}
-          href={n.arg ?? "#"}
+          href={safeBbcodeHref(n.arg)}
           target="_blank"
           rel="noopener noreferrer"
           className="text-primary underline hover:no-underline"
@@ -762,8 +762,10 @@ function renderTag(n: Extract<BBNode, { type: "tag" }>, key: number): ReactNode 
       );
     case "img": {
       // [img]url[/img] — children should be a single text node with the URL.
+      // http(s) only: the URL is tracker-authored; anything else is either
+      // dead (javascript: in img src) or weird enough to drop.
       const flat = nodesToText(n.children).trim();
-      if (!flat) return null;
+      if (!flat || !/^https?:\/\//i.test(flat)) return null;
       return (
         <img
           key={key}
@@ -777,6 +779,15 @@ function renderTag(n: Extract<BBNode, { type: "tag" }>, key: number): ReactNode 
     default:
       return <span key={key}>{inner}</span>;
   }
+}
+
+/** BBCode `[url=…]` hrefs are tracker-authored. The HTML description
+ *  path is DOMPurify-sanitised, but BBCode is rendered by us — keep
+ *  only schemes that can't execute script (`javascript:` in an href is
+ *  a click-to-XSS). Anything else collapses to an inert anchor. */
+function safeBbcodeHref(raw: string | null | undefined): string {
+  const v = (raw ?? "").trim();
+  return /^(https?:|magnet:)/i.test(v) ? v : "#";
 }
 
 function nodesToText(nodes: BBNode[]): string {
