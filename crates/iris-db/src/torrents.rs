@@ -29,6 +29,11 @@ pub struct TorrentRow {
     /// exposed here to avoid leaking PII to non-admin users.
     pub added_by_name: String,
     pub added_at: DateTime<Utc>,
+    /// First time the engine reported the torrent fully downloaded.
+    /// Restart-proof "bytes on disk are final" flag — engine snapshots
+    /// can't answer that during the post-deploy `initializing` re-check.
+    /// Stamped by the seed-stats loop, never cleared.
+    pub finished_at: Option<DateTime<Utc>>,
     pub last_played_at: Option<DateTime<Utc>>,
     pub last_seed_activity_at: Option<DateTime<Utc>>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -112,7 +117,7 @@ pub async fn find_by_infohash(
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
          c.kind AS kind \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
@@ -128,7 +133,7 @@ pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Err
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
          c.kind AS kind \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
@@ -241,6 +246,23 @@ pub async fn total_uploaded_bytes(pool: &SqlitePool) -> Result<u64, sqlx::Error>
     Ok(u64::try_from(row.0.unwrap_or(0)).unwrap_or(0))
 }
 
+/// Stamp `finished_at` (first completion only — never moves once set).
+/// Called from the 30 s seed-stats tick for every snapshot reporting
+/// `finished`, so the flag converges shortly after completion and is
+/// already in place when a later deploy puts the restored session
+/// through its `initializing` re-check.
+pub async fn mark_finished(pool: &SqlitePool, infohash: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE torrents SET finished_at = ?1 \
+         WHERE infohash = ?2 AND finished_at IS NULL AND deleted_at IS NULL",
+    )
+    .bind(Utc::now())
+    .bind(infohash)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn touch_played(pool: &SqlitePool, infohash: &str) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE torrents SET last_played_at = ?1 WHERE infohash = ?2")
         .bind(Utc::now())
@@ -276,7 +298,7 @@ pub async fn list_in_collection(
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
          c.kind AS kind \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \

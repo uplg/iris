@@ -1,0 +1,11 @@
+-- Stamp of the first moment the engine reported this torrent fully
+-- downloaded. Restart-proof source of truth for "the bytes on disk are
+-- final": after a deploy librqbit restores the session and re-checks
+-- every torrent (state `initializing`) — for minutes its snapshots
+-- report finished = false and FileStream creation errors, even though
+-- the files are perfectly readable. Streaming/playback gates consult
+-- this column first so finished content never depends on session state.
+-- Stamped by the 30 s seed-stats reconcile loop; NULL for torrents that
+-- never completed (or completed before this migration and haven't been
+-- observed by a tick yet — the loop converges within a tick).
+ALTER TABLE torrents ADD COLUMN finished_at TEXT;
