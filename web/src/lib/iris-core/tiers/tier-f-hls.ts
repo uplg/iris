@@ -260,6 +260,31 @@ export const mountTierF: EngineMount = async (opts) => {
       console.warn(
         `[iris-core] Tier F: fatal mediaError ${data.details} — recoverMediaError() #${recentRecoveries.length}`,
       );
+      // `recoverMediaError()` detaches + re-attaches the media element,
+      // which RESETS `currentTime` to 0 — a mid-film bufferAppendError
+      // (Firefox background-tab memory pressure is a known trigger)
+      // silently restarted the user from the beginning. This internal
+      // recovery never goes through IrisPlayer's remount, so the
+      // live-playhead resume there can't help; restore the position
+      // ourselves on the first `canplay` after recovery. One-shot,
+      // event-driven, and a no-op when hls.js kept the position.
+      const resumeAt = video.currentTime;
+      if (resumeAt > 1) {
+        const restore = () => {
+          video.removeEventListener("canplay", restore);
+          if (video.currentTime < resumeAt - 1) {
+            console.warn(
+              `[iris-core] Tier F: post-recovery playhead at ${video.currentTime.toFixed(1)}s — restoring ${resumeAt.toFixed(1)}s`,
+            );
+            try {
+              video.currentTime = resumeAt;
+            } catch {
+              /* element torn down — dispose path owns it */
+            }
+          }
+        };
+        video.addEventListener("canplay", restore);
+      }
       try {
         hls.recoverMediaError();
       } catch (e) {
