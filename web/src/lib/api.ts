@@ -548,6 +548,11 @@ export const progress = {
       /** Whether the player is actively playing (vs paused) at this
        *  heartbeat. Feeds the admin "Now watching" presence state. */
       playing?: boolean;
+      /** True when this save follows a deliberate user seek. Required for
+       *  a near-zero position to overwrite substantial stored progress —
+       *  without it the server's reset guard treats the save as an
+       *  error-recovery artifact and keeps the old position. */
+      seek?: boolean;
     },
   ) => api.put<void>(`/torrents/${infohash}/files/${idx}/progress`, body),
 };

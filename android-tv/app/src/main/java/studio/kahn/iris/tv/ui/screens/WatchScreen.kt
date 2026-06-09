@@ -548,6 +548,11 @@ private fun ReadyPlayer(
     val fileSizeBytes: Long = remember(torrent, fileIdx) {
         torrent?.files?.firstOrNull { it.index == fileIdx }?.sizeBytes ?: 0L
     }
+    // Latched on every user seek, consumed by the next progress save. The
+    // server's reset guard refuses a near-zero position over substantial
+    // stored progress unless the save carries `seek = true` (mirror of the
+    // web client's `seekPendingRef`).
+    val pendingSeekSave = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     DisposableEffect(player, fileSizeBytes) {
         val listener = object : androidx.media3.common.Player.Listener {
             override fun onPositionDiscontinuity(
@@ -556,6 +561,7 @@ private fun ReadyPlayer(
                 reason: Int,
             ) {
                 if (reason != androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK) return
+                pendingSeekSave.set(true)
                 val durMs = player.duration
                 if (durMs <= 0 || fileSizeBytes <= 0) return
                 val playheadS = newPosition.positionMs / 1000.0
@@ -777,6 +783,7 @@ private fun ReadyPlayer(
                                         audioTrackIdx = audioIdx,
                                         subtitleTrackIdx = subIdx,
                                         completed = completed,
+                                        seek = pendingSeekSave.getAndSet(false),
                                     ),
                                 )
                             }
@@ -813,6 +820,7 @@ private fun ReadyPlayer(
                             audioTrackIdx = audioIdx,
                             subtitleTrackIdx = subIdx,
                             completed = dur != null && pos >= dur - 30_000,
+                            seek = pendingSeekSave.getAndSet(false),
                         ),
                     )
                 }

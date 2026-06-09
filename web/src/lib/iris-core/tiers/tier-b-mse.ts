@@ -689,10 +689,52 @@ export const mountTierB: EngineMount = async (opts) => {
   // During normal startup buffering this is a harmless no-op: the
   // queue drains as usual and the gap-jump loop finds no near-ahead
   // range to skip to.
+  // Frozen-feed watchdog (single-shot, armed by a stall event only —
+  // user-approved timer exception). `onWaiting` handles wedged appends
+  // and buffer holes synchronously, but a feed frozen UPSTREAM — a
+  // half-dead connection that neither errors nor delivers (observed
+  // through Cloudflare on big files: fedMax frozen, queue empty, no
+  // pending op, no error) — has nothing event-driven left to poke it:
+  // UrlSource only retries REJECTED fetches, and every waiter is
+  // already in its ready state. Detection needs the one thing events
+  // can't express: "still frozen N seconds later". On a confirmed
+  // freeze we rebuild the Input (fresh connections — the old
+  // UrlSource's hung read can't be salvaged) and restart the pipeline
+  // at the playhead: the automated version of the manual play/pause
+  // nudge, position preserved.
+  const STALL_WATCHDOG_MS = 4_000;
+  let stallWatchdogId: ReturnType<typeof setTimeout> | null = null;
+
   const onWaiting = () => {
     if (disposed || !sourceBuffer) return;
     const t = video.currentTime;
     const wedged = sourceBuffer.updating;
+    // Arm the watchdog before any early-return below: the frozen-feed
+    // case is precisely the one where the synchronous recovery paths
+    // all no-op (playhead still inside a buffered range, queue empty).
+    // Fire-time checks make it a no-op when ANY progress happened.
+    if (!videoFeedEnded && stallWatchdogId == null) {
+      const snapT = t;
+      const snapFed = videoFedMax;
+      stallWatchdogId = setTimeout(() => {
+        stallWatchdogId = null;
+        if (disposed || videoFeedEnded || video.paused) return;
+        // ANY movement of either clock (including a user seek resetting
+        // them backwards) means something else is driving recovery.
+        if (Math.abs(video.currentTime - snapT) > 0.25 || videoFedMax !== snapFed) return;
+        console.warn(
+          `[iris-core] Tier B frozen feed: t=${snapT.toFixed(1)}s fedMax=${snapFed.toFixed(1)}s ` +
+            `unchanged after ${STALL_WATCHDOG_MS}ms — rebuilding input, restarting at playhead`,
+        );
+        try {
+          input?.dispose();
+        } catch {
+          /* idempotent */
+        }
+        input = makeInput();
+        void restartConversionFromSeek(video.currentTime);
+      }, STALL_WATCHDOG_MS);
+    }
     // Diagnostic: a stall WITH a healthy forward buffer means the decoder
     // choked (bad frame in this rip) — not starvation. A stall AT the
     // buffered end with `videoFeedEnded` means the demuxer stopped feeding.
@@ -1257,6 +1299,10 @@ export const mountTierB: EngineMount = async (opts) => {
   const dispose = async (): Promise<void> => {
     if (disposed) return;
     disposed = true;
+    if (stallWatchdogId != null) {
+      clearTimeout(stallWatchdogId);
+      stallWatchdogId = null;
+    }
     // Release any feed loop parked in `waitTrackBalance` (ready() is now true
     // via `disposed`); the loops then break on their generation check.
     for (const w of trackWaiters) w();
@@ -1440,7 +1486,10 @@ export const mountTierB: EngineMount = async (opts) => {
 
   // ---- Spin up the first Conversion -----------------------------
 
-  input = new Input({
+  // Input factory rather than a one-shot construction: the frozen-feed
+  // watchdog (see `onWaiting`) rebuilds the Input to get fresh HTTP
+  // connections when the live UrlSource is stuck on a half-dead read.
+  const makeInput = (): Input => new Input({
     source: new UrlSource(streamUrl, {
       // Treat a 5xx as a transient, retryable failure instead of a fatal
       // pipeline error. When the user redeploys, in-flight /stream range
@@ -1471,6 +1520,7 @@ export const mountTierB: EngineMount = async (opts) => {
     }),
     formats: ALL_FORMATS,
   });
+  input = makeInput();
   try {
     // Initial mount always goes through the manual pipeline. It:
     //   1. Lets us drop open-GOP straggler B-frames that would

@@ -603,6 +603,11 @@ data class ProgressUpdate(
     @SerialName("audio_track_idx") val audioTrackIdx: Int? = null,
     @SerialName("subtitle_track_idx") val subtitleTrackIdx: Int? = null,
     val completed: Boolean = false,
+    /** True when this save follows a deliberate user seek. The server's
+     *  reset guard refuses a near-zero position over substantial stored
+     *  progress unless this is set — protects against error-recovery
+     *  restarts clobbering the user's place. */
+    val seek: Boolean = false,
 )
 
 /** Wire format for `POST /api/torrents/.../seek`. `playhead_s` is

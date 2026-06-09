@@ -91,6 +91,11 @@ export function WatchPage() {
   const lastTimeRef = useRef(0);
   const lastSavedTimeRef = useRef(0);
   const lastDurationRef = useRef<number | null>(null);
+  // Set on every user seek, consumed by the next progress save. The
+  // server's reset guard refuses a near-zero position over substantial
+  // stored progress UNLESS the save is flagged as a deliberate seek —
+  // this is that flag (see `put_progress` in iris-api).
+  const seekPendingRef = useRef(false);
   const progressLoadedRef = useRef(false);
   // "Watch next?" state — gated on a single-shot flip per
   // mount, plus a dismissal flag so user choosing "Later" doesn't
@@ -496,6 +501,7 @@ export function WatchPage() {
     lastSavedTimeRef.current = 0;
     lastDurationRef.current = null;
     progressLoadedRef.current = false;
+    seekPendingRef.current = false;
     subtitleTrackRef.current = null;
     audioTrackRef.current = null;
     nextEpDismissedRef.current = false;
@@ -536,6 +542,8 @@ export function WatchPage() {
         lastSavedTimeRef.current = t;
         const dur = lastDurationRef.current ?? null;
         const completed = dur != null && t >= dur - 30;
+        const seek = seekPendingRef.current;
+        seekPendingRef.current = false;
         void progressApi.put(infohash, fileIdx, {
           position_seconds: t,
           duration_seconds: dur,
@@ -543,6 +551,7 @@ export function WatchPage() {
           subtitle_track_idx: subtitleTrackRef.current,
           completed,
           playing: true,
+          seek,
         });
       }
       // Next-episode prompt at >= 95 % of duration. Belt-and-suspenders
@@ -571,6 +580,8 @@ export function WatchPage() {
     (t: number) => {
       if (!infohash || t <= 0) return;
       lastSavedTimeRef.current = t;
+      const seek = seekPendingRef.current;
+      seekPendingRef.current = false;
       void progressApi.put(infohash, fileIdx, {
         position_seconds: t,
         duration_seconds: lastDurationRef.current ?? null,
@@ -578,6 +589,7 @@ export function WatchPage() {
         subtitle_track_idx: subtitleTrackRef.current,
         completed: false,
         playing: false,
+        seek,
       });
     },
     [infohash, fileIdx],
@@ -629,6 +641,7 @@ export function WatchPage() {
         audio_track_idx: audioTrackRef.current,
         subtitle_track_idx: subtitleTrackRef.current,
         completed,
+        seek: seekPendingRef.current,
       });
       const url = `/api/torrents/${infohash}/files/${fileIdx}/progress`;
       // sendBeacon on unload; fall back to fire-and-forget fetch in normal flow.
@@ -762,6 +775,13 @@ export function WatchPage() {
             <div className="aspect-video w-full overflow-hidden rounded-xl border border-border bg-black shadow-2xl">
               {playSrc && !progressQ.isPending && sourceReady && manifest ? (
                 <IrisPlayer
+                  // Per-file identity: navigating to another episode must
+                  // rebuild the player from scratch (fresh `currentTimeRef`,
+                  // audio/subtitle state) instead of reusing per-file state
+                  // initialized for the previous file. Outage-recovery and
+                  // demote remounts keep the same key — only `src` changes —
+                  // so the live playhead survives those.
+                  key={`${infohash}:${fileIdx}`}
                   tier={tier}
                   src={playSrc}
                   srcType={playSrcType}
@@ -803,7 +823,10 @@ export function WatchPage() {
                   }}
                   onTimeUpdate={onTimeUpdate}
                   onDurationChange={onDurationChange}
-                  onSeeking={(t) => postSeekHint(manifest, t)}
+                  onSeeking={(t) => {
+                    seekPendingRef.current = true;
+                    postSeekHint(manifest, t);
+                  }}
                   onPause={onPause}
                   onEnded={onEndedCb}
                   onError={(msg) => {

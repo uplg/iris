@@ -287,11 +287,21 @@ export function IrisPlayer(props: IrisPlayerProps) {
           container,
           manifest: props.manifest,
           streamUrl: props.src,
-          startPosition: mountStartPosition,
+          // Resume at the LIVE playhead, not `mountStartPosition`. The
+          // state only gets bumped on audio-track switches; remounts
+          // triggered by a `src` change (backend-outage recovery nonce,
+          // tier demote) would otherwise rewind to the position loaded at
+          // page mount — 0 on a first watch — and the subsequent progress
+          // heartbeats would clobber the user's real position server-side.
+          // `currentTimeRef` seeds from `props.startPosition`, so the
+          // fallback only matters before the first `timeupdate`.
+          startPosition: currentTimeRef.current > 0 ? currentTimeRef.current : mountStartPosition,
           nativeSubs,
           audioTrackIndex,
           onTimeUpdate: (t) => {
-            currentTimeRef.current = t;
+            // Engines can emit a final `timeupdate` at 0 while tearing
+            // down; latching it would poison the resume position above.
+            if (t > 0) currentTimeRef.current = t;
             props.onTimeUpdate(t);
           },
           onDurationChange: props.onDurationChange,

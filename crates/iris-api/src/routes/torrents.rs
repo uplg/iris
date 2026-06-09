@@ -162,7 +162,20 @@ pub struct ProgressUpdate {
     /// playing anyway) default to `Playing`.
     #[serde(default)]
     pub playing: Option<bool>,
+    /// True when this update follows a deliberate user seek. Lets the
+    /// reset guard below distinguish "user restarted the film from 0"
+    /// (persist it) from "player error-recovered at position 0" (must
+    /// NOT clobber the real progress). Additive — legacy clients omit
+    /// it and get the guard's conservative behavior.
+    #[serde(default)]
+    pub seek: bool,
 }
+
+/// Reset-guard window: a save below `NEW_MAX` landing on stored progress
+/// above `PREV_MIN` without a user seek is treated as an error-recovery
+/// artifact, not a real position.
+const PROGRESS_RESET_GUARD_NEW_MAX_SECS: f64 = 60.0;
+const PROGRESS_RESET_GUARD_PREV_MIN_SECS: f64 = 300.0;
 
 async fn put_progress(
     State(state): State<AppState>,
@@ -177,20 +190,46 @@ async fn put_progress(
     }
     let file_idx = file_idx_to_i64(idx);
     let position_seconds = body.position_seconds.max(0.0);
-    iris_db::playback::upsert(
-        state.db(),
-        iris_db::playback::UpsertProgress {
-            user_id: user.id,
-            infohash: infohash.clone(),
+
+    // Reset guard: progress must never be lost without a voluntary seek.
+    // A player recovering from a mid-play error (network cut, engine
+    // remount) can come back up at position 0 and heartbeat from there —
+    // persisting that would destroy an hour of real progress. A near-zero
+    // position over substantial stored progress is only honored when the
+    // client flags it as a deliberate seek (rewatch of a completed file is
+    // exempt: `prev.completed` short-circuits the guard).
+    let reset_guarded = !body.seek
+        && !body.completed
+        && position_seconds < PROGRESS_RESET_GUARD_NEW_MAX_SECS
+        && match iris_db::playback::get(state.db(), user.id, &infohash, file_idx).await {
+            Ok(Some(prev)) => {
+                !prev.completed && prev.position_seconds >= PROGRESS_RESET_GUARD_PREV_MIN_SECS
+            }
+            _ => false,
+        };
+    if reset_guarded {
+        tracing::info!(
+            %infohash,
             file_idx,
             position_seconds,
-            duration_seconds: body.duration_seconds,
-            audio_track_idx: body.audio_track_idx,
-            subtitle_track_idx: body.subtitle_track_idx,
-            completed: body.completed,
-        },
-    )
-    .await?;
+            "progress reset guard: ignoring near-zero save over substantial progress"
+        );
+    } else {
+        iris_db::playback::upsert(
+            state.db(),
+            iris_db::playback::UpsertProgress {
+                user_id: user.id,
+                infohash: infohash.clone(),
+                file_idx,
+                position_seconds,
+                duration_seconds: body.duration_seconds,
+                audio_track_idx: body.audio_track_idx,
+                subtitle_track_idx: body.subtitle_track_idx,
+                completed: body.completed,
+            },
+        )
+        .await?;
+    }
 
     // Keep both eviction clocks warm for the whole session, not just its
     // first second. `touch_played` (DB row → disk-GC active window) and the
@@ -1727,6 +1766,13 @@ fn build_headers(
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(mime).unwrap());
     headers.insert(header::CONTENT_LENGTH, HeaderValue::from_str(&len.to_string()).unwrap());
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    // Origin-side cache opt-out. Streamed media bodies are multi-GB and
+    // per-user; an edge proxy that decides they're cacheable (e.g. a
+    // Cloudflare "cache everything" rule) will abort the transfer when
+    // the body exceeds its cacheable-object size limit — which kills
+    // playback of exactly the biggest files, mid-stream. `play_asset`
+    // overrides this per-asset for the small immutable HLS segments.
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     if let Some((start, end, total)) = range {
         headers.insert(
             header::CONTENT_RANGE,
