@@ -15,6 +15,15 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
+/// Chunk size for streamed response bodies. `ReaderStream::new` defaults
+/// to 4 KiB reads — far too small for video: a 4K REMUX needs sustained
+/// tens of Mbps and the per-chunk overhead (librqbit piece lookup +
+/// hyper frame + TLS record per 4 KiB) caps real throughput below the
+/// film's bitrate, so the player drains its buffer, stalls, refills and
+/// resumes in a loop. 256 KiB amortises that overhead and stays within
+/// a single typical torrent piece.
+const STREAM_CHUNK_SIZE: usize = 256 * 1024;
+
 use crate::error::{ApiError, ApiResult};
 use crate::routes::extract::AuthUser;
 use crate::state::AppState;
@@ -182,6 +191,16 @@ async fn put_progress(
         },
     )
     .await?;
+
+    // Keep both eviction clocks warm for the whole session, not just its
+    // first second. `touch_played` (DB row → disk-GC active window) and the
+    // remux `.last_played` sentinel (cache LRU + protection window) were
+    // historically only bumped on the `master.m3u8` fetch at playback start,
+    // so a viewer one hour into a film looked "cold" to both evictors and
+    // could lose the cache — or the whole torrent — mid-play. The heartbeat
+    // is the proof someone still has the player open (paused included).
+    let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
+    state.remuxer().touch_played(&format!("{infohash}_{idx}")).await;
 
     // "Moved on to the next episode" ⇒ the one before it is done. Skipping the
     // credits and jumping to the next episode otherwise leaves the prior one
@@ -1447,7 +1466,7 @@ async fn stream_file(
                 return Err(ApiError::Internal(anyhow::anyhow!("seek: {e}")));
             }
             let limited = reader.take(len);
-            let body = Body::from_stream(ReaderStream::new(limited));
+            let body = Body::from_stream(ReaderStream::with_capacity(limited, STREAM_CHUNK_SIZE));
             return Ok(build_headers(StatusCode::PARTIAL_CONTENT, len, &mime, Some((start, end, total)))
                 .body(body)
                 .unwrap());
@@ -1466,7 +1485,7 @@ async fn stream_file(
             .body(Body::empty())
             .unwrap());
     }
-    let body = Body::from_stream(ReaderStream::new(reader));
+    let body = Body::from_stream(ReaderStream::with_capacity(reader, STREAM_CHUNK_SIZE));
     Ok(build_headers(StatusCode::OK, total, &mime, None)
         .body(body)
         .unwrap())
@@ -1668,7 +1687,7 @@ async fn serve_file_with_range(
             if let Err(e) = file.seek(SeekFrom::Start(start)).await {
                 return Err(ApiError::Internal(anyhow::anyhow!("seek: {e}")));
             }
-            let body = Body::from_stream(ReaderStream::new(file.take(len)));
+            let body = Body::from_stream(ReaderStream::with_capacity(file.take(len), STREAM_CHUNK_SIZE));
             return Ok(build_headers(
                 StatusCode::PARTIAL_CONTENT,
                 len,
@@ -1692,7 +1711,7 @@ async fn serve_file_with_range(
             .body(Body::empty())
             .unwrap());
     }
-    let body = Body::from_stream(ReaderStream::new(file));
+    let body = Body::from_stream(ReaderStream::with_capacity(file, STREAM_CHUNK_SIZE));
     Ok(build_headers(StatusCode::OK, total, mime, None)
         .body(body)
         .unwrap())

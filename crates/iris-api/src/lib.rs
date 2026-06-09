@@ -90,7 +90,10 @@ fn setup_gc(
                     while let Ok(Some(e)) = rd.next_entry().await {
                         if let Some(name) = e.file_name().to_str() {
                             if name.starts_with(&prefix) {
-                                let _ = tokio::fs::remove_file(e.path()).await;
+                                // Cache entries are directories — remove_file
+                                // fails silently on them and the orphaned
+                                // cache then inflates the remux dir forever.
+                                let _ = tokio::fs::remove_dir_all(e.path()).await;
                             }
                         }
                     }

@@ -58,6 +58,15 @@ pub const MASTER_PLAYLIST: &str = "master.m3u8";
 /// remuxed last month and never opened again.
 const LAST_PLAYED_SENTINEL: &str = ".last_played";
 
+/// Entries played within this window are never evicted, no matter the
+/// size pressure. Active playback refreshes the sentinel via the
+/// progress heartbeat (every few seconds), so anything warmer than this
+/// has a viewer behind it; deleting it would 404 their next fragment
+/// and force the player into a stop/restart. Exceeding the byte cap for
+/// a while is the lesser evil — the disk GC reclaims torrent bytes
+/// independently and the cap pass runs again 15 min later.
+const EVICT_PROTECT_WINDOW: Duration = Duration::from_secs(15 * 60);
+
 /// Last "logical play time" for a cache dir. Prefers the sentinel
 /// (touched on every `master.m3u8` hit); falls back to the dir's own
 /// mtime so older caches predating this feature still sort sensibly.
@@ -468,9 +477,13 @@ impl RemuxManager {
     }
 
     /// Evict cache entries (oldest last-played first) until total size
-    /// ≤ cap. In-flight jobs are skipped. Returns `(count, bytes_freed)`.
+    /// ≤ cap. In-flight jobs and entries inside [`EVICT_PROTECT_WINDOW`]
+    /// are skipped — both have someone actively behind them, so the cap
+    /// may be overshot rather than break a live stream. Returns
+    /// `(count, bytes_freed)`.
     pub async fn evict_to(&self, max_total_bytes: u64) -> (usize, u64) {
         let active: HashSet<String> = self.inner.jobs.lock().await.keys().cloned().collect();
+        let now = SystemTime::now();
         let mut entries: Vec<(PathBuf, u64, SystemTime, String)> = Vec::new();
         let Ok(mut rd) = tokio::fs::read_dir(&self.inner.base_dir).await else {
             return (0, 0);
@@ -488,8 +501,13 @@ impl RemuxManager {
             if active.contains(&name) {
                 continue;
             }
-            let size = dir_size(&entry.path()).await.unwrap_or(0);
             let mtime = cache_last_played(&entry.path(), &meta).await;
+            // Future mtimes (clock skew) collapse to ZERO age → protected.
+            let age = now.duration_since(mtime).unwrap_or(Duration::ZERO);
+            if age < EVICT_PROTECT_WINDOW {
+                continue;
+            }
+            let size = dir_size(&entry.path()).await.unwrap_or(0);
             entries.push((entry.path(), size, mtime, name));
         }
         let total: u64 = entries.iter().map(|(_, sz, _, _)| sz).sum();
@@ -1074,3 +1092,49 @@ async fn drain_stderr_to_log(stderr: tokio::process::ChildStderr, log_path: Path
 // Suppress dead-code warnings on Child while we don't surface a kill API.
 #[allow(dead_code)]
 fn _silence_child_unused(_: &Child) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a cache entry dir with a payload file and a `.last_played`
+    /// sentinel whose mtime is `age` in the past.
+    fn make_entry(base: &Path, name: &str, age: Duration) {
+        let dir = base.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("v.m4s"), vec![0u8; 1024]).unwrap();
+        let sentinel = dir.join(LAST_PLAYED_SENTINEL);
+        std::fs::write(&sentinel, b"0").unwrap();
+        let f = std::fs::OpenOptions::new().write(true).open(&sentinel).unwrap();
+        f.set_modified(SystemTime::now() - age).unwrap();
+    }
+
+    #[tokio::test]
+    async fn evict_to_spares_recently_played_entries() {
+        let base = std::env::temp_dir().join(format!(
+            "iris-remux-evict-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // "cold" was last played two hours ago, "warm" is heartbeat-fresh.
+        make_entry(&base, "cold_0", Duration::from_secs(2 * 60 * 60));
+        make_entry(&base, "warm_0", Duration::from_secs(5));
+
+        let mgr = RemuxManager::new(base.clone());
+        // Cap 0 demands everything goes — only the cold entry may.
+        let (count, freed) = mgr.evict_to(0).await;
+        assert_eq!(count, 1);
+        assert!(freed >= 1024);
+        assert!(!base.join("cold_0").exists());
+        assert!(base.join("warm_0").exists());
+
+        // A second pass under the same pressure still spares the warm one.
+        let (count, _) = mgr.evict_to(0).await;
+        assert_eq!(count, 0);
+        assert!(base.join("warm_0").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
