@@ -1489,37 +1489,38 @@ export const mountTierB: EngineMount = async (opts) => {
   // Input factory rather than a one-shot construction: the frozen-feed
   // watchdog (see `onWaiting`) rebuilds the Input to get fresh HTTP
   // connections when the live UrlSource is stuck on a half-dead read.
-  const makeInput = (): Input => new Input({
-    source: new UrlSource(streamUrl, {
-      // Treat a 5xx as a transient, retryable failure instead of a fatal
-      // pipeline error. When the user redeploys, in-flight /stream range
-      // requests come back 500/502/503/504. `fetch()` does NOT reject on
-      // a bad status, so Mediabunny's default retry (which only fires on
-      // a rejected `fetch()`) never kicks in — it throws immediately and
-      // the player demotes to Tier F. That's useless (the server is down
-      // for F too) and sticky (we stay on the worse tier after recovery).
-      // Throwing on 5xx converts it into a rejection that `getRetryDelay`
-      // then retries until the backend comes back: playback just pauses
-      // (buffer drains, `waiting` fires) and resumes on its own.
-      fetchFn: async (input, init) => {
-        const res = await fetch(input, init);
-        if (res.status >= 500) {
-          throw new Error(`iris-stream-transient-5xx ${res.status}`);
-        }
-        return res;
-      },
-      // Capped exponential backoff (~0.5,1,2,4,8,8,… s) covering a typical
-      // deploy/restart window, then give up so a genuinely broken stream
-      // still surfaces (and the WatchPage backstop probe can react). The
-      // default never gives up; we bound it to ~12 attempts (~70s).
-      getRetryDelay: (attempts) => (attempts >= 12 ? null : Math.min(8, 0.5 * 2 ** attempts)),
-      // Cap the source read-ahead cache (default 64 MiB). Stacked on the
-      // SourceBuffer budget this was the bulk of the ~160 MB resident that
-      // tanked memory; a local seedbox makes a small cache cheap.
-      maxCacheSize: SOURCE_CACHE_BYTES,
-    }),
-    formats: ALL_FORMATS,
-  });
+  const makeInput = (): Input =>
+    new Input({
+      source: new UrlSource(streamUrl, {
+        // Treat a 5xx as a transient, retryable failure instead of a fatal
+        // pipeline error. When the user redeploys, in-flight /stream range
+        // requests come back 500/502/503/504. `fetch()` does NOT reject on
+        // a bad status, so Mediabunny's default retry (which only fires on
+        // a rejected `fetch()`) never kicks in — it throws immediately and
+        // the player demotes to Tier F. That's useless (the server is down
+        // for F too) and sticky (we stay on the worse tier after recovery).
+        // Throwing on 5xx converts it into a rejection that `getRetryDelay`
+        // then retries until the backend comes back: playback just pauses
+        // (buffer drains, `waiting` fires) and resumes on its own.
+        fetchFn: async (input, init) => {
+          const res = await fetch(input, init);
+          if (res.status >= 500) {
+            throw new Error(`iris-stream-transient-5xx ${res.status}`);
+          }
+          return res;
+        },
+        // Capped exponential backoff (~0.5,1,2,4,8,8,… s) covering a typical
+        // deploy/restart window, then give up so a genuinely broken stream
+        // still surfaces (and the WatchPage backstop probe can react). The
+        // default never gives up; we bound it to ~12 attempts (~70s).
+        getRetryDelay: (attempts) => (attempts >= 12 ? null : Math.min(8, 0.5 * 2 ** attempts)),
+        // Cap the source read-ahead cache (default 64 MiB). Stacked on the
+        // SourceBuffer budget this was the bulk of the ~160 MB resident that
+        // tanked memory; a local seedbox makes a small cache cheap.
+        maxCacheSize: SOURCE_CACHE_BYTES,
+      }),
+      formats: ALL_FORMATS,
+    });
   input = makeInput();
   try {
     // Initial mount always goes through the manual pipeline. It:

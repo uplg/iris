@@ -1008,10 +1008,7 @@ function FileEntry({
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
         <Button asChild size="sm">
-          <Link
-            to="/watch/$infohash/$idx"
-            params={{ infohash, idx: String(file.index) }}
-          >
+          <Link to="/watch/$infohash/$idx" params={{ infohash, idx: String(file.index) }}>
             <Play className="size-3.5" />
             {watchedPct != null && watchedPct > 0 && !watch?.completed ? "Resume" : "Play"}
           </Link>

@@ -653,8 +653,7 @@ export const me = {
    *  / devices). */
   playbackPreferences: () => api.get<PlaybackPrefs>("/me/playback-preferences"),
   /** Save preferred audio + subtitle language. Send the full current state. */
-  savePlaybackPreferences: (body: PlaybackPrefs) =>
-    api.put<void>("/me/playback-preferences", body),
+  savePlaybackPreferences: (body: PlaybackPrefs) => api.put<void>("/me/playback-preferences", body),
 };
 
 export type FilePreview = {

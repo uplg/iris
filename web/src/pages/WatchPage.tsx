@@ -816,7 +816,8 @@ export function WatchPage() {
                     const lang =
                       streamIdx == null
                         ? "off"
-                        : (manifest.subtitles.find((s) => s.stream_idx === streamIdx)?.lang ?? null);
+                        : (manifest.subtitles.find((s) => s.stream_idx === streamIdx)?.lang ??
+                          null);
                     if (lang) {
                       const next = { ...playbackPrefsRef.current, subtitle_language: lang };
                       playbackPrefsRef.current = next;

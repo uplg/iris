@@ -179,7 +179,9 @@ export function NowWatching() {
         </CardHeader>
         <CardContent className="grid max-h-[26rem] gap-0.5 overflow-y-auto">
           {history.data && history.data.length > 0 ? (
-            history.data.map((h) => <HistoryRow key={`${h.user_id}:${h.infohash}:${h.file_idx}`} h={h} />)
+            history.data.map((h) => (
+              <HistoryRow key={`${h.user_id}:${h.infohash}:${h.file_idx}`} h={h} />
+            ))
           ) : (
             <p className="text-sm text-muted-foreground">
               {history.isLoading ? "Loading…" : "No playback recorded yet."}
