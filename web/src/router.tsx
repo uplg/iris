@@ -2,6 +2,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   Outlet,
   redirect,
 } from "@tanstack/react-router";
@@ -9,16 +10,14 @@ import { AppShell } from "@/components/AppShell";
 import { ClientOutdatedOverlay } from "@/components/ClientOutdatedOverlay";
 import { RequireAuth } from "@/components/RequireAuth";
 import { UpdateBanner } from "@/components/UpdateBanner";
-import { AccountPage } from "@/pages/AccountPage";
-import { AdminPage } from "@/pages/AdminPage";
-import { CollectionPage } from "@/pages/CollectionPage";
-import { ForYouPage } from "@/pages/ForYouPage";
-import { HomePage } from "@/pages/HomePage";
-import { LibraryPage } from "@/pages/LibraryPage";
-import { LoginPage } from "@/pages/LoginPage";
-import { RegisterPage } from "@/pages/RegisterPage";
-import { SearchPage } from "@/pages/SearchPage";
-import { WatchPage } from "@/pages/WatchPage";
+
+// Page components are code-split: each `import()` below is a literal
+// specifier (Vite needs that to emit a separate chunk), so a page's code —
+// incl. the heavy player graph behind /watch — only loads on navigation,
+// and is prefetched on link hover/focus via `defaultPreload`. The layout
+// components (RequireAuth, AppShell) stay eager: they render the shell
+// immediately. `lazyRouteComponent`'s 2nd arg is the named export (pages
+// export `export function XPage`, not default).
 
 /** Search-param contracts. `validateSearch` is the only sanctioned entry
  *  point for query state, so these shapes are what `useSearch()` returns
@@ -46,6 +45,16 @@ function AdminGuard() {
   return <RequireAuth adminOnly />;
 }
 
+/** Shown while a lazily-loaded route chunk is in flight. `defaultPendingMs`
+ *  (1s) gates it, so a fast chunk fetch never flickers a spinner. */
+function RoutePending() {
+  return (
+    <div className="flex min-h-[50svh] items-center justify-center text-muted-foreground">
+      loading…
+    </div>
+  );
+}
+
 const rootRoute = createRootRoute({ component: RootLayout });
 
 const loginRoute = createRoute({
@@ -57,7 +66,7 @@ const loginRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { redirect?: string } => ({
     redirect: str(search.redirect),
   }),
-  component: LoginPage,
+  component: lazyRouteComponent(() => import("@/pages/LoginPage"), "LoginPage"),
 });
 
 const registerRoute = createRoute({
@@ -67,7 +76,7 @@ const registerRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { token?: string } => ({
     token: str(search.token),
   }),
-  component: RegisterPage,
+  component: lazyRouteComponent(() => import("@/pages/RegisterPage"), "RegisterPage"),
 });
 
 // Pathless layout: gate every authed route behind the session check.
@@ -87,13 +96,13 @@ const shellRoute = createRoute({
 const indexRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/",
-  component: HomePage,
+  component: lazyRouteComponent(() => import("@/pages/HomePage"), "HomePage"),
 });
 
 const forYouRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/for-you",
-  component: ForYouPage,
+  component: lazyRouteComponent(() => import("@/pages/ForYouPage"), "ForYouPage"),
 });
 
 const searchRoute = createRoute({
@@ -102,7 +111,7 @@ const searchRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { q?: string } => ({
     q: str(search.q),
   }),
-  component: SearchPage,
+  component: lazyRouteComponent(() => import("@/pages/SearchPage"), "SearchPage"),
 });
 
 // Legacy `/series/:followId` → `/collection/:id` redirect. The C1 façade
@@ -123,7 +132,7 @@ const seriesAliasRoute = createRoute({
 const collectionRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/collection/$id",
-  component: CollectionPage,
+  component: lazyRouteComponent(() => import("@/pages/CollectionPage"), "CollectionPage"),
 });
 
 const libraryRoute = createRoute({
@@ -141,13 +150,13 @@ const libraryRoute = createRoute({
         ? search.sort
         : undefined,
   }),
-  component: LibraryPage,
+  component: lazyRouteComponent(() => import("@/pages/LibraryPage"), "LibraryPage"),
 });
 
 const watchRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/watch/$infohash/$idx",
-  component: WatchPage,
+  component: lazyRouteComponent(() => import("@/pages/WatchPage"), "WatchPage"),
 });
 
 const accountRoute = createRoute({
@@ -157,7 +166,7 @@ const accountRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { pair?: string } => ({
     pair: str(search.pair),
   }),
-  component: AccountPage,
+  component: lazyRouteComponent(() => import("@/pages/AccountPage"), "AccountPage"),
 });
 
 const adminGuardRoute = createRoute({
@@ -169,7 +178,7 @@ const adminGuardRoute = createRoute({
 const adminRoute = createRoute({
   getParentRoute: () => adminGuardRoute,
   path: "/admin",
-  component: AdminPage,
+  component: lazyRouteComponent(() => import("@/pages/AdminPage"), "AdminPage"),
 });
 
 const routeTree = rootRoute.addChildren([
@@ -192,8 +201,10 @@ const routeTree = rootRoute.addChildren([
 
 export const router = createRouter({
   routeTree,
-  // Prefetch a route's code/data on link hover/focus — cheap SPA win.
+  // Prefetch a route's code/data on link hover/focus — cheap SPA win, and it
+  // covers the code-split chunks so navigations feel instant after intent.
   defaultPreload: "intent",
+  defaultPendingComponent: RoutePending,
 });
 
 declare module "@tanstack/react-router" {

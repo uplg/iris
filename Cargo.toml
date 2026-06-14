@@ -86,23 +86,14 @@ hex = "0.4.3"
 once_cell = "1.21.4"
 
 # Torrent / media
-# Pinned to 9.0.0-beta.2 + our minimal UA patch (see [patch.crates-io]
-# below). User explicitly opted in to the beta via the `client_name_and
-# _version` field — needed because UNIT3D-Announce trackers (e.g.
-# theoldschool.cc) reject HTTP announces with absent/long User-Agents,
-# and 8.x has no public knob to set one. Upstream tracking issue:
-# https://github.com/ikatson/rqbit/issues/473 + PR
-# https://github.com/ikatson/rqbit/pull/577. Drop the patch + bump to a
-# stable 9.x release once ikatson ships one with the option.
-librqbit = "=9.0.0-beta.2"
-
-# PR 577 (`SessionOptions::client_name_and_version`) was merged into
-# ikatson:main but no `crates.io` release ships it yet (latest is
-# 8.1.1, latest tag is `v9.0.0-beta.2` cut BEFORE the merge). Point at
-# the merge commit directly until a new beta/stable is published, then
-# bump and delete this block entirely.
-[patch.crates-io]
-librqbit = { git = "https://github.com/ikatson/rqbit.git", rev = "af966eba108f822395f65efea32bc9ec14cb8a21" }
+# librqbit 9.x pre-release — pinned to the published `9.0.0-rc.0` (release
+# candidate, opted in deliberately; the user runs the 9.x line). It ships
+# `client_name_and_version()` + `SessionOptions::client_name_and_version`
+# (PR 577) — needed because UNIT3D-Announce trackers (e.g. theoldschool.cc)
+# reject HTTP announces with absent/long User-Agents, and 8.x had no public
+# knob. The git patch is gone now that the option is in a published crate;
+# bump to the stable 9.0.0 once ikatson ships it.
+librqbit = "=9.0.0-rc.0"
 
 [profile.release]
 lto = "thin"

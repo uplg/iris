@@ -302,7 +302,44 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         listener,
         axum::ServiceExt::<axum::extract::Request>::into_make_service(service),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await
     .context("axum serve")?;
+
+    // The server has stopped accepting connections and drained the in-flight
+    // ones (progress saves, ingest, …). Close the DB pool explicitly so
+    // SQLite connections flush + return cleanly instead of being torn down by
+    // process exit. librqbit has no public stop hook, but returning cleanly
+    // here (rather than being SIGKILLed mid-operation) lets the runtime drop
+    // its session in order, keeping its periodically-persisted state coherent.
+    tracing::info!("http drained; closing database pool");
+    pool.close().await;
+    tracing::info!("shutdown complete");
     Ok(())
+}
+
+/// Resolves on SIGTERM (what `docker stop` / compose-down / systemd / k8s
+/// send) or SIGINT (Ctrl-C). Fed to `axum::serve(..).with_graceful_shutdown`
+/// so in-flight requests finish instead of being cut off by a hard kill.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        // A failure to install the handler is a fatal startup-class error;
+        // panicking is fine (the alternative — resolving immediately — would
+        // trigger a spurious shutdown).
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => tracing::info!("SIGINT received — shutting down gracefully"),
+        () = terminate => tracing::info!("SIGTERM received — shutting down gracefully"),
+    }
 }

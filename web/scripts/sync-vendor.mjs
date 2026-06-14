@@ -105,7 +105,9 @@ for (const { pkg, expectMajor, files } of VENDOR) {
     const src = join(NODE_MODULES, pkg, srcRel);
     const dest = join(PUBLIC, destRel);
     if (!existsSync(src)) {
-      problems.push(`${pkg}: source \`${srcRel}\` missing — its dist layout changed in ${version}.`);
+      problems.push(
+        `${pkg}: source \`${srcRel}\` missing — its dist layout changed in ${version}.`,
+      );
       continue;
     }
     if (checkOnly) {
