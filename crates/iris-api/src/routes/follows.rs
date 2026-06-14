@@ -29,6 +29,7 @@ use axum::routing::{delete, get, post};
 use chrono::{DateTime, Utc};
 use iris_media::filename::{Language, detect_language, series_key};
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -48,8 +49,8 @@ pub fn router() -> Router<AppState> {
 // POST /api/me/follows
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
-struct CreateFollowRequest {
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct CreateFollowRequest {
     /// The display name from whatever surface the user clicked
     /// (Discovery / Search / `CollectionPage`). Server normalises it
     /// for identity; the original is kept for indexer queries and
@@ -60,7 +61,18 @@ struct CreateFollowRequest {
     tmdb_id: Option<i64>,
 }
 
-async fn create(
+#[utoipa::path(
+    post,
+    path = "/api/me/follows",
+    operation_id = "create_follow",
+    request_body = CreateFollowRequest,
+    responses(
+        (status = 200, description = "Created (or existing) follow summary", body = FollowSummary),
+        (status = 400, description = "Empty / non-normalisable name"),
+    ),
+    tag = "follows",
+)]
+pub(crate) async fn create(
     State(state): State<AppState>,
     user: AuthUser,
     Json(body): Json<CreateFollowRequest>,
@@ -142,7 +154,14 @@ async fn create(
 // The new web client calls `/api/me/watchlist` (same data, cleaner
 // shape) and skips this façade entirely.
 
-async fn list(
+#[utoipa::path(
+    get,
+    path = "/api/me/follows",
+    operation_id = "list_follows",
+    responses((status = 200, description = "The caller's followed series", body = [FollowSummary])),
+    tag = "follows",
+)]
+pub(crate) async fn list(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<Vec<FollowSummary>>> {
@@ -154,8 +173,8 @@ async fn list(
     Ok(Json(out))
 }
 
-#[derive(Debug, Serialize)]
-struct FollowSummary {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct FollowSummary {
     id: Uuid,
     /// SCENE-normalised name — clients route by this, not `tmdb_id`.
     normalized_name: String,
@@ -232,7 +251,18 @@ async fn trusted_tmdb_id(pool: &iris_db::SqlitePool, normalized_name: &str) -> O
 // DELETE /api/me/follows/:id
 // ---------------------------------------------------------------------------
 
-async fn remove(
+#[utoipa::path(
+    delete,
+    path = "/api/me/follows/{id}",
+    operation_id = "remove_follow",
+    params(("id" = Uuid, Path)),
+    responses(
+        (status = 204, description = "Unfollowed"),
+        (status = 404, description = "No such follow for this user"),
+    ),
+    tag = "follows",
+)]
+pub(crate) async fn remove(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,
@@ -255,15 +285,27 @@ async fn remove(
 //   * available_episodes (indexer cache) — keyed on normalized_name
 // Visiting bumps last_visited_at to clear the "X nouveaux" badge.
 
-#[derive(Debug, Deserialize, Default)]
-struct EpisodesQuery {
+#[derive(Debug, Deserialize, Default, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct EpisodesQuery {
     /// Optional season filter — when set, only that season's rows
     /// are returned. Otherwise everything we know about ships in
     /// one response (covers the grouped Series page render).
     season: Option<u32>,
 }
 
-async fn episodes(
+#[utoipa::path(
+    get,
+    path = "/api/me/follows/{id}/episodes",
+    operation_id = "list_follow_episodes",
+    params(("id" = Uuid, Path), EpisodesQuery),
+    responses(
+        (status = 200, description = "Merged on-disk + indexer-available episodes", body = EpisodesResponse),
+        (status = 404, description = "Unknown follow / collection id"),
+    ),
+    tag = "follows",
+)]
+pub(crate) async fn episodes(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,
@@ -359,16 +401,16 @@ async fn episodes(
     }))
 }
 
-#[derive(Debug, Serialize)]
-struct EpisodesResponse {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct EpisodesResponse {
     /// Echoes the request filter — `null` when the caller asked for
     /// the full set.
     season: Option<u32>,
     items: Vec<EpisodeItem>,
 }
 
-#[derive(Debug, Serialize)]
-struct EpisodeItem {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct EpisodeItem {
     season: i64,
     episode: i64,
     status: EpisodeStatus,
@@ -381,9 +423,9 @@ struct EpisodeItem {
     seeders: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
-enum EpisodeStatus {
+pub(crate) enum EpisodeStatus {
     Downloaded,
     Available,
 }
@@ -396,14 +438,15 @@ enum EpisodeStatus {
 // follow id (if any) plus the `(season, episode + 1)` if we know
 // it from `available_episodes` or already have it on disk.
 
-#[derive(Debug, Deserialize)]
-struct EpisodeContextParams {
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct EpisodeContextParams {
     infohash: String,
     file_idx: i64,
 }
 
-#[derive(Debug, Serialize)]
-struct EpisodeContext {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct EpisodeContext {
     followed: bool,
     current: Option<EpisodePoint>,
     next: Option<EpisodePoint>,
@@ -414,8 +457,8 @@ struct EpisodeContext {
     prev: Option<EpisodePoint>,
 }
 
-#[derive(Debug, Serialize)]
-struct EpisodePoint {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct EpisodePoint {
     follow_id: Option<Uuid>,
     season: i64,
     episode: i64,
@@ -430,7 +473,15 @@ struct EpisodePoint {
     file_idx: Option<i64>,
 }
 
-async fn episode_context(
+#[utoipa::path(
+    get,
+    path = "/api/me/follows/episode-context",
+    operation_id = "follow_episode_context",
+    params(EpisodeContextParams),
+    responses((status = 200, description = "Prev / current / next episode chain for the player", body = EpisodeContext)),
+    tag = "follows",
+)]
+pub(crate) async fn episode_context(
     State(state): State<AppState>,
     user: AuthUser,
     Query(p): Query<EpisodeContextParams>,
@@ -621,14 +672,25 @@ async fn same_torrent_next(
 // already on disk we short-circuit through the existing
 // `episode_files` row.
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct GrabResponse {
     pub infohash: String,
     pub file_idx: i64,
     pub already_grabbed: bool,
 }
 
-async fn grab_episode(
+#[utoipa::path(
+    post,
+    path = "/api/me/follows/{id}/episodes/{season}/{episode}/grab",
+    operation_id = "grab_follow_episode",
+    params(("id" = Uuid, Path), ("season" = i64, Path), ("episode" = i64, Path)),
+    responses(
+        (status = 200, description = "Grabbed (or already-owned) episode", body = GrabResponse),
+        (status = 404, description = "Unknown follow / no resolvable release"),
+    ),
+    tag = "follows",
+)]
+pub(crate) async fn grab_episode(
     State(state): State<AppState>,
     user: AuthUser,
     Path((id, season, episode)): Path<(Uuid, i64, i64)>,

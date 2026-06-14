@@ -328,9 +328,9 @@ function mergeEpisodes(
       language: a.language ?? null,
       indexer_provider: a.indexer_provider,
       indexer_torrent_id: a.indexer_torrent_id,
-      quality: a.quality,
-      seeders: a.seeders,
-      size_bytes: a.size_bytes,
+      quality: a.quality ?? null,
+      seeders: a.seeders ?? null,
+      size_bytes: a.size_bytes ?? null,
     });
   }
   // Stable variant order per row: downloaded first (so the Play
@@ -395,9 +395,9 @@ function mergeEpisodesAbsolute(
       language: a.language ?? null,
       indexer_provider: a.indexer_provider,
       indexer_torrent_id: a.indexer_torrent_id,
-      quality: a.quality,
-      seeders: a.seeders,
-      size_bytes: a.size_bytes,
+      quality: a.quality ?? null,
+      seeders: a.seeders ?? null,
+      size_bytes: a.size_bytes ?? null,
     });
   }
   for (const row of byKey.values()) {

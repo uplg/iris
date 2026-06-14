@@ -1,0 +1,6607 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Iris API",
+    "description": "Self-hosted media aggregator + streamer — internal household API.",
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.8.0"
+  },
+  "paths": {
+    "/api/admin/active-sessions": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_active_sessions",
+        "responses": {
+          "200": {
+            "description": "Live 'who's watching what' presence rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActiveSessionView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          }
+        }
+      }
+    },
+    "/api/admin/gc": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "trigger_gc",
+        "responses": {
+          "200": {
+            "description": "Garbage-collection report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          },
+          "500": {
+            "description": "GC run failed"
+          }
+        }
+      }
+    },
+    "/api/admin/invitations": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_invitations",
+        "responses": {
+          "200": {
+            "description": "All invitation tokens (hashes never returned)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InvitationView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "create_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created invitation with its one-time plaintext token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedInvitation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TTL too short (min 60s)"
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          }
+        }
+      }
+    },
+    "/api/admin/invitations/{id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "revoke_invitation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Invitation revoked"
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          },
+          "404": {
+            "description": "No such invitation"
+          }
+        }
+      }
+    },
+    "/api/admin/remux": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_remux_jobs",
+        "responses": {
+          "200": {
+            "description": "Remuxer cache inventory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RemuxJobView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          }
+        }
+      }
+    },
+    "/api/admin/remux/{key}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "wipe_remux_job",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cache file removed; bytes freed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WipeRemuxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid remux job key"
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          },
+          "500": {
+            "description": "Remux wipe failed"
+          }
+        }
+      }
+    },
+    "/api/admin/storage": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "get_storage_stats",
+        "responses": {
+          "200": {
+            "description": "Disk usage / cleanup thresholds / seed totals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageStats"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          }
+        }
+      }
+    },
+    "/api/admin/tmdb/diagnose/{infohash}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "diagnose_tmdb",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full TMDB-resolution dump for one torrent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TmdbDiagnose"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          },
+          "404": {
+            "description": "No such torrent"
+          }
+        }
+      }
+    },
+    "/api/admin/users": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_users",
+        "responses": {
+          "200": {
+            "description": "All registered users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          }
+        }
+      }
+    },
+    "/api/admin/users/{id}/password": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "reset_user_password",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password reset; all refresh tokens revoked"
+          },
+          "400": {
+            "description": "New password too short (min 8 chars)"
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          },
+          "404": {
+            "description": "No such user"
+          }
+        }
+      }
+    },
+    "/api/admin/watch-history": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_watch_history",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows to return (clamped 1..=200, defaults to 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent playback across all users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WatchHistoryView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          }
+        }
+      }
+    },
+    "/api/auth/device/code": {
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "operationId": "create_code",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Pairing code + opaque device id to poll",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateCodeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/device/poll/{device_id}": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Poll a device-pairing code's status. `pending` until the user links it\nfrom the web UI, then `linked` with the user payload (and the session\ncookies are set), or `expired`.",
+        "operationId": "poll",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "description": "Opaque id returned by POST /auth/device/code",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current pairing status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PollResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown device id"
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in; session cookies set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad credentials"
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "description": "Session revoked; cookies cleared"
+          }
+        }
+      }
+    },
+    "/api/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "refresh",
+        "responses": {
+          "200": {
+            "description": "Session rotated; new cookies set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing / expired / revoked refresh token"
+          }
+        }
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Account created; session cookies set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Weak password / invalid email"
+          },
+          "409": {
+            "description": "Email already registered or invitation already used"
+          }
+        }
+      }
+    },
+    "/api/discover/featured": {
+      "get": {
+        "tags": [
+          "discover"
+        ],
+        "operationId": "get_featured",
+        "responses": {
+          "200": {
+            "description": "Featured movie + series carousels aggregated across providers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/genres": {
+      "get": {
+        "tags": [
+          "preferences"
+        ],
+        "summary": "Merged movie + TV genre taxonomy, deduped by id and sorted by name.\nAnime is deliberately NOT in this list: it is a distinct category —\nNOT TMDB's \"Animation\" genre (id 16) — backed by its own `AniList`\npipeline and driven by the separate `include_anime` preference, never\na TMDB genre id. Clients surface it as its own selectable chip.\nReturns an empty list when TMDB is unconfigured rather than failing\nthe onboarding flow.",
+        "operationId": "list_genres",
+        "responses": {
+          "200": {
+            "description": "Merged movie + TV genre taxonomy (empty when TMDB unconfigured)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenresResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "healthcheck",
+        "responses": {
+          "200": {
+            "description": "Liveness probe — `{ \"status\": \"ok\" }` whenever reachable"
+          }
+        }
+      }
+    },
+    "/api/languages": {
+      "get": {
+        "tags": [
+          "preferences"
+        ],
+        "summary": "The user-selectable language vocabulary (value + display label).\nServed so clients render the onboarding language chips from the server\ninstead of a hardcoded list — adding a language never requires a\nclient redeploy. Sourced from the same `LANGUAGE_OPTIONS` the PUT\nhandler validates against, so the list and the validation can't drift.",
+        "operationId": "list_languages",
+        "responses": {
+          "200": {
+            "description": "User-selectable language vocabulary (value + label)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LanguagesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/library": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "operationId": "list_library",
+        "parameters": [
+          {
+            "name": "view",
+            "in": "query",
+            "description": "`\"collections\"` (default) or `\"torrents\"`. Anything else is\ntreated as the default — easier than rejecting weird values.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collections (default) or raw torrents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/library/collections/{id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "operationId": "collection_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection detail with episodes + offers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown collection"
+          }
+        }
+      }
+    },
+    "/api/library/collections/{id}/grab/{season}/{episode}": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "operationId": "grab_collection_episode",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "season",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "episode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Grabbed (or already-owned) episode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrabResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a TV collection / no SCENE identity"
+          },
+          "404": {
+            "description": "Unknown collection"
+          }
+        }
+      }
+    },
+    "/api/me": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "get_me",
+        "responses": {
+          "200": {
+            "description": "The authenticated user's profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        }
+      }
+    },
+    "/api/me/continue-watching": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "continue_watching",
+        "responses": {
+          "200": {
+            "description": "Recently-watched, not-yet-finished items for resume",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContinueWatchingItem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        }
+      }
+    },
+    "/api/me/devices": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "operationId": "list_devices",
+        "responses": {
+          "200": {
+            "description": "The caller's linked devices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceView"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "operationId": "link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Code linked to the caller's account"
+          },
+          "400": {
+            "description": "Invalid or expired code"
+          },
+          "409": {
+            "description": "Code already claimed"
+          }
+        }
+      }
+    },
+    "/api/me/devices/{jti}": {
+      "delete": {
+        "tags": [
+          "devices"
+        ],
+        "operationId": "revoke",
+        "parameters": [
+          {
+            "name": "jti",
+            "in": "path",
+            "description": "Refresh-token id of the device to revoke",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Device revoked"
+          },
+          "404": {
+            "description": "No such device for this user"
+          }
+        }
+      }
+    },
+    "/api/me/display-name": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "change_display_name",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeDisplayNameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Display name updated"
+          },
+          "400": {
+            "description": "Empty / too-long display name (max 64)"
+          }
+        }
+      }
+    },
+    "/api/me/follows": {
+      "get": {
+        "tags": [
+          "follows"
+        ],
+        "operationId": "list_follows",
+        "responses": {
+          "200": {
+            "description": "The caller's followed series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FollowSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "follows"
+        ],
+        "operationId": "create_follow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFollowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created (or existing) follow summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty / non-normalisable name"
+          }
+        }
+      }
+    },
+    "/api/me/follows/episode-context": {
+      "get": {
+        "tags": [
+          "follows"
+        ],
+        "operationId": "follow_episode_context",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file_idx",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prev / current / next episode chain for the player",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpisodeContext"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/follows/{id}": {
+      "delete": {
+        "tags": [
+          "follows"
+        ],
+        "operationId": "remove_follow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Unfollowed"
+          },
+          "404": {
+            "description": "No such follow for this user"
+          }
+        }
+      }
+    },
+    "/api/me/follows/{id}/episodes": {
+      "get": {
+        "tags": [
+          "follows"
+        ],
+        "operationId": "list_follow_episodes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "description": "Optional season filter — when set, only that season's rows\nare returned. Otherwise everything we know about ships in\none response (covers the grouped Series page render).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Merged on-disk + indexer-available episodes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpisodesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown follow / collection id"
+          }
+        }
+      }
+    },
+    "/api/me/follows/{id}/episodes/{season}/{episode}/grab": {
+      "post": {
+        "tags": [
+          "follows"
+        ],
+        "operationId": "grab_follow_episode",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "season",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "episode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Grabbed (or already-owned) episode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrabResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown follow / no resolvable release"
+          }
+        }
+      }
+    },
+    "/api/me/for-you": {
+      "get": {
+        "tags": [
+          "for-you"
+        ],
+        "operationId": "get_for_you",
+        "responses": {
+          "200": {
+            "description": "The home blended For You shelf",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForYou"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/for-you/dismiss": {
+      "post": {
+        "tags": [
+          "for-you"
+        ],
+        "operationId": "dismiss_for_you",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DismissRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Candidate hidden from future shelves"
+          }
+        }
+      }
+    },
+    "/api/me/for-you/page": {
+      "get": {
+        "tags": [
+          "for-you"
+        ],
+        "operationId": "get_for_you_page",
+        "responses": {
+          "200": {
+            "description": "The organized For You page (sectioned shelves)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForYou"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/password": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password changed; all other sessions revoked"
+          },
+          "400": {
+            "description": "New password too short (min 8 chars)"
+          },
+          "401": {
+            "description": "Old password mismatch / not authenticated"
+          }
+        }
+      }
+    },
+    "/api/me/playback-preferences": {
+      "get": {
+        "tags": [
+          "preferences"
+        ],
+        "operationId": "get_playback_preferences",
+        "responses": {
+          "200": {
+            "description": "The caller's preferred audio + subtitle languages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaybackPrefsResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "preferences"
+        ],
+        "operationId": "set_playback_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePlaybackPrefs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Preferences saved"
+          }
+        }
+      }
+    },
+    "/api/me/preferences": {
+      "get": {
+        "tags": [
+          "preferences"
+        ],
+        "operationId": "get_preferences",
+        "responses": {
+          "200": {
+            "description": "The caller's recommendation preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferencesResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "preferences"
+        ],
+        "operationId": "update_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePreferencesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved preferences (normalised)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferencesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown language in the request"
+          }
+        }
+      }
+    },
+    "/api/me/watchlist": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "list_watchlist",
+        "responses": {
+          "200": {
+            "description": "The caller's per-user Watchlist (TV collections)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WatchlistItem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        }
+      }
+    },
+    "/api/metadata/tmdb/resolve": {
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "summary": "Resolve a release name to its single best TMDB match, scored by\n**kind + year** (not raw popularity) and served from the persistent\n30-day resolve cache shared with the ingest/backfill pipeline.",
+        "description": "This is the poster-resolution path for search-result cards. It\nreplaces the old client-side `extractSceneTitle` + `/tmdb/search` +\n\"take popularity #1\" logic that was duplicated (and subtly fragile —\nshort titles like \"Pride\" collided with more-popular namesakes) in\nboth the web and TV clients. `/tmdb/search` stays a raw popularity\nproxy for the live typeahead dropdown, which legitimately wants the\nunfiltered suggestion list.",
+        "operationId": "resolve_tmdb",
+        "parameters": [
+          {
+            "name": "title",
+            "in": "query",
+            "description": "Raw SCENE release title, untouched\n(e.g. `Pride.2014.1080p.BluRay.x264-AMIABLE`). The backend parses\ntitle / year / kind out of it — clients send the release name\nverbatim so the cleaning + scoring logic lives in exactly one\nplace instead of being reimplemented per client.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Optional stronger kind hint from the search result's own\nclassification (`movie` | `tv`); overrides the kind parsed from\nthe release name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Best TMDB match for the release name (null when none / unconfigured)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TmdbSuggestion"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metadata/tmdb/search": {
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "summary": "Typeahead suggestions for the search page. Proxies TMDB's\n`/search/multi` so the API key stays server-side. Empty array on no\nresults, missing TMDB config, or upstream failure (typeahead is best-\neffort: never block typing on a flaky network).",
+        "operationId": "search_tmdb",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Typeahead suggestions (empty when TMDB unconfigured)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TmdbSuggestion"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metadata/tmdb/{id}": {
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "get_tmdb_metadata",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`\"movie\"` | `\"tv\"`. Without a kind, the lookup tries movie\nfirst then TV — but TMDB uses separate id namespaces, so a\nnumerical id can collide between a movie and an unrelated TV\nshow. Pass the kind whenever the caller knows it\n(collection.kind, search-result kind, etc.) to disambiguate.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TMDB metadata for the movie / show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaMetadata"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TMDB enrichment is not configured"
+          },
+          "404": {
+            "description": "No TMDB record for this id / kind"
+          }
+        }
+      }
+    },
+    "/api/providers": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "operationId": "list_providers",
+        "responses": {
+          "200": {
+            "description": "Registered search providers and their capabilities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/search": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "operationId": "search",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/SortField"
+                }
+              ]
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/SortOrder"
+                }
+              ]
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/MediaKind"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregated tracker results + library matches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/search/details": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Rich preview for a single torrent. Powers the search-result preview\ndialog. Provider-specific shape is normalised to a single\n`TorrentDetails` so web + TV consume one structure.",
+        "operationId": "details",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Provider id from the search hit (`provider_id` field).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "description": "Provider-specific opaque id from the search hit (`external_id`).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Normalised torrent detail view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TorrentDetails"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown provider"
+          },
+          "404": {
+            "description": "Provider exposes no detail page for this id"
+          }
+        }
+      }
+    },
+    "/api/torrents": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "list_torrents",
+        "responses": {
+          "200": {
+            "description": "All active torrents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TorrentView"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "ingest_torrent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Ingested or already-managed torrent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/torrents/preview": {
+      "post": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Parsed torrent metadata (no ingest)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TorrentPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown provider, magnet source, or parse error"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "get_one",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TorrentView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown infohash"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "remove_torrent",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Soft-deleted"
+          },
+          "404": {
+            "description": "Unknown infohash"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/manifest.json": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "manifest_json",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-file playback manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Manifest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid infohash or file not yet on disk"
+          },
+          "404": {
+            "description": "Unknown infohash / file index"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/play/status": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "play_status",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Remux-job readiness for the player loader",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown infohash / file index"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/play/{asset}": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "summary": "Serve any file from the per-source HLS-CMAF cache directory.",
+        "description": "On the master playlist request specifically (`asset == \"master.m3u8\"`)\nwe ensure the cache is built — probe the source, compute the rendition\nplan, and block on the remuxer until the master + first fragment of\nevery variant exist on disk. Subsequent asset requests (variant\nplaylists, init segments, `.m4s`) are pure static-file serving with\nbyte-range support; the player only asks for them after parsing the\nmaster, by which point everything has been observed by the watcher.",
+        "operationId": "play_asset",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "asset",
+            "in": "path",
+            "description": "`master.m3u8`, a variant playlist, an init segment, or an `.m4s` fragment",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HLS-CMAF asset; `master.m3u8` blocks until ffmpeg has built the head",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Partial content for an HTTP `Range` request on a segment"
+          },
+          "404": {
+            "description": "Unknown infohash / file / asset"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/playback-error": {
+      "post": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "playback_error",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaybackErrorBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Fallback tier + URL; server pre-warms the HLS remux",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaybackErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid infohash"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/probe": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "probe_file",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ffprobe stream summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaProbe"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown infohash / file index"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/progress": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "get_progress",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved playback position for this file (null if none)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgressView"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "put_progress",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgressUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Progress saved"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/seek": {
+      "post": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "seek_hint",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeekHint"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Hint accepted (prefetch scheduled)"
+          },
+          "400": {
+            "description": "Invalid infohash"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/stream": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "stream_file",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw source file bytes (used by Tier A/B direct playback + download)",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Partial content for an HTTP `Range` request"
+          },
+          "404": {
+            "description": "Unknown infohash / file index"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/sub/{stream_idx}/track.ass": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "subtitle_ass",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "stream_idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw ASS/SSA subtitle for the libass overlay path",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown infohash / file / stream index"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/sub/{stream_idx}/track.sup": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "subtitle_sup",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "stream_idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PGS bitmap subtitle stream for the libpgs overlay path",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown infohash / file / stream index"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/sub/{stream_idx}/track.vtt": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "subtitle_vtt",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "stream_idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "WebVTT track (text-based subs transcoded to VTT)",
+            "content": {
+              "text/vtt": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown infohash / file / stream index"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/progress": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "get_torrent_progress",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-file watch progress for the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FileProgressEntry"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActiveSessionView": {
+        "type": "object",
+        "description": "One live \"who's watching what\" row for `GET /admin/active-sessions`.",
+        "required": [
+          "user_id",
+          "display_name",
+          "infohash",
+          "file_idx",
+          "tmdb_verified",
+          "position_seconds",
+          "state",
+          "started_at",
+          "last_seen_at"
+        ],
+        "properties": {
+          "client": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"web\"` / `\"tv\"` when the client identified itself, else null."
+          },
+          "client_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Semver of that client (the `version` half of `X-Iris-Client`)."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "file_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On-disk path of the exact file being watched. For season packs this\nis the only way to tell WHICH episode — the torrent name is the whole\npack. `None` when the torrent snapshot isn't live (evicted)."
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MediaKind",
+                "description": "`\"movie\"` / `\"tv\"` collection hint for the TMDB poster lookup."
+              }
+            ]
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "position_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "state": {
+            "type": "string",
+            "description": "`\"playing\"` / `\"paused\"`."
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "COALESCE(collection, torrent) tmdb id — only trust it for posters\nwhen `tmdb_verified` (mirrors the watch shelves)."
+          },
+          "tmdb_verified": {
+            "type": "boolean"
+          },
+          "torrent_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "AggregatedResults": {
+        "type": "object",
+        "required": [
+          "results",
+          "providers"
+        ],
+        "properties": {
+          "parsed_query": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ParsedQueryInfo",
+                "description": "SCENE-parsed view of the user query when the raw `q` looked\nlike a SCENE-style request (e.g. `Classroom of the Elite S04E11`).\nFrontend uses this to render a \"Showing results for X · S04E11\"\nbanner; absent when the parser saw nothing useful."
+              }
+            ]
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderResultMeta"
+            }
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            }
+          }
+        }
+      },
+      "AudioInfo": {
+        "type": "object",
+        "properties": {
+          "bitrate_kbps": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "channels": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "codec": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commercial_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Atmos / Dolby commercial name when `MediaInfo` flagged it."
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AudioStream": {
+        "type": "object",
+        "required": [
+          "index",
+          "absolute_index",
+          "codec",
+          "channels",
+          "default",
+          "forced",
+          "browser_compatible"
+        ],
+        "properties": {
+          "absolute_index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "browser_compatible": {
+            "type": "boolean",
+            "description": "Whether this stream's codec is one most browsers can decode natively\n(AAC / Opus / Vorbis / MP3). Other codecs (DTS, AC-3, EAC-3, FLAC)\nare passed through untouched in the remuxed fMP4 — playback works\nwhere the OS/browser supports them, and stays silent otherwise."
+          },
+          "channel_layout": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channels": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "codec": {
+            "type": "string"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "forced": {
+            "type": "boolean"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sample_rate": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AudioTrack": {
+        "type": "object",
+        "required": [
+          "stream_idx",
+          "codec",
+          "channels",
+          "default",
+          "forced",
+          "browser_native"
+        ],
+        "properties": {
+          "bitrate": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "browser_native": {
+            "type": "boolean",
+            "description": "Whether the codec is one every modern browser decodes natively.\nRe-exposed from the probe's `browser_compatible` flag."
+          },
+          "channel_layout": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channels": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "codec": {
+            "type": "string"
+          },
+          "codec_string": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "forced": {
+            "type": "boolean"
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sample_rate": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "stream_idx": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AvailableEpisodeEntry": {
+        "type": "object",
+        "required": [
+          "season",
+          "episode",
+          "indexer_provider",
+          "indexer_torrent_id",
+          "found_at"
+        ],
+        "properties": {
+          "absolute_episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Absolute episode number for fleuve anime offers. `null` for\nseasonal releases. Additive — older clients ignore it."
+          },
+          "episode": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "found_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "indexer_provider": {
+            "type": "string"
+          },
+          "indexer_torrent_id": {
+            "type": "string"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"french\"` / `\"english\"` / `\"multi\"` / `\"unknown\"` —\nstable string form. Clients render an FR / EN / `MULTi`\nbadge per row so anglophone users can spot Seedpool\nreleases at a glance. `null` only on legacy DB rows from\nbefore migration 0017 (they read as \"unknown\" downstream)."
+          },
+          "quality": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "season": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "seeders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "ByteRange": {
+        "type": "object",
+        "description": "Inclusive byte range `[start, end]`, matching HTTP `Range:` semantics.",
+        "required": [
+          "start",
+          "end"
+        ],
+        "properties": {
+          "end": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "start": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "CatalogCard": {
+        "type": "object",
+        "description": "A catalogue candidate as rendered on a shelf. Shape kept close to the\nsearch / watchlist cards so the clients reuse the same card component.",
+        "required": [
+          "catalog_id",
+          "kind",
+          "title",
+          "is_anime",
+          "availability",
+          "already_in_library"
+        ],
+        "properties": {
+          "already_in_library": {
+            "type": "boolean"
+          },
+          "availability": {
+            "type": "string"
+          },
+          "backdrop_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fully-resolved backdrop URL (wider; for a hero / preview)."
+          },
+          "catalog_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "external_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_anime": {
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MediaKind"
+          },
+          "library_infohash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "overview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "poster_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fully-resolved poster URL. TMDB rows resolve their relative path to\nthe image CDN; AniList-only rows pass their cover URL straight\nthrough — so clients render it directly without knowing the source."
+          },
+          "provider_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The recorded release's provider + id — enough for the client to open\nthe same preview dialog as a search hit. `None` for lazy reco\ncandidates (no resolved release yet → the client falls back to search)."
+          },
+          "seeders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seeder count of the recorded release (rolling-window rows). `None` for\nlazy reco candidates and for torr9 RSS rows (re-checked at grab)."
+          },
+          "title": {
+            "type": "string"
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "ChangeDisplayNameRequest": {
+        "type": "object",
+        "required": [
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": [
+          "old_password",
+          "new_password"
+        ],
+        "properties": {
+          "new_password": {
+            "type": "string"
+          },
+          "old_password": {
+            "type": "string"
+          }
+        }
+      },
+      "Chapter": {
+        "type": "object",
+        "required": [
+          "start_s",
+          "end_s"
+        ],
+        "properties": {
+          "end_s": {
+            "type": "number",
+            "format": "double"
+          },
+          "start_s": {
+            "type": "number",
+            "format": "double"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CollectionDetail": {
+        "type": "object",
+        "required": [
+          "id",
+          "display_title",
+          "kind",
+          "torrents",
+          "episodes"
+        ],
+        "properties": {
+          "available_episodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AvailableEpisodeEntry"
+            },
+            "description": "Indexer-cached episode offers for this collection (TV only).\nAlready-in-library episodes are filtered out so this list is\n\"what the user could grab next\" — the page renders them as\ngrabbable rows alongside the on-disk ones. Empty for movies\nand for collections with no SCENE identity. Additive field —\npre-0.4 clients ignore it."
+          },
+          "backdrop_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_title": {
+            "type": "string"
+          },
+          "episodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EpisodeEntry"
+            },
+            "description": "Merged episode list across every torrent in the collection.\nEmpty for movie-kind collections (which usually have a single\ntorrent + a single video file)."
+          },
+          "has_new_since_last_visit": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Count of `available_episodes` whose `found_at >\nlast_visited_at`. Drives the home-page Watchlist \"X new\"\nbadge. Computed before `last_visited_at` is bumped to now.\n`0` for movies / no-SCENE collections.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_anime": {
+            "type": "boolean",
+            "description": "`true` for anime collections. Additive — older clients ignore it."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MediaKind"
+          },
+          "numbering": {
+            "type": "string",
+            "description": "How the client should lay out episodes: `\"seasonal\"` (the\ndefault — season tabs) or `\"absolute\"` (one flat ordered\n\"Episode N\" list, for fleuve anime whose releases cram the\nabsolute number into a fake `S01`). Derived from the episode set,\nNOT from `is_anime`: a season-cut anime stays `\"seasonal\"`.\nAdditive — older clients ignore it and keep season tabs."
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Server-resolved poster path (TMDB convention — pass through\n`tmdbImage(path, size)` client-side). `None` when no TMDB id\nis attached or the lookup fails. Looked up here (rather than\nfrom the client) so every collection-detail render gets a\nposter without an extra round-trip and a separate\n`/api/metadata/tmdb/:id` call."
+          },
+          "season_packs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeasonPackEntry"
+            },
+            "description": "Season-pack offers cached for this collection. The UI shows\nthese as a separate \"Grab full Season N\" CTA (not as\nper-episode rows). The grab path also consults these when a\nuser clicks a (S, E) that has no singleton offer — the pack\ngets ingested and the matching leaf is returned."
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "torrents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TorrentView"
+            },
+            "description": "All torrents attached to this collection."
+          }
+        }
+      },
+      "CollectionListItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "display_title",
+          "kind",
+          "torrent_count",
+          "total_size_bytes",
+          "episode_count"
+        ],
+        "properties": {
+          "display_title": {
+            "type": "string"
+          },
+          "episode_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Distinct (season, episode) pairs we have on disk. Drives the\n\"X / Y épisodes\" subtitle on the collection card."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_anime": {
+            "type": "boolean",
+            "description": "`true` for anime collections (drives AniList-sourced metadata and\nkeeps the anime / live-action split visible). Additive field —\nolder clients ignore it."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MediaKind"
+          },
+          "representative_infohash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fallback nav target for clients that lack the rich Series page\nrouting (or for collections without a `tmdb_id`). Always present\nwhen `torrent_count > 0`."
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "torrent_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of torrents currently attached. ≥ 1 — the listing already\nfilters out empty collections."
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ContinueWatchingItem": {
+        "type": "object",
+        "required": [
+          "infohash",
+          "torrent_name",
+          "tmdb_verified",
+          "file_idx",
+          "position_seconds",
+          "last_watched_at",
+          "completed"
+        ],
+        "properties": {
+          "completed": {
+            "type": "boolean"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "file_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MediaKind",
+                "description": "`\"movie\"` / `\"tv\"` from the parent collection. Clients pass\nthis to `/api/metadata/tmdb/{id}?kind=` — without it, TMDB's\nseparate id namespaces collide and the lookup serves a\nstranger's poster."
+              }
+            ]
+          },
+          "last_watched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "position_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "tmdb_verified": {
+            "type": "boolean"
+          },
+          "torrent_name": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateCodeRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateCodeResponse": {
+        "type": "object",
+        "required": [
+          "code",
+          "device_id",
+          "verification_url",
+          "expires_in"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "verification_url": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateFollowRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The display name from whatever surface the user clicked\n(Discovery / Search / `CollectionPage`). Server normalises it\nfor identity; the original is kept for indexer queries and\nUI display."
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional TMDB id — stored as decoration. Surfaces a poster\nonly after the corresponding collection gets `tmdb_verified`."
+          }
+        }
+      },
+      "CreateInvitationRequest": {
+        "type": "object",
+        "properties": {
+          "ttl_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "CreatedInvitation": {
+        "type": "object",
+        "required": [
+          "id",
+          "token",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "DescriptionFormat": {
+        "type": "string",
+        "description": "Rich detail view for a single torrent — the kind of payload a tracker's\ntorrent-detail page would normally show. Powers the search-result\npreview dialog. Optional everywhere because shapes vary wildly across\nindexers; the typed fields are the lowest common denominator we feel\ncomfortable surfacing in a unified UI.\nWhat `TorrentDetails::description` is encoded in — indexers don't\nagree on a format. The frontend dispatches the right renderer\n(`BBCode` parser, sanitised HTML, raw text) off this. Defaults to\n[`DescriptionFormat::Bbcode`] when absent so older provider payloads\n(torr9 was the only source originally) keep working unchanged.",
+        "enum": [
+          "bbcode",
+          "html",
+          "plain"
+        ]
+      },
+      "DeviceView": {
+        "type": "object",
+        "required": [
+          "jti",
+          "issued_at",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "jti": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DismissRequest": {
+        "type": "object",
+        "required": [
+          "catalog_id"
+        ],
+        "properties": {
+          "catalog_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "DownloadStatus": {
+        "type": "object",
+        "required": [
+          "progress",
+          "ranges_complete",
+          "bytes_complete"
+        ],
+        "properties": {
+          "bytes_complete": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "progress": {
+            "type": "number",
+            "format": "double"
+          },
+          "ranges_complete": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              }
+            },
+            "description": "Complete byte spans as `[start, end]` pairs (inclusive)."
+          }
+        }
+      },
+      "EpisodeContext": {
+        "type": "object",
+        "required": [
+          "followed"
+        ],
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EpisodePoint"
+              }
+            ]
+          },
+          "followed": {
+            "type": "boolean"
+          },
+          "next": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EpisodePoint"
+              }
+            ]
+          },
+          "prev": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EpisodePoint",
+                "description": "Previous episode (symmetric to [`Self::next`]). Powers the\n\"‹ Prev\" chip in the TV player so the user can step back\nwithout bouncing through the Series detail screen."
+              }
+            ]
+          }
+        }
+      },
+      "EpisodeEntry": {
+        "type": "object",
+        "required": [
+          "season",
+          "episode",
+          "infohash",
+          "file_idx",
+          "watched"
+        ],
+        "properties": {
+          "absolute_episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Absolute episode number for fleuve anime (`One Piece S01E1156` →\n1156). `null` for ordinary seasonal episodes. The client renders\n\"Episode N\" from this when the collection's `numbering` is\n`\"absolute\"`. Additive — older clients ignore it."
+          },
+          "episode": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Language tag derived from the parent torrent's SCENE name so\nusers can tell a French / English / `MULTi` episode apart at a\nglance. Same string form as `AvailableEpisodeEntry.language`\n(`\"french\"` / `\"english\"` / `\"multi\"` / `\"unknown\"`). `null`\nwhen the parent torrent is no longer registered in the\nengine (shouldn't happen but defensive)."
+          },
+          "season": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "watched": {
+            "type": "boolean",
+            "description": "`true` when the requesting user's `playback_progress.completed`\nis set for this file — drives the \"vu\" badge on the Series page."
+          }
+        }
+      },
+      "EpisodeItem": {
+        "type": "object",
+        "required": [
+          "season",
+          "episode",
+          "status",
+          "watched"
+        ],
+        "properties": {
+          "episode": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "file_idx": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "indexer_provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "indexer_torrent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "infohash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "season": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "seeders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EpisodeStatus"
+          },
+          "watched": {
+            "type": "boolean"
+          }
+        }
+      },
+      "EpisodePoint": {
+        "type": "object",
+        "required": [
+          "season",
+          "episode",
+          "status"
+        ],
+        "properties": {
+          "episode": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "file_idx": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "follow_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "infohash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Physical location for `status == Downloaded`. Lets the TV\nplayer navigate directly to the next episode without a\nround-trip through `/grab`. `None` for `Available` (the file\ndoesn't exist on disk yet)."
+          },
+          "season": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EpisodeStatus"
+          }
+        }
+      },
+      "EpisodeStatus": {
+        "type": "string",
+        "enum": [
+          "downloaded",
+          "available"
+        ]
+      },
+      "EpisodesResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EpisodeItem"
+            }
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Echoes the request filter — `null` when the caller asked for\nthe full set.",
+            "minimum": 0
+          }
+        }
+      },
+      "EvictedEntry": {
+        "type": "object",
+        "required": [
+          "infohash",
+          "name",
+          "freed_bytes"
+        ],
+        "properties": {
+          "freed_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "FeaturedResponse": {
+        "type": "object",
+        "required": [
+          "movies",
+          "series"
+        ],
+        "properties": {
+          "movies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            }
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            }
+          }
+        }
+      },
+      "FileEntry": {
+        "type": "object",
+        "required": [
+          "index",
+          "path",
+          "size_bytes"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "path": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FileProgressEntry": {
+        "type": "object",
+        "required": [
+          "file_idx",
+          "position_seconds",
+          "completed",
+          "last_watched_at"
+        ],
+        "properties": {
+          "completed": {
+            "type": "boolean"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_watched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "position_seconds": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "FollowSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "normalized_name",
+          "name",
+          "new_count",
+          "created_at"
+        ],
+        "properties": {
+          "backdrop_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_visited_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "new_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "normalized_name": {
+            "type": "string",
+            "description": "SCENE-normalised name — clients route by this, not `tmdb_id`."
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Decoration TMDB id (may be null). Even when present, only\nrendered as a poster after the joined collection is verified."
+          }
+        }
+      },
+      "ForYou": {
+        "type": "object",
+        "required": [
+          "shelves"
+        ],
+        "properties": {
+          "shelves": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Shelf"
+            }
+          }
+        }
+      },
+      "GcReport": {
+        "type": "object",
+        "required": [
+          "used_bytes_before",
+          "used_bytes_after",
+          "threshold_bytes",
+          "target_bytes",
+          "derived_freed_bytes",
+          "evicted"
+        ],
+        "properties": {
+          "derived_freed_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes reclaimed from the derived cache (remux) before any\ntorrent was touched. Zero when the threshold was hit purely by\ntorrent footprint (or no derived cache was registered).",
+            "minimum": 0
+          },
+          "evicted": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvictedEntry"
+            }
+          },
+          "target_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "threshold_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "used_bytes_after": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "used_bytes_before": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "GenreOption": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "GenresResponse": {
+        "type": "object",
+        "required": [
+          "genres"
+        ],
+        "properties": {
+          "genres": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenreOption"
+            }
+          }
+        }
+      },
+      "GrabResponse": {
+        "type": "object",
+        "required": [
+          "infohash",
+          "file_idx",
+          "already_grabbed"
+        ],
+        "properties": {
+          "already_grabbed": {
+            "type": "boolean"
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "infohash": {
+            "type": "string"
+          }
+        }
+      },
+      "HdrKind": {
+        "type": "string",
+        "enum": [
+          "none",
+          "hdr10",
+          "hdr10_plus",
+          "dovi",
+          "hlg"
+        ]
+      },
+      "IngestResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "already_managed",
+          "snapshot"
+        ],
+        "properties": {
+          "already_managed": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/TorrentSnapshot"
+          }
+        }
+      },
+      "InvitationView": {
+        "type": "object",
+        "required": [
+          "id",
+          "created_by",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "consumed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "consumed_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "LanguageOption": {
+        "type": "object",
+        "required": [
+          "value",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "LanguagesResponse": {
+        "type": "object",
+        "required": [
+          "languages"
+        ],
+        "properties": {
+          "languages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LanguageOption"
+            }
+          }
+        }
+      },
+      "LibraryMatch": {
+        "type": "object",
+        "description": "A library item matching the search query, surfaced ABOVE tracker\nresults by the clients (\"you already have this\"). Built from the\nSCENE-normalised collection key, so a different release of the same\nwork matches — unlike the infohash-keyed `already_in_library` flag\non individual results, which deliberately only marks the exact\nrelease (see `ranking.rs`: other languages/cuts must stay grabbable).",
+        "required": [
+          "collection_id",
+          "display_title",
+          "kind",
+          "is_anime",
+          "torrent_count",
+          "episode_count"
+        ],
+        "properties": {
+          "collection_id": {
+            "type": "string"
+          },
+          "display_title": {
+            "type": "string"
+          },
+          "episode_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "episode_file_idx": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "episode_infohash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "episode_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "episode_season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Set when the query named one specific episode the library owns:\nthe exact owned file, ready for a direct `/watch` deep-link."
+          },
+          "is_anime": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`\"movie\"` | `\"tv\"` — same vocabulary as `MediaKind`."
+          },
+          "representative_infohash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fallback navigation target (most recently played torrent)."
+          },
+          "season_episode_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Set when the query was season-scoped (\"vikings s03\"): how many\nepisodes of that season the library holds."
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "torrent_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "LibraryResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "items",
+              "view"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CollectionListItem"
+                }
+              },
+              "view": {
+                "type": "string",
+                "enum": [
+                  "collections"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "items",
+              "total_uploaded_bytes",
+              "view"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TorrentView"
+                }
+              },
+              "total_uploaded_bytes": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Lifetime upload across every torrent ever ingested, including\nthe soft-deleted ones not present in `items`. Lets the raw\nview show the \"since the beginning\" total without needing\nadmin scope (the admin storage endpoint does the same sum).",
+                "minimum": 0
+              },
+              "view": {
+                "type": "string",
+                "enum": [
+                  "torrents"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "LinkRequest": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "Manifest": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "infohash",
+          "file_idx",
+          "filename",
+          "container",
+          "size_bytes",
+          "index_at_end",
+          "header_byte_range",
+          "download",
+          "video",
+          "audio",
+          "subtitles",
+          "chapters"
+        ],
+        "properties": {
+          "audio": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudioTrack"
+            }
+          },
+          "chapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Chapter"
+            }
+          },
+          "container": {
+            "type": "string"
+          },
+          "download": {
+            "$ref": "#/components/schemas/DownloadStatus"
+          },
+          "duration_s": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "filename": {
+            "type": "string"
+          },
+          "header_byte_range": {
+            "$ref": "#/components/schemas/ByteRange"
+          },
+          "index_at_end": {
+            "type": "boolean",
+            "description": "`true` if the demux index lives near the end of the file\n(MKV Cues, MP4 trailing `moov`, AVI `idx1`). The Phase 1 sparse\nstreamer uses this to prioritise tail bytes on first read."
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "moov_at_start": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`Some(true)` if a fast-start MP4 with `moov` ahead of `mdat`,\n`Some(false)` if MP4 with trailing `moov`, `None` for non-MP4."
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "subtitles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubtitleTrack"
+            }
+          },
+          "tail_byte_range": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ByteRange"
+              }
+            ]
+          },
+          "video": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VideoTrack"
+            }
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "is_admin"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_admin": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MediaInfoSummary": {
+        "type": "object",
+        "properties": {
+          "audio": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudioInfo"
+            }
+          },
+          "subtitles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubInfo"
+            }
+          },
+          "video": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VideoInfo"
+              }
+            ]
+          }
+        }
+      },
+      "MediaKind": {
+        "type": "string",
+        "enum": [
+          "movie",
+          "tv"
+        ]
+      },
+      "MediaMetadata": {
+        "type": "object",
+        "required": [
+          "kind",
+          "tmdb_id",
+          "title",
+          "genres",
+          "genre_ids"
+        ],
+        "properties": {
+          "backdrop_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "genre_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "TMDB genre ids. Always present from list endpoints (discover /\ntrending); derived from the full genre objects on detail lookups."
+          },
+          "genres": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TmdbKind"
+          },
+          "number_of_seasons": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "TV shows only — total seasons published. Used at follow time to\nsnapshot how many seasons we expect, so the Series page can pre-\nrender season tabs without waiting on a fresh TMDB lookup.",
+            "minimum": 0
+          },
+          "original_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 639-1 original language (\"fr\" / \"en\" / …). Drives per-user\nlanguage filtering of the catalogue."
+          },
+          "overview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "popularity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "TMDB popularity score (relative, unbounded). Ranks catalogue\ncandidates in the recommendation pipeline."
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Path component, e.g. `/abc.jpg`. Combine with size + base URL to form\nthe actual image URL: `https://image.tmdb.org/t/p/<size><poster_path>`."
+          },
+          "release_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DD` release / first-air date, kept raw alongside the\nparsed `year`."
+          },
+          "runtime_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Movie runtime in minutes (TMDB `runtime`). For TV shows we expose\nthe *typical* episode runtime here when one is published; both\ncan drift wildly from the actual file's duration so callers do\nthe verification themselves.",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "tmdb_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "vote_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "vote_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "0..1 (TMDB's `vote_average` is /10, normalized here for the UI)."
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "MediaProbe": {
+        "type": "object",
+        "required": [
+          "container",
+          "video",
+          "audio",
+          "subtitle"
+        ],
+        "properties": {
+          "audio": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudioStream"
+            }
+          },
+          "bit_rate": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "container": {
+            "type": "string"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "subtitle": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubtitleStream"
+            }
+          },
+          "video": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VideoStream"
+            }
+          }
+        }
+      },
+      "ParsedQueryInfo": {
+        "type": "object",
+        "description": "Surface of the SCENE parser run against the user's raw query string.\nLives here so iris-api's ranking module can construct it without\npulling iris-providers into iris-core.",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "PlayStatus": {
+        "type": "object",
+        "description": "State of the per-file remux job exposed to the player UI. Polled\nbefore mounting the `<video>` so we can render a meaningful loading\nstep (\"downloading 47 %\", \"remuxing\", \"ready\").",
+        "required": [
+          "ready"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "0..1. Populated when `reason == \"downloading\"` (torrent\nprogress) or when `reason == \"remuxing\"` (ffmpeg's encoded\nposition over total duration). Null until the relevant source\nhas produced its first measurement."
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"downloading\"` / `\"remuxing\"` / `null` when ready or when an\n`error` is set instead."
+          }
+        }
+      },
+      "PlaybackErrorBody": {
+        "type": "object",
+        "description": "Playback-error report sent by clients when a decode tier fails.\nEchoes the legacy HLS URL as the fallback and pre-warms the server-\nside ffmpeg + shaka remux in the background so the client's next\nrequest to `/play/master.m3u8` lands on a hot cache.",
+        "required": [
+          "tier",
+          "reason"
+        ],
+        "properties": {
+          "browser": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "codec": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "details": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string"
+          }
+        }
+      },
+      "PlaybackErrorResponse": {
+        "type": "object",
+        "required": [
+          "fallback_tier",
+          "fallback_url"
+        ],
+        "properties": {
+          "fallback_tier": {
+            "type": "string"
+          },
+          "fallback_url": {
+            "type": "string"
+          }
+        }
+      },
+      "PlaybackPrefsResponse": {
+        "type": "object",
+        "properties": {
+          "audio_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Preferred audio language (ISO 639-1 / BCP-47), or null = no preference."
+          },
+          "subtitle_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Preferred subtitle language, `\"off\"` for disabled, or null = no\npreference."
+          }
+        }
+      },
+      "PollResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "expired"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "user",
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "linked"
+                ]
+              },
+              "user": {
+                "$ref": "#/components/schemas/PolledUser"
+              }
+            }
+          }
+        ]
+      },
+      "PolledUser": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "is_admin"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_admin": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PreferencesResponse": {
+        "type": "object",
+        "required": [
+          "languages",
+          "genres",
+          "include_anime",
+          "onboarding_completed"
+        ],
+        "properties": {
+          "genres": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "include_anime": {
+            "type": "boolean"
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "onboarding_completed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProgressUpdate": {
+        "type": "object",
+        "required": [
+          "position_seconds"
+        ],
+        "properties": {
+          "audio_track_idx": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "completed": {
+            "type": "boolean"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "playing": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the player is actively playing (vs paused) at the moment of\nthis heartbeat. Drives the admin \"Now watching\" presence state.\nAdditive + optional so legacy clients (which only heartbeat while\nplaying anyway) default to `Playing`."
+          },
+          "position_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "seek": {
+            "type": "boolean",
+            "description": "True when this update follows a deliberate user seek. Lets the\nreset guard below distinguish \"user restarted the film from 0\"\n(persist it) from \"player error-recovered at position 0\" (must\nNOT clobber the real progress). Additive — legacy clients omit\nit and get the guard's conservative behavior."
+          },
+          "subtitle_track_idx": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "ProgressView": {
+        "type": "object",
+        "required": [
+          "position_seconds",
+          "completed",
+          "last_watched_at"
+        ],
+        "properties": {
+          "audio_track_idx": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "completed": {
+            "type": "boolean"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "last_watched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "position_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "subtitle_track_idx": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "ProviderCapabilities": {
+        "type": "object",
+        "required": [
+          "returns_magnet",
+          "returns_torrent_file",
+          "returns_infohash"
+        ],
+        "properties": {
+          "returns_infohash": {
+            "type": "boolean"
+          },
+          "returns_magnet": {
+            "type": "boolean"
+          },
+          "returns_torrent_file": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProviderInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "capabilities"
+        ],
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/ProviderCapabilities"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderResultMeta": {
+        "type": "object",
+        "required": [
+          "id",
+          "current_page",
+          "limit"
+        ],
+        "properties": {
+          "current_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_pages": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": [
+          "invite_token",
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "invite_token": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "RemuxJobView": {
+        "type": "object",
+        "description": "One entry in the remuxer cache inventory shown in `/admin`.",
+        "required": [
+          "key",
+          "in_flight",
+          "size_bytes"
+        ],
+        "properties": {
+          "file_idx": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "in_flight": {
+            "type": "boolean",
+            "description": "True if an ffmpeg run for this key is currently in flight."
+          },
+          "infohash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string",
+            "description": "`<infohash>_<file_idx>` — also the cache filename stem."
+          },
+          "mtime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Last-modified time of the cache file (epoch seconds)."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes occupied by the cached `.fmp4` (0 when not built yet).",
+            "minimum": 0
+          },
+          "torrent_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "required": [
+          "new_password"
+        ],
+        "properties": {
+          "new_password": {
+            "type": "string"
+          }
+        }
+      },
+      "ResolveBody": {
+        "type": "object",
+        "required": [
+          "provider_id",
+          "external_id"
+        ],
+        "properties": {
+          "external_id": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional TMDB id, captured at search time. We persist it on ingest so\nthe library/continue-watching endpoints can ship posters without a\nfuzzy title-year lookup. Frontends are expected to pass this through\nfrom the search hit when available."
+          }
+        }
+      },
+      "SearchResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AggregatedResults"
+          },
+          {
+            "type": "object",
+            "required": [
+              "library_matches"
+            ],
+            "properties": {
+              "library_matches": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LibraryMatch"
+                }
+              }
+            }
+          }
+        ],
+        "description": "`AggregatedResults` + the library rows. `flatten` keeps the wire\nshape byte-compatible for deployed clients — `library_matches` is\npurely additive (TV ignores unknown keys, TS fields are optional)."
+      },
+      "SearchResult": {
+        "type": "object",
+        "required": [
+          "provider_id",
+          "external_id",
+          "title"
+        ],
+        "properties": {
+          "already_in_library": {
+            "type": "boolean",
+            "description": "API-layer enrichment: `true` when the result's SCENE-parsed\n(title, season, episode) matches an existing `episode_files`\nrow. UI uses this to disable the \"Add to library\" CTA and\nlabel the card as already-downloaded, preventing the\nsurprisingly-common second ingest of the same episode under a\ndifferent release group. Providers always emit `false`; the\nAPI search layer flips it before returning to the client."
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "freeleech": {
+            "type": "boolean"
+          },
+          "infohash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MediaKind",
+                "description": "Coarse classification (movie / tv / unknown), derived from the\nprovider's category taxonomy."
+              }
+            ]
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Coarse language tag derived server-side from the SCENE\nrelease name: `\"french\"` / `\"english\"` / `\"multi\"` /\n`\"unknown\"`. Drives the FR / EN / `MULTi` badges on\nsearch result cards so the household's anglophone users\ncan spot a Seedpool release among the c411 / TOS\nfrancophones at a glance. Stable string form so\ndeserialisers stay tolerant to future variants."
+          },
+          "leechers": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "library_file_idx": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "File index inside [`Self::library_infohash`] for the matching\nepisode. Paired with the infohash to build a direct\n`/watch/{infohash}/{file_idx}` URL.",
+            "minimum": 0
+          },
+          "library_infohash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Infohash of the existing library file when\n[`Self::already_in_library`] is `true`. Lets the UI link\nstraight to `/watch/<infohash>/<file_idx>` instead of asking\nthe user to re-download."
+          },
+          "magnet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parsed_episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "SCENE-parsed episode number. Paired with `parsed_season`.\n`Some(0)` is the season-pack sentinel from the parser.",
+            "minimum": 0
+          },
+          "parsed_season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "SCENE-parsed season number from the release title. Lets the\nweb search grid surface a compact \"S04E11\" chip per card so\nusers can scan for their episode without opening every\npreview. `None` when the parser saw no marker (movies,\nseason packs, exotic naming).",
+            "minimum": 0
+          },
+          "poster_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pre-resolved poster URL when the indexer ships one (torr9\nincludes it on featured items). Trusted because the indexer\ncurates these editorially — much higher confidence than a\nTMDB-id round-trip."
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "seeders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "TMDB id (movie or TV), captured from providers that index it. Powers\nposter + metadata enrichment via `/api/metadata/tmdb/:id`.",
+            "minimum": 0
+          },
+          "uploaded_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "uploader": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SeasonPackEntry": {
+        "type": "object",
+        "description": "Season-pack offer the indexer scanner cached for this collection.\nSurfaced as its own list (separate from `available_episodes`) so\nthe UI can render a \"Grab full Season N\" CTA instead of trying\nto display the pack as a single episode row. Grab path\ntransparently falls back to the matching pack when a user clicks\na missing per-episode (S, E) that no singleton offers.",
+        "required": [
+          "season",
+          "indexer_provider",
+          "indexer_torrent_id",
+          "found_at"
+        ],
+        "properties": {
+          "found_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "indexer_provider": {
+            "type": "string"
+          },
+          "indexer_torrent_id": {
+            "type": "string"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "season": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "seeders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "SeekHint": {
+        "type": "object",
+        "description": "Playhead hint sent by the client on every user-initiated seek. Phase 1\nwill use it to bias librqbit's piece priority. Phase 0 only logs.",
+        "required": [
+          "byte_offset"
+        ],
+        "properties": {
+          "byte_offset": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "playhead_s": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "Shelf": {
+        "type": "object",
+        "required": [
+          "key",
+          "title",
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogCard"
+            }
+          },
+          "key": {
+            "type": "string",
+            "description": "Stable key for client routing (e.g. `for_you`, `genre:18`)."
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional `\"movie\"`/`\"tv\"` hint when a shelf is single-kind."
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "SortField": {
+        "type": "string",
+        "enum": [
+          "title",
+          "size",
+          "seeders",
+          "leechers",
+          "uploaded"
+        ]
+      },
+      "SortOrder": {
+        "type": "string",
+        "enum": [
+          "asc",
+          "desc"
+        ]
+      },
+      "StorageStats": {
+        "type": "object",
+        "required": [
+          "used_bytes",
+          "max_storage_bytes",
+          "threshold_bytes",
+          "target_bytes",
+          "threshold_pct",
+          "target_pct",
+          "torrent_count",
+          "total_uploaded_bytes"
+        ],
+        "properties": {
+          "max_storage_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "target_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "target_pct": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "threshold_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "threshold_pct": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "torrent_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_uploaded_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lifetime total uploaded across every torrent ever ingested,\nincluding soft-deleted ones. Reconciled from librqbit's session\ncounter every 30 s — see `iris_api::seed_stats`.",
+            "minimum": 0
+          },
+          "used_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SubInfo": {
+        "type": "object",
+        "properties": {
+          "default": {
+            "type": "boolean"
+          },
+          "forced": {
+            "type": "boolean"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"UTF-8\"`, `\"PGS\"`, `\"VobSub\"`, etc."
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SubtitleStream": {
+        "type": "object",
+        "required": [
+          "index",
+          "absolute_index",
+          "codec",
+          "default",
+          "forced",
+          "text_based"
+        ],
+        "properties": {
+          "absolute_index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "codec": {
+            "type": "string"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "forced": {
+            "type": "boolean"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text_based": {
+            "type": "boolean",
+            "description": "Whether this stream can be losslessly converted to `WebVTT`\n(text-based subtitle codecs only)."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SubtitleTrack": {
+        "type": "object",
+        "required": [
+          "stream_idx",
+          "codec",
+          "default",
+          "forced",
+          "text_based",
+          "extractable",
+          "url"
+        ],
+        "properties": {
+          "codec": {
+            "type": "string"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "extractable": {
+            "type": "boolean",
+            "description": "Always true today — kept as an explicit field so future codecs that\nthe server can't demux can be marked `false` without breaking the\nschema."
+          },
+          "forced": {
+            "type": "boolean"
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stream_idx": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "text_based": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "description": "Relative URL the client should GET to receive the extracted track.\nSuffix is `.vtt` for text subs, `.sup` for PGS, `.ass` for ASS/SSA."
+          }
+        }
+      },
+      "TmdbDiagnose": {
+        "type": "object",
+        "description": "Per-torrent TMDB resolution dump — `GET /admin/tmdb/diagnose/{infohash}`.\n\nSurfaces every input the resolver sees so we can tell *why* a given\ntorrent is stuck on a wrong `tmdb_id`: the raw torrent name, what the\nSCENE parser extracted, the multi-search candidates TMDB returned,\nand what `pick_best` would settle on with the current rules. Useful\nwhen a library card shows the wrong poster and we need to know\nwhether the bug is upstream of `pick_best` (parser misextracted the\ntitle, TMDB has the wrong show on file) or downstream (our scoring\npicks a worse candidate).",
+        "required": [
+          "infohash",
+          "torrent_name",
+          "db_tmdb_verified",
+          "cleaned_query",
+          "suggestions"
+        ],
+        "properties": {
+          "cleaned_query": {
+            "type": "string",
+            "description": "Cleaned name fed to `multi_search`. Empty when SCENE parsing\nfailed (no title to look up)."
+          },
+          "db_collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "db_collection_tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "db_tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "db_tmdb_verified": {
+            "type": "boolean"
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "parsed": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TmdbDiagnoseParsed"
+              }
+            ]
+          },
+          "picked": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TmdbDiagnoseSuggestion"
+              }
+            ]
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TmdbDiagnoseSuggestion"
+            }
+          },
+          "torrent_name": {
+            "type": "string"
+          }
+        }
+      },
+      "TmdbDiagnoseParsed": {
+        "type": "object",
+        "required": [
+          "title",
+          "is_tv"
+        ],
+        "properties": {
+          "episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "is_tv": {
+            "type": "boolean"
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "TmdbDiagnoseSuggestion": {
+        "type": "object",
+        "required": [
+          "kind",
+          "tmdb_id",
+          "title"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "tmdb_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "TmdbKind": {
+        "type": "string",
+        "enum": [
+          "movie",
+          "tv"
+        ]
+      },
+      "TmdbSuggestion": {
+        "type": "object",
+        "required": [
+          "kind",
+          "tmdb_id",
+          "title"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TmdbKind"
+          },
+          "overview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "tmdb_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "TorrentDetails": {
+        "type": "object",
+        "required": [
+          "provider_id",
+          "external_id",
+          "title"
+        ],
+        "properties": {
+          "age": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-formatted age string from the provider when available\n(e.g., \"6 minutes\", \"2 hours\"). When absent the frontend can\nderive its own from `uploaded_at`."
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description body. Encoding depends on [`Self::description_format`]."
+          },
+          "description_format": {
+            "$ref": "#/components/schemas/DescriptionFormat",
+            "description": "Encoding of `description`. Always set on new payloads; absent\nvalues default to [`DescriptionFormat::Bbcode`] for backward\ncompatibility with pre-c411 clients."
+          },
+          "exclusive": {
+            "type": "boolean"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "file_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "file_size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "freeleech": {
+            "type": "boolean"
+          },
+          "leechers": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "media_info": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MediaInfoSummary",
+                "description": "Server-side parsed view of the NFO so web + TV consume the same\nshape rather than each having to ship a `MediaInfo` regex tower."
+              }
+            ]
+          },
+          "nfo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw `MediaInfo` text dump. Web exposes this in a collapsible\n`<details>` for power users; TV doesn't show it."
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "seeders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "times_completed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "uploaded_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "uploader": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "views": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TorrentFilePreview": {
+        "type": "object",
+        "required": [
+          "index",
+          "path",
+          "size_bytes",
+          "is_video"
+        ],
+        "properties": {
+          "extension": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lowercase extension (no dot), e.g. \"mkv\", \"mp4\", \"srt\"."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "is_video": {
+            "type": "boolean",
+            "description": "Heuristic: `true` when the extension is a typical video container."
+          },
+          "path": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TorrentPreview": {
+        "type": "object",
+        "required": [
+          "infohash",
+          "name",
+          "total_size_bytes",
+          "piece_length",
+          "piece_count",
+          "announce_urls",
+          "files"
+        ],
+        "properties": {
+          "announce_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TorrentFilePreview"
+            }
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "piece_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "piece_length": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TorrentSnapshot": {
+        "type": "object",
+        "required": [
+          "infohash",
+          "total_size_bytes",
+          "state",
+          "progress_bytes",
+          "progress_pct",
+          "download_speed_bps",
+          "upload_speed_bps",
+          "uploaded_bytes",
+          "peers",
+          "files",
+          "finished",
+          "fetched_at"
+        ],
+        "properties": {
+          "download_speed_bps": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileEntry"
+            }
+          },
+          "finished": {
+            "type": "boolean"
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "peers": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "progress_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "progress_pct": {
+            "type": "number",
+            "format": "double"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TorrentState"
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "upload_speed_bps": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "uploaded_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TorrentState": {
+        "type": "string",
+        "enum": [
+          "initializing",
+          "live",
+          "paused",
+          "error"
+        ]
+      },
+      "TorrentView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TorrentSnapshot"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "added_by",
+              "added_by_name",
+              "added_at",
+              "tmdb_verified",
+              "uploaded_bytes_total"
+            ],
+            "properties": {
+              "added_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "added_by": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "added_by_name": {
+                "type": "string",
+                "description": "Public display name of the uploader (NOT the email — that stays\nprivate). Backfilled from the email's local-part for accounts\nthat pre-date migration 0006; users edit it from /account."
+              },
+              "collection_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid",
+                "description": "Parent collection UUID, once `collection_assign` has grouped this\ntorrent. `None` for orphan torrents (no SCENE identity / not yet\nassigned). Additive field — lets a client deep-link a multi-file\ntorrent straight to its collection page rather than a generic\nfallback. Older clients ignore the unknown field."
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "kind": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MediaKind",
+                    "description": "`\"movie\"` / `\"tv\"` from the parent collection. Clients pass\nthis to `/api/metadata/tmdb/{id}?kind=` so TMDB's separate\nmovie / tv namespaces don't collide on poster lookups."
+                  }
+                ]
+              },
+              "last_played_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "source_external_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source_provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tmdb_id": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "tmdb_verified": {
+                "type": "boolean",
+                "description": "True only when we've matched the TMDB runtime against the file's\nprobed duration within ±15 %. Frontends use the `(tmdb_id,\ntmdb_verified=true)` pair to decide whether to fetch posters /\ntitles from TMDB; otherwise they stick with the filename."
+              },
+              "uploaded_bytes_total": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Lifetime upload counter — survives session restarts and GC\nevictions, unlike `snapshot.uploaded_bytes`.",
+                "minimum": 0
+              }
+            }
+          }
+        ]
+      },
+      "UpdatePlaybackPrefs": {
+        "type": "object",
+        "properties": {
+          "audio_language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subtitle_language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UpdatePreferencesRequest": {
+        "type": "object",
+        "properties": {
+          "genres": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "include_anime": {
+            "type": "boolean"
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "onboarding_completed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "is_admin"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_admin": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserView": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "is_admin",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_admin": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VideoInfo": {
+        "type": "object",
+        "properties": {
+          "bitrate_kbps": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "codec": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "fps": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "hdr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"HDR10\"`, `\"Dolby Vision\"`, `\"SDR\"` etc. Best-effort heuristic."
+          },
+          "resolution": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"1920x1080\"` style."
+          }
+        }
+      },
+      "VideoStream": {
+        "type": "object",
+        "required": [
+          "index",
+          "absolute_index",
+          "codec",
+          "hdr"
+        ],
+        "properties": {
+          "absolute_index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "bit_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "bit_rate": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "codec": {
+            "type": "string"
+          },
+          "color_primaries": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "color_space": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "color_transfer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frame_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "frame_rate_den": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "frame_rate_num": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Frame rate as a rational, when available. The legacy `frame_rate` float\nremains for existing callers; this field gives the exact ratio MSE\ntimestamps need.",
+            "minimum": 0
+          },
+          "hdr": {
+            "$ref": "#/components/schemas/HdrKind",
+            "description": "Detected HDR flavour, derived from `color_transfer` + side data."
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "index": {
+            "type": "integer",
+            "description": "Index within video streams (0-based, NOT the global stream index).",
+            "minimum": 0
+          },
+          "level": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Codec level encoded as the integer ffprobe reports (e.g. 51 = level 5.1).",
+            "minimum": 0
+          },
+          "max_cll": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_fall": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "VideoTrack": {
+        "type": "object",
+        "required": [
+          "stream_idx",
+          "codec",
+          "hdr"
+        ],
+        "properties": {
+          "bit_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "codec": {
+            "type": "string"
+          },
+          "codec_string": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MSE / `WebCodecs` codec string when we can produce one with\nconfidence (e.g. `\"avc1.640028\"`, `\"hev1.2.4.L153.B0\"`)."
+          },
+          "color_matrix": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "color_primaries": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "color_transfer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fps_den": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "fps_num": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "hdr": {
+            "$ref": "#/components/schemas/HdrKind"
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "level": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_cll": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_fall": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stream_idx": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "WatchHistoryView": {
+        "type": "object",
+        "description": "One row for `GET /admin/watch-history` — recent playback across all users.",
+        "required": [
+          "user_id",
+          "display_name",
+          "infohash",
+          "file_idx",
+          "torrent_name",
+          "tmdb_verified",
+          "position_seconds",
+          "completed",
+          "last_watched_at"
+        ],
+        "properties": {
+          "completed": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "file_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On-disk path of the watched file (episode within a season pack)."
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MediaKind"
+              }
+            ]
+          },
+          "last_watched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "position_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "tmdb_verified": {
+            "type": "boolean"
+          },
+          "torrent_name": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WatchlistItem": {
+        "type": "object",
+        "description": "Post-0.4 \"My Watchlist\" payload. Derived from TV collections\nthat have at least one ingested episode — the household\nauto-tracks every show they're watching, no Follow button. The\nshape mirrors what the legacy `/api/me/follows` façade returns\nso the web client can flip endpoints without rewriting card\nrendering. Old APK 0.3.1 keeps calling `/api/me/follows`.",
+        "required": [
+          "id",
+          "normalized_name",
+          "name",
+          "new_count",
+          "created_at"
+        ],
+        "properties": {
+          "backdrop_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Collection id — clients route to `/collection/:id`."
+          },
+          "last_visited_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "new_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Distinct (season, episode) the indexer has surfaced since\nthe requesting user last opened this collection. Drives the\n\"X new\" tile badge."
+          },
+          "normalized_name": {
+            "type": "string",
+            "description": "SCENE-normalised name. Clients use this to detect \"is this\nsearch result already on my Watchlist?\" without having to\nrun the same normaliser themselves."
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "WipeRemuxResponse": {
+        "type": "object",
+        "required": [
+          "freed_bytes"
+        ],
+        "properties": {
+          "freed_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes freed by removing the cache file.",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "auth",
+      "description": "Session auth — register / login / refresh / logout."
+    },
+    {
+      "name": "devices",
+      "description": "Device pairing for headless clients (Android TV)."
+    },
+    {
+      "name": "search",
+      "description": "Tracker search + torrent detail preview."
+    },
+    {
+      "name": "torrents",
+      "description": "Library torrents — list / detail / per-file watch progress."
+    },
+    {
+      "name": "library",
+      "description": "Collections + raw-torrent library views and episode grabs."
+    },
+    {
+      "name": "follows",
+      "description": "Per-user series follows — Watchlist, episode lists, grabs."
+    },
+    {
+      "name": "me",
+      "description": "The authenticated user's own profile, watchlist, continue-watching."
+    },
+    {
+      "name": "preferences",
+      "description": "Recommendation prefs + genre / language vocabularies + playback prefs."
+    },
+    {
+      "name": "for-you",
+      "description": "Personalised recommendation shelves and dismissals."
+    },
+    {
+      "name": "discover",
+      "description": "Featured movie / series carousels aggregated across trackers."
+    },
+    {
+      "name": "providers",
+      "description": "Registered search providers and their capabilities."
+    },
+    {
+      "name": "metadata",
+      "description": "TMDB metadata lookup, typeahead search, SCENE-name resolution."
+    },
+    {
+      "name": "admin",
+      "description": "Admin-only: invitations, users, storage / GC, remux cache, presence, diagnostics."
+    },
+    {
+      "name": "health",
+      "description": "Unauthenticated liveness probe (excluded from the client-version gate)."
+    }
+  ]
+}

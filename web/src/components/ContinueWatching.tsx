@@ -44,7 +44,7 @@ export function ContinueWatching() {
             <MediaCard
               key={`${it.infohash}:${it.file_idx}`}
               tmdbId={it.tmdb_id}
-              kind={it.kind}
+              kind={it.kind ?? null}
               title={primary}
               subtitle={subtitle}
               progress={pct}

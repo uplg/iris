@@ -18,6 +18,7 @@ use chrono::{Duration, Utc};
 use iris_core::ids::UserId;
 use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -39,7 +40,7 @@ pub fn me_router() -> Router<AppState> {
 
 const DEVICE_CODE_TTL_SECS: i64 = 600; // 10 minutes
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateCodeRequest {
     #[serde(default = "default_kind")]
     pub kind: String,
@@ -49,7 +50,7 @@ fn default_kind() -> String {
     "unknown".into()
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CreateCodeResponse {
     pub code: String,
     pub device_id: Uuid,
@@ -57,7 +58,14 @@ pub struct CreateCodeResponse {
     pub expires_in: i64,
 }
 
-async fn create_code(
+#[utoipa::path(
+    post,
+    path = "/api/auth/device/code",
+    request_body = CreateCodeRequest,
+    responses((status = 200, description = "Pairing code + opaque device id to poll", body = CreateCodeResponse)),
+    tag = "devices",
+)]
+pub(crate) async fn create_code(
     State(state): State<AppState>,
     Json(req): Json<CreateCodeRequest>,
 ) -> ApiResult<Json<CreateCodeResponse>> {
@@ -78,7 +86,7 @@ async fn create_code(
     }))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PollResponse {
     Pending,
@@ -86,14 +94,29 @@ pub enum PollResponse {
     Linked { user: PolledUser },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PolledUser {
     pub id: Uuid,
     pub email: String,
     pub is_admin: bool,
 }
 
-async fn poll(
+/// Poll a device-pairing code's status. `pending` until the user links it
+/// from the web UI, then `linked` with the user payload (and the session
+/// cookies are set), or `expired`.
+#[utoipa::path(
+    get,
+    path = "/api/auth/device/poll/{device_id}",
+    params(
+        ("device_id" = Uuid, Path, description = "Opaque id returned by POST /auth/device/code"),
+    ),
+    responses(
+        (status = 200, description = "Current pairing status", body = PollResponse),
+        (status = 404, description = "Unknown device id"),
+    ),
+    tag = "devices",
+)]
+pub(crate) async fn poll(
     State(state): State<AppState>,
     jar: CookieJar,
     Path(device_id): Path<Uuid>,
@@ -140,13 +163,24 @@ async fn poll(
     ))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct LinkRequest {
     pub code: String,
     pub label: Option<String>,
 }
 
-async fn link(
+#[utoipa::path(
+    post,
+    path = "/api/me/devices",
+    request_body = LinkRequest,
+    responses(
+        (status = 204, description = "Code linked to the caller's account"),
+        (status = 400, description = "Invalid or expired code"),
+        (status = 409, description = "Code already claimed"),
+    ),
+    tag = "devices",
+)]
+pub(crate) async fn link(
     State(state): State<AppState>,
     user: AuthUser,
     Json(req): Json<LinkRequest>,
@@ -168,7 +202,7 @@ async fn link(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DeviceView {
     pub jti: Uuid,
     pub label: Option<String>,
@@ -177,7 +211,17 @@ pub struct DeviceView {
     pub expires_at: chrono::DateTime<Utc>,
 }
 
-async fn list(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<Vec<DeviceView>>> {
+#[utoipa::path(
+    get,
+    path = "/api/me/devices",
+    operation_id = "list_devices",
+    responses((status = 200, description = "The caller's linked devices", body = [DeviceView])),
+    tag = "devices",
+)]
+pub(crate) async fn list(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<Vec<DeviceView>>> {
     let rows = iris_db::refresh_tokens::list_devices_for_user(state.db(), user.id).await?;
     Ok(Json(
         rows.into_iter()
@@ -192,7 +236,17 @@ async fn list(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<V
     ))
 }
 
-async fn revoke(
+#[utoipa::path(
+    delete,
+    path = "/api/me/devices/{jti}",
+    params(("jti" = Uuid, Path, description = "Refresh-token id of the device to revoke")),
+    responses(
+        (status = 204, description = "Device revoked"),
+        (status = 404, description = "No such device for this user"),
+    ),
+    tag = "devices",
+)]
+pub(crate) async fn revoke(
     State(state): State<AppState>,
     user: AuthUser,
     Path(jti): Path<Uuid>,

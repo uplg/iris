@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+use utoipa::ToSchema;
 
 #[derive(Clone)]
 pub struct TmdbClient {
@@ -68,14 +69,14 @@ enum CacheEntry {
     NotFound,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TmdbKind {
     Movie,
     Tv,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TmdbSuggestion {
     pub kind: TmdbKind,
     pub tmdb_id: u64,
@@ -108,7 +109,7 @@ pub struct EpisodeMetadata {
     pub still_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MediaMetadata {
     pub kind: TmdbKind,
     pub tmdb_id: u64,

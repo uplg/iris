@@ -12,6 +12,7 @@ use axum::extract::State;
 use axum::routing::get;
 use iris_core::search::SearchResult;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::error::ApiResult;
 use crate::routes::extract::AuthUser;
@@ -21,13 +22,20 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/featured", get(featured))
 }
 
-#[derive(Debug, Serialize)]
-struct FeaturedResponse {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct FeaturedResponse {
     movies: Vec<SearchResult>,
     series: Vec<SearchResult>,
 }
 
-async fn featured(
+#[utoipa::path(
+    get,
+    path = "/api/discover/featured",
+    operation_id = "get_featured",
+    responses((status = 200, description = "Featured movie + series carousels aggregated across providers", body = FeaturedResponse)),
+    tag = "discover",
+)]
+pub(crate) async fn featured(
     State(state): State<AppState>,
     _user: AuthUser,
 ) -> ApiResult<Json<FeaturedResponse>> {

@@ -6,16 +6,17 @@ use iris_core::Error;
 use iris_core::Result;
 use iris_core::search::{ProviderCapabilities, SearchQuery, SearchResult};
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::SearchProvider;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProviderInfo {
     pub id: String,
     pub capabilities: ProviderCapabilities,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProviderResultMeta {
     pub id: String,
     pub current_page: u32,
@@ -25,7 +26,7 @@ pub struct ProviderResultMeta {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
 pub struct AggregatedResults {
     pub results: Vec<SearchResult>,
     pub providers: Vec<ProviderResultMeta>,
@@ -40,7 +41,7 @@ pub struct AggregatedResults {
 /// Surface of the SCENE parser run against the user's raw query string.
 /// Lives here so iris-api's ranking module can construct it without
 /// pulling iris-providers into iris-core.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ParsedQueryInfo {
     pub title: String,
     pub season: Option<u32>,

@@ -1,6 +1,7 @@
 //! Provider-agnostic search domain types.
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
@@ -39,14 +40,29 @@ pub struct SearchQuery {
     pub year: Option<u16>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaKind {
     Movie,
     Tv,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+impl MediaKind {
+    /// Parse the lowercase wire / DB token (`"movie"` / `"tv"`) — the same
+    /// spelling [`MediaKind`] serialises to. Any other value yields `None`
+    /// so a stray `kind` column degrades to "unknown kind" (client falls
+    /// back to the filename) rather than poisoning the whole response.
+    #[must_use]
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "movie" => Some(Self::Movie),
+            "tv" => Some(Self::Tv),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SortField {
     Title,
@@ -56,7 +72,7 @@ pub enum SortField {
     Uploaded,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SortOrder {
     Asc,
@@ -72,14 +88,14 @@ pub struct ProviderPage {
     pub total_pages: Option<u32>,
 }
 
-#[derive(Debug, Clone, Default, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Copy, Serialize, Deserialize, ToSchema)]
 pub struct ProviderCapabilities {
     pub returns_magnet: bool,
     pub returns_torrent_file: bool,
     pub returns_infohash: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SearchResult {
     pub provider_id: String,
     pub external_id: String,
@@ -246,7 +262,7 @@ pub enum TorrentSource {
 /// (`BBCode` parser, sanitised HTML, raw text) off this. Defaults to
 /// [`DescriptionFormat::Bbcode`] when absent so older provider payloads
 /// (torr9 was the only source originally) keep working unchanged.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DescriptionFormat {
     /// torr9 dialect: `[b]`, `[center]`, `[size=N]`, `[color=#xxx]`,
@@ -261,7 +277,7 @@ pub enum DescriptionFormat {
     Plain,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TorrentDetails {
     pub provider_id: String,
     pub external_id: String,
@@ -301,7 +317,7 @@ pub struct TorrentDetails {
     pub file_size_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct MediaInfoSummary {
     pub video: Option<VideoInfo>,
     #[serde(default)]
@@ -310,7 +326,7 @@ pub struct MediaInfoSummary {
     pub subtitles: Vec<SubInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct VideoInfo {
     pub codec: Option<String>,
     /// `"1920x1080"` style.
@@ -322,7 +338,7 @@ pub struct VideoInfo {
     pub hdr: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AudioInfo {
     pub lang: Option<String>,
     pub codec: Option<String>,
@@ -335,7 +351,7 @@ pub struct AudioInfo {
     pub commercial_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SubInfo {
     pub lang: Option<String>,
     /// `"UTF-8"`, `"PGS"`, `"VobSub"`, etc.

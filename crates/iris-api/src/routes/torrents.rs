@@ -6,7 +6,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::{get, post};
 use iris_core::ids::TorrentId;
-use iris_core::search::TorrentSource;
+use iris_core::search::{MediaKind, TorrentSource};
 use iris_torrent::{TorrentPreview, TorrentSnapshot};
 use serde::{Deserialize, Serialize};
 use std::io::SeekFrom;
@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
+use utoipa::ToSchema;
 
 /// Chunk size for streamed response bodies. `ReaderStream::new` defaults
 /// to 4 KiB reads — far too small for video: a 4K REMUX needs sustained
@@ -89,7 +90,7 @@ pub fn router() -> Router<AppState> {
         .route("/{infohash}/progress", get(get_torrent_progress))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FileProgressEntry {
     pub file_idx: i64,
     pub position_seconds: f64,
@@ -98,7 +99,14 @@ pub struct FileProgressEntry {
     pub last_watched_at: chrono::DateTime<chrono::Utc>,
 }
 
-async fn get_torrent_progress(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}/progress",
+    params(("infohash" = String, Path)),
+    responses((status = 200, description = "Per-file watch progress for the caller", body = [FileProgressEntry])),
+    tag = "torrents",
+)]
+pub(crate) async fn get_torrent_progress(
     State(state): State<AppState>,
     user: AuthUser,
     Path(infohash): Path<String>,
@@ -118,7 +126,7 @@ async fn get_torrent_progress(
     ))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProgressView {
     pub position_seconds: f64,
     pub duration_seconds: Option<f64>,
@@ -128,7 +136,14 @@ pub struct ProgressView {
     pub last_watched_at: chrono::DateTime<chrono::Utc>,
 }
 
-async fn get_progress(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}/files/{idx}/progress",
+    params(("infohash" = String, Path), ("idx" = i32, Path)),
+    responses((status = 200, description = "Saved playback position for this file (null if none)", body = ProgressView)),
+    tag = "torrents",
+)]
+pub(crate) async fn get_progress(
     State(state): State<AppState>,
     user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
@@ -145,7 +160,7 @@ async fn get_progress(
     })))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ProgressUpdate {
     pub position_seconds: f64,
     pub duration_seconds: Option<f64>,
@@ -174,7 +189,15 @@ pub struct ProgressUpdate {
 const PROGRESS_RESET_GUARD_NEW_MAX_SECS: f64 = 60.0;
 const PROGRESS_RESET_GUARD_PREV_MIN_SECS: f64 = 300.0;
 
-async fn put_progress(
+#[utoipa::path(
+    put,
+    path = "/api/torrents/{infohash}/files/{idx}/progress",
+    params(("infohash" = String, Path), ("idx" = i32, Path)),
+    request_body = ProgressUpdate,
+    responses((status = 204, description = "Progress saved")),
+    tag = "torrents",
+)]
+pub(crate) async fn put_progress(
     State(state): State<AppState>,
     user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
@@ -285,7 +308,7 @@ async fn put_progress(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ResolveBody {
     pub provider_id: String,
     pub external_id: String,
@@ -297,7 +320,17 @@ pub struct ResolveBody {
     pub tmdb_id: Option<i64>,
 }
 
-async fn preview(
+#[utoipa::path(
+    post,
+    path = "/api/torrents/preview",
+    request_body = ResolveBody,
+    responses(
+        (status = 200, description = "Parsed torrent metadata (no ingest)", body = TorrentPreview),
+        (status = 400, description = "Unknown provider, magnet source, or parse error"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn preview(
     State(state): State<AppState>,
     _user: AuthUser,
     Json(body): Json<ResolveBody>,
@@ -320,14 +353,22 @@ async fn preview(
     Ok(Json(preview))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct IngestResponse {
     pub id: uuid::Uuid,
     pub already_managed: bool,
     pub snapshot: TorrentSnapshot,
 }
 
-async fn ingest(
+#[utoipa::path(
+    post,
+    path = "/api/torrents",
+    operation_id = "ingest_torrent",
+    request_body = ResolveBody,
+    responses((status = 200, description = "Ingested or already-managed torrent", body = IngestResponse)),
+    tag = "torrents",
+)]
+pub(crate) async fn ingest(
     State(state): State<AppState>,
     user: AuthUser,
     Json(body): Json<ResolveBody>,
@@ -723,7 +764,7 @@ async fn verify_tmdb_match(state: &AppState, infohash: &str, probed_duration_sec
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TorrentView {
     pub id: uuid::Uuid,
     pub added_by: uuid::Uuid,
@@ -744,7 +785,7 @@ pub struct TorrentView {
     /// `"movie"` / `"tv"` from the parent collection. Clients pass
     /// this to `/api/metadata/tmdb/{id}?kind=` so TMDB's separate
     /// movie / tv namespaces don't collide on poster lookups.
-    pub kind: Option<String>,
+    pub kind: Option<MediaKind>,
     /// Parent collection UUID, once `collection_assign` has grouped this
     /// torrent. `None` for orphan torrents (no SCENE identity / not yet
     /// assigned). Additive field — lets a client deep-link a multi-file
@@ -758,7 +799,17 @@ pub struct TorrentView {
     pub snapshot: TorrentSnapshot,
 }
 
-async fn list(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<Vec<TorrentView>>> {
+#[utoipa::path(
+    get,
+    path = "/api/torrents",
+    operation_id = "list_torrents",
+    responses((status = 200, description = "All active torrents", body = [TorrentView])),
+    tag = "torrents",
+)]
+pub(crate) async fn list(
+    State(state): State<AppState>,
+    _user: AuthUser,
+) -> ApiResult<Json<Vec<TorrentView>>> {
     let rows = iris_db::torrents::list_active(state.db()).await?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
@@ -773,7 +824,7 @@ async fn list(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<
                 source_external_id: row.source_external_id,
                 tmdb_id: row.tmdb_id,
                 tmdb_verified: row.tmdb_verified,
-                kind: row.kind,
+                kind: row.kind.as_deref().and_then(MediaKind::from_wire),
                 collection_id: row.collection_id,
                 uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                 snapshot,
@@ -783,7 +834,14 @@ async fn list(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<
     Ok(Json(out))
 }
 
-async fn get_one(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}",
+    params(("infohash" = String, Path)),
+    responses((status = 200, body = TorrentView), (status = 404, description = "Unknown infohash")),
+    tag = "torrents",
+)]
+pub(crate) async fn get_one(
     State(state): State<AppState>,
     _user: AuthUser,
     Path(infohash): Path<String>,
@@ -805,14 +863,25 @@ async fn get_one(
         source_external_id: row.source_external_id,
         tmdb_id: row.tmdb_id,
         tmdb_verified: row.tmdb_verified,
-        kind: row.kind,
+        kind: row.kind.as_deref().and_then(MediaKind::from_wire),
         collection_id: row.collection_id,
         uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
         snapshot,
     }))
 }
 
-async fn remove(
+#[utoipa::path(
+    delete,
+    path = "/api/torrents/{infohash}",
+    operation_id = "remove_torrent",
+    params(("infohash" = String, Path)),
+    responses(
+        (status = 204, description = "Soft-deleted"),
+        (status = 404, description = "Unknown infohash"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn remove(
     State(state): State<AppState>,
     _user: AuthUser,
     Path(infohash): Path<String>,
@@ -855,7 +924,17 @@ async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn probe_file(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}/files/{idx}/probe",
+    params(("infohash" = String, Path), ("idx" = u32, Path)),
+    responses(
+        (status = 200, description = "ffprobe stream summary", body = iris_media::MediaProbe),
+        (status = 404, description = "Unknown infohash / file index"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn probe_file(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
@@ -946,7 +1025,18 @@ async fn probe_file(
 // heuristic after the `collapsible_if` → let-chain cleanup. Same inline-allow
 // pattern as `clippy::cast_precision_loss` below.
 #[allow(clippy::too_many_lines)]
-async fn manifest_json(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}/files/{idx}/manifest.json",
+    params(("infohash" = String, Path), ("idx" = u32, Path)),
+    responses(
+        (status = 200, description = "Per-file playback manifest", body = iris_media::Manifest),
+        (status = 400, description = "Invalid infohash or file not yet on disk"),
+        (status = 404, description = "Unknown infohash / file index"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn manifest_json(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
@@ -1123,13 +1213,24 @@ fn map_engine_err(e: iris_torrent::EngineError) -> ApiError {
 
 /// Playhead hint sent by the client on every user-initiated seek. Phase 1
 /// will use it to bias librqbit's piece priority. Phase 0 only logs.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SeekHint {
     pub byte_offset: u64,
     pub playhead_s: Option<f64>,
 }
 
-async fn seek_hint(
+#[utoipa::path(
+    post,
+    path = "/api/torrents/{infohash}/files/{idx}/seek",
+    params(("infohash" = String, Path), ("idx" = u32, Path)),
+    request_body = SeekHint,
+    responses(
+        (status = 204, description = "Hint accepted (prefetch scheduled)"),
+        (status = 400, description = "Invalid infohash"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn seek_hint(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
@@ -1221,7 +1322,7 @@ async fn playhead_window_bytes(
 /// Echoes the legacy HLS URL as the fallback and pre-warms the server-
 /// side ffmpeg + shaka remux in the background so the client's next
 /// request to `/play/master.m3u8` lands on a hot cache.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct PlaybackErrorBody {
     pub tier: String,
     pub reason: String,
@@ -1233,13 +1334,24 @@ pub struct PlaybackErrorBody {
     pub details: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PlaybackErrorResponse {
     pub fallback_tier: &'static str,
     pub fallback_url: String,
 }
 
-async fn playback_error(
+#[utoipa::path(
+    post,
+    path = "/api/torrents/{infohash}/files/{idx}/playback-error",
+    params(("infohash" = String, Path), ("idx" = u32, Path)),
+    request_body = PlaybackErrorBody,
+    responses(
+        (status = 200, description = "Fallback tier + URL; server pre-warms the HLS remux", body = PlaybackErrorResponse),
+        (status = 400, description = "Invalid infohash"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn playback_error(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
@@ -1328,7 +1440,7 @@ async fn prewarm_remux_file(state: &AppState, infohash: &str, idx: usize) {
 /// State of the per-file remux job exposed to the player UI. Polled
 /// before mounting the `<video>` so we can render a meaningful loading
 /// step ("downloading 47 %", "remuxing", "ready").
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PlayStatus {
     pub ready: bool,
     /// `"downloading"` / `"remuxing"` / `null` when ready or when an
@@ -1342,7 +1454,17 @@ pub struct PlayStatus {
     pub error: Option<String>,
 }
 
-async fn play_status(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}/files/{idx}/play/status",
+    params(("infohash" = String, Path), ("idx" = u32, Path)),
+    responses(
+        (status = 200, description = "Remux-job readiness for the player loader", body = PlayStatus),
+        (status = 404, description = "Unknown infohash / file index"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn play_status(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
@@ -1422,7 +1544,18 @@ async fn play_status(
     }))
 }
 
-async fn subtitle_vtt(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}/files/{idx}/sub/{stream_idx}/track.vtt",
+    operation_id = "subtitle_vtt",
+    params(("infohash" = String, Path), ("idx" = u32, Path), ("stream_idx" = u32, Path)),
+    responses(
+        (status = 200, description = "WebVTT track (text-based subs transcoded to VTT)", body = String, content_type = "text/vtt"),
+        (status = 404, description = "Unknown infohash / file / stream index"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn subtitle_vtt(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
@@ -1437,7 +1570,18 @@ async fn subtitle_vtt(
     .await
 }
 
-async fn subtitle_ass(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}/files/{idx}/sub/{stream_idx}/track.ass",
+    operation_id = "subtitle_ass",
+    params(("infohash" = String, Path), ("idx" = u32, Path), ("stream_idx" = u32, Path)),
+    responses(
+        (status = 200, description = "Raw ASS/SSA subtitle for the libass overlay path", body = String, content_type = "text/plain"),
+        (status = 404, description = "Unknown infohash / file / stream index"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn subtitle_ass(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
@@ -1452,7 +1596,18 @@ async fn subtitle_ass(
     .await
 }
 
-async fn subtitle_sup(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}/files/{idx}/sub/{stream_idx}/track.sup",
+    operation_id = "subtitle_sup",
+    params(("infohash" = String, Path), ("idx" = u32, Path), ("stream_idx" = u32, Path)),
+    responses(
+        (status = 200, description = "PGS bitmap subtitle stream for the libpgs overlay path", body = String, content_type = "application/octet-stream"),
+        (status = 404, description = "Unknown infohash / file / stream index"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn subtitle_sup(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
@@ -1540,7 +1695,19 @@ async fn serve_subtitle(
         .unwrap())
 }
 
-async fn stream_file(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}/files/{idx}/stream",
+    operation_id = "stream_file",
+    params(("infohash" = String, Path), ("idx" = u32, Path)),
+    responses(
+        (status = 200, description = "Raw source file bytes (used by Tier A/B direct playback + download)", body = String, content_type = "application/octet-stream"),
+        (status = 206, description = "Partial content for an HTTP `Range` request"),
+        (status = 404, description = "Unknown infohash / file index"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn stream_file(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
@@ -1651,7 +1818,23 @@ async fn stream_file(
 /// playlists, init segments, `.m4s`) are pure static-file serving with
 /// byte-range support; the player only asks for them after parsing the
 /// master, by which point everything has been observed by the watcher.
-async fn play_asset(
+#[utoipa::path(
+    get,
+    path = "/api/torrents/{infohash}/files/{idx}/play/{asset}",
+    operation_id = "play_asset",
+    params(
+        ("infohash" = String, Path),
+        ("idx" = u32, Path),
+        ("asset" = String, Path, description = "`master.m3u8`, a variant playlist, an init segment, or an `.m4s` fragment"),
+    ),
+    responses(
+        (status = 200, description = "HLS-CMAF asset; `master.m3u8` blocks until ffmpeg has built the head", body = String, content_type = "application/octet-stream"),
+        (status = 206, description = "Partial content for an HTTP `Range` request on a segment"),
+        (status = 404, description = "Unknown infohash / file / asset"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn play_asset(
     State(state): State<AppState>,
     _user: AuthUser,
     Path((infohash, idx, asset)): Path<(String, usize, String)>,

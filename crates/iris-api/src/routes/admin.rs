@@ -5,7 +5,9 @@ use axum::routing::get;
 use chrono::{Duration, Utc};
 use iris_auth::new_invitation_token;
 use iris_core::ids::InvitationId;
+use iris_core::search::MediaKind;
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -52,8 +54,8 @@ fn resolve_file_path(state: &AppState, infohash: &str, file_idx: i64) -> Option<
 }
 
 /// One live "who's watching what" row for `GET /admin/active-sessions`.
-#[derive(Debug, Serialize)]
-struct ActiveSessionView {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct ActiveSessionView {
     user_id: Uuid,
     display_name: String,
     infohash: String,
@@ -68,7 +70,7 @@ struct ActiveSessionView {
     tmdb_id: Option<i64>,
     tmdb_verified: bool,
     /// `"movie"` / `"tv"` collection hint for the TMDB poster lookup.
-    kind: Option<String>,
+    kind: Option<MediaKind>,
     position_seconds: f64,
     duration_seconds: Option<f64>,
     /// `"playing"` / `"paused"`.
@@ -81,7 +83,17 @@ struct ActiveSessionView {
     last_seen_at: chrono::DateTime<Utc>,
 }
 
-async fn active_sessions(
+#[utoipa::path(
+    get,
+    path = "/api/admin/active-sessions",
+    operation_id = "list_active_sessions",
+    responses(
+        (status = 200, description = "Live 'who's watching what' presence rows", body = [ActiveSessionView]),
+        (status = 403, description = "Caller is not an admin"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn active_sessions(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> ApiResult<Json<Vec<ActiveSessionView>>> {
@@ -104,7 +116,10 @@ async fn active_sessions(
             torrent_name: card.as_ref().map(|c| c.torrent_name.clone()),
             tmdb_id: card.as_ref().and_then(|c| c.tmdb_id),
             tmdb_verified: card.as_ref().is_some_and(|c| c.tmdb_verified),
-            kind: card.as_ref().and_then(|c| c.kind.clone()),
+            kind: card
+                .as_ref()
+                .and_then(|c| c.kind.as_deref())
+                .and_then(MediaKind::from_wire),
             position_seconds: s.position_seconds,
             duration_seconds: s.duration_seconds,
             state: s.state.as_str(),
@@ -118,8 +133,8 @@ async fn active_sessions(
 }
 
 /// One row for `GET /admin/watch-history` — recent playback across all users.
-#[derive(Debug, Serialize)]
-struct WatchHistoryView {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct WatchHistoryView {
     user_id: Uuid,
     display_name: String,
     infohash: String,
@@ -129,19 +144,32 @@ struct WatchHistoryView {
     file_path: Option<String>,
     tmdb_id: Option<i64>,
     tmdb_verified: bool,
-    kind: Option<String>,
+    kind: Option<MediaKind>,
     position_seconds: f64,
     duration_seconds: Option<f64>,
     completed: bool,
     last_watched_at: chrono::DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
-struct WatchHistoryQuery {
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct WatchHistoryQuery {
+    /// Max rows to return (clamped 1..=200, defaults to 50).
     limit: Option<i64>,
 }
 
-async fn watch_history(
+#[utoipa::path(
+    get,
+    path = "/api/admin/watch-history",
+    operation_id = "list_watch_history",
+    params(WatchHistoryQuery),
+    responses(
+        (status = 200, description = "Recent playback across all users", body = [WatchHistoryView]),
+        (status = 403, description = "Caller is not an admin"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn watch_history(
     State(state): State<AppState>,
     _admin: AdminUser,
     axum::extract::Query(q): axum::extract::Query<WatchHistoryQuery>,
@@ -159,7 +187,7 @@ async fn watch_history(
                 torrent_name: r.torrent_name,
                 tmdb_id: r.tmdb_id,
                 tmdb_verified: r.tmdb_verified,
-                kind: r.kind,
+                kind: r.kind.as_deref().and_then(MediaKind::from_wire),
                 position_seconds: r.position_seconds,
                 duration_seconds: r.duration_seconds,
                 completed: r.completed,
@@ -169,8 +197,8 @@ async fn watch_history(
     ))
 }
 
-#[derive(Debug, Serialize)]
-struct UserView {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct UserView {
     id: Uuid,
     email: String,
     display_name: String,
@@ -178,7 +206,17 @@ struct UserView {
     created_at: chrono::DateTime<Utc>,
 }
 
-async fn list_users(
+#[utoipa::path(
+    get,
+    path = "/api/admin/users",
+    operation_id = "list_users",
+    responses(
+        (status = 200, description = "All registered users", body = [UserView]),
+        (status = 403, description = "Caller is not an admin"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn list_users(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> ApiResult<Json<Vec<UserView>>> {
@@ -197,12 +235,26 @@ async fn list_users(
     ))
 }
 
-#[derive(Debug, Deserialize)]
-struct ResetPasswordRequest {
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct ResetPasswordRequest {
     new_password: String,
 }
 
-async fn reset_user_password(
+#[utoipa::path(
+    post,
+    path = "/api/admin/users/{id}/password",
+    operation_id = "reset_user_password",
+    params(("id" = Uuid, Path)),
+    request_body = ResetPasswordRequest,
+    responses(
+        (status = 204, description = "Password reset; all refresh tokens revoked"),
+        (status = 400, description = "New password too short (min 8 chars)"),
+        (status = 403, description = "Caller is not an admin"),
+        (status = 404, description = "No such user"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn reset_user_password(
     State(state): State<AppState>,
     _admin: AdminUser,
     Path(id): Path<Uuid>,
@@ -225,7 +277,18 @@ async fn reset_user_password(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-async fn trigger_gc(
+#[utoipa::path(
+    post,
+    path = "/api/admin/gc",
+    operation_id = "trigger_gc",
+    responses(
+        (status = 200, description = "Garbage-collection report", body = iris_torrent::GcReport),
+        (status = 403, description = "Caller is not an admin"),
+        (status = 500, description = "GC run failed"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn trigger_gc(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> ApiResult<Json<iris_torrent::GcReport>> {
@@ -237,8 +300,8 @@ async fn trigger_gc(
     Ok(Json(report))
 }
 
-#[derive(Debug, Serialize)]
-struct StorageStats {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct StorageStats {
     used_bytes: u64,
     max_storage_bytes: u64,
     threshold_bytes: u64,
@@ -252,7 +315,17 @@ struct StorageStats {
     total_uploaded_bytes: u64,
 }
 
-async fn storage_stats(
+#[utoipa::path(
+    get,
+    path = "/api/admin/storage",
+    operation_id = "get_storage_stats",
+    responses(
+        (status = 200, description = "Disk usage / cleanup thresholds / seed totals", body = StorageStats),
+        (status = 403, description = "Caller is not an admin"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn storage_stats(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> ApiResult<Json<StorageStats>> {
@@ -301,8 +374,8 @@ async fn dir_size_async(path: &std::path::Path) -> std::io::Result<u64> {
     Ok(total)
 }
 
-#[derive(Debug, Serialize)]
-struct InvitationView {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct InvitationView {
     id: Uuid,
     created_by: Uuid,
     created_at: chrono::DateTime<Utc>,
@@ -311,7 +384,17 @@ struct InvitationView {
     consumed_by: Option<Uuid>,
 }
 
-async fn list_invitations(
+#[utoipa::path(
+    get,
+    path = "/api/admin/invitations",
+    operation_id = "list_invitations",
+    responses(
+        (status = 200, description = "All invitation tokens (hashes never returned)", body = [InvitationView]),
+        (status = 403, description = "Caller is not an admin"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn list_invitations(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> ApiResult<Json<Vec<InvitationView>>> {
@@ -330,19 +413,31 @@ async fn list_invitations(
     ))
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct CreateInvitationRequest {
+#[derive(Debug, Deserialize, Default, ToSchema)]
+pub(crate) struct CreateInvitationRequest {
     ttl_secs: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
-struct CreatedInvitation {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct CreatedInvitation {
     id: Uuid,
     token: String,
     expires_at: chrono::DateTime<Utc>,
 }
 
-async fn create_invitation(
+#[utoipa::path(
+    post,
+    path = "/api/admin/invitations",
+    operation_id = "create_invitation",
+    request_body = CreateInvitationRequest,
+    responses(
+        (status = 200, description = "Created invitation with its one-time plaintext token", body = CreatedInvitation),
+        (status = 400, description = "TTL too short (min 60s)"),
+        (status = 403, description = "Caller is not an admin"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn create_invitation(
     State(state): State<AppState>,
     admin: AdminUser,
     Json(req): Json<CreateInvitationRequest>,
@@ -369,7 +464,19 @@ async fn create_invitation(
     }))
 }
 
-async fn revoke_invitation(
+#[utoipa::path(
+    delete,
+    path = "/api/admin/invitations/{id}",
+    operation_id = "revoke_invitation",
+    params(("id" = Uuid, Path)),
+    responses(
+        (status = 204, description = "Invitation revoked"),
+        (status = 403, description = "Caller is not an admin"),
+        (status = 404, description = "No such invitation"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn revoke_invitation(
     State(state): State<AppState>,
     _admin: AdminUser,
     Path(id): Path<Uuid>,
@@ -383,8 +490,8 @@ async fn revoke_invitation(
 }
 
 /// One entry in the remuxer cache inventory shown in `/admin`.
-#[derive(Debug, Serialize)]
-struct RemuxJobView {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct RemuxJobView {
     /// `<infohash>_<file_idx>` — also the cache filename stem.
     key: String,
     infohash: Option<String>,
@@ -398,7 +505,17 @@ struct RemuxJobView {
     mtime: Option<i64>,
 }
 
-async fn list_remux_jobs(
+#[utoipa::path(
+    get,
+    path = "/api/admin/remux",
+    operation_id = "list_remux_jobs",
+    responses(
+        (status = 200, description = "Remuxer cache inventory", body = [RemuxJobView]),
+        (status = 403, description = "Caller is not an admin"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn list_remux_jobs(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> ApiResult<Json<Vec<RemuxJobView>>> {
@@ -431,8 +548,8 @@ async fn list_remux_jobs(
     Ok(Json(out))
 }
 
-#[derive(Debug, Serialize)]
-struct WipeRemuxResponse {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct WipeRemuxResponse {
     /// Bytes freed by removing the cache file.
     freed_bytes: u64,
 }
@@ -447,8 +564,8 @@ struct WipeRemuxResponse {
 /// whether the bug is upstream of `pick_best` (parser misextracted the
 /// title, TMDB has the wrong show on file) or downstream (our scoring
 /// picks a worse candidate).
-#[derive(Debug, Serialize)]
-struct TmdbDiagnose {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct TmdbDiagnose {
     infohash: String,
     torrent_name: String,
     db_tmdb_id: Option<i64>,
@@ -463,8 +580,8 @@ struct TmdbDiagnose {
     picked: Option<TmdbDiagnoseSuggestion>,
 }
 
-#[derive(Debug, Serialize)]
-struct TmdbDiagnoseParsed {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct TmdbDiagnoseParsed {
     title: String,
     year: Option<u16>,
     season: Option<u32>,
@@ -472,8 +589,8 @@ struct TmdbDiagnoseParsed {
     is_tv: bool,
 }
 
-#[derive(Debug, Serialize)]
-struct TmdbDiagnoseSuggestion {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct TmdbDiagnoseSuggestion {
     kind: String,
     tmdb_id: u64,
     title: String,
@@ -481,7 +598,19 @@ struct TmdbDiagnoseSuggestion {
     poster_path: Option<String>,
 }
 
-async fn diagnose_tmdb(
+#[utoipa::path(
+    get,
+    path = "/api/admin/tmdb/diagnose/{infohash}",
+    operation_id = "diagnose_tmdb",
+    params(("infohash" = String, Path)),
+    responses(
+        (status = 200, description = "Full TMDB-resolution dump for one torrent", body = TmdbDiagnose),
+        (status = 403, description = "Caller is not an admin"),
+        (status = 404, description = "No such torrent"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn diagnose_tmdb(
     State(state): State<AppState>,
     _admin: AdminUser,
     Path(infohash): Path<String>,
@@ -566,7 +695,20 @@ async fn diagnose_tmdb(
     }))
 }
 
-async fn wipe_remux_job(
+#[utoipa::path(
+    delete,
+    path = "/api/admin/remux/{key}",
+    operation_id = "wipe_remux_job",
+    params(("key" = String, Path)),
+    responses(
+        (status = 200, description = "Cache file removed; bytes freed", body = WipeRemuxResponse),
+        (status = 400, description = "Invalid remux job key"),
+        (status = 403, description = "Caller is not an admin"),
+        (status = 500, description = "Remux wipe failed"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn wipe_remux_job(
     State(state): State<AppState>,
     _admin: AdminUser,
     Path(key): Path<String>,

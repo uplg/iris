@@ -3,7 +3,9 @@ use axum::Router;
 use axum::extract::State;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
+use iris_core::search::MediaKind;
 use serde::Serialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -19,13 +21,25 @@ pub fn router() -> Router<AppState> {
         .route("/display-name", axum::routing::post(change_display_name))
 }
 
-#[derive(Debug, serde::Deserialize)]
-pub struct ChangePasswordRequest {
+#[derive(Debug, serde::Deserialize, ToSchema)]
+pub(crate) struct ChangePasswordRequest {
     pub old_password: String,
     pub new_password: String,
 }
 
-async fn change_password(
+#[utoipa::path(
+    post,
+    path = "/api/me/password",
+    operation_id = "change_password",
+    request_body = ChangePasswordRequest,
+    responses(
+        (status = 204, description = "Password changed; all other sessions revoked"),
+        (status = 400, description = "New password too short (min 8 chars)"),
+        (status = 401, description = "Old password mismatch / not authenticated"),
+    ),
+    tag = "me",
+)]
+pub(crate) async fn change_password(
     State(state): State<AppState>,
     user: AuthUser,
     Json(body): Json<ChangePasswordRequest>,
@@ -51,15 +65,28 @@ async fn change_password(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Serialize)]
-struct MeResponse {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct MeResponse {
     id: Uuid,
     email: String,
     display_name: String,
     is_admin: bool,
 }
 
-async fn me(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<MeResponse>> {
+#[utoipa::path(
+    get,
+    path = "/api/me",
+    operation_id = "get_me",
+    responses(
+        (status = 200, description = "The authenticated user's profile", body = MeResponse),
+        (status = 401, description = "Not authenticated"),
+    ),
+    tag = "me",
+)]
+pub(crate) async fn me(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<MeResponse>> {
     let u = iris_db::users::find_by_id(state.db(), user.id)
         .await?
         .ok_or(ApiError::Unauthorized)?;
@@ -71,12 +98,23 @@ async fn me(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<MeR
     }))
 }
 
-#[derive(Debug, serde::Deserialize)]
-pub struct ChangeDisplayNameRequest {
+#[derive(Debug, serde::Deserialize, ToSchema)]
+pub(crate) struct ChangeDisplayNameRequest {
     pub display_name: String,
 }
 
-async fn change_display_name(
+#[utoipa::path(
+    post,
+    path = "/api/me/display-name",
+    operation_id = "change_display_name",
+    request_body = ChangeDisplayNameRequest,
+    responses(
+        (status = 204, description = "Display name updated"),
+        (status = 400, description = "Empty / too-long display name (max 64)"),
+    ),
+    tag = "me",
+)]
+pub(crate) async fn change_display_name(
     State(state): State<AppState>,
     user: AuthUser,
     Json(body): Json<ChangeDisplayNameRequest>,
@@ -94,8 +132,8 @@ async fn change_display_name(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, serde::Serialize)]
-struct ContinueWatchingItem {
+#[derive(Debug, serde::Serialize, ToSchema)]
+pub(crate) struct ContinueWatchingItem {
     infohash: String,
     torrent_name: String,
     tmdb_id: Option<i64>,
@@ -104,7 +142,7 @@ struct ContinueWatchingItem {
     /// this to `/api/metadata/tmdb/{id}?kind=` — without it, TMDB's
     /// separate id namespaces collide and the lookup serves a
     /// stranger's poster.
-    kind: Option<String>,
+    kind: Option<MediaKind>,
     file_idx: i64,
     file_path: Option<String>,
     position_seconds: f64,
@@ -119,8 +157,8 @@ struct ContinueWatchingItem {
 /// shape mirrors what the legacy `/api/me/follows` façade returns
 /// so the web client can flip endpoints without rewriting card
 /// rendering. Old APK 0.3.1 keeps calling `/api/me/follows`.
-#[derive(Debug, Serialize)]
-struct WatchlistItem {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct WatchlistItem {
     /// Collection id — clients route to `/collection/:id`.
     id: Uuid,
     /// SCENE-normalised name. Clients use this to detect "is this
@@ -139,7 +177,17 @@ struct WatchlistItem {
     created_at: DateTime<Utc>,
 }
 
-async fn watchlist(
+#[utoipa::path(
+    get,
+    path = "/api/me/watchlist",
+    operation_id = "list_watchlist",
+    responses(
+        (status = 200, description = "The caller's per-user Watchlist (TV collections)", body = [WatchlistItem]),
+        (status = 401, description = "Not authenticated"),
+    ),
+    tag = "me",
+)]
+pub(crate) async fn watchlist(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<Vec<WatchlistItem>>> {
@@ -210,7 +258,17 @@ async fn watchlist(
     Ok(Json(out))
 }
 
-async fn continue_watching(
+#[utoipa::path(
+    get,
+    path = "/api/me/continue-watching",
+    operation_id = "continue_watching",
+    responses(
+        (status = 200, description = "Recently-watched, not-yet-finished items for resume", body = [ContinueWatchingItem]),
+        (status = 401, description = "Not authenticated"),
+    ),
+    tag = "me",
+)]
+pub(crate) async fn continue_watching(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<Vec<ContinueWatchingItem>>> {
@@ -230,7 +288,7 @@ async fn continue_watching(
                 torrent_name: r.torrent_name,
                 tmdb_id: r.tmdb_id,
                 tmdb_verified: r.tmdb_verified,
-                kind: r.kind,
+                kind: r.kind.as_deref().and_then(MediaKind::from_wire),
                 file_idx: r.file_idx,
                 file_path,
                 position_seconds: r.position_seconds,

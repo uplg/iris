@@ -245,7 +245,7 @@ impl Gc {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct GcReport {
     pub used_bytes_before: u64,
     pub used_bytes_after: u64,
@@ -258,7 +258,7 @@ pub struct GcReport {
     pub evicted: Vec<EvictedEntry>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct EvictedEntry {
     pub infohash: String,
     pub name: String,

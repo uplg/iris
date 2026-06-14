@@ -51,14 +51,14 @@ function ClientIcon({ client }: { client: ActiveSession["client"] }) {
 }
 
 function SessionCard({ s }: { s: ActiveSession }) {
-  const progress = pct(s.position_seconds, s.duration_seconds);
+  const progress = pct(s.position_seconds, s.duration_seconds ?? null);
   return (
     <Link
       to="/watch/$infohash/$idx"
       params={{ infohash: s.infohash, idx: String(s.file_idx) }}
       className="flex gap-3 rounded-lg border border-border bg-elev/50 p-3 transition-colors hover:bg-elev"
     >
-      <Poster tmdbId={s.tmdb_id} kind={s.kind} size="md" alt={s.torrent_name ?? ""} />
+      <Poster tmdbId={s.tmdb_id} kind={s.kind ?? null} size="md" alt={s.torrent_name ?? ""} />
       <div className="grid min-w-0 flex-1 content-between gap-2">
         <div className="grid gap-1">
           <div className="flex items-center gap-2">
@@ -85,9 +85,9 @@ function SessionCard({ s }: { s: ActiveSession }) {
           </div>
           <span
             className="truncate text-sm text-muted-foreground"
-            title={watchedLabel(s.file_path, s.torrent_name)}
+            title={watchedLabel(s.file_path ?? null, s.torrent_name ?? null)}
           >
-            {watchedLabel(s.file_path, s.torrent_name)}
+            {watchedLabel(s.file_path ?? null, s.torrent_name ?? null)}
           </span>
         </div>
         <div className="grid gap-1">
@@ -100,20 +100,20 @@ function SessionCard({ s }: { s: ActiveSession }) {
 }
 
 function HistoryRow({ h }: { h: WatchHistoryEntry }) {
-  const progress = pct(h.position_seconds, h.duration_seconds);
+  const progress = pct(h.position_seconds, h.duration_seconds ?? null);
   return (
     <Link
       to="/watch/$infohash/$idx"
       params={{ infohash: h.infohash, idx: String(h.file_idx) }}
       className="flex items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-elev"
     >
-      <Poster tmdbId={h.tmdb_id} kind={h.kind} size="xs" alt={h.torrent_name} />
+      <Poster tmdbId={h.tmdb_id} kind={h.kind ?? null} size="xs" alt={h.torrent_name} />
       <div className="grid min-w-0 flex-1">
         <span className="truncate text-sm">
           <span className="font-medium">{h.display_name}</span>
           <span className="text-muted-foreground">
             {" · "}
-            {watchedLabel(h.file_path, h.torrent_name)}
+            {watchedLabel(h.file_path ?? null, h.torrent_name)}
           </span>
         </span>
         <span className="text-xs text-muted-foreground">

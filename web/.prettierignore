@@ -5,3 +5,11 @@
 # right back on the next sync, and they're minified/generated anyway).
 public/
 dist/
+
+# Generated contract artifacts — owned by their generators, not oxfmt.
+# `openapi.json` is written byte-for-byte by `gen-openapi` (serde_json
+# to_pretty_json); the iris-api `committed_spec_is_current` snapshot test
+# asserts the committed file equals that exact rendering, so any oxfmt
+# reflow would break the build. `api-types.ts` is regenerated from it.
+openapi.json
+src/lib/api-types.ts

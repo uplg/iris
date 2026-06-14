@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 iris-core = { workspace = true }
 iris-config = { workspace = true }
+utoipa = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 reqwest = { workspace = true }

@@ -10,6 +10,7 @@ use chrono::{Duration, Utc};
 use iris_auth::{hash_invitation_token, hash_password, verify_password};
 use iris_core::ids::{InvitationId, UserId};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -43,14 +44,14 @@ pub fn router() -> Router<AppState> {
         .route("/logout", post(logout))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RegisterRequest {
     pub invite_token: String,
     pub email: String,
     pub password: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct UserResponse {
     pub id: Uuid,
     pub email: String,
@@ -58,7 +59,18 @@ pub struct UserResponse {
     pub is_admin: bool,
 }
 
-async fn register(
+#[utoipa::path(
+    post,
+    path = "/api/auth/register",
+    request_body = RegisterRequest,
+    responses(
+        (status = 200, description = "Account created; session cookies set", body = UserResponse),
+        (status = 400, description = "Weak password / invalid email"),
+        (status = 409, description = "Email already registered or invitation already used"),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn register(
     State(state): State<AppState>,
     jar: CookieJar,
     Json(req): Json<RegisterRequest>,
@@ -125,13 +137,23 @@ async fn register(
     ))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
 }
 
-async fn login(
+#[utoipa::path(
+    post,
+    path = "/api/auth/login",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Signed in; session cookies set", body = UserResponse),
+        (status = 401, description = "Bad credentials"),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn login(
     State(state): State<AppState>,
     jar: CookieJar,
     Json(req): Json<LoginRequest>,
@@ -166,7 +188,16 @@ async fn login(
     ))
 }
 
-async fn refresh(
+#[utoipa::path(
+    post,
+    path = "/api/auth/refresh",
+    responses(
+        (status = 200, description = "Session rotated; new cookies set", body = UserResponse),
+        (status = 401, description = "Missing / expired / revoked refresh token"),
+    ),
+    tag = "auth",
+)]
+pub(crate) async fn refresh(
     State(state): State<AppState>,
     jar: CookieJar,
 ) -> ApiResult<(CookieJar, Json<UserResponse>)> {
@@ -241,7 +272,13 @@ async fn refresh(
     ))
 }
 
-async fn logout(State(state): State<AppState>, jar: CookieJar) -> ApiResult<CookieJar> {
+#[utoipa::path(
+    post,
+    path = "/api/auth/logout",
+    responses((status = 200, description = "Session revoked; cookies cleared")),
+    tag = "auth",
+)]
+pub(crate) async fn logout(State(state): State<AppState>, jar: CookieJar) -> ApiResult<CookieJar> {
     if let Some(token) = jar.get(REFRESH_COOKIE).map(|c| c.value().to_owned())
         && let Ok(claims) = state.jwt().verify_refresh(&token)
     {

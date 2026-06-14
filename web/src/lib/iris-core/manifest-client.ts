@@ -7,86 +7,22 @@
  * the dual of `iris-media::manifest::Manifest` in Rust.
  */
 
+import type { components } from "../api-types";
 import { capsHeader, isMobileLike, probeCapabilities } from "./caps";
 import { libavCanDecode } from "./decode/libav-audio-decoder";
 import { cheapProbeVideoCodec } from "./decode/webcodecs-probe";
 
-export type HdrKind = "none" | "hdr10" | "hdr10_plus" | "dovi" | "hlg";
-
-export type ByteRange = { start: number; end: number };
-
-export type DownloadStatus = {
-  progress: number;
-  ranges_complete: Array<[number, number]>;
-  bytes_complete: number;
-};
-
-export type VideoTrack = {
-  stream_idx: number;
-  codec: string;
-  codec_string: string | null;
-  profile: string | null;
-  level: number | null;
-  bit_depth: number | null;
-  width: number | null;
-  height: number | null;
-  fps_num: number | null;
-  fps_den: number | null;
-  hdr: HdrKind;
-  color_primaries: string | null;
-  color_transfer: string | null;
-  color_matrix: string | null;
-  max_cll: number | null;
-  max_fall: number | null;
-};
-
-export type AudioTrack = {
-  stream_idx: number;
-  codec: string;
-  codec_string: string | null;
-  channels: number;
-  channel_layout: string | null;
-  sample_rate: number | null;
-  bitrate: number | null;
-  lang: string | null;
-  title: string | null;
-  default: boolean;
-  forced: boolean;
-  browser_native: boolean;
-};
-
-export type SubtitleTrack = {
-  stream_idx: number;
-  codec: string;
-  lang: string | null;
-  title: string | null;
-  default: boolean;
-  forced: boolean;
-  text_based: boolean;
-  extractable: boolean;
-  url: string;
-};
-
-export type Chapter = { start_s: number; end_s: number; title: string | null };
-
-export type Manifest = {
-  schema_version: number;
-  infohash: string;
-  file_idx: number;
-  filename: string;
-  container: string;
-  duration_s: number | null;
-  size_bytes: number;
-  moov_at_start: boolean | null;
-  index_at_end: boolean;
-  header_byte_range: ByteRange;
-  tail_byte_range: ByteRange | null;
-  download: DownloadStatus;
-  video: VideoTrack[];
-  audio: AudioTrack[];
-  subtitles: SubtitleTrack[];
-  chapters: Chapter[];
-};
+// The manifest wire format is owned by the Rust `iris-media::manifest`
+// module and emitted into the OpenAPI contract; these are thin aliases over
+// the generated schema so a backend field change shows up here at `tsc`.
+export type HdrKind = components["schemas"]["HdrKind"];
+export type ByteRange = components["schemas"]["ByteRange"];
+export type DownloadStatus = components["schemas"]["DownloadStatus"];
+export type VideoTrack = components["schemas"]["VideoTrack"];
+export type AudioTrack = components["schemas"]["AudioTrack"];
+export type SubtitleTrack = components["schemas"]["SubtitleTrack"];
+export type Chapter = components["schemas"]["Chapter"];
+export type Manifest = components["schemas"]["Manifest"];
 
 /**
  * The decode-tier label returned by `pickTier`.

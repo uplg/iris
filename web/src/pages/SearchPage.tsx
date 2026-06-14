@@ -394,7 +394,9 @@ function LibraryMatchCard({ match }: { match: LibraryMatch }) {
       title={match.display_title}
       subtitle={subtitle}
       tmdbId={match.tmdb_id}
-      kind={match.kind}
+      // LibraryMatch.kind is a Rust `String` ("movie"/"tv" by contract), so
+      // the generated type is `string` — narrow to MediaKind for the card.
+      kind={match.kind as MediaKind}
       badge={
         <Tag variant="success" upper>
           <Check className="size-2.5" /> In library
@@ -621,9 +623,9 @@ function ResultCard({
           <span className="font-mono">{result.provider_id}</span>
           {result.uploaded_at && <span>{formatRelative(result.uploaded_at)}</span>}
         </div>
-        {result.tags.length > 0 && (
+        {(result.tags?.length ?? 0) > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
-            {result.tags.slice(0, 4).map((t) => (
+            {(result.tags ?? []).slice(0, 4).map((t) => (
               <span key={t} className="rounded bg-elev-2 px-1.5 py-0.5 text-[10px] text-fg-dim">
                 {t}
               </span>

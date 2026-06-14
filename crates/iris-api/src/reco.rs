@@ -22,9 +22,11 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Utc};
 use iris_core::ids::UserId;
+use iris_core::search::MediaKind;
 use iris_db::SqlitePool;
 use iris_db::catalog::{CatalogItem, CatalogOrder, CatalogQuery, WatchedSignal};
 use serde::Serialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -50,11 +52,11 @@ static RECO_CACHE: LazyLock<Mutex<HashMap<Uuid, (Instant, ForYou)>>> =
 
 /// A catalogue candidate as rendered on a shelf. Shape kept close to the
 /// search / watchlist cards so the clients reuse the same card component.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct CatalogCard {
     pub catalog_id: Uuid,
     pub tmdb_id: Option<i64>,
-    pub kind: String,
+    pub kind: MediaKind,
     pub title: String,
     /// Fully-resolved poster URL. TMDB rows resolve their relative path to
     /// the image CDN; AniList-only rows pass their cover URL straight
@@ -78,7 +80,7 @@ pub struct CatalogCard {
     pub library_infohash: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Shelf {
     /// Stable key for client routing (e.g. `for_you`, `genre:18`).
     pub key: String,
@@ -88,7 +90,7 @@ pub struct Shelf {
     pub items: Vec<CatalogCard>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ForYou {
     pub shelves: Vec<Shelf>,
 }
@@ -707,7 +709,8 @@ fn card_from_row(row: CatalogItem) -> CatalogCard {
     CatalogCard {
         catalog_id: row.id,
         tmdb_id: row.tmdb_id,
-        kind: row.kind,
+        // `catalog_items.kind` is CHECK-constrained to 'movie'/'tv'.
+        kind: MediaKind::from_wire(&row.kind).unwrap_or(MediaKind::Tv),
         title: row.title,
         poster_url: image_url(row.poster_path.as_deref(), "w342"),
         backdrop_url: image_url(row.backdrop_path.as_deref(), "w780"),

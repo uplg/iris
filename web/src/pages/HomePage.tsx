@@ -448,7 +448,7 @@ function ContinueCard({ item }: { item: ContinueWatchingItem }) {
       title={primary}
       subtitle={subtitle}
       tmdbId={item.tmdb_id}
-      kind={item.kind}
+      kind={item.kind ?? null}
       progress={progress}
       progressColor="bg-primary"
     />

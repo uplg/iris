@@ -18,6 +18,7 @@ use librqbit::{
 use serde::Serialize;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
+use utoipa::ToSchema;
 
 /// `librqbit` re-exports `ManagedTorrentHandle` as a private type alias inside
 /// `torrent_state`; keep the local alias explicit so callers don't need to
@@ -101,7 +102,7 @@ mod version_tests {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TorrentState {
     Initializing,
@@ -121,14 +122,14 @@ impl TorrentState {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct FileEntry {
     pub index: usize,
     pub path: String,
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TorrentSnapshot {
     pub infohash: String,
     pub name: Option<String>,

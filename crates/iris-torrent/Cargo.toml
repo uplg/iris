@@ -13,6 +13,7 @@ workspace = true
 iris-core = { workspace = true }
 iris-db = { workspace = true }
 iris-media = { workspace = true }
+utoipa = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }

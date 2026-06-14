@@ -13,6 +13,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult};
 use crate::routes::extract::AuthUser;
@@ -44,8 +45,8 @@ pub fn languages_router() -> Router<AppState> {
     Router::new().route("/", get(languages))
 }
 
-#[derive(Debug, Serialize)]
-struct PreferencesResponse {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct PreferencesResponse {
     languages: Vec<String>,
     genres: Vec<i64>,
     include_anime: bool,
@@ -63,7 +64,14 @@ impl From<iris_db::preferences::UserPreferences> for PreferencesResponse {
     }
 }
 
-async fn get_preferences(
+#[utoipa::path(
+    get,
+    path = "/api/me/preferences",
+    operation_id = "get_preferences",
+    responses((status = 200, description = "The caller's recommendation preferences", body = PreferencesResponse)),
+    tag = "preferences",
+)]
+pub(crate) async fn get_preferences(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<PreferencesResponse>> {
@@ -71,8 +79,8 @@ async fn get_preferences(
     Ok(Json(prefs.into()))
 }
 
-#[derive(Debug, Deserialize)]
-struct UpdatePreferencesRequest {
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct UpdatePreferencesRequest {
     #[serde(default)]
     languages: Vec<String>,
     #[serde(default)]
@@ -83,7 +91,18 @@ struct UpdatePreferencesRequest {
     onboarding_completed: bool,
 }
 
-async fn put_preferences(
+#[utoipa::path(
+    put,
+    path = "/api/me/preferences",
+    operation_id = "update_preferences",
+    request_body = UpdatePreferencesRequest,
+    responses(
+        (status = 200, description = "Saved preferences (normalised)", body = PreferencesResponse),
+        (status = 400, description = "Unknown language in the request"),
+    ),
+    tag = "preferences",
+)]
+pub(crate) async fn put_preferences(
     State(state): State<AppState>,
     user: AuthUser,
     Json(body): Json<UpdatePreferencesRequest>,
@@ -125,14 +144,14 @@ async fn put_preferences(
     Ok(Json(prefs.into()))
 }
 
-#[derive(Debug, Serialize)]
-struct GenreOption {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct GenreOption {
     id: i64,
     name: String,
 }
 
-#[derive(Debug, Serialize)]
-struct GenresResponse {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct GenresResponse {
     genres: Vec<GenreOption>,
 }
 
@@ -143,7 +162,17 @@ struct GenresResponse {
 /// a TMDB genre id. Clients surface it as its own selectable chip.
 /// Returns an empty list when TMDB is unconfigured rather than failing
 /// the onboarding flow.
-async fn genres(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<GenresResponse>> {
+#[utoipa::path(
+    get,
+    path = "/api/genres",
+    operation_id = "list_genres",
+    responses((status = 200, description = "Merged movie + TV genre taxonomy (empty when TMDB unconfigured)", body = GenresResponse)),
+    tag = "preferences",
+)]
+pub(crate) async fn genres(
+    State(state): State<AppState>,
+    _user: AuthUser,
+) -> ApiResult<Json<GenresResponse>> {
     let Some(tmdb) = state.tmdb() else {
         return Ok(Json(GenresResponse { genres: Vec::new() }));
     };
@@ -163,14 +192,14 @@ async fn genres(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Jso
     Ok(Json(GenresResponse { genres: out }))
 }
 
-#[derive(Debug, Serialize)]
-struct LanguageOption {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct LanguageOption {
     value: String,
     label: String,
 }
 
-#[derive(Debug, Serialize)]
-struct LanguagesResponse {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct LanguagesResponse {
     languages: Vec<LanguageOption>,
 }
 
@@ -179,7 +208,14 @@ struct LanguagesResponse {
 /// instead of a hardcoded list — adding a language never requires a
 /// client redeploy. Sourced from the same `LANGUAGE_OPTIONS` the PUT
 /// handler validates against, so the list and the validation can't drift.
-async fn languages(_user: AuthUser) -> Json<LanguagesResponse> {
+#[utoipa::path(
+    get,
+    path = "/api/languages",
+    operation_id = "list_languages",
+    responses((status = 200, description = "User-selectable language vocabulary (value + label)", body = LanguagesResponse)),
+    tag = "preferences",
+)]
+pub(crate) async fn languages(_user: AuthUser) -> Json<LanguagesResponse> {
     let languages = LANGUAGE_OPTIONS
         .iter()
         .map(|(value, label)| LanguageOption {

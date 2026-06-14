@@ -15,7 +15,9 @@ use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use chrono::{DateTime, Utc};
+use iris_core::search::MediaKind;
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -33,17 +35,18 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct LibraryQuery {
+#[derive(Debug, Deserialize, Default, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct LibraryQuery {
     /// `"collections"` (default) or `"torrents"`. Anything else is
     /// treated as the default — easier than rejecting weird values.
     #[serde(default)]
     view: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(tag = "view")]
-enum LibraryResponse {
+pub(crate) enum LibraryResponse {
     #[serde(rename = "collections")]
     Collections { items: Vec<CollectionListItem> },
     #[serde(rename = "torrents")]
@@ -57,12 +60,12 @@ enum LibraryResponse {
     },
 }
 
-#[derive(Debug, Serialize)]
-struct CollectionListItem {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct CollectionListItem {
     id: Uuid,
     tmdb_id: Option<i64>,
     display_title: String,
-    kind: String,
+    kind: MediaKind,
     /// `true` for anime collections (drives AniList-sourced metadata and
     /// keeps the anime / live-action split visible). Additive field —
     /// older clients ignore it.
@@ -81,7 +84,15 @@ struct CollectionListItem {
     representative_infohash: Option<String>,
 }
 
-async fn list_library(
+#[utoipa::path(
+    get,
+    path = "/api/library",
+    operation_id = "list_library",
+    params(LibraryQuery),
+    responses((status = 200, description = "Collections (default) or raw torrents", body = LibraryResponse)),
+    tag = "library",
+)]
+pub(crate) async fn list_library(
     State(state): State<AppState>,
     user: AuthUser,
     Query(q): Query<LibraryQuery>,
@@ -101,7 +112,10 @@ async fn list_library(
                     source_external_id: row.source_external_id,
                     tmdb_id: row.tmdb_id,
                     tmdb_verified: row.tmdb_verified,
-                    kind: row.kind,
+                    kind: row
+                        .kind
+                        .as_deref()
+                        .and_then(iris_core::search::MediaKind::from_wire),
                     collection_id: row.collection_id,
                     uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                     snapshot,
@@ -125,7 +139,9 @@ async fn list_library(
             id: s.id,
             tmdb_id: s.tmdb_id,
             display_title: s.display_title,
-            kind: s.kind,
+            // `collections.kind` is `NOT NULL CHECK (kind IN ('tv','movie'))`,
+            // so `from_wire` only ever returns `None` on a corrupt row.
+            kind: MediaKind::from_wire(&s.kind).unwrap_or(MediaKind::Tv),
             is_anime: s.is_anime,
             torrent_count: s.torrent_count,
             total_size_bytes: s.total_size_bytes,
@@ -136,12 +152,12 @@ async fn list_library(
     Ok(Json(LibraryResponse::Collections { items }))
 }
 
-#[derive(Debug, Serialize)]
-struct CollectionDetail {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct CollectionDetail {
     id: Uuid,
     tmdb_id: Option<i64>,
     display_title: String,
-    kind: String,
+    kind: MediaKind,
     /// `true` for anime collections. Additive — older clients ignore it.
     #[serde(default)]
     is_anime: bool,
@@ -192,8 +208,8 @@ struct CollectionDetail {
     has_new_since_last_visit: u32,
 }
 
-#[derive(Debug, Serialize)]
-struct EpisodeEntry {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct EpisodeEntry {
     season: i64,
     episode: i64,
     infohash: String,
@@ -216,8 +232,8 @@ struct EpisodeEntry {
     absolute_episode: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
-struct AvailableEpisodeEntry {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct AvailableEpisodeEntry {
     season: i64,
     episode: i64,
     indexer_provider: String,
@@ -244,8 +260,8 @@ struct AvailableEpisodeEntry {
 /// to display the pack as a single episode row. Grab path
 /// transparently falls back to the matching pack when a user clicks
 /// a missing per-episode (S, E) that no singleton offers.
-#[derive(Debug, Serialize)]
-struct SeasonPackEntry {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct SeasonPackEntry {
     season: i64,
     indexer_provider: String,
     indexer_torrent_id: String,
@@ -297,7 +313,17 @@ fn derive_numbering(episodes: &[EpisodeEntry], available: &[AvailableEpisodeEntr
     }
 }
 
-async fn collection_detail(
+#[utoipa::path(
+    get,
+    path = "/api/library/collections/{id}",
+    params(("id" = Uuid, Path)),
+    responses(
+        (status = 200, description = "Collection detail with episodes + offers", body = CollectionDetail),
+        (status = 404, description = "Unknown collection"),
+    ),
+    tag = "library",
+)]
+pub(crate) async fn collection_detail(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,
@@ -320,7 +346,10 @@ async fn collection_detail(
                 source_external_id: row.source_external_id.clone(),
                 tmdb_id: row.tmdb_id,
                 tmdb_verified: row.tmdb_verified,
-                kind: row.kind.clone(),
+                kind: row
+                    .kind
+                    .as_deref()
+                    .and_then(iris_core::search::MediaKind::from_wire),
                 collection_id: row.collection_id,
                 uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
                 snapshot,
@@ -389,7 +418,8 @@ async fn collection_detail(
         id: collection.id,
         tmdb_id: collection.tmdb_id,
         display_title: collection.display_title,
-        kind: collection.kind,
+        // `collections.kind` is CHECK-constrained to 'tv'/'movie'.
+        kind: MediaKind::from_wire(&collection.kind).unwrap_or(MediaKind::Tv),
         is_anime: collection.is_anime,
         numbering,
         poster_path,
@@ -675,13 +705,31 @@ async fn build_tv_episode_view(
 /// one cached language slot — what the UI sends when the user
 /// clicked a specific FR / EN badge. Without it the core falls
 /// back to the historical "first available, any language" pick.
-#[derive(Debug, Deserialize)]
-struct GrabQuery {
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct GrabQuery {
     #[serde(default)]
     language: Option<String>,
 }
 
-async fn grab_collection_episode(
+#[utoipa::path(
+    post,
+    path = "/api/library/collections/{id}/grab/{season}/{episode}",
+    operation_id = "grab_collection_episode",
+    params(
+        ("id" = Uuid, Path),
+        ("season" = i64, Path),
+        ("episode" = i64, Path),
+        GrabQuery,
+    ),
+    responses(
+        (status = 200, description = "Grabbed (or already-owned) episode", body = crate::routes::follows::GrabResponse),
+        (status = 400, description = "Not a TV collection / no SCENE identity"),
+        (status = 404, description = "Unknown collection"),
+    ),
+    tag = "library",
+)]
+pub(crate) async fn grab_collection_episode(
     State(state): State<AppState>,
     user: AuthUser,
     Path((id, season, episode)): Path<(Uuid, i64, i64)>,

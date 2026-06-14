@@ -20,6 +20,13 @@ public/hevcjs/
 public/libpgs/
 public/libavjs/
 
+# Generated TS API types — regenerated from the committed openapi.json by
+# `bun run gen-types` (predev/prebuild). bun-only, so the Docker web-builder
+# (no Rust toolchain) produces them too; never committed → can't drift from
+# the spec. NB: web/openapi.json itself IS committed (it's the contract, kept
+# in sync with the Rust types by the iris-api snapshot test).
+src/lib/api-types.ts
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

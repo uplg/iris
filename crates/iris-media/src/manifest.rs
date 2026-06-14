@@ -21,12 +21,13 @@
 use std::path::Path;
 
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::probe::{AudioStream, HdrKind, MediaProbe, SubtitleStream, VideoStream};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Manifest {
     pub schema_version: u32,
     pub infohash: String,
@@ -56,20 +57,22 @@ pub struct Manifest {
 }
 
 /// Inclusive byte range `[start, end]`, matching HTTP `Range:` semantics.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 pub struct ByteRange {
     pub start: u64,
     pub end: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Default, ToSchema)]
 pub struct DownloadStatus {
     pub progress: f64,
+    /// Complete byte spans as `[start, end]` pairs (inclusive).
+    #[schema(value_type = Vec<Vec<u64>>)]
     pub ranges_complete: Vec<[u64; 2]>,
     pub bytes_complete: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct VideoTrack {
     pub stream_idx: u32,
     pub codec: String,
@@ -91,7 +94,7 @@ pub struct VideoTrack {
     pub max_fall: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct AudioTrack {
     pub stream_idx: u32,
     pub codec: String,
@@ -109,7 +112,7 @@ pub struct AudioTrack {
     pub browser_native: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[allow(clippy::struct_excessive_bools)] // schema-driven; these flags are part of the wire format
 pub struct SubtitleTrack {
     pub stream_idx: u32,
@@ -128,7 +131,7 @@ pub struct SubtitleTrack {
     pub url: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Chapter {
     pub start_s: f64,
     pub end_s: f64,

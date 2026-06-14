@@ -49,3 +49,4 @@ time = "0.3.49"
 reqwest = { workspace = true }
 rand = { workspace = true }
 semver = { workspace = true }
+utoipa = { workspace = true }

@@ -12,7 +12,14 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/", get(list))
 }
 
-async fn list(
+#[utoipa::path(
+    get,
+    path = "/api/providers",
+    operation_id = "list_providers",
+    responses((status = 200, description = "Registered search providers and their capabilities", body = [ProviderInfo])),
+    tag = "providers",
+)]
+pub(crate) async fn list(
     State(state): State<AppState>,
     _user: AuthUser,
 ) -> ApiResult<Json<Vec<ProviderInfo>>> {

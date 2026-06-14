@@ -73,7 +73,7 @@ export function IrisChrome(props: IrisChromeProps) {
   // chrome's display state because engines emit at different cadences;
   // a 60-Hz tick gives us a consistent UI feel.
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState<number | null>(manifest.duration_s);
+  const [duration, setDuration] = useState<number | null>(manifest.duration_s ?? null);
   const [paused, setPaused] = useState(true);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);

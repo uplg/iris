@@ -16,12 +16,10 @@ import {
   ApiError,
   searchDetails,
   torrents,
-  type AudioInfo,
   type FilePreview,
-  type SubInfo,
+  type MediaInfoSummary,
   type TorrentDetails,
   type TorrentPreview,
-  type VideoInfo,
 } from "@/lib/api";
 import { formatSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -172,25 +170,26 @@ export function PreviewDialog({
             )}
             {!preview && "Reading metadata…"}
           </DialogDescription>
-          {details && (details.tags.length > 0 || details.freeleech || details.exclusive) && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {details.freeleech && (
-                <Badge className="bg-emerald-500/90 text-[10px] uppercase text-white">
-                  Freeleech
-                </Badge>
-              )}
-              {details.exclusive && (
-                <Badge className="bg-amber-500/90 text-[10px] uppercase text-white">
-                  Exclusive
-                </Badge>
-              )}
-              {details.tags.slice(0, 6).map((t) => (
-                <Badge key={t} variant="outline" className="text-[10px]">
-                  {t}
-                </Badge>
-              ))}
-            </div>
-          )}
+          {details &&
+            ((details.tags?.length ?? 0) > 0 || details.freeleech || details.exclusive) && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {details.freeleech && (
+                  <Badge className="bg-emerald-500/90 text-[10px] uppercase text-white">
+                    Freeleech
+                  </Badge>
+                )}
+                {details.exclusive && (
+                  <Badge className="bg-amber-500/90 text-[10px] uppercase text-white">
+                    Exclusive
+                  </Badge>
+                )}
+                {(details.tags ?? []).slice(0, 6).map((t) => (
+                  <Badge key={t} variant="outline" className="text-[10px]">
+                    {t}
+                  </Badge>
+                ))}
+              </div>
+            )}
         </DialogHeader>
 
         {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -379,12 +378,12 @@ function pickAutoFile(files: FilePreview[]): number | null {
 // FactsGrid — structured MediaInfo summary.
 // ---------------------------------------------------------------------------
 
-function FactsGrid({
-  mi,
-}: {
-  mi: { video: VideoInfo | null; audio: AudioInfo[]; subtitles: SubInfo[] };
-}) {
-  if (!mi.video && mi.audio.length === 0 && mi.subtitles.length === 0) return null;
+function FactsGrid({ mi }: { mi: MediaInfoSummary }) {
+  // `audio`/`subtitles` are `#[serde(default)]` server-side (always sent, but
+  // the schema marks them optional), so normalise to arrays.
+  const audio = mi.audio ?? [];
+  const subtitles = mi.subtitles ?? [];
+  if (!mi.video && audio.length === 0 && subtitles.length === 0) return null;
   return (
     <div className="grid gap-3 rounded-md border border-border bg-card/30 p-3 text-sm">
       {mi.video && (
@@ -402,13 +401,13 @@ function FactsGrid({
           )}
         </div>
       )}
-      {mi.audio.length > 0 && (
+      {audio.length > 0 && (
         <div className="flex flex-wrap items-start gap-2 text-xs">
           <span className="mt-0.5 font-semibold uppercase tracking-wide text-muted-foreground">
             Audio
           </span>
           <div className="flex flex-1 flex-wrap gap-1.5">
-            {mi.audio.map((a, i) => (
+            {audio.map((a, i) => (
               <span
                 key={i}
                 className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5"
@@ -432,13 +431,13 @@ function FactsGrid({
           </div>
         </div>
       )}
-      {mi.subtitles.length > 0 && (
+      {subtitles.length > 0 && (
         <div className="flex flex-wrap items-start gap-2 text-xs">
           <span className="mt-0.5 font-semibold uppercase tracking-wide text-muted-foreground">
             Subtitles
           </span>
           <div className="flex flex-1 flex-wrap gap-1.5">
-            {mi.subtitles.map((s, i) => (
+            {subtitles.map((s, i) => (
               <span
                 key={i}
                 className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5"

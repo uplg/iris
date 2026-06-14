@@ -9,14 +9,14 @@ import { Tag } from "@/components/Tag";
 import { me as meApi, type CatalogCard } from "@/lib/api";
 
 /**
- * A "For You" card. A followed series with new episodes opens its collection.
- * Everything else opens the SAME preview dialog as a search hit, so the user
+ * A "For You" card. Opens the SAME preview dialog as a search hit, so the user
  * sees the files / MediaInfo / quality before committing a download:
  *   - a rolling-window card carries its recommended-best release
  *     (`provider_id`/`external_id`) → preview that release directly;
  *   - a lazy recommendation (no resolved release yet) → fall back to a title
  *     search so the user picks + previews a release.
- * Recommendation candidates get a "not interested" dismiss button on hover.
+ * Every card is a recommendation candidate (For-You excludes what's already in
+ * the library), so all get a "not interested" dismiss button on hover.
  */
 export function CatalogCardView({ card }: { card: CatalogCard }) {
   const qc = useQueryClient();
@@ -31,14 +31,11 @@ export function CatalogCardView({ card }: { card: CatalogCard }) {
     },
   });
 
-  const isSeries = card.collection_id != null;
   const hasRelease =
     card.availability === "available" && card.provider_id != null && card.external_id != null;
 
   const onClick = () => {
-    if (isSeries) {
-      navigate({ to: "/collection/$id", params: { id: String(card.collection_id) } });
-    } else if (hasRelease) {
+    if (hasRelease) {
       setPreview(true);
     } else {
       // Lazy recommendation — no resolved release yet. Let the user pick one
@@ -51,14 +48,10 @@ export function CatalogCardView({ card }: { card: CatalogCard }) {
   const typeLabel = card.is_anime ? `Anime · ${kindLabel}` : kindLabel;
   const subtitle = [typeLabel, card.year ? String(card.year) : null].filter(Boolean).join(" · ");
 
-  // New-episode count for follows; otherwise a discreet seeder count when
-  // known (1 seeder is fine — we never warn, only block 0 at grab time).
-  let badge;
-  if (card.new_count && card.new_count > 0) {
-    badge = <Tag variant="accent">{card.new_count} new</Tag>;
-  } else if (card.seeders && card.seeders > 0) {
-    badge = <Tag variant="plain">{card.seeders}↑</Tag>;
-  }
+  // A discreet seeder count when known (1 seeder is fine — we never warn, only
+  // block 0 at grab time).
+  const badge =
+    card.seeders && card.seeders > 0 ? <Tag variant="plain">{card.seeders}↑</Tag> : undefined;
 
   return (
     <div className="group/card relative">
@@ -71,26 +64,22 @@ export function CatalogCardView({ card }: { card: CatalogCard }) {
         kind={card.kind}
         badge={badge}
       />
-      {/* Dismiss applies to recommendation candidates, not the user's own
-          follows ("new episodes"). */}
-      {!isSeries && (
-        <button
-          type="button"
-          aria-label="Not interested"
-          title="Not interested"
-          onClick={() => dismiss.mutate()}
-          disabled={dismiss.isPending}
-          className="absolute left-1.5 top-1.5 z-10 grid size-6 place-items-center rounded-full bg-black/60 text-white/90 opacity-0 transition group-hover/card:opacity-100 hover:bg-black/80 focus-visible:opacity-100"
-        >
-          <X className="size-3.5" />
-        </button>
-      )}
+      <button
+        type="button"
+        aria-label="Not interested"
+        title="Not interested"
+        onClick={() => dismiss.mutate()}
+        disabled={dismiss.isPending}
+        className="absolute left-1.5 top-1.5 z-10 grid size-6 place-items-center rounded-full bg-black/60 text-white/90 opacity-0 transition group-hover/card:opacity-100 hover:bg-black/80 focus-visible:opacity-100"
+      >
+        <X className="size-3.5" />
+      </button>
       {hasRelease && (
         <PreviewDialog
           open={preview}
           onOpenChange={setPreview}
-          providerId={card.provider_id}
-          externalId={card.external_id}
+          providerId={card.provider_id ?? null}
+          externalId={card.external_id ?? null}
           initialTitle={card.title}
           tmdbId={card.tmdb_id}
           seeders={card.seeders}

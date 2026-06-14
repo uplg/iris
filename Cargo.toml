@@ -61,6 +61,12 @@ serde_json = "1.0.150"
 toml = "1.1.2"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 
+# OpenAPI — utoipa derives the spec from the route handlers + serde types.
+# The spec is the BE↔FE↔TV contract as a build artifact (generated TS via
+# openapi-typescript, Kotlin via openapi-generator) instead of hand-kept
+# discipline. `axum_extras` teaches `#[utoipa::path]` about axum extractors.
+utoipa = { version = "5.5.0", features = ["axum_extras", "uuid", "chrono"] }
+
 # DB (latest stable)
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "macros", "migrate", "uuid", "chrono"] }
 

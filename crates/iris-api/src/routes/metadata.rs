@@ -3,6 +3,7 @@ use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use serde::Deserialize;
+use utoipa::IntoParams;
 
 use crate::error::{ApiError, ApiResult};
 use crate::routes::extract::AuthUser;
@@ -16,8 +17,9 @@ pub fn router() -> Router<AppState> {
         .route("/tmdb/resolve", get(tmdb_resolve))
 }
 
-#[derive(Debug, Deserialize)]
-struct TmdbLookupParams {
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct TmdbLookupParams {
     /// `"movie"` | `"tv"`. Without a kind, the lookup tries movie
     /// first then TV — but TMDB uses separate id namespaces, so a
     /// numerical id can collide between a movie and an unrelated TV
@@ -26,7 +28,19 @@ struct TmdbLookupParams {
     kind: Option<String>,
 }
 
-async fn tmdb_lookup(
+#[utoipa::path(
+    get,
+    path = "/api/metadata/tmdb/{id}",
+    operation_id = "get_tmdb_metadata",
+    params(("id" = u64, Path), TmdbLookupParams),
+    responses(
+        (status = 200, description = "TMDB metadata for the movie / show", body = MediaMetadata),
+        (status = 400, description = "TMDB enrichment is not configured"),
+        (status = 404, description = "No TMDB record for this id / kind"),
+    ),
+    tag = "metadata",
+)]
+pub(crate) async fn tmdb_lookup(
     State(state): State<AppState>,
     _user: AuthUser,
     Path(id): Path<u64>,
@@ -47,8 +61,9 @@ async fn tmdb_lookup(
         .ok_or(ApiError::NotFound)
 }
 
-#[derive(Debug, Deserialize)]
-struct TmdbSearchParams {
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct TmdbSearchParams {
     q: String,
 }
 
@@ -56,7 +71,15 @@ struct TmdbSearchParams {
 /// `/search/multi` so the API key stays server-side. Empty array on no
 /// results, missing TMDB config, or upstream failure (typeahead is best-
 /// effort: never block typing on a flaky network).
-async fn tmdb_search(
+#[utoipa::path(
+    get,
+    path = "/api/metadata/tmdb/search",
+    operation_id = "search_tmdb",
+    params(TmdbSearchParams),
+    responses((status = 200, description = "Typeahead suggestions (empty when TMDB unconfigured)", body = [TmdbSuggestion])),
+    tag = "metadata",
+)]
+pub(crate) async fn tmdb_search(
     State(state): State<AppState>,
     _user: AuthUser,
     Query(params): Query<TmdbSearchParams>,
@@ -67,8 +90,9 @@ async fn tmdb_search(
     Ok(Json(client.multi_search(&params.q).await))
 }
 
-#[derive(Debug, Deserialize)]
-struct TmdbResolveParams {
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct TmdbResolveParams {
     /// Raw SCENE release title, untouched
     /// (e.g. `Pride.2014.1080p.BluRay.x264-AMIABLE`). The backend parses
     /// title / year / kind out of it — clients send the release name
@@ -92,7 +116,15 @@ struct TmdbResolveParams {
 /// both the web and TV clients. `/tmdb/search` stays a raw popularity
 /// proxy for the live typeahead dropdown, which legitimately wants the
 /// unfiltered suggestion list.
-async fn tmdb_resolve(
+#[utoipa::path(
+    get,
+    path = "/api/metadata/tmdb/resolve",
+    operation_id = "resolve_tmdb",
+    params(TmdbResolveParams),
+    responses((status = 200, description = "Best TMDB match for the release name (null when none / unconfigured)", body = TmdbSuggestion)),
+    tag = "metadata",
+)]
+pub(crate) async fn tmdb_resolve(
     State(state): State<AppState>,
     _user: AuthUser,
     Query(params): Query<TmdbResolveParams>,

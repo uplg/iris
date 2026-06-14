@@ -2,8 +2,9 @@
 
 use librqbit::{ByteBuf, TorrentMetaV1, torrent_from_bytes};
 use serde::Serialize;
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TorrentPreview {
     pub infohash: String,
     pub name: String,
@@ -14,7 +15,7 @@ pub struct TorrentPreview {
     pub files: Vec<TorrentFilePreview>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TorrentFilePreview {
     pub index: usize,
     pub path: String,

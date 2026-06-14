@@ -163,7 +163,7 @@ export const mountTierC: EngineMount = async (opts) => {
       }
     },
     currentTime: () => currentMediaTime(),
-    duration: () => opts.manifest.duration_s,
+    duration: () => opts.manifest.duration_s ?? null,
     paused: () => paused,
     volume: () => scheduler.getVolume(),
     muted: () => scheduler.getMuted(),

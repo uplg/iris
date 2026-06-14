@@ -7,6 +7,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::RwLock;
+use utoipa::ToSchema;
 
 #[derive(Debug, Error)]
 pub enum ProbeError {
@@ -18,7 +19,7 @@ pub enum ProbeError {
     Io(#[from] std::io::Error),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MediaProbe {
     pub container: String,
     pub duration_seconds: Option<f64>,
@@ -29,7 +30,7 @@ pub struct MediaProbe {
     pub subtitle: Vec<SubtitleStream>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct VideoStream {
     /// Index within video streams (0-based, NOT the global stream index).
     pub index: usize,
@@ -57,7 +58,7 @@ pub struct VideoStream {
     pub max_fall: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HdrKind {
     None,
@@ -67,7 +68,7 @@ pub enum HdrKind {
     Hlg,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct AudioStream {
     pub index: usize,
     pub absolute_index: u32,
@@ -86,7 +87,7 @@ pub struct AudioStream {
     pub browser_compatible: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SubtitleStream {
     pub index: usize,
     pub absolute_index: u32,

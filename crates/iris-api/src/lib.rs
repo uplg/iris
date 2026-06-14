@@ -7,6 +7,7 @@ pub mod error;
 pub mod freshness_scheduler;
 pub mod middleware;
 pub mod observability;
+pub mod openapi;
 pub mod presence;
 pub mod ranking;
 pub mod rate_limit;

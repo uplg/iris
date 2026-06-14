@@ -1,9 +1,11 @@
-export type User = {
-  id: string;
-  email: string;
-  display_name: string;
-  is_admin: boolean;
-};
+import type { components } from "./api-types";
+
+/** Wire types generated from the OpenAPI spec (`bun run gen-api`) — the Rust
+ *  route handlers + serde types are the source of truth (see
+ *  crates/iris-api/src/openapi.rs). Annotated groups re-export their schema
+ *  under the existing names so call sites don't change; the rest stays
+ *  hand-written until its endpoints are annotated in later waves. */
+export type User = components["schemas"]["UserResponse"];
 
 export class ApiError extends Error {
   status: number;
@@ -99,20 +101,9 @@ export const api = {
   delete: <T>(p: string) => request<T>("DELETE", p),
 };
 
-export type Invitation = {
-  id: string;
-  created_by: string;
-  created_at: string;
-  expires_at: string;
-  consumed_at: string | null;
-  consumed_by: string | null;
-};
+export type Invitation = components["schemas"]["InvitationView"];
 
-export type CreatedInvitation = {
-  id: string;
-  token: string;
-  expires_at: string;
-};
+export type CreatedInvitation = components["schemas"]["CreatedInvitation"];
 
 export const auth = {
   me: () => api.get<User>("/me"),
@@ -126,94 +117,21 @@ export const auth = {
   changeDisplayName: (display_name: string) => api.post<void>("/me/display-name", { display_name }),
 };
 
-export type StorageStats = {
-  used_bytes: number;
-  max_storage_bytes: number;
-  threshold_bytes: number;
-  target_bytes: number;
-  threshold_pct: number;
-  target_pct: number;
-  torrent_count: number;
-  /** Lifetime total uploaded across every torrent ever ingested
-   *  (including soft-deleted ones). Survives session restarts and GC. */
-  total_uploaded_bytes: number;
-};
+export type StorageStats = components["schemas"]["StorageStats"];
 
-export type GcEvictedEntry = {
-  infohash: string;
-  name: string;
-  freed_bytes: number;
-};
+export type GcEvictedEntry = components["schemas"]["EvictedEntry"];
 
-export type GcReport = {
-  used_bytes_before: number;
-  used_bytes_after: number;
-  threshold_bytes: number;
-  target_bytes: number;
-  evicted: GcEvictedEntry[];
-};
+export type GcReport = components["schemas"]["GcReport"];
 
-export type UserView = {
-  id: string;
-  email: string;
-  display_name: string;
-  is_admin: boolean;
-  created_at: string;
-};
+export type UserView = components["schemas"]["UserView"];
 
-export type RemuxJobView = {
-  /** `<infohash>_<file_idx>` — also the cache filename stem. */
-  key: string;
-  infohash: string | null;
-  file_idx: number | null;
-  torrent_name: string | null;
-  /** True if an ffmpeg run for this key is currently in flight. */
-  in_flight: boolean;
-  /** Bytes occupied by the cached `.fmp4` (0 when not yet built). */
-  size_bytes: number;
-  /** Last-modified time of the cache file (epoch seconds). */
-  mtime: number | null;
-};
+export type RemuxJobView = components["schemas"]["RemuxJobView"];
 
 /** A live "who's watching what" entry from `/admin/active-sessions`. */
-export type ActiveSession = {
-  user_id: string;
-  display_name: string;
-  infohash: string;
-  file_idx: number;
-  torrent_name: string | null;
-  /** On-disk path of the exact file watched — the episode within a season
-   *  pack. Null when the torrent snapshot isn't live. */
-  file_path: string | null;
-  tmdb_id: number | null;
-  tmdb_verified: boolean;
-  kind: MediaKind | null;
-  position_seconds: number;
-  duration_seconds: number | null;
-  state: "playing" | "paused";
-  client: "web" | "tv" | null;
-  client_version: string | null;
-  started_at: string;
-  last_seen_at: string;
-};
+export type ActiveSession = components["schemas"]["ActiveSessionView"];
 
 /** A recent playback row from `/admin/watch-history` (all users). */
-export type WatchHistoryEntry = {
-  user_id: string;
-  display_name: string;
-  infohash: string;
-  file_idx: number;
-  torrent_name: string;
-  /** On-disk path of the watched file (episode within a season pack). */
-  file_path: string | null;
-  tmdb_id: number | null;
-  tmdb_verified: boolean;
-  kind: MediaKind | null;
-  position_seconds: number;
-  duration_seconds: number | null;
-  completed: boolean;
-  last_watched_at: string;
-};
+export type WatchHistoryEntry = components["schemas"]["WatchHistoryView"];
 
 export const admin = {
   listInvitations: () => api.get<Invitation[]>("/admin/invitations"),
@@ -232,13 +150,7 @@ export const admin = {
     api.get<WatchHistoryEntry[]>(`/admin/watch-history${limit ? `?limit=${limit}` : ""}`),
 };
 
-export type DeviceView = {
-  jti: string;
-  label: string | null;
-  kind: string | null;
-  issued_at: string;
-  expires_at: string;
-};
+export type DeviceView = components["schemas"]["DeviceView"];
 
 export const devices = {
   list: () => api.get<DeviceView[]>("/me/devices"),
@@ -246,108 +158,17 @@ export const devices = {
   revoke: (jti: string) => api.delete<void>(`/me/devices/${jti}`),
 };
 
-export type SearchResult = {
-  provider_id: string;
-  external_id: string;
-  title: string;
-  year: number | null;
-  size_bytes: number | null;
-  seeders: number | null;
-  leechers: number | null;
-  infohash: string | null;
-  magnet: string | null;
-  category: string | null;
-  tags: string[];
-  freeleech: boolean;
-  uploader: string | null;
-  uploaded_at: string | null;
-  tmdb_id: number | null;
-  kind: MediaKind | null;
-  /** Pre-resolved poster URL from the indexer (torr9 ships these on
-   *  featured items). Use directly — no TMDB lookup needed. */
-  poster_url: string | null;
-  /** Server-set: result's SCENE identity (title, S, E) already maps
-   *  to an episode_files row. UI disables the "Add" CTA and offers
-   *  to play the existing file instead. Optional for backwards
-   *  compatibility — older backends omit it. */
-  already_in_library?: boolean;
-  /** When `already_in_library` is true, the infohash of the file we
-   *  already have. Empty otherwise. */
-  library_infohash?: string | null;
-  /** File index inside `library_infohash` for the matching episode.
-   *  Combined with the infohash to build a direct `/watch/X/Y` URL. */
-  library_file_idx?: number | null;
-  /** Coarse language tag the server detected from the SCENE release
-   *  name. Stable string form: `"french"` / `"english"` / `"multi"` /
-   *  `"unknown"`. Drives the FR / EN / MULTi badge on result cards
-   *  so anglophone users can spot Seedpool releases at a glance. */
-  language?: string | null;
-  /** SCENE-parsed season number — server-side extract from the
-   *  release name. Lets the search card surface a compact "S04E11"
-   *  chip so users can spot their episode at a glance instead of
-   *  having to read the full release name. `null` for movies and
-   *  for releases the parser couldn't classify. */
-  parsed_season?: number | null;
-  /** SCENE-parsed episode number. `0` is the season-pack sentinel
-   *  (display as "Sxx pack" rather than "Sxx E00"). */
-  parsed_episode?: number | null;
-};
-
-export type MediaKind = "movie" | "tv";
-export type SortField = "title" | "size" | "seeders" | "leechers" | "uploaded";
-export type SortOrder = "asc" | "desc";
-
-export type ProviderResultMeta = {
-  id: string;
-  current_page: number;
-  limit: number;
-  total_count: number | null;
-  total_pages: number | null;
-  error: string | null;
-};
-
-/** SCENE-style parse of the user query the server ran before fan-out.
- *  Drives the "Showing results for X · S04E11" banner above the
- *  search grid. Absent when the query was a bare title with no
- *  recognisable structure. */
-export type ParsedQueryInfo = {
-  title: string;
-  season: number | null;
-  episode: number | null;
-  year: number | null;
-};
-
-/** A library item matching the search query — pinned by the UI above
- *  tracker results ("you already have this"). Matched on the
- *  SCENE-normalised collection key server-side, so ANY release of the
- *  same work matches — unlike `SearchResult.already_in_library`, which
- *  is infohash-exact on purpose. Episode-shaped queries only produce a
- *  match when the exact episode (or ≥1 episode of the season) is owned. */
-export type LibraryMatch = {
-  collection_id: string;
-  display_title: string;
-  kind: "movie" | "tv";
-  tmdb_id: number | null;
-  is_anime: boolean;
-  torrent_count: number;
-  episode_count: number;
-  representative_infohash: string | null;
-  /** Exact owned episode (episode-shaped query) — direct watch target. */
-  episode_season: number | null;
-  episode_number: number | null;
-  episode_infohash: string | null;
-  episode_file_idx: number | null;
-  /** Season-shaped query: owned episodes in that season. */
-  season_episode_count: number | null;
-};
-
-export type AggregatedResults = {
-  results: SearchResult[];
-  providers: ProviderResultMeta[];
-  parsed_query?: ParsedQueryInfo | null;
-  /** Optional with fallback — predates servers ≤ 0.7.0. */
-  library_matches?: LibraryMatch[];
-};
+export type SearchResult = components["schemas"]["SearchResult"];
+export type MediaKind = components["schemas"]["MediaKind"];
+export type SortField = components["schemas"]["SortField"];
+export type SortOrder = components["schemas"]["SortOrder"];
+export type ProviderResultMeta = components["schemas"]["ProviderResultMeta"];
+export type ParsedQueryInfo = components["schemas"]["ParsedQueryInfo"];
+export type LibraryMatch = components["schemas"]["LibraryMatch"];
+/** The `/api/search` response = `AggregatedResults` (flattened) + library
+ *  matches. Kept under the name `AggregatedResults` for call-site stability;
+ *  the Rust source type is `SearchResponse`. */
+export type AggregatedResults = components["schemas"]["SearchResponse"];
 
 export type SearchOpts = {
   page?: number;
@@ -369,31 +190,9 @@ export const search = {
   },
 };
 
-export type TmdbMetadata = {
-  kind: "movie" | "tv";
-  tmdb_id: number;
-  title: string;
-  overview: string | null;
-  year: number | null;
-  poster_path: string | null;
-  backdrop_path: string | null;
-  vote_score: number | null;
-  vote_count: number | null;
-  genres: string[];
-  /** Movies only: TMDB `runtime` minutes. TV: typical episode runtime. */
-  runtime_minutes: number | null;
-  /** TV only — total seasons published. NULL for movies. */
-  number_of_seasons: number | null;
-};
+export type TmdbMetadata = components["schemas"]["MediaMetadata"];
 
-export type TmdbSuggestion = {
-  kind: MediaKind;
-  tmdb_id: number;
-  title: string;
-  year: number | null;
-  overview: string | null;
-  poster_path: string | null;
-};
+export type TmdbSuggestion = components["schemas"]["TmdbSuggestion"];
 
 export const metadata = {
   /** TMDB id lookup. `kind` disambiguates the movie/tv namespaces (the
@@ -421,67 +220,12 @@ export const metadata = {
 // Torrent details (search result preview)
 // ---------------------------------------------------------------------------
 
-export type AudioInfo = {
-  lang: string | null;
-  codec: string | null;
-  channels: number | null;
-  bitrate_kbps: number | null;
-  title: string | null;
-  default: boolean;
-  commercial_name: string | null;
-};
-
-export type SubInfo = {
-  lang: string | null;
-  format: string | null;
-  title: string | null;
-  default: boolean;
-  forced: boolean;
-};
-
-export type VideoInfo = {
-  codec: string | null;
-  resolution: string | null;
-  duration_secs: number | null;
-  fps: number | null;
-  bitrate_kbps: number | null;
-  hdr: string | null;
-};
-
-export type MediaInfoSummary = {
-  video: VideoInfo | null;
-  audio: AudioInfo[];
-  subtitles: SubInfo[];
-};
-
-/** Encoding of [TorrentDetails.description]. Mirrors the Rust
- *  `iris_core::search::DescriptionFormat`. Older payloads (torr9 was
- *  the only source originally) didn't ship the field; default to
- *  "bbcode" when absent so existing flows keep working. */
-export type DescriptionFormat = "bbcode" | "html" | "plain";
-
-export type TorrentDetails = {
-  provider_id: string;
-  external_id: string;
-  title: string;
-  description: string | null;
-  description_format?: DescriptionFormat;
-  nfo: string | null;
-  media_info: MediaInfoSummary | null;
-  tags: string[];
-  category: string | null;
-  uploader: string | null;
-  uploaded_at: string | null;
-  age: string | null;
-  seeders: number | null;
-  leechers: number | null;
-  times_completed: number | null;
-  views: number | null;
-  freeleech: boolean;
-  exclusive: boolean;
-  file_count: number | null;
-  file_size_bytes: number | null;
-};
+export type AudioInfo = components["schemas"]["AudioInfo"];
+export type SubInfo = components["schemas"]["SubInfo"];
+export type VideoInfo = components["schemas"]["VideoInfo"];
+export type MediaInfoSummary = components["schemas"]["MediaInfoSummary"];
+export type DescriptionFormat = components["schemas"]["DescriptionFormat"];
+export type TorrentDetails = components["schemas"]["TorrentDetails"];
 
 export const searchDetails = {
   get: (provider_id: string, external_id: string) =>
@@ -499,64 +243,23 @@ export function tmdbImage(
   return `https://image.tmdb.org/t/p/${size}${path}`;
 }
 
-export type ProviderInfo = {
-  id: string;
-  capabilities: {
-    returns_magnet: boolean;
-    returns_torrent_file: boolean;
-    returns_infohash: boolean;
-  };
-};
+export type ProviderInfo = components["schemas"]["ProviderInfo"];
 
 export const providers = {
   list: () => api.get<ProviderInfo[]>("/providers"),
 };
 
-export type ProgressView = {
-  position_seconds: number;
-  duration_seconds: number | null;
-  audio_track_idx: number | null;
-  subtitle_track_idx: number | null;
-  completed: boolean;
-  last_watched_at: string;
-};
+export type ProgressView = components["schemas"]["ProgressView"];
 
 /** Per-user playback language preferences (cross-file / cross-device). Applied
  *  by matching the file's tracks: per-file saved index wins, else this, else
  *  the file default. `subtitle_language: "off"` = subtitles disabled; null =
  *  no preference. Volume is NOT here — it's persisted device-locally. */
-export type PlaybackPrefs = {
-  audio_language: string | null;
-  subtitle_language: string | null;
-};
+export type PlaybackPrefs = components["schemas"]["PlaybackPrefsResponse"];
 
-export type ContinueWatchingItem = {
-  infohash: string;
-  torrent_name: string;
-  tmdb_id: number | null;
-  /** True only if the server matched the TMDB runtime against the file's
-   *  probed duration. Until then frontends should NOT fetch TMDB metadata
-   *  for this entry — the wrong-poster / wrong-title experience is worse
-   *  than no metadata at all. */
-  tmdb_verified: boolean;
-  /** `"movie"` | `"tv"` from the parent collection. Required by the TMDB
-   *  lookup to pick the right namespace (movie vs tv). */
-  kind: MediaKind | null;
-  file_idx: number;
-  file_path: string | null;
-  position_seconds: number;
-  duration_seconds: number | null;
-  last_watched_at: string;
-  completed: boolean;
-};
+export type ContinueWatchingItem = components["schemas"]["ContinueWatchingItem"];
 
-export type FileProgressEntry = {
-  file_idx: number;
-  position_seconds: number;
-  duration_seconds: number | null;
-  completed: boolean;
-  last_watched_at: string;
-};
+export type FileProgressEntry = components["schemas"]["FileProgressEntry"];
 
 export const progress = {
   get: (infohash: string, idx: number) =>
@@ -588,56 +291,15 @@ export const progress = {
  *  ("french" / "english"), ordered most-preferred first; `genres`
  *  holds TMDB genre ids. `onboarding_completed` gates the first-login
  *  onboarding dialog. */
-export type Preferences = {
-  languages: string[];
-  genres: number[];
-  include_anime: boolean;
-  onboarding_completed: boolean;
-};
+export type Preferences = components["schemas"]["PreferencesResponse"];
 
 /** A recommendation candidate as rendered on a "For You" shelf. Shape is
  *  kept close to SearchResult / WatchlistItem so the same card renders it. */
-export type CatalogCard = {
-  catalog_id: string;
-  tmdb_id: number | null;
-  kind: MediaKind;
-  title: string;
-  /** Fully-resolved poster URL (TMDB CDN path or AniList cover) — render
-   *  directly, no tmdbImage() needed. */
-  poster_url: string | null;
-  /** Fully-resolved backdrop URL (wider; for a hero/preview). */
-  backdrop_url: string | null;
-  overview: string | null;
-  is_anime: boolean;
-  /** "unknown" | "available" | "imminent" | "unavailable". */
-  availability: string;
-  /** Seeder count of the recorded release (rolling-window rows). null for
-   *  lazy reco candidates / torr9 RSS rows (re-checked at grab). */
-  seeders: number | null;
-  /** The recorded release's provider + id — lets the client open the same
-   *  preview dialog as a search hit. null for lazy reco candidates (the
-   *  client falls back to a title search). */
-  provider_id: string | null;
-  external_id: string | null;
-  year: number | null;
-  already_in_library: boolean;
-  library_infohash: string | null;
-  /** Set on "new episodes" cards — distinct new (S, E) since last visit. */
-  new_count: number | null;
-  /** Set on "new episodes" cards — routes to the collection. */
-  collection_id: string | null;
-};
+export type CatalogCard = components["schemas"]["CatalogCard"];
 
-export type ForYouShelf = {
-  key: string;
-  title: string;
-  kind: MediaKind | null;
-  items: CatalogCard[];
-};
+export type ForYouShelf = components["schemas"]["Shelf"];
 
-export type ForYouResponse = {
-  shelves: ForYouShelf[];
-};
+export type ForYouResponse = components["schemas"]["ForYou"];
 export const me = {
   continueWatching: () => api.get<ContinueWatchingItem[]>("/me/continue-watching"),
   watchlist: () => api.get<WatchlistItem[]>("/me/watchlist"),
@@ -656,76 +318,15 @@ export const me = {
   savePlaybackPreferences: (body: PlaybackPrefs) => api.put<void>("/me/playback-preferences", body),
 };
 
-export type FilePreview = {
-  index: number;
-  path: string;
-  size_bytes: number;
-  extension: string | null;
-  is_video: boolean;
-};
+export type FilePreview = components["schemas"]["TorrentFilePreview"];
+export type TorrentPreview = components["schemas"]["TorrentPreview"];
 
-export type TorrentPreview = {
-  infohash: string;
-  name: string;
-  total_size_bytes: number;
-  piece_length: number;
-  piece_count: number;
-  announce_urls: string[];
-  files: FilePreview[];
-};
+export type FileEntry = components["schemas"]["FileEntry"];
+export type TorrentSnapshot = components["schemas"]["TorrentSnapshot"];
 
-export type FileEntry = {
-  index: number;
-  path: string;
-  size_bytes: number;
-};
+export type TorrentView = components["schemas"]["TorrentView"];
 
-export type TorrentSnapshot = {
-  infohash: string;
-  name: string | null;
-  total_size_bytes: number;
-  state: "initializing" | "live" | "paused" | "error";
-  progress_bytes: number;
-  progress_pct: number;
-  download_speed_bps: number;
-  upload_speed_bps: number;
-  uploaded_bytes: number;
-  peers: number;
-  files: FileEntry[];
-  error: string | null;
-  finished: boolean;
-};
-
-export type TorrentView = TorrentSnapshot & {
-  id: string;
-  added_by: string;
-  /** Public display name of the user that added this torrent. */
-  added_by_name: string;
-  added_at: string;
-  last_played_at: string | null;
-  source_provider: string | null;
-  source_external_id: string | null;
-  tmdb_id: number | null;
-  /** Server-validated TMDB association (runtime matches probed duration ±15 %). */
-  tmdb_verified: boolean;
-  /** `"movie"` | `"tv"` from the parent collection — pass to the TMDB
-   *  lookup endpoint to disambiguate movie vs tv namespaces. */
-  kind: MediaKind | null;
-  /** Parent collection UUID once `collection_assign` has grouped this
-   *  torrent; `null`/absent for orphan torrents. Lets a multi-file
-   *  torrent deep-link to its collection page. Optional — older
-   *  backends don't send it (`#[serde(default)]` on the Rust side). */
-  collection_id?: string | null;
-  /** Lifetime upload counter — survives session restarts and GC eviction,
-   *  unlike the snapshot's `uploaded_bytes`. */
-  uploaded_bytes_total: number;
-};
-
-export type IngestResponse = {
-  id: string;
-  already_managed: boolean;
-  snapshot: TorrentSnapshot;
-};
+export type IngestResponse = components["schemas"]["IngestResponse"];
 
 export const torrents = {
   preview: (provider_id: string, external_id: string) =>
@@ -758,92 +359,30 @@ export const torrents = {
     `/api/torrents/${infohash}/files/${idx}/sub/${streamIdx}/track.vtt`,
 };
 
-export type MediaProbe = {
-  container: string;
-  duration_seconds: number | null;
-  size_bytes: number | null;
-  bit_rate: number | null;
-  video: VideoStream[];
-  audio: AudioStream[];
-  subtitle: SubtitleStream[];
-};
-
-export type VideoStream = {
-  index: number;
-  absolute_index: number;
-  codec: string;
-  profile: string | null;
-  width: number | null;
-  height: number | null;
-  bit_rate: number | null;
-  frame_rate: number | null;
-};
-
-export type AudioStream = {
-  index: number;
-  absolute_index: number;
-  codec: string;
-  channels: number;
-  channel_layout: string | null;
-  sample_rate: number | null;
-  language: string | null;
-  title: string | null;
-  default: boolean;
-  forced: boolean;
-  browser_compatible: boolean;
-};
-
-export type PlayStatus = {
-  ready: boolean;
-  /** "downloading" | "remuxing" | "preparing" — null when ready. */
-  reason: string | null;
-  /** 0..1 — only meaningful when reason === "downloading". */
-  progress: number | null;
-  error: string | null;
-};
-
-export type SubtitleStream = {
-  index: number;
-  absolute_index: number;
-  codec: string;
-  language: string | null;
-  title: string | null;
-  default: boolean;
-  forced: boolean;
-  text_based: boolean;
-};
+export type MediaProbe = components["schemas"]["MediaProbe"];
+export type VideoStream = components["schemas"]["VideoStream"];
+export type AudioStream = components["schemas"]["AudioStream"];
+export type PlayStatus = components["schemas"]["PlayStatus"];
+export type SubtitleStream = components["schemas"]["SubtitleStream"];
 
 // ---------------------------------------------------------------------------
 // Discovery: featured carousels (torr9 /featured/{movies,series}, etc.)
 // ---------------------------------------------------------------------------
 
-export type FeaturedResponse = {
-  movies: SearchResult[];
-  series: SearchResult[];
-};
+export type FeaturedResponse = components["schemas"]["FeaturedResponse"];
 
 /** One entry of TMDB's genre taxonomy (merged movie+TV, deduped). The
  *  `id` is what we persist in a user's `genres` preference. */
-export type GenreOption = {
-  id: number;
-  name: string;
-};
+export type GenreOption = components["schemas"]["GenreOption"];
 
-export type GenresResponse = {
-  genres: GenreOption[];
-};
+export type GenresResponse = components["schemas"]["GenresResponse"];
 
 /** A user-selectable language: `value` is the backend `Language` wire
  *  token ("french"/"english"), `label` the display string. Served by the
  *  backend so adding a language needs no client redeploy. */
-export type LanguageOption = {
-  value: string;
-  label: string;
-};
+export type LanguageOption = components["schemas"]["LanguageOption"];
 
-export type LanguagesResponse = {
-  languages: LanguageOption[];
-};
+export type LanguagesResponse = components["schemas"]["LanguagesResponse"];
 
 export const discover = {
   featured: () => api.get<FeaturedResponse>("/discover/featured"),
@@ -859,121 +398,12 @@ export const discover = {
 // Library — collections (default) or raw torrents (toggle)
 // ---------------------------------------------------------------------------
 
-export type CollectionListItem = {
-  id: string;
-  tmdb_id: number | null;
-  display_title: string;
-  kind: "tv" | "movie";
-  /** True for anime collections (kept distinct from a same-titled
-   *  live-action show). Additive field — absent on older servers. */
-  is_anime?: boolean;
-  torrent_count: number;
-  total_size_bytes: number;
-  episode_count: number;
-  representative_infohash: string | null;
-};
-
-export type LibraryResponse =
-  | { view: "collections"; items: CollectionListItem[] }
-  | {
-      view: "torrents";
-      items: TorrentView[];
-      /** Lifetime upload across every torrent ever ingested, including
-       *  soft-deleted ones not present in `items`. */
-      total_uploaded_bytes: number;
-    };
-
-export type CollectionEpisodeEntry = {
-  season: number;
-  episode: number;
-  infohash: string;
-  file_idx: number;
-  watched: boolean;
-  /** Language tag derived server-side from the parent torrent's
-   *  SCENE name (`french` / `english` / `multi` / `unknown`).
-   *  Rendered as a row badge so a household with anglophone +
-   *  francophone viewers can tell which dub they have on disk. */
-  language?: string | null;
-  /** Absolute episode number for fleuve anime (`One Piece S01E1156`
-   *  → 1156). Null for ordinary seasonal episodes. Rendered as
-   *  "Episode N" when `CollectionDetail.numbering === "absolute"`. */
-  absolute_episode?: number | null;
-};
-
-/** Cached season-pack offer the indexer scanner stashed for this
- *  collection. Surfaced separately from `available_episodes` because
- *  the UX is different: a pack covers a whole season, not a single
- *  episode. The grab path transparently falls back to a matching
- *  pack when a user clicks a (S, E) that has no singleton offer —
- *  the pack is ingested and the requested episode's file_idx is
- *  resolved post-ingest from the SCENE-parsed file list. */
-export type SeasonPackEntry = {
-  season: number;
-  indexer_provider: string;
-  indexer_torrent_id: string;
-  quality: string | null;
-  seeders: number | null;
-  size_bytes: number | null;
-  found_at: string;
-  language: string | null;
-};
-
-/** Indexer offer for an episode not yet on disk, surfaced inside the
- *  same `CollectionDetail` payload as the on-disk `episodes` so the
- *  Series view can render a single merged list with `Play` /
- *  `Grab & Play` / `Prepare` actions per row. Server already
- *  filters out (season, episode) pairs that exist in `episodes`. */
-export type AvailableEpisodeEntry = {
-  season: number;
-  episode: number;
-  indexer_provider: string;
-  indexer_torrent_id: string;
-  quality: string | null;
-  seeders: number | null;
-  size_bytes: number | null;
-  found_at: string;
-  /** Server-resolved language tag (`french` / `english` / `multi` /
-   *  `unknown`). Rendered as a row badge so anglophone users can
-   *  spot a Seedpool EN release on a francophone-watched show. */
-  language?: string | null;
-  /** Absolute episode number for fleuve anime offers. Null for
-   *  seasonal releases. */
-  absolute_episode?: number | null;
-};
-
-export type CollectionDetail = {
-  id: string;
-  tmdb_id: number | null;
-  display_title: string;
-  kind: "tv" | "movie";
-  /** True for anime collections (AniList-enriched, split from a
-   *  same-titled live-action show). Additive — absent on older servers. */
-  is_anime?: boolean;
-  /** How to lay out episodes: `"seasonal"` (season tabs, the default)
-   *  or `"absolute"` (one flat "Episode N" list — fleuve anime whose
-   *  releases cram the absolute number into a fake S01). Derived
-   *  server-side from the episode data, NOT from `is_anime`: a
-   *  season-cut anime stays `"seasonal"`. Absent on older servers →
-   *  treat as `"seasonal"`. */
-  numbering?: "seasonal" | "absolute";
-  /** Server-resolved TMDB poster_path / backdrop_path (`/abc123.jpg`
-   *  form). Pass through `tmdbImage(path, size)` to get a URL.
-   *  Null when no tmdb_id is attached or the TMDB lookup failed. */
-  poster_path?: string | null;
-  backdrop_path?: string | null;
-  torrents: TorrentView[];
-  episodes: CollectionEpisodeEntry[];
-  /** Indexer offers for grabbable next episodes. Empty for movies /
-   *  collections with no SCENE identity / TV shows the household has
-   *  fully caught up on. */
-  available_episodes?: AvailableEpisodeEntry[];
-  /** Season-pack offers (separate from `available_episodes`). UI
-   *  renders one "Grab full Season N" CTA per pack/language. */
-  season_packs?: SeasonPackEntry[];
-  /** Count of `available_episodes` whose `found_at > last_visited_at`.
-   *  Drives the home-page Watchlist "X new" badge. */
-  has_new_since_last_visit?: number;
-};
+export type CollectionListItem = components["schemas"]["CollectionListItem"];
+export type LibraryResponse = components["schemas"]["LibraryResponse"];
+export type CollectionEpisodeEntry = components["schemas"]["EpisodeEntry"];
+export type SeasonPackEntry = components["schemas"]["SeasonPackEntry"];
+export type AvailableEpisodeEntry = components["schemas"]["AvailableEpisodeEntry"];
+export type CollectionDetail = components["schemas"]["CollectionDetail"];
 
 export const library = {
   list: (view: "collections" | "torrents" = "collections") =>
@@ -1007,91 +437,21 @@ export const library = {
 /// rows (auto-created on grab). `id` is the collection id when one
 /// already exists for this normalised name, otherwise the follow
 /// row's own id (used as a routing token for `/collection/:id`).
-export type WatchlistItem = {
-  id: string;
-  /** SCENE-normalised name. Clients use this to detect "is this
-   *  search result already on my Watchlist?" without having to run
-   *  the same normaliser themselves. */
-  normalized_name: string;
-  name: string;
-  tmdb_id: number | null;
-  poster_path: string | null;
-  backdrop_path: string | null;
-  new_count: number;
-  last_visited_at: string | null;
-  created_at: string;
-};
+export type WatchlistItem = components["schemas"]["WatchlistItem"];
 
-export type FollowSummary = {
-  /** Stable id — clients route by this, not by tmdb_id. */
-  id: string;
-  /** SCENE-normalised name; identity for joining episode_files /
-   *  available_episodes. */
-  normalized_name: string;
-  /** Display name as the user picked it. */
-  name: string;
-  /** Decoration only. Even when present, frontends should not pull
-   *  TMDB metadata unless the matching collection has been
-   *  tmdb_verified by the runtime probe (server only fills
-   *  poster_path / backdrop_path under that condition). */
-  tmdb_id: number | null;
-  /** Empty until the joined collection has tmdb_verified=true. */
-  poster_path: string | null;
-  backdrop_path: string | null;
-  /** Number of distinct (season, episode) the indexer has surfaced
-   *  since `last_visited_at`. Drives the "X new" badge. */
-  new_count: number;
-  last_visited_at: string | null;
-  created_at: string;
-};
+export type FollowSummary = components["schemas"]["FollowSummary"];
 
-export type EpisodeStatus = "downloaded" | "available";
+export type EpisodeStatus = components["schemas"]["EpisodeStatus"];
 
-export type EpisodeItem = {
-  season: number;
-  episode: number;
-  status: EpisodeStatus;
-  /** Per-user `playback_progress.completed` for the underlying file
-   *  (only meaningful when status === "downloaded"). */
-  watched: boolean;
-  /** Set when status === "downloaded": where to play. */
-  infohash: string | null;
-  file_idx: number | null;
-  /** Set when status === "available": pass to grabEpisode. */
-  indexer_provider: string | null;
-  indexer_torrent_id: string | null;
-  quality: string | null;
-  seeders: number | null;
-};
+export type EpisodeItem = components["schemas"]["EpisodeItem"];
 
-export type EpisodesResponse = {
-  /** Echoes the request's season filter — null when the caller
-   *  asked for the full set across all seasons. */
-  season: number | null;
-  items: EpisodeItem[];
-};
+export type EpisodesResponse = components["schemas"]["EpisodesResponse"];
 
-export type EpisodePoint = {
-  follow_id: string | null;
-  season: number;
-  episode: number;
-  status: EpisodeStatus;
-};
+export type EpisodePoint = components["schemas"]["EpisodePoint"];
 
-export type EpisodeContext = {
-  followed: boolean;
-  current: EpisodePoint | null;
-  next: EpisodePoint | null;
-};
+export type EpisodeContext = components["schemas"]["EpisodeContext"];
 
-export type GrabEpisodeResponse = {
-  infohash: string;
-  file_idx: number;
-  /** True when the episode was already in the library — the call short-
-   *  circuited through the idempotent path and didn't trigger a fresh
-   *  ingest. */
-  already_grabbed: boolean;
-};
+export type GrabEpisodeResponse = components["schemas"]["GrabResponse"];
 
 export const follows = {
   list: () => api.get<FollowSummary[]>("/me/follows"),

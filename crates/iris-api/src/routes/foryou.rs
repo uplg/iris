@@ -15,6 +15,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::ApiResult;
@@ -29,23 +30,48 @@ pub fn router() -> Router<AppState> {
         .route("/dismiss", post(dismiss))
 }
 
-async fn for_you(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<reco::ForYou>> {
+#[utoipa::path(
+    get,
+    path = "/api/me/for-you",
+    operation_id = "get_for_you",
+    responses((status = 200, description = "The home blended For You shelf", body = reco::ForYou)),
+    tag = "for-you",
+)]
+pub(crate) async fn for_you(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<reco::ForYou>> {
     Ok(Json(reco::for_you(&state, user.id).await?))
 }
 
-async fn for_you_page(
+#[utoipa::path(
+    get,
+    path = "/api/me/for-you/page",
+    operation_id = "get_for_you_page",
+    responses((status = 200, description = "The organized For You page (sectioned shelves)", body = reco::ForYou)),
+    tag = "for-you",
+)]
+pub(crate) async fn for_you_page(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<reco::ForYou>> {
     Ok(Json(reco::for_you_page(&state, user.id).await?))
 }
 
-#[derive(Debug, Deserialize)]
-struct DismissRequest {
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct DismissRequest {
     catalog_id: Uuid,
 }
 
-async fn dismiss(
+#[utoipa::path(
+    post,
+    path = "/api/me/for-you/dismiss",
+    operation_id = "dismiss_for_you",
+    request_body = DismissRequest,
+    responses((status = 204, description = "Candidate hidden from future shelves")),
+    tag = "for-you",
+)]
+pub(crate) async fn dismiss(
     State(state): State<AppState>,
     user: AuthUser,
     Json(body): Json<DismissRequest>,

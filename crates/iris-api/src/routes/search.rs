@@ -5,6 +5,7 @@ use axum::routing::get;
 use iris_core::search::{MediaKind, SearchQuery, SortField, SortOrder, TorrentDetails};
 use iris_providers::registry::AggregatedResults;
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 
 use crate::error::{ApiError, ApiResult};
 use crate::ranking;
@@ -17,7 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/details", get(details))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct SearchParams {
     pub q: String,
     pub page: Option<u32>,
@@ -33,7 +34,7 @@ pub struct SearchParams {
 /// work matches — unlike the infohash-keyed `already_in_library` flag
 /// on individual results, which deliberately only marks the exact
 /// release (see `ranking.rs`: other languages/cuts must stay grabbable).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LibraryMatch {
     pub collection_id: String,
     pub display_title: String,
@@ -59,14 +60,23 @@ pub struct LibraryMatch {
 /// `AggregatedResults` + the library rows. `flatten` keeps the wire
 /// shape byte-compatible for deployed clients — `library_matches` is
 /// purely additive (TV ignores unknown keys, TS fields are optional).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SearchResponse {
     #[serde(flatten)]
     pub agg: AggregatedResults,
     pub library_matches: Vec<LibraryMatch>,
 }
 
-async fn search(
+#[utoipa::path(
+    get,
+    path = "/api/search",
+    params(SearchParams),
+    responses(
+        (status = 200, description = "Aggregated tracker results + library matches", body = SearchResponse),
+    ),
+    tag = "search",
+)]
+pub(crate) async fn search(
     State(state): State<AppState>,
     _user: AuthUser,
     Query(params): Query<SearchParams>,
@@ -231,7 +241,7 @@ async fn library_matches_for(state: &AppState, q: &SearchQuery) -> Vec<LibraryMa
     out
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct DetailsParams {
     /// Provider id from the search hit (`provider_id` field).
     pub provider: String,
@@ -242,7 +252,18 @@ pub struct DetailsParams {
 /// Rich preview for a single torrent. Powers the search-result preview
 /// dialog. Provider-specific shape is normalised to a single
 /// `TorrentDetails` so web + TV consume one structure.
-async fn details(
+#[utoipa::path(
+    get,
+    path = "/api/search/details",
+    params(DetailsParams),
+    responses(
+        (status = 200, description = "Normalised torrent detail view", body = TorrentDetails),
+        (status = 400, description = "Unknown provider"),
+        (status = 404, description = "Provider exposes no detail page for this id"),
+    ),
+    tag = "search",
+)]
+pub(crate) async fn details(
     State(state): State<AppState>,
     _user: AuthUser,
     Query(params): Query<DetailsParams>,

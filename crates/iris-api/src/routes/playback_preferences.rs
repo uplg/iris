@@ -15,6 +15,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::error::ApiResult;
 use crate::routes::extract::AuthUser;
@@ -24,8 +25,8 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/", get(get_prefs).put(put_prefs))
 }
 
-#[derive(Debug, Serialize)]
-struct PlaybackPrefsResponse {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct PlaybackPrefsResponse {
     /// Preferred audio language (ISO 639-1 / BCP-47), or null = no preference.
     audio_language: Option<String>,
     /// Preferred subtitle language, `"off"` for disabled, or null = no
@@ -33,7 +34,14 @@ struct PlaybackPrefsResponse {
     subtitle_language: Option<String>,
 }
 
-async fn get_prefs(
+#[utoipa::path(
+    get,
+    path = "/api/me/playback-preferences",
+    operation_id = "get_playback_preferences",
+    responses((status = 200, description = "The caller's preferred audio + subtitle languages", body = PlaybackPrefsResponse)),
+    tag = "preferences",
+)]
+pub(crate) async fn get_prefs(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<PlaybackPrefsResponse>> {
@@ -44,8 +52,8 @@ async fn get_prefs(
     }))
 }
 
-#[derive(Debug, Deserialize)]
-struct UpdatePlaybackPrefs {
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct UpdatePlaybackPrefs {
     #[serde(default)]
     audio_language: Option<String>,
     #[serde(default)]
@@ -61,7 +69,15 @@ fn norm(value: Option<String>) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-async fn put_prefs(
+#[utoipa::path(
+    put,
+    path = "/api/me/playback-preferences",
+    operation_id = "set_playback_preferences",
+    request_body = UpdatePlaybackPrefs,
+    responses((status = 204, description = "Preferences saved")),
+    tag = "preferences",
+)]
+pub(crate) async fn put_prefs(
     State(state): State<AppState>,
     user: AuthUser,
     Json(body): Json<UpdatePlaybackPrefs>,
