@@ -55,11 +55,11 @@ struct Inner {
 /// TTL for the cached TMDB genre taxonomy. The list changes maybe once
 /// a year; a daily refresh costs one request per kind and keeps the
 /// onboarding picker current.
-const GENRE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const GENRE_CACHE_TTL: Duration = Duration::from_hours(24);
 
 /// TTL for cached list slices (`recommendations` / `similar`). A few hours
 /// keeps the "Because you watched" shelf cheap across repeated renders.
-const DISCOVER_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const DISCOVER_CACHE_TTL: Duration = Duration::from_hours(6);
 
 #[derive(Clone)]
 enum CacheEntry {
@@ -163,7 +163,6 @@ impl TmdbClient {
             }),
         })
     }
-
 }
 
 const fn kind_marker(k: TmdbKind) -> &'static str {
@@ -174,7 +173,6 @@ const fn kind_marker(k: TmdbKind) -> &'static str {
 }
 
 impl TmdbClient {
-
     /// Multi-search across movies + TV shows. Powers the search-page
     /// typeahead — the user types a few characters, we surface "did you
     /// mean X (2024)" suggestions tied to a TMDB id so a click runs an
@@ -261,10 +259,10 @@ impl TmdbClient {
     /// than failing onboarding).
     pub async fn genre_list(&self, kind: TmdbKind) -> Vec<Genre> {
         let marker = kind_marker(kind);
-        if let Some((fetched, genres)) = self.inner.genres_cache.read().await.get(marker).cloned() {
-            if fetched.elapsed() < GENRE_CACHE_TTL {
-                return genres;
-            }
+        if let Some((fetched, genres)) = self.inner.genres_cache.read().await.get(marker).cloned()
+            && fetched.elapsed() < GENRE_CACHE_TTL
+        {
+            return genres;
         }
         let url = format!(
             "https://api.themoviedb.org/3/genre/{marker}/list?api_key={}&language=en-US",
@@ -290,7 +288,10 @@ impl TmdbClient {
         let genres: Vec<Genre> = raw
             .genres
             .into_iter()
-            .map(|g| Genre { id: g.id, name: g.name })
+            .map(|g| Genre {
+                id: g.id,
+                name: g.name,
+            })
             .collect();
         self.inner
             .genres_cache
@@ -335,11 +336,16 @@ impl TmdbClient {
         url: String,
         kind: TmdbKind,
     ) -> Vec<MediaMetadata> {
-        if let Some((fetched, items)) = self.inner.discover_cache.read().await.get(&cache_key).cloned()
+        if let Some((fetched, items)) = self
+            .inner
+            .discover_cache
+            .read()
+            .await
+            .get(&cache_key)
+            .cloned()
+            && fetched.elapsed() < DISCOVER_CACHE_TTL
         {
-            if fetched.elapsed() < DISCOVER_CACHE_TTL {
-                return items;
-            }
+            return items;
         }
         let res = match self.inner.http.get(&url).send().await {
             Ok(r) => r,
@@ -374,11 +380,7 @@ impl TmdbClient {
     /// any error or for invalid `(tmdb_id, season)` combos — the caller can't
     /// usefully distinguish "doesn't exist" from "TMDB is down" and treats
     /// both as "no expected episodes right now".
-    pub async fn tv_season_episodes(
-        &self,
-        tmdb_id: u64,
-        season: u32,
-    ) -> Vec<EpisodeMetadata> {
+    pub async fn tv_season_episodes(&self, tmdb_id: u64, season: u32) -> Vec<EpisodeMetadata> {
         let key = (tmdb_id, season);
         if let Some(hit) = self.inner.seasons.read().await.get(&key).cloned() {
             return hit;
@@ -418,7 +420,11 @@ impl TmdbClient {
                 still_path: e.still_path,
             })
             .collect();
-        self.inner.seasons.write().await.insert(key, episodes.clone());
+        self.inner
+            .seasons
+            .write()
+            .await
+            .insert(key, episodes.clone());
         episodes
     }
 
@@ -444,14 +450,7 @@ impl TmdbClient {
         // Cache key includes the kind so a /movie/X lookup doesn't
         // serve a stale /tv/X entry from a previous call.
         let cache_key = (tmdb_id, kind_hint.map(kind_marker));
-        if let Some(hit) = self
-            .inner
-            .typed_cache
-            .read()
-            .await
-            .get(&cache_key)
-            .cloned()
-        {
+        if let Some(hit) = self.inner.typed_cache.read().await.get(&cache_key).cloned() {
             return match hit {
                 CacheEntry::Found(m) => Some(*m),
                 CacheEntry::NotFound => None,
@@ -521,9 +520,11 @@ impl TmdbClient {
         // entry as a representative episode length. Either way the
         // caller is expected to compare against the file's real probed
         // duration before trusting the metadata.
-        let runtime_minutes = raw
-            .runtime
-            .or_else(|| raw.episode_run_time.as_ref().and_then(|v| v.first().copied()));
+        let runtime_minutes = raw.runtime.or_else(|| {
+            raw.episode_run_time
+                .as_ref()
+                .and_then(|v| v.first().copied())
+        });
         Some(MediaMetadata {
             kind,
             tmdb_id,
@@ -652,9 +653,9 @@ struct TmdbMultiRaw {
 struct TmdbMultiResult {
     id: u64,
     media_type: Option<String>,
-    title: Option<String>,        // movies
-    name: Option<String>,         // tv
-    release_date: Option<String>, // movies
+    title: Option<String>,          // movies
+    name: Option<String>,           // tv
+    release_date: Option<String>,   // movies
     first_air_date: Option<String>, // tv
     overview: Option<String>,
     poster_path: Option<String>,

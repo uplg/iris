@@ -56,10 +56,7 @@ pub fn router() -> Router<AppState> {
         .route("/{infohash}/files/{idx}/probe", get(probe_file))
         // Capability-negotiated entry point. Clients fetch the manifest
         // once, then pick a decode tier; see docs/SOTA_ARCHITECTURE.md.
-        .route(
-            "/{infohash}/files/{idx}/manifest.json",
-            get(manifest_json),
-        )
+        .route("/{infohash}/files/{idx}/manifest.json", get(manifest_json))
         // Playhead hint → playhead-priority piece prefetch (Phase 1).
         .route("/{infohash}/files/{idx}/seek", post(seek_hint))
         .route(
@@ -239,7 +236,10 @@ async fn put_progress(
     // could lose the cache — or the whole torrent — mid-play. The heartbeat
     // is the proof someone still has the player open (paused included).
     let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
-    state.remuxer().touch_played(&format!("{infohash}_{idx}")).await;
+    state
+        .remuxer()
+        .touch_played(&format!("{infohash}_{idx}"))
+        .await;
 
     // "Moved on to the next episode" ⇒ the one before it is done. Skipping the
     // credits and jumping to the next episode otherwise leaves the prior one
@@ -333,7 +333,14 @@ async fn ingest(
     Json(body): Json<ResolveBody>,
 ) -> ApiResult<Json<IngestResponse>> {
     Ok(Json(
-        ingest_core(&state, user.id, body.provider_id, body.external_id, body.tmdb_id).await?,
+        ingest_core(
+            &state,
+            user.id,
+            body.provider_id,
+            body.external_id,
+            body.tmdb_id,
+        )
+        .await?,
     ))
 }
 
@@ -364,10 +371,10 @@ async fn resolve_release(
         match provider.fetch_bytes(&url).await {
             Ok(bytes) => {
                 // Almost always a .torrent; tolerate a magnet body just in case.
-                if bytes.starts_with(b"magnet:") {
-                    if let Ok(s) = std::str::from_utf8(&bytes) {
-                        return Ok(TorrentSource::Magnet(s.trim().to_string()));
-                    }
+                if bytes.starts_with(b"magnet:")
+                    && let Ok(s) = std::str::from_utf8(&bytes)
+                {
+                    return Ok(TorrentSource::Magnet(s.trim().to_string()));
                 }
                 return Ok(TorrentSource::TorrentFile(bytes.to_vec()));
             }
@@ -379,7 +386,10 @@ async fn resolve_release(
             ),
         }
     }
-    provider.resolve(external_id).await.map_err(map_provider_err)
+    provider
+        .resolve(external_id)
+        .await
+        .map_err(map_provider_err)
 }
 
 /// Core grab path shared by the search ingest endpoint and the For-You preview
@@ -434,7 +444,11 @@ pub(crate) async fn ingest_core(
         state.db(),
         iris_db::torrents::NewTorrent {
             infohash: result.snapshot.infohash.clone(),
-            name: result.snapshot.name.clone().unwrap_or_else(|| "<unnamed>".into()),
+            name: result
+                .snapshot
+                .name
+                .clone()
+                .unwrap_or_else(|| "<unnamed>".into()),
             total_size_bytes: result.snapshot.total_size_bytes,
             source_provider: Some(provider_id),
             source_external_id: Some(external_id),
@@ -527,8 +541,22 @@ async fn prewarm_default_remux(state: &AppState, infohash: &str) {
                 .filter(|f| {
                     let p = std::path::Path::new(&f.path);
                     matches!(
-                        p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
-                        Some("mkv" | "mp4" | "webm" | "m4v" | "avi" | "mov" | "ts" | "mts" | "m2ts" | "wmv")
+                        p.extension()
+                            .and_then(|e| e.to_str())
+                            .map(str::to_ascii_lowercase)
+                            .as_deref(),
+                        Some(
+                            "mkv"
+                                | "mp4"
+                                | "webm"
+                                | "m4v"
+                                | "avi"
+                                | "mov"
+                                | "ts"
+                                | "mts"
+                                | "m2ts"
+                                | "wmv"
+                        )
                     )
                 })
                 .max_by_key(|f| f.size_bytes)
@@ -554,7 +582,11 @@ async fn prewarm_default_remux(state: &AppState, infohash: &str) {
     };
     // Both prewarm paths only reach here once the torrent is `finished`
     // (guarded above), so the probe is taken on a complete file.
-    let probe = match state.probes().get_or_probe(infohash, idx, &path, true).await {
+    let probe = match state
+        .probes()
+        .get_or_probe(infohash, idx, &path, true)
+        .await
+    {
         Ok(p) => p,
         Err(e) => {
             tracing::debug!(error = %e, "prewarm: probe failed");
@@ -562,7 +594,11 @@ async fn prewarm_default_remux(state: &AppState, infohash: &str) {
         }
     };
     verify_tmdb_match(state, infohash, probe.duration_seconds).await;
-    tracing::info!(infohash, idx, "prewarm: probed (no remux — lazy on first /play hit)");
+    tracing::info!(
+        infohash,
+        idx,
+        "prewarm: probed (no remux — lazy on first /play hit)"
+    );
 }
 
 /// Build the HLS audio-rendition plan from probe data.
@@ -579,8 +615,7 @@ async fn prewarm_default_remux(state: &AppState, infohash: &str) {
 fn build_remux_plan(probe: &iris_media::MediaProbe) -> iris_media::RemuxPlan {
     use iris_media::{AudioCodec, AudioRendition};
     let mut renditions: Vec<AudioRendition> = Vec::new();
-    let mut lang_count: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut lang_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for a in &probe.audio {
         let language = a
             .language
@@ -640,30 +675,34 @@ const TMDB_RUNTIME_TOLERANCE: f64 = 0.15;
 /// Confirm or reject a torrent's `tmdb_id` by matching declared runtime
 /// against the file's probed duration. Idempotent: once verified, never
 /// re-checked. No-op when `tmdb_id` is missing or the runtime is unknown.
-async fn verify_tmdb_match(
-    state: &AppState,
-    infohash: &str,
-    probed_duration_secs: Option<f64>,
-) {
+async fn verify_tmdb_match(state: &AppState, infohash: &str, probed_duration_secs: Option<f64>) {
     let Ok(Some(row)) = iris_db::torrents::find_by_infohash(state.db(), infohash).await else {
         return;
     };
     if row.tmdb_verified {
         return;
     }
-    let Some(tmdb_id) = row.tmdb_id.filter(|id| *id > 0) else { return };
-    let Some(probed) = probed_duration_secs.filter(|d| *d > 0.0) else { return };
+    let Some(tmdb_id) = row.tmdb_id.filter(|id| *id > 0) else {
+        return;
+    };
+    let Some(probed) = probed_duration_secs.filter(|d| *d > 0.0) else {
+        return;
+    };
     let Some(tmdb) = state.tmdb() else { return };
     // tmdb_id is a positive i64 from the DB; u64::try_from cannot fail here.
-    let Ok(tmdb_id_u64) = u64::try_from(tmdb_id) else { return };
-    let Some(meta) = tmdb.lookup(tmdb_id_u64).await else { return };
-    let Some(tmdb_minutes) = meta.runtime_minutes.filter(|m| *m > 0) else { return };
+    let Ok(tmdb_id_u64) = u64::try_from(tmdb_id) else {
+        return;
+    };
+    let Some(meta) = tmdb.lookup(tmdb_id_u64).await else {
+        return;
+    };
+    let Some(tmdb_minutes) = meta.runtime_minutes.filter(|m| *m > 0) else {
+        return;
+    };
     let tmdb_secs = f64::from(tmdb_minutes) * 60.0;
     let diff = (probed - tmdb_secs).abs() / tmdb_secs;
     let verified = diff < TMDB_RUNTIME_TOLERANCE;
-    if let Err(e) =
-        iris_db::torrents::set_tmdb_verified(state.db(), infohash, verified).await
-    {
+    if let Err(e) = iris_db::torrents::set_tmdb_verified(state.db(), infohash, verified).await {
         tracing::warn!(error = %e, infohash, "tmdb verify: db write failed");
         return;
     }
@@ -719,10 +758,7 @@ pub struct TorrentView {
     pub snapshot: TorrentSnapshot,
 }
 
-async fn list(
-    State(state): State<AppState>,
-    _user: AuthUser,
-) -> ApiResult<Json<Vec<TorrentView>>> {
+async fn list(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<Vec<TorrentView>>> {
     let rows = iris_db::torrents::list_active(state.db()).await?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
@@ -788,12 +824,9 @@ async fn remove(
     // otherwise the bytes uploaded since the last 30 s reconcile tick are
     // lost forever.
     if let Some(snap) = state.engine().get_by_infohash(&row.infohash) {
-        let _ = iris_db::torrents::reconcile_uploaded(
-            state.db(),
-            &row.infohash,
-            snap.uploaded_bytes,
-        )
-        .await;
+        let _ =
+            iris_db::torrents::reconcile_uploaded(state.db(), &row.infohash, snap.uploaded_bytes)
+                .await;
     }
     state
         .engine()
@@ -831,7 +864,10 @@ async fn probe_file(
     let row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
         .await?
         .ok_or(ApiError::NotFound)?;
-    let path = state.engine().file_path(&infohash, idx).map_err(map_engine_err)?;
+    let path = state
+        .engine()
+        .file_path(&infohash, idx)
+        .map_err(map_engine_err)?;
 
     // Don't gate playback on the *whole torrent* finishing — a 4 K remux is
     // tens of GB and "click-to-play" must work as soon as the head is here.
@@ -848,32 +884,24 @@ async fn probe_file(
     let snap = state.engine().get_by_infohash(&infohash);
     let torrent_finished = row.finished_at.is_some() || snap.as_ref().is_some_and(|s| s.finished);
     let mut header_bytes: u64 = 0;
-    if let Some(snap) = snap.as_ref() {
-        if !torrent_finished {
-            if let Some(file) = snap.files.iter().find(|f| f.index == idx) {
-                let header_count: u64 = 1 << 16; // 64 KiB
-                let tail_count: u64 = 1 << 20; // 1 MiB
-                let tail_start = file.size_bytes.saturating_sub(tail_count);
-                let engine = state.engine().clone();
-                let ih = infohash.clone();
-                let header =
-                    engine.prefetch_range(&ih, idx, 0, header_count, Duration::from_secs(30));
-                let tail = engine.prefetch_range(
-                    &ih,
-                    idx,
-                    tail_start,
-                    tail_count,
-                    Duration::from_secs(30),
-                );
-                let (h, t) = tokio::join!(header, tail);
-                match h {
-                    Ok(n) => header_bytes = n,
-                    Err(e) => tracing::debug!(error = %e, "probe: header prefetch errored"),
-                }
-                if let Err(e) = t {
-                    tracing::debug!(error = %e, "probe: tail prefetch errored");
-                }
-            }
+    if let Some(snap) = snap.as_ref()
+        && !torrent_finished
+        && let Some(file) = snap.files.iter().find(|f| f.index == idx)
+    {
+        let header_count: u64 = 1 << 16; // 64 KiB
+        let tail_count: u64 = 1 << 20; // 1 MiB
+        let tail_start = file.size_bytes.saturating_sub(tail_count);
+        let engine = state.engine().clone();
+        let ih = infohash.clone();
+        let header = engine.prefetch_range(&ih, idx, 0, header_count, Duration::from_secs(30));
+        let tail = engine.prefetch_range(&ih, idx, tail_start, tail_count, Duration::from_secs(30));
+        let (h, t) = tokio::join!(header, tail);
+        match h {
+            Ok(n) => header_bytes = n,
+            Err(e) => tracing::debug!(error = %e, "probe: header prefetch errored"),
+        }
+        if let Err(e) = t {
+            tracing::debug!(error = %e, "probe: tail prefetch errored");
         }
     }
 
@@ -885,16 +913,18 @@ async fn probe_file(
     // "Reading media metadata…" until its retry budget runs out — with no
     // hint *why*. Surface a distinct, non-retryable error that does NOT
     // carry the poll tokens, so the UI can say "no seeders" and stop.
-    if !torrent_finished && header_bytes == 0 {
-        if let Some(s) = state.engine().get_by_infohash(&infohash) {
-            if !s.finished && s.peers == 0 && s.download_speed_bps == 0 {
-                return Err(ApiError::Conflict(format!(
-                    "stalled: no seeders for this file ({:.0}% downloaded, 0 peers, 0 B/s) — \
+    if !torrent_finished
+        && header_bytes == 0
+        && let Some(s) = state.engine().get_by_infohash(&infohash)
+        && !s.finished
+        && s.peers == 0
+        && s.download_speed_bps == 0
+    {
+        return Err(ApiError::Conflict(format!(
+            "stalled: no seeders for this file ({:.0}% downloaded, 0 peers, 0 B/s) — \
                      nothing to read yet",
-                    s.progress_pct
-                )));
-            }
-        }
+            s.progress_pct
+        )));
     }
 
     if !path.exists() {
@@ -911,6 +941,11 @@ async fn probe_file(
     Ok(Json(probe))
 }
 
+// Cohesive partial-download manifest handler (validate → prefetch header/tail
+// → stalled-swarm guard → probe → assemble); 2 lines over the pedantic
+// heuristic after the `collapsible_if` → let-chain cleanup. Same inline-allow
+// pattern as `clippy::cast_precision_loss` below.
+#[allow(clippy::too_many_lines)]
 async fn manifest_json(
     State(state): State<AppState>,
     _user: AuthUser,
@@ -954,7 +989,7 @@ async fn manifest_json(
     let mut header_bytes: u64 = 0;
     if !torrent_finished {
         let header_count: u64 = 1 << 16; // 64 KiB — generous for any container header
-        let tail_count: u64 = 1 << 20;   // 1 MiB
+        let tail_count: u64 = 1 << 20; // 1 MiB
         let tail_start = file.size_bytes.saturating_sub(tail_count);
         let engine = state.engine().clone();
         let infohash_for_prefetch = infohash.clone();
@@ -985,16 +1020,18 @@ async fn manifest_json(
     // Stalled-swarm guard — same rationale as `probe_file`: a dead torrent
     // (no peers, no throughput, head still unreadable) must surface a
     // distinct non-retryable error instead of an endless not-ready poll.
-    if !torrent_finished && header_bytes == 0 {
-        if let Some(s) = state.engine().get_by_infohash(&infohash) {
-            if !s.finished && s.peers == 0 && s.download_speed_bps == 0 {
-                return Err(ApiError::Conflict(format!(
-                    "stalled: no seeders for this file ({:.0}% downloaded, 0 peers, 0 B/s) — \
+    if !torrent_finished
+        && header_bytes == 0
+        && let Some(s) = state.engine().get_by_infohash(&infohash)
+        && !s.finished
+        && s.peers == 0
+        && s.download_speed_bps == 0
+    {
+        return Err(ApiError::Conflict(format!(
+            "stalled: no seeders for this file ({:.0}% downloaded, 0 peers, 0 B/s) — \
                      nothing to read yet",
-                    s.progress_pct
-                )));
-            }
-        }
+            s.progress_pct
+        )));
     }
     if !path.exists() {
         return Err(ApiError::BadRequest(format!(
@@ -1009,8 +1046,8 @@ async fn manifest_json(
         .await
         .map_err(|e| map_probe_err(&e, torrent_finished))?;
 
-    let file_idx_u32 = u32::try_from(idx)
-        .map_err(|_| ApiError::BadRequest("file index too large".into()))?;
+    let file_idx_u32 =
+        u32::try_from(idx).map_err(|_| ApiError::BadRequest("file index too large".into()))?;
     let progress = if snapshot.total_size_bytes > 0 {
         #[allow(clippy::cast_precision_loss)]
         let p = snapshot.progress_bytes as f64 / snapshot.total_size_bytes as f64;
@@ -1125,7 +1162,7 @@ async fn seek_hint(
                 idx,
                 byte_offset,
                 bytes_ahead,
-                Duration::from_secs(60),
+                Duration::from_mins(1),
             )
             .await
         {
@@ -1164,7 +1201,10 @@ async fn playhead_window_bytes(
     let Ok(path) = engine.file_path(infohash, idx) else {
         return FALLBACK;
     };
-    let Ok(probe) = probes.get_or_probe(infohash, idx, &path, snapshot.finished).await else {
+    let Ok(probe) = probes
+        .get_or_probe(infohash, idx, &path, snapshot.finished)
+        .await
+    else {
         return FALLBACK;
     };
     let Some(duration) = probe.duration_seconds.filter(|d| *d > 0.0) else {
@@ -1252,20 +1292,24 @@ async fn prewarm_remux_file(state: &AppState, infohash: &str, idx: usize) {
     // If the torrent isn't finished, the client's playback was
     // sparse-streaming. The remux pipeline can't handle partial files,
     // so defer until completion.
-    if let Some(snap) = state.engine().get_by_infohash(infohash) {
-        if !snap.finished {
-            tracing::debug!(
-                infohash,
-                idx,
-                pct = snap.progress_pct,
-                "fallback prewarm: deferring until torrent finishes"
-            );
-            return;
-        }
+    if let Some(snap) = state.engine().get_by_infohash(infohash)
+        && !snap.finished
+    {
+        tracing::debug!(
+            infohash,
+            idx,
+            pct = snap.progress_pct,
+            "fallback prewarm: deferring until torrent finishes"
+        );
+        return;
     }
     // Both prewarm paths only reach here once the torrent is `finished`
     // (guarded above), so the probe is taken on a complete file.
-    let probe = match state.probes().get_or_probe(infohash, idx, &path, true).await {
+    let probe = match state
+        .probes()
+        .get_or_probe(infohash, idx, &path, true)
+        .await
+    {
         Ok(p) => p,
         Err(e) => {
             tracing::debug!(error = %e, "fallback prewarm: probe failed");
@@ -1310,30 +1354,34 @@ async fn play_status(
     // Validate we know about this file even though we no longer touch
     // the raw bytes here (the lazy-remux path makes them irrelevant
     // until /play/master.m3u8 is hit).
-    let _ = state.engine().file_path(&infohash, idx).map_err(map_engine_err)?;
+    let _ = state
+        .engine()
+        .file_path(&infohash, idx)
+        .map_err(map_engine_err)?;
 
-    if let Some(snap) = state.engine().get_by_infohash(&infohash) {
-        if !snap.finished {
-            return Ok(Json(PlayStatus {
-                ready: false,
-                reason: Some("downloading".into()),
-                progress: Some((snap.progress_pct / 100.0).clamp(0.0, 1.0)),
-                error: None,
-            }));
-        }
+    if let Some(snap) = state.engine().get_by_infohash(&infohash)
+        && !snap.finished
+    {
+        return Ok(Json(PlayStatus {
+            ready: false,
+            reason: Some("downloading".into()),
+            progress: Some((snap.progress_pct / 100.0).clamp(0.0, 1.0)),
+            error: None,
+        }));
     }
 
     let key = format!("{infohash}_{idx}");
     let master = state.remuxer().master_path(&key);
-    if let Ok(meta) = tokio::fs::metadata(&master).await {
-        if meta.is_file() && meta.len() > 0 {
-            return Ok(Json(PlayStatus {
-                ready: true,
-                reason: None,
-                progress: None,
-                error: None,
-            }));
-        }
+    if let Ok(meta) = tokio::fs::metadata(&master).await
+        && meta.is_file()
+        && meta.len() > 0
+    {
+        return Ok(Json(PlayStatus {
+            ready: true,
+            reason: None,
+            progress: None,
+            error: None,
+        }));
     }
 
     // Sticky failure short-circuit: once ffmpeg has failed for this source
@@ -1379,7 +1427,14 @@ async fn subtitle_vtt(
     _user: AuthUser,
     Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
 ) -> ApiResult<Response> {
-    serve_subtitle(&state, &infohash, idx, stream_idx, iris_media::SubtitleFormat::WebVtt).await
+    serve_subtitle(
+        &state,
+        &infohash,
+        idx,
+        stream_idx,
+        iris_media::SubtitleFormat::WebVtt,
+    )
+    .await
 }
 
 async fn subtitle_ass(
@@ -1387,7 +1442,14 @@ async fn subtitle_ass(
     _user: AuthUser,
     Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
 ) -> ApiResult<Response> {
-    serve_subtitle(&state, &infohash, idx, stream_idx, iris_media::SubtitleFormat::Ass).await
+    serve_subtitle(
+        &state,
+        &infohash,
+        idx,
+        stream_idx,
+        iris_media::SubtitleFormat::Ass,
+    )
+    .await
 }
 
 async fn subtitle_sup(
@@ -1395,7 +1457,14 @@ async fn subtitle_sup(
     _user: AuthUser,
     Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
 ) -> ApiResult<Response> {
-    serve_subtitle(&state, &infohash, idx, stream_idx, iris_media::SubtitleFormat::Sup).await
+    serve_subtitle(
+        &state,
+        &infohash,
+        idx,
+        stream_idx,
+        iris_media::SubtitleFormat::Sup,
+    )
+    .await
 }
 
 /// Shared subtitle handler used by `track.{vtt,ass,sup}`. Caches per-
@@ -1458,15 +1527,10 @@ async fn serve_subtitle(
             .unwrap());
     }
 
-    let stream = iris_media::stream_subtitle(
-        &path,
-        stream_idx,
-        format,
-        cache_path,
-        torrent_finished,
-    )
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("subtitle extract: {e}")))?;
+    let stream =
+        iris_media::stream_subtitle(&path, stream_idx, format, cache_path, torrent_finished)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("subtitle extract: {e}")))?;
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, format.mime())
@@ -1499,16 +1563,15 @@ async fn stream_file(
             .engine()
             .get_by_infohash(&infohash)
             .is_some_and(|s| s.finished);
-    if finished {
-        if let Ok(path) = state.engine().file_path(&infohash, idx) {
-            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
-                let mime = mime_for_filename(&path.to_string_lossy());
-                let method = req.method().clone();
-                let range = req.headers().get(header::RANGE).cloned();
-                return serve_file_with_range(&path, &mime, method, range, 0).await;
-            }
-        }
+    if finished
+        && let Ok(path) = state.engine().file_path(&infohash, idx)
+        && tokio::fs::try_exists(&path).await.unwrap_or(false)
+    {
+        let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
+        let mime = mime_for_filename(&path.to_string_lossy());
+        let method = req.method().clone();
+        let range = req.headers().get(header::RANGE).cloned();
+        return serve_file_with_range(&path, &mime, method, range, 0).await;
     }
 
     let stream = state
@@ -1536,18 +1599,28 @@ async fn stream_file(
         if let Some((start, end)) = parse_range(rh, total) {
             let len = end - start + 1;
             if head_only {
-                return Ok(build_headers(StatusCode::PARTIAL_CONTENT, len, &mime, Some((start, end, total)))
-                    .body(Body::empty())
-                    .unwrap());
+                return Ok(build_headers(
+                    StatusCode::PARTIAL_CONTENT,
+                    len,
+                    &mime,
+                    Some((start, end, total)),
+                )
+                .body(Body::empty())
+                .unwrap());
             }
             if let Err(e) = reader.seek(SeekFrom::Start(start)).await {
                 return Err(ApiError::Internal(anyhow::anyhow!("seek: {e}")));
             }
             let limited = reader.take(len);
             let body = Body::from_stream(ReaderStream::with_capacity(limited, STREAM_CHUNK_SIZE));
-            return Ok(build_headers(StatusCode::PARTIAL_CONTENT, len, &mime, Some((start, end, total)))
-                .body(body)
-                .unwrap());
+            return Ok(build_headers(
+                StatusCode::PARTIAL_CONTENT,
+                len,
+                &mime,
+                Some((start, end, total)),
+            )
+            .body(body)
+            .unwrap());
         }
         let mut resp = Response::new(Body::from("invalid range"));
         *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
@@ -1675,8 +1748,10 @@ async fn play_asset(
     } else {
         "public, max-age=604800, immutable"
     };
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache_control));
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
     Ok(resp)
 }
 
@@ -1741,7 +1816,7 @@ async fn serve_file_with_range(
             // playback from earlier positions continues to work.
             let mut actual = actual;
             if start >= actual {
-                actual = wait_for_size(path, start + 1, std::time::Duration::from_secs(60))
+                actual = wait_for_size(path, start + 1, std::time::Duration::from_mins(1))
                     .await
                     .unwrap_or(actual);
             }
@@ -1772,7 +1847,10 @@ async fn serve_file_with_range(
             if let Err(e) = file.seek(SeekFrom::Start(start)).await {
                 return Err(ApiError::Internal(anyhow::anyhow!("seek: {e}")));
             }
-            let body = Body::from_stream(ReaderStream::with_capacity(file.take(len), STREAM_CHUNK_SIZE));
+            let body = Body::from_stream(ReaderStream::with_capacity(
+                file.take(len),
+                STREAM_CHUNK_SIZE,
+            ));
             return Ok(build_headers(
                 StatusCode::PARTIAL_CONTENT,
                 len,
@@ -1810,7 +1888,10 @@ fn build_headers(
 ) -> http::response::Builder {
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(mime).unwrap());
-    headers.insert(header::CONTENT_LENGTH, HeaderValue::from_str(&len.to_string()).unwrap());
+    headers.insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&len.to_string()).unwrap(),
+    );
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     // Origin-side cache opt-out. Streamed media bodies are multi-GB and
     // per-user; an edge proxy that decides they're cacheable (e.g. a

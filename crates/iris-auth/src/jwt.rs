@@ -75,7 +75,10 @@ impl Issuer {
         Ok(encode(&Header::default(), &claims, &self.encoding)?)
     }
 
-    pub fn issue_refresh(&self, user_id: UserId) -> Result<(String, Uuid, chrono::DateTime<Utc>), JwtError> {
+    pub fn issue_refresh(
+        &self,
+        user_id: UserId,
+    ) -> Result<(String, Uuid, chrono::DateTime<Utc>), JwtError> {
         let now = Utc::now();
         let jti = Uuid::new_v4();
         let exp = now + self.refresh_ttl;

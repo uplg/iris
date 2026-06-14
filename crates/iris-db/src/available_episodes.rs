@@ -88,20 +88,31 @@ pub async fn list_best_for_series(
     pool: &SqlitePool,
     normalized_name: &str,
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
-    let sql = format!(
+    // QueryBuilder rather than a `format!`-built string: the ranking
+    // `ORDER BY` is a parameterless constant expression pushed as raw
+    // SQL, while every value (`normalized_name`) goes through
+    // `push_bind`. No user data ever reaches the raw SQL, so there's no
+    // `AssertSqlSafe` audit hatch to rot if this query is edited later.
+    let mut qb = sqlx::QueryBuilder::new(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
                 magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode \
          FROM (SELECT *, ROW_NUMBER() OVER ( \
                    PARTITION BY season, episode, COALESCE(language, '') \
-                   ORDER BY {order}) AS _rn \
+                   ORDER BY ",
+    );
+    qb.push(recommended_order_sql());
+    qb.push(
+        ") AS _rn \
                FROM available_episodes \
-               WHERE normalized_name = ?1 AND episode > 0) \
+               WHERE normalized_name = ",
+    );
+    qb.push_bind(normalized_name);
+    qb.push(
+        " AND episode > 0) \
          WHERE _rn = 1 \
          ORDER BY season, episode, language",
-        order = recommended_order_sql(),
     );
-    sqlx::query_as::<_, AvailableEpisodeRow>(&sql)
-        .bind(normalized_name)
+    qb.build_query_as::<AvailableEpisodeRow>()
         .fetch_all(pool)
         .await
 }
@@ -128,20 +139,26 @@ pub async fn list_season_packs_for_series(
     pool: &SqlitePool,
     normalized_name: &str,
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
-    let sql = format!(
+    let mut qb = sqlx::QueryBuilder::new(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
                 magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode \
          FROM (SELECT *, ROW_NUMBER() OVER ( \
                    PARTITION BY season, COALESCE(language, '') \
-                   ORDER BY {order}) AS _rn \
+                   ORDER BY ",
+    );
+    qb.push(recommended_order_sql());
+    qb.push(
+        ") AS _rn \
                FROM available_episodes \
-               WHERE normalized_name = ?1 AND episode = 0 AND seeders IS NOT 0) \
+               WHERE normalized_name = ",
+    );
+    qb.push_bind(normalized_name);
+    qb.push(
+        " AND episode = 0 AND seeders IS NOT 0) \
          WHERE _rn = 1 \
          ORDER BY season, language",
-        order = recommended_order_sql(),
     );
-    sqlx::query_as::<_, AvailableEpisodeRow>(&sql)
-        .bind(normalized_name)
+    qb.build_query_as::<AvailableEpisodeRow>()
         .fetch_all(pool)
         .await
 }
@@ -160,20 +177,26 @@ pub async fn find_pack_for_season(
     season: i64,
     language_pref: Option<&str>,
 ) -> Result<Option<AvailableEpisodeRow>, sqlx::Error> {
-    let sql = format!(
+    // `language_pref` is bound twice (the original `?3` appeared twice as
+    // `?3 IS NULL OR language = ?3`); QueryBuilder placeholders are
+    // positional, so each `push_bind` emits its own `?`.
+    let mut qb = sqlx::QueryBuilder::new(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
                 magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode \
          FROM available_episodes \
-         WHERE normalized_name = ?1 AND episode = 0 AND season = ?2 AND seeders IS NOT 0 \
-           AND (?3 IS NULL OR language = ?3) \
-         ORDER BY {order} \
-         LIMIT 1",
-        order = recommended_order_sql(),
+         WHERE normalized_name = ",
     );
-    sqlx::query_as::<_, AvailableEpisodeRow>(&sql)
-        .bind(normalized_name)
-        .bind(season)
-        .bind(language_pref)
+    qb.push_bind(normalized_name);
+    qb.push(" AND episode = 0 AND season = ");
+    qb.push_bind(season);
+    qb.push(" AND seeders IS NOT 0 AND (");
+    qb.push_bind(language_pref);
+    qb.push(" IS NULL OR language = ");
+    qb.push_bind(language_pref);
+    qb.push(") ORDER BY ");
+    qb.push(recommended_order_sql());
+    qb.push(" LIMIT 1");
+    qb.build_query_as::<AvailableEpisodeRow>()
         .fetch_optional(pool)
         .await
 }
@@ -227,10 +250,7 @@ pub struct UpsertAvailableEpisode {
     pub absolute_episode: Option<i64>,
 }
 
-pub async fn upsert(
-    pool: &SqlitePool,
-    a: UpsertAvailableEpisode,
-) -> Result<(), sqlx::Error> {
+pub async fn upsert(pool: &SqlitePool, a: UpsertAvailableEpisode) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO available_episodes \
             (id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \

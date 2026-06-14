@@ -100,7 +100,6 @@ pub async fn list_for_normalized(
     .await
 }
 
-
 /// The owned file for one exact episode of a collection — seasonal
 /// `(season, episode)` match, or absolute-numbered match for fleuve
 /// anime (`One Piece 1156` → `absolute_episode = 1156`). When the
@@ -168,9 +167,7 @@ pub struct LibraryEpisodeKey {
     pub file_idx: i64,
 }
 
-pub async fn list_library_keys(
-    pool: &SqlitePool,
-) -> Result<Vec<LibraryEpisodeKey>, sqlx::Error> {
+pub async fn list_library_keys(pool: &SqlitePool) -> Result<Vec<LibraryEpisodeKey>, sqlx::Error> {
     sqlx::query_as::<_, LibraryEpisodeKey>(
         "SELECT c.parsed_title_normalized AS normalized_title, \
                 ef.season, ef.episode, ef.infohash, ef.file_idx \
@@ -213,10 +210,7 @@ pub async fn find_by_file(
 /// torrent no longer exists ("stale collection entities"). Re-grabbing
 /// the same release re-`upsert`s the rows, so a hard delete here is safe.
 /// Returns the number of rows removed.
-pub async fn delete_for_infohash(
-    pool: &SqlitePool,
-    infohash: &str,
-) -> Result<u64, sqlx::Error> {
+pub async fn delete_for_infohash(pool: &SqlitePool, infohash: &str) -> Result<u64, sqlx::Error> {
     let res = sqlx::query("DELETE FROM episode_files WHERE infohash = ?1")
         .bind(infohash)
         .execute(pool)

@@ -7,7 +7,7 @@ use axum::routing::post;
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use chrono::{Duration, Utc};
-use iris_auth::{hash_password, hash_invitation_token, verify_password};
+use iris_auth::{hash_invitation_token, hash_password, verify_password};
 use iris_core::ids::{InvitationId, UserId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -87,7 +87,10 @@ async fn register(
         .await?
         .ok_or_else(|| ApiError::BadRequest("invalid or expired invitation".into()))?;
 
-    if iris_db::users::find_by_email(&mut *tx, &email).await?.is_some() {
+    if iris_db::users::find_by_email(&mut *tx, &email)
+        .await?
+        .is_some()
+    {
         return Err(ApiError::Conflict("email already registered".into()));
     }
 
@@ -101,12 +104,8 @@ async fn register(
     )
     .await?;
 
-    let consumed = iris_db::invitations::consume(
-        &mut *tx,
-        InvitationId::from(invitation.id),
-        user.id,
-    )
-    .await?;
+    let consumed =
+        iris_db::invitations::consume(&mut *tx, InvitationId::from(invitation.id), user.id).await?;
     if !consumed {
         // Drop without commit → tx rolls back, the `users` insert is undone.
         return Err(ApiError::Conflict("invitation already used".into()));
@@ -242,14 +241,11 @@ async fn refresh(
     ))
 }
 
-async fn logout(
-    State(state): State<AppState>,
-    jar: CookieJar,
-) -> ApiResult<CookieJar> {
-    if let Some(token) = jar.get(REFRESH_COOKIE).map(|c| c.value().to_owned()) {
-        if let Ok(claims) = state.jwt().verify_refresh(&token) {
-            iris_db::refresh_tokens::revoke(state.db(), claims.jti).await?;
-        }
+async fn logout(State(state): State<AppState>, jar: CookieJar) -> ApiResult<CookieJar> {
+    if let Some(token) = jar.get(REFRESH_COOKIE).map(|c| c.value().to_owned())
+        && let Ok(claims) = state.jwt().verify_refresh(&token)
+    {
+        iris_db::refresh_tokens::revoke(state.db(), claims.jti).await?;
     }
     let jar = jar
         .remove(Cookie::build(ACCESS_COOKIE).path("/").build())
@@ -326,7 +322,12 @@ pub async fn issue_session_for_kind(
     Ok(jar.clone().add(access_cookie).add(refresh_cookie))
 }
 
-fn build_cookie(name: &'static str, value: String, ttl: Duration, path: &'static str) -> Cookie<'static> {
+fn build_cookie(
+    name: &'static str,
+    value: String,
+    ttl: Duration,
+    path: &'static str,
+) -> Cookie<'static> {
     let expires = Utc::now() + ttl;
     Cookie::build((name, value))
         .http_only(true)

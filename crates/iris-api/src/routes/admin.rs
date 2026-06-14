@@ -14,8 +14,14 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/invitations", get(list_invitations).post(create_invitation))
-        .route("/invitations/{id}", axum::routing::delete(revoke_invitation))
+        .route(
+            "/invitations",
+            get(list_invitations).post(create_invitation),
+        )
+        .route(
+            "/invitations/{id}",
+            axum::routing::delete(revoke_invitation),
+        )
         .route("/gc", axum::routing::post(trigger_gc))
         .route("/storage", get(storage_stats))
         .route("/users", get(list_users))
@@ -253,11 +259,10 @@ async fn storage_stats(
     let cfg = &state.cfg().storage;
     let max = cfg.max_storage_gb.saturating_mul(1_073_741_824);
     let used = dir_size_async(&cfg.download_dir).await.unwrap_or(0);
-    let count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM torrents WHERE deleted_at IS NULL")
-            .fetch_one(state.db())
-            .await
-            .unwrap_or((0,));
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM torrents WHERE deleted_at IS NULL")
+        .fetch_one(state.db())
+        .await
+        .unwrap_or((0,));
     let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
         .await
         .unwrap_or(0);
@@ -487,7 +492,9 @@ async fn diagnose_tmdb(
         .ok_or(ApiError::NotFound)?;
 
     let collection_tmdb_id = match row.collection_id {
-        Some(cid) => iris_db::collections::get(state.db(), cid).await?.and_then(|c| c.tmdb_id),
+        Some(cid) => iris_db::collections::get(state.db(), cid)
+            .await?
+            .and_then(|c| c.tmdb_id),
         None => None,
     };
 
@@ -500,36 +507,42 @@ async fn diagnose_tmdb(
     let mut suggestions: Vec<TmdbDiagnoseSuggestion> = Vec::new();
     let mut picked: Option<TmdbDiagnoseSuggestion> = None;
 
-    if let (Some(tmdb), Some(p)) = (state.tmdb(), parsed.as_ref()) {
-        if cleaned.len() >= 2 {
-            let raw = tmdb.multi_search(&cleaned).await;
-            for s in &raw {
-                suggestions.push(TmdbDiagnoseSuggestion {
-                    kind: format!("{:?}", s.kind).to_ascii_lowercase(),
-                    tmdb_id: s.tmdb_id,
-                    title: s.title.clone(),
-                    year: s.year,
-                    poster_path: s.poster_path.clone(),
-                });
-            }
-            // Re-run resolution end-to-end so the dump reflects what the
-            // backfill / ingestion path would actually pick today.
-            let kind_hint = if p.is_tv() {
-                Some(crate::tmdb::TmdbKind::Tv)
-            } else {
-                Some(crate::tmdb::TmdbKind::Movie)
-            };
-            if let Some(r) =
-                crate::tmdb_resolve::resolve_cleaned(state.db(), tmdb, &cleaned, kind_hint, p.year.map(u32::from)).await
-            {
-                picked = Some(TmdbDiagnoseSuggestion {
-                    kind: format!("{:?}", r.kind).to_ascii_lowercase(),
-                    tmdb_id: r.tmdb_id,
-                    title: r.title,
-                    year: r.year,
-                    poster_path: r.poster_path,
-                });
-            }
+    if let (Some(tmdb), Some(p)) = (state.tmdb(), parsed.as_ref())
+        && cleaned.len() >= 2
+    {
+        let raw = tmdb.multi_search(&cleaned).await;
+        for s in &raw {
+            suggestions.push(TmdbDiagnoseSuggestion {
+                kind: format!("{:?}", s.kind).to_ascii_lowercase(),
+                tmdb_id: s.tmdb_id,
+                title: s.title.clone(),
+                year: s.year,
+                poster_path: s.poster_path.clone(),
+            });
+        }
+        // Re-run resolution end-to-end so the dump reflects what the
+        // backfill / ingestion path would actually pick today.
+        let kind_hint = if p.is_tv() {
+            Some(crate::tmdb::TmdbKind::Tv)
+        } else {
+            Some(crate::tmdb::TmdbKind::Movie)
+        };
+        if let Some(r) = crate::tmdb_resolve::resolve_cleaned(
+            state.db(),
+            tmdb,
+            &cleaned,
+            kind_hint,
+            p.year.map(u32::from),
+        )
+        .await
+        {
+            picked = Some(TmdbDiagnoseSuggestion {
+                kind: format!("{:?}", r.kind).to_ascii_lowercase(),
+                tmdb_id: r.tmdb_id,
+                title: r.title,
+                year: r.year,
+                poster_path: r.poster_path,
+            });
         }
     }
 
@@ -567,7 +580,5 @@ async fn wipe_remux_job(
         .wipe(&key)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("remux wipe: {e}")))?;
-    Ok(Json(WipeRemuxResponse {
-        freed_bytes: freed,
-    }))
+    Ok(Json(WipeRemuxResponse { freed_bytes: freed }))
 }

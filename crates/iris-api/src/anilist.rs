@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 
 /// AniList changes day-to-day at most; a 6 h cache matches the scheduler
 /// cadence and keeps the keyless public endpoint happy.
-const ANILIST_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const ANILIST_CACHE_TTL: Duration = Duration::from_hours(6);
 const ENDPOINT: &str = "https://graphql.anilist.co";
 
 #[derive(Clone)]
@@ -119,10 +119,10 @@ impl AniListClient {
         query: &str,
         variables: serde_json::Value,
     ) -> Vec<AniListMedia> {
-        if let Some((at, items)) = self.inner.cache.read().await.get(&cache_key).cloned() {
-            if at.elapsed() < ANILIST_CACHE_TTL {
-                return items;
-            }
+        if let Some((at, items)) = self.inner.cache.read().await.get(&cache_key).cloned()
+            && at.elapsed() < ANILIST_CACHE_TTL
+        {
+            return items;
         }
         let body = serde_json::json!({ "query": query, "variables": variables });
         let res = match self.inner.http.post(ENDPOINT).json(&body).send().await {
@@ -168,10 +168,10 @@ impl AniListClient {
 }
 
 fn push_unique(out: &mut Vec<AniListMedia>, seen: &mut HashSet<i64>, media: Option<AniListMedia>) {
-    if let Some(m) = media {
-        if seen.insert(m.anilist_id) {
-            out.push(m);
-        }
+    if let Some(m) = media
+        && seen.insert(m.anilist_id)
+    {
+        out.push(m);
     }
 }
 

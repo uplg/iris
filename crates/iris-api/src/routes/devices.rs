@@ -83,9 +83,7 @@ async fn create_code(
 pub enum PollResponse {
     Pending,
     Expired,
-    Linked {
-        user: PolledUser,
-    },
+    Linked { user: PolledUser },
 }
 
 #[derive(Debug, Serialize)]
@@ -179,10 +177,7 @@ pub struct DeviceView {
     pub expires_at: chrono::DateTime<Utc>,
 }
 
-async fn list(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> ApiResult<Json<Vec<DeviceView>>> {
+async fn list(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<Vec<DeviceView>>> {
     let rows = iris_db::refresh_tokens::list_devices_for_user(state.db(), user.id).await?;
     Ok(Json(
         rows.into_iter()

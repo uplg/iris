@@ -33,7 +33,7 @@ fn setup_remuxer(data_dir: &Path) -> anyhow::Result<(iris_media::RemuxManager, P
     let evictor = remuxer.clone();
     let cap_bytes: u64 = 100 * 1_073_741_824;
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(15 * 60));
+        let mut ticker = tokio::time::interval(std::time::Duration::from_mins(15));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         ticker.tick().await; // skip immediate boot tick
         loop {
@@ -88,13 +88,13 @@ fn setup_gc(
                 let prefix = format!("{h}_");
                 if let Ok(mut rd) = tokio::fs::read_dir(&cache_dir).await {
                     while let Ok(Some(e)) = rd.next_entry().await {
-                        if let Some(name) = e.file_name().to_str() {
-                            if name.starts_with(&prefix) {
-                                // Cache entries are directories — remove_file
-                                // fails silently on them and the orphaned
-                                // cache then inflates the remux dir forever.
-                                let _ = tokio::fs::remove_dir_all(e.path()).await;
-                            }
+                        if let Some(name) = e.file_name().to_str()
+                            && name.starts_with(&prefix)
+                        {
+                            // Cache entries are directories — remove_file
+                            // fails silently on them and the orphaned
+                            // cache then inflates the remux dir forever.
+                            let _ = tokio::fs::remove_dir_all(e.path()).await;
                         }
                     }
                 }
@@ -109,8 +109,8 @@ fn setup_gc(
             max_storage_bytes: cfg.storage.max_storage_gb.saturating_mul(1_073_741_824),
             cleanup_threshold_pct: cfg.storage.cleanup_threshold_pct,
             cleanup_target_pct: cfg.storage.cleanup_target_pct,
-            interval: std::time::Duration::from_secs(15 * 60),
-            active_window: std::time::Duration::from_secs(60 * 60),
+            interval: std::time::Duration::from_mins(15),
+            active_window: std::time::Duration::from_hours(1),
         },
         cfg.storage.download_dir.clone(),
         Some(derived),
@@ -206,22 +206,21 @@ fn spawn_background_jobs(
             &bf_engine,
         )
         .await;
-        let mut ticker =
-            tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+        let mut ticker = tokio::time::interval(std::time::Duration::from_mins(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         ticker.tick().await; // skip the immediate fire
         loop {
             ticker.tick().await;
             collection_assign::run_backfill(
-            &bf_pool,
-            collection_assign::EnrichDeps {
-                tmdb: bf_tmdb.as_ref(),
-                anilist: bf_anilist.as_ref(),
-                providers: Some(&bf_providers),
-            },
-            &bf_engine,
-        )
-        .await;
+                &bf_pool,
+                collection_assign::EnrichDeps {
+                    tmdb: bf_tmdb.as_ref(),
+                    anilist: bf_anilist.as_ref(),
+                    providers: Some(&bf_providers),
+                },
+                &bf_engine,
+            )
+            .await;
         }
     });
 }
@@ -240,17 +239,21 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
     let pool = iris_db::connect(&db_path)
         .await
         .with_context(|| format!("connecting to db at {}", db_path.display()))?;
-    iris_db::migrate::run(&pool).await.context("running migrations")?;
+    iris_db::migrate::run(&pool)
+        .await
+        .context("running migrations")?;
 
     state::bootstrap_admin_if_configured(&pool, &cfg.auth)
         .await
         .context("bootstrap admin")?;
 
-    let provider_registry = iris_providers::ProviderRegistry::from_entries(&providers_cfg.providers)
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "no providers loaded; continuing with empty registry");
-            iris_providers::ProviderRegistry::default()
-        });
+    let provider_registry = iris_providers::ProviderRegistry::from_entries(
+        &providers_cfg.providers,
+    )
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "no providers loaded; continuing with empty registry");
+        iris_providers::ProviderRegistry::default()
+    });
 
     let engine = iris_torrent::Engine::new(
         cfg.storage.download_dir.clone(),
@@ -295,8 +298,11 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         .await
         .with_context(|| format!("binding to {}", cfg.server.bind))?;
     tracing::info!(addr = %cfg.server.bind, "iris listening");
-    axum::serve(listener, axum::ServiceExt::<axum::extract::Request>::into_make_service(service))
-        .await
-        .context("axum serve")?;
+    axum::serve(
+        listener,
+        axum::ServiceExt::<axum::extract::Request>::into_make_service(service),
+    )
+    .await
+    .context("axum serve")?;
     Ok(())
 }

@@ -28,12 +28,11 @@ impl KeyExtractor for CloudflareIpKeyExtractor {
     type Key = IpAddr;
 
     fn extract<T>(&self, req: &http::Request<T>) -> Result<Self::Key, GovernorError> {
-        if let Some(hdr) = req.headers().get(&CF_CONNECTING_IP) {
-            if let Ok(s) = hdr.to_str() {
-                if let Ok(ip) = s.trim().parse::<IpAddr>() {
-                    return Ok(ip);
-                }
-            }
+        if let Some(hdr) = req.headers().get(&CF_CONNECTING_IP)
+            && let Ok(s) = hdr.to_str()
+            && let Ok(ip) = s.trim().parse::<IpAddr>()
+        {
+            return Ok(ip);
         }
         // No CF header => direct origin access (dev, or a bypass
         // attempt). Collapse all such callers onto one bucket so an

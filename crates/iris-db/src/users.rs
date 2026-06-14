@@ -81,8 +81,18 @@ where
     })
 }
 
-const USER_COLUMNS: &str =
-    "id, email, password_hash, display_name, is_admin, created_at";
+/// Column list for `SELECT`ing a [`UserRow`]. A macro rather than a
+/// `const &str` so it expands to a string literal usable inside
+/// `concat!`, keeping every read query a compile-time `&'static str` —
+/// the only type sqlx 0.9 accepts natively (`SqlSafeStr`) — instead of a
+/// `format!`-built string that would need an `AssertSqlSafe` audit hatch.
+/// The literal carries no runtime data, so injection is impossible by
+/// construction.
+macro_rules! user_columns {
+    () => {
+        "id, email, password_hash, display_name, is_admin, created_at"
+    };
+}
 
 pub async fn find_by_email<'e, E>(
     executor: E,
@@ -91,21 +101,27 @@ pub async fn find_by_email<'e, E>(
 where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
-    let q = format!("SELECT {USER_COLUMNS} FROM users WHERE email = ?1");
-    let row: Option<UserRow> = sqlx::query_as(&q)
-        .bind(email)
-        .fetch_optional(executor)
-        .await?;
+    let row: Option<UserRow> = sqlx::query_as(concat!(
+        "SELECT ",
+        user_columns!(),
+        " FROM users WHERE email = ?1"
+    ))
+    .bind(email)
+    .fetch_optional(executor)
+    .await?;
     Ok(row.map(UserRow::into_domain))
 }
 
 pub async fn find_by_id(pool: &SqlitePool, id: UserId) -> Result<Option<User>, sqlx::Error> {
     let uuid: Uuid = id.into();
-    let q = format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?1");
-    let row: Option<UserRow> = sqlx::query_as(&q)
-        .bind(uuid)
-        .fetch_optional(pool)
-        .await?;
+    let row: Option<UserRow> = sqlx::query_as(concat!(
+        "SELECT ",
+        user_columns!(),
+        " FROM users WHERE id = ?1"
+    ))
+    .bind(uuid)
+    .fetch_optional(pool)
+    .await?;
     Ok(row.map(|r| r.into_domain().0))
 }
 
@@ -117,8 +133,13 @@ pub async fn count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
 }
 
 pub async fn list(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
-    let q = format!("SELECT {USER_COLUMNS} FROM users ORDER BY created_at ASC");
-    let rows: Vec<UserRow> = sqlx::query_as(&q).fetch_all(pool).await?;
+    let rows: Vec<UserRow> = sqlx::query_as(concat!(
+        "SELECT ",
+        user_columns!(),
+        " FROM users ORDER BY created_at ASC"
+    ))
+    .fetch_all(pool)
+    .await?;
     Ok(rows.into_iter().map(|r| r.into_domain().0).collect())
 }
 

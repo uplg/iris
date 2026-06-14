@@ -4,7 +4,7 @@
 #![allow(
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
+    clippy::cast_possible_wrap
 )]
 
 //! Per-user series-following endpoints. Mounted under `/api/me/follows`.
@@ -41,10 +41,7 @@ pub fn router() -> Router<AppState> {
         .route("/episode-context", get(episode_context))
         .route("/{id}", delete(remove))
         .route("/{id}/episodes", get(episodes))
-        .route(
-            "/{id}/episodes/{season}/{episode}/grab",
-            post(grab_episode),
-        )
+        .route("/{id}/episodes/{season}/{episode}/grab", post(grab_episode))
 }
 
 // ---------------------------------------------------------------------------
@@ -77,14 +74,8 @@ async fn create(
         return Err(ApiError::BadRequest("name does not normalise".into()));
     }
 
-    let row = iris_db::follows::add(
-        state.db(),
-        user.id,
-        &normalized,
-        trimmed,
-        body.tmdb_id,
-    )
-    .await?;
+    let row =
+        iris_db::follows::add(state.db(), user.id, &normalized, trimmed, body.tmdb_id).await?;
 
     // Kick off an immediate background scan so the series page
     // shows `dispo` chips on first visit instead of waiting on the
@@ -223,10 +214,7 @@ async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> Follo
 /// the post-verify enrichment path (which only fires when the
 /// runtime probe matched). Returns None when no verified
 /// collection joins to this normalised name.
-async fn trusted_tmdb_id(
-    pool: &iris_db::SqlitePool,
-    normalized_name: &str,
-) -> Option<i64> {
+async fn trusted_tmdb_id(pool: &iris_db::SqlitePool, normalized_name: &str) -> Option<i64> {
     let row: Option<(i64,)> = sqlx::query_as(
         "SELECT tmdb_id FROM collections \
          WHERE parsed_title_normalized = ?1 AND kind = 'tv' AND tmdb_id IS NOT NULL \
@@ -289,20 +277,16 @@ async fn episodes(
         .ok_or(ApiError::NotFound)?;
 
     // 1. Files on disk — per-collection join via normalised name.
-    let downloaded = iris_db::episode_files::list_for_normalized(
-        state.db(),
-        &identity.normalized_name,
-    )
-    .await
-    .unwrap_or_default();
+    let downloaded =
+        iris_db::episode_files::list_for_normalized(state.db(), &identity.normalized_name)
+            .await
+            .unwrap_or_default();
 
     // 2. Indexer-cached availability.
-    let available = iris_db::available_episodes::list_best_for_series(
-        state.db(),
-        &identity.normalized_name,
-    )
-    .await
-    .unwrap_or_default();
+    let available =
+        iris_db::available_episodes::list_best_for_series(state.db(), &identity.normalized_name)
+            .await
+            .unwrap_or_default();
 
     // Merge: anything in `downloaded` wins; otherwise fall back to
     // the indexer hint. The two tables can overlap (we ingested an
@@ -311,10 +295,10 @@ async fn episodes(
     let mut by_key: BTreeMap<(i64, i64), EpisodeItem> = BTreeMap::new();
 
     for d in &downloaded {
-        if let Some(s) = q.season {
-            if d.season != i64::from(s) {
-                continue;
-            }
+        if let Some(s) = q.season
+            && d.season != i64::from(s)
+        {
+            continue;
         }
         let watched = iris_db::playback::get(state.db(), user.id, &d.infohash, d.file_idx)
             .await
@@ -337,10 +321,10 @@ async fn episodes(
         );
     }
     for a in &available {
-        if let Some(s) = q.season {
-            if a.season != i64::from(s) {
-                continue;
-            }
+        if let Some(s) = q.season
+            && a.season != i64::from(s)
+        {
+            continue;
         }
         by_key.entry((a.season, a.episode)).or_insert(EpisodeItem {
             season: a.season,
@@ -589,7 +573,10 @@ async fn lookup_next_episode(
     let avail = iris_db::available_episodes::list_best_for_series(pool, normalized_name)
         .await
         .unwrap_or_default();
-    if avail.iter().any(|a| a.season == season && a.episode == episode) {
+    if avail
+        .iter()
+        .any(|a| a.season == season && a.episode == episode)
+    {
         return Some(EpisodePoint {
             follow_id: Some(follow.id),
             season,
@@ -703,17 +690,16 @@ async fn resolve_followish(
             source: FollowishSource::SeriesFollow,
         });
     }
-    if let Ok(Some(c)) = iris_db::collections::get(state.db(), id).await {
-        if c.kind == "tv" {
-            if let Some(norm) = c.parsed_title_normalized {
-                return Some(FollowishIdentity {
-                    normalized_name: norm,
-                    display_name: c.display_title,
-                    tmdb_id: c.tmdb_id,
-                    source: FollowishSource::Collection,
-                });
-            }
-        }
+    if let Ok(Some(c)) = iris_db::collections::get(state.db(), id).await
+        && c.kind == "tv"
+        && let Some(norm) = c.parsed_title_normalized
+    {
+        return Some(FollowishIdentity {
+            normalized_name: norm,
+            display_name: c.display_title,
+            tmdb_id: c.tmdb_id,
+            source: FollowishSource::Collection,
+        });
     }
     None
 }
@@ -789,7 +775,10 @@ impl LangSel {
 fn select_by_lang<T: Clone>(items: &[(Language, T)], sel: &LangSel) -> Option<T> {
     match sel {
         LangSel::Any => items.first().map(|(_, t)| t.clone()),
-        LangSel::Exact(l) => items.iter().find(|(lang, _)| lang == l).map(|(_, t)| t.clone()),
+        LangSel::Exact(l) => items
+            .iter()
+            .find(|(lang, _)| lang == l)
+            .map(|(_, t)| t.clone()),
         LangSel::Prefer(order) => order
             .iter()
             .find_map(|w| items.iter().find(|(lang, _)| lang == w))
@@ -889,14 +878,8 @@ pub(crate) async fn grab_episode_core(
     // circuit so a "grab the one I already have" click still tracks.
     // Idempotent — `iris_db::follows::add` is a no-op when
     // (user_id, normalized_name) already exists.
-    let _ = iris_db::follows::add(
-        state.db(),
-        user_id,
-        normalized_name,
-        display_title,
-        tmdb_id,
-    )
-    .await;
+    let _ =
+        iris_db::follows::add(state.db(), user_id, normalized_name, display_title, tmdb_id).await;
 
     // Short-circuit only when we already hold the episode in the
     // requested language. An explicit FR badge click must NOT return
@@ -1046,28 +1029,27 @@ async fn finalise_grabbed_episode(
 
     if let Some(t) =
         iris_db::torrents::find_by_infohash(state.db(), &result.snapshot.infohash).await?
+        && let Some(collection_id) = t.collection_id
     {
-        if let Some(collection_id) = t.collection_id {
-            // Mirror the parser's SxxExx absolute rule: a fleuve grab
-            // arrives as `season=1, episode=<absolute>`, so a high
-            // episode under season 1 carries the absolute number.
-            let absolute_episode = (season == 1
-                && episode > i64::from(iris_media::filename::ABSOLUTE_EPISODE_THRESHOLD))
-                .then_some(episode);
-            let _ = iris_db::episode_files::upsert(
-                state.db(),
-                iris_db::episode_files::UpsertEpisodeFile {
-                    collection_id,
-                    season,
-                    episode,
-                    infohash: result.snapshot.infohash.clone(),
-                    file_idx,
-                    derived_from: iris_db::episode_files::DerivedFrom::TmdbMatch,
-                    absolute_episode,
-                },
-            )
-            .await;
-        }
+        // Mirror the parser's SxxExx absolute rule: a fleuve grab
+        // arrives as `season=1, episode=<absolute>`, so a high
+        // episode under season 1 carries the absolute number.
+        let absolute_episode = (season == 1
+            && episode > i64::from(iris_media::filename::ABSOLUTE_EPISODE_THRESHOLD))
+        .then_some(episode);
+        let _ = iris_db::episode_files::upsert(
+            state.db(),
+            iris_db::episode_files::UpsertEpisodeFile {
+                collection_id,
+                season,
+                episode,
+                infohash: result.snapshot.infohash.clone(),
+                file_idx,
+                derived_from: iris_db::episode_files::DerivedFrom::TmdbMatch,
+                absolute_episode,
+            },
+        )
+        .await;
     }
     Ok(())
 }
@@ -1182,33 +1164,36 @@ async fn ingest_picked(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")));
     }
-    if let Some(url) = pick.download_url.as_deref() {
-        if let Some(provider) = state.providers().get(&pick.indexer_provider) {
-            match provider.fetch_bytes(url).await {
-                Ok(bytes) => {
-                    return state
-                        .engine()
-                        .add_from_bytes(bytes.to_vec())
-                        .await
-                        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")));
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        url,
-                        provider = %pick.indexer_provider,
-                        error = %e,
-                        "persisted download_url fetch failed; falling back to provider.resolve()",
-                    );
-                }
+    if let Some(url) = pick.download_url.as_deref()
+        && let Some(provider) = state.providers().get(&pick.indexer_provider)
+    {
+        match provider.fetch_bytes(url).await {
+            Ok(bytes) => {
+                return state
+                    .engine()
+                    .add_from_bytes(bytes.to_vec())
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    url,
+                    provider = %pick.indexer_provider,
+                    error = %e,
+                    "persisted download_url fetch failed; falling back to provider.resolve()",
+                );
             }
         }
     }
-    let provider = state.providers().get(&pick.indexer_provider).ok_or_else(|| {
-        ApiError::Internal(anyhow::anyhow!(
-            "provider `{}` no longer registered",
-            pick.indexer_provider
-        ))
-    })?;
+    let provider = state
+        .providers()
+        .get(&pick.indexer_provider)
+        .ok_or_else(|| {
+            ApiError::Internal(anyhow::anyhow!(
+                "provider `{}` no longer registered",
+                pick.indexer_provider
+            ))
+        })?;
     // First resolve attempt — works when the provider's in-memory
     // link cache is still hot (i.e. the scheduler has touched this
     // (S, E) recently). On a fresh server boot the cache is empty
@@ -1291,8 +1276,8 @@ async fn find_pack_offer(
     season: i64,
     sel: &LangSel,
 ) -> Result<Option<PickedAvailability>, sqlx::Error> {
-    let packs = iris_db::available_episodes::list_season_packs_for_series(pool, normalized_name)
-        .await?;
+    let packs =
+        iris_db::available_episodes::list_season_packs_for_series(pool, normalized_name).await?;
     let tagged: Vec<(Language, iris_db::available_episodes::AvailableEpisodeRow)> = packs
         .into_iter()
         .filter(|p| p.season == season)
@@ -1357,9 +1342,7 @@ async fn ingest_pack_and_pick_episode(
                 None
             }
         })
-        .ok_or_else(|| {
-            ApiError::NotFound
-        })?;
+        .ok_or_else(|| ApiError::NotFound)?;
 
     iris_db::torrents::upsert(
         state.db(),

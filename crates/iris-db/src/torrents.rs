@@ -172,16 +172,14 @@ pub async fn library_tmdb_ids(pool: &SqlitePool) -> Result<Vec<i64>, sqlx::Error
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-pub async fn soft_delete(
-    pool: &SqlitePool,
-    id: TorrentId,
-) -> Result<bool, sqlx::Error> {
+pub async fn soft_delete(pool: &SqlitePool, id: TorrentId) -> Result<bool, sqlx::Error> {
     let id: Uuid = id.into();
-    let res = sqlx::query("UPDATE torrents SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL")
-        .bind(Utc::now())
-        .bind(id)
-        .execute(pool)
-        .await?;
+    let res =
+        sqlx::query("UPDATE torrents SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL")
+            .bind(Utc::now())
+            .bind(id)
+            .execute(pool)
+            .await?;
     Ok(res.rows_affected() == 1)
 }
 
@@ -239,10 +237,9 @@ pub async fn reconcile_uploaded(
 /// including soft-deleted ones (a torrent we've already evicted still
 /// represents work the seedbox did for the swarm).
 pub async fn total_uploaded_bytes(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
-    let row: (Option<i64>,) =
-        sqlx::query_as("SELECT SUM(uploaded_bytes_total) FROM torrents")
-            .fetch_one(pool)
-            .await?;
+    let row: (Option<i64>,) = sqlx::query_as("SELECT SUM(uploaded_bytes_total) FROM torrents")
+        .fetch_one(pool)
+        .await?;
     Ok(u64::try_from(row.0.unwrap_or(0)).unwrap_or(0))
 }
 

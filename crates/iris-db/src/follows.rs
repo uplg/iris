@@ -118,11 +118,7 @@ pub async fn add(
         .ok_or(sqlx::Error::RowNotFound)
 }
 
-pub async fn delete(
-    pool: &SqlitePool,
-    user_id: UserId,
-    id: Uuid,
-) -> Result<bool, sqlx::Error> {
+pub async fn delete(pool: &SqlitePool, user_id: UserId, id: Uuid) -> Result<bool, sqlx::Error> {
     let user: Uuid = user_id.into();
     let res = sqlx::query("DELETE FROM series_follows WHERE user_id = ?1 AND id = ?2")
         .bind(user)
@@ -133,11 +129,7 @@ pub async fn delete(
 }
 
 /// Bumped every time the user opens the series detail page.
-pub async fn mark_visited(
-    pool: &SqlitePool,
-    user_id: UserId,
-    id: Uuid,
-) -> Result<(), sqlx::Error> {
+pub async fn mark_visited(pool: &SqlitePool, user_id: UserId, id: Uuid) -> Result<(), sqlx::Error> {
     let user: Uuid = user_id.into();
     sqlx::query(
         "UPDATE series_follows SET last_visited_at = ?3 \
@@ -152,16 +144,11 @@ pub async fn mark_visited(
 }
 
 /// Bumped by the notify scheduler after each indexer pass.
-pub async fn mark_checked(
-    pool: &SqlitePool,
-    id: Uuid,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE series_follows SET last_checked_at = ?2 WHERE id = ?1",
-    )
-    .bind(id)
-    .bind(Utc::now())
-    .execute(pool)
-    .await?;
+pub async fn mark_checked(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE series_follows SET last_checked_at = ?2 WHERE id = ?1")
+        .bind(id)
+        .bind(Utc::now())
+        .execute(pool)
+        .await?;
     Ok(())
 }

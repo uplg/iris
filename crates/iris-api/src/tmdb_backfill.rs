@@ -54,7 +54,10 @@ async fn run_collections(state: &AppState) {
             return;
         }
     };
-    tracing::info!(total = cols.len(), "tmdb_backfill: starting collection pass");
+    tracing::info!(
+        total = cols.len(),
+        "tmdb_backfill: starting collection pass"
+    );
 
     let mut stamped = 0u64;
     let mut already_correct = 0u64;

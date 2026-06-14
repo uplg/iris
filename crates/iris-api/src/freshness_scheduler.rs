@@ -65,7 +65,12 @@ const fn kind_str(kind: MediaKind) -> &'static str {
     }
 }
 
-pub fn spawn(pool: SqlitePool, tmdb: TmdbClient, providers: ProviderRegistry, cfg: DiscoveryConfig) {
+pub fn spawn(
+    pool: SqlitePool,
+    tmdb: TmdbClient,
+    providers: ProviderRegistry,
+    cfg: DiscoveryConfig,
+) {
     let providers = Arc::new(providers);
     // Keyless AniList client for anime correlation (precise poster + the
     // anime dedup identity). Absence just disables the anime category.
@@ -97,9 +102,18 @@ pub fn spawn(pool: SqlitePool, tmdb: TmdbClient, providers: ProviderRegistry, cf
         loop {
             ticker.tick().await; // first tick fires immediately (after warm-up)
             let (provider_id, kind) = &slices[idx % slices.len()];
-            run_slice(&pool, &tmdb, anilist.as_ref(), &providers, provider_id, *kind, &cfg).await;
+            run_slice(
+                &pool,
+                &tmdb,
+                anilist.as_ref(),
+                &providers,
+                provider_id,
+                *kind,
+                &cfg,
+            )
+            .await;
             idx += 1;
-            if idx % slices.len() == 0 {
+            if idx.is_multiple_of(slices.len()) {
                 run_gc(&pool, &cfg).await; // end of a full cycle
             }
         }
@@ -131,9 +145,26 @@ async fn run_slice(
     }
 
     let window_start = Utc::now() - chrono::Duration::weeks(cfg.poll_window_weeks.max(1));
-    let best = collect_best(pool, tmdb, providers, provider_id, kind, page.results, window_start).await;
-    let upserted =
-        upsert_window_rows(pool, tmdb, anilist, provider_id, kind, best, cfg.max_content_age_years).await;
+    let best = collect_best(
+        pool,
+        tmdb,
+        providers,
+        provider_id,
+        kind,
+        page.results,
+        window_start,
+    )
+    .await;
+    let upserted = upsert_window_rows(
+        pool,
+        tmdb,
+        anilist,
+        provider_id,
+        kind,
+        best,
+        cfg.max_content_age_years,
+    )
+    .await;
 
     tracing::info!(
         provider = provider_id,
@@ -311,10 +342,10 @@ fn is_anime_meta(meta: &MediaMetadata) -> bool {
 
 /// Pick the AniList match for a title, preferring an exact release-year match.
 fn pick_anime(results: &[AniListMedia], year: Option<u32>) -> Option<AniListMedia> {
-    if let Some(y) = year.and_then(|y| u16::try_from(y).ok()) {
-        if let Some(m) = results.iter().find(|m| m.year == Some(y)) {
-            return Some(m.clone());
-        }
+    if let Some(y) = year.and_then(|y| u16::try_from(y).ok())
+        && let Some(m) = results.iter().find(|m| m.year == Some(y))
+    {
+        return Some(m.clone());
     }
     results.first().cloned()
 }

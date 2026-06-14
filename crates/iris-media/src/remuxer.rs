@@ -65,16 +65,16 @@ const LAST_PLAYED_SENTINEL: &str = ".last_played";
 /// and force the player into a stop/restart. Exceeding the byte cap for
 /// a while is the lesser evil — the disk GC reclaims torrent bytes
 /// independently and the cap pass runs again 15 min later.
-const EVICT_PROTECT_WINDOW: Duration = Duration::from_secs(15 * 60);
+const EVICT_PROTECT_WINDOW: Duration = Duration::from_mins(15);
 
 /// Last "logical play time" for a cache dir. Prefers the sentinel
 /// (touched on every `master.m3u8` hit); falls back to the dir's own
 /// mtime so older caches predating this feature still sort sensibly.
 async fn cache_last_played(dir: &Path, dir_meta: &std::fs::Metadata) -> SystemTime {
-    if let Ok(meta) = tokio::fs::metadata(dir.join(LAST_PLAYED_SENTINEL)).await {
-        if let Ok(t) = meta.modified() {
-            return t;
-        }
+    if let Ok(meta) = tokio::fs::metadata(dir.join(LAST_PLAYED_SENTINEL)).await
+        && let Ok(t) = meta.modified()
+    {
+        return t;
     }
     dir_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH)
 }
@@ -156,7 +156,7 @@ const VIDEO_VARIANT: &str = "v";
 /// How long a recorded ffmpeg failure is treated as still-fresh. After this
 /// the next caller is allowed to retry from scratch — covers transient flakes
 /// without spamming during a hard failure.
-const FAILURE_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+const FAILURE_COOLDOWN: Duration = Duration::from_mins(5);
 
 /// Per-remux configuration derived from probe data by the caller.
 ///
@@ -653,7 +653,13 @@ impl RemuxManager {
             {
                 let mut failures = failures_handle.lock().await;
                 if let Some(msg) = failure_message {
-                    failures.insert(key.clone(), Failure { at: Instant::now(), message: msg });
+                    failures.insert(
+                        key.clone(),
+                        Failure {
+                            at: Instant::now(),
+                            message: msg,
+                        },
+                    );
                 } else {
                     failures.remove(&key);
                 }
@@ -819,7 +825,10 @@ async fn run_ffmpeg(
     cmd.args(["-map_chapters", "-1"])
         .args(["-map", "0:V:0?", "-c:v", "copy"]);
     if matches!(
-        plan.source_video_codec.as_deref().map(str::to_ascii_lowercase).as_deref(),
+        plan.source_video_codec
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
         Some("hevc" | "h265")
     ) {
         // Force the `hvc1` MP4 brand — `hev1` (ffmpeg's default for
@@ -905,7 +914,9 @@ async fn run_ffmpeg(
         .arg(tmp);
     }
 
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     tracing::info!(
         source = %source.display(),
@@ -1105,21 +1116,22 @@ mod tests {
         std::fs::write(dir.join("v.m4s"), vec![0u8; 1024]).unwrap();
         let sentinel = dir.join(LAST_PLAYED_SENTINEL);
         std::fs::write(&sentinel, b"0").unwrap();
-        let f = std::fs::OpenOptions::new().write(true).open(&sentinel).unwrap();
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&sentinel)
+            .unwrap();
         f.set_modified(SystemTime::now() - age).unwrap();
     }
 
     #[tokio::test]
     async fn evict_to_spares_recently_played_entries() {
-        let base = std::env::temp_dir().join(format!(
-            "iris-remux-evict-test-{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("iris-remux-evict-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
 
         // "cold" was last played two hours ago, "warm" is heartbeat-fresh.
-        make_entry(&base, "cold_0", Duration::from_secs(2 * 60 * 60));
+        make_entry(&base, "cold_0", Duration::from_hours(2));
         make_entry(&base, "warm_0", Duration::from_secs(5));
 
         let mgr = RemuxManager::new(base.clone());

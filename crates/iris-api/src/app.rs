@@ -44,7 +44,10 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/devices", routes::devices::me_router())
         .nest("/follows", routes::follows::router())
         .nest("/preferences", routes::preferences::router())
-        .nest("/playback-preferences", routes::playback_preferences::router())
+        .nest(
+            "/playback-preferences",
+            routes::playback_preferences::router(),
+        )
         .nest("/for-you", routes::foryou::router());
 
     // Apply the Iris-Caps parser + telemetry on /torrents only — that's
@@ -81,7 +84,7 @@ pub fn build_router(state: AppState) -> Router {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
-        .max_age(Duration::from_secs(600));
+        .max_age(Duration::from_mins(10));
 
     let mut app = Router::new().nest("/api", api);
 

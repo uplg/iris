@@ -140,7 +140,10 @@ fn section_kind(header: &str) -> Section {
 
 fn parse_video(body: &str) -> VideoInfo {
     let kv = key_value_map(body);
-    let resolution = match (kv.get("Width").and_then(parse_pixels), kv.get("Height").and_then(parse_pixels)) {
+    let resolution = match (
+        kv.get("Width").and_then(parse_pixels),
+        kv.get("Height").and_then(parse_pixels),
+    ) {
         (Some(w), Some(h)) => Some(format!("{w}x{h}")),
         _ => None,
     };
@@ -156,19 +159,18 @@ fn parse_video(body: &str) -> VideoInfo {
         .map(|s| s.to_string());
     // Best-effort HDR detection: the "HDR format" line shows up on HDR10
     // and DV releases; otherwise check transfer characteristics.
-    let hdr = kv
-        .get("HDR format")
-        .map(|s| s.to_string())
-        .or_else(|| {
-            let xfer = kv.get("Transfer characteristics").map_or("", String::as_str);
-            if xfer.contains("PQ") || xfer.contains("2084") {
-                Some("HDR10".to_string())
-            } else if xfer.contains("HLG") {
-                Some("HLG".to_string())
-            } else {
-                None
-            }
-        });
+    let hdr = kv.get("HDR format").map(|s| s.to_string()).or_else(|| {
+        let xfer = kv
+            .get("Transfer characteristics")
+            .map_or("", String::as_str);
+        if xfer.contains("PQ") || xfer.contains("2084") {
+            Some("HDR10".to_string())
+        } else if xfer.contains("HLG") {
+            Some("HLG".to_string())
+        } else {
+            None
+        }
+    });
     VideoInfo {
         codec,
         resolution,
@@ -187,11 +189,15 @@ fn parse_audio(body: &str) -> AudioInfo {
         .or_else(|| kv.get("Commercial name"))
         .map(|s| s.to_string());
     let channels = kv.get("Channel(s)").and_then(|s| {
-        s.split_whitespace().next().and_then(|s| s.parse::<u8>().ok())
+        s.split_whitespace()
+            .next()
+            .and_then(|s| s.parse::<u8>().ok())
     });
     let bitrate_kbps = kv.get("Bit rate").and_then(|s| parse_bitrate_kbps(s));
     let title = kv.get("Title").map(|s| s.to_string());
-    let default = kv.get("Default").is_some_and(|s| s.eq_ignore_ascii_case("yes"));
+    let default = kv
+        .get("Default")
+        .is_some_and(|s| s.eq_ignore_ascii_case("yes"));
     let commercial_name = kv.get("Commercial name").map(|s| s.to_string());
     AudioInfo {
         lang,
@@ -209,8 +215,12 @@ fn parse_sub(body: &str) -> SubInfo {
     let lang = kv.get("Language").map(|s| s.to_string());
     let format = kv.get("Format").map(|s| s.to_string());
     let title = kv.get("Title").map(|s| s.to_string());
-    let default = kv.get("Default").is_some_and(|s| s.eq_ignore_ascii_case("yes"));
-    let forced = kv.get("Forced").is_some_and(|s| s.eq_ignore_ascii_case("yes"));
+    let default = kv
+        .get("Default")
+        .is_some_and(|s| s.eq_ignore_ascii_case("yes"));
+    let forced = kv
+        .get("Forced")
+        .is_some_and(|s| s.eq_ignore_ascii_case("yes"));
     SubInfo {
         lang,
         format,

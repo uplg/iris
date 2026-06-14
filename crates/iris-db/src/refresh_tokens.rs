@@ -106,11 +106,13 @@ pub async fn get_active_device_info(
     .bind(Utc::now())
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(device_label, device_kind, expires_at)| ActiveDeviceInfo {
-        device_label,
-        device_kind,
-        expires_at,
-    }))
+    Ok(
+        row.map(|(device_label, device_kind, expires_at)| ActiveDeviceInfo {
+            device_label,
+            device_kind,
+            expires_at,
+        }),
+    )
 }
 
 pub async fn is_active(pool: &SqlitePool, jti: Uuid) -> Result<bool, sqlx::Error> {

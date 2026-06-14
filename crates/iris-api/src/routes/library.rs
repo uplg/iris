@@ -333,14 +333,15 @@ async fn collection_detail(
     // grab path); falls back to None when the user has never
     // touched this series — in which case every available episode
     // counts as new.
-    let user_last_visited: Option<DateTime<Utc>> = match collection.parsed_title_normalized.as_deref() {
-        Some(norm) => iris_db::follows::get_by_normalized(state.db(), user.id, norm)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|f| f.last_visited_at),
-        None => None,
-    };
+    let user_last_visited: Option<DateTime<Utc>> =
+        match collection.parsed_title_normalized.as_deref() {
+            Some(norm) => iris_db::follows::get_by_normalized(state.db(), user.id, norm)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|f| f.last_visited_at),
+            None => None,
+        };
 
     let (episodes, available_episodes, season_packs, has_new_since_last_visit) =
         if collection.kind == "tv" {
@@ -356,12 +357,10 @@ async fn collection_detail(
     // the grab path. Without the row → no badge to bump, nothing to
     // do. The collection-wide `last_visited_at` column stays unused
     // (kept around for the v0.5 cleanup).
-    if let Some(norm) = collection.parsed_title_normalized.as_deref() {
-        if let Ok(Some(row)) =
-            iris_db::follows::get_by_normalized(state.db(), user.id, norm).await
-        {
-            let _ = iris_db::follows::mark_visited(state.db(), user.id, row.id).await;
-        }
+    if let Some(norm) = collection.parsed_title_normalized.as_deref()
+        && let Ok(Some(row)) = iris_db::follows::get_by_normalized(state.db(), user.id, norm).await
+    {
+        let _ = iris_db::follows::mark_visited(state.db(), user.id, row.id).await;
     }
 
     // TMDB lookup for the hero poster — same gating as the
@@ -459,18 +458,18 @@ async fn build_available_singletons(
         // the collection (just-grabbed, still downloading, or fully
         // on disk). Surfacing it as a "Grab" chip would let the
         // user retrigger the same ingest from the same row. Skip.
-        if owned_torrent_ids
-            .contains(&(o.indexer_provider.clone(), o.indexer_torrent_id.clone()))
-        {
+        if owned_torrent_ids.contains(&(o.indexer_provider.clone(), o.indexer_torrent_id.clone())) {
             continue;
         }
         let offer_lang =
             iris_media::filename::Language::parse_tag(o.language.as_deref().unwrap_or(""));
-        let covered = owned_languages.get(&(o.season, o.episode)).is_some_and(|owned| {
-            owned
-                .iter()
-                .any(|&l| l == iris_media::filename::Language::Multi || l == offer_lang)
-        });
+        let covered = owned_languages
+            .get(&(o.season, o.episode))
+            .is_some_and(|owned| {
+                owned
+                    .iter()
+                    .any(|&l| l == iris_media::filename::Language::Multi || l == offer_lang)
+            });
         if covered {
             continue;
         }
@@ -566,8 +565,10 @@ async fn build_tv_episode_view(
     // dropping every variant the moment one language is owned —
     // a user with the FR release of S01E01 should still see EN /
     // MULTi variants as grabable alternatives.
-    let mut owned_languages: std::collections::HashMap<(i64, i64), Vec<iris_media::filename::Language>> =
-        std::collections::HashMap::new();
+    let mut owned_languages: std::collections::HashMap<
+        (i64, i64),
+        Vec<iris_media::filename::Language>,
+    > = std::collections::HashMap::new();
     for f in files {
         // episode == 0 is the season-pack sentinel — keep it out
         // of the dedup map so the indexer's individual S04E05
@@ -637,9 +638,10 @@ async fn build_tv_episode_view(
         // — once the user has a pack in the library every leaf
         // has an `episode_files` row and the banner would just
         // nudge them to re-download what they already own.
-        let packs = iris_db::available_episodes::list_season_packs_for_series(state.db(), normalized)
-            .await
-            .unwrap_or_default();
+        let packs =
+            iris_db::available_episodes::list_season_packs_for_series(state.db(), normalized)
+                .await
+                .unwrap_or_default();
         for p in packs {
             if owned_torrent_ids
                 .contains(&(p.indexer_provider.clone(), p.indexer_torrent_id.clone()))

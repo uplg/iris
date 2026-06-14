@@ -192,7 +192,10 @@ mod tests {
         let again = p.snapshot().await;
         assert_eq!(again.len(), 1);
         assert!((again[0].position_seconds - 25.0).abs() < f64::EPSILON);
-        assert_eq!(again[0].started_at, started, "same title must keep started_at");
+        assert_eq!(
+            again[0].started_at, started,
+            "same title must keep started_at"
+        );
     }
 
     #[tokio::test]
@@ -222,7 +225,7 @@ mod tests {
     fn expired_sessions_are_not_live() {
         let now = Instant::now();
         let fresh = now.checked_sub(Duration::from_secs(5)).unwrap();
-        let stale = now.checked_sub(Duration::from_secs(60)).unwrap();
+        let stale = now.checked_sub(Duration::from_mins(1)).unwrap();
         assert!(is_live(fresh, now, SESSION_TTL));
         assert!(!is_live(stale, now, SESSION_TTL));
     }

@@ -7,8 +7,8 @@ use iris_providers::registry::AggregatedResults;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::extract::AuthUser;
 use crate::ranking;
+use crate::routes::extract::AuthUser;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {

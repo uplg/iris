@@ -95,7 +95,10 @@ async fn put_preferences(
     let mut languages: Vec<String> = Vec::with_capacity(body.languages.len());
     for lang in &body.languages {
         let l = lang.trim().to_lowercase();
-        if !LANGUAGE_OPTIONS.iter().any(|(value, _)| *value == l.as_str()) {
+        if !LANGUAGE_OPTIONS
+            .iter()
+            .any(|(value, _)| *value == l.as_str())
+        {
             return Err(ApiError::BadRequest(format!("unknown language: {lang}")));
         }
         if !languages.contains(&l) {
@@ -140,10 +143,7 @@ struct GenresResponse {
 /// a TMDB genre id. Clients surface it as its own selectable chip.
 /// Returns an empty list when TMDB is unconfigured rather than failing
 /// the onboarding flow.
-async fn genres(
-    State(state): State<AppState>,
-    _user: AuthUser,
-) -> ApiResult<Json<GenresResponse>> {
+async fn genres(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<GenresResponse>> {
     let Some(tmdb) = state.tmdb() else {
         return Ok(Json(GenresResponse { genres: Vec::new() }));
     };

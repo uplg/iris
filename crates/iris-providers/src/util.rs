@@ -4,10 +4,7 @@ use iris_core::Error;
 /// Extract a string field from a provider entry, or fall back to the env var
 /// named by `<key>_env` if present. Useful for secrets that should not live
 /// in `providers.toml`.
-pub(crate) fn field_or_env(
-    entry: &ProviderEntry,
-    key: &str,
-) -> Result<String, Error> {
+pub(crate) fn field_or_env(entry: &ProviderEntry, key: &str) -> Result<String, Error> {
     if let Some(v) = entry.fields.get(key).and_then(|v| v.as_str()) {
         return Ok(v.to_string());
     }
@@ -54,14 +51,11 @@ pub(crate) fn extract_year(title: &str) -> Option<u16> {
                 && bytes[i + 1].is_ascii_digit()
                 && bytes[i + 2].is_ascii_digit()
                 && bytes[i + 3].is_ascii_digit()
+                && let Ok(s) = std::str::from_utf8(&bytes[i..i + 4])
+                && let Ok(n) = s.parse::<u16>()
+                && (1900..=2099).contains(&n)
             {
-                if let Ok(s) = std::str::from_utf8(&bytes[i..i + 4]) {
-                    if let Ok(n) = s.parse::<u16>() {
-                        if (1900..=2099).contains(&n) {
-                            return Some(n);
-                        }
-                    }
-                }
+                return Some(n);
             }
         }
         i += 1;
@@ -75,7 +69,10 @@ mod tests {
 
     #[test]
     fn finds_year() {
-        assert_eq!(extract_year("Avatar 2009 EXTENDED MULTi BluRay"), Some(2009));
+        assert_eq!(
+            extract_year("Avatar 2009 EXTENDED MULTi BluRay"),
+            Some(2009)
+        );
         assert_eq!(extract_year("Some Movie (2024) 1080p"), Some(2024));
         assert_eq!(extract_year("No year here"), None);
         // Don't pick years embedded in larger numbers.

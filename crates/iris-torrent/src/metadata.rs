@@ -34,17 +34,17 @@ pub fn parse_preview(bytes: &[u8]) -> anyhow::Result<TorrentPreview> {
     let info_hash = hex::encode(parsed.info_hash.0);
 
     let mut announce_urls = Vec::new();
-    if let Some(a) = parsed.announce.as_ref() {
-        if let Ok(s) = std::str::from_utf8(a.as_ref()) {
-            announce_urls.push(s.to_string());
-        }
+    if let Some(a) = parsed.announce.as_ref()
+        && let Ok(s) = std::str::from_utf8(a.as_ref())
+    {
+        announce_urls.push(s.to_string());
     }
     for tier in &parsed.announce_list {
         for url in tier {
-            if let Ok(s) = std::str::from_utf8(url.as_ref()) {
-                if !announce_urls.iter().any(|x| x == s) {
-                    announce_urls.push(s.to_string());
-                }
+            if let Ok(s) = std::str::from_utf8(url.as_ref())
+                && !announce_urls.iter().any(|x| x == s)
+            {
+                announce_urls.push(s.to_string());
             }
         }
     }
@@ -56,8 +56,9 @@ pub fn parse_preview(bytes: &[u8]) -> anyhow::Result<TorrentPreview> {
     // a `Result` (errors are checked at construction).
     let info_raw = &parsed.info.data;
     let name = match info_raw.name.as_ref() {
-        Some(n) => std::str::from_utf8(n.as_ref())
-            .map_or_else(|_| "<invalid utf-8>".into(), str::to_owned),
+        Some(n) => {
+            std::str::from_utf8(n.as_ref()).map_or_else(|_| "<invalid utf-8>".into(), str::to_owned)
+        }
         None => "<unnamed>".into(),
     };
     let piece_length: u32 = info_raw.piece_length;

@@ -265,16 +265,15 @@ pub async fn probe_file(path: &Path) -> Result<MediaProbe, ProbeError> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
-            format!("ffprobe exited {} with no stderr (path: {})",
+            format!(
+                "ffprobe exited {} with no stderr (path: {})",
                 output.status.code().unwrap_or(-1),
-                path.display())
+                path.display()
+            )
         } else {
             stderr
         };
-        return Err(ProbeError::Failed(
-            output.status.code().unwrap_or(-1),
-            msg,
-        ));
+        return Err(ProbeError::Failed(output.status.code().unwrap_or(-1), msg));
     }
 
     let raw: FfprobeOutput = serde_json::from_slice(&output.stdout)?;
@@ -435,10 +434,7 @@ fn normalize_video(stream: RawStream, index: usize) -> VideoStream {
         level: stream.level.and_then(|l| u32::try_from(l).ok()),
         width: stream.width,
         height: stream.height,
-        bit_rate: stream
-            .bit_rate
-            .as_ref()
-            .and_then(|s| s.parse::<u64>().ok()),
+        bit_rate: stream.bit_rate.as_ref().and_then(|s| s.parse::<u64>().ok()),
         frame_rate,
         frame_rate_num: fps_num,
         frame_rate_den: fps_den,
@@ -499,7 +495,9 @@ fn lang_and_title(tags: Option<&RawTags>) -> (Option<String>, Option<String>) {
 }
 
 fn parse_frame_rate_rational(s: Option<&str>) -> (Option<u32>, Option<u32>) {
-    let Some(s) = s else { return (None, None); };
+    let Some(s) = s else {
+        return (None, None);
+    };
     if let Some((a, b)) = s.split_once('/') {
         let num = a.parse::<u32>().ok();
         let den = b.parse::<u32>().ok();
@@ -509,12 +507,13 @@ fn parse_frame_rate_rational(s: Option<&str>) -> (Option<u32>, Option<u32>) {
         return (num, den);
     }
     // Single number e.g. "23.976" — convert to milli-fps rational.
-    if let Ok(f) = s.parse::<f64>() {
-        if f > 0.0 && f < 1000.0 {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let num = (f * 1000.0).round() as u32;
-            return (Some(num), Some(1000));
-        }
+    if let Ok(f) = s.parse::<f64>()
+        && f > 0.0
+        && f < 1000.0
+    {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let num = (f * 1000.0).round() as u32;
+        return (Some(num), Some(1000));
     }
     (None, None)
 }
@@ -548,7 +547,9 @@ fn detect_hdr(color_transfer: Option<&str>, side_data: Option<&[RawSideData]>) -
 }
 
 fn content_light_level(side_data: Option<&[RawSideData]>) -> (Option<u32>, Option<u32>) {
-    let Some(items) = side_data else { return (None, None); };
+    let Some(items) = side_data else {
+        return (None, None);
+    };
     for item in items {
         if item.is_content_light_level() {
             return (item.max_content, item.max_average);
@@ -603,9 +604,7 @@ struct RawSideData {
 
 impl RawSideData {
     fn type_lower(&self) -> Option<String> {
-        self.side_data_type
-            .as_ref()
-            .map(|s| s.to_ascii_lowercase())
+        self.side_data_type.as_ref().map(|s| s.to_ascii_lowercase())
     }
 
     fn is_dovi(&self) -> bool {

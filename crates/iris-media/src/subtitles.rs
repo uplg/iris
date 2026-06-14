@@ -126,8 +126,7 @@ pub async fn extract_webvtt(
 }
 
 /// A boxed Stream the HTTP layer can hand to `axum::body::Body::from_stream`.
-pub type SubtitleStream =
-    Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>;
+pub type SubtitleStream = Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>;
 
 /// Backwards-compat shim kept for the existing `/track.vtt` route.
 pub async fn stream_webvtt(
@@ -136,7 +135,14 @@ pub async fn stream_webvtt(
     cache_path: PathBuf,
     mark_complete: bool,
 ) -> Result<SubtitleStream, SubtitleError> {
-    stream_subtitle(source, absolute_stream_idx, SubtitleFormat::WebVtt, cache_path, mark_complete).await
+    stream_subtitle(
+        source,
+        absolute_stream_idx,
+        SubtitleFormat::WebVtt,
+        cache_path,
+        mark_complete,
+    )
+    .await
 }
 
 /// Spawn `ffmpeg` to extract a subtitle stream in the requested format
@@ -181,7 +187,13 @@ pub async fn stream_subtitle(
         .arg(source)
         // Absolute stream index (matches what the manifest URL carries).
         .args(["-map", &format!("0:{absolute_stream_idx}")])
-        .args(["-c:s", format.ffmpeg_codec(), "-f", format.ffmpeg_muxer(), "pipe:1"])
+        .args([
+            "-c:s",
+            format.ffmpeg_codec(),
+            "-f",
+            format.ffmpeg_muxer(),
+            "pipe:1",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

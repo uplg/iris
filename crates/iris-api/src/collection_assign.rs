@@ -132,8 +132,12 @@ pub async fn assign_after_ingest(
     // unrelated Watchlist follow.
     if kind == Kind::Tv {
         for (file_idx, parsed) in &parsed_files {
-            let Some(season) = parsed.season else { continue };
-            let Some(episode) = parsed.episode else { continue };
+            let Some(season) = parsed.season else {
+                continue;
+            };
+            let Some(episode) = parsed.episode else {
+                continue;
+            };
             let _ = episode_files::upsert(
                 pool,
                 UpsertEpisodeFile {
@@ -188,70 +192,68 @@ async fn prewarm_tv_collection(
     // specific release, so it can only enrich here — the per-release
     // anime/live-action split is decided by the offline signal at
     // ingest. Best-effort; missing AniList just leaves `anilist_id` null.
-    if collection.is_anime && collection.anilist_id.is_none() {
-        if let Some(id) = anilist_id_for(deps.anilist, &collection.display_title).await {
-            if let Err(e) = iris_db::collections::set_is_anime(pool, collection.id, true, Some(id)).await
-            {
-                tracing::warn!(error = %e, collection_id = %collection.id, "prewarm: set anilist_id failed");
-            } else {
-                tracing::info!(
-                    collection_id = %collection.id,
-                    anilist_id = id,
-                    "prewarm: enriched anime collection with AniList id",
-                );
-            }
-        }
-    }
-    if collection.tmdb_id.is_none() {
-        if let Some(client) = deps.tmdb {
-            if let Some(resolved) = crate::tmdb_resolve::resolve_release_name(
-                pool,
-                client,
-                release_name,
-                Some(crate::tmdb::TmdbKind::Tv),
-            )
-            .await
-            {
-                // TMDB ids never exceed ~i32::MAX in practice; reject
-                // anything that doesn't fit i64 cleanly rather than
-                // forcing an `as` cast — keeps `cargo clippy` happy
-                // without an `allow` blanket.
-                let Ok(id) = i64::try_from(resolved.tmdb_id) else {
-                    tracing::warn!(
-                        tmdb_id = resolved.tmdb_id,
-                        collection_id = %collection.id,
-                        "prewarm: TMDB id overflowed i64 — dropping (shouldn't happen)",
-                    );
-                    return;
-                };
-                if let Err(e) =
-                    iris_db::collections::set_tmdb_id_if_missing(pool, collection.id, id).await
-                {
-                    tracing::warn!(
-                        error = %e,
-                        collection_id = %collection.id,
-                        "prewarm: set_tmdb_id_if_missing failed",
-                    );
-                } else {
-                    tracing::info!(
-                        collection_id = %collection.id,
-                        tmdb_id = id,
-                        "prewarm: resolved TMDB id via SCENE name (unverified — poster only)",
-                    );
-                }
-            }
-        }
-    }
-    if let Some(reg) = deps.providers {
+    if collection.is_anime
+        && collection.anilist_id.is_none()
+        && let Some(id) = anilist_id_for(deps.anilist, &collection.display_title).await
+    {
         if let Err(e) =
-            crate::collections_scheduler::scan_collection(pool, reg, collection.id).await
+            iris_db::collections::set_is_anime(pool, collection.id, true, Some(id)).await
+        {
+            tracing::warn!(error = %e, collection_id = %collection.id, "prewarm: set anilist_id failed");
+        } else {
+            tracing::info!(
+                collection_id = %collection.id,
+                anilist_id = id,
+                "prewarm: enriched anime collection with AniList id",
+            );
+        }
+    }
+    if collection.tmdb_id.is_none()
+        && let Some(client) = deps.tmdb
+        && let Some(resolved) = crate::tmdb_resolve::resolve_release_name(
+            pool,
+            client,
+            release_name,
+            Some(crate::tmdb::TmdbKind::Tv),
+        )
+        .await
+    {
+        // TMDB ids never exceed ~i32::MAX in practice; reject
+        // anything that doesn't fit i64 cleanly rather than
+        // forcing an `as` cast — keeps `cargo clippy` happy
+        // without an `allow` blanket.
+        let Ok(id) = i64::try_from(resolved.tmdb_id) else {
+            tracing::warn!(
+                tmdb_id = resolved.tmdb_id,
+                collection_id = %collection.id,
+                "prewarm: TMDB id overflowed i64 — dropping (shouldn't happen)",
+            );
+            return;
+        };
+        if let Err(e) = iris_db::collections::set_tmdb_id_if_missing(pool, collection.id, id).await
         {
             tracing::warn!(
                 error = %e,
                 collection_id = %collection.id,
-                "prewarm: initial scheduler scan failed",
+                "prewarm: set_tmdb_id_if_missing failed",
+            );
+        } else {
+            tracing::info!(
+                collection_id = %collection.id,
+                tmdb_id = id,
+                "prewarm: resolved TMDB id via SCENE name (unverified — poster only)",
             );
         }
+    }
+    if let Some(reg) = deps.providers
+        && let Err(e) =
+            crate::collections_scheduler::scan_collection(pool, reg, collection.id).await
+    {
+        tracing::warn!(
+            error = %e,
+            collection_id = %collection.id,
+            "prewarm: initial scheduler scan failed",
+        );
     }
 }
 
@@ -341,16 +343,17 @@ fn pick_identity<'a>(
         // into the UI. Only trust the file parse when it produced
         // a real season; otherwise fall back to the torrent name
         // (which for season packs is canonical: `Silicon.Valley.S01.…`).
-        if let Some((_, p)) = parsed_files.first() {
-            if !p.title.is_empty() && p.season.is_some() {
-                return Some(p);
-            }
-        }
-    }
-    if let Some(p) = parsed_name {
-        if !p.title.is_empty() {
+        if let Some((_, p)) = parsed_files.first()
+            && !p.title.is_empty()
+            && p.season.is_some()
+        {
             return Some(p);
         }
+    }
+    if let Some(p) = parsed_name
+        && !p.title.is_empty()
+    {
+        return Some(p);
     }
     parsed_files.first().map(|(_, p)| p)
 }
@@ -397,7 +400,9 @@ pub async fn enrich_after_verify(pool: &SqlitePool, infohash: &str) {
         return;
     }
     let Some(tmdb_id) = row.tmdb_id else { return };
-    let Some(collection_id) = row.collection_id else { return };
+    let Some(collection_id) = row.collection_id else {
+        return;
+    };
     if let Err(e) = collections::set_tmdb_id_if_missing(pool, collection_id, tmdb_id).await {
         tracing::warn!(error = %e, infohash, "enrich_after_verify: write failed");
         return;
@@ -476,14 +481,18 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
     let Ok(Some(torrent)) = iris_db::torrents::find_by_infohash(pool, infohash).await else {
         return;
     };
-    let Some(collection_id) = torrent.collection_id else { return };
+    let Some(collection_id) = torrent.collection_id else {
+        return;
+    };
     let Ok(Some(collection)) = iris_db::collections::get(pool, collection_id).await else {
         return;
     };
     if collection.kind != "tv" {
         return;
     }
-    let Some(parsed) = filename::parse(&torrent.name) else { return };
+    let Some(parsed) = filename::parse(&torrent.name) else {
+        return;
+    };
     if parsed.season.is_none() {
         return;
     }
@@ -500,17 +509,16 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
     // the existing row.
     if let Ok(Some(other)) =
         iris_db::collections::find_by_parsed_title(pool, &new_key, Kind::Tv).await
+        && other.id != collection_id
     {
-        if other.id != collection_id {
-            tracing::warn!(
-                collection_id = %collection_id,
-                current = %current_key,
-                target = %new_key,
-                other_id = %other.id,
-                "heal_tv_collection_identity: target key already owned by another collection — skipping",
-            );
-            return;
-        }
+        tracing::warn!(
+            collection_id = %collection_id,
+            current = %current_key,
+            target = %new_key,
+            other_id = %other.id,
+            "heal_tv_collection_identity: target key already owned by another collection — skipping",
+        );
+        return;
     }
     let new_display = parsed.display_with_year(true);
     if let Err(e) =
@@ -519,8 +527,7 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
         tracing::warn!(error = %e, collection_id = %collection_id, "heal: set_parsed_title_normalized failed");
         return;
     }
-    if let Err(e) =
-        iris_db::collections::set_display_title(pool, collection_id, &new_display).await
+    if let Err(e) = iris_db::collections::set_display_title(pool, collection_id, &new_display).await
     {
         tracing::warn!(error = %e, collection_id = %collection_id, "heal: set_display_title failed");
         return;
@@ -558,24 +565,30 @@ async fn heal_anime_collection_identity(
     let Ok(Some(torrent)) = iris_db::torrents::find_by_infohash(pool, infohash).await else {
         return;
     };
-    let Some(collection_id) = torrent.collection_id else { return };
+    let Some(collection_id) = torrent.collection_id else {
+        return;
+    };
     let Ok(Some(collection)) = collections::get(pool, collection_id).await else {
         return;
     };
     if collection.kind != "tv" {
         return;
     }
-    let Some(parsed) = filename::parse(&torrent.name) else { return };
+    let Some(parsed) = filename::parse(&torrent.name) else {
+        return;
+    };
     if parsed.season.is_none() {
         return; // no season marker → no canonical TV key to write
     }
-    let is_anime =
-        filename::looks_like_anime_release(&torrent.name, parsed.season, parsed.episode);
+    let is_anime = filename::looks_like_anime_release(&torrent.name, parsed.season, parsed.episode);
     let new_key = parsed.collection_key_kind(true, is_anime);
     if new_key.is_empty() {
         return;
     }
-    let current_key = collection.parsed_title_normalized.clone().unwrap_or_default();
+    let current_key = collection
+        .parsed_title_normalized
+        .clone()
+        .unwrap_or_default();
 
     // Already in the correct collection — keep the denormalised flag and
     // absolute numbers current, nothing else to do (steady state).
@@ -705,7 +718,9 @@ impl AnimeHeal<'_> {
                 continue;
             }
             let leaf = path.rsplit('/').next().unwrap_or(path);
-            let Some(p) = filename::parse(leaf) else { continue };
+            let Some(p) = filename::parse(leaf) else {
+                continue;
+            };
             let (Some(season), Some(episode)) = (p.season, p.episode) else {
                 continue;
             };
@@ -747,7 +762,9 @@ async fn backfill_episode_absolutes(pool: &SqlitePool, infohash: &str, files: &[
             continue;
         }
         let leaf = path.rsplit('/').next().unwrap_or(path);
-        let Some(p) = filename::parse(leaf) else { continue };
+        let Some(p) = filename::parse(leaf) else {
+            continue;
+        };
         let (Some(season), Some(episode)) = (p.season, p.episode) else {
             continue;
         };
@@ -774,11 +791,11 @@ async fn rebuild_availability(
     collection_id: uuid::Uuid,
 ) {
     let _ = iris_db::available_episodes::delete_for_series(pool, normalized).await;
-    if let Some(reg) = providers {
-        if let Err(e) = crate::collections_scheduler::scan_collection(pool, reg, collection_id).await
-        {
-            tracing::warn!(error = %e, collection_id = %collection_id, "anime heal: rescan failed");
-        }
+    if let Some(reg) = providers
+        && let Err(e) =
+            crate::collections_scheduler::scan_collection(pool, reg, collection_id).await
+    {
+        tracing::warn!(error = %e, collection_id = %collection_id, "anime heal: rescan failed");
     }
 }
 
@@ -786,11 +803,7 @@ async fn rebuild_availability(
 /// to any that doesn't have one yet. Runs at boot to backfill the
 /// existing library after the SCENE-first migration. Idempotent —
 /// safe to call repeatedly.
-pub async fn run_backfill(
-    pool: &SqlitePool,
-    deps: EnrichDeps<'_>,
-    engine: &iris_torrent::Engine,
-) {
+pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris_torrent::Engine) {
     let rows = match iris_db::torrents::list_active(pool).await {
         Ok(v) => v,
         Err(e) => {
@@ -829,7 +842,8 @@ pub async fn run_backfill(
                 // Needs the file list; torrents whose engine state isn't
                 // loaded yet are retried on a later tick.
                 if let Some(files) = &files {
-                    heal_anime_collection_identity(pool, deps.providers, &row.infohash, files).await;
+                    heal_anime_collection_identity(pool, deps.providers, &row.infohash, files)
+                        .await;
                 }
             } else {
                 // Self-heal TV collection identity. Earlier builds picked
@@ -849,11 +863,8 @@ pub async fn run_backfill(
         let Some(snap) = engine.get_by_infohash(&row.infohash) else {
             continue;
         };
-        let files: Vec<(usize, String)> = snap
-            .files
-            .into_iter()
-            .map(|f| (f.index, f.path))
-            .collect();
+        let files: Vec<(usize, String)> =
+            snap.files.into_iter().map(|f| (f.index, f.path)).collect();
         assign_after_ingest(pool, deps, &row.infohash, &row.name, row.tmdb_id, &files).await;
         if row.tmdb_verified {
             enrich_after_verify(pool, &row.infohash).await;

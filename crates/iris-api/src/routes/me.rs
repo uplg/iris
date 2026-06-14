@@ -86,7 +86,9 @@ async fn change_display_name(
         return Err(ApiError::BadRequest("display name cannot be empty".into()));
     }
     if trimmed.len() > 64 {
-        return Err(ApiError::BadRequest("display name too long (max 64)".into()));
+        return Err(ApiError::BadRequest(
+            "display name too long (max 64)".into(),
+        ));
     }
     let _ = iris_db::users::update_display_name(state.db(), user.id, trimmed).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
@@ -216,13 +218,13 @@ async fn continue_watching(
     let out = rows
         .into_iter()
         .map(|r| {
-            let file_path = state
-                .engine()
-                .get_by_infohash(&r.infohash)
-                .and_then(|s| {
-                    let file_idx = usize::try_from(r.file_idx).ok()?;
-                    s.files.into_iter().find(|f| f.index == file_idx).map(|f| f.path)
-                });
+            let file_path = state.engine().get_by_infohash(&r.infohash).and_then(|s| {
+                let file_idx = usize::try_from(r.file_idx).ok()?;
+                s.files
+                    .into_iter()
+                    .find(|f| f.index == file_idx)
+                    .map(|f| f.path)
+            });
             ContinueWatchingItem {
                 infohash: r.infohash,
                 torrent_name: r.torrent_name,

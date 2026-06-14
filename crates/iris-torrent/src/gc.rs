@@ -27,8 +27,7 @@ use crate::Engine;
 /// download dir. Given a target byte budget for the cache itself, must
 /// shrink the cache to ≤ target and return the freed bytes. The GC
 /// invokes it before touching real torrents.
-pub type DerivedTrimFn =
-    Arc<dyn Fn(u64) -> BoxFuture<'static, u64> + Send + Sync>;
+pub type DerivedTrimFn = Arc<dyn Fn(u64) -> BoxFuture<'static, u64> + Send + Sync>;
 
 /// Pairing of a directory (counted toward the storage budget) with the
 /// async callback that knows how to trim it.
@@ -131,7 +130,10 @@ impl Gc {
 
         if used < threshold {
             tracing::debug!(
-                used, torrent_used, derived_used, threshold,
+                used,
+                torrent_used,
+                derived_used,
+                threshold,
                 "gc: under threshold, nothing to do"
             );
             return Ok(report);
@@ -164,7 +166,8 @@ impl Gc {
         }
 
         // Step 2: only now do we touch real torrents.
-        self.evict_torrents(current_used, target, &mut report).await?;
+        self.evict_torrents(current_used, target, &mut report)
+            .await?;
 
         let post_torrent_used = dir_size(&self.inner.download_dir).await.unwrap_or(0);
         let post_derived_used = match &self.inner.derived {

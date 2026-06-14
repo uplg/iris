@@ -84,11 +84,20 @@ pub struct CatalogItem {
 }
 
 /// Column list for `CatalogItem` reads — shared so the row queries can't
-/// drift from the struct's `FromRow` field order.
-const SELECT_COLUMNS: &str = "id, tmdb_id, anilist_id, kind, title, original_language, genres, \
-     is_anime, poster_path, backdrop_path, overview, popularity, vote_average, release_date, \
-     availability, available_provider, seeders, provider_id, external_id, download_url, infohash, \
-     language, released_at";
+/// drift from the struct's `FromRow` field order. A macro rather than a
+/// `const &str` so it expands to a string literal usable inside
+/// `concat!`, keeping the simple reads compile-time `&'static str` — the
+/// only type sqlx 0.9 accepts natively (`SqlSafeStr`) — and feeding the
+/// dynamic `QueryBuilder` path (`query_for_user`) a static initializer
+/// too, with no `format!`/`AssertSqlSafe` audit hatch anywhere.
+macro_rules! select_columns {
+    () => {
+        "id, tmdb_id, anilist_id, kind, title, original_language, genres, \
+         is_anime, poster_path, backdrop_path, overview, popularity, vote_average, release_date, \
+         availability, available_provider, seeders, provider_id, external_id, download_url, infohash, \
+         language, released_at"
+    };
+}
 
 /// Ordering for a catalogue query.
 #[derive(Debug, Clone, Copy, Default)]
@@ -265,8 +274,11 @@ pub async fn query_for_user(
     pool: &SqlitePool,
     q: &CatalogQuery,
 ) -> Result<Vec<CatalogItem>, sqlx::Error> {
-    let mut qb =
-        sqlx::QueryBuilder::new(format!("SELECT {SELECT_COLUMNS} FROM catalog_items WHERE 1 = 1"));
+    let mut qb = sqlx::QueryBuilder::new(concat!(
+        "SELECT ",
+        select_columns!(),
+        " FROM catalog_items WHERE 1 = 1"
+    ));
     if let Some(kind) = &q.kind {
         qb.push(" AND kind = ").push_bind(kind.clone());
     }
@@ -369,22 +381,19 @@ pub async fn find_by_tmdb(
     pool: &SqlitePool,
     tmdb_id: i64,
 ) -> Result<Option<CatalogItem>, sqlx::Error> {
-    let sql = format!(
-        "SELECT {SELECT_COLUMNS} FROM catalog_items \
-         WHERE tmdb_id = ?1 AND is_anime = 0 LIMIT 1"
-    );
-    sqlx::query_as::<_, CatalogItem>(&sql)
-        .bind(tmdb_id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, CatalogItem>(concat!(
+        "SELECT ",
+        select_columns!(),
+        " FROM catalog_items WHERE tmdb_id = ?1 AND is_anime = 0 LIMIT 1"
+    ))
+    .bind(tmdb_id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// Drop rows not refreshed since `older_than` — keeps the catalogue from
 /// growing without bound as TMDB trends churn. Returns rows removed.
-pub async fn prune_stale(
-    pool: &SqlitePool,
-    older_than: DateTime<Utc>,
-) -> Result<u64, sqlx::Error> {
+pub async fn prune_stale(pool: &SqlitePool, older_than: DateTime<Utc>) -> Result<u64, sqlx::Error> {
     let res = sqlx::query("DELETE FROM catalog_items WHERE last_refreshed_at < ?1")
         .bind(older_than)
         .execute(pool)
@@ -498,16 +507,24 @@ mod tests {
 
         // Same (tmdb_id, kind) twice → the partial-index ON CONFLICT
         // updates in place rather than inserting a duplicate.
-        upsert_item(&pool, &movie(1, "Amelie", "fr", 10.0)).await.unwrap();
+        upsert_item(&pool, &movie(1, "Amelie", "fr", 10.0))
+            .await
+            .unwrap();
         let mut updated = movie(1, "Amelie (updated)", "fr", 20.0);
         updated.genres = vec![35, 18];
         upsert_item(&pool, &updated).await.unwrap();
-        upsert_item(&pool, &movie(2, "Heat", "en", 15.0)).await.unwrap();
+        upsert_item(&pool, &movie(2, "Heat", "en", 15.0))
+            .await
+            .unwrap();
 
         // Language filter resolves to the single, updated French row.
         let fr = query_for_user(
             &pool,
-            &CatalogQuery { languages: vec!["fr".to_string()], limit: 10, ..Default::default() },
+            &CatalogQuery {
+                languages: vec!["fr".to_string()],
+                limit: 10,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -516,9 +533,15 @@ mod tests {
         assert_eq!(fr[0].genres, "[35,18]");
 
         // No language filter → both rows, popularity desc.
-        let all = query_for_user(&pool, &CatalogQuery { limit: 10, ..Default::default() })
-            .await
-            .unwrap();
+        let all = query_for_user(
+            &pool,
+            &CatalogQuery {
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].title, "Amelie (updated)");
     }
@@ -529,13 +552,21 @@ mod tests {
         let old = Utc::now() - chrono::Duration::days(40);
         let fresh = Utc::now() - chrono::Duration::days(2);
 
-        upsert_item(&pool, &movie_release(1, "Old Drop", 5, old)).await.unwrap();
-        upsert_item(&pool, &movie_release(2, "Fresh Drop", 12, fresh)).await.unwrap();
+        upsert_item(&pool, &movie_release(1, "Old Drop", 5, old))
+            .await
+            .unwrap();
+        upsert_item(&pool, &movie_release(2, "Fresh Drop", 12, fresh))
+            .await
+            .unwrap();
 
         // Release facts round-trip + freshest-first ordering.
         let rows = query_for_user(
             &pool,
-            &CatalogQuery { order: CatalogOrder::Released, limit: 10, ..Default::default() },
+            &CatalogQuery {
+                order: CatalogOrder::Released,
+                limit: 10,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -550,7 +581,11 @@ mod tests {
         // only_available passes (rolling-window rows are 'available').
         let available = query_for_user(
             &pool,
-            &CatalogQuery { only_available: true, limit: 10, ..Default::default() },
+            &CatalogQuery {
+                only_available: true,
+                limit: 10,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -563,8 +598,12 @@ mod tests {
         let old = Utc::now() - chrono::Duration::days(40);
         let fresh = Utc::now() - chrono::Duration::days(2);
 
-        upsert_item(&pool, &movie_release(1, "Old Drop", 5, old)).await.unwrap();
-        upsert_item(&pool, &movie_release(2, "Fresh Drop", 12, fresh)).await.unwrap();
+        upsert_item(&pool, &movie_release(1, "Old Drop", 5, old))
+            .await
+            .unwrap();
+        upsert_item(&pool, &movie_release(2, "Fresh Drop", 12, fresh))
+            .await
+            .unwrap();
         // A lazy reco candidate: no released_at, AniList-only (always
         // GC-eligible). Backdate last_refreshed_at so it reads as cold.
         let mut lazy = movie(3, "Lazy Rec", "fr", 8.0);
@@ -579,12 +618,20 @@ mod tests {
 
         let released_cutoff = Utc::now() - chrono::Duration::days(28);
         let lazy_cutoff = Utc::now() - chrono::Duration::days(1);
-        let removed = prune_window(&pool, released_cutoff, lazy_cutoff).await.unwrap();
-        assert_eq!(removed, 2, "old drop + cold lazy candidate pruned");
-
-        let rows = query_for_user(&pool, &CatalogQuery { limit: 10, ..Default::default() })
+        let removed = prune_window(&pool, released_cutoff, lazy_cutoff)
             .await
             .unwrap();
+        assert_eq!(removed, 2, "old drop + cold lazy candidate pruned");
+
+        let rows = query_for_user(
+            &pool,
+            &CatalogQuery {
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "Fresh Drop");
     }

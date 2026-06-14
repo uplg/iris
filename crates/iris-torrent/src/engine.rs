@@ -287,18 +287,16 @@ impl Engine {
         delete_files: bool,
     ) -> Result<(), EngineError> {
         let handle = self.handle_by_infohash(infohash)?;
-        self.session.delete(handle.id().into(), delete_files).await?;
+        self.session
+            .delete(handle.id().into(), delete_files)
+            .await?;
         Ok(())
     }
 
     /// Resolve the absolute on-disk path librqbit writes to for a given
     /// torrent file. Used by the remux pipeline to feed ffmpeg an actual file
     /// instead of replaying through the streaming layer.
-    pub fn file_path(
-        &self,
-        infohash: &str,
-        file_idx: usize,
-    ) -> Result<PathBuf, EngineError> {
+    pub fn file_path(&self, infohash: &str, file_idx: usize) -> Result<PathBuf, EngineError> {
         let handle = self.handle_by_infohash(infohash)?;
         let rel = handle
             .with_metadata(|m| {

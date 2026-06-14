@@ -26,12 +26,12 @@ use iris_core::search::{
 };
 
 use crate::nfo;
-use reqwest::header::{
-    ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, HeaderMap, HeaderValue, ORIGIN, REFERER, USER_AGENT,
-};
 use quick_xml::Reader;
 use quick_xml::escape::unescape as xml_unescape;
 use quick_xml::events::Event;
+use reqwest::header::{
+    ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, HeaderMap, HeaderValue, ORIGIN, REFERER, USER_AGENT,
+};
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use serde::Deserialize;
 use tokio::sync::Mutex;
@@ -45,18 +45,18 @@ const DEFAULT_USER_AGENT: &str =
 const DEFAULT_REFERER: &str = "https://torr9.net/";
 const DEFAULT_ORIGIN: &str = "https://torr9.net";
 /// Token TTL is 30 days; refresh proactively well before that.
-const TOKEN_REFRESH_AFTER: Duration = Duration::from_secs(25 * 24 * 60 * 60);
+const TOKEN_REFRESH_AFTER: Duration = Duration::from_hours(600);
 /// Bencoded torrent files start with a dictionary marker.
 const BENCODE_DICT_MARKER: u8 = b'd';
 /// Featured carousels are curated server-side and refresh slowly. Caching
 /// 30 min keeps the discovery home cheap without going stale on the
 /// daily-ish editorial cadence.
-const FEATURED_TTL: Duration = Duration::from_secs(30 * 60);
+const FEATURED_TTL: Duration = Duration::from_mins(30);
 /// Torrent details get re-opened when the user shops around the search
 /// results. 60s avoids hammering the indexer when they bounce between
 /// 5 torrents in 30 seconds, but stays fresh enough for seeders/leechers
 /// to be representative.
-const DETAILS_TTL: Duration = Duration::from_secs(60);
+const DETAILS_TTL: Duration = Duration::from_mins(1);
 
 pub struct Torr9 {
     id: String,
@@ -153,10 +153,10 @@ impl Torr9 {
             FeaturedKind::Movies => &self.featured_movies_cache,
             FeaturedKind::Series => &self.featured_series_cache,
         };
-        if let Some(c) = cache_slot.lock().await.as_ref() {
-            if c.fetched_at.elapsed() < FEATURED_TTL {
-                return Ok(c.items.clone());
-            }
+        if let Some(c) = cache_slot.lock().await.as_ref()
+            && c.fetched_at.elapsed() < FEATURED_TTL
+        {
+            return Ok(c.items.clone());
         }
 
         let path = match kind {
@@ -245,10 +245,10 @@ impl Torr9 {
 
     async fn token(&self) -> Result<String> {
         let mut guard = self.token.lock().await;
-        if let Some(t) = guard.as_ref() {
-            if t.fetched_at.elapsed() < TOKEN_REFRESH_AFTER {
-                return Ok(t.bearer.clone());
-            }
+        if let Some(t) = guard.as_ref()
+            && t.fetched_at.elapsed() < TOKEN_REFRESH_AFTER
+        {
+            return Ok(t.bearer.clone());
         }
         tracing::debug!(provider = %self.id, "torr9 (re)logging in");
         let bearer = self.login().await?;
@@ -458,10 +458,10 @@ impl SearchProvider for Torr9 {
         // Cache hit?
         {
             let cache = self.details_cache.lock().await;
-            if let Some(c) = cache.get(external_id) {
-                if c.fetched_at.elapsed() < DETAILS_TTL {
-                    return Ok(Some(c.details.clone()));
-                }
+            if let Some(c) = cache.get(external_id)
+                && c.fetched_at.elapsed() < DETAILS_TTL
+            {
+                return Ok(Some(c.details.clone()));
             }
         }
 
@@ -754,14 +754,20 @@ struct Torrent {
 
 impl Torrent {
     fn into_search_result(self, provider_id: &str) -> SearchResult {
-        let category = match (self.category_name.clone(), self.parent_category_name.clone()) {
+        let category = match (
+            self.category_name.clone(),
+            self.parent_category_name.clone(),
+        ) {
             (Some(c), Some(p)) if c != p => Some(format!("{p} / {c}")),
             (Some(c), _) => Some(c),
             (None, Some(p)) => Some(p),
             (None, None) => None,
         };
         let year = extract_year(&self.title);
-        let kind = derive_kind(self.parent_category_name.as_deref(), self.category_name.as_deref());
+        let kind = derive_kind(
+            self.parent_category_name.as_deref(),
+            self.category_name.as_deref(),
+        );
         let tmdb_id = self.tmdb_id.filter(|id| *id > 0);
         SearchResult {
             provider_id: provider_id.to_string(),
@@ -804,7 +810,11 @@ fn derive_kind(parent: Option<&str>, leaf: Option<&str>) -> Option<MediaKind> {
         if lower.contains("films") || lower == "film" || lower.contains("animation") {
             return Some(MediaKind::Movie);
         }
-        if lower.contains("séries") || lower.contains("series") || lower.contains("anime") || lower.contains("manga") {
+        if lower.contains("séries")
+            || lower.contains("series")
+            || lower.contains("anime")
+            || lower.contains("manga")
+        {
             return Some(MediaKind::Tv);
         }
         None
@@ -920,7 +930,8 @@ fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<Search
             let Ok(raw) = std::str::from_utf8(&attr.value) else {
                 continue;
             };
-            let val = xml_unescape(raw).map_or_else(|_| raw.to_string(), std::borrow::Cow::into_owned);
+            let val =
+                xml_unescape(raw).map_or_else(|_| raw.to_string(), std::borrow::Cow::into_owned);
             match attr.key.as_ref() {
                 b"url" => item.enclosure_url = Some(val),
                 b"length" => item.length = val.parse().ok(),
@@ -946,38 +957,39 @@ fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<Search
                 _ => tag = None,
             },
             Ok(Event::Empty(e)) => {
-                if e.name().as_ref() == b"enclosure" {
-                    if let Some(item) = cur.as_mut() {
-                        read_enclosure(&e, item);
-                    }
+                if e.name().as_ref() == b"enclosure"
+                    && let Some(item) = cur.as_mut()
+                {
+                    read_enclosure(&e, item);
                 }
             }
             Ok(Event::Text(t)) => {
-                if let (Some(item), Some(tg)) = (cur.as_mut(), tag) {
-                    if let Ok(decoded) = t.decode() {
-                        let text = xml_unescape(decoded.as_ref())
-                            .map_or_else(|_| decoded.to_string(), std::borrow::Cow::into_owned);
-                        let text = text.trim().to_string();
-                        if !text.is_empty() {
-                            match tg {
-                                RssTag::Title => item.title = Some(text),
-                                // link wins, but accept guid as a fallback id.
-                                RssTag::Link => item.page_url = Some(text),
-                                RssTag::Guid => {
-                                    item.page_url.get_or_insert(text);
-                                }
-                                RssTag::PubDate => item.pub_date = Some(text),
+                if let (Some(item), Some(tg)) = (cur.as_mut(), tag)
+                    && let Ok(decoded) = t.decode()
+                {
+                    let text = xml_unescape(decoded.as_ref())
+                        .map_or_else(|_| decoded.to_string(), std::borrow::Cow::into_owned);
+                    let text = text.trim().to_string();
+                    if !text.is_empty() {
+                        match tg {
+                            RssTag::Title => item.title = Some(text),
+                            // link wins, but accept guid as a fallback id.
+                            RssTag::Link => item.page_url = Some(text),
+                            RssTag::Guid => {
+                                item.page_url.get_or_insert(text);
                             }
+                            RssTag::PubDate => item.pub_date = Some(text),
                         }
                     }
                 }
             }
             Ok(Event::End(e)) => {
-                if e.name().as_ref() == b"item" {
-                    if let Some(r) = cur.take().and_then(|i| i.into_search_result(provider_id, kind))
-                    {
-                        out.push(r);
-                    }
+                if e.name().as_ref() == b"item"
+                    && let Some(r) = cur
+                        .take()
+                        .and_then(|i| i.into_search_result(provider_id, kind))
+                {
+                    out.push(r);
                 }
                 tag = None;
             }
@@ -1039,8 +1051,14 @@ mod tests {
 
     #[test]
     fn id_from_url_rejects_non_numeric() {
-        assert_eq!(torr9_id_from_url("https://torr9.net/torrents/42"), Some("42".to_string()));
-        assert_eq!(torr9_id_from_url("https://torr9.net/torrents/42/"), Some("42".to_string()));
+        assert_eq!(
+            torr9_id_from_url("https://torr9.net/torrents/42"),
+            Some("42".to_string())
+        );
+        assert_eq!(
+            torr9_id_from_url("https://torr9.net/torrents/42/"),
+            Some("42".to_string())
+        );
         assert_eq!(torr9_id_from_url("https://torr9.net/about"), None);
     }
 }

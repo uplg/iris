@@ -216,7 +216,10 @@ mod tests {
     #[test]
     fn preserves_unknown_keys() {
         let caps = ClientCapabilities::parse("future-codec=vvc; container=mp4");
-        assert_eq!(caps.extras.get("future-codec").map(String::as_str), Some("vvc"));
+        assert_eq!(
+            caps.extras.get("future-codec").map(String::as_str),
+            Some("vvc")
+        );
         assert!(caps.has_container("mp4"));
     }
 

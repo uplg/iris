@@ -59,19 +59,32 @@ impl PrefRow {
     }
 }
 
-const SELECT_COLUMNS: &str =
-    "languages, genres, include_anime, onboarding_completed, updated_at";
+/// Column list for `SELECT`ing a [`PrefRow`]. A macro rather than a
+/// `const &str` so it expands to a string literal usable inside
+/// `concat!`, keeping every read query a compile-time `&'static str` —
+/// the only type sqlx 0.9 accepts natively (`SqlSafeStr`) — instead of a
+/// `format!`-built string that would need an `AssertSqlSafe` audit hatch.
+/// The literal carries no runtime data, so injection is impossible by
+/// construction.
+macro_rules! select_columns {
+    () => {
+        "languages, genres, include_anime, onboarding_completed, updated_at"
+    };
+}
 
 /// Resolve a user's preferences, returning the all-empty default when no
 /// row exists yet (never-onboarded user). Callers treat the default as
 /// "cold start" rather than an error.
 pub async fn get(pool: &SqlitePool, user_id: UserId) -> Result<UserPreferences, sqlx::Error> {
     let uuid: Uuid = user_id.into();
-    let q = format!("SELECT {SELECT_COLUMNS} FROM user_preferences WHERE user_id = ?1");
-    let row: Option<PrefRow> = sqlx::query_as(&q)
-        .bind(uuid)
-        .fetch_optional(pool)
-        .await?;
+    let row: Option<PrefRow> = sqlx::query_as(concat!(
+        "SELECT ",
+        select_columns!(),
+        " FROM user_preferences WHERE user_id = ?1"
+    ))
+    .bind(uuid)
+    .fetch_optional(pool)
+    .await?;
     Ok(row.map(PrefRow::into_domain).unwrap_or_default())
 }
 
@@ -129,9 +142,12 @@ pub async fn is_onboarded(pool: &SqlitePool, user_id: UserId) -> Result<bool, sq
 /// (languages × genres × anime) to decide which TMDB slices to fetch,
 /// so it batches by household demand instead of fetching per-user.
 pub async fn all_onboarded(pool: &SqlitePool) -> Result<Vec<UserPreferences>, sqlx::Error> {
-    let q = format!(
-        "SELECT {SELECT_COLUMNS} FROM user_preferences WHERE onboarding_completed = 1"
-    );
-    let rows: Vec<PrefRow> = sqlx::query_as(&q).fetch_all(pool).await?;
+    let rows: Vec<PrefRow> = sqlx::query_as(concat!(
+        "SELECT ",
+        select_columns!(),
+        " FROM user_preferences WHERE onboarding_completed = 1"
+    ))
+    .fetch_all(pool)
+    .await?;
     Ok(rows.into_iter().map(PrefRow::into_domain).collect())
 }

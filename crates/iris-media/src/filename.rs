@@ -222,15 +222,13 @@ pub fn compare_video_files(a: &str, b: &str) -> std::cmp::Ordering {
     let key_a = parse(base_a).and_then(|p| Some((p.season?, p.episode?)));
     let key_b = parse(base_b).and_then(|p| Some((p.season?, p.episode?)));
     match (key_a, key_b) {
-        (Some((sa, ea)), Some((sb, eb))) => {
-            sa.cmp(&sb).then_with(|| ea.cmp(&eb))
-        }
+        (Some((sa, ea)), Some((sb, eb))) => sa.cmp(&sb).then_with(|| ea.cmp(&eb)),
         // SE-marked files come first; bonus / extras drop to the end.
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
-        (None, None) => {
-            base_a.to_ascii_lowercase().cmp(&base_b.to_ascii_lowercase())
-        }
+        (None, None) => base_a
+            .to_ascii_lowercase()
+            .cmp(&base_b.to_ascii_lowercase()),
     }
 }
 
@@ -426,9 +424,7 @@ pub fn normalize_title(s: &str) -> String {
 /// recognisable — even a bare title produces a `Parsed { title, .. }`
 /// with everything else null.
 pub fn parse(filename: &str) -> Option<Parsed> {
-    let stem = filename
-        .rsplit_once('.')
-        .map_or(filename, |(s, _ext)| s);
+    let stem = filename.rsplit_once('.').map_or(filename, |(s, _ext)| s);
     if stem.trim().is_empty() {
         return None;
     }
@@ -444,11 +440,12 @@ pub fn parse(filename: &str) -> Option<Parsed> {
     // normal SCENE names never reach it and SXXEXX / year releases keep
     // their existing parse untouched.
     let mut absolute_episode = None;
-    if season.is_none() && year.is_none() {
-        if let Some(am) = parse_anime(stem) {
-            title = am.title;
-            absolute_episode = Some(am.episode);
-        }
+    if season.is_none()
+        && year.is_none()
+        && let Some(am) = parse_anime(stem)
+    {
+        title = am.title;
+        absolute_episode = Some(am.episode);
     }
 
     if title.is_empty() {
@@ -507,17 +504,17 @@ fn parse_anime(stem: &str) -> Option<AnimeMatch> {
 fn strip_trailing_tag_groups(s: &str) -> String {
     let mut s = s.trim();
     loop {
-        if s.ends_with(']') {
-            if let Some(open) = s.rfind('[') {
-                s = s[..open].trim_end();
-                continue;
-            }
+        if s.ends_with(']')
+            && let Some(open) = s.rfind('[')
+        {
+            s = s[..open].trim_end();
+            continue;
         }
-        if s.ends_with(')') {
-            if let Some(open) = s.rfind('(') {
-                s = s[..open].trim_end();
-                continue;
-            }
+        if s.ends_with(')')
+            && let Some(open) = s.rfind('(')
+        {
+            s = s[..open].trim_end();
+            continue;
         }
         break;
     }
@@ -542,9 +539,7 @@ fn find_title_boundary(stem: &str) -> (usize, Option<u32>, Option<u32>, Option<u
     }
     if let Some(q_idx) = find_quality_index(stem) {
         return (
-            stem[..q_idx]
-                .trim_end_matches(['.', '_', ' ', '-'])
-                .len(),
+            stem[..q_idx].trim_end_matches(['.', '_', ' ', '-']).len(),
             None,
             None,
             None,
@@ -579,8 +574,7 @@ fn scan_for_se(stem: &str, require_episode: bool) -> Option<SeMatch> {
         // Token boundary: only treat `S` as a marker when it stands at
         // the start of a fresh token (preceded by separator). Without
         // this, `S` inside a word like "Squid" or "Lassie" matches.
-        let at_boundary = i == 0
-            || matches!(bytes[i - 1], b'.' | b'_' | b' ' | b'-' | b'(' | b'[');
+        let at_boundary = i == 0 || matches!(bytes[i - 1], b'.' | b'_' | b' ' | b'-' | b'(' | b'[');
         if at_boundary && (bytes[i] == b'S' || bytes[i] == b's') {
             let mut j = i + 1;
             let mut s_digits = 0;
@@ -606,8 +600,7 @@ fn scan_for_se(stem: &str, require_episode: bool) -> Option<SeMatch> {
                     e_pos += 1;
                     gap += 1;
                 }
-                let has_e =
-                    e_pos < bytes.len() && (bytes[e_pos] == b'E' || bytes[e_pos] == b'e');
+                let has_e = e_pos < bytes.len() && (bytes[e_pos] == b'E' || bytes[e_pos] == b'e');
                 if has_e {
                     let mut k = e_pos + 1;
                     let mut e_digits = 0;
@@ -615,20 +608,18 @@ fn scan_for_se(stem: &str, require_episode: bool) -> Option<SeMatch> {
                         k += 1;
                         e_digits += 1;
                     }
-                    if e_digits > 0 {
-                        if let (Ok(s), Ok(e)) = (
+                    if e_digits > 0
+                        && let (Ok(s), Ok(e)) = (
                             stem[i + 1..s_end].parse::<u32>(),
                             stem[e_pos + 1..k].parse::<u32>(),
-                        ) {
-                            let title_end = stem[..i]
-                                .trim_end_matches(['.', '_', ' ', '-'])
-                                .len();
-                            return Some(SeMatch {
-                                title_end,
-                                season: s,
-                                episode: e,
-                            });
-                        }
+                        )
+                    {
+                        let title_end = stem[..i].trim_end_matches(['.', '_', ' ', '-']).len();
+                        return Some(SeMatch {
+                            title_end,
+                            season: s,
+                            episode: e,
+                        });
                     }
                 }
                 // Season-only fallback (`S01` with no `E\d+`). Only
@@ -639,25 +630,21 @@ fn scan_for_se(stem: &str, require_episode: bool) -> Option<SeMatch> {
                 if !require_episode {
                     let next_ok = j == bytes.len()
                         || matches!(bytes[j], b'.' | b'_' | b' ' | b'-' | b']' | b')');
-                    if next_ok {
-                        if let Ok(s) = stem[i + 1..s_end].parse::<u32>() {
-                            let title_end = stem[..i]
-                                .trim_end_matches(['.', '_', ' ', '-'])
-                                .len();
-                            return Some(SeMatch {
-                                title_end,
-                                season: s,
-                                // `episode = 0` is the in-band sentinel
-                                // for "season pack" — `Parsed::is_tv()`
-                                // only checks `season.is_some()`, so
-                                // downstream classification still works,
-                                // and SCENE-grouping uses the
-                                // (collection_id, season, episode) key
-                                // for episode-level joins which a
-                                // season pack shouldn't appear in.
-                                episode: 0,
-                            });
-                        }
+                    if next_ok && let Ok(s) = stem[i + 1..s_end].parse::<u32>() {
+                        let title_end = stem[..i].trim_end_matches(['.', '_', ' ', '-']).len();
+                        return Some(SeMatch {
+                            title_end,
+                            season: s,
+                            // `episode = 0` is the in-band sentinel
+                            // for "season pack" — `Parsed::is_tv()`
+                            // only checks `season.is_some()`, so
+                            // downstream classification still works,
+                            // and SCENE-grouping uses the
+                            // (collection_id, season, episode) key
+                            // for episode-level joins which a
+                            // season pack shouldn't appear in.
+                            episode: 0,
+                        });
                     }
                 }
             }
@@ -679,21 +666,18 @@ fn find_year_boundary(stem: &str) -> Option<YearMatch> {
         if bytes[i..i + 4].iter().all(u8::is_ascii_digit) {
             let prev_ok = i == 0 || !bytes[i - 1].is_ascii_digit();
             let next_ok = i + 4 == bytes.len() || !bytes[i + 4].is_ascii_digit();
-            if prev_ok && next_ok {
-                if let Ok(y) = std::str::from_utf8(&bytes[i..i + 4]).unwrap().parse::<u16>() {
-                    if (1900..=2099).contains(&y) {
-                        // Skip leading-position years (e.g., "2024.Show.Name" —
-                        // unlikely, but the year shouldn't eat the title).
-                        if i > 0 {
-                            let title_end = stem[..i]
-                                .trim_end_matches(['.', '_', ' ', '-', '('])
-                                .len();
-                            return Some(YearMatch {
-                                title_end,
-                                year: y,
-                            });
-                        }
-                    }
+            if prev_ok
+                && next_ok
+                && let Ok(y) = std::str::from_utf8(&bytes[i..i + 4])
+                    .unwrap()
+                    .parse::<u16>()
+                && (1900..=2099).contains(&y)
+            {
+                // Skip leading-position years (e.g., "2024.Show.Name" —
+                // unlikely, but the year shouldn't eat the title).
+                if i > 0 {
+                    let title_end = stem[..i].trim_end_matches(['.', '_', ' ', '-', '(']).len();
+                    return Some(YearMatch { title_end, year: y });
                 }
             }
         }
@@ -743,7 +727,9 @@ fn find_quality(s: &str) -> Option<String> {
 fn find_source(s: &str) -> Option<String> {
     // Order matters — match longer / more specific tags first so
     // "WEB-DL" doesn't get caught by a "WEB" check.
-    for src in ["WEB-DL", "WEBRip", "BluRay", "BDRip", "HDTV", "DVDRip", "WEB"] {
+    for src in [
+        "WEB-DL", "WEBRip", "BluRay", "BDRip", "HDTV", "DVDRip", "WEB",
+    ] {
         if s.contains(src) {
             return Some(src.to_string());
         }
@@ -996,15 +982,21 @@ mod tests {
         // response so this stays grounded in reality, not in what we
         // think tracker naming conventions should be.
         assert_eq!(
-            detect_language("Classroom.Of.The.Elite.S04E11.VOSTFR.1080p.WEB.AAC.2.0.x264-Tsundere-Raws"),
+            detect_language(
+                "Classroom.Of.The.Elite.S04E11.VOSTFR.1080p.WEB.AAC.2.0.x264-Tsundere-Raws"
+            ),
             Language::French,
         );
         assert_eq!(
-            detect_language("Classroom.of.the.Elite.S04E11.SUBFRENCH.1080p.CR.WEB.x264.AAC-Tsundere-Raws"),
+            detect_language(
+                "Classroom.of.the.Elite.S04E11.SUBFRENCH.1080p.CR.WEB.x264.AAC-Tsundere-Raws"
+            ),
             Language::French,
         );
         assert_eq!(
-            detect_language("Classroom.of.the.Elite.S04E06.MULTi.AD.1080p.CR.WEB-DL.AAC2.0.x264-Tsundere-Raws"),
+            detect_language(
+                "Classroom.of.the.Elite.S04E06.MULTi.AD.1080p.CR.WEB-DL.AAC2.0.x264-Tsundere-Raws"
+            ),
             Language::Multi,
         );
         // Seedpool — no language tag at all. Treated as Unknown so
@@ -1093,7 +1085,10 @@ mod tests {
             .iter()
             .filter_map(|f| f.split_whitespace().nth(2))
             .collect();
-        assert_eq!(eps, ["S02E01", "S02E02", "S02E03", "S02E04", "S02E05", "S02E09"]);
+        assert_eq!(
+            eps,
+            ["S02E01", "S02E02", "S02E03", "S02E04", "S02E05", "S02E09"]
+        );
     }
 
     #[test]

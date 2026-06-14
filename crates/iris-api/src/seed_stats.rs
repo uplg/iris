@@ -41,10 +41,10 @@ async fn reconcile_once(pool: &SqlitePool, engine: &Engine) {
         // After a restart the re-checking (`initializing`) session reports
         // finished = false for minutes; the DB stamp is what lets streaming
         // serve finished torrents straight from disk during that window.
-        if snap.finished {
-            if let Err(e) = iris_db::torrents::mark_finished(pool, &snap.infohash).await {
-                tracing::warn!(error = %e, infohash = %snap.infohash, "seed_stats mark_finished failed");
-            }
+        if snap.finished
+            && let Err(e) = iris_db::torrents::mark_finished(pool, &snap.infohash).await
+        {
+            tracing::warn!(error = %e, infohash = %snap.infohash, "seed_stats mark_finished failed");
         }
     }
 }

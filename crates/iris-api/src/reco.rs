@@ -31,7 +31,7 @@ use crate::state::AppState;
 use crate::tmdb::{MediaMetadata, TmdbKind};
 
 /// Per-user cache window for the home shelf.
-const RECO_CACHE_TTL: Duration = Duration::from_secs(60);
+const RECO_CACHE_TTL: Duration = Duration::from_mins(1);
 /// Candidates fetched per kind to rank the blended feed.
 const BLEND_WINDOW: i64 = 200;
 /// SQL fetch cap for an organized section before exclusions.
@@ -242,10 +242,10 @@ pub async fn for_you_page(state: &AppState, user_id: UserId) -> Result<ForYou, s
     if let Some(s) = because_you_watched(state, &ctx, &mut shown, &data.signals).await? {
         shelves.push(s);
     }
-    if data.prefs.include_anime {
-        if let Some(s) = new_anime_shelf(&ctx, &mut shown).await? {
-            shelves.push(s);
-        }
+    if data.prefs.include_anime
+        && let Some(s) = new_anime_shelf(&ctx, &mut shown).await?
+    {
+        shelves.push(s);
     }
 
     Ok(ForYou { shelves })
@@ -469,7 +469,10 @@ async fn get_or_create_lazy(
 }
 
 /// New anime, most-recently-added (not language-filtered — anime is VO).
-async fn new_anime_shelf(ctx: &Ctx<'_>, shown: &mut HashSet<Uuid>) -> Result<Option<Shelf>, sqlx::Error> {
+async fn new_anime_shelf(
+    ctx: &Ctx<'_>,
+    shown: &mut HashSet<Uuid>,
+) -> Result<Option<Shelf>, sqlx::Error> {
     let cards = collect_shelf(
         ctx,
         shown,
@@ -526,7 +529,10 @@ fn score_and_sort(rows: Vec<CatalogItem>, ctx: &Ctx<'_>) -> Vec<CatalogItem> {
         .into_iter()
         .filter(|r| r.kind != "movie" || item_year(r).is_none_or(|y| y >= ctx.movie_cutoff_year))
         .collect();
-    let max_pop = rows.iter().filter_map(|r| r.popularity).fold(0.0_f64, f64::max);
+    let max_pop = rows
+        .iter()
+        .filter_map(|r| r.popularity)
+        .fold(0.0_f64, f64::max);
     let max_aff = rows
         .iter()
         .map(|r| item_affinity(&r.genres, ctx.affinity))

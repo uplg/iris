@@ -15,7 +15,7 @@ members = [
 [workspace.package]
 version = "0.8.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.94"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -42,32 +42,32 @@ iris-media = { path = "crates/iris-media" }
 iris-caps = { path = "crates/iris-caps" }
 
 # Async runtime + http
-tokio = { version = "1.52", features = ["full"] }
+tokio = { version = "1.52.3", features = ["full"] }
 tokio-util = { version = "0.7.18", features = ["io"] }
 futures = "0.3.32"
 async-trait = "0.1.89"
 axum = { version = "0.8.9", features = ["macros", "http2"] }
 axum-extra = { version = "0.12.6", features = ["typed-header", "cookie", "cookie-private"] }
 tower = { version = "0.5.3", features = ["util"] }
-tower-http = { version = "0.6.10", features = ["trace", "cors", "fs", "compression-gzip", "set-header", "normalize-path"] }
-hyper = "1.9"
-http = "1.4"
-reqwest = { version = "0.13.3", default-features = false, features = ["json", "query", "rustls", "gzip", "brotli", "stream", "http2"] }
-bytes = "1.11"
+tower-http = { version = "0.6.11", features = ["trace", "cors", "fs", "compression-gzip", "set-header", "normalize-path"] }
+hyper = "1.10.1"
+http = "1.4.2"
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls", "gzip", "brotli", "stream", "http2"] }
+bytes = "1.11.1"
 
 # Serde / config
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-toml = "1.1"
+serde_json = "1.0.150"
+toml = "1.1.2"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 
-# DB (latest stable; 0.9 is alpha)
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "macros", "migrate", "uuid", "chrono"] }
+# DB (latest stable)
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "macros", "migrate", "uuid", "chrono"] }
 
 # Auth (latest stable; argon2 0.6 is rc)
 argon2 = "0.5.3"
-jsonwebtoken = { version = "10.3", default-features = false, features = ["rust_crypto"] }
-rand = "0.10"
+jsonwebtoken = { version = "10.4.0", default-features = false, features = ["rust_crypto"] }
+rand = "0.10.1"
 
 # Errors / logging
 thiserror = "2.0.18"
@@ -76,14 +76,14 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 
 # Utility
-chrono = { version = "0.4.44", default-features = false, features = ["std", "serde", "clock"] }
-uuid = { version = "1.23", features = ["v4", "serde"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }
+uuid = { version = "1.23.3", features = ["v4", "serde"] }
 url = { version = "2.5.8", features = ["serde"] }
-quick-xml = "0.40"
-semver = "1.0"
+quick-xml = "0.40.1"
+semver = "1.0.28"
 base64 = "0.22.1"
 hex = "0.4.3"
-once_cell = "1.21"
+once_cell = "1.21.4"
 
 # Torrent / media
 # Pinned to 9.0.0-beta.2 + our minimal UA patch (see [patch.crates-io]

@@ -35,10 +35,10 @@ use iris_core::search::{
     TorrentDetails, TorrentSource,
 };
 use reqwest::Client;
+use reqwest::StatusCode;
 use reqwest::header::{
     ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, HeaderMap, HeaderValue, REFERER, USER_AGENT,
 };
-use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 use url::Url;
@@ -52,12 +52,12 @@ const DEFAULT_USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
 /// Featured shelves are editorial — refreshes are slow. 30 min keeps
 /// the home page cheap without going stale on c411's daily cadence.
-const FEATURED_TTL: Duration = Duration::from_secs(30 * 60);
+const FEATURED_TTL: Duration = Duration::from_mins(30);
 /// `details()` reads the same payload while the user shops around the
 /// preview dialog. 60 s avoids hammering c411 when the user bounces
 /// between 5 torrents in 30 seconds, but stays fresh enough for
 /// seeders/leechers to be representative.
-const DETAILS_TTL: Duration = Duration::from_secs(60);
+const DETAILS_TTL: Duration = Duration::from_mins(1);
 
 pub struct C411 {
     id: String,
@@ -136,10 +136,10 @@ impl C411 {
         }
         {
             let cache = self.details_cache.lock().await;
-            if let Some(c) = cache.get(infohash) {
-                if c.fetched_at.elapsed() < DETAILS_TTL {
-                    return Ok(Some(c.details.clone()));
-                }
+            if let Some(c) = cache.get(infohash)
+                && c.fetched_at.elapsed() < DETAILS_TTL
+            {
+                return Ok(Some(c.details.clone()));
             }
         }
 
@@ -191,10 +191,10 @@ impl C411 {
     }
 
     async fn refresh_featured_if_stale(&self) -> Result<()> {
-        if let Some(c) = self.featured_cache.lock().await.as_ref() {
-            if c.fetched_at.elapsed() < FEATURED_TTL {
-                return Ok(());
-            }
+        if let Some(c) = self.featured_cache.lock().await.as_ref()
+            && c.fetched_at.elapsed() < FEATURED_TTL
+        {
+            return Ok(());
         }
 
         let url = self
@@ -351,35 +351,35 @@ impl SearchProvider for C411 {
         // we cached at homepage-fetch time. The search side-effects
         // the link cache, then resolve() finishes through the normal
         // path.
-        if is_infohash(external_id) {
-            if let Some(title) = self.featured_title_for(external_id).await {
-                tracing::debug!(
-                    provider = %self.id,
-                    infohash = external_id,
-                    title = %title,
-                    "c411: priming Torznab link cache via title search",
-                );
-                let prime = SearchQuery {
-                    q: title,
-                    page: Some(1),
-                    limit: Some(25),
-                    sort_by: None,
-                    order: None,
-                    kind: None,
-                    // Priming a featured-link lookup — no need to push
-                    // structured hints down to the underlying Torznab.
-                    parsed_title: None,
-                    season: None,
-                    episode: None,
-                    year: None,
-                };
-                // Best-effort: if the search fails (network, indexer
-                // 5xx), we fall through to the explicit error below
-                // so the user sees a clear "couldn't resolve" rather
-                // than a silent hang.
-                let _ = self.torznab.search(&prime).await;
-                return self.torznab.resolve(external_id).await;
-            }
+        if is_infohash(external_id)
+            && let Some(title) = self.featured_title_for(external_id).await
+        {
+            tracing::debug!(
+                provider = %self.id,
+                infohash = external_id,
+                title = %title,
+                "c411: priming Torznab link cache via title search",
+            );
+            let prime = SearchQuery {
+                q: title,
+                page: Some(1),
+                limit: Some(25),
+                sort_by: None,
+                order: None,
+                kind: None,
+                // Priming a featured-link lookup — no need to push
+                // structured hints down to the underlying Torznab.
+                parsed_title: None,
+                season: None,
+                episode: None,
+                year: None,
+            };
+            // Best-effort: if the search fails (network, indexer
+            // 5xx), we fall through to the explicit error below
+            // so the user sees a clear "couldn't resolve" rather
+            // than a silent hang.
+            let _ = self.torznab.search(&prime).await;
+            return self.torznab.resolve(external_id).await;
         }
 
         Err(Error::Provider(format!(
@@ -610,10 +610,7 @@ impl TorrentDetailRaw {
     }
 }
 
-fn build_category(
-    top: Option<&RawNamed>,
-    meta: Option<&TorrentMetadata>,
-) -> Option<String> {
+fn build_category(top: Option<&RawNamed>, meta: Option<&TorrentMetadata>) -> Option<String> {
     let parent = top
         .and_then(|c| c.name.clone())
         .or_else(|| meta.and_then(|m| m.category.as_ref().and_then(|c| c.name.clone())));
@@ -640,10 +637,7 @@ mod tests {
             classify_title("Science.grand.format.S09E11.FRENCH"),
             MediaKind::Tv,
         );
-        assert_eq!(
-            classify_title("The.Madison.S01.MULTi.2160p"),
-            MediaKind::Tv,
-        );
+        assert_eq!(classify_title("The.Madison.S01.MULTi.2160p"), MediaKind::Tv,);
         // "Soul Mate" — first letter is uppercase S but followed by space, not digits.
         assert_eq!(
             classify_title("Soul.Mate.2026.S01.MULTi.1080p"),
@@ -655,7 +649,6 @@ mod tests {
             MediaKind::Movie,
         );
     }
-
 
     #[test]
     fn validates_infohash() {
@@ -702,7 +695,10 @@ mod tests {
 
         assert_eq!(d.external_id, "98259ba623eec5f33167c083b51b30122c7fa068");
         assert_eq!(d.title, "AVATAR.2009.MULTI.VFI.2160P.BluRay");
-        assert_eq!(d.description.as_deref(), Some("<h1>Avatar</h1><p>Synopsis</p>"));
+        assert_eq!(
+            d.description.as_deref(),
+            Some("<h1>Avatar</h1><p>Synopsis</p>")
+        );
         assert_eq!(d.description_format, DescriptionFormat::Html);
         assert_eq!(d.nfo.as_deref(), Some("FILE: x.mkv\nDuration: 2h"));
         assert_eq!(d.uploader.as_deref(), Some("ShuMax62"));

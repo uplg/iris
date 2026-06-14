@@ -40,8 +40,8 @@ use iris_core::search::{
 };
 use quick_xml::Reader;
 use quick_xml::escape::unescape as xml_unescape;
-use quick_xml::events::{BytesText, Event};
 use quick_xml::events::attributes::Attribute;
+use quick_xml::events::{BytesText, Event};
 use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, REFERER, USER_AGENT};
 use reqwest::{Client, StatusCode};
 use tokio::sync::Mutex;
@@ -317,10 +317,10 @@ impl SearchProvider for TorznabProvider {
         // pack alongside the episodes.
         if let Some(s) = q.season {
             qs.push(("season", s.to_string()));
-            if let Some(e) = q.episode {
-                if e > 0 {
-                    qs.push(("ep", e.to_string()));
-                }
+            if let Some(e) = q.episode
+                && e > 0
+            {
+                qs.push(("ep", e.to_string()));
             }
         }
 
@@ -497,10 +497,10 @@ impl RawItem {
                 self.infohash = Some(value.to_ascii_lowercase());
             }
             "tmdbid" | "tmdb" => {
-                if let Ok(n) = value.parse() {
-                    if n > 0 {
-                        self.tmdb_id = Some(n);
-                    }
+                if let Ok(n) = value.parse()
+                    && n > 0
+                {
+                    self.tmdb_id = Some(n);
                 }
             }
             "category" => {
@@ -511,10 +511,10 @@ impl RawItem {
             // Jackett / Prowlarr / many UNIT3D indexers expose freeleech
             // as `downloadvolumefactor` = 0 (you owe nothing on download).
             "downloadvolumefactor" => {
-                if let Ok(v) = value.parse::<f32>() {
-                    if v == 0.0 {
-                        self.freeleech = true;
-                    }
+                if let Ok(v) = value.parse::<f32>()
+                    && v == 0.0
+                {
+                    self.freeleech = true;
                 }
             }
             _ => {}
@@ -524,10 +524,7 @@ impl RawItem {
     fn into_search_result(self, provider_id: &str) -> SearchResult {
         let year = extract_year(&self.title);
         let kind = derive_kind_from_categories(&self.categories);
-        let uploaded_at = self
-            .pub_date
-            .as_deref()
-            .and_then(parse_rfc2822_lenient);
+        let uploaded_at = self.pub_date.as_deref().and_then(parse_rfc2822_lenient);
 
         SearchResult {
             provider_id: provider_id.to_string(),
@@ -599,23 +596,28 @@ fn parse_torznab_xml(body: &str) -> Result<ParsedTorznab> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                handle_start(e.name().as_ref(), &mut in_channel, &mut current, &mut last_tag);
+                handle_start(
+                    e.name().as_ref(),
+                    &mut in_channel,
+                    &mut current,
+                    &mut last_tag,
+                );
             }
             Ok(Event::Empty(e)) => {
                 handle_empty(&e, current.as_mut(), &mut out);
             }
             Ok(Event::Text(t)) => {
-                if let (Some(item), Some(kind)) = (current.as_mut(), last_tag) {
-                    if let Some(text) = text_value(&t) {
-                        apply_text(item, kind, text);
-                    }
+                if let (Some(item), Some(kind)) = (current.as_mut(), last_tag)
+                    && let Some(text) = text_value(&t)
+                {
+                    apply_text(item, kind, text);
                 }
             }
             Ok(Event::CData(c)) => {
-                if let (Some(item), Some(TagKind::Description)) = (current.as_mut(), last_tag) {
-                    if let Ok(text) = std::str::from_utf8(c.as_ref()) {
-                        item.description = Some(text.to_string());
-                    }
+                if let (Some(item), Some(TagKind::Description)) = (current.as_mut(), last_tag)
+                    && let Ok(text) = std::str::from_utf8(c.as_ref())
+                {
+                    item.description = Some(text.to_string());
                 }
             }
             Ok(Event::End(e)) => {
@@ -679,12 +681,11 @@ fn handle_empty(
         }
     } else if bytes.ends_with(b":response") || bytes == b"response" {
         for attr in e.attributes().flatten() {
-            if attr.key.as_ref() == b"total" {
-                if let Some(s) = attr_value(&attr) {
-                    if let Ok(n) = s.parse() {
-                        out.total = Some(n);
-                    }
-                }
+            if attr.key.as_ref() == b"total"
+                && let Some(s) = attr_value(&attr)
+                && let Ok(n) = s.parse()
+            {
+                out.total = Some(n);
             }
         }
     }
@@ -715,10 +716,10 @@ fn apply_enclosure_element(e: &quick_xml::events::BytesStart<'_>, item: &mut Raw
                 }
             }
             b"length" => {
-                if let Some(s) = attr_value(&attr) {
-                    if let Ok(n) = s.parse() {
-                        item.size.get_or_insert(n);
-                    }
+                if let Some(s) = attr_value(&attr)
+                    && let Ok(n) = s.parse()
+                {
+                    item.size.get_or_insert(n);
                 }
             }
             _ => {}

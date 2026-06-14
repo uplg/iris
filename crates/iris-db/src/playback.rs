@@ -238,10 +238,7 @@ pub async fn continue_watching(
 /// in-progress), preferring the parent collection id. Used to exclude
 /// already-seen titles from the recommendation shelves. Soft-deleted
 /// torrents still count — the user saw it even if it's since been GC'd.
-pub async fn watched_tmdb_ids(
-    pool: &SqlitePool,
-    user_id: UserId,
-) -> Result<Vec<i64>, sqlx::Error> {
+pub async fn watched_tmdb_ids(pool: &SqlitePool, user_id: UserId) -> Result<Vec<i64>, sqlx::Error> {
     let user: Uuid = user_id.into();
     let rows: Vec<(i64,)> = sqlx::query_as(
         "SELECT DISTINCT COALESCE(c.tmdb_id, t.tmdb_id) AS tmdb_id \

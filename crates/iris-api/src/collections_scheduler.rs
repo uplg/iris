@@ -4,7 +4,7 @@
 #![allow(
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
+    clippy::cast_possible_wrap
 )]
 
 //! Notify-only scheduler for TV `collections`.
@@ -60,7 +60,7 @@ fn candidate_of(r: &SearchResult, is_multi: bool) -> iris_core::ranking::Candida
 /// How often to scan all TV collections. Most series ship a new
 /// episode once a week, so 4 h means we surface a release within
 /// hours of it landing on a tracker.
-const TICK_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
+const TICK_INTERVAL: Duration = Duration::from_hours(4);
 
 /// Skip per-collection work if `last_indexer_scan_at` is younger
 /// than this. Two hours strikes the same balance as the retired
@@ -104,7 +104,10 @@ async fn run_pass(pool: &SqlitePool, providers: Arc<ProviderRegistry>) {
     if collections.is_empty() {
         return;
     }
-    tracing::info!(count = collections.len(), "scheduler: scanning TV collections");
+    tracing::info!(
+        count = collections.len(),
+        "scheduler: scanning TV collections"
+    );
     for collection in collections {
         if let Err(e) = check_one(pool, &providers, &collection).await {
             tracing::warn!(

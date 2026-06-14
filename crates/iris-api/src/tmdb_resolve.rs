@@ -49,9 +49,20 @@ pub async fn resolve_release_name(
         return None;
     }
     let resolved_kind = kind_hint.or_else(|| {
-        if parsed.is_tv() { Some(TmdbKind::Tv) } else { Some(TmdbKind::Movie) }
+        if parsed.is_tv() {
+            Some(TmdbKind::Tv)
+        } else {
+            Some(TmdbKind::Movie)
+        }
     });
-    let result = resolve_cleaned(pool, tmdb, &cleaned, resolved_kind, parsed.year.map(u32::from)).await;
+    let result = resolve_cleaned(
+        pool,
+        tmdb,
+        &cleaned,
+        resolved_kind,
+        parsed.year.map(u32::from),
+    )
+    .await;
     if result.is_none() {
         tracing::info!(
             release_name,
@@ -177,10 +188,10 @@ pub(crate) fn pick_best(
         return Some(kind_match[0].clone());
     }
     // No kind hint — best effort by year, then popularity.
-    if let Some(yh) = year_hint {
-        if let Some(s) = suggestions.iter().find(|s| s.year == Some(yh)) {
-            return Some(s.clone());
-        }
+    if let Some(yh) = year_hint
+        && let Some(s) = suggestions.iter().find(|s| s.year == Some(yh))
+    {
+        return Some(s.clone());
     }
     suggestions.first().cloned()
 }

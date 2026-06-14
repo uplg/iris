@@ -181,12 +181,14 @@ pub async fn set_is_anime(
     is_anime: bool,
     anilist_id: Option<i64>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE collections SET is_anime = ?1, anilist_id = COALESCE(?2, anilist_id) WHERE id = ?3")
-        .bind(is_anime)
-        .bind(anilist_id)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE collections SET is_anime = ?1, anilist_id = COALESCE(?2, anilist_id) WHERE id = ?3",
+    )
+    .bind(is_anime)
+    .bind(anilist_id)
+    .bind(id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -199,13 +201,11 @@ pub async fn set_tmdb_id_if_missing(
     id: Uuid,
     tmdb_id: i64,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE collections SET tmdb_id = ?1 WHERE id = ?2 AND tmdb_id IS NULL",
-    )
-    .bind(tmdb_id)
-    .bind(id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE collections SET tmdb_id = ?1 WHERE id = ?2 AND tmdb_id IS NULL")
+        .bind(tmdb_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -217,11 +217,7 @@ pub async fn set_tmdb_id_if_missing(
 /// resolution and the watch / series routing — keeping it in sync
 /// with the parser's verdict avoids loading a movie poster onto a
 /// TV-row in the library.
-pub async fn set_kind(
-    pool: &SqlitePool,
-    id: Uuid,
-    kind: Kind,
-) -> Result<(), sqlx::Error> {
+pub async fn set_kind(pool: &SqlitePool, id: Uuid, kind: Kind) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE collections SET kind = ?1 WHERE id = ?2")
         .bind(kind.as_str())
         .bind(id)
@@ -277,11 +273,7 @@ pub async fn set_display_title(
 /// stamped with that same wrong value and the standard "first writer
 /// wins" rule would block the correction. Live ingestion flows must
 /// keep using [`set_tmdb_id_if_missing`].
-pub async fn set_tmdb_id(
-    pool: &SqlitePool,
-    id: Uuid,
-    tmdb_id: i64,
-) -> Result<(), sqlx::Error> {
+pub async fn set_tmdb_id(pool: &SqlitePool, id: Uuid, tmdb_id: i64) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE collections SET tmdb_id = ?1 WHERE id = ?2")
         .bind(tmdb_id)
         .bind(id)
@@ -341,9 +333,7 @@ pub struct CollectionSummary {
 /// (`GET /api/me/watchlist` + the legacy `/api/me/follows` façade):
 /// "every TV show the household has actually started watching".
 /// Newest activity first via `last_visited_at` then `created_at`.
-pub async fn list_tv_with_episodes(
-    pool: &SqlitePool,
-) -> Result<Vec<CollectionRow>, sqlx::Error> {
+pub async fn list_tv_with_episodes(pool: &SqlitePool) -> Result<Vec<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
         "SELECT c.id, c.tmdb_id, c.parsed_title_normalized, c.display_title, c.kind, \
                 c.created_at, c.last_indexer_scan_at, c.last_visited_at, c.is_anime, c.anilist_id \
@@ -463,9 +453,7 @@ pub async fn search_summaries(
     .await
 }
 
-pub async fn list_summaries(
-    pool: &SqlitePool,
-) -> Result<Vec<CollectionSummary>, sqlx::Error> {
+pub async fn list_summaries(pool: &SqlitePool) -> Result<Vec<CollectionSummary>, sqlx::Error> {
     // `tmdb_id` falls back to whichever member torrent has one set when
     // the collection slot itself is null. Otherwise newly-ingested
     // collections (before the SCENE backfill has stamped them) would

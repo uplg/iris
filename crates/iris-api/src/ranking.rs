@@ -6,7 +6,7 @@
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
+    clippy::cast_sign_loss
 )]
 
 //! Search result post-processing — runs once per `/api/search` call
@@ -72,8 +72,10 @@ impl LibraryIndex {
     }
 
     fn build(infohashes: Vec<String>, keys: Vec<LibraryEpisodeKey>) -> Self {
-        let owned_infohashes: HashSet<String> =
-            infohashes.into_iter().map(|h| h.to_ascii_lowercase()).collect();
+        let owned_infohashes: HashSet<String> = infohashes
+            .into_iter()
+            .map(|h| h.to_ascii_lowercase())
+            .collect();
         let mut file_idx_by_infohash = HashMap::new();
         for k in keys {
             if k.file_idx < 0 {
@@ -116,10 +118,7 @@ struct LibraryMatch {
 fn infohash_from_magnet(magnet: &str) -> Option<String> {
     let lower = magnet.to_ascii_lowercase();
     let start = lower.find("xt=urn:btih:")? + "xt=urn:btih:".len();
-    let hash: String = lower[start..]
-        .chars()
-        .take_while(|c| *c != '&')
-        .collect();
+    let hash: String = lower[start..].chars().take_while(|c| *c != '&').collect();
     (hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit())).then_some(hash)
 }
 
@@ -169,12 +168,12 @@ pub fn rerank_results(agg: &mut AggregatedResults, q: &SearchQuery, lib: &Librar
             .infohash
             .clone()
             .or_else(|| r.magnet.as_deref().and_then(infohash_from_magnet));
-        if let Some(ih) = result_infohash {
-            if let Some(m) = lib.lookup(&ih) {
-                r.already_in_library = true;
-                r.library_infohash = Some(ih);
-                r.library_file_idx = m.file_idx;
-            }
+        if let Some(ih) = result_infohash
+            && let Some(m) = lib.lookup(&ih)
+        {
+            r.already_in_library = true;
+            r.library_infohash = Some(ih);
+            r.library_file_idx = m.file_idx;
         }
 
         // Expose the parsed (season, episode) on the result so the
@@ -247,13 +246,14 @@ fn relevance_score(
 ) -> f64 {
     let mut score = 0.0_f64;
 
-    if let (Some(qt), Some(rt)) = (q.parsed_title.as_deref(), result_title) {
-        if !qt.is_empty() && !rt.is_empty() {
-            if qt == rt {
-                score += 200.0;
-            } else if rt.contains(qt) || qt.contains(rt) {
-                score += 80.0;
-            }
+    if let (Some(qt), Some(rt)) = (q.parsed_title.as_deref(), result_title)
+        && !qt.is_empty()
+        && !rt.is_empty()
+    {
+        if qt == rt {
+            score += 200.0;
+        } else if rt.contains(qt) || qt.contains(rt) {
+            score += 80.0;
         }
     }
 
@@ -279,14 +279,13 @@ fn relevance_score(
         _ => {}
     }
 
-    if let (Some(qy), Some(ry)) = (q.year, result_year) {
-        if qy == ry {
-            score += 30.0;
-        }
+    if let (Some(qy), Some(ry)) = (q.year, result_year)
+        && qy == ry
+    {
+        score += 30.0;
     }
 
-    let likely_non_video =
-        r.size_bytes.is_some_and(|b| b < 200 * 1024 * 1024) && r.kind.is_none();
+    let likely_non_video = r.size_bytes.is_some_and(|b| b < 200 * 1024 * 1024) && r.kind.is_none();
     if likely_non_video {
         score -= 100.0;
     }
@@ -303,7 +302,12 @@ mod tests {
     use super::*;
     use iris_core::search::MediaKind;
 
-    fn mk_result(title: &str, seeders: u32, size_gib: f64, kind: Option<MediaKind>) -> SearchResult {
+    fn mk_result(
+        title: &str,
+        seeders: u32,
+        size_gib: f64,
+        kind: Option<MediaKind>,
+    ) -> SearchResult {
         SearchResult {
             provider_id: "test".into(),
             external_id: title.into(),
@@ -363,7 +367,13 @@ mod tests {
             sort_by: None,
             order: None,
             kind: None,
-            parsed_title: Some(series_key(q.split_whitespace().take(4).collect::<Vec<_>>().join(" ").as_str())),
+            parsed_title: Some(series_key(
+                q.split_whitespace()
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .as_str(),
+            )),
             season,
             episode,
             year: None,
@@ -420,8 +430,18 @@ mod tests {
         // the size-first "recommended" tie-break, so a 50 GB 4K rip no
         // longer beats an 8 GB 1080p one on raw seeders.
         let q = mk_query("the matrix", None, None);
-        let monster = mk_result("The.Matrix.2160p.UHD.BluRay.x265-GRP", 800, 50.0, Some(MediaKind::Movie));
-        let light = mk_result("The.Matrix.1080p.BluRay.x264-GRP", 40, 8.0, Some(MediaKind::Movie));
+        let monster = mk_result(
+            "The.Matrix.2160p.UHD.BluRay.x265-GRP",
+            800,
+            50.0,
+            Some(MediaKind::Movie),
+        );
+        let light = mk_result(
+            "The.Matrix.1080p.BluRay.x264-GRP",
+            40,
+            8.0,
+            Some(MediaKind::Movie),
+        );
         let mut agg = AggregatedResults {
             results: vec![monster, light],
             ..Default::default()
@@ -438,8 +458,18 @@ mod tests {
         // Same title, same size, comparable seeders: MULTi edges ahead
         // via the effective-size discount.
         let q = mk_query("dune part two", None, None);
-        let single = mk_result("Dune.Part.Two.2024.VOSTFR.1080p.BluRay.x264-GRP", 100, 10.0, Some(MediaKind::Movie));
-        let multi = mk_result("Dune.Part.Two.2024.MULTi.1080p.BluRay.x264-GRP", 90, 10.0, Some(MediaKind::Movie));
+        let single = mk_result(
+            "Dune.Part.Two.2024.VOSTFR.1080p.BluRay.x264-GRP",
+            100,
+            10.0,
+            Some(MediaKind::Movie),
+        );
+        let multi = mk_result(
+            "Dune.Part.Two.2024.MULTi.1080p.BluRay.x264-GRP",
+            90,
+            10.0,
+            Some(MediaKind::Movie),
+        );
         let mut agg = AggregatedResults {
             results: vec![single, multi],
             ..Default::default()
@@ -566,7 +596,10 @@ mod tests {
             .iter()
             .find(|r| r.infohash.as_deref() == Some("owned-multi"))
             .unwrap();
-        assert!(owned.already_in_library, "the exact owned torrent is flagged");
+        assert!(
+            owned.already_in_library,
+            "the exact owned torrent is flagged"
+        );
         let other = agg
             .results
             .iter()
@@ -589,7 +622,10 @@ mod tests {
             1.0,
             Some(MediaKind::Tv),
         );
-        r.magnet = Some(format!("magnet:?xt=urn:btih:{}&dn=Show", hash.to_uppercase()));
+        r.magnet = Some(format!(
+            "magnet:?xt=urn:btih:{}&dn=Show",
+            hash.to_uppercase()
+        ));
         let lib = lib_with(&[hash], &[]);
         let mut agg = AggregatedResults {
             results: vec![r],
@@ -597,7 +633,10 @@ mod tests {
         };
         rerank_results(&mut agg, &mk_query("show S01E01", Some(1), Some(1)), &lib);
         assert!(agg.results[0].already_in_library);
-        assert_eq!(agg.results[0].library_file_idx, None, "no episode-file row → no deep link");
+        assert_eq!(
+            agg.results[0].library_file_idx, None,
+            "no episode-file row → no deep link"
+        );
     }
 
     #[test]

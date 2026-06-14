@@ -38,14 +38,14 @@ use iris_core::search::{
     DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
     TorrentDetails, TorrentSource,
 };
-use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, USER_AGENT};
 use reqwest::Client;
+use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Deserializer};
 use tokio::sync::Mutex;
 use url::Url;
 
-use crate::nfo;
 use crate::SearchProvider;
+use crate::nfo;
 use crate::util::{extract_year, field_or_env, field_str};
 
 const DEFAULT_USER_AGENT: &str =
@@ -236,9 +236,7 @@ impl SearchProvider for Unit3dProvider {
         // Tag the request with the TV/movie category when:
         //   * the caller explicitly asked for it, OR
         //   * the parser saw an SxxExx marker (an unambiguous TV signal).
-        let inferred_kind = q
-            .kind
-            .or_else(|| q.season.map(|_| MediaKind::Tv));
+        let inferred_kind = q.kind.or_else(|| q.season.map(|_| MediaKind::Tv));
         if let Some(cat_id) = match inferred_kind {
             Some(MediaKind::Movie) => Some(self.movie_category_id),
             Some(MediaKind::Tv) => Some(self.tv_category_id),
@@ -297,7 +295,10 @@ impl SearchProvider for Unit3dProvider {
         // include enough metadata in the list endpoint to skip this
         // round trip, and a cached search row may be hours old by
         // the time the user opens the preview.
-        let path = format!("{}/torrents/{external_id}", self.api_path.trim_end_matches('/'));
+        let path = format!(
+            "{}/torrents/{external_id}",
+            self.api_path.trim_end_matches('/')
+        );
         let url = self
             .base_url
             .join(&path)
@@ -647,15 +648,15 @@ impl TorrentEnvelope {
         // UI chips them on the result row without any provider-
         // specific logic.
         let mut tags: Vec<String> = Vec::new();
-        if let Some(t) = attrs.release_type {
-            if !t.is_empty() {
-                tags.push(t);
-            }
+        if let Some(t) = attrs.release_type
+            && !t.is_empty()
+        {
+            tags.push(t);
         }
-        if let Some(r) = attrs.resolution {
-            if !r.is_empty() {
-                tags.push(r);
-            }
+        if let Some(r) = attrs.resolution
+            && !r.is_empty()
+        {
+            tags.push(r);
         }
         let (poster_url, genre_tags) = match attrs.meta {
             Some(m) => {
@@ -683,15 +684,9 @@ impl TorrentEnvelope {
 
         // Freeleech: anything below 100 % still charges the user
         // some download credit, so we only flag true at full.
-        let freeleech = attrs
-            .freeleech
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|s| {
-                s == "100%"
-                    || s.eq_ignore_ascii_case("true")
-                    || s.eq_ignore_ascii_case("yes")
-            });
+        let freeleech = attrs.freeleech.as_deref().map(str::trim).is_some_and(|s| {
+            s == "100%" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
+        });
 
         let uploaded_at = attrs
             .created_at
@@ -746,26 +741,18 @@ impl TorrentEnvelope {
         //     (also a theoldschool tic — surfacing it would render
         //     "the.release.name.dots.and.all" as if it were a
         //     synopsis, which is what the user is seeing today).
-        let description = attrs
-            .description
-            .filter(|s| {
-                let trimmed = s.trim();
-                !trimmed.is_empty()
-                    && trimmed != "Pas de description"
-                    && !trimmed.eq_ignore_ascii_case(attrs.name.trim())
-            });
+        let description = attrs.description.filter(|s| {
+            let trimmed = s.trim();
+            !trimmed.is_empty()
+                && trimmed != "Pas de description"
+                && !trimmed.eq_ignore_ascii_case(attrs.name.trim())
+        });
         let file_count = attrs
             .num_file
             .or_else(|| u32::try_from(attrs.files.len()).ok());
-        let freeleech = attrs
-            .freeleech
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|s| {
-                s == "100%"
-                    || s.eq_ignore_ascii_case("true")
-                    || s.eq_ignore_ascii_case("yes")
-            });
+        let freeleech = attrs.freeleech.as_deref().map(str::trim).is_some_and(|s| {
+            s == "100%" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
+        });
         let uploaded_at = attrs
             .created_at
             .as_deref()
@@ -783,16 +770,16 @@ impl TorrentEnvelope {
         if let Some(r) = attrs.resolution.filter(|r| !r.is_empty()) {
             tags.push(r);
         }
-        if let Some(m) = attrs.meta {
-            if let Some(genres) = m.genres {
-                tags.extend(
-                    genres
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(String::from),
-                );
-            }
+        if let Some(m) = attrs.meta
+            && let Some(genres) = m.genres
+        {
+            tags.extend(
+                genres
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from),
+            );
         }
 
         TorrentDetails {
@@ -903,8 +890,16 @@ mod tests {
     #[test]
     fn maps_search_result_movie() {
         let resp: SearchResponse = serde_json::from_str(SAMPLE).unwrap();
-        let movie = resp.data.into_iter().next().unwrap().into_search_result("tos");
-        assert_eq!(movie.title, "Gwendoline 1984 2in1 1080p Blu-ray AVC DTS-HD MA 5.1");
+        let movie = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
+        assert_eq!(
+            movie.title,
+            "Gwendoline 1984 2in1 1080p Blu-ray AVC DTS-HD MA 5.1"
+        );
         assert_eq!(movie.external_id, "39808");
         assert_eq!(movie.kind, Some(MediaKind::Movie));
         assert_eq!(movie.year, Some(1984));
@@ -933,7 +928,12 @@ mod tests {
             "release_year":2026,"download_link":"https://x/1"
         }}],"meta":{}}"#;
         let resp: SearchResponse = serde_json::from_str(json).unwrap();
-        let r = resp.data.into_iter().next().unwrap().into_search_result("tos");
+        let r = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
         assert_eq!(r.year, Some(2026));
 
         // String form — what `/api/torrents` (bare list) returns.
@@ -942,7 +942,12 @@ mod tests {
             "release_year":"2024","download_link":"https://x/2"
         }}],"meta":{}}"#;
         let resp: SearchResponse = serde_json::from_str(json).unwrap();
-        let r = resp.data.into_iter().next().unwrap().into_search_result("tos");
+        let r = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
         assert_eq!(r.year, Some(2024));
 
         // Empty string → fall back to title-scan.
@@ -951,7 +956,12 @@ mod tests {
             "release_year":"","download_link":"https://x/3"
         }}],"meta":{}}"#;
         let resp: SearchResponse = serde_json::from_str(json).unwrap();
-        let r = resp.data.into_iter().next().unwrap().into_search_result("tos");
+        let r = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
         assert_eq!(r.year, Some(2018));
 
         // `"0"` (string) → fall back via flexible_u64's zero-filter.
@@ -960,7 +970,12 @@ mod tests {
             "release_year":"0","download_link":"https://x/4"
         }}],"meta":{}}"#;
         let resp: SearchResponse = serde_json::from_str(json).unwrap();
-        let r = resp.data.into_iter().next().unwrap().into_search_result("tos");
+        let r = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
         assert_eq!(r.year, None);
 
         // `0` (number) → same.
@@ -969,7 +984,12 @@ mod tests {
             "release_year":0,"download_link":"https://x/5"
         }}],"meta":{}}"#;
         let resp: SearchResponse = serde_json::from_str(json).unwrap();
-        let r = resp.data.into_iter().next().unwrap().into_search_result("tos");
+        let r = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
         assert_eq!(r.year, None);
 
         // `null` → none.
@@ -978,7 +998,12 @@ mod tests {
             "release_year":null,"download_link":"https://x/6"
         }}],"meta":{}}"#;
         let resp: SearchResponse = serde_json::from_str(json).unwrap();
-        let r = resp.data.into_iter().next().unwrap().into_search_result("tos");
+        let r = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
         assert_eq!(r.year, None);
 
         // Out-of-range — guard against silly values like `3000`.
@@ -987,14 +1012,24 @@ mod tests {
             "release_year":3000,"download_link":"https://x/7"
         }}],"meta":{}}"#;
         let resp: SearchResponse = serde_json::from_str(json).unwrap();
-        let r = resp.data.into_iter().next().unwrap().into_search_result("tos");
+        let r = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
         assert_eq!(r.year, None);
     }
 
     #[test]
     fn maps_search_result_tv() {
         let resp: SearchResponse = serde_json::from_str(SAMPLE).unwrap();
-        let tv = resp.data.into_iter().nth(1).unwrap().into_search_result("tos");
+        let tv = resp
+            .data
+            .into_iter()
+            .nth(1)
+            .unwrap()
+            .into_search_result("tos");
         // `"Series"` is theoldschool's name for TV; mainline `UNIT3D`
         // emits `"TV"`. Both should land on `MediaKind::Tv`.
         assert_eq!(tv.kind, Some(MediaKind::Tv));
@@ -1016,7 +1051,12 @@ mod tests {
             "freeleech":"50%","download_link":"https://x/1"
         }}],"meta":{}}"#;
         let resp: SearchResponse = serde_json::from_str(json).unwrap();
-        let r = resp.data.into_iter().next().unwrap().into_search_result("tos");
+        let r = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
         assert!(!r.freeleech);
     }
 
@@ -1132,7 +1172,12 @@ mod tests {
         }"#;
         let resp: SearchResponse = serde_json::from_str(json).expect("deserialise full shape");
         assert_eq!(resp.data.len(), 1);
-        let sr = resp.data.into_iter().next().unwrap().into_search_result("tos");
+        let sr = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
         assert_eq!(sr.tmdb_id, Some(299_167));
         assert_eq!(sr.kind, Some(MediaKind::Tv));
         assert_eq!(sr.year, Some(2026));
@@ -1161,7 +1206,10 @@ mod tests {
         }"#;
         let envelope: TorrentEnvelope = serde_json::from_str(json).unwrap();
         let d = envelope.into_torrent_details("tos", "1");
-        assert!(d.description.is_none(), "release-name-as-description should be dropped");
+        assert!(
+            d.description.is_none(),
+            "release-name-as-description should be dropped"
+        );
     }
 
     #[test]
@@ -1212,7 +1260,12 @@ mod tests {
             "info_hash":"NOT-A-VALID-HASH","download_link":"https://x/1"
         }}],"meta":{}}"#;
         let resp: SearchResponse = serde_json::from_str(json).unwrap();
-        let r = resp.data.into_iter().next().unwrap().into_search_result("tos");
+        let r = resp
+            .data
+            .into_iter()
+            .next()
+            .unwrap()
+            .into_search_result("tos");
         assert!(r.infohash.is_none());
     }
 
@@ -1225,7 +1278,12 @@ mod tests {
         }}],"meta":{}}"#;
         let r: SearchResponse = serde_json::from_str(n).unwrap();
         assert_eq!(
-            r.data.into_iter().next().unwrap().into_search_result("tos").tmdb_id,
+            r.data
+                .into_iter()
+                .next()
+                .unwrap()
+                .into_search_result("tos")
+                .tmdb_id,
             Some(19400),
         );
         // String form (some older forks).
@@ -1235,7 +1293,12 @@ mod tests {
         }}],"meta":{}}"#;
         let r: SearchResponse = serde_json::from_str(s).unwrap();
         assert_eq!(
-            r.data.into_iter().next().unwrap().into_search_result("tos").tmdb_id,
+            r.data
+                .into_iter()
+                .next()
+                .unwrap()
+                .into_search_result("tos")
+                .tmdb_id,
             Some(19400),
         );
         // Zero (numeric) — treated as "no id".
@@ -1245,7 +1308,12 @@ mod tests {
         }}],"meta":{}}"#;
         let r: SearchResponse = serde_json::from_str(z).unwrap();
         assert_eq!(
-            r.data.into_iter().next().unwrap().into_search_result("tos").tmdb_id,
+            r.data
+                .into_iter()
+                .next()
+                .unwrap()
+                .into_search_result("tos")
+                .tmdb_id,
             None,
         );
         // Zero (string) — same.
@@ -1255,7 +1323,12 @@ mod tests {
         }}],"meta":{}}"#;
         let r: SearchResponse = serde_json::from_str(zs).unwrap();
         assert_eq!(
-            r.data.into_iter().next().unwrap().into_search_result("tos").tmdb_id,
+            r.data
+                .into_iter()
+                .next()
+                .unwrap()
+                .into_search_result("tos")
+                .tmdb_id,
             None,
         );
         // Null — also None.
@@ -1265,7 +1338,12 @@ mod tests {
         }}],"meta":{}}"#;
         let r: SearchResponse = serde_json::from_str(null).unwrap();
         assert_eq!(
-            r.data.into_iter().next().unwrap().into_search_result("tos").tmdb_id,
+            r.data
+                .into_iter()
+                .next()
+                .unwrap()
+                .into_search_result("tos")
+                .tmdb_id,
             None,
         );
     }
@@ -1345,7 +1423,10 @@ mod tests {
         // and the raw NFO collapsible in PreviewDialog.
         assert!(d.description.is_none());
         assert!(d.nfo.as_deref().unwrap().contains("HEVC"));
-        assert!(d.media_info.is_some(), "parsed MediaInfo should populate FactsGrid");
+        assert!(
+            d.media_info.is_some(),
+            "parsed MediaInfo should populate FactsGrid"
+        );
         let mi = d.media_info.unwrap();
         assert!(mi.video.is_some());
         assert!(!mi.audio.is_empty());

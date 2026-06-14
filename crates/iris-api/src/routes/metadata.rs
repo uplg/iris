@@ -33,9 +33,7 @@ async fn tmdb_lookup(
     Query(params): Query<TmdbLookupParams>,
 ) -> ApiResult<Json<MediaMetadata>> {
     let client = state.tmdb().ok_or_else(|| {
-        ApiError::BadRequest(
-            "TMDB enrichment is not configured (set [tmdb].api_key)".into(),
-        )
+        ApiError::BadRequest("TMDB enrichment is not configured (set [tmdb].api_key)".into())
     })?;
     let kind_hint = match params.kind.as_deref() {
         Some("tv") => Some(crate::tmdb::TmdbKind::Tv),
@@ -107,13 +105,9 @@ async fn tmdb_resolve(
         Some("movie") => Some(crate::tmdb::TmdbKind::Movie),
         _ => None,
     };
-    let resolved = crate::tmdb_resolve::resolve_release_name(
-        state.db(),
-        client,
-        &params.title,
-        kind_hint,
-    )
-    .await;
+    let resolved =
+        crate::tmdb_resolve::resolve_release_name(state.db(), client, &params.title, kind_hint)
+            .await;
     Ok(Json(resolved.map(|r| TmdbSuggestion {
         kind: r.kind,
         tmdb_id: r.tmdb_id,
