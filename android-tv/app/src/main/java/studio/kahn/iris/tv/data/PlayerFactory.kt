@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.data
 
 import android.content.Context
+import android.os.Handler
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -10,7 +11,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.video.VideoRendererEventListener
 import okhttp3.OkHttpClient
 import studio.kahn.iris.tv.BuildConfig
 
@@ -51,12 +55,21 @@ fun buildPlayer(
     // modern Android TV silicon (~1–3 % for AAC stereo) and we're
     // always plugged in.
     //
+    // BUT `setExtensionRendererMode` is global — PREFER also drags the
+    // bundled libgav1 *software* AV1 extension (app/libs/lib-decoder-av1)
+    // ahead of the device's *hardware* AV1 decoder. That makes AV1 play
+    // in software and stutter on hardware that decodes it natively (the
+    // reason the same file is smooth in a browser). `IrisRenderersFactory`
+    // below keeps PREFER for audio but forces ON for video, so hardware
+    // video decoders win and libgav1 is a fallback only (boxes without
+    // AV1 silicon).
+    //
     // `setEnableDecoderFallback(true)` is belt-and-braces: if the
     // selected renderer hits a runtime init failure (corrupted .so,
     // missing symbol on an exotic ABI, …), ExoPlayer transparently
     // retries with the next renderer instead of bubbling an error to
     // the user.
-    val renderersFactory = DefaultRenderersFactory(context)
+    val renderersFactory = IrisRenderersFactory(context)
         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
         .setEnableDecoderFallback(true)
 
@@ -86,6 +99,46 @@ fun buildPlayer(
             // discover surround capabilities via `AudioCapabilities`
             // and route passthrough correctly.
         }
+}
+
+/**
+ * `DefaultRenderersFactory` that keeps the factory's extension-renderer
+ * mode (`PREFER`) for AUDIO — so the FFmpeg extension still wins over a
+ * platform decoder that lies about DTS/TrueHD — but forces ON for VIDEO.
+ *
+ * `setExtensionRendererMode` is a single global knob; under `PREFER` it
+ * also inserts the bundled libgav1 *software* AV1 decoder ahead of the
+ * device's *hardware* AV1 decoder. The result is AV1 decoded in software
+ * even on silicon that handles it natively → dropped frames / stutter
+ * (while the very same file plays fine in a browser that uses the GPU).
+ * `buildVideoRenderers` receives the mode as a parameter, so overriding
+ * just this one call flips video to ON (platform/hardware decoders first,
+ * libgav1 only as a fallback for boxes with no AV1 silicon) without
+ * touching audio.
+ */
+@UnstableApi
+private class IrisRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
+    override fun buildVideoRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: Handler,
+        eventListener: VideoRendererEventListener,
+        allowedVideoJoiningTimeMs: Long,
+        out: ArrayList<Renderer>,
+    ) {
+        super.buildVideoRenderers(
+            context,
+            DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON,
+            mediaCodecSelector,
+            enableDecoderFallback,
+            eventHandler,
+            eventListener,
+            allowedVideoJoiningTimeMs,
+            out,
+        )
+    }
 }
 
 /**
