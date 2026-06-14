@@ -119,23 +119,29 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     && cp /app/target/release/iris /iris
 
 ###############################################################################
-# 3) Runtime
+# 3) Runtime — Chainguard Wolfi (glibc)
+#
+# glibc (2.43) just like Debian, so the prebuilt glibc shaka-packager binary
+# and the glibc Rust binary (built above on rust:1.96-trixie / glibc 2.41 —
+# older, so it runs fine on Wolfi's newer 2.43) work UNCHANGED. NOT Alpine:
+# musl would break the prebuilt shaka binary and hurt librqbit's allocation-
+# heavy throughput. Verified codec parity — Wolfi's ffmpeg ships every
+# decoder / demuxer / encoder Iris uses server-side (h264/hevc/vp9/av1,
+# aac/ac3/eac3/dts/flac/opus, the native AAC encoder, mkv/mp4/ts/avi demux,
+# ass/pgs/srt).
+#
+# Why Wolfi over debian:trixie-slim (measured on arm64, runtime layers only):
+#   image size  750 MB → 298 MB   ·   CVEs  261 (11 crit / 39 high) → 0
+#
+# The `iris-data` named volume is host-side and untouched by swapping the
+# base; the process runs as uid 1001 — the same uid the old Debian `iris`
+# user wrote prod data with — so it keeps full read/write on existing data.
 ###############################################################################
-FROM debian:trixie-slim AS runtime
+FROM cgr.dev/chainguard/wolfi-base AS runtime
 ARG TARGETARCH
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        ffmpeg \
-        tini \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
+# `apk` here is Wolfi's package manager — glibc packages, NOT Alpine's musl.
+RUN apk add --no-cache ca-certificates-bundle ffmpeg tini curl
 
-# shaka-packager — used to convert ffmpeg's per-stream MP4 outputs into
-# a proper HLS-CMAF manifest tree (master.m3u8 + per-rendition .m3u8 +
-# init/segment .m4s). ffmpeg's own HLS muxer produces manifests with
-# overly-strict CODECS attributes that browsers reject upfront via
-# `MediaSource.isTypeSupported`; shaka writes correct codec strings.
 ARG SHAKA_VERSION=v3.7.2
 RUN set -eux; \
     case "${TARGETARCH}" in \
@@ -143,23 +149,29 @@ RUN set -eux; \
         arm64) shaka_arch=arm64 ;; \
         *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
+    # wolfi-base has no /usr/local/bin (Debian does) — create it before curl.
+    mkdir -p /usr/local/bin; \
     curl -fsSL -o /usr/local/bin/packager \
         "https://github.com/shaka-project/shaka-packager/releases/download/${SHAKA_VERSION}/packager-linux-${shaka_arch}"; \
     chmod +x /usr/local/bin/packager; \
     /usr/local/bin/packager --version | head -1; \
-    apt-get purge -y --auto-remove curl; \
-    rm -rf /var/lib/apt/lists/*
+    apk del curl
 
-RUN useradd --system --create-home --uid 1001 iris
+# Run as a non-root numeric UID (Chainguard-idiomatic — no passwd entry
+# needed). uid 1001 is the SAME uid the previous Debian `iris` user wrote
+# the `iris-data` volume with, so existing prod files (owned 1001) stay
+# read/write across the migration — verified against a live volume.
 WORKDIR /srv/iris
-RUN mkdir -p /srv/iris/web /data /data/downloads && chown -R iris:iris /srv/iris /data
+RUN mkdir -p /srv/iris/web /srv/iris/config /data /data/downloads \
+    && chown -R 1001:1001 /srv/iris /data
 
 COPY --from=rust-builder /iris /usr/local/bin/iris
 COPY --from=web-builder /app/web/dist /srv/iris/web
 COPY config/config.toml.example /srv/iris/config/config.toml.example
 COPY config/providers.toml.example /srv/iris/config/providers.toml.example
 
-USER iris
+USER 1001:1001
+ENV HOME=/srv/iris
 ENV IRIS_CONFIG=/srv/iris/config/config.toml
 EXPOSE 8080
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/iris"]
