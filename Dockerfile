@@ -15,7 +15,7 @@
 ###############################################################################
 # Recent emsdk — the image is multi-arch (linux/amd64 + linux/arm64)
 # so building on Apple Silicon doesn't go through qemu emulation.
-FROM emscripten/emsdk:5.0.7 AS libav-builder
+FROM emscripten/emsdk:6.0.0 AS libav-builder
 WORKDIR /build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -106,7 +106,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 # itself must be copied out *before* the RUN finishes — otherwise it
 # vanishes with the cache when the next build runs.
 ###############################################################################
-FROM rust:1.95-trixie AS rust-builder
+FROM rust:1.96-trixie AS rust-builder
 WORKDIR /app
 ENV CARGO_TERM_COLOR=never
 COPY rust-toolchain.toml Cargo.toml Cargo.lock* ./
