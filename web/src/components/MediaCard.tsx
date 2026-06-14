@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router";
+import { Link, type LinkProps } from "@tanstack/react-router";
 import { Film, Tv } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -41,9 +41,10 @@ export type MediaCardProps = {
   /** Tailwind text-color class, e.g. `bg-primary` for watch progress or
    *  `bg-sky-500` for downloads. Defaults to primary. */
   progressColor?: string;
-  /** When set, the whole card becomes a `<Link>`. Mutually exclusive
-   *  with `onClick` (link wins). */
-  href?: string;
+  /** When set, the whole card becomes a `<Link>`. Build it with
+   *  `linkOptions({ to, params })` for full type-safety. Mutually
+   *  exclusive with `onClick` (link wins). */
+  link?: LinkProps;
   onClick?: () => void;
   size?: Size;
   className?: string;
@@ -66,7 +67,7 @@ export function MediaCard(props: MediaCardProps) {
     badge,
     progress,
     progressColor = "bg-primary",
-    href,
+    link,
     onClick,
     size = "md",
     className,
@@ -136,9 +137,9 @@ export function MediaCard(props: MediaCardProps) {
   // The `group` class is applied to the outer interactive element so the
   // child hover/focus styles (poster border, scale) all activate from a
   // single focus boundary — matters for keyboard nav.
-  if (href) {
+  if (link) {
     return (
-      <Link to={href} className="group block rounded-lg outline-none focus-visible:outline-none">
+      <Link {...link} className="group block rounded-lg outline-none focus-visible:outline-none">
         {inner}
       </Link>
     );

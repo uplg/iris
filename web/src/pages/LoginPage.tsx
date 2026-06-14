@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, Navigate, useLocation, useNavigate } from "react-router";
+import { getRouteApi, Link, Navigate, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 import { Brand } from "@/components/Brand";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -48,18 +48,19 @@ export function AuthVisual() {
   );
 }
 
+const loginRoute = getRouteApi("/login");
+
 export function LoginPage() {
   const auth = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
+  const { redirect } = loginRoute.useSearch();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
   if (auth.status === "authenticated") {
-    const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname ?? "/";
-    return <Navigate to={from} replace />;
+    return <Navigate to={redirect ?? "/"} replace />;
   }
 
   const onSubmit = async (e: FormEvent) => {
@@ -68,7 +69,7 @@ export function LoginPage() {
     setError(null);
     try {
       await auth.login(email, password);
-      navigate("/", { replace: true });
+      navigate({ to: redirect ?? "/", replace: true });
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "login failed");
     } finally {

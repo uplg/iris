@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { CheckCircle2, Download, Library as LibraryIcon, Loader2, Play } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -82,9 +82,11 @@ function writeStoredVolume(v: number): void {
   localStorage.setItem(VOLUME_KEY, String(Math.max(0, Math.min(1, v))));
 }
 
+const watchRoute = getRouteApi("/auth/shell/watch/$infohash/$idx");
+
 export function WatchPage() {
-  const { infohash, idx } = useParams<{ infohash: string; idx: string }>();
-  const fileIdx = Number(idx ?? 0);
+  const { infohash, idx } = watchRoute.useParams();
+  const fileIdx = Number(idx);
   const navigate = useNavigate();
 
   const [playerError, setPlayerError] = useState<string | null>(null);
@@ -121,7 +123,7 @@ export function WatchPage() {
 
   const torrentQ = useQuery<TorrentView>({
     queryKey: ["torrent", infohash],
-    queryFn: () => torrents.get(infohash!),
+    queryFn: () => torrents.get(infohash),
     enabled: !!infohash,
     refetchInterval: 3000,
   });
@@ -156,7 +158,7 @@ export function WatchPage() {
   // we can render a meaningful loader instead of a generic spinner.
   const playStatusQ = useQuery({
     queryKey: ["play-status", infohash, fileIdx],
-    queryFn: () => torrents.playStatus(infohash!, fileIdx),
+    queryFn: () => torrents.playStatus(infohash, fileIdx),
     enabled: !!infohash,
     refetchInterval: (q) => {
       const d = q.state.data;
@@ -188,7 +190,7 @@ export function WatchPage() {
   // manifest query below.
   const probeQ = useQuery({
     queryKey: ["probe", infohash, fileIdx],
-    queryFn: () => torrents.probe(infohash!, fileIdx),
+    queryFn: () => torrents.probe(infohash, fileIdx),
     enabled: !!infohash,
     retry: (failureCount, err) => {
       // The backend prefetch can take up to ~30s per attempt to pull the
@@ -221,7 +223,7 @@ export function WatchPage() {
   // The ManifestNotReadyError retry handles the early-download window.
   const manifestQ = useQuery({
     queryKey: ["manifest", infohash, fileIdx],
-    queryFn: () => fetchManifest(infohash!, fileIdx),
+    queryFn: () => fetchManifest(infohash, fileIdx),
     enabled: !!infohash,
     retry: (failureCount, err) => err instanceof ManifestNotReadyError && failureCount < 30,
     retryDelay: 2000,
@@ -391,7 +393,7 @@ export function WatchPage() {
   // cached null/old value as if the user hadn't watched anything).
   const progressQ = useQuery({
     queryKey: ["progress", infohash, fileIdx],
-    queryFn: () => progressApi.get(infohash!, fileIdx),
+    queryFn: () => progressApi.get(infohash, fileIdx),
     enabled: !!infohash,
   });
 
@@ -417,7 +419,7 @@ export function WatchPage() {
   // other-files panel).
   const torrentProgressQ = useQuery({
     queryKey: ["torrent-progress", infohash],
-    queryFn: () => progressApi.forTorrent(infohash!),
+    queryFn: () => progressApi.forTorrent(infohash),
     enabled: !!infohash,
     refetchInterval: 10_000,
   });
@@ -517,7 +519,7 @@ export function WatchPage() {
   // fires — no need to gate the query.
   const episodeContextQ = useQuery({
     queryKey: ["episode-context", infohash, fileIdx],
-    queryFn: () => follows.episodeContext(infohash!, fileIdx),
+    queryFn: () => follows.episodeContext(infohash, fileIdx),
     enabled: !!infohash,
     staleTime: 5 * 60_000,
   });
@@ -946,7 +948,12 @@ export function WatchPage() {
                         variant={row.active ? "secondary" : "default"}
                         disabled={row.active}
                         className="flex-1"
-                        onClick={() => navigate(`/watch/${row.infohash}/${row.fileIdx}`)}
+                        onClick={() =>
+                          navigate({
+                            to: "/watch/$infohash/$idx",
+                            params: { infohash: row.infohash, idx: String(row.fileIdx) },
+                          })
+                        }
                       >
                         <Play className="size-3.5" />
                         {row.watchedPct != null && row.watchedPct > 0 && !row.watched

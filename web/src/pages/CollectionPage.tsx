@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Download, Film, Loader2, Play, Sparkles, Tv } from "lucide-react";
 
@@ -38,12 +38,14 @@ const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
  * Both lists arrive in a single CollectionDetail payload — no
  * second round-trip, the server filters out already-owned offers.
  */
+const collectionRoute = getRouteApi("/auth/shell/collection/$id");
+
 export function CollectionPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id } = collectionRoute.useParams();
   const navigate = useNavigate();
   const { data, isLoading, error } = useQuery({
     queryKey: ["collection", id],
-    queryFn: () => library.collection(id!),
+    queryFn: () => library.collection(id),
     enabled: !!id,
   });
 
@@ -59,7 +61,11 @@ export function CollectionPage() {
         .filter((x) => VIDEO_RE.test(x.path))
         .sort((a, b) => b.size_bytes - a.size_bytes)[0];
       if (t && f) {
-        navigate(`/watch/${t.infohash}/${f.index}`, { replace: true });
+        navigate({
+          to: "/watch/$infohash/$idx",
+          params: { infohash: t.infohash, idx: String(f.index) },
+          replace: true,
+        });
       }
     }
   }, [data, navigate]);
@@ -99,12 +105,22 @@ export function CollectionPage() {
       <Hero collection={data} />
       <Container>
         {tvHasEpisodes ? (
-          <EpisodeList collection={data} onPlay={(ih, idx) => navigate(`/watch/${ih}/${idx}`)} />
+          <EpisodeList
+            collection={data}
+            onPlay={(ih, idx) =>
+              navigate({ to: "/watch/$infohash/$idx", params: { infohash: ih, idx: String(idx) } })
+            }
+          />
         ) : (
           // Movies, or a TV pack the SCENE parser couldn't break into
           // episodes. Either way the raw file picker gets the user
           // unblocked.
-          <RawFileList collection={data} onPlay={(ih, idx) => navigate(`/watch/${ih}/${idx}`)} />
+          <RawFileList
+            collection={data}
+            onPlay={(ih, idx) =>
+              navigate({ to: "/watch/$infohash/$idx", params: { infohash: ih, idx: String(idx) } })
+            }
+          />
         )}
       </Container>
     </div>
@@ -220,7 +236,10 @@ function Hero({ collection }: { collection: CollectionDetail }) {
             {playTarget && (
               <div className="flex flex-wrap gap-2.5">
                 <Button asChild size="lg" className="h-11">
-                  <Link to={`/watch/${playTarget.infohash}/${playTarget.idx}`}>
+                  <Link
+                    to="/watch/$infohash/$idx"
+                    params={{ infohash: playTarget.infohash, idx: String(playTarget.idx) }}
+                  >
                     <Play className="size-4.5" />
                     {resume ? "Resume" : "Play"}
                   </Link>

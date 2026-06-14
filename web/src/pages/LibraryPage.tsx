@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { getRouteApi, Link } from "@tanstack/react-router";
 import {
   CheckCircle2,
   ChevronDown,
@@ -52,9 +52,12 @@ const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
  * The toggle is mirrored into `?view=torrents` so a refresh keeps the
  * user's pick.
  */
+const libraryRoute = getRouteApi("/auth/shell/library");
+
 export function LibraryPage() {
-  const [params, setParams] = useSearchParams();
-  const view = params.get("view") === "torrents" ? "torrents" : "collections";
+  const { view: viewParam } = libraryRoute.useSearch();
+  const navigate = libraryRoute.useNavigate();
+  const view = viewParam === "torrents" ? "torrents" : "collections";
 
   // Read-only stats off the (already-cached on Home) torrents list, for
   // the header stat cards. Cheap — shared query key.
@@ -94,13 +97,13 @@ export function LibraryPage() {
           <div className="flex items-center gap-1 rounded-[10px] border border-border bg-elev p-1">
             <ViewToggleButton
               active={view === "collections"}
-              onClick={() => setParams({}, { replace: true })}
+              onClick={() => navigate({ search: {}, replace: true })}
               icon={<LayoutGrid className="size-3.5" />}
               label="Collections"
             />
             <ViewToggleButton
               active={view === "torrents"}
-              onClick={() => setParams({ view: "torrents" }, { replace: true })}
+              onClick={() => navigate({ search: { view: "torrents" }, replace: true })}
               icon={<List className="size-3.5" />}
               label="Torrents"
             />
@@ -178,8 +181,8 @@ const SORT_LABEL: Record<SortMode, string> = {
 };
 
 function CollectionsView() {
-  const navigate = useNavigate();
-  const [params, setParams] = useSearchParams();
+  const navigate = libraryRoute.useNavigate();
+  const { kind: kindFilter, sort: sortParam } = libraryRoute.useSearch();
   const { data, isLoading, error } = useQuery({
     queryKey: ["library", "collections"],
     queryFn: () => library.list("collections"),
@@ -188,23 +191,20 @@ function CollectionsView() {
 
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
-  // URL-persisted: kind=movie|tv (omit = all). Mirrors `?view=…`.
-  const kindFilter = params.get("kind");
+  // URL-persisted: kind=movie|tv (omit = all). The updater preserves the
+  // other library filters (e.g. sort) rather than clobbering them.
   const setKindFilter = (next: "movie" | "tv" | null) => {
-    const np = new URLSearchParams(params);
-    if (next == null) np.delete("kind");
-    else np.set("kind", next);
-    setParams(np, { replace: true });
+    navigate({ search: (prev) => ({ ...prev, kind: next ?? undefined }), replace: true });
   };
-  // Sort persisted in URL too (`?sort=alpha|recent|size|episodes`) so a
-  // refresh keeps the user's choice. Defaults to `recent` which matches
-  // the previous server-side ordering.
-  const sort = (params.get("sort") as SortMode | null) ?? "recent";
+  // Sort persisted in URL too (`?sort=alpha|recent|size`) so a refresh
+  // keeps the user's choice. Defaults to `recent` (= the previous
+  // server-side ordering), which we encode as the absent param.
+  const sort = sortParam ?? "recent";
   const setSort = (next: SortMode) => {
-    const np = new URLSearchParams(params);
-    if (next === "recent") np.delete("sort");
-    else np.set("sort", next);
-    setParams(np, { replace: true });
+    navigate({
+      search: (prev) => ({ ...prev, sort: next === "recent" ? undefined : next }),
+      replace: true,
+    });
   };
 
   const allItems = useMemo<CollectionListItem[]>(
@@ -294,7 +294,7 @@ function CollectionsFilters({
 }: {
   search: string;
   onSearchChange: (v: string) => void;
-  kindFilter: string | null;
+  kindFilter: "movie" | "tv" | undefined;
   onKindChange: (k: "movie" | "tv" | null) => void;
   sort: SortMode;
   onSortChange: (s: SortMode) => void;
@@ -535,7 +535,10 @@ function collectionBadge(c: CollectionListItem): React.ReactNode {
   return undefined;
 }
 
-function routeCollection(c: CollectionListItem, navigate: ReturnType<typeof useNavigate>) {
+function routeCollection(
+  c: CollectionListItem,
+  navigate: ReturnType<typeof libraryRoute.useNavigate>,
+) {
   // Always land on the collection page. The /series/:tmdb_id route
   // is the Watchlist surface (TMDB-driven episode grid) and only
   // makes sense for shows the user has explicitly followed — when
@@ -543,7 +546,7 @@ function routeCollection(c: CollectionListItem, navigate: ReturnType<typeof useN
   // "broken follow" view whenever the indexer-attached tmdb_id was
   // wrong. CollectionPage shows the actual SCENE-grouped content
   // we have on disk, which is always correct.
-  navigate(`/collection/${c.id}`);
+  navigate({ to: "/collection/$id", params: { id: String(c.id) } });
 }
 
 // ---------------------------------------------------------------------------
@@ -811,7 +814,10 @@ function TorrentRow({
             <div className="flex shrink-0 items-center gap-1.5">
               {videos.length === 1 && (
                 <Button asChild size="sm" variant="outline">
-                  <Link to={`/watch/${t.infohash}/${videos[0]!.index}`}>
+                  <Link
+                    to="/watch/$infohash/$idx"
+                    params={{ infohash: t.infohash, idx: String(videos[0]!.index) }}
+                  >
                     <Play className="size-3.5" />
                     Play
                   </Link>
@@ -1002,7 +1008,10 @@ function FileEntry({
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
         <Button asChild size="sm">
-          <Link to={`/watch/${infohash}/${file.index}`}>
+          <Link
+            to="/watch/$infohash/$idx"
+            params={{ infohash, idx: String(file.index) }}
+          >
             <Play className="size-3.5" />
             {watchedPct != null && watchedPct > 0 && !watch?.completed ? "Resume" : "Play"}
           </Link>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router";
+import { Link, type LinkProps, Outlet, useLocation } from "@tanstack/react-router";
 import {
   Home as HomeIcon,
   Library as LibraryIcon,
@@ -16,7 +16,7 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 type NavEntry = {
-  to: string;
+  to: LinkProps["to"];
   label: string;
   icon: typeof HomeIcon;
   end?: boolean;
@@ -85,7 +85,7 @@ export function AppShell() {
             >
               <SettingsIcon className="size-4" />
             </Button>
-            <NavLink
+            <Link
               to="/account"
               aria-label="Account"
               className="focus-ring inline-flex h-9 items-center gap-2 rounded-full border border-border bg-elev py-0 pr-1 pl-2.5"
@@ -99,7 +99,7 @@ export function AppShell() {
               >
                 {avatarLetter}
               </span>
-            </NavLink>
+            </Link>
           </div>
         </div>
       </header>
@@ -119,17 +119,13 @@ export function AppShell() {
 function NavItem({ item }: { item: NavEntry }) {
   const Icon = item.icon;
   return (
-    <NavLink
+    <Link
       to={item.to}
-      end={item.end}
-      className={({ isActive }) =>
-        cn(
-          "relative inline-flex items-center gap-2 rounded-[10px] px-3 py-2 text-sm font-medium transition-colors",
-          isActive
-            ? "bg-elev-2 text-foreground"
-            : "text-muted-foreground hover:bg-accent hover:text-foreground",
-        )
-      }
+      // `end` → exact match so Home ("/") isn't active on every route.
+      activeOptions={{ exact: item.end ?? false }}
+      className="relative inline-flex items-center gap-2 rounded-[10px] px-3 py-2 text-sm font-medium transition-colors"
+      activeProps={{ className: "bg-elev-2 text-foreground" }}
+      inactiveProps={{ className: "text-muted-foreground hover:bg-accent hover:text-foreground" }}
     >
       {({ isActive }) => (
         <>
@@ -140,7 +136,7 @@ function NavItem({ item }: { item: NavEntry }) {
           )}
         </>
       )}
-    </NavLink>
+    </Link>
   );
 }
 
@@ -161,16 +157,13 @@ function BottomBar({ nav }: { nav: NavEntry[] }) {
         {nav.map((item) => {
           const Icon = item.icon;
           return (
-            <NavLink
-              key={item.to}
+            <Link
+              key={item.label}
               to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                cn(
-                  "grid place-items-center gap-0.5 rounded-xl px-1 py-1.5 text-[11px] font-medium leading-none",
-                  isActive ? "bg-accent text-foreground" : "text-fg-dim",
-                )
-              }
+              activeOptions={{ exact: item.end ?? false }}
+              className="grid place-items-center gap-0.5 rounded-xl px-1 py-1.5 text-[11px] font-medium leading-none"
+              activeProps={{ className: "bg-accent text-foreground" }}
+              inactiveProps={{ className: "text-fg-dim" }}
             >
               {({ isActive }) => (
                 <>
@@ -178,7 +171,7 @@ function BottomBar({ nav }: { nav: NavEntry[] }) {
                   <span className="mt-0.5">{item.label}</span>
                 </>
               )}
-            </NavLink>
+            </Link>
           );
         })}
       </div>

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useMemo, useState } from "react";
-import { Link } from "react-router";
+import { Link, linkOptions } from "@tanstack/react-router";
 import { ArrowUpRight, Bookmark, Play, Sparkles } from "lucide-react";
 
 import { CatalogCardView } from "@/components/CatalogCardView";
@@ -123,7 +123,7 @@ export function HomePage() {
               key={shelf.key}
               eyebrow="Recommended"
               title={shelf.title}
-              href="/for-you"
+              link={linkOptions({ to: "/for-you" })}
               isEmpty={shelf.items.length === 0}
             >
               {shelf.items.map((card) => (
@@ -135,7 +135,7 @@ export function HomePage() {
           <Shelf
             eyebrow="On disk"
             title="My Library"
-            href="/library"
+            link={linkOptions({ to: "/library" })}
             isEmpty={recentLibrary.length === 0}
             emptyState={
               <span>
@@ -283,7 +283,10 @@ function ResumeHero({ item }: { item: ContinueWatchingItem }) {
       overview={md?.overview}
       actions={
         <Button asChild size="lg" className="h-11">
-          <Link to={`/watch/${item.infohash}/${item.file_idx}`}>
+          <Link
+            to="/watch/$infohash/$idx"
+            params={{ infohash: item.infohash, idx: String(item.file_idx) }}
+          >
             <Play className="size-4.5" />
             Resume
           </Link>
@@ -438,7 +441,10 @@ function ContinueCard({ item }: { item: ContinueWatchingItem }) {
 
   return (
     <MediaCard
-      href={`/watch/${item.infohash}/${item.file_idx}`}
+      link={linkOptions({
+        to: "/watch/$infohash/$idx",
+        params: { infohash: item.infohash, idx: String(item.file_idx) },
+      })}
       title={primary}
       subtitle={subtitle}
       tmdbId={item.tmdb_id}
@@ -455,7 +461,7 @@ function WatchlistCard({ item }: { item: WatchlistItem }) {
   // is computed server-side off the calling user's series_follows row.
   return (
     <MediaCard
-      href={`/collection/${item.id}`}
+      link={linkOptions({ to: "/collection/$id", params: { id: String(item.id) } })}
       title={item.name}
       posterUrl={tmdbImage(item.poster_path, "w342")}
       kind="tv"
@@ -480,17 +486,20 @@ function LibraryCard({ torrent }: { torrent: TorrentView }) {
   //  3. else the generic library grid (no playable video at all).
   const largestVideo =
     videos.length > 0 ? videos.reduce((a, b) => (b.size_bytes > a.size_bytes ? b : a)) : null;
-  const href = torrent.collection_id
-    ? `/collection/${torrent.collection_id}`
+  const link = torrent.collection_id
+    ? linkOptions({ to: "/collection/$id", params: { id: String(torrent.collection_id) } })
     : largestVideo
-      ? `/watch/${torrent.infohash}/${largestVideo.index}`
-      : "/library";
+      ? linkOptions({
+          to: "/watch/$infohash/$idx",
+          params: { infohash: torrent.infohash, idx: String(largestVideo.index) },
+        })
+      : linkOptions({ to: "/library" });
   const subtitle = formatSize(torrent.total_size_bytes);
   const downloading = torrent.progress_pct < 99.9;
   const progress = downloading ? torrent.progress_pct / 100 : undefined;
   return (
     <MediaCard
-      href={href}
+      link={link}
       title={torrent.name ?? torrent.infohash.slice(0, 12)}
       subtitle={subtitle}
       tmdbId={torrent.tmdb_id}

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router";
+import { useNavigate } from "@tanstack/react-router";
 
 import { MediaCard } from "@/components/MediaCard";
 import { me } from "@/lib/api";
@@ -48,7 +48,12 @@ export function ContinueWatching() {
               title={primary}
               subtitle={subtitle}
               progress={pct}
-              onClick={() => navigate(`/watch/${it.infohash}/${it.file_idx}`)}
+              onClick={() =>
+                navigate({
+                  to: "/watch/$infohash/$idx",
+                  params: { infohash: it.infohash, idx: String(it.file_idx) },
+                })
+              }
             />
           );
         })}

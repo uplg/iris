@@ -1,4 +1,4 @@
-import { Navigate, Outlet, useLocation } from "react-router";
+import { Navigate, Outlet, useLocation } from "@tanstack/react-router";
 import { useAuth } from "@/lib/auth";
 
 export function RequireAuth({ adminOnly = false }: { adminOnly?: boolean }) {
@@ -13,7 +13,9 @@ export function RequireAuth({ adminOnly = false }: { adminOnly?: boolean }) {
     );
   }
   if (auth.status === "anonymous") {
-    return <Navigate to="/login" replace state={{ from: location }} />;
+    // Bounce to login, remembering where to return after sign-in (pathname
+    // only — matches the previous `state.from.pathname` behaviour).
+    return <Navigate to="/login" search={{ redirect: location.pathname }} replace />;
   }
   if (adminOnly && !auth.user.is_admin) {
     return <Navigate to="/" replace />;

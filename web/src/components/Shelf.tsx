@@ -1,5 +1,5 @@
 import { type ReactNode, useRef } from "react";
-import { Link } from "react-router";
+import { Link, type LinkProps } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -10,8 +10,9 @@ export type ShelfProps = {
   eyebrow?: string;
   /** Section heading shown above the cards. */
   title: string;
-  /** Optional "see all" link in the heading. */
-  href?: string;
+  /** Optional "see all" link in the heading. Build it with
+   *  `linkOptions({ to })` for type-safety. */
+  link?: LinkProps;
   /** Anything to put in the top-right of the heading row (a count badge,
    *  a filter chip…). Mutually OK with `href` — both render side by side. */
   action?: ReactNode;
@@ -39,7 +40,7 @@ export type ShelfProps = {
 export function Shelf({
   eyebrow,
   title,
-  href,
+  link,
   action,
   emptyState,
   children,
@@ -62,9 +63,9 @@ export function Shelf({
       <div className="flex items-end justify-between gap-4">
         <div className="grid gap-1">
           {eyebrow && <span className="eyebrow">{eyebrow}</span>}
-          {href ? (
+          {link ? (
             <Link
-              to={href}
+              {...link}
               className="group inline-flex items-center gap-1.5 font-display text-[22px] tracking-tight text-foreground transition-colors hover:text-primary"
             >
               {title}

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link } from "@tanstack/react-router";
 import {
   ArrowLeft,
   KeyRound,
@@ -103,7 +103,7 @@ export function AdminPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button asChild variant="outline" size="sm">
-              <Link to="/library?view=torrents">
+              <Link to="/library" search={{ view: "torrents" }}>
                 <List className="size-3.5" />
                 Raw torrents view
               </Link>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { Play } from "lucide-react";
 import DOMPurify from "dompurify";
 import {
@@ -131,7 +131,10 @@ export function PreviewDialog({
     try {
       const res = await torrents.ingest(providerId, externalId, tmdbId ?? null);
       onOpenChange(false);
-      navigate(`/watch/${res.snapshot.infohash}/${pickedIdx}`);
+      navigate({
+        to: "/watch/$infohash/$idx",
+        params: { infohash: res.snapshot.infohash, idx: String(pickedIdx) },
+      });
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -312,7 +315,10 @@ export function PreviewDialog({
               <Button
                 onClick={() => {
                   onOpenChange(false);
-                  navigate(`/watch/${libraryInfohash}/${libraryFileIdx}`);
+                  navigate({
+                    to: "/watch/$infohash/$idx",
+                    params: { infohash: libraryInfohash, idx: String(libraryFileIdx) },
+                  });
                 }}
               >
                 <Play className="size-4" />

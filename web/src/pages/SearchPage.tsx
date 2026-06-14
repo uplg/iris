@@ -1,6 +1,5 @@
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router";
 import {
   Check,
   ChevronLeft,
@@ -12,7 +11,7 @@ import {
   Tv,
 } from "lucide-react";
 
-import { useNavigate } from "react-router";
+import { getRouteApi, linkOptions } from "@tanstack/react-router";
 
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -111,10 +110,12 @@ function useDebounce<T>(value: T, delay = 300): T {
  * not the legacy table. Click a card → PreviewDialog with the rich
  * description / NFO breakdown / "ingest" CTA.
  */
+const searchRoute = getRouteApi("/auth/shell/search");
+
 export function SearchPage() {
-  const [params, setParams] = useSearchParams();
-  const initialQ = params.get("q") ?? "";
-  const [q, setQ] = useState(initialQ);
+  const { q: queryParam } = searchRoute.useSearch();
+  const navigate = searchRoute.useNavigate();
+  const [q, setQ] = useState(queryParam ?? "");
   const debounced = useDebounce(q.trim(), 350);
   const [picked, setPicked] = useState<SearchResult | null>(null);
   const [page, setPage] = useState(1);
@@ -122,17 +123,16 @@ export function SearchPage() {
   const [kind, setKind] = useState<MediaKind | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const navigate = useNavigate();
 
   // Mirror the in-input value into the URL so refresh keeps the search
   // and copy/paste of the URL replays it.
   useEffect(() => {
     if (debounced.length >= 2) {
-      setParams({ q: debounced }, { replace: true });
-    } else if (debounced.length === 0 && params.get("q")) {
-      setParams({}, { replace: true });
+      navigate({ search: { q: debounced }, replace: true });
+    } else if (debounced.length === 0 && queryParam) {
+      navigate({ search: {}, replace: true });
     }
-  }, [debounced, params, setParams]);
+  }, [debounced, navigate, queryParam]);
 
   // Reset to page 1 when query/sort/kind changes.
   useEffect(() => {
@@ -316,18 +316,19 @@ export function SearchPage() {
           <>
             <div className="grid gap-4.5 grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
               {libMatches.map((m) => (
-                <LibraryMatchCard
-                  key={`lib:${m.collection_id}`}
-                  match={m}
-                  onOpen={(path) => navigate(path)}
-                />
+                <LibraryMatchCard key={`lib:${m.collection_id}`} match={m} />
               ))}
               {rows.map((r) => (
                 <ResultCard
                   key={`${r.provider_id}:${r.external_id}`}
                   result={r}
                   onClick={() => setPicked(r)}
-                  onPlayExisting={(infohash, fileIdx) => navigate(`/watch/${infohash}/${fileIdx}`)}
+                  onPlayExisting={(infohash, fileIdx) =>
+                    navigate({
+                      to: "/watch/$infohash/$idx",
+                      params: { infohash, idx: String(fileIdx) },
+                    })
+                  }
                 />
               ))}
             </div>
@@ -363,17 +364,19 @@ export function SearchPage() {
  *  player; everything else lands on the collection page where the user
  *  picks a release/language. Poster comes from the collection's
  *  server-derived `tmdb_id` (same trust level as the Library page). */
-function LibraryMatchCard({
-  match,
-  onOpen,
-}: {
-  match: LibraryMatch;
-  onOpen: (path: string) => void;
-}) {
+function LibraryMatchCard({ match }: { match: LibraryMatch }) {
   const pad = (n: number) => String(n).padStart(2, "0");
+  // Episode-specific matches deep-link to the player; everything else
+  // lands on the collection page where the user picks a release/language.
   const watchTarget =
     match.episode_infohash != null && match.episode_file_idx != null
-      ? `/watch/${match.episode_infohash}/${match.episode_file_idx}`
+      ? linkOptions({
+          to: "/watch/$infohash/$idx",
+          params: {
+            infohash: match.episode_infohash,
+            idx: String(match.episode_file_idx),
+          },
+        })
       : null;
   let subtitle: string;
   if (watchTarget && match.episode_season != null && match.episode_number != null) {
@@ -397,7 +400,10 @@ function LibraryMatchCard({
           <Check className="size-2.5" /> In library
         </Tag>
       }
-      onClick={() => onOpen(watchTarget ?? `/collection/${match.collection_id}`)}
+      link={
+        watchTarget ??
+        linkOptions({ to: "/collection/$id", params: { id: String(match.collection_id) } })
+      }
     />
   );
 }

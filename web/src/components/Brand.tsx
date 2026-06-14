@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Link } from "@tanstack/react-router";
 
 /**
  * The Iris wordmark — used as the logo in the header and as a focal point

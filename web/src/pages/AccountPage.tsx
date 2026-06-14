@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useSearchParams } from "react-router";
+import { getRouteApi } from "@tanstack/react-router";
 import { KeyRound, Link2, LogOut, Trash2, Tv } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -484,21 +484,23 @@ function emailLocalDefault(email: string): string {
   return email.split("@")[0]?.split(".")[0] ?? "";
 }
 
+const accountRoute = getRouteApi("/auth/shell/account");
+
 function DevicesCard() {
   const qc = useQueryClient();
-  const [params, setParams] = useSearchParams();
+  const { pair } = accountRoute.useSearch();
+  const navigate = accountRoute.useNavigate();
   const [code, setCode] = useState("");
   const [label, setLabel] = useState("");
 
-  // Deep-link from a TV: GET /account?pair=ABCD-EFGH pre-fills the input.
+  // Deep-link from a TV: GET /account?pair=ABCD-EFGH pre-fills the input,
+  // then strips the param so a refresh doesn't re-fill it.
   useEffect(() => {
-    const fromUrl = params.get("pair");
-    if (fromUrl && !code) {
-      setCode(fromUrl.toUpperCase());
-      params.delete("pair");
-      setParams(params, { replace: true });
+    if (pair && !code) {
+      setCode(pair.toUpperCase());
+      navigate({ search: (prev) => ({ ...prev, pair: undefined }), replace: true });
     }
-  }, [params, code, setParams]);
+  }, [pair, code, navigate]);
 
   // After a successful link, the device only appears in the list once the TV
   // polls /auth/device/poll and a refresh_token row is created. Poll briefly

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router";
+import { Link } from "@tanstack/react-router";
 import { Eye, Monitor, Pause, Play, Tv } from "lucide-react";
 
 import { Poster } from "@/components/Poster";
@@ -54,7 +54,8 @@ function SessionCard({ s }: { s: ActiveSession }) {
   const progress = pct(s.position_seconds, s.duration_seconds);
   return (
     <Link
-      to={`/watch/${s.infohash}/${s.file_idx}`}
+      to="/watch/$infohash/$idx"
+      params={{ infohash: s.infohash, idx: String(s.file_idx) }}
       className="flex gap-3 rounded-lg border border-border bg-elev/50 p-3 transition-colors hover:bg-elev"
     >
       <Poster tmdbId={s.tmdb_id} kind={s.kind} size="md" alt={s.torrent_name ?? ""} />
@@ -102,7 +103,8 @@ function HistoryRow({ h }: { h: WatchHistoryEntry }) {
   const progress = pct(h.position_seconds, h.duration_seconds);
   return (
     <Link
-      to={`/watch/${h.infohash}/${h.file_idx}`}
+      to="/watch/$infohash/$idx"
+      params={{ infohash: h.infohash, idx: String(h.file_idx) }}
       className="flex items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-elev"
     >
       <Poster tmdbId={h.tmdb_id} kind={h.kind} size="xs" alt={h.torrent_name} />

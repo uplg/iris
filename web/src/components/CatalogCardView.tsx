@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useNavigate } from "react-router";
+import { useNavigate } from "@tanstack/react-router";
 
 import { MediaCard } from "@/components/MediaCard";
 import { PreviewDialog } from "@/components/PreviewDialog";
@@ -37,13 +37,13 @@ export function CatalogCardView({ card }: { card: CatalogCard }) {
 
   const onClick = () => {
     if (isSeries) {
-      navigate(`/collection/${card.collection_id}`);
+      navigate({ to: "/collection/$id", params: { id: String(card.collection_id) } });
     } else if (hasRelease) {
       setPreview(true);
     } else {
       // Lazy recommendation — no resolved release yet. Let the user pick one
       // from search (which previews each before download).
-      navigate(`/search?q=${encodeURIComponent(card.title)}`);
+      navigate({ to: "/search", search: { q: card.title } });
     }
   };
 

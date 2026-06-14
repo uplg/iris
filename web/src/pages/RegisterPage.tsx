@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
+import { getRouteApi, Link, Navigate, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 import { Brand } from "@/components/Brand";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -10,10 +10,12 @@ import { Label } from "@/components/ui/label";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
 
+const registerRoute = getRouteApi("/register");
+
 export function RegisterPage() {
   const auth = useAuth();
   const navigate = useNavigate();
-  const [params] = useSearchParams();
+  const { token: tokenParam } = registerRoute.useSearch();
   const [token, setToken] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -21,9 +23,8 @@ export function RegisterPage() {
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
-    const t = params.get("token");
-    if (t) setToken(t);
-  }, [params]);
+    if (tokenParam) setToken(tokenParam);
+  }, [tokenParam]);
 
   if (auth.status === "authenticated") {
     return <Navigate to="/" replace />;
@@ -35,7 +36,7 @@ export function RegisterPage() {
     setError(null);
     try {
       await auth.register(token, email, password);
-      navigate("/", { replace: true });
+      navigate({ to: "/", replace: true });
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "registration failed");
     } finally {
