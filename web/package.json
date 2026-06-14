@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "sync-vendor": "cp node_modules/@jellyfin/libass-wasm/dist/js/subtitles-octopus.js node_modules/@jellyfin/libass-wasm/dist/js/subtitles-octopus-worker.js node_modules/@jellyfin/libass-wasm/dist/js/subtitles-octopus-worker.wasm node_modules/@jellyfin/libass-wasm/dist/js/subtitles-octopus-worker-legacy.js node_modules/@jellyfin/libass-wasm/dist/js/default.woff2 public/libass/",
+    "sync-vendor": "bun scripts/sync-vendor.mjs",
+    "sync-vendor:check": "bun scripts/sync-vendor.mjs --check",
     "predev": "bun run sync-vendor",
     "prebuild": "bun run sync-vendor",
     "build": "tsc -b && vite build",

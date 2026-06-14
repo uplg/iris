@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# Vendored static assets — regenerated from node_modules by `bun run sync-vendor`
+# (predev/prebuild). Never committed, so a committed copy can't drift from the
+# installed package version. See scripts/sync-vendor.mjs.
+public/libass/
+public/hevcjs/
+public/libpgs/
+public/libavjs/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

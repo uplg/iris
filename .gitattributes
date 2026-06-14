@@ -1,14 +1,10 @@
 # GitHub Linguist hints — keep language stats honest.
 #
-# Everything under web/public/<vendored-lib>/ is third-party code we
-# ship verbatim from npm packages (libass-wasm / SubtitlesOctopus,
-# libav.js, hevc.js, libpgs). Without these markers, Linguist sums
-# their ~8 MB of minified JS / WebAssembly into our totals and tags
-# the repo as "JavaScript".
-web/public/libass/**     linguist-vendored
-web/public/libavjs/**    linguist-vendored
-web/public/hevcjs/**     linguist-vendored
-web/public/libpgs/**     linguist-vendored
+# The vendored third-party WASM workers (libass-wasm / SubtitlesOctopus,
+# libav.js, hevc.js, libpgs) are no longer committed: they're gitignored and
+# regenerated from node_modules at build time (web/scripts/sync-vendor.mjs), so
+# Linguist never sees their ~8 MB of minified JS / WebAssembly and no
+# `linguist-vendored` markers are needed.
 
 # Lockfiles aren't authored code. Linguist treats most of these as
 # `linguist-generated` via its defaults, but pin them explicitly so
