@@ -391,6 +391,17 @@ private fun ReadyPlayer(
         maxOf((startPositionSec * 1000).toLong(), fallbackResumeMs).coerceAtLeast(0)
     }
 
+    // Authoritative film duration from ffprobe (the source). A still-growing
+    // HLS EVENT transcode reports `player.duration` as only the encoder's edge,
+    // so using it for saved progress / completion would record a position that
+    // is a % of "what's transcoded so far", not of the whole film — wrong
+    // resume points, premature "completed", a bogus continue-watching bar.
+    // Prefer this everywhere; fall back to `player.duration` only when ffprobe
+    // gave no duration (then they're equal anyway for the seekable-VOD paths).
+    val filmDurationMs = remember(probe) {
+        ((probe.durationSeconds ?: 0.0) * 1000).toLong()
+    }
+
     // The GROWING server transcode (`needsServerTranscode`) streams as an HLS
     // EVENT playlist that only lists segments up to the encoder's edge. Seeking
     // to a resume position past that edge would make Media3 wait for the encode
@@ -565,7 +576,8 @@ private fun ReadyPlayer(
                 val (pos, dur) = kotlinx.coroutines.withContext(
                     kotlinx.coroutines.Dispatchers.Main,
                 ) {
-                    player.currentPosition to player.duration.takeIf { it > 0 }
+                    player.currentPosition to
+                        (filmDurationMs.takeIf { it > 0 } ?: player.duration.takeIf { it > 0 })
                 }
                 runCatching {
                     container.apiFor(serverUrl).saveProgress(
@@ -630,7 +642,7 @@ private fun ReadyPlayer(
             ) {
                 if (reason != androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK) return
                 pendingSeekSave.set(true)
-                val durMs = player.duration
+                val durMs = filmDurationMs.takeIf { it > 0 } ?: player.duration
                 if (durMs <= 0 || fileSizeBytes <= 0) return
                 val playheadS = newPosition.positionMs / 1000.0
                 val byteOffset = (
@@ -827,10 +839,13 @@ private fun ReadyPlayer(
     DisposableEffect(player) {
         val handler = android.os.Handler(android.os.Looper.getMainLooper())
         var lastSavedMs: Long = (startPositionSec * 1000).toLong()
-        var durationMs: Long = -1
+        // Real film duration (ffprobe) — NOT the growing transcode's edge.
+        var durationMs: Long = filmDurationMs.takeIf { it > 0 } ?: -1
         val tick = object : Runnable {
             override fun run() {
-                if (player.duration > 0) durationMs = player.duration
+                // Only fall back to the player's (live-window) duration when
+                // ffprobe gave us nothing.
+                if (durationMs <= 0 && player.duration > 0) durationMs = player.duration
                 val pos = player.currentPosition
                 if (pos > 0) {
                     onPositionUpdate(pos / 1000.0)
@@ -875,7 +890,7 @@ private fun ReadyPlayer(
         onDispose {
             handler.removeCallbacksAndMessages(null)
             val pos = player.currentPosition
-            val dur = player.duration.takeIf { it > 0 }
+            val dur = filmDurationMs.takeIf { it > 0 } ?: player.duration.takeIf { it > 0 }
             if (pos > 0) onPositionUpdate(pos / 1000.0)
             val audioIdx = currentAudioIdxRef.get()
             val subIdx = currentSubIdxRef.get()
