@@ -840,6 +840,18 @@ async fn remux_one(
     encode: &EncodeConfig,
     job: Arc<JobState>,
 ) -> Result<(), RemuxError> {
+    // Transcode (catch-up) path: STREAM the HLS-CMAF straight out of ffmpeg
+    // into `out_dir` (EVENT playlist), so the player starts after the first
+    // few seconds while ffmpeg keeps encoding ahead — instead of encoding the
+    // whole file before anything plays (the two-stage path below). We re-encode
+    // here anyway, so shaka's browser-grade CODECS strings buy nothing; this
+    // path is TV/ExoPlayer-only, so we skip shaka entirely.
+    if matches!(plan.video, VideoMode::Transcode { .. }) {
+        return run_ffmpeg_hls(source, out_dir, plan, encode, log_path, job).await;
+    }
+
+    // Stream-copy path: two stages. Copy is ~instant, so the temp MP4 → shaka
+    // step (which emits the cleanest browser-MSE manifests) costs nothing.
     let temp_dir = out_dir.join(".tmp");
     if tokio::fs::try_exists(&temp_dir).await.unwrap_or(false) {
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
@@ -1056,6 +1068,168 @@ async fn run_ffmpeg(
     }
     // ffmpeg done — pin progress at 100 % so the API returns a clean
     // `1.0` until the shaka stage flips ready.
+    let total = job.total_ms.load(Ordering::Acquire);
+    if total > 0 {
+        job.encoded_ms.store(total, Ordering::Release);
+    }
+    Ok(())
+}
+
+/// Streaming transcode: ONE ffmpeg pass that re-encodes the video (per
+/// `plan.video`) and writes HLS-CMAF straight into `out_dir`. The EVENT
+/// playlist + incrementally-appended fmp4 segments let the player start
+/// within seconds while ffmpeg keeps encoding ahead — the whole point versus
+/// the two-stage "encode the entire file, then package" path. Output
+/// filenames mirror the shaka layout (`v_init.mp4`, `v_<n>.m4s`,
+/// `<name>_init.mp4`, `<name>.m3u8`, `master.m3u8`), so the readiness watcher
+/// and asset serving need no changes. TV/ExoPlayer-only (the catch-up path),
+/// so shaka's stricter browser-MSE manifests aren't needed.
+#[allow(clippy::too_many_lines)] // one linear ffmpeg command builder
+async fn run_ffmpeg_hls(
+    source: &Path,
+    out_dir: &Path,
+    plan: &RemuxPlan,
+    encode: &EncodeConfig,
+    log_path: &Path,
+    job: Arc<JobState>,
+) -> Result<(), RemuxError> {
+    let VideoMode::Transcode {
+        codec,
+        ten_bit,
+        tonemap,
+    } = plan.video
+    else {
+        return Err(RemuxError::Failed(
+            -1,
+            "run_ffmpeg_hls called for a non-transcode plan".to_string(),
+        ));
+    };
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args(["-progress", "pipe:1"])
+        .arg("-i")
+        .arg(source);
+
+    // Video: 1080p-capped re-encode, optional HDR → SDR tonemap, keyframe
+    // every 2 s so HLS segments are self-contained.
+    cmd.args(["-map", "0:V:0"]);
+    let mut filters: Vec<&str> = Vec::new();
+    if tonemap {
+        filters.push(
+            "zscale=t=linear:npl=100,format=gbrpf32le,tonemap=hable:desat=0,\
+             zscale=p=bt709:t=bt709:m=bt709:r=tv",
+        );
+    }
+    filters.push("scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease");
+    let vf = filters.join(",");
+    cmd.args(["-vf", vf.as_str()]);
+    cmd.args(["-force_key_frames", "expr:gte(t,n_forced*2)"]);
+    let crf = encode.crf.to_string();
+    match codec {
+        VideoCodec::H264 => {
+            cmd.args([
+                "-c:v",
+                "libx264",
+                "-preset",
+                encode.preset.as_str(),
+                "-crf",
+                crf.as_str(),
+                "-pix_fmt",
+                "yuv420p",
+                "-profile:v",
+                "high",
+                "-level:v",
+                "4.1",
+            ]);
+        }
+        VideoCodec::Hevc => {
+            let pix_fmt = if ten_bit { "yuv420p10le" } else { "yuv420p" };
+            cmd.args([
+                "-c:v",
+                "libx265",
+                "-preset",
+                encode.preset.as_str(),
+                "-crf",
+                crf.as_str(),
+                "-pix_fmt",
+                pix_fmt,
+                "-tag:v",
+                "hvc1",
+                "-x265-params",
+                "open-gop=0",
+            ]);
+        }
+    }
+
+    // Audio: one rendition per plan entry — copied (browser/TV-native) or
+    // transcoded to AAC stereo. Per-stream codec specifiers (`-c:a:<n>`)
+    // because everything goes into one HLS output context.
+    for (i, a) in plan.audio.iter().enumerate() {
+        cmd.args(["-map", &format!("0:a:{}", a.source_idx)]);
+        match a.codec {
+            AudioCodec::Copy => {
+                cmd.arg(format!("-c:a:{i}")).arg("copy");
+            }
+            AudioCodec::Aac => {
+                cmd.arg(format!("-c:a:{i}"))
+                    .arg("aac")
+                    .arg(format!("-b:a:{i}"))
+                    .arg("192k")
+                    .arg(format!("-ac:a:{i}"))
+                    .arg("2");
+            }
+        }
+    }
+
+    // HLS-CMAF: EVENT playlist (player follows ~live), fmp4 segments, and
+    // shaka-matching filenames (`%v` ← the per-stream `name:` in the var map).
+    cmd.args(["-f", "hls"])
+        .args(["-hls_time", "6"])
+        .args(["-hls_segment_type", "fmp4"])
+        .args(["-hls_playlist_type", "event"])
+        .args(["-hls_flags", "independent_segments"])
+        .args(["-hls_fmp4_init_filename", "%v_init.mp4"])
+        .arg("-hls_segment_filename")
+        .arg(out_dir.join("%v_%d.m4s"))
+        .args(["-master_pl_name", MASTER_PLAYLIST]);
+    let mut var_map: Vec<String> = vec![format!("v:0,agroup:aud,name:{VIDEO_VARIANT}")];
+    for (i, a) in plan.audio.iter().enumerate() {
+        let mut entry = format!("a:{i},agroup:aud,name:{},language:{}", a.name, a.language);
+        if a.default {
+            entry.push_str(",default:yes");
+        }
+        var_map.push(entry);
+    }
+    cmd.arg("-var_stream_map").arg(var_map.join(" "));
+    cmd.arg(out_dir.join("%v.m3u8"));
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    tracing::info!(
+        source = %source.display(),
+        renditions = plan.audio.len() + 1,
+        "remuxer: spawning streaming transcode",
+    );
+
+    let mut child = cmd.spawn()?;
+    if let Some(stderr) = child.stderr.take() {
+        let log = log_path.to_path_buf();
+        tokio::spawn(async move { drain_stderr_to_log(stderr, log).await });
+    }
+    if let Some(stdout) = child.stdout.take() {
+        let job = job.clone();
+        tokio::spawn(async move { drain_progress_into_job(stdout, job).await });
+    }
+    let status = child.wait().await?;
+    if !status.success() {
+        return Err(RemuxError::Failed(
+            status.code().unwrap_or(-1),
+            log_path.display().to_string(),
+        ));
+    }
     let total = job.total_ms.load(Ordering::Acquire);
     if total > 0 {
         job.encoded_ms.store(total, Ordering::Release);

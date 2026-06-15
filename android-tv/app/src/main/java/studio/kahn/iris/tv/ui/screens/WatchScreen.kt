@@ -1017,14 +1017,14 @@ private fun ReadyPlayer(
             }
         }
 
-        // Tier-F overlay: when the error listener has swapped us
-        // onto the server's HLS remux, poll `/play/status` and
-        // surface the remuxer's progress so the user understands
-        // why playback stalled for a moment. The overlay hides
-        // automatically once the server reports `ready: true` —
-        // the player itself is already preparing the manifest by
-        // then so playback resumes on its own.
-        if (useRemuxFallback) {
+        // Remux/transcode overlay: poll `/play/status` and surface the
+        // server's progress while it builds the HLS head. Shown both when the
+        // error listener swapped us onto the remux (`useRemuxFallback`) AND
+        // when we proactively routed a heavy 10-bit AV1 to the server's
+        // transcode (`needsServerTranscode`) — the latter can take a few
+        // seconds of encoding before the first segment, so the user needs the
+        // progress. Hides automatically once the server reports `ready: true`.
+        if (useRemuxFallback || needsServerTranscode) {
             Box(modifier = Modifier.align(Alignment.Center)) {
                 RemuxFallbackOverlay(
                     container = container,

@@ -73,10 +73,15 @@ impl Default for TranscodeConfig {
 }
 
 fn default_transcode_codec() -> String {
-    "hevc".to_string()
+    // H.264 by default: `libx264` encodes several times faster than `libx265`,
+    // which a CPU-only server needs to stay AHEAD of real-time playback (the
+    // transcode streams into HLS as it encodes). HEVC is ~2× smaller on disk
+    // but only viable when the server has the headroom — flip `codec = "hevc"`
+    // then.
+    "h264".to_string()
 }
 fn default_transcode_preset() -> String {
-    "superfast".to_string()
+    "veryfast".to_string()
 }
 fn default_transcode_crf() -> u8 {
     26

@@ -63,15 +63,18 @@ invitation_ttl_secs = 604800
 # software. Everything else is stream-copied (zero re-encode). The output is
 # capped at 1080p and cached on disk like any other remux.
 #
-# codec: "hevc" (default — hardware-decoded by most TV chips incl. 10-bit, and
-#   ~2x smaller on disk) or "h264" (8-bit, but encodes much faster on a weak
-#   CPU-only server).
-codec = "hevc"
-# preset: libx264/libx265 -preset. On a CPU-only server this MUST encode
-# faster than real-time or HLS playback stalls (the player catches up to the
-# encoder). "superfast" suits an older Xeon; raise the quality (slower preset)
-# only if your server can sustain it.
-preset = "superfast"
+# The transcode STREAMS into HLS as it encodes (the player follows ~live), so
+# the encoder MUST stay ahead of real-time playback or it stalls.
+#
+# codec: "h264" (default — `libx264` encodes several times faster than x265, so
+#   a CPU-only server keeps up; 8-bit, ~2x bigger on disk) or "hevc"
+#   (hardware-decoded by most TV chips incl. 10-bit, ~2x smaller, but only
+#   viable if your server can sustain real-time x265).
+codec = "h264"
+# preset: libx264/libx265 -preset. "veryfast" gives a comfortable real-time
+# margin for H.264 on an older Xeon; slower presets = smaller files but risk
+# stalling. Drop to "ultrafast" if even veryfast can't keep up.
+preset = "veryfast"
 # crf: 0..=51, lower = better quality / larger files. 26 is a good size/quality
 # balance for the fallback path.
 crf = 26
