@@ -477,6 +477,9 @@ data class VideoStream(
     val codec: String,
     val width: Int? = null,
     val height: Int? = null,
+    /** Bits per component (8 / 10 / 12). Drives the server-transcode routing
+     *  for heavy 10-bit AV1 on boxes with no AV1 silicon. */
+    @SerialName("bit_depth") val bitDepth: Int? = null,
 )
 
 @Serializable

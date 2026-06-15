@@ -1,7 +1,6 @@
 package studio.kahn.iris.tv.data
 
 import android.content.Context
-import android.os.Handler
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -11,10 +10,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.Renderer
-import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.video.VideoRendererEventListener
 import okhttp3.OkHttpClient
 import studio.kahn.iris.tv.BuildConfig
 
@@ -43,33 +39,43 @@ fun buildPlayer(
     // anything Android handles natively but DTS / DTS-HD MA / TrueHD
     // / MLP go silent.
     //
-    // `EXTENSION_RENDERER_MODE_PREFER` puts the FFmpeg renderer
-    // BEFORE the platform `MediaCodecAudioRenderer`. We picked PREFER
-    // over the lighter-touch `ON` because some Android TV builds
-    // (notably the AVD emulator and some AFTV firmwares) register a
-    // MediaCodec that claims DTS support but produces silence at
-    // runtime — with mode ON, ExoPlayer trusts that claim and never
-    // falls through to FFmpeg, so playback is silent. With PREFER,
-    // FFmpeg handles every codec it supports; the platform renderer
-    // only sees codecs FFmpeg can't decode. CPU cost is negligible on
-    // modern Android TV silicon (~1–3 % for AAC stereo) and we're
-    // always plugged in.
+    // `EXTENSION_RENDERER_MODE_PREFER` puts the bundled software
+    // extensions BEFORE the platform `MediaCodec*Renderer`s — for both
+    // the FFmpeg audio decoder AND the dav1d AV1 video decoder (built by
+    // `scripts/build-{ffmpeg,av1}-ext.sh`). We need PREFER, not the
+    // lighter `ON`, for two distinct reasons:
     //
-    // BUT `setExtensionRendererMode` is global — PREFER also drags the
-    // bundled libgav1 *software* AV1 extension (app/libs/lib-decoder-av1)
-    // ahead of the device's *hardware* AV1 decoder. That makes AV1 play
-    // in software and stutter on hardware that decodes it natively (the
-    // reason the same file is smooth in a browser). `IrisRenderersFactory`
-    // below keeps PREFER for audio but forces ON for video, so hardware
-    // video decoders win and libgav1 is a fallback only (boxes without
-    // AV1 silicon).
+    //   - Audio: some Android TV builds (AVD emulator, some AFTV
+    //     firmwares) register a MediaCodec that claims DTS support but
+    //     outputs silence; with ON, ExoPlayer trusts the claim and never
+    //     falls through to FFmpeg. PREFER lets FFmpeg handle everything
+    //     it supports; the platform renderer only sees the rest.
+    //
+    //   - Video (AV1): many TV boxes have an AV1 hardware decoder that is
+    //     8-bit-only (their HEVC path does 10-bit, AV1 does not). With ON
+    //     the platform renderer is tried first for a 10-bit AV1 stream,
+    //     reports support, then fails at runtime with
+    //     DECODING_FORMAT_EXCEEDS_CAPABILITIES / DECODER_INIT_FAILED —
+    //     and `isRemuxableError` treats that as a cue to bounce onto the
+    //     server HLS remux (`/play/master.m3u8`) instead of decoding.
+    //     PREFER routes ALL AV1 straight to dav1d (fast software, handles
+    //     8- and 10-bit), so AV1 just plays. dav1d only ever claims AV1,
+    //     so HEVC / H.264 / VP9 still hardware-decode via the platform.
+    //     (PREFER costs the hardware AV1 path for 8-bit AV1, but dav1d is
+    //     fast and the box is mains-powered — a fair trade for never
+    //     stuttering or bouncing to remux.)
+    //
+    // NOTE: the AV1 AAR MUST contain native `libdav1dJNI.so` — a
+    // classes-only AAR (the dav1d build was skipped) leaves the renderer
+    // inert and AV1 silently falls back to the slow platform decoder.
+    // `build-av1-ext.sh` guards against shipping a hollow AAR.
     //
     // `setEnableDecoderFallback(true)` is belt-and-braces: if the
     // selected renderer hits a runtime init failure (corrupted .so,
     // missing symbol on an exotic ABI, …), ExoPlayer transparently
     // retries with the next renderer instead of bubbling an error to
     // the user.
-    val renderersFactory = IrisRenderersFactory(context)
+    val renderersFactory = DefaultRenderersFactory(context)
         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
         .setEnableDecoderFallback(true)
 
@@ -99,46 +105,6 @@ fun buildPlayer(
             // discover surround capabilities via `AudioCapabilities`
             // and route passthrough correctly.
         }
-}
-
-/**
- * `DefaultRenderersFactory` that keeps the factory's extension-renderer
- * mode (`PREFER`) for AUDIO — so the FFmpeg extension still wins over a
- * platform decoder that lies about DTS/TrueHD — but forces ON for VIDEO.
- *
- * `setExtensionRendererMode` is a single global knob; under `PREFER` it
- * also inserts the bundled libgav1 *software* AV1 decoder ahead of the
- * device's *hardware* AV1 decoder. The result is AV1 decoded in software
- * even on silicon that handles it natively → dropped frames / stutter
- * (while the very same file plays fine in a browser that uses the GPU).
- * `buildVideoRenderers` receives the mode as a parameter, so overriding
- * just this one call flips video to ON (platform/hardware decoders first,
- * libgav1 only as a fallback for boxes with no AV1 silicon) without
- * touching audio.
- */
-@UnstableApi
-private class IrisRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
-    override fun buildVideoRenderers(
-        context: Context,
-        extensionRendererMode: Int,
-        mediaCodecSelector: MediaCodecSelector,
-        enableDecoderFallback: Boolean,
-        eventHandler: Handler,
-        eventListener: VideoRendererEventListener,
-        allowedVideoJoiningTimeMs: Long,
-        out: ArrayList<Renderer>,
-    ) {
-        super.buildVideoRenderers(
-            context,
-            DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON,
-            mediaCodecSelector,
-            enableDecoderFallback,
-            eventHandler,
-            eventListener,
-            allowedVideoJoiningTimeMs,
-            out,
-        )
-    }
 }
 
 /**

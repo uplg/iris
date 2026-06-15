@@ -653,7 +653,48 @@ async fn prewarm_default_remux(state: &AppState, infohash: &str) {
 /// copy anyway).
 ///
 /// Names disambiguate sources sharing a language tag: `fre`, `fre2`, …
-fn build_remux_plan(probe: &iris_media::MediaProbe) -> iris_media::RemuxPlan {
+/// Decide how to treat the video stream for `key`. The catch-up transcode
+/// fires only when the client *explicitly* advertises software-only decode of
+/// the source codec (`av1-sw`) AND the content is heavy (10-bit) — the case
+/// where a box with no AV1 silicon (e.g. Amlogic S905X2) stutters on a 1080p
+/// 10-bit AV1 in software. Everything else stream-copies, so legacy clients
+/// (bare `vdec=…,av1`) and the caps-less prewarm path are never transcoded.
+fn decide_video_mode(
+    probe: &iris_media::MediaProbe,
+    caps: &iris_caps::ClientCapabilities,
+    transcode: &iris_config::TranscodeConfig,
+) -> iris_media::VideoMode {
+    let Some(v) = probe.video.first() else {
+        return iris_media::VideoMode::Copy;
+    };
+    let codec = v.codec.to_ascii_lowercase();
+    let ten_bit_source = v.bit_depth.is_some_and(|d| d >= 10);
+    let needs_transcode = codec == "av1" && caps.has_video_decoder("av1-sw") && ten_bit_source;
+    if !needs_transcode {
+        return iris_media::VideoMode::Copy;
+    }
+    let target = if transcode.codec.eq_ignore_ascii_case("h264") {
+        iris_media::VideoCodec::H264
+    } else {
+        iris_media::VideoCodec::Hevc
+    };
+    // H.264 is 8-bit only; HEVC keeps 10-bit only when the operator opts in.
+    let ten_bit = matches!(target, iris_media::VideoCodec::Hevc) && transcode.ten_bit;
+    // We never carry HDR metadata through the transcode, so flatten any HDR
+    // (PQ/HLG) source to BT.709 SDR — the box gets a clean, correct picture.
+    let tonemap = !matches!(v.hdr, iris_media::HdrKind::None);
+    iris_media::VideoMode::Transcode {
+        codec: target,
+        ten_bit,
+        tonemap,
+    }
+}
+
+fn build_remux_plan(
+    probe: &iris_media::MediaProbe,
+    caps: &iris_caps::ClientCapabilities,
+    transcode: &iris_config::TranscodeConfig,
+) -> iris_media::RemuxPlan {
     use iris_media::{AudioCodec, AudioRendition};
     let mut renditions: Vec<AudioRendition> = Vec::new();
     let mut lang_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -698,10 +739,7 @@ fn build_remux_plan(probe: &iris_media::MediaProbe) -> iris_media::RemuxPlan {
         audio: renditions,
         source_video_codec: probe.video.first().map(|v| v.codec.clone()),
         source_duration_secs: probe.duration_seconds,
-        // Default: stream-copy video. The caps catch-up path flips this
-        // to `TranscodeH264` only for clients that genuinely can't
-        // decode the source — wired separately (task #4).
-        video: iris_media::VideoMode::Copy,
+        video: decide_video_mode(probe, caps, transcode),
     }
 }
 
@@ -1429,7 +1467,14 @@ async fn prewarm_remux_file(state: &AppState, infohash: &str, idx: usize) {
         }
     };
     let key = format!("{infohash}_{idx}");
-    let plan = build_remux_plan(&probe);
+    // Prewarm is speculative + caps-less, so it always builds the
+    // stream-copy variant (no transcode). The real `/play` request carries
+    // `Iris-Caps` and builds the transcoded variant under its own cache key.
+    let plan = build_remux_plan(
+        &probe,
+        &iris_caps::ClientCapabilities::default(),
+        &state.cfg().transcode,
+    );
     if let Err(e) = state.remuxer().ensure_remuxed(&key, &path, plan).await {
         tracing::warn!(error = %e, infohash, idx, "fallback prewarm: remux failed");
         return;
@@ -1467,16 +1512,14 @@ pub struct PlayStatus {
 pub(crate) async fn play_status(
     State(state): State<AppState>,
     _user: AuthUser,
+    axum::Extension(caps): axum::Extension<crate::middleware::IrisCaps>,
     Path((infohash, idx)): Path<(String, usize)>,
 ) -> ApiResult<Json<PlayStatus>> {
     let infohash = infohash.to_ascii_lowercase();
     iris_db::torrents::find_by_infohash(state.db(), &infohash)
         .await?
         .ok_or(ApiError::NotFound)?;
-    // Validate we know about this file even though we no longer touch
-    // the raw bytes here (the lazy-remux path makes them irrelevant
-    // until /play/master.m3u8 is hit).
-    let _ = state
+    let path = state
         .engine()
         .file_path(&infohash, idx)
         .map_err(map_engine_err)?;
@@ -1492,7 +1535,21 @@ pub(crate) async fn play_status(
         }));
     }
 
-    let key = format!("{infohash}_{idx}");
+    // Caps-aware cache key: a software-AV1 client polls the progress of the
+    // transcoded variant (`..._hevc`) it will actually play, not the
+    // never-built stream-copy one. Falls back to the bare key if the probe
+    // isn't available yet (the master.m3u8 request will probe + build).
+    let key = match state
+        .probes()
+        .get_or_probe(&infohash, idx, &path, true)
+        .await
+    {
+        Ok(probe) => {
+            let plan = build_remux_plan(&probe, &caps.0, &state.cfg().transcode);
+            format!("{infohash}_{idx}{}", plan.cache_suffix())
+        }
+        Err(_) => format!("{infohash}_{idx}"),
+    };
     let master = state.remuxer().master_path(&key);
     if let Ok(meta) = tokio::fs::metadata(&master).await
         && meta.is_file()
@@ -1871,20 +1928,30 @@ pub(crate) async fn play_asset(
         )));
     }
 
-    let key = format!("{infohash}_{idx}");
+    // The cache variant depends on the client's caps: a software-AV1 box gets
+    // a transcoded variant under a distinct key (`..._hevc`). Probe + plan are
+    // computed for EVERY asset request, not just the master, so the segment
+    // requests that follow resolve the SAME suffixed cache dir. The probe is
+    // cached, so this stays cheap after the first hit.
+    let caps = req
+        .extensions()
+        .get::<crate::middleware::IrisCaps>()
+        .map(|c| c.0.clone())
+        .unwrap_or_default();
+    // `play_asset` already rejected unfinished torrents above, so the remux
+    // always probes a complete file.
+    let probe = state
+        .probes()
+        .get_or_probe(&infohash, idx, &path, true)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
+    let plan = build_remux_plan(&probe, &caps, &state.cfg().transcode);
+    let key = format!("{infohash}_{idx}{}", plan.cache_suffix());
 
     if asset == iris_media::MASTER_PLAYLIST {
-        // Probe runs the TMDB-runtime verification side-effect that the UI
-        // relies on for poster / metadata gating. Cached, so cheap on repeat.
-        // `play_asset` already rejected unfinished torrents above, so
-        // the remux always probes a complete file.
-        let probe = state
-            .probes()
-            .get_or_probe(&infohash, idx, &path, true)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("ffprobe: {e}")))?;
+        // The probe above also drives the TMDB-runtime verification side-effect
+        // the UI relies on for poster / metadata gating.
         verify_tmdb_match(&state, &infohash, probe.duration_seconds).await;
-        let plan = build_remux_plan(&probe);
         state
             .remuxer()
             .ensure_remuxed(&key, &path, plan)

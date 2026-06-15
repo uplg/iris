@@ -344,21 +344,36 @@ private fun ReadyPlayer(
     // `startPositionSec`) when no fallback has happened yet.
     var fallbackResumeMs by remember(infohash, fileIdx) { mutableLongStateOf(0L) }
 
-    val playUrl = remember(serverUrl, infohash, fileIdx, useRemuxFallback) {
-        val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
-        if (useRemuxFallback) {
-            // Tier F — server-side HLS remux. `play/master.m3u8`
-            // wraps the source video in fragmented MP4 + audio in
-            // AAC, sidesteps Media3's MKV demuxer + the picky
-            // native codecs that refused the raw stream.
-            "${base}api/torrents/$infohash/files/$fileIdx/play/master.m3u8"
-        } else {
-            // Default: raw source bytes — Media3 demuxes the
-            // container in-process and surfaces every audio +
-            // subtitle track (incl. PGS bitmap subs from Blu-rays).
-            "${base}api/torrents/$infohash/files/$fileIdx/stream"
-        }
+    // Proactive route to the server transcode. A 10-bit AV1 file on a box with
+    // no AV1 silicon (e.g. Amlogic S905X2) can't be hardware-decoded and
+    // stutters in software, so play the server's HEVC re-encode from the start
+    // instead of direct-playing /stream and bouncing on the stutter. Mirrors
+    // the server's `decide_video_mode`; every other case direct-plays.
+    val needsServerTranscode = remember(probe) {
+        val v = probe.video.firstOrNull()
+        v != null &&
+            v.codec.equals("av1", ignoreCase = true) &&
+            (v.bitDepth ?: 8) >= 10 &&
+            !studio.kahn.iris.tv.data.IrisCaps.hasHardwareDecoder("av1")
     }
+
+    val playUrl =
+        remember(serverUrl, infohash, fileIdx, useRemuxFallback, needsServerTranscode) {
+            val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
+            if (useRemuxFallback || needsServerTranscode) {
+                // Server-side HLS remux/transcode. `play/master.m3u8` wraps the
+                // source video in fragmented MP4 + audio in AAC (and re-encodes
+                // the video to a codec the box decodes in hardware when the
+                // client asked for it via `Iris-Caps`), sidestepping Media3's
+                // MKV demuxer + the picky native codecs that refused /stream.
+                "${base}api/torrents/$infohash/files/$fileIdx/play/master.m3u8"
+            } else {
+                // Default: raw source bytes — Media3 demuxes the
+                // container in-process and surfaces every audio +
+                // subtitle track (incl. PGS bitmap subs from Blu-rays).
+                "${base}api/torrents/$infohash/files/$fileIdx/stream"
+            }
+        }
 
     // No more external subtitle injection — the source MKV / MP4
     // already contains every subtitle track and Media3 has parsers

@@ -32,7 +32,54 @@ pub struct AppConfig {
     #[serde(default)]
     pub discovery: DiscoveryConfig,
     #[serde(default)]
+    pub transcode: TranscodeConfig,
+    #[serde(default)]
     pub providers_file: Option<PathBuf>,
+}
+
+/// Server-side encode settings for the "catch-up" transcode path — used when
+/// a client only software-decodes the source video codec (e.g. AV1 on a TV
+/// box with no AV1 silicon) and the content is heavy (10-bit). The server
+/// re-encodes to a codec the client hardware-decodes, capped at 1080p. On a
+/// CPU-only server the preset MUST stay ahead of real-time playback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscodeConfig {
+    /// Target codec: `"hevc"` (default — hardware-decoded by most TV chips,
+    /// keeps 10-bit, ~2× smaller) or `"h264"` (8-bit, encodes much faster).
+    #[serde(default = "default_transcode_codec")]
+    pub codec: String,
+    /// `libx264` / `libx265` `-preset`. Default `"superfast"`.
+    #[serde(default = "default_transcode_preset")]
+    pub preset: String,
+    /// `-crf` (0..=51). Lower = better quality / larger. Default `26`.
+    #[serde(default = "default_transcode_crf")]
+    pub crf: u8,
+    /// Keep a 10-bit pipeline (HEVC only). `false` (default) = 8-bit, which
+    /// encodes faster + smaller and is invisible for SDR sources; `true`
+    /// preserves the source's 10-bit precision.
+    #[serde(default)]
+    pub ten_bit: bool,
+}
+
+impl Default for TranscodeConfig {
+    fn default() -> Self {
+        Self {
+            codec: default_transcode_codec(),
+            preset: default_transcode_preset(),
+            crf: default_transcode_crf(),
+            ten_bit: false,
+        }
+    }
+}
+
+fn default_transcode_codec() -> String {
+    "hevc".to_string()
+}
+fn default_transcode_preset() -> String {
+    "superfast".to_string()
+}
+fn default_transcode_crf() -> u8 {
+    26
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

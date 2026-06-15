@@ -54,3 +54,28 @@ invitation_ttl_secs = 604800
 # [auth.bootstrap_admin]
 # email = "admin@iris.local"
 # password = "change-me-immediately"
+
+[transcode]
+# Server-side "catch-up" transcode. Iris only re-encodes when a client tells
+# it (via Iris-Caps `av1-sw`) that it can ONLY software-decode the source
+# codec AND the content is heavy (10-bit) — e.g. a 1080p 10-bit AV1 file on a
+# TV box with no AV1 silicon (Amlogic S905X2 & co), which stutters in
+# software. Everything else is stream-copied (zero re-encode). The output is
+# capped at 1080p and cached on disk like any other remux.
+#
+# codec: "hevc" (default — hardware-decoded by most TV chips incl. 10-bit, and
+#   ~2x smaller on disk) or "h264" (8-bit, but encodes much faster on a weak
+#   CPU-only server).
+codec = "hevc"
+# preset: libx264/libx265 -preset. On a CPU-only server this MUST encode
+# faster than real-time or HLS playback stalls (the player catches up to the
+# encoder). "superfast" suits an older Xeon; raise the quality (slower preset)
+# only if your server can sustain it.
+preset = "superfast"
+# crf: 0..=51, lower = better quality / larger files. 26 is a good size/quality
+# balance for the fallback path.
+crf = 26
+# ten_bit: keep a 10-bit pipeline (HEVC only). false (default) encodes 8-bit —
+# faster, smaller, and invisible for SDR sources. true preserves the source's
+# 10-bit precision at some encode-speed + size cost.
+ten_bit = false

@@ -184,28 +184,58 @@ pub struct RemuxPlan {
     pub video: VideoMode,
 }
 
+/// Target codec for a video re-encode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoCodec {
+    /// `libx264`. 8-bit only; the universal Android / browser baseline.
+    H264,
+    /// `libx265`. Hardware-decoded by most TV chips (incl. 10-bit) and
+    /// ~2× smaller than H.264 — the default for the AV1-catch-up path.
+    Hevc,
+}
+
 /// What `run_ffmpeg` does with the video stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoMode {
     /// Stream-copy the source video (no re-encode). Original behaviour.
     Copy,
-    /// Re-encode to H.264 High@4.1 8-bit 4:2:0, capped at 1080p — the
-    /// universal Android baseline. `tonemap` flattens an HDR (PQ/HLG)
-    /// source to BT.709 SDR (an 8-bit H.264 output can't carry HDR, so
-    /// without this the picture comes out washed-out / too dark).
-    TranscodeH264 { tonemap: bool },
+    /// Re-encode the source — capped at 1080p — to a codec the client can
+    /// hardware-decode. Used by the caps catch-up path when a client only
+    /// software-decodes the source codec (e.g. AV1 on a box with no AV1
+    /// silicon). `ten_bit` keeps a 10-bit pipeline (`yuv420p10le`, HEVC
+    /// only); `tonemap` flattens an HDR (PQ/HLG) source to BT.709 SDR
+    /// (needed when the target can't carry HDR, e.g. 8-bit output).
+    Transcode {
+        codec: VideoCodec,
+        ten_bit: bool,
+        tonemap: bool,
+    },
 }
 
 impl RemuxPlan {
     /// Cache-dir discriminator. `Copy` keeps the bare `infohash_idx`
     /// key so every pre-existing cache entry (and the caps-unaware
-    /// `play_status` / prewarm key) stays valid — only the transcoded
-    /// variant gets a distinct suffix, and only when explicitly asked.
+    /// `play_status` / prewarm key) stays valid — only a transcoded
+    /// variant gets a distinct suffix, keyed by codec + bit depth so a
+    /// HEVC-10 cache can't be served to a client that asked for H.264.
     #[must_use]
     pub fn cache_suffix(&self) -> &'static str {
         match self.video {
             VideoMode::Copy => "",
-            VideoMode::TranscodeH264 { .. } => "_h264",
+            VideoMode::Transcode {
+                codec: VideoCodec::H264,
+                ..
+            } => "_h264",
+            VideoMode::Transcode {
+                codec: VideoCodec::Hevc,
+                ten_bit: false,
+                ..
+            } => "_hevc",
+            VideoMode::Transcode {
+                codec: VideoCodec::Hevc,
+                ten_bit: true,
+                ..
+            } => "_hevc10",
         }
     }
 }
@@ -254,6 +284,29 @@ impl RemuxPlan {
     }
 }
 
+/// Server-wide encoder settings for the transcode (catch-up) path, sourced
+/// from `[transcode]` in `config.toml`. Shared by every job.
+#[derive(Debug, Clone)]
+pub struct EncodeConfig {
+    /// `libx264` / `libx265` `-preset` (e.g. `"superfast"`). On a CPU-only
+    /// server this MUST encode faster than real-time, or HLS playback stalls
+    /// when the player catches up to the encoder head.
+    pub preset: String,
+    /// `-crf` (0..=51). Lower = better quality / larger files.
+    pub crf: u8,
+}
+
+impl Default for EncodeConfig {
+    fn default() -> Self {
+        // superfast/26 keeps a 2011-era CPU-only server ahead of 1080p
+        // playback while still ~2× smaller than H.264.
+        Self {
+            preset: "superfast".to_string(),
+            crf: 26,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RemuxManager {
     inner: Arc<Inner>,
@@ -261,6 +314,8 @@ pub struct RemuxManager {
 
 struct Inner {
     base_dir: PathBuf,
+    /// Encoder settings for `VideoMode::Transcode` (catch-up path).
+    encode: EncodeConfig,
     /// In-flight remux jobs keyed by `<infohash>_<file_idx>`. Multiple
     /// concurrent `ensure_remuxed` calls for the same key all attach to
     /// the same `JobState` and wake together.
@@ -310,9 +365,14 @@ pub struct JobInfo {
 
 impl RemuxManager {
     pub fn new(base_dir: PathBuf) -> Self {
+        Self::with_encode_config(base_dir, EncodeConfig::default())
+    }
+
+    pub fn with_encode_config(base_dir: PathBuf, encode: EncodeConfig) -> Self {
         Self {
             inner: Arc::new(Inner {
                 base_dir,
+                encode,
                 jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 failures: Arc::new(Mutex::new(std::collections::HashMap::new())),
             }),
@@ -585,6 +645,7 @@ impl RemuxManager {
         let log_path = self.log_path(&key);
         let jobs_handle = self.inner.jobs.clone();
         let failures_handle = self.inner.failures.clone();
+        let encode = self.inner.encode.clone();
 
         // Watcher: polls the cache dir until the master playlist + at
         // least the first segment of every declared variant are on disk.
@@ -617,7 +678,7 @@ impl RemuxManager {
                 job.failed.store(true, Ordering::Release);
                 failure_message = Some(format!("mkdir {}: {e}", dir.display()));
             } else {
-                match remux_one(&source, &dir, &log_path, &plan, job.clone()).await {
+                match remux_one(&source, &dir, &log_path, &plan, &encode, job.clone()).await {
                     Ok(()) => {
                         tracing::info!(
                             key = %key,
@@ -776,6 +837,7 @@ async fn remux_one(
     out_dir: &Path,
     log_path: &Path,
     plan: &RemuxPlan,
+    encode: &EncodeConfig,
     job: Arc<JobState>,
 ) -> Result<(), RemuxError> {
     let temp_dir = out_dir.join(".tmp");
@@ -789,7 +851,16 @@ async fn remux_one(
     let audio_tmps: Vec<PathBuf> = (0..plan.audio.len())
         .map(|i| temp_dir.join(format!("audio_{i}.mp4")))
         .collect();
-    run_ffmpeg(source, &video_tmp, &audio_tmps, plan, log_path, job.clone()).await?;
+    run_ffmpeg(
+        source,
+        &video_tmp,
+        &audio_tmps,
+        plan,
+        encode,
+        log_path,
+        job.clone(),
+    )
+    .await?;
 
     // Stage 2: shaka-packager → HLS-CMAF in out_dir.
     run_shaka(out_dir, &video_tmp, &audio_tmps, plan, log_path).await?;
@@ -799,11 +870,13 @@ async fn remux_one(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // one linear ffmpeg command builder
 async fn run_ffmpeg(
     source: &Path,
     video_tmp: &Path,
     audio_tmps: &[PathBuf],
     plan: &RemuxPlan,
+    encode: &EncodeConfig,
     log_path: &Path,
     job: Arc<JobState>,
 ) -> Result<(), RemuxError> {
@@ -822,52 +895,93 @@ async fn run_ffmpeg(
     // chapters propagate into the per-stream MP4 and the MP4 muxer
     // synthesises a `bin_data` chapter-text track, which then trips
     // up downstream demuxers (shaka picks up bogus timing hints).
-    cmd.args(["-map_chapters", "-1"])
-        .args(["-map", "0:V:0?", "-c:v", "copy"]);
-    if matches!(
+    let source_is_hevc = matches!(
         plan.source_video_codec
             .as_deref()
             .map(str::to_ascii_lowercase)
             .as_deref(),
         Some("hevc" | "h265")
-    ) {
-        // Force the `hvc1` MP4 brand — `hev1` (ffmpeg's default for
-        // HEVC) puts SPS/PPS in the bitstream and is rejected by
-        // browsers, which only decode HEVC when the parameter sets
-        // live in the `hvcC` box of the sample entry.
-        cmd.args(["-tag:v", "hvc1"]);
-        // Drop NAL units the cascaded MSE → VideoToolbox path on
-        // Chrome can't recover from at HLS segment boundaries:
-        //
-        //   62, 63 — UNSPEC slots Dolby uses for its RPU and EL
-        //            payload. Chrome routes HEVC through
-        //            VideoToolbox on macOS and VT chokes on
-        //            Profile 8.1 BL+RPU streams (we observed
-        //            `kVTVideoDecoderBadDataErr -17694`). Stripping
-        //            them reduces the stream to plain HDR10, which
-        //            VT decodes reliably. Combined with `-tag:v
-        //            hvc1` above (writes a clean `hvcC` instead of
-        //            `dvcC`) we don't advertise DV at the container
-        //            level either, so browsers don't even try to
-        //            engage their DV pipeline.
-        //
-        //    8,  9 — RASL_N / RASL_R: "Random Access Skipped
-        //            Leading" frames. x265 emits CRA keyframes
-        //            (type 21) instead of IDR (type 19/20) by
-        //            default, and CRAs can be followed by RASL
-        //            frames that reference the *previous* GOP. At
-        //            an HLS segment boundary the browser flushes
-        //            the decoder's reference buffer, so RASL
-        //            frames arrive without their refs and VT throws
-        //            the same -17694. The HEVC spec explicitly
-        //            allows discarding RASL on random access — we
-        //            do it preemptively so every segment is
-        //            self-contained. Costs ~0.1% frames at GOP
-        //            boundaries, invisible in playback.
-        //
-        // `filter_units` is a no-op when none of the listed types
-        // appear, so this is safe on closed-GOP / non-DV sources.
-        cmd.args(["-bsf:v", "filter_units=remove_types=8|9|62|63"]);
+    );
+    cmd.args(["-map_chapters", "-1"]).args(["-map", "0:V:0?"]);
+    match plan.video {
+        VideoMode::Copy => {
+            cmd.args(["-c:v", "copy"]);
+            if source_is_hevc {
+                // Force the `hvc1` MP4 brand — `hev1` (ffmpeg's default for
+                // HEVC) puts SPS/PPS in the bitstream and is rejected by
+                // browsers, which only decode HEVC when the parameter sets
+                // live in the `hvcC` box of the sample entry.
+                cmd.args(["-tag:v", "hvc1"]);
+                // Drop NAL units the cascaded MSE → VideoToolbox path on
+                // Chrome can't recover from at HLS segment boundaries
+                // (62/63 = Dolby RPU/EL → -17694 on VT; 8/9 = RASL after
+                // x265 open-GOP CRA). `filter_units` is a no-op when none
+                // appear, so it's safe on closed-GOP / non-DV sources.
+                cmd.args(["-bsf:v", "filter_units=remove_types=8|9|62|63"]);
+            }
+        }
+        VideoMode::Transcode {
+            codec,
+            ten_bit,
+            tonemap,
+        } => {
+            // Filter chain: optional HDR (PQ/HLG) → BT.709 SDR tonemap, then
+            // a never-upscale 1080p cap so a CPU-only encoder isn't handed a
+            // 4K source it can't keep ahead of playback.
+            let mut filters: Vec<&str> = Vec::new();
+            if tonemap {
+                filters.push(
+                    "zscale=t=linear:npl=100,format=gbrpf32le,tonemap=hable:desat=0,\
+                     zscale=p=bt709:t=bt709:m=bt709:r=tv",
+                );
+            }
+            filters
+                .push("scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease");
+            let vf = filters.join(",");
+            cmd.args(["-vf", vf.as_str()]);
+            // Force a keyframe every 2 s (fps-independent) so shaka can cut
+            // self-contained HLS segments from the re-encoded stream.
+            cmd.args(["-force_key_frames", "expr:gte(t,n_forced*2)"]);
+            let crf = encode.crf.to_string();
+            match codec {
+                VideoCodec::H264 => {
+                    cmd.args([
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        encode.preset.as_str(),
+                        "-crf",
+                        crf.as_str(),
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-profile:v",
+                        "high",
+                        "-level:v",
+                        "4.1",
+                    ]);
+                }
+                VideoCodec::Hevc => {
+                    let pix_fmt = if ten_bit { "yuv420p10le" } else { "yuv420p" };
+                    cmd.args([
+                        "-c:v",
+                        "libx265",
+                        "-preset",
+                        encode.preset.as_str(),
+                        "-crf",
+                        crf.as_str(),
+                        "-pix_fmt",
+                        pix_fmt,
+                        // hvc1 brand + clean hvcC (see the copy path note).
+                        "-tag:v",
+                        "hvc1",
+                        // Closed-GOP IDR keyframes so each HLS segment is
+                        // self-contained (x265 defaults to open-GOP CRA).
+                        "-x265-params",
+                        "open-gop=0",
+                    ]);
+                }
+            }
+        }
     }
     // `negative_cts_offsets` lets ffmpeg express B-frame composition
     // offsets without an `elst` edit list — pairs with `-ignore_editlist`

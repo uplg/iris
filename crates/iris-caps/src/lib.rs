@@ -117,6 +117,25 @@ impl ClientCapabilities {
         contains_ci(&self.video_decoders, c)
     }
 
+    /// Whether the client can decode `codec` in **hardware**.
+    ///
+    /// Convention for the `vdec` list: a bare codec name (`av1`) or an
+    /// explicit `<codec>-hw` (`hevc-hw`) means hardware; an explicit
+    /// `<codec>-sw` (`av1-sw`) means software-only. Bare names count as
+    /// hardware so legacy clients — which sent `vdec=h264,hevc,av1` meaning
+    /// "I can play this natively" — are never needlessly transcoded for. A
+    /// client that genuinely software-decodes a codec must say so explicitly
+    /// (`av1-sw`) to opt into a server-side transcode.
+    #[must_use]
+    pub fn hw_decodes(&self, codec: &str) -> bool {
+        let codec = codec.to_ascii_lowercase();
+        let hw = format!("{codec}-hw");
+        self.video_decoders.iter().any(|d| {
+            let d = d.trim().to_ascii_lowercase();
+            d == codec || d == hw
+        })
+    }
+
     #[must_use]
     pub fn has_audio_decoder(&self, c: &str) -> bool {
         contains_ci(&self.audio_decoders, c)
@@ -211,6 +230,22 @@ mod tests {
         assert_eq!(caps.platform.as_deref(), Some("web-chromium-134"));
         assert!(caps.has_container("MKV"));
         assert!(caps.has_video_decoder("hevc-hw"));
+    }
+
+    #[test]
+    fn hw_decodes_convention() {
+        // Bare name and `-hw` both count as hardware; `-sw` is software-only.
+        let caps = ClientCapabilities::parse("vdec=h264-hw,hevc-hw,vp9-hw,av1-sw");
+        assert!(caps.hw_decodes("h264"));
+        assert!(caps.hw_decodes("HEVC")); // case-insensitive
+        assert!(caps.hw_decodes("vp9"));
+        assert!(!caps.hw_decodes("av1")); // software-only → not hardware
+        assert!(!caps.hw_decodes("vvc")); // absent → not hardware
+
+        // Legacy clients send bare names → treated as hardware (no transcode).
+        let legacy = ClientCapabilities::parse("vdec=h264,hevc,av1,vp9");
+        assert!(legacy.hw_decodes("av1"));
+        assert!(legacy.hw_decodes("hevc"));
     }
 
     #[test]

@@ -26,11 +26,20 @@ use std::path::{Path, PathBuf};
 /// pressure; the disk GC also calls into the remuxer first when the
 /// overall budget is exceeded, evicting oldest-played caches before
 /// torrents.
-fn setup_remuxer(data_dir: &Path) -> anyhow::Result<(iris_media::RemuxManager, PathBuf)> {
+fn setup_remuxer(
+    data_dir: &Path,
+    transcode: &iris_config::TranscodeConfig,
+) -> anyhow::Result<(iris_media::RemuxManager, PathBuf)> {
     use anyhow::Context;
     let remux_dir = data_dir.join("remux");
     std::fs::create_dir_all(&remux_dir).context("creating remux dir")?;
-    let remuxer = iris_media::RemuxManager::new(remux_dir.clone());
+    let remuxer = iris_media::RemuxManager::with_encode_config(
+        remux_dir.clone(),
+        iris_media::EncodeConfig {
+            preset: transcode.preset.clone(),
+            crf: transcode.crf,
+        },
+    );
     let evictor = remuxer.clone();
     let cap_bytes: u64 = 100 * 1_073_741_824;
     tokio::spawn(async move {
@@ -270,7 +279,7 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
     );
 
     let (remuxer, remux_dir) =
-        setup_remuxer(&cfg.storage.data_dir).context("setting up remuxer")?;
+        setup_remuxer(&cfg.storage.data_dir, &cfg.transcode).context("setting up remuxer")?;
 
     let gc = setup_gc(&cfg, &engine, &pool, &remuxer, remux_dir);
     gc.clone().spawn();

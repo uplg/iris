@@ -1,0 +1,109 @@
+diff --git a/libraries/decoder_av1/src/main/java/androidx/media3/decoder/av1/Libdav1dVideoRenderer.java b/libraries/decoder_av1/src/main/java/androidx/media3/decoder/av1/Libdav1dVideoRenderer.java
+index 24d5e03..eb24ad4 100644
+--- a/libraries/decoder_av1/src/main/java/androidx/media3/decoder/av1/Libdav1dVideoRenderer.java
++++ b/libraries/decoder_av1/src/main/java/androidx/media3/decoder/av1/Libdav1dVideoRenderer.java
+@@ -45,9 +45,14 @@ public class Libdav1dVideoRenderer extends DecoderVideoRenderer {
+   public static final int THREAD_COUNT_EXPERIMENTAL = -2;
+ 
+   private static final String TAG = "Libdav1dVideoRenderer";
+-  private static final int DEFAULT_NUM_OF_INPUT_BUFFERS = 4;
+-  private static final int DEFAULT_NUM_OF_OUTPUT_BUFFERS = 4;
+-  private static final int DEFAULT_MAX_FRAME_DELAY = 2;
++  // Iris patch: deeper frame-parallel pipeline. The stock defaults (2 frame
++  // delay / 4 buffers) starve dav1d's frame threading and can't sustain 1080p
++  // 10-bit on a weak TV SoC (stutter). A larger frame delay + matching buffer
++  // pool lets dav1d decode several frames concurrently across cores. VOD
++  // playback only pays a few extra frames of start latency + ~tens of MB RAM.
++  private static final int DEFAULT_NUM_OF_INPUT_BUFFERS = 8;
++  private static final int DEFAULT_NUM_OF_OUTPUT_BUFFERS = 8;
++  private static final int DEFAULT_MAX_FRAME_DELAY = 6;
+ 
+   /**
+    * Default input buffer size in bytes, based on 720p resolution video compressed by a factor of
+diff --git a/libraries/decoder_av1/src/main/jni/dav1d_jni.cc b/libraries/decoder_av1/src/main/jni/dav1d_jni.cc
+index 9112fcc..29036ee 100644
+--- a/libraries/decoder_av1/src/main/jni/dav1d_jni.cc
++++ b/libraries/decoder_av1/src/main/jni/dav1d_jni.cc
+@@ -306,6 +306,26 @@ void CopyPlane(const uint8_t* source, int source_stride, uint8_t* destination,
+   }
+ }
+ 
++// Iris patch: down-convert a dav1d high-bit-depth (10/12-bit) plane to the
++// 8-bit YV12 ANativeWindow buffer. HBD planes hold one little-endian 16-bit
++// sample per pixel; we shift the top 8 bits out (>> (bpc - 8)) so the source
++// stays a normal 8-bit YUV plane. `source_stride` is in bytes; `width` is in
++// samples. SDR content only loses sub-perceptual precision; the alternative
++// is no playback at all (the stock wrapper errors on any HBD frame).
++void CopyPlaneDownscaleToByte(const uint8_t* source, int source_stride,
++                              uint8_t* destination, int destination_stride,
++                              int width, int height, int bpc) {
++  const int shift = bpc - 8;
++  while (height--) {
++    const uint16_t* source16 = reinterpret_cast<const uint16_t*>(source);
++    for (int x = 0; x < width; x++) {
++      destination[x] = static_cast<uint8_t>(source16[x] >> shift);
++    }
++    source += source_stride;
++    destination += destination_stride;
++  }
++}
++
+ constexpr int GetColorSpace(Dav1dColorPrimaries primary) {
+   switch (primary) {
+     case DAV1D_COLOR_PRI_BT601:
+@@ -718,7 +738,13 @@ DECODER_FUNC(jint, dav1dGetFrame, jlong jContext, jobject jOutputBuffer) {
+     context->jni_status_code = kJniStatusBufferInitError;
+     return kStatusError;
+   }
+-  if (dav1d_picture->p.bpc != 8) {
++  // Iris patch: only the YUV (GL shader) output path is genuinely 8-bit
++  // only. The Surface (ANativeWindow) path renders via dav1dRenderFrame,
++  // which down-converts 10/12-bit to 8-bit YV12 — so let HBD frames through
++  // for that mode instead of failing the whole stream (which bounced the
++  // Iris TV player onto the server HLS remux, which can't help either).
++  if (dav1d_picture->p.bpc != 8 &&
++      returned_user_data->output_mode == kOutputModeYuv) {
+     context->jni_status_code = kJniStatusHighBitDepthNotSupportedWithYuv;
+     return kStatusError;
+   }
+@@ -813,8 +839,21 @@ DECODER_FUNC(jint, dav1dRenderFrame, jlong jContext, jobject jSurface,
+     LOGE("Failed to get dav1d picture.");
+     return kStatusError;
+   }
++  // Iris patch: pick the plane copier by bit depth. dav1d delivers 10/12-bit
++  // frames as 16-bit samples; `copyPlane` down-converts those to the 8-bit
++  // YV12 ANativeWindow buffer, and is a plain memcpy for 8-bit frames.
++  const int bpc = dav1d_picture->p.bpc;
++  auto copyPlane = [bpc](const uint8_t* src, int src_stride, uint8_t* dst,
++                         int dst_stride, int w, int h) {
++    if (bpc > 8) {
++      CopyPlaneDownscaleToByte(src, src_stride, dst, dst_stride, w, h, bpc);
++    } else {
++      CopyPlane(src, src_stride, dst, dst_stride, w, h);
++    }
++  };
++
+   // Y plane
+-  CopyPlane(reinterpret_cast<const uint8_t*>(dav1d_picture->data[kPlaneY]),
++  copyPlane(reinterpret_cast<const uint8_t*>(dav1d_picture->data[kPlaneY]),
+             dav1d_picture->stride[kPlaneY],
+             reinterpret_cast<uint8_t*>(native_window_buffer.bits),
+             native_window_buffer.stride, width, height);
+@@ -832,7 +871,7 @@ DECODER_FUNC(jint, dav1dRenderFrame, jlong jContext, jobject jSurface,
+   // V plane
+   // Since the format for ANativeWindow is YV12, V plane is being processed
+   // before U plane.
+-  CopyPlane(
++  copyPlane(
+       reinterpret_cast<const uint8_t*>(dav1d_picture->data[kPlaneV]),
+       dav1d_picture->stride[kPlaneU],
+       reinterpret_cast<uint8_t*>(native_window_buffer.bits) + y_plane_size,
+@@ -841,7 +880,7 @@ DECODER_FUNC(jint, dav1dRenderFrame, jlong jContext, jobject jSurface,
+   const int v_plane_size = uv_plane_height * native_window_buffer_uv_stride;
+ 
+   // U plane
+-  CopyPlane(reinterpret_cast<const uint8_t*>(dav1d_picture->data[kPlaneU]),
++  copyPlane(reinterpret_cast<const uint8_t*>(dav1d_picture->data[kPlaneU]),
+             dav1d_picture->stride[kPlaneU],
+             reinterpret_cast<uint8_t*>(native_window_buffer.bits) +
+                 y_plane_size + v_plane_size,
