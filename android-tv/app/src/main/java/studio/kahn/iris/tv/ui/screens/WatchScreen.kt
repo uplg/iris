@@ -375,6 +375,16 @@ private fun ReadyPlayer(
             }
         }
 
+    // Flipped true on Media3's first rendered frame for the current
+    // `playUrl`. Gates the transcode/remux loader overlay: keep it up
+    // (showing `/status` progress) until the player ACTUALLY paints a frame,
+    // not merely until the server reports the head is built. That covers a
+    // resume into a not-yet-encoded position — the head is "ready" but the
+    // player is still waiting on segments around the playhead — which
+    // otherwise vanished into a silent black screen. Re-armed per `playUrl`
+    // so the Tier-F swap (or a new episode) starts the loader fresh.
+    var firstFrameRendered by remember(playUrl) { mutableStateOf(false) }
+
     // No more external subtitle injection — the source MKV / MP4
     // already contains every subtitle track and Media3 has parsers
     // for SRT, ASS/SSA and PGS bitmap. Defaults are honored below
@@ -655,6 +665,15 @@ private fun ReadyPlayer(
                     return
                 }
                 onPlayerError(message)
+            }
+
+            override fun onRenderedFirstFrame() {
+                // The player painted a real frame — playback has truly
+                // started, so dismiss the transcode/remux loader overlay
+                // (gated on this below). Fires once per prepared stream,
+                // after the resume seek lands, so it's the correct "we're
+                // actually showing video now" signal.
+                firstFrameRendered = true
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -1024,7 +1043,7 @@ private fun ReadyPlayer(
         // transcode (`needsServerTranscode`) — the latter can take a few
         // seconds of encoding before the first segment, so the user needs the
         // progress. Hides automatically once the server reports `ready: true`.
-        if (useRemuxFallback || needsServerTranscode) {
+        if ((useRemuxFallback || needsServerTranscode) && !firstFrameRendered) {
             Box(modifier = Modifier.align(Alignment.Center)) {
                 RemuxFallbackOverlay(
                     container = container,
@@ -1308,10 +1327,10 @@ private fun stepFor(probeReady: Boolean, torrent: TorrentView?): Step {
  * Tier-F overlay shown while the server is rewrapping the source
  * into HLS-fMP4 after a failed direct-stream attempt. Reuses the
  * `/play/status` endpoint the web's Tier F gate already polls —
- * same payload, same `reason` / `progress` semantics. Hides itself
- * by returning an empty Surface once the remuxer reports
- * `ready: true`; the AndroidView underneath is already loading the
- * manifest by then and will start drawing frames within a beat.
+ * same payload, same `reason` / `progress` semantics. Visibility is
+ * owned by the caller, which keeps it mounted until the player paints
+ * its first frame (`onRenderedFirstFrame`); this composable just renders
+ * the latest progress while it's on screen.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -1329,21 +1348,19 @@ private fun RemuxFallbackOverlay(
         // 1.5 s cadence is the same the web client uses for the
         // same endpoint — fast enough that the progress bar moves
         // smoothly without hammering the server.
+        // Keep polling for fresh progress until the parent removes us
+        // (it does so on the player's first rendered frame). We deliberately
+        // DON'T stop on `ready: true`: on a resume the head reports ready
+        // while the player is still waiting on segments around the playhead,
+        // and the overlay must stay (showing movement) until video actually
+        // appears.
         while (true) {
             val res = runCatching { api.playStatus(infohash, fileIdx) }.getOrNull()
-            if (res != null) {
-                status = res
-                if (res.ready) break
-            }
+            if (res != null) status = res
             kotlinx.coroutines.delay(1_500L)
         }
     }
     val s = status
-    if (s != null && s.ready) {
-        // Don't render anything once the remux is ready — the
-        // AndroidView is already taking over.
-        return
-    }
     Surface(
         shape = RoundedCornerShape(16.dp),
         colors = SurfaceDefaults.colors(

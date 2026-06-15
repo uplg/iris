@@ -1546,20 +1546,29 @@ pub(crate) async fn play_status(
         }));
     }
 
-    // Caps-aware cache key: a software-AV1 client polls the progress of the
-    // transcoded variant (`..._hevc`) it will actually play, not the
-    // never-built stream-copy one. Falls back to the bare key if the probe
+    // Caps-aware cache key + whether THIS client must wait on a server-side
+    // build. A software-AV1 box polls the progress of the transcoded variant
+    // (`..._h264`) it will actually play, not the never-built stream-copy one.
+    // `needs_build` is true only for a Transcode plan: that client routes to
+    // `/play/master.m3u8` and the player blocks until ffmpeg has built the
+    // head, so `/status` must report real progress rather than a premature
+    // `ready: true`. A Copy plan (web, or TV playing raw `/stream`) has
+    // nothing to wait for. Falls back to the bare key + no-build if the probe
     // isn't available yet (the master.m3u8 request will probe + build).
-    let key = match state
+    let (key, needs_build) = match state
         .probes()
         .get_or_probe(&infohash, idx, &path, true)
         .await
     {
         Ok(probe) => {
             let plan = build_remux_plan(&probe, &caps, &state.cfg().transcode);
-            format!("{infohash}_{idx}{}", plan.cache_suffix())
+            let needs_build = matches!(plan.video, iris_media::VideoMode::Transcode { .. });
+            (
+                format!("{infohash}_{idx}{}", plan.cache_suffix()),
+                needs_build,
+            )
         }
-        Err(_) => format!("{infohash}_{idx}"),
+        Err(_) => (format!("{infohash}_{idx}"), false),
     };
     let master = state.remuxer().master_path(&key);
     if let Ok(meta) = tokio::fs::metadata(&master).await
@@ -1587,23 +1596,29 @@ pub(crate) async fn play_status(
         }));
     }
 
-    // `play_status` used to eagerly kick off a background remux here
-    // so the web UI's "Tier F ready" gate would flip without the user
-    // having to request `/play/master.m3u8`. With the web client now
-    // defaulting to Tier B (Mediabunny remux in-browser) and the
-    // Android TV client playing raw `/stream` directly, 99 % of
-    // sessions never touch Tier F — eagerly remuxing on every status
-    // poll was burning server CPU for a fallback path that's rarely
-    // exercised. The remux is now strictly lazy: it fires the first
-    // time someone actually requests `/play/master.m3u8` (see
-    // `play_asset`).
-    //
-    // We fall through here when the torrent is finished, the master
-    // playlist doesn't exist yet, and there's no sticky failure
-    // recorded. That's the new `ready: true` for the raw-stream path
-    // — Tier A/B/TV can start playing immediately. A client that
-    // needs Tier F will hit `/play/master.m3u8` and the remux will
-    // spin up at that moment.
+    // Transcode clients block on `/play/master.m3u8` while ffmpeg builds the
+    // head, so reporting `ready: true` here (as the raw-stream path does)
+    // hid the loader and left a silent black screen until the whole head
+    // was ready. Report the live encode fraction instead — `progress()` is
+    // `None` until ffmpeg's first tick, which the player renders as an
+    // indeterminate bar, then a determinate one. This is also what the user
+    // sees on a resume into a not-yet-encoded position: real movement
+    // instead of a frozen screen.
+    if needs_build {
+        return Ok(Json(PlayStatus {
+            ready: false,
+            reason: Some("remuxing".into()),
+            progress: state.remuxer().progress(&key).await,
+            error: None,
+        }));
+    }
+
+    // Raw-stream path (Copy plan). The web client now defaults to Tier B
+    // (Mediabunny remux in-browser) and the Android TV client plays raw
+    // `/stream` directly, so 99 % of sessions never touch the server remux;
+    // it's strictly lazy, firing only when someone requests
+    // `/play/master.m3u8` (see `play_asset`). Nothing to wait on here —
+    // Tier A/B/TV can start playing immediately.
     Ok(Json(PlayStatus {
         ready: true,
         reason: None,

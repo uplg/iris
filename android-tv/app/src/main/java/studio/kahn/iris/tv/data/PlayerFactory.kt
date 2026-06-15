@@ -227,13 +227,31 @@ fun buildMediaItem(
     playUrl: String,
     title: String? = null,
     mimeType: String = MimeTypes.APPLICATION_MATROSKA,
-): MediaItem =
-    MediaItem.Builder()
+): MediaItem {
+    // CRITICAL: the server HLS routes (`/play/master.m3u8`, used by BOTH the
+    // proactive AV1-10-bit transcode path AND the Tier-F error fallback) MUST
+    // be tagged as HLS. When an explicit MIME is set, Media3's
+    // `DefaultMediaSourceFactory` trusts it and builds a `ProgressiveMediaSource`
+    // + `MatroskaExtractor` — which then tries to demux the `.m3u8` TEXT
+    // playlist as a Matroska container and NEVER starts playback (the
+    // "ready on the server but the TV never launches" bug). The default hint
+    // is MKV for the raw `/stream` bytes, so without this an HLS `playUrl`
+    // inherits the wrong type. Infer HLS from the URL so every caller routes
+    // to `HlsMediaSource` automatically; the raw-stream path keeps its hint.
+    val resolvedMime = if (isHlsUrl(playUrl)) MimeTypes.APPLICATION_M3U8 else mimeType
+    return MediaItem.Builder()
         .setUri(playUrl)
-        .setMimeType(mimeType)
+        .setMimeType(resolvedMime)
         .apply {
             if (!title.isNullOrBlank()) {
                 setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
             }
         }
         .build()
+}
+
+/** True when [url]'s path ends in `.m3u8` (HLS playlist), ignoring any
+ *  query string / fragment. Drives the HLS-vs-progressive source-type
+ *  selection in [buildMediaItem]. */
+private fun isHlsUrl(url: String): Boolean =
+    url.substringBefore('?').substringBefore('#').endsWith(".m3u8", ignoreCase = true)
