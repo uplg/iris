@@ -420,7 +420,7 @@ private fun ReadyPlayer(
                         // Encoded seconds = fraction × runtime. Start once the
                         // encoder is a touch past the resume point so the seek
                         // lands with buffer ahead instead of on the live edge.
-                        val encodedSec = (st.progress ?: 0.0) * durationSec
+                        val encodedSec = (st.progress?.toDouble() ?: 0.0) * durationSec
                         if (st.ready || durationSec <= 0.0 || encodedSec >= resumeSec + 10.0) {
                             portionReady = true
                         }
