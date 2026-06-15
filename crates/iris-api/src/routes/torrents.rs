@@ -1512,9 +1512,20 @@ pub struct PlayStatus {
 pub(crate) async fn play_status(
     State(state): State<AppState>,
     _user: AuthUser,
-    axum::Extension(caps): axum::Extension<crate::middleware::IrisCaps>,
     Path((infohash, idx)): Path<(String, usize)>,
+    req: Request<Body>,
 ) -> ApiResult<Json<PlayStatus>> {
+    // Caps are OPTIONAL: the `Iris-Caps` middleware only inserts the extension
+    // when the client actually sent the header, and the web player polls
+    // `/status` WITHOUT it. A required `Extension` extractor 500s ("Missing
+    // request extension") on every header-less request — i.e. it breaks the
+    // web client. Pull it defensively and fall back to default caps (no
+    // transcode), exactly like `play_asset` does. We never break a client.
+    let caps = req
+        .extensions()
+        .get::<crate::middleware::IrisCaps>()
+        .map(|c| c.0.clone())
+        .unwrap_or_default();
     let infohash = infohash.to_ascii_lowercase();
     iris_db::torrents::find_by_infohash(state.db(), &infohash)
         .await?
@@ -1545,7 +1556,7 @@ pub(crate) async fn play_status(
         .await
     {
         Ok(probe) => {
-            let plan = build_remux_plan(&probe, &caps.0, &state.cfg().transcode);
+            let plan = build_remux_plan(&probe, &caps, &state.cfg().transcode);
             format!("{infohash}_{idx}{}", plan.cache_suffix())
         }
         Err(_) => format!("{infohash}_{idx}"),
