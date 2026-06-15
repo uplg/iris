@@ -78,10 +78,10 @@ fn default_transcode_codec() -> String {
     // transcode streams into HLS as it encodes). HEVC is ~2× smaller on disk
     // but only viable when the server has the headroom — flip `codec = "hevc"`
     // then.
-    "h264".to_string()
+    "hevc".to_string()
 }
 fn default_transcode_preset() -> String {
-    "veryfast".to_string()
+    "superfast".to_string()
 }
 fn default_transcode_crf() -> u8 {
     26

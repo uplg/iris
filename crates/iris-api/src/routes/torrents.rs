@@ -1509,6 +1509,7 @@ pub struct PlayStatus {
     ),
     tag = "torrents",
 )]
+#[allow(clippy::too_many_lines)] // linear status state-machine; clearer inline
 pub(crate) async fn play_status(
     State(state): State<AppState>,
     _user: AuthUser,
@@ -1555,21 +1556,92 @@ pub(crate) async fn play_status(
     // `ready: true`. A Copy plan (web, or TV playing raw `/stream`) has
     // nothing to wait for. Falls back to the bare key + no-build if the probe
     // isn't available yet (the master.m3u8 request will probe + build).
-    let (key, needs_build) = match state
+    // `build_plan` is `Some` only for a Transcode plan: that client plays the
+    // server variant via `/play/master.m3u8`, so `/status` drives its progress
+    // (and kicks the build off so the percentage advances even before the
+    // player asks). A Copy plan (web, or TV on raw `/stream`) has nothing to
+    // wait for. Falls back to the bare key + no-build if the probe isn't ready
+    // yet (the master.m3u8 request will probe + build).
+    let (key, build_plan) = match state
         .probes()
         .get_or_probe(&infohash, idx, &path, true)
         .await
     {
         Ok(probe) => {
             let plan = build_remux_plan(&probe, &caps, &state.cfg().transcode);
-            let needs_build = matches!(plan.video, iris_media::VideoMode::Transcode { .. });
-            (
-                format!("{infohash}_{idx}{}", plan.cache_suffix()),
-                needs_build,
-            )
+            let key = format!("{infohash}_{idx}{}", plan.cache_suffix());
+            let build_plan = matches!(plan.video, iris_media::VideoMode::Transcode { .. })
+                .then_some(plan);
+            (key, build_plan)
         }
-        Err(_) => (format!("{infohash}_{idx}"), false),
+        Err(_) => (format!("{infohash}_{idx}"), None),
     };
+    // Transcode plan: the variant STREAMS while ffmpeg keeps encoding ahead of
+    // the playhead. The master playlist lands on disk early (after the first
+    // segment), so a plain "master exists → ready" check would flip ready the
+    // instant the head is built — long before the encoder reaches, say, a
+    // 30-min resume position. The TV instead shows a determinate progress bar
+    // and only starts playback once the encode has passed its resume point, so
+    // `/status` must surface the live encode fraction for as long as the job
+    // is in flight, BEFORE the master-exists shortcut.
+    if let Some(plan) = build_plan {
+        // A failed job isn't in flight, so check the sticky failure first.
+        if let Some(msg) = state.remuxer().recent_failure(&key).await {
+            return Ok(Json(PlayStatus {
+                ready: false,
+                reason: None,
+                progress: None,
+                error: Some(msg),
+            }));
+        }
+        // In flight (and past ffmpeg's first progress tick) → live fraction.
+        if let Some(p) = state.remuxer().progress(&key).await {
+            return Ok(Json(PlayStatus {
+                ready: false,
+                reason: Some("remuxing".into()),
+                progress: Some(p),
+                error: None,
+            }));
+        }
+        // Not in flight: either the encode finished (master on disk → playable
+        // + fully seekable) or it hasn't been kicked off yet.
+        let master = state.remuxer().master_path(&key);
+        let master_ready = matches!(
+            tokio::fs::metadata(&master).await,
+            Ok(m) if m.is_file() && m.len() > 0
+        );
+        if master_ready {
+            return Ok(Json(PlayStatus {
+                ready: true,
+                reason: None,
+                progress: None,
+                error: None,
+            }));
+        }
+        // Kick off the build so the percentage starts moving without the
+        // player having to request `master.m3u8` (it's holding back until we
+        // report the resume portion encoded). `ensure_remuxed` is idempotent —
+        // a no-op once a job is in flight or the cache is built.
+        let remuxer = state.remuxer().clone();
+        let key_owned = key.clone();
+        let source = path.clone();
+        tokio::spawn(async move {
+            let _ = remuxer.ensure_remuxed(&key_owned, &source, plan).await;
+        });
+        return Ok(Json(PlayStatus {
+            ready: false,
+            reason: Some("remuxing".into()),
+            progress: None,
+            error: None,
+        }));
+    }
+
+    // Raw-stream path (Copy plan). The web client defaults to Tier B
+    // (Mediabunny remux in-browser) and the Android TV client plays raw
+    // `/stream` directly, so 99 % of sessions never touch the server remux;
+    // it's strictly lazy, firing only when someone requests
+    // `/play/master.m3u8`. Report ready as soon as the master exists, else
+    // fall through to ready — there's nothing to wait on.
     let master = state.remuxer().master_path(&key);
     if let Ok(meta) = tokio::fs::metadata(&master).await
         && meta.is_file()
@@ -1582,11 +1654,6 @@ pub(crate) async fn play_status(
             error: None,
         }));
     }
-
-    // Sticky failure short-circuit: once ffmpeg has failed for this source
-    // we surface the error and STOP polling-driven respawns. The user can
-    // wipe the entry from `/admin` to retry, otherwise the cooldown clears
-    // it after a few minutes.
     if let Some(msg) = state.remuxer().recent_failure(&key).await {
         return Ok(Json(PlayStatus {
             ready: false,
@@ -1595,30 +1662,6 @@ pub(crate) async fn play_status(
             error: Some(msg),
         }));
     }
-
-    // Transcode clients block on `/play/master.m3u8` while ffmpeg builds the
-    // head, so reporting `ready: true` here (as the raw-stream path does)
-    // hid the loader and left a silent black screen until the whole head
-    // was ready. Report the live encode fraction instead — `progress()` is
-    // `None` until ffmpeg's first tick, which the player renders as an
-    // indeterminate bar, then a determinate one. This is also what the user
-    // sees on a resume into a not-yet-encoded position: real movement
-    // instead of a frozen screen.
-    if needs_build {
-        return Ok(Json(PlayStatus {
-            ready: false,
-            reason: Some("remuxing".into()),
-            progress: state.remuxer().progress(&key).await,
-            error: None,
-        }));
-    }
-
-    // Raw-stream path (Copy plan). The web client now defaults to Tier B
-    // (Mediabunny remux in-browser) and the Android TV client plays raw
-    // `/stream` directly, so 99 % of sessions never touch the server remux;
-    // it's strictly lazy, firing only when someone requests
-    // `/play/master.m3u8` (see `play_asset`). Nothing to wait on here —
-    // Tier A/B/TV can start playing immediately.
     Ok(Json(PlayStatus {
         ready: true,
         reason: None,

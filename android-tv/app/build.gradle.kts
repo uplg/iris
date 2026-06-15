@@ -12,8 +12,8 @@ android {
         applicationId = "studio.kahn.iris.tv"
         minSdk = 23           // Android TV reaches further back than phones
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.8.0"
+        versionCode = 14
+        versionName = "0.8.1"
     }
 
     // We're never publishing this on Play Store — the TV is the only target

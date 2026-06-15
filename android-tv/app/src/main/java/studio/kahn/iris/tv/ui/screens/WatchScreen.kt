@@ -385,6 +385,52 @@ private fun ReadyPlayer(
     // so the Tier-F swap (or a new episode) starts the loader fresh.
     var firstFrameRendered by remember(playUrl) { mutableStateOf(false) }
 
+    // Resume position the player should start at (saved progress, or the
+    // mid-stream Tier-F fallback position).
+    val resumeMs = remember(playUrl, startPositionSec, fallbackResumeMs) {
+        maxOf((startPositionSec * 1000).toLong(), fallbackResumeMs).coerceAtLeast(0)
+    }
+
+    // The GROWING server transcode (`needsServerTranscode`) streams as an HLS
+    // EVENT playlist that only lists segments up to the encoder's edge. Seeking
+    // to a resume position past that edge would make Media3 wait for the encode
+    // to catch up (a 30-min resume waits for ~half the movie). So when resuming
+    // into a transcode we DON'T prepare the player yet: we show a determinate
+    // progress bar and only start playback — directly at the resume position —
+    // once `/status` reports the encode has passed it. Everything else (raw
+    // `/stream`, Copy-remux Tier-F) is fully seekable, so it plays immediately.
+    val gateOnTranscode = needsServerTranscode && resumeMs > 0
+    var portionReady by remember(playUrl) { mutableStateOf(!gateOnTranscode) }
+    // Latest `/status` payload, polled here and rendered by the loader overlay.
+    var serverStatus by remember(playUrl) {
+        mutableStateOf<studio.kahn.iris.tv.data.PlayStatus?>(null)
+    }
+    if (needsServerTranscode || useRemuxFallback) {
+        LaunchedEffect(playUrl) {
+            val api = container.apiFor(serverUrl)
+            val durationSec = probe.durationSeconds ?: 0.0
+            val resumeSec = resumeMs / 1000.0
+            // Poll until the player actually paints a frame (which hides the
+            // loader). 1.5 s cadence matches the web client.
+            while (!firstFrameRendered) {
+                val st = runCatching { api.playStatus(infohash, fileIdx) }.getOrNull()
+                if (st != null) {
+                    serverStatus = st
+                    if (gateOnTranscode && !portionReady) {
+                        // Encoded seconds = fraction × runtime. Start once the
+                        // encoder is a touch past the resume point so the seek
+                        // lands with buffer ahead instead of on the live edge.
+                        val encodedSec = (st.progress ?: 0.0) * durationSec
+                        if (st.ready || durationSec <= 0.0 || encodedSec >= resumeSec + 10.0) {
+                            portionReady = true
+                        }
+                    }
+                }
+                delay(1_500L)
+            }
+        }
+    }
+
     // No more external subtitle injection — the source MKV / MP4
     // already contains every subtitle track and Media3 has parsers
     // for SRT, ASS/SSA and PGS bitmap. Defaults are honored below
@@ -395,19 +441,16 @@ private fun ReadyPlayer(
         mutableStateOf(buildPlaybackTitle(torrent?.name, currentEpisode))
     }
 
-    val player = remember(playUrl) {
-        buildPlayer(context, container.mediaOkHttpClient).apply {
-            // Pick the higher of the saved progress and the
-            // mid-stream fallback position so the Tier F swap
-            // resumes where the user was — not at zero.
-            val resumeMs = maxOf(
-                (startPositionSec * 1000).toLong(),
-                fallbackResumeMs,
-            ).coerceAtLeast(0)
-            setMediaItem(buildMediaItem(playUrl, title), resumeMs)
-            prepare()
-            playWhenReady = true
-        }
+    val player = remember(playUrl) { buildPlayer(context, container.mediaOkHttpClient) }
+    // Start playback once the resume portion is ready (`portionReady`) — in one
+    // shot, directly at the resume position. For non-transcode and fresh
+    // (resume == 0) paths `portionReady` is already true, so this fires
+    // immediately, preserving the prior "prepare on mount" behaviour.
+    LaunchedEffect(player, portionReady) {
+        if (!portionReady) return@LaunchedEffect
+        player.setMediaItem(buildMediaItem(playUrl, title), resumeMs)
+        player.prepare()
+        player.playWhenReady = true
     }
 
 
@@ -1037,19 +1080,15 @@ private fun ReadyPlayer(
         }
 
         // Remux/transcode overlay: poll `/play/status` and surface the
-        // server's progress while it builds the HLS head. Shown both when the
-        // error listener swapped us onto the remux (`useRemuxFallback`) AND
-        // when we proactively routed a heavy 10-bit AV1 to the server's
-        // transcode (`needsServerTranscode`) — the latter can take a few
-        // seconds of encoding before the first segment, so the user needs the
-        // progress. Hides automatically once the server reports `ready: true`.
+        // server's progress while it builds the HLS variant. Shown when the
+        // error listener swapped us onto the remux (`useRemuxFallback`) OR when
+        // we proactively routed a heavy 10-bit AV1 to the server transcode
+        // (`needsServerTranscode`). Stays up until the player paints its first
+        // frame — which, for a resume into a transcode, is only after the
+        // encode has passed the resume point and playback has started.
         if ((useRemuxFallback || needsServerTranscode) && !firstFrameRendered) {
             Box(modifier = Modifier.align(Alignment.Center)) {
-                RemuxFallbackOverlay(
-                    container = container,
-                    infohash = infohash,
-                    fileIdx = fileIdx,
-                )
+                RemuxFallbackOverlay(status = serverStatus)
             }
         }
 
@@ -1324,42 +1363,18 @@ private fun stepFor(probeReady: Boolean, torrent: TorrentView?): Step {
 }
 
 /**
- * Tier-F overlay shown while the server is rewrapping the source
- * into HLS-fMP4 after a failed direct-stream attempt. Reuses the
- * `/play/status` endpoint the web's Tier F gate already polls —
- * same payload, same `reason` / `progress` semantics. Visibility is
- * owned by the caller, which keeps it mounted until the player paints
- * its first frame (`onRenderedFirstFrame`); this composable just renders
- * the latest progress while it's on screen.
+ * Loader overlay shown while the server builds the HLS variant (Tier-F
+ * remux, or the proactive AV1-10-bit transcode). The caller owns the
+ * `/play/status` polling and visibility — it keeps this mounted until the
+ * player paints its first frame, and on a transcode resume that's only
+ * after the encode has reached the resume point. This composable just
+ * renders the latest `status` (`reason` / `progress`).
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun RemuxFallbackOverlay(
-    container: AppContainer,
-    infohash: String,
-    fileIdx: Int,
+    status: studio.kahn.iris.tv.data.PlayStatus?,
 ) {
-    var status by remember(infohash, fileIdx) {
-        mutableStateOf<studio.kahn.iris.tv.data.PlayStatus?>(null)
-    }
-    LaunchedEffect(infohash, fileIdx) {
-        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
-        val api = container.apiFor(url)
-        // 1.5 s cadence is the same the web client uses for the
-        // same endpoint — fast enough that the progress bar moves
-        // smoothly without hammering the server.
-        // Keep polling for fresh progress until the parent removes us
-        // (it does so on the player's first rendered frame). We deliberately
-        // DON'T stop on `ready: true`: on a resume the head reports ready
-        // while the player is still waiting on segments around the playhead,
-        // and the overlay must stay (showing movement) until video actually
-        // appears.
-        while (true) {
-            val res = runCatching { api.playStatus(infohash, fileIdx) }.getOrNull()
-            if (res != null) status = res
-            kotlinx.coroutines.delay(1_500L)
-        }
-    }
     val s = status
     Surface(
         shape = RoundedCornerShape(16.dp),
