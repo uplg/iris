@@ -184,6 +184,7 @@ fun PairingScreen(
                 Text(
                     "Pair this TV",
                     style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     "On your phone or computer, go to:",

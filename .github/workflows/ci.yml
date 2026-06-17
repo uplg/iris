@@ -22,7 +22,7 @@ env:
 
 jobs:
   gate:
-    name: clippy + fmt
+    name: fmt + clippy + test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -34,6 +34,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --no-deps --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
 
   deny:
     name: cargo-deny
