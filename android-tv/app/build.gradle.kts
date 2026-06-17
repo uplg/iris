@@ -1,17 +1,20 @@
+import org.openapitools.generator.gradle.plugin.tasks.GenerateTask
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.openapi.generator)
 }
 
 android {
     namespace = "studio.kahn.iris.tv"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "studio.kahn.iris.tv"
         minSdk = 23           // Android TV reaches further back than phones
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 14
         versionName = "0.8.1"
     }
@@ -72,6 +75,56 @@ android {
 // AGP 9.0+ owns the Kotlin compilation; configure the JVM toolchain here.
 kotlin {
     jvmToolchain(17)
+}
+
+// ---------------------------------------------------------------------------
+// OpenAPI → Kotlin DTOs. The backend's committed spec (../web/openapi.json,
+// utoipa-derived) is the single source of truth for the request/response
+// contract; this regenerates the `@Serializable` model layer on every build
+// (the TV analogue of web's `openapi-typescript` step), so the client can't
+// drift from the server. MODELS ONLY — the Retrofit `IrisApi` interface and
+// all OkHttp wiring (auth refresh, cookie jar, caps + client-version headers,
+// dual Media3 client, 426 gating) stay hand-written. Generated straight into
+// the `…data` package so unchanged schema names need no import churn.
+val openApiOut = layout.buildDirectory.dir("generated/openapi")
+
+openApiGenerate {
+    generatorName.set("kotlin")
+    inputSpec.set(file("$rootDir/../web/openapi.json").path)
+    outputDir.set(openApiOut.get().asFile.path)
+    packageName.set("studio.kahn.iris.tv.data")
+    modelPackage.set("studio.kahn.iris.tv.data")
+    library.set("jvm-retrofit2")
+    // Models only — no generated API/infra/docs/tests.
+    globalProperties.set(
+        mapOf("models" to "", "modelDocs" to "false", "modelTests" to "false"),
+    )
+    configOptions.set(
+        mapOf(
+            "serializationLibrary" to "kotlinx_serialization",
+            // New backend enum variants must not throw on an older client:
+            // emit an `unknown_default_open_api` fallback variant + serializer.
+            "enumUnknownDefaultCase" to "true",
+            // serde `#[serde(tag = …)]` unions (promoted to a `discriminator`
+            // in the spec) → generated kotlinx sealed interfaces with a
+            // discriminator-aware serializer instead of broken flat classes.
+            "generateOneOfAnyOfWrappers" to "true",
+        ),
+    )
+}
+
+// Register the generated Kotlin as a variant source via the AGP 9 Sources API
+// (the legacy `sourceSets.java.srcDir` is ignored by AGP 9's built-in Kotlin
+// for generated dirs). This also carries the task dependency automatically, so
+// `openApiGenerate` runs before compilation. The generator lays files out under
+// `<outputDir>/src/main/kotlin/<pkg>`; Kotlin scans the root recursively and
+// takes the package from each file's declaration, so wiring `outputDir` works.
+androidComponents {
+    onVariants { variant ->
+        variant.sources.kotlin?.addGeneratedSourceDirectory(
+            tasks.named<GenerateTask>("openApiGenerate"),
+        ) { it.outputDir }
+    }
 }
 
 dependencies {

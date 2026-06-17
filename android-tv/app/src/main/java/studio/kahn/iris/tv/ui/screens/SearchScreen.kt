@@ -73,10 +73,11 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import studio.kahn.iris.tv.data.AggregatedResults
+import studio.kahn.iris.tv.data.SearchResponse
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.LibraryMatch
+import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.SearchViewMode
 import studio.kahn.iris.tv.data.TmdbSuggestion
@@ -178,7 +179,7 @@ fun SearchScreen(
     }
     var page by rememberSaveable { mutableIntStateOf(1) }
 
-    var data by remember { mutableStateOf<AggregatedResults?>(null) }
+    var data by remember { mutableStateOf<SearchResponse?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var pending by remember { mutableStateOf(false) }
     var ingestingId by remember { mutableStateOf<String?>(null) }
@@ -314,7 +315,7 @@ fun SearchScreen(
         // popularity collisions) and cheap (shared server-side cache).
         // Library matches resolve through the same cache keyed on their
         // clean display title — same poster pipeline as everything else.
-        val unresolved = (results.map { it.title to it.kind } +
+        val unresolved = (results.map { it.title to it.kind?.value } +
             libs.map { it.displayTitle to it.kind })
             .filter { (title, _) -> title.isNotBlank() }
             .filter { it !in tmdbCache }
@@ -521,9 +522,9 @@ fun SearchScreen(
                             ) { r ->
                                 ResultCard(
                                     result = r,
-                                    resolvedPoster = tmdbCache[r.title to r.kind]?.posterPath,
+                                    resolvedPoster = tmdbCache[r.title to r.kind?.value]?.posterPath,
                                     onClick = {
-                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
+                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind?.value)
                                     },
                                 )
                             }
@@ -548,9 +549,9 @@ fun SearchScreen(
                             ) { r ->
                                 ResultRow(
                                     result = r,
-                                    resolvedPoster = tmdbCache[r.title to r.kind]?.posterPath,
+                                    resolvedPoster = tmdbCache[r.title to r.kind?.value]?.posterPath,
                                     onClick = {
-                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind)
+                                        onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind?.value)
                                     },
                                 )
                             }
@@ -582,7 +583,7 @@ private const val SIZE_FLOOR_GIB: Double = 0.5
  *  video size floor — catches uncategorised but plausibly-video hits
  *  without letting books through). */
 private fun isLikelyVideo(r: SearchResult): Boolean {
-    if (r.kind == "movie" || r.kind == "tv") return true
+    if (r.kind == MediaKind.movie || r.kind == MediaKind.tv) return true
     return (r.sizeBytes ?: 0L) >= MIN_VIDEO_BYTES
 }
 
@@ -988,7 +989,7 @@ private fun ResultCard(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    if (result.freeleech) {
+                    if (result.freeleech == true) {
                         BadgePill("FL", Color(0xFF10B981))
                     }
                     BadgePill(result.providerId, Color.Black.copy(alpha = 0.65f))
@@ -996,7 +997,7 @@ private fun ResultCard(
                 // Bottom strip: kind chip on the left.
                 result.kind?.let { k ->
                     BadgePill(
-                        label = if (k == "tv") "TV" else "Movie",
+                        label = if (k == MediaKind.tv) "TV" else "Movie",
                         bg = Color.Black.copy(alpha = 0.65f),
                         modifier = Modifier
                             .align(Alignment.BottomStart)
@@ -1206,7 +1207,7 @@ private fun ResultRow(
             ) {
                 result.kind?.let { k ->
                     BadgePill(
-                        if (k == "tv") "TV" else "Movie",
+                        if (k == MediaKind.tv) "TV" else "Movie",
                         Color.Black.copy(alpha = 0.65f),
                         small = true,
                     )
@@ -1215,7 +1216,7 @@ private fun ResultRow(
                 if (parsed.subs) {
                     BadgePill("SUB", Color(0xFF6366F1), small = true)
                 }
-                if (result.freeleech) {
+                if (result.freeleech == true) {
                     BadgePill("FL", Color(0xFF10B981), small = true)
                 }
                 BadgePill(result.providerId, Color.Black.copy(alpha = 0.65f), small = true)
@@ -1396,7 +1397,7 @@ private val QUALITY_HINTS = setOf(
  * entries just mean we render fewer chips on the card.
  */
 private fun parseTags(r: SearchResult): ParsedTags {
-    val raw = (r.tags + listOf(r.title.uppercase()))
+    val raw = (r.tags.orEmpty() + listOf(r.title.uppercase()))
         .flatMap { it.uppercase().split(' ', '.', '-', '_', '[', ']', '(', ')', ',', '/') }
         .filter { it.isNotEmpty() }
         .toSet()
@@ -1465,7 +1466,7 @@ private fun ingestAndPlay(
                 ?: return@launch onError("Not signed in")
             val api = container.apiFor(url)
             val res = api.ingest(
-                studio.kahn.iris.tv.data.IngestRequest(
+                studio.kahn.iris.tv.data.ResolveBody(
                     providerId = hit.providerId,
                     externalId = hit.externalId,
                     tmdbId = hit.tmdbId,

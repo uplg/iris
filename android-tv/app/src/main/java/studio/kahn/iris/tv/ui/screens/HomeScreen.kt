@@ -53,16 +53,18 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import studio.kahn.iris.tv.data.TorrentState
+import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.CatalogCard
-import studio.kahn.iris.tv.data.ForYouResponse
+import studio.kahn.iris.tv.data.ForYou
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.LibraryResponse
-import studio.kahn.iris.tv.data.Preferences
+import studio.kahn.iris.tv.data.PreferencesResponse
 import studio.kahn.iris.tv.data.WatchlistItem
-import studio.kahn.iris.tv.data.TmdbMetadata
+import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
@@ -139,12 +141,12 @@ fun HomeScreen(
     var downloading by remember { mutableStateOf<List<TorrentView>>(emptyList()) }
     var library by remember { mutableStateOf<List<TorrentView>>(emptyList()) }
     var watchlist by remember { mutableStateOf<List<WatchlistItem>>(emptyList()) }
-    var forYou by remember { mutableStateOf<ForYouResponse?>(null) }
+    var forYou by remember { mutableStateOf<ForYou?>(null) }
     var collections by remember { mutableStateOf<List<CollectionListItem>>(emptyList()) }
     // First-run onboarding: null until prefs load (or stays null on an
     // older server with no endpoint). `onboardingDismissed` lets the user
     // leave onboarding for this session without a refetch race.
-    var preferences by remember { mutableStateOf<Preferences?>(null) }
+    var preferences by remember { mutableStateOf<PreferencesResponse?>(null) }
     var onboardingDismissed by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -167,9 +169,9 @@ fun HomeScreen(
                 val cw: Result<List<ContinueWatchingItem>>,
                 val tor: Result<List<TorrentView>>,
                 val watchlist: Result<List<WatchlistItem>>,
-                val forYou: Result<ForYouResponse>,
+                val forYou: Result<ForYou>,
                 val collections: Result<LibraryResponse>,
-                val prefs: Result<Preferences>,
+                val prefs: Result<PreferencesResponse>,
             )
             val fetch = withContext(Dispatchers.IO) {
                 // Discovery / watchlist / library failures shouldn't
@@ -202,7 +204,7 @@ fun HomeScreen(
             library = newLib
             watchlist = wl.getOrDefault(emptyList())
             forYou = fy.getOrNull()
-            collections = (coll.getOrNull() as? LibraryResponse.Collections)?.items.orEmpty()
+            collections = (coll.getOrNull() as? LibraryResponse.CollectionsWrapper)?.value?.items.orEmpty()
             preferences = fetch.prefs.getOrNull()
             val fail = listOfNotNull(cw.exceptionOrNull(), tor.exceptionOrNull()).firstOrNull()
             if (fail != null && fresh.isEmpty() && continueWatching.isEmpty()) {
@@ -295,7 +297,7 @@ private fun HomeContent(
     downloading: List<TorrentView>,
     library: List<TorrentView>,
     watchlist: List<WatchlistItem>,
-    forYou: ForYouResponse?,
+    forYou: ForYou?,
     collections: List<CollectionListItem>,
     container: AppContainer,
     onPickFile: (String, Int) -> Unit,
@@ -338,7 +340,7 @@ private fun HomeContent(
                 ResumeHero(
                     container = container,
                     item = resumePick,
-                    onResume = { onPickFile(resumePick.infohash, resumePick.fileIdx) },
+                    onResume = { onPickFile(resumePick.infohash, resumePick.fileIdx.toInt()) },
                     topBar = topBar,
                     modifier = Modifier.fillParentMaxHeight(0.78f),
                 )
@@ -388,7 +390,7 @@ private fun HomeContent(
                         ContinueWatchingCard(
                             container = container,
                             item = item,
-                            onClick = { onPickFile(item.infohash, item.fileIdx) },
+                            onClick = { onPickFile(item.infohash, item.fileIdx.toInt()) },
                         )
                     }
                 }
@@ -421,7 +423,7 @@ private fun HomeContent(
                             // shot straight to the representative
                             // torrent, hiding the rest of the
                             // collection's content.
-                            onClick = { onOpenCollection(c.id) },
+                            onClick = { onOpenCollection(c.id.toString()) },
                         )
                     }
                 }
@@ -443,7 +445,7 @@ private fun HomeContent(
                         WatchlistCard(
                             container = container,
                             item = w,
-                            onClick = { onOpenCollection(w.id) },
+                            onClick = { onOpenCollection(w.id.toString()) },
                         )
                     }
                 }
@@ -705,11 +707,11 @@ private fun ResumeHero(
     // tmdb_verified left the hero backdrop blank almost every time, since the
     // flag is usually false even when the id is good (it's COALESCEd from the
     // parent collection's resolved id).
-    var meta by remember(item.tmdbId) { mutableStateOf<TmdbMetadata?>(null) }
+    var meta by remember(item.tmdbId) { mutableStateOf<MediaMetadata?>(null) }
     LaunchedEffect(item.tmdbId, item.kind) {
         if (item.tmdbId == null) return@LaunchedEffect
         val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
-        meta = runCatching { container.apiFor(url).tmdbMetadata(item.tmdbId, item.kind) }.getOrNull()
+        meta = runCatching { container.apiFor(url).tmdbMetadata(item.tmdbId, item.kind?.value) }.getOrNull()
     }
     val backdrop = tmdbBackdropUrl(meta?.backdropPath, "w1280")
     val title = meta?.title
@@ -720,7 +722,7 @@ private fun ResumeHero(
         ?.let { (it - item.positionSeconds).coerceAtLeast(0.0) } ?: 0.0
     val metaParts = listOfNotNull(
         meta?.year?.toString(),
-        if (item.kind == "tv") "Series" else "Movie",
+        if (item.kind == MediaKind.tv) "Series" else "Movie",
         meta?.numberOfSeasons?.let { "$it seasons" },
     )
 
@@ -869,7 +871,7 @@ private fun ContinueWatchingCard(
         // (which the SCENE backfill resolved). The runtime-verified
         // flag is irrelevant for poster display.
         tmdbVerified = item.tmdbId != null,
-        kindHint = item.kind,
+        kindHint = item.kind?.value,
         // Original release / file name verbatim. We don't strip
         // tokens — episode numbers (SxxExx) and quality markers stay
         // visible; the marquee scroll on PosterCard handles long
@@ -931,11 +933,11 @@ internal fun CatalogCardTv(
     card: CatalogCard,
     onClick: () -> Unit,
 ) {
-    val newCount = card.newCount ?: 0
+    val newCount = 0 // backend CatalogCard exposes no new_count
     // Always say what it is — Movie / Series, prefixed with "Anime" for the
     // anime catalogue (which mixes movies and series). Solves "can't tell a
     // series from a film" on the blended shelves.
-    val kindLabel = if (card.kind == "tv") "Series" else "Movie"
+    val kindLabel = if (card.kind == MediaKind.tv) "Series" else "Movie"
     val typeLabel = if (card.isAnime) "Anime · $kindLabel" else kindLabel
     val subtitle = listOfNotNull(typeLabel, card.year?.toString()).joinToString(" · ")
     PosterCard(
@@ -949,7 +951,7 @@ internal fun CatalogCardTv(
         progress = null,
         progressColor = null,
         onClick = onClick,
-        kindHint = card.kind,
+        kindHint = card.kind.value,
         posterUrlOverride = card.posterUrl,
         topBadge = when {
             newCount > 0 -> {
@@ -1008,13 +1010,13 @@ internal fun routeCatalogClick(
     onPickResult: (String, String, Long?, String?) -> Unit,
     onOpenSearch: (String) -> Unit,
 ) {
-    val collectionId = card.collectionId
+    val collectionId: String? = null // backend CatalogCard exposes no collection_id
     val providerId = card.providerId
     val externalId = card.externalId
     when {
         collectionId != null -> onOpenCollection(collectionId)
         card.availability == "available" && providerId != null && externalId != null ->
-            onPickResult(providerId, externalId, card.tmdbId, card.kind)
+            onPickResult(providerId, externalId, card.tmdbId, card.kind.value)
         else -> onOpenSearch(card.title)
     }
 }
@@ -1027,7 +1029,7 @@ private fun CollectionCard(
     onClick: () -> Unit,
 ) {
     val subtitle = buildString {
-        if (collection.kind == "tv" && collection.episodeCount > 0) {
+        if (collection.kind == MediaKind.tv && collection.episodeCount > 0) {
             append("${collection.episodeCount} ep")
         } else {
             append(formatBytes(collection.totalSizeBytes))
@@ -1044,7 +1046,7 @@ private fun CollectionCard(
         // right TMDB namespace. Without this, an id collision between
         // `/movie/X` and `/tv/X` flipped the poster to an unrelated
         // entry.
-        kindHint = collection.kind,
+        kindHint = collection.kind.value,
         title = prettifyFilename(collection.displayTitle),
         subtitle = subtitle,
         progress = null,
@@ -1064,7 +1066,7 @@ private fun TorrentCard(
         container = container,
         tmdbId = torrent.tmdbId,
         tmdbVerified = torrent.tmdbVerified,
-        kindHint = torrent.kind,
+        kindHint = torrent.kind?.value,
         title = prettifyFilename(torrent.name ?: torrent.infohash.take(12)),
         subtitle = formatBytes(torrent.totalSizeBytes),
         progress = null,
@@ -1085,11 +1087,11 @@ private fun DownloadingCard(
     torrent: TorrentView,
     onClick: () -> Unit,
 ) {
-    val pct = (torrent.progressPct / 100f).coerceIn(0f, 1f)
+    val pct = (torrent.progressPct.toFloat() / 100f).coerceIn(0f, 1f)
     val speed = torrent.downloadSpeedBps
     val subtitle = if (torrent.error != null) {
         "Error"
-    } else if (torrent.state.equals("paused", ignoreCase = true)) {
+    } else if (torrent.state == TorrentState.paused) {
         "Paused · ${torrent.progressPct.toInt()}%"
     } else if (speed > 0) {
         "${torrent.progressPct.toInt()}% · ${formatSpeed(speed)}"
@@ -1100,7 +1102,7 @@ private fun DownloadingCard(
         container = container,
         tmdbId = torrent.tmdbId,
         tmdbVerified = torrent.tmdbVerified,
-        kindHint = torrent.kind,
+        kindHint = torrent.kind?.value,
         title = prettifyFilename(torrent.name ?: torrent.infohash.take(12)),
         subtitle = subtitle,
         progress = pct,
@@ -1169,7 +1171,7 @@ private fun PosterCard(
      *  top of the poster. */
     topBadge: (@Composable () -> Unit)? = null,
 ) {
-    var meta by remember(tmdbId, tmdbVerified) { mutableStateOf<TmdbMetadata?>(null) }
+    var meta by remember(tmdbId, tmdbVerified) { mutableStateOf<MediaMetadata?>(null) }
     LaunchedEffect(tmdbId, tmdbVerified, posterUrlOverride, kindHint) {
         if (posterUrlOverride != null) return@LaunchedEffect
         if (!tmdbVerified || tmdbId == null) return@LaunchedEffect

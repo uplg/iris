@@ -95,7 +95,7 @@ fun TorrentsScreen(
         val res = withContext(Dispatchers.IO) {
             runCatching { container.apiFor(url).library("torrents") }.getOrNull()
         }
-        val t = res as? LibraryResponse.Torrents ?: return null
+        val t = (res as? LibraryResponse.TorrentsWrapper)?.value ?: return null
         return t.items to t.totalUploadedBytes
     }
 
@@ -335,7 +335,7 @@ private fun TorrentCard(
     }
     val single = videos.size == 1
     val multi = videos.size > 1
-    val pct = t.progressPct.coerceIn(0f, 100f)
+    val pct = t.progressPct.toFloat().coerceIn(0f, 100f)
     val finished = pct >= 100f
     val ratio = if (t.progressBytes > 0) t.uploadedBytesTotal.toDouble() / t.progressBytes else null
 
@@ -360,7 +360,7 @@ private fun TorrentCard(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                StateBadge(t.state)
+                StateBadge(t.state.value)
                 Meta("${t.peers} peer${if (t.peers == 1) "" else "s"}")
                 Meta("${formatBytes(t.progressBytes)} / ${formatBytes(t.totalSizeBytes)}")
                 Meta("↓ ${formatBytes(t.downloadSpeedBps)}/s")

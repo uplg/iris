@@ -28,8 +28,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.DeviceCodeRequest
-import studio.kahn.iris.tv.data.DeviceCodeResponse
+import studio.kahn.iris.tv.data.CreateCodeRequest
+import studio.kahn.iris.tv.data.CreateCodeResponse
+import studio.kahn.iris.tv.data.PollResponse
 import studio.kahn.iris.tv.data.IrisSession
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
@@ -60,7 +61,7 @@ fun PairingScreen(
     onUsePassword: () -> Unit,
 ) {
     var serverUrl by remember { mutableStateOf("https://iris.kahn.studio") }
-    var pairing by remember { mutableStateOf<DeviceCodeResponse?>(null) }
+    var pairing by remember { mutableStateOf<CreateCodeResponse?>(null) }
     var pending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -80,25 +81,29 @@ fun PairingScreen(
         )
         while (true) {
             try {
-                val res = api.pollDeviceCode(p.deviceId)
-                when (res.status) {
-                    "linked" -> {
+                val res = api.pollDeviceCode(p.deviceId.toString())
+                when (res) {
+                    is PollResponse.LinkedWrapper -> {
                         // CookieJar persisted Set-Cookie. Save user-visible
                         // fields so the next launch knows who it is.
                         val current = container.sessionStore.session.first()
-                        if (current != null && res.user != null) {
+                        if (current != null) {
                             container.sessionStore.saveSession(
-                                current.copy(email = res.user.email, isAdmin = res.user.isAdmin)
+                                current.copy(
+                                    email = res.value.user.email,
+                                    isAdmin = res.value.user.isAdmin,
+                                )
                             )
                         }
                         onPaired()
                         return@LaunchedEffect
                     }
-                    "expired" -> {
+                    is PollResponse.ExpiredWrapper -> {
                         error = "Pairing code expired. Generate a new one."
                         pairing = null
                         return@LaunchedEffect
                     }
+                    is PollResponse.PendingWrapper -> Unit // keep polling
                 }
             } catch (e: Exception) {
                 error = e.message ?: "Polling failed"
@@ -147,7 +152,7 @@ fun PairingScreen(
                             try {
                                 container.sessionStore.setServerUrl(serverUrl)
                                 val res = container.apiFor(serverUrl)
-                                    .createDeviceCode(DeviceCodeRequest(kind = "android-tv"))
+                                    .createDeviceCode(CreateCodeRequest(kind = "android-tv"))
                                 pairing = res
                             } catch (e: Exception) {
                                 error = e.message ?: "Failed to create pairing code"

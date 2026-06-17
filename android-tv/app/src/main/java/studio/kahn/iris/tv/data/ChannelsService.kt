@@ -73,7 +73,7 @@ class ChannelsService(private val context: Context) {
                     posterUri = poster,
                     deepLink = "iris://watch/${t.infohash}/$idx",
                     weight = weight--,
-                    type = if (meta?.kind == "tv")
+                    type = if (meta?.kind == TmdbKind.tv)
                         TvContractCompat.PreviewPrograms.TYPE_TV_SERIES
                     else
                         TvContractCompat.PreviewPrograms.TYPE_MOVIE,

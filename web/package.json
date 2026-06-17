@@ -27,19 +27,19 @@
     "@jellyfin/libass-wasm": "^4.2.4",
     "@tailwindcss/vite": "^4.3.1",
     "@tanstack/react-query": "^5.101.0",
-    "@tanstack/react-router": "^1.170.15",
-    "@tanstack/react-virtual": "3.14.2",
+    "@tanstack/react-router": "^1.170.16",
+    "@tanstack/react-virtual": "3.14.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "dompurify": "^3.4.10",
+    "dompurify": "^3.4.11",
     "hls.js": "^1.6.16",
     "libav.js": "^6.8.8",
     "libavjs-webcodecs-bridge": "^0.3.2",
     "libpgs": "^0.8.1",
-    "lucide-react": "^1.18.0",
-    "mediabunny": "^1.46.0",
+    "lucide-react": "^1.20.0",
+    "mediabunny": "^1.48.1",
     "next-themes": "^0.4.6",
-    "radix-ui": "^1.5.0",
+    "radix-ui": "^1.6.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-hook-form": "^7.79.0",
@@ -57,12 +57,12 @@
     "@vitejs/plugin-react": "^6.0.2",
     "@webgpu/types": "^0.1.70",
     "openapi-typescript": "^7.13.0",
-    "oxfmt": "^0.54.0",
-    "oxlint": "^1.69.0",
+    "oxfmt": "^0.55.0",
+    "oxlint": "^1.70.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.16"
   },
   "patchedDependencies": {
-    "mediabunny@1.46.0": "patches/mediabunny@1.46.0.patch"
+    "mediabunny@1.48.1": "patches/mediabunny@1.48.1.patch"
   }
 }

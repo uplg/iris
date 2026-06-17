@@ -58,10 +58,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.R
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.EpisodeStatus
 import studio.kahn.iris.tv.data.EpisodePoint
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.MediaProbe
-import studio.kahn.iris.tv.data.PlaybackPrefs
+import studio.kahn.iris.tv.data.TorrentState
+import studio.kahn.iris.tv.data.UpdatePlaybackPrefs
 import studio.kahn.iris.tv.data.ProgressUpdate
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.buildMediaItem
@@ -151,7 +153,7 @@ fun WatchScreen(
                 val freshProbe = api.probe(infohash, fileIdx)
                 val progresses = runCatching { api.torrentProgress(infohash) }
                     .getOrDefault(emptyList())
-                val resume = progresses.firstOrNull { it.fileIdx == fileIdx }
+                val resume = progresses.firstOrNull { it.fileIdx == fileIdx.toLong() }
                     ?.takeUnless { it.completed }?.positionSeconds ?: 0.0
                 // Per-file progress carries the audio + subtitle
                 // picks; safe to ignore failures (first-time watch).
@@ -165,8 +167,8 @@ fun WatchScreen(
                 // first recomposition that sees `probe != null`
                 // already has the right start offset.
                 resumePositionSec = resume
-                savedAudioIdx = saved?.audioTrackIdx
-                savedSubIdx = saved?.subtitleTrackIdx
+                savedAudioIdx = saved?.audioTrackIdx?.toInt()
+                savedSubIdx = saved?.subtitleTrackIdx?.toInt()
                 prefAudioLang = prefs?.audioLanguage
                 prefSubLang = prefs?.subtitleLanguage
                 probe = freshProbe
@@ -431,7 +433,7 @@ private fun ReadyPlayer(
                         // Encoded seconds = fraction × runtime. Start once the
                         // encoder is a touch past the resume point so the seek
                         // lands with buffer ahead instead of on the live edge.
-                        val encodedSec = (st.progress?.toDouble() ?: 0.0) * durationSec
+                        val encodedSec = (st.progress ?: 0.0) * durationSec
                         if (st.ready || durationSec <= 0.0 || encodedSec >= resumeSec + 10.0) {
                             portionReady = true
                         }
@@ -586,8 +588,8 @@ private fun ReadyPlayer(
                         body = ProgressUpdate(
                             positionSeconds = pos / 1000.0,
                             durationSeconds = dur?.div(1000.0),
-                            audioTrackIdx = currentAudioIdxRef.get(),
-                            subtitleTrackIdx = currentSubIdxRef.get(),
+                            audioTrackIdx = currentAudioIdxRef.get()?.toLong(),
+                            subtitleTrackIdx = currentSubIdxRef.get()?.toLong(),
                             completed = dur != null && pos >= dur - 30_000,
                         ),
                     )
@@ -604,7 +606,7 @@ private fun ReadyPlayer(
                 }
                 runCatching {
                     container.apiFor(serverUrl).savePlaybackPreferences(
-                        PlaybackPrefs(audioLanguage = audioLang, subtitleLanguage = subLang),
+                        UpdatePlaybackPrefs(audioLanguage = audioLang, subtitleLanguage = subLang),
                     )
                 }
             }
@@ -872,8 +874,8 @@ private fun ReadyPlayer(
                                     body = ProgressUpdate(
                                         positionSeconds = pos / 1000.0,
                                         durationSeconds = if (durationMs > 0) durationMs / 1000.0 else null,
-                                        audioTrackIdx = audioIdx,
-                                        subtitleTrackIdx = subIdx,
+                                        audioTrackIdx = audioIdx?.toLong(),
+                                        subtitleTrackIdx = subIdx?.toLong(),
                                         completed = completed,
                                         seek = pendingSeekSave.getAndSet(false),
                                     ),
@@ -909,8 +911,8 @@ private fun ReadyPlayer(
                         body = ProgressUpdate(
                             positionSeconds = pos / 1000.0,
                             durationSeconds = dur?.div(1000.0),
-                            audioTrackIdx = audioIdx,
-                            subtitleTrackIdx = subIdx,
+                            audioTrackIdx = audioIdx?.toLong(),
+                            subtitleTrackIdx = subIdx?.toLong(),
                             completed = dur != null && pos >= dur - 30_000,
                             seek = pendingSeekSave.getAndSet(false),
                         ),
@@ -1027,12 +1029,12 @@ private fun ReadyPlayer(
                 EpisodeNavChip(
                     label = "S%02dE%02d".format(prev.season, prev.episode),
                     direction = NavDirection.Prev,
-                    grabbing = grabbing && prev.status == "available",
+                    grabbing = grabbing && prev.status == EpisodeStatus.available,
                     point = prev,
                     onPlay = {
                         val ih = prev.infohash
                         val idx = prev.fileIdx
-                        if (ih != null && idx != null) onNavigateToFile(ih, idx)
+                        if (ih != null && idx != null) onNavigateToFile(ih, idx.toInt())
                     },
                     onPrepare = {
                         val fid = prev.followId ?: return@EpisodeNavChip
@@ -1040,15 +1042,15 @@ private fun ReadyPlayer(
                         scope.launch {
                             val grabbed = runCatching {
                                 container.apiFor(serverUrl).grabEpisode(
-                                    id = fid,
-                                    season = prev.season,
-                                    episode = prev.episode,
+                                    id = fid.toString(),
+                                    season = prev.season.toInt(),
+                                    episode = prev.episode.toInt(),
                                 )
                             }.getOrNull()
                             grabbing = false
                             if (grabbed != null) {
                                 prevEpisode = prev.copy(
-                                    status = "downloaded",
+                                    status = EpisodeStatus.downloaded,
                                     infohash = grabbed.infohash,
                                     fileIdx = grabbed.fileIdx,
                                 )
@@ -1061,12 +1063,12 @@ private fun ReadyPlayer(
                 EpisodeNavChip(
                     label = "S%02dE%02d".format(next.season, next.episode),
                     direction = NavDirection.Next,
-                    grabbing = grabbing && next.status == "available",
+                    grabbing = grabbing && next.status == EpisodeStatus.available,
                     point = next,
                     onPlay = {
                         val ih = next.infohash
                         val idx = next.fileIdx
-                        if (ih != null && idx != null) onNavigateToFile(ih, idx)
+                        if (ih != null && idx != null) onNavigateToFile(ih, idx.toInt())
                     },
                     onPrepare = {
                         val fid = next.followId ?: return@EpisodeNavChip
@@ -1074,15 +1076,15 @@ private fun ReadyPlayer(
                         scope.launch {
                             val grabbed = runCatching {
                                 container.apiFor(serverUrl).grabEpisode(
-                                    id = fid,
-                                    season = next.season,
-                                    episode = next.episode,
+                                    id = fid.toString(),
+                                    season = next.season.toInt(),
+                                    episode = next.episode.toInt(),
                                 )
                             }.getOrNull()
                             grabbing = false
                             if (grabbed != null) {
                                 nextEpisode = next.copy(
-                                    status = "downloaded",
+                                    status = EpisodeStatus.downloaded,
                                     infohash = grabbed.infohash,
                                     fileIdx = grabbed.fileIdx,
                                 )
@@ -1129,11 +1131,11 @@ private fun ReadyPlayer(
                 ) {
                     UpNextPill(
                         next = next,
-                        grabbing = grabbing && next.status == "available",
+                        grabbing = grabbing && next.status == EpisodeStatus.available,
                         onPlay = {
                             val ih = next.infohash
                             val idx = next.fileIdx
-                            if (ih != null && idx != null) onNavigateToFile(ih, idx)
+                            if (ih != null && idx != null) onNavigateToFile(ih, idx.toInt())
                         },
                         onPrepare = {
                             val fid = next.followId ?: return@UpNextPill
@@ -1141,15 +1143,15 @@ private fun ReadyPlayer(
                             scope.launch {
                                 val grabbed = runCatching {
                                     container.apiFor(serverUrl).grabEpisode(
-                                        id = fid,
-                                        season = next.season,
-                                        episode = next.episode,
+                                        id = fid.toString(),
+                                        season = next.season.toInt(),
+                                        episode = next.episode.toInt(),
                                     )
                                 }.getOrNull()
                                 grabbing = false
                                 if (grabbed != null) {
                                     nextEpisode = next.copy(
-                                        status = "downloaded",
+                                        status = EpisodeStatus.downloaded,
                                         infohash = grabbed.infohash,
                                         fileIdx = grabbed.fileIdx,
                                     )
@@ -1173,7 +1175,7 @@ private fun UpNextPill(
     onPrepare: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val downloaded = next.status == "downloaded" && next.infohash != null && next.fileIdx != null
+    val downloaded = next.status == EpisodeStatus.downloaded && next.infohash != null && next.fileIdx != null
     Surface(
         shape = RoundedCornerShape(12.dp),
         colors = SurfaceDefaults.colors(
@@ -1231,7 +1233,7 @@ private fun EpisodeNavChip(
     onPlay: () -> Unit,
     onPrepare: () -> Unit,
 ) {
-    val downloaded = point.status == "downloaded" && point.infohash != null && point.fileIdx != null
+    val downloaded = point.status == EpisodeStatus.downloaded && point.infohash != null && point.fileIdx != null
     val text = when {
         grabbing -> "Preparing $label…"
         downloaded && direction == NavDirection.Prev -> "‹ $label"
@@ -1363,7 +1365,7 @@ private fun stepFor(probeReady: Boolean, torrent: TorrentView?): Step {
                 append(" · ${torrent.peers} peers")
             }
         }
-        val label = if (torrent.state.equals("paused", ignoreCase = true)) {
+        val label = if (torrent.state == TorrentState.paused) {
             "Download paused"
         } else if (torrent.error != null) {
             "Torrent error"
@@ -1372,7 +1374,7 @@ private fun stepFor(probeReady: Boolean, torrent: TorrentView?): Step {
         } else {
             "Connecting to peers…"
         }
-        return Step(label, sub, pct.coerceIn(0f, 0.99f))
+        return Step(label, sub, pct.toFloat().coerceIn(0f, 0.99f))
     }
     return Step("Reading media metadata…", "ffprobe scanning streams.", null)
 }
@@ -1424,7 +1426,7 @@ private fun RemuxFallbackOverlay(
             // overlay never freezes silent on a slow remuxer warm-up.
             if (pct != null) {
                 androidx.compose.material3.LinearProgressIndicator(
-                    progress = { pct.coerceIn(0f, 1f) },
+                    progress = { pct.toFloat().coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth(0.5f).height(4.dp),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = Color.White.copy(alpha = 0.15f),

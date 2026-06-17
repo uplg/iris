@@ -14,8 +14,10 @@
 //! (incl. the binary stream / HLS / subtitle endpoints), library, follows,
 //! me, preferences, playback, for-you, discover, providers, metadata, admin,
 //! and the health probe. Hard cases handled: `#[serde(tag = "…")]`
-//! discriminated unions (`PollResponse`, `LibraryResponse`) → `oneOf`, and
-//! `#[serde(flatten)]` (`SearchResponse`) → `allOf`.
+//! discriminated unions (`PollResponse`, `LibraryResponse`) → `oneOf` +
+//! `discriminator` (see `promote_tagged_union` — utoipa can't emit the
+//! discriminator itself, and codegen needs it), and `#[serde(flatten)]`
+//! (`SearchResponse`) → `allOf`.
 //!
 //! To add a new endpoint: annotate the handler with `#[utoipa::path(...)]`,
 //! make it (and the request/response DTOs it names) `pub(crate)`, and add the
@@ -191,9 +193,105 @@ pub fn spec_path() -> std::path::PathBuf {
 /// and the snapshot test checks.
 #[must_use]
 pub fn spec_json() -> String {
-    ApiDoc::openapi()
-        .to_pretty_json()
-        .expect("serialize OpenAPI spec")
+    let mut doc = ApiDoc::openapi();
+    if let Some(components) = doc.components.as_mut() {
+        // utoipa emits serde internally-tagged enums (`#[serde(tag = "…")]`) as
+        // a bare `oneOf` of inline objects with NO discriminator — it only
+        // supports `discriminator` on `#[serde(untagged)]` enums. Downstream
+        // codegen then can't tell the variants apart: openapi-generator's
+        // kotlin target collapses them into one broken data class and
+        // openapi-typescript produces an awkward union. Promote each tagged
+        // union into a proper discriminated union — variants become named
+        // `$ref` schemas and the parent gets an OpenAPI `discriminator` — so
+        // every consumer generates a clean sealed type. This reshapes only the
+        // *spec*; the JSON wire format is identical (the Rust types are
+        // untouched), so deployed clients are unaffected.
+        //
+        // Keep this list in lockstep with the `#[serde(tag = …)]` response
+        // enums in `routes/` (`committed_spec_is_current` guards the output).
+        promote_tagged_union(components, "LibraryResponse", "view");
+        promote_tagged_union(components, "PollResponse", "status");
+    }
+    doc.to_pretty_json().expect("serialize OpenAPI spec")
+}
+
+/// Rewrite a discriminator-less `oneOf` (how utoipa renders an internally-tagged
+/// enum) into a discriminated union: lift each inline variant into its own named
+/// component schema (`<Union><Variant>`), reference it by `$ref`, and attach a
+/// `discriminator` keyed on the serde tag property.
+///
+/// Works at the `serde_json::Value` level — the variant schemas round-trip
+/// through `RefOr<Schema>`'s `Deserialize` — so it never has to reconstruct
+/// utoipa's typed schema model by hand. No-op (idempotent) if the named schema
+/// isn't a `oneOf`.
+fn promote_tagged_union(
+    components: &mut utoipa::openapi::Components,
+    name: &str,
+    discriminator: &str,
+) {
+    use serde_json::{Value, json};
+
+    let Some(current) = components.schemas.get(name) else {
+        return;
+    };
+    let union = serde_json::to_value(current).expect("schema serialises to JSON");
+    let Some(variants) = union.get("oneOf").and_then(Value::as_array) else {
+        return;
+    };
+
+    let mut refs: Vec<Value> = Vec::with_capacity(variants.len());
+    let mut mapping = serde_json::Map::new();
+    let mut promoted: Vec<(String, Value)> = Vec::with_capacity(variants.len());
+
+    for variant in variants {
+        let tag = variant
+            .pointer(&format!("/properties/{discriminator}/enum/0"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| {
+                panic!("`{name}` oneOf variant lacks a const `{discriminator}` discriminator")
+            });
+        let variant_name = format!("{name}{}", pascal_case(tag));
+        let ref_path = format!("#/components/schemas/{variant_name}");
+        refs.push(json!({ "$ref": ref_path }));
+        mapping.insert(tag.to_owned(), Value::String(ref_path));
+        promoted.push((variant_name, variant.clone()));
+    }
+
+    let mut rewritten = serde_json::Map::new();
+    if let Some(desc) = union.get("description") {
+        rewritten.insert("description".to_owned(), desc.clone());
+    }
+    rewritten.insert("oneOf".to_owned(), Value::Array(refs));
+    rewritten.insert(
+        "discriminator".to_owned(),
+        json!({ "propertyName": discriminator, "mapping": Value::Object(mapping) }),
+    );
+
+    components.schemas.insert(
+        name.to_owned(),
+        serde_json::from_value(Value::Object(rewritten)).expect("rebuild union schema"),
+    );
+    for (variant_name, variant) in promoted {
+        components
+            .schemas
+            .insert(variant_name, serde_json::from_value(variant).expect("rebuild variant schema"));
+    }
+}
+
+/// `snake_case` / `kebab-case` tag value → `PascalCase` schema-name suffix
+/// (`collections` → `Collections`, `season_pack` → `SeasonPack`).
+fn pascal_case(value: &str) -> String {
+    value
+        .split(['_', '-'])
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

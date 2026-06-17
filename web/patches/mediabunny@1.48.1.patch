@@ -1,8 +1,5 @@
-diff --git a/node_modules/mediabunny/.bun-tag-fcb3587c0db22042 b/.bun-tag-fcb3587c0db22042
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/mediabunny.d.ts b/dist/mediabunny.d.ts
-index b9cec087d4014ffa0dd7eab15ddd03229d6b3d09..255a3ac20fbec0635a9e5f73995fe0fc7e893c3a 100644
+index 988d9ff4b32d222c4ce8fbff2c7a4f0a102e3428..05aa6fcc0877c65739803217fba0f20db2e6b866 100644
 --- a/dist/mediabunny.d.ts
 +++ b/dist/mediabunny.d.ts
 @@ -149,7 +149,7 @@ export declare type AttachedImage = {
@@ -14,7 +11,7 @@ index b9cec087d4014ffa0dd7eab15ddd03229d6b3d09..255a3ac20fbec0635a9e5f73995fe0fc
  
  /**
   * A sink that retrieves decoded audio samples from an audio track and converts them to `AudioBuffer` instances. This is
-@@ -3117,7 +3117,7 @@ export declare type MpegTsOutputFormatOptions = {
+@@ -3223,7 +3223,7 @@ export declare type MpegTsOutputFormatOptions = {
   * @group Codecs
   * @public
   */
@@ -83,24 +80,17 @@ index 039b9fc16ab7336e2a8cee553cb0833c72c9341a..39b2cb9000bd444e20cefd4d11c647dd
          return codec;
      }
 diff --git a/dist/modules/src/isobmff/isobmff-muxer.js b/dist/modules/src/isobmff/isobmff-muxer.js
-index 1a1381839f3cf776cf39186c5c326de20286e670..1a8d5654dba06bf7dd08e41bb5a60de6d0a493fb 100644
+index a55e563040bbfd00553b6c875847c2dcfcad2da9..a0340db1eb5c6a80ae991949fd3d47d21c3be11e 100644
 --- a/dist/modules/src/isobmff/isobmff-muxer.js
 +++ b/dist/modules/src/isobmff/isobmff-muxer.js
-@@ -575,13 +575,31 @@ export class IsobmffMuxer extends Muxer {
+@@ -575,13 +575,24 @@ export class IsobmffMuxer extends Muxer {
              // (presentation timestamp & decode order are all you need), but it is a concept in ISOBMFF so we need to
              // model it.
              sample.decodeTimestamp = sortedTimestamps[i];
-+            // [iris patch] Open-GOP fix. A new GOP's leading pictures present before
-+            // the previous GOP's max PTS, so the sorted-PTS->DTS heuristic above
-+            // produces a decode timestamp that moves BACKWARDS across the GOP
-+            // boundary, which trips the `assert(delta >= 0)` below. Iris's Tier B
-+            // worked around it by DROPPING those frames upstream, but they are decode
-+            // references for the open GOP, so dropping them stalls the browser decoder
-+            // (readyState stuck, no error). Instead, clamp the decode timestamp to stay
-+            // monotonic; the per-sample composition offset emitted in `trun` (signed,
-+            // version 1) is recomputed from this decodeTimestamp at write time, so the
-+            // presentation timestamp (PTS) is unchanged. This is how ffmpeg muxes
-+            // open-GOP HEVC into MP4.
++            // [iris patch] Open-GOP fix. Clamp decode timestamp to stay monotonic across
++            // GOP boundaries (open-GOP leading pictures present before the previous GOP's
++            // max PTS) so the assert below doesn't trip; PTS is unchanged (the signed
++            // composition offset in trun is recomputed from this decodeTimestamp).
 +            if (trackData.lastTimescaleUnits !== null) {
 +                const minDecodeTimestamp = trackData.lastTimescaleUnits / trackData.timescale;
 +                if (sample.decodeTimestamp < minDecodeTimestamp) {
@@ -114,8 +104,8 @@ index 1a1381839f3cf776cf39186c5c326de20286e670..1a8d5654dba06bf7dd08e41bb5a60de6
                  const timescaleUnits = intoTimescale(sample.decodeTimestamp, trackData.timescale, false);
 -                const delta = Math.round(timescaleUnits - trackData.lastTimescaleUnits);
 -                assert(delta >= 0);
-+                // [iris patch] Clamp (belt-and-suspenders for float drift); the
-+                // decodeTimestamp clamp above already keeps this non-negative.
++                // [iris patch] Clamp (belt-and-suspenders for float drift); the decodeTimestamp
++                // clamp above already keeps this non-negative.
 +                const delta = Math.max(0, Math.round(timescaleUnits - trackData.lastTimescaleUnits));
                  trackData.lastTimescaleUnits += delta;
                  trackData.lastSample.timescaleUnitsToNextSample = delta;
@@ -133,7 +123,7 @@ index 50cfea7ec0a82b9360dec35174a2c14789241513..06e73c63d53c1b78d75d150e86f4b09d
      'pcm-s16': 'A_PCM/INT/LIT',
      'pcm-s16be': 'A_PCM/INT/BIG',
 diff --git a/dist/modules/src/matroska/matroska-demuxer.js b/dist/modules/src/matroska/matroska-demuxer.js
-index cee05b8ce7cf6fc31820e29f4baa04aa427a7e4e..f80446a26ae119a4bb57263e5d59d1a49c748d0d 100644
+index b40fdc6290c5ea1ad8739f75a5adb9a494915c28..8d895c98ac39f8b8c0aaf51acb0a7d77f4fd63a7 100644
 --- a/dist/modules/src/matroska/matroska-demuxer.js
 +++ b/dist/modules/src/matroska/matroska-demuxer.js
 @@ -780,6 +780,10 @@ export class MatroskaDemuxer extends Demuxer {

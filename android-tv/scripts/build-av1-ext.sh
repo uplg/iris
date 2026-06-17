@@ -263,8 +263,12 @@ if [[ -z "${AAR_FILE}" ]]; then
 fi
 
 # Guard against the exact bug this rewrite fixes: a classes-only AAR
-# (no native libdav1d) means the renderer is inert at runtime.
-if ! unzip -l "${AAR_FILE}" 2>/dev/null | grep -q '\.so'; then
+# (no native libdav1d) means the renderer is inert at runtime. Use `grep -c`
+# (consumes all input) instead of `grep -q` (short-circuits on first match):
+# under `set -o pipefail`, grep -q's early exit SIGPIPEs the upstream `unzip`,
+# so the pipeline returns 141 and trips this guard even when a .so IS present.
+so_count="$(unzip -l "${AAR_FILE}" 2>/dev/null | grep -c '\.so' || true)"
+if [[ "${so_count}" -eq 0 ]]; then
     echo "Built AAR contains no native .so - the dav1d JNI did not link." >&2
     echo "  AAR: ${AAR_FILE}" >&2
     exit 1

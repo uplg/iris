@@ -23,7 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.ForYouResponse
+import studio.kahn.iris.tv.data.ForYou
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.theme.IrisColors
@@ -43,7 +43,7 @@ fun ForYouScreen(
     onPickResult: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
     onOpenSearch: (String) -> Unit,
 ) {
-    var data by remember { mutableStateOf<ForYouResponse?>(null) }
+    var data by remember { mutableStateOf<ForYou?>(null) }
     var loading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {

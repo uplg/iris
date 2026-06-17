@@ -49,7 +49,7 @@ async-trait = "0.1.89"
 axum = { version = "0.8.9", features = ["macros", "http2"] }
 axum-extra = { version = "0.12.6", features = ["typed-header", "cookie", "cookie-private"] }
 tower = { version = "0.5.3", features = ["util"] }
-tower-http = { version = "0.6.11", features = ["trace", "cors", "fs", "compression-gzip", "set-header", "normalize-path"] }
+tower-http = { version = "0.7.0", features = ["trace", "cors", "fs", "compression-gzip", "set-header", "normalize-path"] }
 hyper = "1.10.1"
 http = "1.4.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls", "gzip", "brotli", "stream", "http2"] }

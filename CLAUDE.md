@@ -105,10 +105,57 @@ bun run format       # oxfmt
 
 # Android TV (open android-tv/ in Android Studio Hedgehog+)
 # AGP 9 enables Kotlin automatically — no kotlin-android plugin
+# compileSdk/targetSdk 37 — targetSdk bumps need a real-device smoke test.
+./gradlew :app:assembleRelease            # also runs :app:openApiGenerate (DTO codegen)
 
 # Docker prod
 docker compose up --build -d
 ```
+
+## OpenAPI contract (BE ↔ web ↔ TV)
+
+`web/openapi.json` (utoipa-derived, `crates/iris-api/src/openapi.rs`) is the
+single source of truth for the request/response shapes. **Nothing hand-maintains
+DTOs** — every client generates them:
+
+- **Backend** emits the spec: `bun run gen-api` (or `cargo run -p iris-api
+  --bin gen-openapi -- --write`). The `committed_spec_is_current` test fails
+  until you regenerate + commit `web/openapi.json`.
+- **Web** generates TS types: `openapi-typescript` → `src/lib/api-types.ts`
+  (auto via `predev`/`prebuild`). `api.ts` wraps them with the fetch client.
+- **Android TV** generates `@Serializable` models: the `org.openapi.generator`
+  Gradle plugin (`openApiGenerate` task, wired before compile via the AGP
+  Variant API) → `app/build/generated/openapi/…/data/` in package
+  `studio.kahn.iris.tv.data`. Models only — `IrisApi.kt` (the Retrofit
+  interface) + the OkHttp wiring stay hand-written. Generator flags that
+  matter: `serializationLibrary=kotlinx_serialization`,
+  `enumUnknownDefaultCase=true` (unknown enum variant → fallback, never throws —
+  the backward-compat rule), `generateOneOfAnyOfWrappers=true` (turns the
+  tagged unions into working kotlinx sealed interfaces).
+
+**Discriminated unions:** utoipa renders `#[serde(tag = "…")]` enums
+(`LibraryResponse`, `PollResponse`) as a bare `oneOf` with NO discriminator,
+which both generators mishandle. `promote_tagged_union` in `openapi.rs`
+rewrites them (JSON-level, Rust types untouched → wire-identical) into named
+`$ref` variants + an OpenAPI `discriminator`. **Keep that list in sync with the
+tagged response enums.**
+
+The generated Kotlin types are stricter than loose hand-written models
+(`MediaKind`/`TmdbKind`/`EpisodeStatus`/`TorrentState` enums not `String`,
+`UUID` not `String`, `Long` not `Int`, real nullability) — drift surfaces as
+compile errors, which is the point. A field the TV used but the spec lacks
+(e.g. `CatalogCard.new_count`) is genuine drift: add it to the Rust type, not a
+hand-patched Kotlin model.
+
+### Media3 decoder AARs are version-coupled
+
+`app/libs/lib-decoder-{ffmpeg,av1}-<media3>-release.aar` are hand-built native
+extensions (not on Maven) and **must match the `media3` version exactly** or
+they crash at runtime. After bumping `media3` in `libs.versions.toml`:
+`rm -rf android-tv/.ffmpeg-ext-build/media` (forces a re-clone at the new tag),
+then run `scripts/build-ffmpeg-ext.sh` + `scripts/build-av1-ext.sh`. The av1
+script re-applies `scripts/dav1d-10bit-surface.patch` — if it no longer applies
+to the new Media3 source, regenerate it (else 10-bit AV1 breaks).
 
 ## Core architectural patterns
 

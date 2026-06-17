@@ -47,10 +47,11 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
+import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.LibraryResponse
-import studio.kahn.iris.tv.data.TmdbMetadata
+import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
@@ -110,7 +111,7 @@ fun LibraryScreen(
             val url = container.sessionStore.serverUrl.first()
                 ?: run { error = "Not signed in"; loading = false; return@LaunchedEffect }
             val res = container.apiFor(url).library("collections")
-            all = (res as? LibraryResponse.Collections)?.items.orEmpty()
+            all = (res as? LibraryResponse.CollectionsWrapper)?.value?.items.orEmpty()
         } catch (e: Exception) {
             error = e.message ?: "Failed to load library"
         } finally {
@@ -121,7 +122,7 @@ fun LibraryScreen(
     val visible = remember(all, search, kind, sort) {
         val q = search.trim().lowercase()
         val filtered = all.asSequence()
-            .filter { kind.kind == null || it.kind == kind.kind }
+            .filter { kind.kind == null || it.kind.value == kind.kind }
             .filter { q.isEmpty() || it.displayTitle.lowercase().contains(q) }
             .toList()
         when (sort) {
@@ -144,7 +145,7 @@ fun LibraryScreen(
     // Card to focus: the one we came from when it's still present under the
     // current filter, else the first card.
     val targetIndex = remember(visible, lastOpenedId) {
-        lastOpenedId?.let { id -> visible.indexOfFirst { it.id == id } }?.takeIf { it >= 0 } ?: 0
+        lastOpenedId?.let { id -> visible.indexOfFirst { it.id.toString() == id } }?.takeIf { it >= 0 } ?: 0
     }
     LaunchedEffect(visible.isNotEmpty()) {
         if (didInitialFocus || visible.isEmpty()) return@LaunchedEffect
@@ -268,8 +269,8 @@ fun LibraryScreen(
                             // Remember which card we leave from so Back can
                             // restore focus to it.
                             onClick = {
-                                lastOpenedId = c.id
-                                onOpenCollection(c.id)
+                                lastOpenedId = c.id.toString()
+                                onOpenCollection(c.id.toString())
                             },
                             modifier = if (index == targetIndex) {
                                 Modifier.focusRequester(restoreFocus)
@@ -319,16 +320,16 @@ private fun LibraryGridCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var meta by remember(collection.tmdbId) { mutableStateOf<TmdbMetadata?>(null) }
-    LaunchedEffect(collection.tmdbId, collection.kind) {
+    var meta by remember(collection.tmdbId) { mutableStateOf<MediaMetadata?>(null) }
+    LaunchedEffect(collection.tmdbId, collection.kind.value) {
         val id = collection.tmdbId ?: return@LaunchedEffect
         val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
-        meta = runCatching { container.apiFor(url).tmdbMetadata(id, collection.kind) }.getOrNull()
+        meta = runCatching { container.apiFor(url).tmdbMetadata(id, collection.kind.value) }.getOrNull()
     }
     val poster = tmdbPosterUrl(meta?.posterPath, "w342")
     val title = prettify(collection.displayTitle)
     val subtitle = buildString {
-        if (collection.kind == "tv" && collection.episodeCount > 0) {
+        if (collection.kind == MediaKind.tv && collection.episodeCount > 0) {
             append("${collection.episodeCount} ep")
         } else {
             append(formatBytesLib(collection.totalSizeBytes))

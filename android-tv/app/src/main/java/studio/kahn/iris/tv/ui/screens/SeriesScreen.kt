@@ -40,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import studio.kahn.iris.tv.data.EpisodeStatus
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.EpisodeItem
 import studio.kahn.iris.tv.data.EpisodesResponse
@@ -87,7 +88,7 @@ fun SeriesScreen(
         val api = container.apiFor(url)
         val (f, eps) = withContext(Dispatchers.IO) {
             val list = runCatching { api.listFollows() }.getOrDefault(emptyList())
-            val matched = list.firstOrNull { it.id == followId }
+            val matched = list.firstOrNull { it.id.toString() == followId }
             val episodesRes = runCatching { api.followEpisodes(followId) }.getOrNull()
             matched to episodesRes
         }
@@ -96,7 +97,7 @@ fun SeriesScreen(
     }
 
     val seasons = (episodes?.items ?: emptyList())
-        .groupBy { it.season }
+        .groupBy { it.season.toInt() }
         .toSortedMap()
     if (selectedSeason == -1 && seasons.isNotEmpty()) {
         selectedSeason = seasons.keys.first()
@@ -130,10 +131,10 @@ fun SeriesScreen(
             val api = container.apiFor(url)
             try {
                 val res = withContext(Dispatchers.IO) {
-                    api.grabEpisode(followId, ep.season, ep.episode)
+                    api.grabEpisode(followId, ep.season.toInt(), ep.episode.toInt())
                 }
                 if (andPlay) {
-                    onPickFile(res.infohash, res.fileIdx)
+                    onPickFile(res.infohash, res.fileIdx.toInt())
                 } else {
                     episodes = withContext(Dispatchers.IO) {
                         runCatching { api.followEpisodes(followId) }.getOrNull()
@@ -416,7 +417,7 @@ private fun EpisodeRow(
 private fun StatusBadge(ep: EpisodeItem) {
     val (label, color) = when {
         ep.watched -> "watched" to androidx.compose.ui.graphics.Color(0xFF6B7280)
-        ep.status == "downloaded" -> "downloaded" to androidx.compose.ui.graphics.Color(0xFF6B7280)
+        ep.status == EpisodeStatus.downloaded -> "downloaded" to androidx.compose.ui.graphics.Color(0xFF6B7280)
         else -> "available" to androidx.compose.ui.graphics.Color(0xFF10B981)
     }
     Surface(
@@ -439,10 +440,10 @@ private fun EpisodeAction(
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
     onGrab: (EpisodeItem, Boolean) -> Unit,
 ) {
-    if (ep.status == "downloaded" && ep.infohash != null && ep.fileIdx != null) {
+    if (ep.status == EpisodeStatus.downloaded && ep.infohash != null && ep.fileIdx != null) {
         IrisButton(
             if (ep.watched) "Watch again" else "Play",
-            { onPlay(ep.infohash, ep.fileIdx) },
+            { onPlay(ep.infohash, ep.fileIdx.toInt()) },
             focusedScale = 1f,
         )
         return

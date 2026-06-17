@@ -54,10 +54,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.AvailableEpisodeEntry
 import studio.kahn.iris.tv.data.CollectionDetail
-import studio.kahn.iris.tv.data.CollectionEpisode
+import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.FileEntry
 import studio.kahn.iris.tv.data.SeasonPackEntry
 import studio.kahn.iris.tv.data.TorrentView
@@ -129,12 +130,12 @@ fun CollectionScreen(
     // Merge on-disk + indexer-cached episodes for TV. Available
     // entries carry a language tag so the same (S, E) can render as
     // FR + EN side by side; downloaded entries get one row regardless.
-    val merged = remember(d) { mergeEpisodes(d.episodes, d.availableEpisodes) }
+    val merged = remember(d) { mergeEpisodes(d.episodes, d.availableEpisodes.orEmpty()) }
     // Fleuve anime (One Piece): one flat absolute-numbered list, no
     // season tabs. Derived server-side, so a season-cut anime keeps the
     // seasonal layout below.
     val isAbsolute = d.numbering == "absolute"
-    val absoluteRows = remember(d) { mergeEpisodesAbsolute(d.episodes, d.availableEpisodes) }
+    val absoluteRows = remember(d) { mergeEpisodesAbsolute(d.episodes, d.availableEpisodes.orEmpty()) }
     // Seasons that have either episodes OR a pack offer — a brand
     // new follow whose only signal is a pack still gets its season
     // tab so the user has a "Grab full Season N" affordance.
@@ -143,7 +144,7 @@ fun CollectionScreen(
         for (row in merged) {
             map.getOrPut(row.season.toInt()) { mutableListOf() }.add(row)
         }
-        for (p in d.seasonPacks) {
+        for (p in d.seasonPacks.orEmpty()) {
             map.getOrPut(p.season.toInt()) { mutableListOf() }
         }
         map.mapValues { it.value.toList() }.toSortedMap()
@@ -188,7 +189,7 @@ fun CollectionScreen(
             CollectionHero(detail = d, onBack = onBack)
         }
 
-        if (d.kind == "tv" && isAbsolute && absoluteRows.isNotEmpty()) {
+        if (d.kind == MediaKind.tv && isAbsolute && absoluteRows.isNotEmpty()) {
             // Flat absolute list — no season tabs, no packs (a fleuve
             // anime numbers continuously; "Season N" packs don't apply).
             itemsIndexed(
@@ -231,7 +232,7 @@ fun CollectionScreen(
                     )
                 }
             }
-        } else if (d.kind == "tv" && (merged.isNotEmpty() || d.seasonPacks.isNotEmpty())) {
+        } else if (d.kind == MediaKind.tv && (merged.isNotEmpty() || d.seasonPacks.orEmpty().isNotEmpty())) {
             if (seasons.size > 1) {
                 item(key = "season-tabs") {
                     Box(Modifier.padding(horizontal = layout.gutterHorizontal, vertical = Spacing.md)) {
@@ -244,7 +245,7 @@ fun CollectionScreen(
                 }
             }
 
-            val currentPacks = d.seasonPacks.filter { it.season.toInt() == activeSeason }
+            val currentPacks = d.seasonPacks.orEmpty().filter { it.season.toInt() == activeSeason }
             if (currentPacks.isNotEmpty()) {
                 items(currentPacks, key = { "pack:${it.season}:${it.language ?: "_"}:${it.indexerTorrentId}" }) { pack ->
                     Box(
@@ -373,7 +374,7 @@ private sealed class EpisodeVariant {
 }
 
 private fun mergeEpisodes(
-    onDisk: List<CollectionEpisode>,
+    onDisk: List<EpisodeEntry>,
     available: List<AvailableEpisodeEntry>,
 ): List<MergedEpisode> {
     // Group both downloaded and available entries under the same
@@ -391,7 +392,7 @@ private fun mergeEpisodes(
         ensure(d.season, d.episode).add(
             EpisodeVariant.Downloaded(
                 infohash = d.infohash,
-                fileIdx = d.fileIdx,
+                fileIdx = d.fileIdx.toInt(),
                 watched = d.watched,
                 language = d.language,
             ),
@@ -431,7 +432,7 @@ private fun mergeEpisodes(
  *  grab call; `absolute` drives the "Episode N" label. Mirrors the
  *  web client's `mergeEpisodesAbsolute`. */
 private fun mergeEpisodesAbsolute(
-    onDisk: List<CollectionEpisode>,
+    onDisk: List<EpisodeEntry>,
     available: List<AvailableEpisodeEntry>,
 ): List<MergedEpisode> {
     // A long-running anime ships fleuve fansubs (`S01E1156`, absolute
@@ -453,7 +454,7 @@ private fun mergeEpisodesAbsolute(
         ensure(d.absoluteEpisode, d.season, d.episode).variants.add(
             EpisodeVariant.Downloaded(
                 infohash = d.infohash,
-                fileIdx = d.fileIdx,
+                fileIdx = d.fileIdx.toInt(),
                 watched = d.watched,
                 language = d.language,
             ),
@@ -511,7 +512,7 @@ private suspend fun doGrabVariant(
     // The grab is always play-on-success on TV — the alternate
     // "Prepare" web button doesn't have a clean D-pad equivalent
     // and the user typically opens an episode to watch it.
-    onPlay(res.infohash, res.fileIdx)
+    onPlay(res.infohash, res.fileIdx.toInt())
 }
 
 /// Grab a full season pack. Calls the same per-episode endpoint
@@ -540,7 +541,7 @@ private suspend fun doGrabPack(
         }.getOrNull()
     } ?: return
     if (autoPlay) {
-        onPlay(res.infohash, res.fileIdx)
+        onPlay(res.infohash, res.fileIdx.toInt())
     }
 }
 
@@ -615,12 +616,12 @@ private fun CollectionHero(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 val subtitle = buildString {
-                    append(if (detail.kind == "tv") "Series" else "Movie")
+                    append(if (detail.kind == MediaKind.tv) "Series" else "Movie")
                     append(" · ")
                     append(detail.torrents.size)
                     append(" torrent")
                     if (detail.torrents.size > 1) append("s")
-                    if (detail.kind == "tv" && detail.episodes.isNotEmpty()) {
+                    if (detail.kind == MediaKind.tv && detail.episodes.isNotEmpty()) {
                         append(" · ${detail.episodes.size} episodes")
                     }
                 }
@@ -629,7 +630,7 @@ private fun CollectionHero(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (detail.hasNewSinceLastVisit > 0) {
+                if ((detail.hasNewSinceLastVisit ?: 0) > 0) {
                     Surface(
                         shape = RoundedCornerShape(4.dp),
                         colors = SurfaceDefaults.colors(

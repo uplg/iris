@@ -21,10 +21,10 @@ index 24d5e03..eb24ad4 100644
    /**
     * Default input buffer size in bytes, based on 720p resolution video compressed by a factor of
 diff --git a/libraries/decoder_av1/src/main/jni/dav1d_jni.cc b/libraries/decoder_av1/src/main/jni/dav1d_jni.cc
-index 9112fcc..29036ee 100644
+index 62b3682..a25986f 100644
 --- a/libraries/decoder_av1/src/main/jni/dav1d_jni.cc
 +++ b/libraries/decoder_av1/src/main/jni/dav1d_jni.cc
-@@ -306,6 +306,26 @@ void CopyPlane(const uint8_t* source, int source_stride, uint8_t* destination,
+@@ -354,6 +354,26 @@ void CopyPlane(const uint8_t* source, int source_stride, uint8_t* destination,
    }
  }
  
@@ -51,28 +51,28 @@ index 9112fcc..29036ee 100644
  constexpr int GetColorSpace(Dav1dColorPrimaries primary) {
    switch (primary) {
      case DAV1D_COLOR_PRI_BT601:
-@@ -718,7 +738,13 @@ DECODER_FUNC(jint, dav1dGetFrame, jlong jContext, jobject jOutputBuffer) {
+@@ -828,7 +848,13 @@ DECODER_FUNC(jint, dav1dGetFrame, jlong jContext, jobject jOutputBuffer) {
      context->jni_status_code = kJniStatusBufferInitError;
      return kStatusError;
    }
 -  if (dav1d_picture->p.bpc != 8) {
-+  // Iris patch: only the YUV (GL shader) output path is genuinely 8-bit
-+  // only. The Surface (ANativeWindow) path renders via dav1dRenderFrame,
-+  // which down-converts 10/12-bit to 8-bit YV12 — so let HBD frames through
-+  // for that mode instead of failing the whole stream (which bounced the
-+  // Iris TV player onto the server HLS remux, which can't help either).
++  // Iris patch: only the YUV (GL shader) output path is genuinely 8-bit only.
++  // The Surface (ANativeWindow) path renders via dav1dRenderFrame, which
++  // down-converts 10/12-bit to 8-bit YV12 - so let HBD frames through for that
++  // mode instead of failing the whole stream (which bounced the Iris TV player
++  // onto the server HLS remux, which can't help either).
 +  if (dav1d_picture->p.bpc != 8 &&
 +      returned_user_data->output_mode == kOutputModeYuv) {
+     std::lock_guard<std::mutex> lock(  // NOLINT(build/c++11)
+         context->state_mutex);
      context->jni_status_code = kJniStatusHighBitDepthNotSupportedWithYuv;
-     return kStatusError;
-   }
-@@ -813,8 +839,21 @@ DECODER_FUNC(jint, dav1dRenderFrame, jlong jContext, jobject jSurface,
-     LOGE("Failed to get dav1d picture.");
-     return kStatusError;
-   }
+@@ -980,8 +1006,21 @@ DECODER_FUNC(jint, dav1dRenderFrame, jlong jContext, jobject jSurface,
+                                   (int32_t)native_window_buffer.stride);
+   y_copy_width = std::min(y_copy_width, (int32_t)width);
+ 
 +  // Iris patch: pick the plane copier by bit depth. dav1d delivers 10/12-bit
-+  // frames as 16-bit samples; `copyPlane` down-converts those to the 8-bit
-+  // YV12 ANativeWindow buffer, and is a plain memcpy for 8-bit frames.
++  // frames as 16-bit samples; copyPlane down-converts those to the 8-bit YV12
++  // ANativeWindow buffer, and is a plain memcpy for 8-bit frames.
 +  const int bpc = dav1d_picture->p.bpc;
 +  auto copyPlane = [bpc](const uint8_t* src, int src_stride, uint8_t* dst,
 +                         int dst_stride, int w, int h) {
@@ -88,8 +88,8 @@ index 9112fcc..29036ee 100644
 +  copyPlane(reinterpret_cast<const uint8_t*>(dav1d_picture->data[kPlaneY]),
              dav1d_picture->stride[kPlaneY],
              reinterpret_cast<uint8_t*>(native_window_buffer.bits),
-             native_window_buffer.stride, width, height);
-@@ -832,7 +871,7 @@ DECODER_FUNC(jint, dav1dRenderFrame, jlong jContext, jobject jSurface,
+             native_window_buffer.stride, y_copy_width, y_copy_height);
+@@ -1004,14 +1043,14 @@ DECODER_FUNC(jint, dav1dRenderFrame, jlong jContext, jobject jSurface,
    // V plane
    // Since the format for ANativeWindow is YV12, V plane is being processed
    // before U plane.
@@ -98,8 +98,7 @@ index 9112fcc..29036ee 100644
        reinterpret_cast<const uint8_t*>(dav1d_picture->data[kPlaneV]),
        dav1d_picture->stride[kPlaneU],
        reinterpret_cast<uint8_t*>(native_window_buffer.bits) + y_plane_size,
-@@ -841,7 +880,7 @@ DECODER_FUNC(jint, dav1dRenderFrame, jlong jContext, jobject jSurface,
-   const int v_plane_size = uv_plane_height * native_window_buffer_uv_stride;
+       native_window_buffer_uv_stride, uv_copy_width, uv_copy_height);
  
    // U plane
 -  CopyPlane(reinterpret_cast<const uint8_t*>(dav1d_picture->data[kPlaneU]),

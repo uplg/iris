@@ -3990,55 +3990,68 @@
       "LibraryResponse": {
         "oneOf": [
           {
-            "type": "object",
-            "required": [
-              "items",
-              "view"
-            ],
-            "properties": {
-              "items": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/CollectionListItem"
-                }
-              },
-              "view": {
-                "type": "string",
-                "enum": [
-                  "collections"
-                ]
-              }
-            }
+            "$ref": "#/components/schemas/LibraryResponseCollections"
           },
           {
-            "type": "object",
-            "required": [
-              "items",
-              "total_uploaded_bytes",
-              "view"
-            ],
-            "properties": {
-              "items": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/TorrentView"
-                }
-              },
-              "total_uploaded_bytes": {
-                "type": "integer",
-                "format": "int64",
-                "description": "Lifetime upload across every torrent ever ingested, including\nthe soft-deleted ones not present in `items`. Lets the raw\nview show the \"since the beginning\" total without needing\nadmin scope (the admin storage endpoint does the same sum).",
-                "minimum": 0
-              },
-              "view": {
-                "type": "string",
-                "enum": [
-                  "torrents"
-                ]
-              }
-            }
+            "$ref": "#/components/schemas/LibraryResponseTorrents"
           }
-        ]
+        ],
+        "discriminator": {
+          "propertyName": "view",
+          "mapping": {
+            "collections": "#/components/schemas/LibraryResponseCollections",
+            "torrents": "#/components/schemas/LibraryResponseTorrents"
+          }
+        }
+      },
+      "LibraryResponseCollections": {
+        "type": "object",
+        "required": [
+          "items",
+          "view"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionListItem"
+            }
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "collections"
+            ]
+          }
+        }
+      },
+      "LibraryResponseTorrents": {
+        "type": "object",
+        "required": [
+          "items",
+          "total_uploaded_bytes",
+          "view"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TorrentView"
+            }
+          },
+          "total_uploaded_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lifetime upload across every torrent ever ingested, including\nthe soft-deleted ones not present in `items`. Lets the raw\nview show the \"since the beginning\" total without needing\nadmin scope (the admin storage endpoint does the same sum).",
+            "minimum": 0
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "torrents"
+            ]
+          }
+        }
       },
       "LinkRequest": {
         "type": "object",
@@ -4548,52 +4561,69 @@
       "PollResponse": {
         "oneOf": [
           {
-            "type": "object",
-            "required": [
-              "status"
-            ],
-            "properties": {
-              "status": {
-                "type": "string",
-                "enum": [
-                  "pending"
-                ]
-              }
-            }
+            "$ref": "#/components/schemas/PollResponsePending"
           },
           {
-            "type": "object",
-            "required": [
-              "status"
-            ],
-            "properties": {
-              "status": {
-                "type": "string",
-                "enum": [
-                  "expired"
-                ]
-              }
-            }
+            "$ref": "#/components/schemas/PollResponseExpired"
           },
           {
-            "type": "object",
-            "required": [
-              "user",
-              "status"
-            ],
-            "properties": {
-              "status": {
-                "type": "string",
-                "enum": [
-                  "linked"
-                ]
-              },
-              "user": {
-                "$ref": "#/components/schemas/PolledUser"
-              }
-            }
+            "$ref": "#/components/schemas/PollResponseLinked"
           }
-        ]
+        ],
+        "discriminator": {
+          "propertyName": "status",
+          "mapping": {
+            "expired": "#/components/schemas/PollResponseExpired",
+            "linked": "#/components/schemas/PollResponseLinked",
+            "pending": "#/components/schemas/PollResponsePending"
+          }
+        }
+      },
+      "PollResponseExpired": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "expired"
+            ]
+          }
+        }
+      },
+      "PollResponseLinked": {
+        "type": "object",
+        "required": [
+          "user",
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "linked"
+            ]
+          },
+          "user": {
+            "$ref": "#/components/schemas/PolledUser"
+          }
+        }
+      },
+      "PollResponsePending": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending"
+            ]
+          }
+        }
       },
       "PolledUser": {
         "type": "object",

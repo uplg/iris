@@ -36,11 +36,12 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
+import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.FileEntry
 import studio.kahn.iris.tv.data.FileProgressEntry
 import studio.kahn.iris.tv.data.IrisApi
-import studio.kahn.iris.tv.data.TmdbMetadata
+import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.components.Chip
@@ -77,7 +78,7 @@ fun DetailScreen(
     onBack: () -> Unit,
 ) {
     var torrent by remember { mutableStateOf<TorrentView?>(null) }
-    var meta by remember { mutableStateOf<TmdbMetadata?>(null) }
+    var meta by remember { mutableStateOf<MediaMetadata?>(null) }
     var progresses by remember { mutableStateOf<List<FileProgressEntry>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -96,7 +97,7 @@ fun DetailScreen(
             // every unverified torrent was hurting UX more than the
             // rare wrong-poster mismatch.
             t.tmdbId?.let { id ->
-                meta = runCatching { api.tmdbMetadata(id, t.kind) }.getOrNull()
+                meta = runCatching { api.tmdbMetadata(id, t.kind?.value) }.getOrNull()
             }
         } catch (e: Exception) {
             error = e.message ?: "Failed to load"
@@ -125,7 +126,7 @@ fun DetailScreen(
         return
     }
 
-    val progressByIdx = remember(progresses) { progresses.associateBy { it.fileIdx } }
+    val progressByIdx = remember(progresses) { progresses.associateBy { it.fileIdx.toInt() } }
     val videoFiles = remember(t) {
         t.files.filter { f -> VIDEO_EXTS_DETAIL.any { f.path.endsWith(it, ignoreCase = true) } }
             .sortedBy { it.path }
@@ -183,7 +184,7 @@ fun DetailScreen(
                         }
                     }
                 }
-                Eyebrow(if (t.kind == "tv") "Series" else "Movie", color = IrisColors.Brand)
+                Eyebrow(if (t.kind == MediaKind.tv) "Series" else "Movie", color = IrisColors.Brand)
                 Text(
                     // We *don't* substitute meta?.title here — TMDB resolution
                     // can be wrong (same year, same family of names) and the
@@ -206,7 +207,7 @@ fun DetailScreen(
                 if (t.addedByName.isNotBlank()) {
                     Text(
                         "Added by ${t.addedByName}" +
-                            if (t.addedAt.length >= 10) " · ${t.addedAt.substring(0, 10)}" else "",
+                            if (t.addedAt.toString().length >= 10) " · ${t.addedAt.toString().substring(0, 10)}" else "",
                         style = MaterialTheme.typography.labelSmall,
                         color = IrisColors.FgDim,
                     )

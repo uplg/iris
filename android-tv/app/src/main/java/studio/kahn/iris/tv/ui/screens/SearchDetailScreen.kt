@@ -38,16 +38,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import studio.kahn.iris.tv.data.AddFollowRequest
+import studio.kahn.iris.tv.data.CreateFollowRequest
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.AudioInfoDetails
+import studio.kahn.iris.tv.data.AudioInfo
 import studio.kahn.iris.tv.data.DescriptionFormat
-import studio.kahn.iris.tv.data.IngestRequest
+import studio.kahn.iris.tv.data.ResolveBody
 import studio.kahn.iris.tv.data.MediaInfoSummary
-import studio.kahn.iris.tv.data.SubInfoDetails
-import studio.kahn.iris.tv.data.TmdbMetadata
+import studio.kahn.iris.tv.data.SubInfo
+import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.TorrentDetails
-import studio.kahn.iris.tv.data.VideoInfoDetails
+import studio.kahn.iris.tv.data.VideoInfo
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.components.IrisButton
@@ -86,7 +86,7 @@ fun SearchDetailScreen(
 ) {
     val scope = rememberCoroutineScope()
     var details by remember { mutableStateOf<TorrentDetails?>(null) }
-    var meta by remember { mutableStateOf<TmdbMetadata?>(null) }
+    var meta by remember { mutableStateOf<MediaMetadata?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var ingesting by remember { mutableStateOf(false) }
@@ -169,7 +169,7 @@ fun SearchDetailScreen(
             }
 
             details?.let { d ->
-                if (d.tags.isNotEmpty() || d.uploader != null || d.age != null) {
+                if (d.tags.orEmpty().isNotEmpty() || d.uploader != null || d.age != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         d.uploader?.let {
                             Text(
@@ -178,9 +178,9 @@ fun SearchDetailScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        if (d.tags.isNotEmpty()) {
+                        if (d.tags.orEmpty().isNotEmpty()) {
                             Text(
-                                d.tags.take(6).joinToString(" · "),
+                                d.tags.orEmpty().take(6).joinToString(" · "),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -228,13 +228,13 @@ fun SearchDetailScreen(
                                     val api = container.apiFor(url)
                                     val created = withContext(Dispatchers.IO) {
                                         api.addFollow(
-                                            AddFollowRequest(
+                                            CreateFollowRequest(
                                                 name = title,
                                                 tmdbId = tmdbId,
                                             ),
                                         )
                                     }
-                                    onOpenSeries(created.id)
+                                    onOpenSeries(created.id.toString())
                                 } catch (e: Exception) {
                                     error = e.message ?: "Follow failed"
                                     following = false
@@ -260,7 +260,7 @@ fun SearchDetailScreen(
                                     }
                                 val api = container.apiFor(url)
                                 val res = api.ingest(
-                                    IngestRequest(
+                                    ResolveBody(
                                         providerId = providerId,
                                         externalId = externalId,
                                         tmdbId = tmdbId,
@@ -302,9 +302,10 @@ fun SearchDetailScreen(
             val synopsis = meta?.overview ?: details?.let { d ->
                 d.description?.let { desc ->
                     when (d.descriptionFormat) {
-                        DescriptionFormat.BBCODE -> stripBBCode(desc)
-                        DescriptionFormat.HTML -> stripHtml(desc)
-                        DescriptionFormat.PLAIN -> desc
+                        DescriptionFormat.bbcode -> stripBBCode(desc)
+                        DescriptionFormat.html -> stripHtml(desc)
+                        DescriptionFormat.plain -> desc
+                        else -> stripBBCode(desc)
                     }
                 }
             }
@@ -328,7 +329,7 @@ fun SearchDetailScreen(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun Hero(
-    meta: TmdbMetadata?,
+    meta: MediaMetadata?,
     tmdbId: Long?,
     fallbackTitle: String,
     onBack: () -> Unit,
@@ -402,14 +403,14 @@ private fun Hero(
 private fun FactsGrid(mi: MediaInfoSummary) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         mi.video?.let { VideoFacts(it) }
-        if (mi.audio.isNotEmpty()) AudioFacts(mi.audio)
-        if (mi.subtitles.isNotEmpty()) SubFacts(mi.subtitles)
+        if (mi.audio.orEmpty().isNotEmpty()) AudioFacts(mi.audio.orEmpty())
+        if (mi.subtitles.orEmpty().isNotEmpty()) SubFacts(mi.subtitles.orEmpty())
     }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun VideoFacts(v: VideoInfoDetails) {
+private fun VideoFacts(v: VideoInfo) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         SectionLabel("Video")
         v.codec?.let { ChipText(it) }
@@ -432,7 +433,7 @@ private fun VideoFacts(v: VideoInfoDetails) {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun AudioFacts(audio: List<AudioInfoDetails>) {
+private fun AudioFacts(audio: List<AudioInfo>) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
         SectionLabel("Audio")
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -443,7 +444,7 @@ private fun AudioFacts(audio: List<AudioInfoDetails>) {
                         a.commercialName ?: a.codec,
                         a.channels?.let { channelLabel(it) },
                         a.bitrateKbps?.let { "${it} kb/s" },
-                        if (a.default) "default" else null,
+                        if (a.default == true) "default" else null,
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,
                     // No explicit color → black LocalContentColor on a
@@ -458,7 +459,7 @@ private fun AudioFacts(audio: List<AudioInfoDetails>) {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun SubFacts(subs: List<SubInfoDetails>) {
+private fun SubFacts(subs: List<SubInfo>) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
         SectionLabel("Subtitles")
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -467,7 +468,7 @@ private fun SubFacts(subs: List<SubInfoDetails>) {
                     listOfNotNull(
                         s.lang ?: "?",
                         s.format,
-                        if (s.forced) "forced" else null,
+                        if (s.forced == true) "forced" else null,
                         if (s.title?.contains("SDH", ignoreCase = true) == true) "SDH" else null,
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,

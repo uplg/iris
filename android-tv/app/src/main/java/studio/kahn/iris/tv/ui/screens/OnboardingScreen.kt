@@ -43,7 +43,8 @@ import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.GenreOption
 import studio.kahn.iris.tv.data.LanguageOption
-import studio.kahn.iris.tv.data.Preferences
+import studio.kahn.iris.tv.data.PreferencesResponse
+import studio.kahn.iris.tv.data.UpdatePreferencesRequest
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
@@ -68,7 +69,7 @@ import studio.kahn.iris.tv.ui.theme.irisAmbient
 @Composable
 fun OnboardingScreen(
     container: AppContainer,
-    initialPrefs: Preferences,
+    initialPrefs: PreferencesResponse,
     onDone: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -117,7 +118,7 @@ fun OnboardingScreen(
         scope.launch {
             val url = container.sessionStore.serverUrl.first()
             if (url != null) {
-                val body = Preferences(
+                val body = UpdatePreferencesRequest(
                     languages = if (keep) languages else emptyList(),
                     genres = if (keep) genres else emptyList(),
                     includeAnime = if (keep) includeAnime else false,
