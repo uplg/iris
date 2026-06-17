@@ -1,0 +1,53 @@
+# cargo-deny configuration. Run: cargo deny check
+
+[advisories]
+yanked = "deny"
+# Each ignore is a known, fix-less transitive advisory we've reviewed. Revisit
+# whenever a dependency (esp. the pinned librqbit RC and jsonwebtoken) bumps.
+ignore = [
+    # rsa "Marvin Attack" timing sidechannel. Pulled by jsonwebtoken's
+    # `rust_crypto` feature for RS*/PS* algorithms — but Iris signs/verifies
+    # JWTs with HS256 (HMAC, `EncodingKey::from_secret`), so the RSA private-key
+    # path is never executed. No fixed rsa release exists yet.
+    "RUSTSEC-2023-0071",
+    # crypto-hash unmaintained — transitive via librqbit's sha1 wrapper. No
+    # safe upgrade; goes away when librqbit drops it. Not a vulnerability.
+    "RUSTSEC-2025-0141",
+    # bincode 2.0.1 unmaintained — transitive via librqbit. No safe upgrade.
+    "RUSTSEC-2025-0060",
+]
+
+[licenses]
+# Permissive (and public-domain-equivalent) licenses we accept. Crates offering
+# a choice (e.g. "Unlicense OR MIT") are satisfied via one of these.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    # webpki-roots / webpki-root-certs (the Mozilla CA bundle, via rustls).
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+wildcards = "deny"
+allow-wildcard-paths = true
+# Surface duplicate crate versions without failing the gate: the pinned
+# `librqbit = "=9.0.0-rc.0"` drags in a parallel reqwest 0.12 tree plus older
+# majors of the RustCrypto / rand / windows-sys stacks that we can't dedupe
+# ourselves. The set is large and transient — it collapses once librqbit ships
+# a 9.0.0 stable. Tighten to "deny" + an explicit skip-list then.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1570,8 +1570,8 @@ pub(crate) async fn play_status(
         Ok(probe) => {
             let plan = build_remux_plan(&probe, &caps, &state.cfg().transcode);
             let key = format!("{infohash}_{idx}{}", plan.cache_suffix());
-            let build_plan = matches!(plan.video, iris_media::VideoMode::Transcode { .. })
-                .then_some(plan);
+            let build_plan =
+                matches!(plan.video, iris_media::VideoMode::Transcode { .. }).then_some(plan);
             (key, build_plan)
         }
         Err(_) => (format!("{infohash}_{idx}"), None),

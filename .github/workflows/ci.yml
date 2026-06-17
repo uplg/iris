@@ -1,0 +1,60 @@
+name: CI
+
+# Gate (clippy + rustfmt + cargo-deny) on every push to main and PR. Pushing a
+# semver tag (e.g. `0.9.0`) additionally publishes a GitHub release with notes
+# pulled from CHANGELOG.md (the APK is attached to that release by hand). Tags
+# are bare semver — no `v` prefix — matching the existing release history.
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gate:
+    name: clippy + fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --no-deps --locked -- -D warnings
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # Tag-only: publish a GitHub release with notes from CHANGELOG.md. The APK is
+  # attached to the release by hand afterwards (built locally with `just apk`).
+  release:
+    name: release
+    needs: [gate, deny]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          changelog: CHANGELOG.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

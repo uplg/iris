@@ -272,9 +272,10 @@ fn promote_tagged_union(
         serde_json::from_value(Value::Object(rewritten)).expect("rebuild union schema"),
     );
     for (variant_name, variant) in promoted {
-        components
-            .schemas
-            .insert(variant_name, serde_json::from_value(variant).expect("rebuild variant schema"));
+        components.schemas.insert(
+            variant_name,
+            serde_json::from_value(variant).expect("rebuild variant schema"),
+        );
     }
 }
 
