@@ -40,6 +40,10 @@ coil = "3.5.0"
 tvprovider = "1.1.0"
 work = "2.11.2"
 
+# ----- Desugaring -----
+# Backports java.time (used by the OpenAPI-generated DTOs) to minSdk 23.
+desugar-jdk-libs = "2.1.5"
+
 # ----- Codegen -----
 # Generates the @Serializable DTO layer from ../web/openapi.json (utoipa-
 # derived spec). Pinned to the same release as the openapi-generator line the
@@ -48,6 +52,7 @@ openapi-generator = "7.23.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar-jdk-libs" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }

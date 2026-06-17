@@ -77,6 +77,10 @@ class DefaultAppContainer(context: Context) : AppContainer {
         ignoreUnknownKeys = true
         coerceInputValues = true
         explicitNulls = false
+        // Serializers for the generated DTOs' @Contextual Java types
+        // (OffsetDateTime / UUID) — openapi-generator's infra isn't emitted in
+        // models-only mode, so they'd otherwise fail at runtime.
+        serializersModule = irisSerializersModule
     }
 
     @OptIn(ExperimentalSerializationApi::class)
