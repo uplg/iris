@@ -41,6 +41,16 @@ import { cn } from "@/lib/utils";
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
 /**
+ * Release name for display in the torrents list. A single-file torrent is
+ * named after its only file (".mkv" and all), so the raw `name` reads like
+ * a path; stripping the trailing video extension turns
+ * `Midnight.2021.MULTi.1080p.WEB.x264-FW.mkv` into the release name
+ * `Midnight.2021.MULTi.1080p.WEB.x264-FW`. Multi-file release / folder
+ * names carry no extension and pass through unchanged.
+ */
+const releaseName = (name: string): string => name.replace(VIDEO_RE, "");
+
+/**
  * Library page with two views:
  *
  *   * Collections (default): Netflix-style poster grid, one card per
@@ -786,12 +796,12 @@ function TorrentRow({
   return (
     <div className="group rounded-lg border border-border/70 bg-card/60 transition hover:border-border">
       <div className="flex gap-4 p-4">
-        <TorrentPoster name={t.name ?? null} kind={t.kind ?? null} verified={t.tmdb_verified} />
+        <TorrentPoster tmdbId={t.tmdb_id ?? null} kind={t.kind ?? null} verified={t.tmdb_verified} />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h3 className="truncate text-sm font-medium leading-snug" title={t.name ?? undefined}>
-                {t.name ?? t.infohash}
+                {t.name ? releaseName(t.name) : t.infohash}
               </h3>
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
                 <StateBadge state={t.state} />
@@ -897,24 +907,25 @@ function TorrentRow({
  * re-mounts during scroll don't re-hit the network.
  */
 function TorrentPoster({
-  name,
+  tmdbId,
   kind,
   verified,
 }: {
-  name: string | null;
+  tmdbId: number | null;
   kind: MediaKind | null;
   verified: boolean;
 }) {
-  // Resolve by release *name* (server-side kind+year scoring, shared 30d
-  // cache) — the exact path the search results use. The torrent's stored
-  // `tmdb_id` is set once at ingest and falls back to the unreliable
-  // indexer id whenever the resolver found nothing then, so trusting it
-  // here is what made this list "fantasque". Shared `tmdb-resolve` query
-  // key dedupes against the search card for the same title.
+  // Resolve by the *served* tmdb_id. The backend now sets a torrent's
+  // `tmdb_id` to its parent collection's resolved id
+  // (`effective_tmdb_id`) — the same stable source the collection grid,
+  // Home shelf and collection page use — so this view converges on it
+  // too (a c411 "Saison N" pack used to resolve by its useless name
+  // here and showed a wrong thumb). Shared `["tmdb", …]` query key
+  // dedupes against `MediaCard` for the same id.
   const tmdbQ = useQuery({
-    queryKey: ["tmdb-resolve", name, kind ?? "any"],
-    queryFn: () => metadata.tmdbResolve(name!, kind),
-    enabled: !!name && name.length >= 2,
+    queryKey: ["tmdb", tmdbId, kind],
+    queryFn: () => metadata.tmdb(tmdbId!, kind ?? undefined),
+    enabled: tmdbId != null,
     staleTime: 60_000,
   });
   const url = tmdbImage(tmdbQ.data?.poster_path, "w92");

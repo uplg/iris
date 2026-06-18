@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-18
+
+### Fixed
+
+- Library posters could resolve to an unrelated title (e.g. _Supernatural
+  (2005)_ showed another show's art, _Midnight (2021)_ showed a different
+  film). TMDB resolution now keys on the collection's SCENE identity
+  (`display_title`) instead of the raw torrent name, and uses TMDB's typed,
+  year-filtered search (`/search/movie` + `primary_release_year`,
+  `/search/tv` + `first_air_date_year`) so a common title isn't drowned by
+  the popularity-sorted multi-search. Existing collections self-heal on boot.
+- Android TV launcher-channel posters could show an unrelated image when a
+  movie and a TV entry shared a numeric TMDB id — every lookup now passes the
+  media kind to disambiguate the namespaces.
+
+### Changed
+
+- Unified poster sourcing across every library surface — the home shelf, the
+  library grid, the collection page and the per-torrent views all derive their
+  poster from the parent collection's resolved TMDB id (web **and** TV),
+  instead of a per-torrent ingest-time hint. The torrent list now serves
+  `COALESCE(collection.tmdb_id, torrent.tmdb_id)` so the convergence needs no
+  client change.
+- Quieter production logs: the collection-identity heal "target key already
+  owned" skip and the TMDB "no match" line dropped to `debug` (both re-fired
+  every scheduler tick with nothing to act on).
+
 ## [0.9.0] - 2026-06-18
 
 ### Added
@@ -194,7 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/0.9.0...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/0.9.1...HEAD
+[0.9.1]: https://github.com/uplg/iris/compare/0.9.0...0.9.1
 [0.9.0]: https://github.com/uplg/iris/compare/0.8.1...0.9.0
 [0.8.1]: https://github.com/uplg/iris/compare/0.8.0...0.8.1
 [0.8.0]: https://github.com/uplg/iris/compare/0.6.0...0.8.0

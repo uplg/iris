@@ -47,7 +47,7 @@ class ChannelsService(private val context: Context) {
 
             var weight = library.size + cw.size + 1
             for (item in cw.take(10)) {
-                val poster = posterUriFor(api, item.tmdbId)
+                val poster = posterUriFor(api, item.tmdbId, item.kind?.value)
                 val (host, idx) = item.infohash to item.fileIdx
                 insertProgram(
                     channelId = channelId,
@@ -60,7 +60,8 @@ class ChannelsService(private val context: Context) {
                 )
             }
             for (t in library.take(15)) {
-                val meta = t.tmdbId?.let { runCatching { api.tmdbMetadata(it) }.getOrNull() }
+                val meta =
+                    t.tmdbId?.let { runCatching { api.tmdbMetadata(it, t.kind?.value) }.getOrNull() }
                 val poster = meta?.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
                 val idx = t.files
                     .filter { f -> VIDEO_EXTS.any { f.path.endsWith(it, ignoreCase = true) } }
@@ -82,9 +83,12 @@ class ChannelsService(private val context: Context) {
         }
     }
 
-    private suspend fun posterUriFor(api: IrisApi, tmdbId: Long?): String? {
+    private suspend fun posterUriFor(api: IrisApi, tmdbId: Long?, kind: String?): String? {
         if (tmdbId == null) return null
-        val meta = runCatching { api.tmdbMetadata(tmdbId) }.getOrNull() ?: return null
+        // Pass the kind: TMDB's movie/tv id namespaces overlap, so an
+        // id-only lookup can resolve to an unrelated entry and paint the
+        // wrong poster on the launcher channel.
+        val meta = runCatching { api.tmdbMetadata(tmdbId, kind) }.getOrNull() ?: return null
         return meta.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
     }
 
