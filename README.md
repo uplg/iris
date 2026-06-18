@@ -43,7 +43,3 @@ docker compose up --build -d
 - Install (allow unknown sources if needed)
 
 (New updates can be done after using Iris settings screen > Update app.)
-
-## Support group / invites
-
-[Telegram](https://t.me/+li3Y6aGwokZlMjFk)
