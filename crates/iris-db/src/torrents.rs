@@ -49,6 +49,28 @@ pub struct TorrentRow {
     /// can resolve to two unrelated entries; the kind hint picks
     /// the right one.
     pub kind: Option<String>,
+    /// Parent collection's resolved `tmdb_id` (via the `collections`
+    /// LEFT JOIN). The collection is the single source of truth for
+    /// poster/metadata — its id is resolved from the SCENE *identity*
+    /// (`display_title`) and self-healed by `tmdb_backfill`, whereas a
+    /// torrent's own `tmdb_id` is the unreliable ingest-time hint
+    /// (a c411 season pack named "Saison 1" never resolves; a
+    /// falsely-runtime-verified movie keeps a wrong id). NULL for
+    /// standalone torrents or collections without a resolved id.
+    /// Surfaced to clients via [`TorrentRow::effective_tmdb_id`] so
+    /// every poster path converges on the same stable id.
+    pub collection_tmdb_id: Option<i64>,
+}
+
+impl TorrentRow {
+    /// The id clients should render from: the parent collection's
+    /// resolved id when grouped, falling back to the torrent's own
+    /// hint for standalone torrents. This is what unifies the library
+    /// shelf, the collection page and the per-torrent views onto one
+    /// stable poster source — see `collection_tmdb_id`.
+    pub fn effective_tmdb_id(&self) -> Option<i64> {
+        self.collection_tmdb_id.or(self.tmdb_id)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +140,7 @@ pub async fn find_by_infohash(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
          t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
-         c.kind AS kind \
+         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
          LEFT JOIN collections c ON c.id = t.collection_id \
@@ -134,7 +156,7 @@ pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Err
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
          t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
-         c.kind AS kind \
+         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
          LEFT JOIN collections c ON c.id = t.collection_id \
@@ -296,7 +318,7 @@ pub async fn list_in_collection(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
          t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
-         c.kind AS kind \
+         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
          LEFT JOIN collections c ON c.id = t.collection_id \

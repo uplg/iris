@@ -102,6 +102,7 @@ pub(crate) async fn list_library(
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             if let Some(snapshot) = state.engine().get_by_infohash(&row.infohash) {
+                let tmdb_id = row.effective_tmdb_id();
                 out.push(TorrentView {
                     id: row.id,
                     added_by: row.added_by,
@@ -110,7 +111,7 @@ pub(crate) async fn list_library(
                     last_played_at: row.last_played_at,
                     source_provider: row.source_provider,
                     source_external_id: row.source_external_id,
-                    tmdb_id: row.tmdb_id,
+                    tmdb_id,
                     tmdb_verified: row.tmdb_verified,
                     kind: row
                         .kind
@@ -344,7 +345,7 @@ pub(crate) async fn collection_detail(
                 last_played_at: row.last_played_at,
                 source_provider: row.source_provider.clone(),
                 source_external_id: row.source_external_id.clone(),
-                tmdb_id: row.tmdb_id,
+                tmdb_id: row.effective_tmdb_id(),
                 tmdb_verified: row.tmdb_verified,
                 kind: row
                     .kind

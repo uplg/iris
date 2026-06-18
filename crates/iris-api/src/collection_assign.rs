@@ -514,12 +514,15 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
     }
     // A different collection already owns the canonical key — would
     // need a torrent-migration to merge; defer instead of corrupting
-    // the existing row.
+    // the existing row. debug, not warn: this is a benign, permanent
+    // state (e.g. a legacy "silicon valley s01 multi" row next to the
+    // canonical "silicon valley") re-evaluated on every backfill tick,
+    // so at warn it reprints every 5 min forever with nothing to act on.
     if let Ok(Some(other)) =
         iris_db::collections::find_by_parsed_title(pool, &new_key, Kind::Tv).await
         && other.id != collection_id
     {
-        tracing::warn!(
+        tracing::debug!(
             collection_id = %collection_id,
             current = %current_key,
             target = %new_key,

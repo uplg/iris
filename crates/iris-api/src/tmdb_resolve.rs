@@ -64,7 +64,11 @@ pub async fn resolve_release_name(
     )
     .await;
     if result.is_none() {
-        tracing::info!(
+        // debug, not info: a miss is re-logged on every scheduler tick
+        // for the same unresolvable title (anime fansub names, obscure
+        // releases), and a negative cache hit still reaches here — at
+        // info it floods prod logs with non-actionable lines.
+        tracing::debug!(
             release_name,
             cleaned = %cleaned,
             kind = ?resolved_kind,
