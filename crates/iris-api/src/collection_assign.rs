@@ -160,13 +160,13 @@ pub async fn assign_after_ingest(
         // collection page that would otherwise show "No poster" +
         // empty Watchlist until the runtime probe + 4 h scheduler
         // tick caught up. Both signals are cheap to pre-warm:
-        //   * SCENE-name → TMDB resolve gives us a `tmdb_id` good
-        //     enough for the poster lookup (NOT `tmdb_verified` —
+        //   * collection identity → TMDB resolve gives us a `tmdb_id`
+        //     good enough for the poster lookup (NOT `tmdb_verified` —
         //     that still requires the runtime probe).
         //   * A one-shot scan against the indexers populates
         //     `available_episodes` so the "next episodes" picker
         //     has data on first render.
-        prewarm_tv_collection(pool, deps, &collection, name).await;
+        prewarm_tv_collection(pool, deps, &collection).await;
     }
 }
 
@@ -184,7 +184,6 @@ async fn prewarm_tv_collection(
     pool: &SqlitePool,
     deps: EnrichDeps<'_>,
     collection: &iris_db::collections::CollectionRow,
-    release_name: &str,
 ) {
     // Anime enrichment: when the offline classifier already flagged
     // this collection anime, attach an AniList id (poster /
@@ -208,12 +207,21 @@ async fn prewarm_tv_collection(
             );
         }
     }
+    // Resolve from the collection's SCENE *identity* (`display_title`),
+    // never the raw torrent name. The torrent name is frequently
+    // useless for resolution — c411 names season packs "Saison N"
+    // (French "Season N"), which carries no title, so feeding it to
+    // `multi_search` returned an unrelated French show's poster
+    // (Supernatural → "Pimp my ride version FR"). `display_title` was
+    // derived at ingest from the canonical season-marked file leaf and
+    // re-parses cleanly: a trailing "(YYYY)" becomes the year hint that
+    // disambiguates same-title shows.
     if collection.tmdb_id.is_none()
         && let Some(client) = deps.tmdb
         && let Some(resolved) = crate::tmdb_resolve::resolve_release_name(
             pool,
             client,
-            release_name,
+            &collection.display_title,
             Some(crate::tmdb::TmdbKind::Tv),
         )
         .await

@@ -1197,4 +1197,40 @@ mod tests {
         let p = parse(name).unwrap();
         assert!(!looks_like_anime_release(name, p.season, p.episode));
     }
+
+    #[test]
+    fn display_title_carries_year_for_tmdb_resolution() {
+        // Regression (prod "Supernatural (2005)" → "Pimp my ride" poster):
+        // collection TMDB resolution must run on the SCENE *identity*
+        // (`display_title`), not the torrent name. c411 names season
+        // packs "Saison N" (French "Season N") — a useless query that
+        // returned an unrelated French show as the top TV hit. The
+        // display_title is built from the Plex/Sonarr-style file leaf,
+        // and re-parsing it must recover a clean title + the year hint
+        // that disambiguates same-title shows.
+        let leaf = parse(
+            "Supernatural (2005) - S01E01 - Pilot - 2005-09-13 - Audio [FR+EN] - SubTitle [FR+EN] - Quality [WEBDL-1080p].mkv",
+        )
+        .unwrap();
+        // The file leaf parses to a TV identity; the inline "(2005)"
+        // stays in the title (SE marker wins the boundary).
+        assert_eq!(leaf.season, Some(1));
+        assert_eq!(leaf.episode, Some(1));
+        assert_eq!(leaf.title, "Supernatural (2005)");
+        let display = leaf.display_with_year(true);
+        assert_eq!(display, "Supernatural (2005)");
+
+        // Re-parsing the display_title (no SE marker) lets the year
+        // boundary fire: clean title + year hint for `pick_best`.
+        let from_display = parse(&display).unwrap();
+        assert_eq!(from_display.title, "Supernatural");
+        assert_eq!(from_display.year, Some(2005));
+        assert_eq!(series_key(&from_display.title), "supernatural");
+
+        // The torrent name, by contrast, is unusable: no year hint and a
+        // garbage title that would feed `multi_search` the wrong query.
+        let torrent_name = parse("Saison 1").unwrap();
+        assert_eq!(torrent_name.year, None);
+        assert_eq!(torrent_name.title, "Saison 1");
+    }
 }

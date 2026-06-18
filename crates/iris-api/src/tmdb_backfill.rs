@@ -1,11 +1,17 @@
 //! One-shot collection TMDB id backfill.
 //!
 //! Mirrors the per-torrent SCENE resolver:
-//!   1. Take a member torrent's filename.
+//!   1. Take the collection's SCENE identity (`display_title`).
 //!   2. Run `iris_media::filename::parse` to extract `(title, year)`.
 //!   3. `multi_search(title)` → score candidates by `(kind, year)` via
 //!      [`crate::tmdb_resolve::pick_best`] and take the best match.
 //!   4. Write its `tmdb_id` to the collection.
+//!
+//! `display_title` — not a member torrent's name — is the resolution
+//! input: the torrent name is frequently useless (c411 names season
+//! packs "Saison N", French for "Season N", with no title), whereas
+//! `display_title` was derived at ingest from the canonical
+//! season-marked file leaf and re-parses cleanly.
 //!
 //! Kind hint comes from the collection itself (`tv` vs `movie` already
 //! decided at ingest). Year hint comes from the SCENE-parsed filename.
@@ -19,7 +25,7 @@ use std::time::Duration;
 
 use crate::state::AppState;
 use crate::tmdb::TmdbKind;
-use crate::tmdb_resolve::pick_best;
+use crate::tmdb_resolve::{pick_best, search_candidates};
 
 /// One-shot at boot. Runs after a 45 s delay so it doesn't fight the
 /// collection-assignment backfill for the same DB lock; nothing
@@ -104,15 +110,20 @@ async fn process_one_collection(
         );
         return CollectionOutcome::NoTorrents;
     }
-    let Some((rep_name, parsed)) = torrents
-        .iter()
-        .find_map(|t| iris_media::filename::parse(&t.name).map(|p| (t.name.clone(), p)))
-    else {
+    // Resolve from the collection's SCENE identity, NOT a member
+    // torrent's name. c411 names season packs "Saison N" (French
+    // "Season N"), which carries no title — feeding it to multi_search
+    // returned an unrelated French show's poster (Supernatural →
+    // "Pimp my ride version FR"). display_title was derived at ingest
+    // from the canonical season-marked file leaf and re-parses cleanly
+    // (a trailing "(YYYY)" becomes the year hint that disambiguates
+    // same-title shows like Supernatural 2005 vs others).
+    let rep_name = c.display_title.as_str();
+    let Some(parsed) = iris_media::filename::parse(rep_name) else {
         tracing::debug!(
             collection_id = %c.id,
             display_title = %c.display_title,
-            first_torrent = %torrents[0].name,
-            "tmdb_backfill: SKIP — no torrent in collection parsed"
+            "tmdb_backfill: SKIP — display_title did not parse"
         );
         return CollectionOutcome::NoParse;
     };
@@ -133,12 +144,16 @@ async fn process_one_collection(
         return CollectionOutcome::NoParse;
     }
 
-    let hits = tmdb.multi_search(&title).await;
-    // Score by `(kind, year)` instead of taking the popularity-sorted
-    // top hit. Same logic the per-torrent SCENE resolver uses, so
-    // collection-level and torrent-level tmdb_ids can't disagree on
-    // the obvious year-disambiguated cases like Transformers 2007 vs
-    // the 1986 animated series.
+    // Typed, year-filtered search (movies → `primary_release_year`, TV →
+    // `first_air_date_year`) so a common title isn't drowned by the
+    // popularity-sorted `/search/multi` firehose — "Midnight" (2021)
+    // never even appears in multi's page-1, so the closest-year fallback
+    // grabbed "Midnight Matinee" (1988). `pick_best` then scores the
+    // returned candidates by `(kind, year)` exactly as the per-torrent
+    // SCENE resolver does, so collection- and torrent-level tmdb_ids
+    // can't disagree on year-disambiguated cases (Transformers 2007 vs
+    // the 1986 animated series).
+    let hits = search_candidates(tmdb, &title, kind_hint, year_hint).await;
     let Some(top) = pick_best(&hits, kind_hint, year_hint) else {
         tracing::debug!(
             collection_id = %c.id,

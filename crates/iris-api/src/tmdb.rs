@@ -253,6 +253,96 @@ impl TmdbClient {
         out
     }
 
+    /// Typed, year-targeted search. `/search/multi` ranks by raw
+    /// popularity across both media kinds, so a common title gets
+    /// drowned: searching "Midnight" returns nine unrelated TV shows
+    /// plus "Midnight Matinee" (1988) within the page-1 cutoff and the
+    /// actual "Midnight" (2021) movie never appears at all. Hitting the
+    /// typed endpoint (`/search/{movie,tv}`) with TMDB's own year filter
+    /// returns year-correct candidates with the exact title ranked
+    /// first. Used by the SCENE → TMDB resolver, which always knows the
+    /// kind (decided at ingest) and usually the year (from the release
+    /// name). Shares the `multi_search` in-memory cache, namespaced by
+    /// kind + year so the keyspaces never collide.
+    pub async fn search_typed(
+        &self,
+        query: &str,
+        kind: TmdbKind,
+        year: Option<u32>,
+    ) -> Vec<TmdbSuggestion> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+        let marker = kind_marker(kind);
+        let cache_key = format!("{marker}:{}:{}", year.unwrap_or(0), trimmed.to_lowercase());
+        if let Some(hit) = self.inner.searches.read().await.get(&cache_key).cloned() {
+            return hit;
+        }
+        // TMDB's canonical year filters for the typed search endpoints.
+        let year_param = match kind {
+            TmdbKind::Movie => "primary_release_year",
+            TmdbKind::Tv => "first_air_date_year",
+        };
+        let year_str = year.map(|y| y.to_string());
+        let mut params: Vec<(&str, &str)> = vec![
+            ("api_key", self.inner.api_key.as_str()),
+            ("query", query),
+            ("include_adult", "false"),
+            ("page", "1"),
+        ];
+        if let Some(y) = year_str.as_deref() {
+            params.push((year_param, y));
+        }
+        let url = format!("https://api.themoviedb.org/3/search/{marker}");
+        let res = match self.inner.http.get(&url).query(&params).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, query, marker, "tmdb typed-search failed");
+                return Vec::new();
+            }
+        };
+        if !res.status().is_success() {
+            return Vec::new();
+        }
+        let raw: TmdbMultiRaw = match res.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, query, marker, "tmdb typed-search parse failed");
+                return Vec::new();
+            }
+        };
+        // Typed endpoints omit `media_type` — the kind is the one we
+        // asked for, so stamp it directly rather than reading the field.
+        let out: Vec<TmdbSuggestion> = raw
+            .results
+            .into_iter()
+            .filter_map(|r| {
+                let title = r.title.or(r.name)?;
+                let date = r.release_date.or(r.first_air_date);
+                let year = date
+                    .as_deref()
+                    .and_then(|d| d.split('-').next())
+                    .and_then(|y| y.parse().ok());
+                Some(TmdbSuggestion {
+                    kind,
+                    tmdb_id: r.id,
+                    title,
+                    year,
+                    overview: r.overview.filter(|s| !s.is_empty()),
+                    poster_path: r.poster_path,
+                })
+            })
+            .take(10)
+            .collect();
+        self.inner
+            .searches
+            .write()
+            .await
+            .insert(cache_key, out.clone());
+        out
+    }
+
     /// Fetch TMDB's canonical genre taxonomy for `kind` (movies or TV).
     /// Powers the onboarding genre picker. Cached in-memory per kind for
     /// `GENRE_CACHE_TTL`; returns an empty list on any error or when the

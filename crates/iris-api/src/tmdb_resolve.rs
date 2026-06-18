@@ -88,12 +88,22 @@ pub async fn resolve_cleaned(
 ) -> Option<ResolvedTitle> {
     let kind_str = kind_hint.map(kind_to_str);
     let max_age = Duration::days(MAX_AGE_DAYS);
+    // Year-scoped cache key. Two same-title titles of different years
+    // (Dune 1984 vs 2021, Midnight 2021 vs 2024) resolve to *different*
+    // ids, so the year must be part of the key — otherwise the
+    // first-resolved one's poster leaks onto the other. `cleaned` is
+    // already normalised (lowercase, no punctuation), so a trailing
+    // " {year}" can't collide with a real title token.
+    let cache_key = match year_hint {
+        Some(y) => format!("{cleaned} {y}"),
+        None => cleaned.to_string(),
+    };
 
-    if let Ok(Some(hit)) = tmdb_cache::get(pool, cleaned, kind_str, max_age).await {
+    if let Ok(Some(hit)) = tmdb_cache::get(pool, &cache_key, kind_str, max_age).await {
         return ResolvedTitle::from_entry(&hit, kind_hint);
     }
 
-    let suggestions = tmdb.multi_search(cleaned).await;
+    let suggestions = search_candidates(tmdb, cleaned, kind_hint, year_hint).await;
     let top = pick_best(&suggestions, kind_hint, year_hint);
     let entry = match top.as_ref() {
         Some(t) => ResolveEntry {
@@ -107,7 +117,7 @@ pub async fn resolve_cleaned(
         },
         None => ResolveEntry::not_found_at(Utc::now()),
     };
-    if let Err(e) = tmdb_cache::put(pool, cleaned, kind_str, &entry).await {
+    if let Err(e) = tmdb_cache::put(pool, &cache_key, kind_str, &entry).await {
         tracing::warn!(error = %e, cleaned, "tmdb_resolve_cache put failed");
     }
     top.map(|t| ResolvedTitle {
@@ -118,6 +128,34 @@ pub async fn resolve_cleaned(
         poster_path: t.poster_path,
         overview: t.overview,
     })
+}
+
+/// Candidate list for `(query, kind, year)`. Prefers TMDB's typed
+/// search with the year filter — precise enough that the exact title
+/// ranks first and same-prefix noise is excluded (`/search/multi`
+/// drowns "Midnight (2021)" under more-popular "Midnight *" titles and
+/// drops it past the page-1 cutoff entirely). Retries without the year
+/// when the strict filter comes back empty (a release year can be
+/// off-by-one vs TMDB's primary release year), then falls back to the
+/// broad multi-search. Without a kind hint there's nothing to type the
+/// endpoint with, so it's straight to multi-search.
+pub(crate) async fn search_candidates(
+    tmdb: &TmdbClient,
+    query: &str,
+    kind_hint: Option<TmdbKind>,
+    year_hint: Option<u32>,
+) -> Vec<TmdbSuggestion> {
+    let Some(kind) = kind_hint else {
+        return tmdb.multi_search(query).await;
+    };
+    let mut hits = tmdb.search_typed(query, kind, year_hint).await;
+    if hits.is_empty() && year_hint.is_some() {
+        hits = tmdb.search_typed(query, kind, None).await;
+    }
+    if hits.is_empty() {
+        hits = tmdb.multi_search(query).await;
+    }
+    hits
 }
 
 #[derive(Debug, Clone)]
