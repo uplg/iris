@@ -313,6 +313,7 @@ async fn upsert_window_rows(
             infohash: release.infohash,
             language: Some(lang.as_str().to_string()),
             released_at: release.uploaded_at,
+            size_bytes: release.size_bytes.and_then(|b| i64::try_from(b).ok()),
         };
 
         let res = if let Some(am) = anime {
@@ -335,13 +336,14 @@ async fn upsert_window_rows(
 }
 
 /// Heuristic: does this TMDB title look like anime? Animation genre (16) in
-/// Japanese. Good enough to gate the (cached) AniList reconciliation.
-fn is_anime_meta(meta: &MediaMetadata) -> bool {
+/// Japanese. Good enough to gate the (cached) AniList reconciliation. Shared with
+/// the watched-title backfill so both classify anime identically.
+pub(crate) fn is_anime_meta(meta: &MediaMetadata) -> bool {
     meta.genre_ids.contains(&16) && meta.original_language.as_deref() == Some("ja")
 }
 
 /// Pick the AniList match for a title, preferring an exact release-year match.
-fn pick_anime(results: &[AniListMedia], year: Option<u32>) -> Option<AniListMedia> {
+pub(crate) fn pick_anime(results: &[AniListMedia], year: Option<u32>) -> Option<AniListMedia> {
     if let Some(y) = year.and_then(|y| u16::try_from(y).ok())
         && let Some(m) = results.iter().find(|m| m.year == Some(y))
     {

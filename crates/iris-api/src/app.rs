@@ -48,7 +48,8 @@ pub fn build_router(state: AppState) -> Router {
             "/playback-preferences",
             routes::playback_preferences::router(),
         )
-        .nest("/for-you", routes::foryou::router());
+        .nest("/for-you", routes::foryou::router())
+        .nest("/moods", routes::moods::router());
 
     // Apply the Iris-Caps parser + telemetry on /torrents only — that's
     // where capability negotiation matters, and the middleware reads the DB

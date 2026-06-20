@@ -72,6 +72,14 @@ interface IrisApi {
     @POST("api/me/for-you/dismiss")
     suspend fun dismissForYou(@Body body: DismissRequest)
 
+    /** The mood board for a kind — TMDB genres ordered by the user's taste. */
+    @GET("api/me/moods")
+    suspend fun moodBoard(@Query("kind") kind: String): MoodBoard
+
+    /** Results for a mood — catalogue ∪ broad TMDB, recency-filtered, taste-ranked. */
+    @GET("api/me/moods/{id}")
+    suspend fun moodResults(@Path("id") id: String, @Query("kind") kind: String): MoodResults
+
     /** The user's preferred audio + subtitle language (applied across episodes
      *  / devices). */
     @GET("api/me/playback-preferences")

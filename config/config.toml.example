@@ -33,6 +33,24 @@ slice_interval_minutes = 10  # minutes between slices (full cycle ≈ this × pr
 # to embrace older catalogue, lower it for a stricter "recent only" feel.
 max_content_age_years = 10
 
+# Content-first recommendation engine (see RECOSYS.md). All optional — the
+# defaults below apply when the section is absent.
+[reco]
+enabled = true
+# model2vec model id (HF repo or local path). potion-retrieval-32M won the rig
+# sweep; swap to minishlab/potion-base-8M for a smaller (~8 MB) table.
+model = "minishlab/potion-retrieval-32M"
+centroids = 3          # taste centroids per user (weighted k-means)
+embed_batch = 512      # items embedded per background ingest slice
+# The catalogue records ONE best release per title (smallest-sane size, seeders
+# as a garde-fou) — which can land on a 4K REMUX (75 GB) when smaller encodes
+# are low-seeded. The reco / mood shelves skip proposing a release above these
+# per-kind ceilings (GiB); the title still surfaces via discover and re-searches
+# a saner release at grab. Set 0 to disable a cap. Movies are capped tighter;
+# TV is looser because a legit season pack is large.
+max_movie_gib = 40
+max_tv_gib = 100
+
 [auth]
 # Override every value below with IRIS_AUTH__<KEY> environment variables in
 # production. The JWT secret in particular MUST come from the environment.

@@ -3,6 +3,7 @@ import { Link, type LinkProps, Outlet, useLocation } from "@tanstack/react-route
 import {
   Home as HomeIcon,
   Library as LibraryIcon,
+  Popcorn as MoodIcon,
   Settings as SettingsIcon,
   Search as SearchIcon,
   ShieldCheck,
@@ -46,8 +47,9 @@ export function AppShell() {
 
   const nav: NavEntry[] = [
     { to: "/", label: "Home", icon: HomeIcon, end: true },
-    { to: "/for-you", label: "For You", icon: ForYouIcon },
     { to: "/search", label: "Search", icon: SearchIcon },
+    { to: "/moods", label: "Tonight", icon: MoodIcon },
+    { to: "/for-you", label: "For You", icon: ForYouIcon },
     { to: "/library", label: "Library", icon: LibraryIcon },
     ...(auth.user.is_admin
       ? [{ to: "/admin", label: "Admin", icon: ShieldCheck } satisfies NavEntry]

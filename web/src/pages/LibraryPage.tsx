@@ -796,7 +796,11 @@ function TorrentRow({
   return (
     <div className="group rounded-lg border border-border/70 bg-card/60 transition hover:border-border">
       <div className="flex gap-4 p-4">
-        <TorrentPoster tmdbId={t.tmdb_id ?? null} kind={t.kind ?? null} verified={t.tmdb_verified} />
+        <TorrentPoster
+          tmdbId={t.tmdb_id ?? null}
+          kind={t.kind ?? null}
+          verified={t.tmdb_verified}
+        />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">

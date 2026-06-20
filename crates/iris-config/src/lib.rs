@@ -34,7 +34,88 @@ pub struct AppConfig {
     #[serde(default)]
     pub transcode: TranscodeConfig,
     #[serde(default)]
+    pub reco: RecoConfig,
+    #[serde(default)]
     pub providers_file: Option<PathBuf>,
+}
+
+/// Tuning for the content-first recommendation engine (see `RECOSYS.md`). The
+/// model embeds each catalogue item once at ingest; the request path only ranks
+/// over the cached vectors, so none of this touches the hot path's memory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoConfig {
+    /// Master switch. When false the engine falls back to the legacy linear
+    /// `fresh_score` shelves.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// `model2vec` model id (Hugging Face repo or local path). The English,
+    /// retrieval-tuned `potion-retrieval-32M` won the rig sweep — smaller AND
+    /// more accurate than the multilingual model — so embedding text is
+    /// normalized to English. Swap to `potion-base-8M` for an ~8 MB table.
+    #[serde(default = "default_reco_model")]
+    pub model: String,
+    /// Taste centroids per user (weighted k-means). 3 was the empirical optimum
+    /// on the prod data (1 blurs a household's distinct tastes, 5 over-segments).
+    #[serde(default = "default_reco_centroids")]
+    pub centroids: usize,
+    /// Max items embedded per ingest slice — bounds the background pass so a big
+    /// backfill never monopolises the box.
+    #[serde(default = "default_reco_embed_batch")]
+    pub embed_batch: i64,
+    /// Max recorded release size (GiB) a **movie** may have to be proposed by the
+    /// reco / mood shelves. The catalogue records one best release per title via
+    /// `recommended_cmp` (smallest-sane, seeders garde-fou), which can land on a
+    /// 4K REMUX (75 GB) when smaller encodes are low-seeded. Above this the row is
+    /// not proposed by default; the title can still surface via the discover path
+    /// (re-searched for a saner release at grab). `0` disables the cap.
+    #[serde(default = "default_max_movie_gib")]
+    pub max_movie_gib: i64,
+    /// Same cap for **tv** — higher, since a legit season pack is large.
+    #[serde(default = "default_max_tv_gib")]
+    pub max_tv_gib: i64,
+}
+
+fn default_reco_model() -> String {
+    "minishlab/potion-retrieval-32M".to_string()
+}
+fn default_reco_centroids() -> usize {
+    3
+}
+fn default_reco_embed_batch() -> i64 {
+    512
+}
+fn default_max_movie_gib() -> i64 {
+    40
+}
+fn default_max_tv_gib() -> i64 {
+    100
+}
+
+impl RecoConfig {
+    /// Size ceiling in bytes for a kind (`<= 0` ⇒ no cap). `kind` is the
+    /// catalogue's `"movie"` / `"tv"` tag.
+    #[must_use]
+    pub fn max_bytes_for_kind(&self, kind: &str) -> Option<i64> {
+        let gib = if kind == "tv" {
+            self.max_tv_gib
+        } else {
+            self.max_movie_gib
+        };
+        (gib > 0).then(|| gib.saturating_mul(1_073_741_824))
+    }
+}
+
+impl Default for RecoConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model: default_reco_model(),
+            centroids: default_reco_centroids(),
+            embed_batch: default_reco_embed_batch(),
+            max_movie_gib: default_max_movie_gib(),
+            max_tv_gib: default_max_tv_gib(),
+        }
+    }
 }
 
 /// Server-side encode settings for the "catch-up" transcode path — used when

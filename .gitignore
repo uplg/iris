@@ -10,7 +10,10 @@
 !/.env.example
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
+/recosys-proto/
 *.sqlite-journal
 *.sqlite3
 .DS_Store

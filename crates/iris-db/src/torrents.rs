@@ -12,8 +12,13 @@ pub struct TorrentRow {
     pub total_size_bytes: i64,
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
+    /// DEPRECATED — no longer written (always NULL for torrents ingested after
+    /// the collection-tmdb unification). The collection's id is the single source
+    /// of truth ([`Self::effective_tmdb_id`] / `collection_tmdb_id`). Kept only so
+    /// the admin diagnostic can still surface legacy rows' stale value; drop the
+    /// column in a follow-up migration once the new grab flow is confirmed.
     pub tmdb_id: Option<i64>,
-    /// Set true by [`set_tmdb_verified`] once we've matched `tmdb_id`'s
+    /// Set true by [`set_tmdb_verified`] once we've matched the collection's `tmdb_id`'s
     /// declared runtime against the file's probed duration. Until then
     /// frontends ignore `tmdb_id` for display purposes — wrong posters
     /// are worse UX than no posters.
@@ -63,13 +68,14 @@ pub struct TorrentRow {
 }
 
 impl TorrentRow {
-    /// The id clients should render from: the parent collection's
-    /// resolved id when grouped, falling back to the torrent's own
-    /// hint for standalone torrents. This is what unifies the library
-    /// shelf, the collection page and the per-torrent views onto one
-    /// stable poster source — see `collection_tmdb_id`.
+    /// The id clients render from: the parent collection's resolved id —
+    /// the SINGLE source of truth. The torrent's own `tmdb_id` is the
+    /// unreliable ingest-time hint (it disagreed with the collection in
+    /// several prod rows) and is deliberately NOT consulted here, so every
+    /// poster path (library shelf, collection page, per-torrent views) is
+    /// one logic. `None` when the collection has no resolved id yet.
     pub fn effective_tmdb_id(&self) -> Option<i64> {
-        self.collection_tmdb_id.or(self.tmdb_id)
+        self.collection_tmdb_id
     }
 }
 
@@ -80,26 +86,17 @@ pub struct NewTorrent {
     pub total_size_bytes: u64,
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
-    pub tmdb_id: Option<i64>,
     pub added_by: UserId,
 }
 
 /// Insert if the infohash is new, otherwise return the existing row
-/// (un-soft-deleting it). If the existing row lacks `tmdb_id` and the new
-/// payload has one, backfill it — handy for torrents ingested before the
-/// 0005 migration whose `tmdb_id` is now available because they got
-/// re-resolved through search.
+/// (un-soft-deleting it). The torrent's own `tmdb_id` is no longer written —
+/// the parent collection's id is the single source of truth (resolved from the
+/// collection's SCENE identity); see `collection_assign::resolve_collection_tmdb`.
 pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sqlx::Error> {
     if let Some(existing) = find_by_infohash(pool, &new.infohash).await? {
         if existing.deleted_at.is_some() {
             sqlx::query("UPDATE torrents SET deleted_at = NULL WHERE id = ?1")
-                .bind(existing.id)
-                .execute(pool)
-                .await?;
-        }
-        if existing.tmdb_id.is_none() && new.tmdb_id.is_some() {
-            sqlx::query("UPDATE torrents SET tmdb_id = ?1 WHERE id = ?2")
-                .bind(new.tmdb_id)
                 .bind(existing.id)
                 .execute(pool)
                 .await?;
@@ -113,8 +110,8 @@ pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sq
     let added_by: Uuid = new.added_by.into();
     sqlx::query(
         "INSERT INTO torrents (id, infohash, name, total_size_bytes, source_provider, \
-         source_external_id, tmdb_id, added_by, added_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         source_external_id, added_by, added_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )
     .bind(id)
     .bind(&new.infohash)
@@ -122,7 +119,6 @@ pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sq
     .bind(i64::try_from(new.total_size_bytes).unwrap_or(i64::MAX))
     .bind(&new.source_provider)
     .bind(&new.source_external_id)
-    .bind(new.tmdb_id)
     .bind(added_by)
     .bind(now)
     .execute(pool)
@@ -179,15 +175,16 @@ pub async fn list_active_infohashes(pool: &SqlitePool) -> Result<Vec<String>, sq
     Ok(rows.into_iter().map(|(h,)| h).collect())
 }
 
-/// Distinct TMDB ids currently in the library (not soft-deleted),
-/// preferring a torrent's parent collection id over its own. Used to
-/// exclude already-owned titles from the recommendation shelves.
+/// Distinct TMDB ids currently in the library (not soft-deleted), from each
+/// torrent's parent collection — the authoritative id. The torrent's own
+/// `tmdb_id` is never consulted. Used to exclude already-owned titles from the
+/// recommendation shelves.
 pub async fn library_tmdb_ids(pool: &SqlitePool) -> Result<Vec<i64>, sqlx::Error> {
     let rows: Vec<(i64,)> = sqlx::query_as(
-        "SELECT DISTINCT COALESCE(c.tmdb_id, t.tmdb_id) AS tmdb_id \
+        "SELECT DISTINCT c.tmdb_id AS tmdb_id \
          FROM torrents t \
          LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.deleted_at IS NULL AND COALESCE(c.tmdb_id, t.tmdb_id) IS NOT NULL",
+         WHERE t.deleted_at IS NULL AND c.tmdb_id IS NOT NULL",
     )
     .fetch_all(pool)
     .await?;

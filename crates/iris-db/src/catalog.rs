@@ -52,6 +52,10 @@ pub struct NewCatalogItem {
     /// Tracker upload time of the recorded release — basis for the sliding
     /// window ordering + GC. `None` for lazy reco candidates.
     pub released_at: Option<DateTime<Utc>>,
+    /// Total size of the recorded best release, in bytes. Lets the reco skip
+    /// proposing an absurdly large release (a 4K REMUX) by default. `None` for
+    /// lazy reco candidates (no recorded release).
+    pub size_bytes: Option<i64>,
 }
 
 /// A catalogue row as queried for the recommendation shelves.
@@ -81,6 +85,8 @@ pub struct CatalogItem {
     pub infohash: Option<String>,
     pub language: Option<String>,
     pub released_at: Option<DateTime<Utc>>,
+    /// Total size of the recorded best release, in bytes (`None` for lazy rows).
+    pub size_bytes: Option<i64>,
 }
 
 /// Column list for `CatalogItem` reads — shared so the row queries can't
@@ -95,7 +101,7 @@ macro_rules! select_columns {
         "id, tmdb_id, anilist_id, kind, title, original_language, genres, \
          is_anime, poster_path, backdrop_path, overview, popularity, vote_average, release_date, \
          availability, available_provider, seeders, provider_id, external_id, download_url, infohash, \
-         language, released_at"
+         language, released_at, size_bytes"
     };
 }
 
@@ -142,9 +148,9 @@ pub async fn upsert_item(pool: &SqlitePool, item: &NewCatalogItem) -> Result<(),
              poster_path, backdrop_path, overview, popularity, vote_average, release_date, \
              source, first_seen_at, last_refreshed_at, \
              availability, seeders, provider_id, external_id, download_url, infohash, \
-             language, released_at) \
+             language, released_at, size_bytes) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, \
-                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24) \
+                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25) \
          ON CONFLICT(tmdb_id, kind) WHERE tmdb_id IS NOT NULL AND is_anime = 0 DO UPDATE SET \
             title = excluded.title, \
             original_language = excluded.original_language, \
@@ -165,7 +171,8 @@ pub async fn upsert_item(pool: &SqlitePool, item: &NewCatalogItem) -> Result<(),
             download_url = excluded.download_url, \
             infohash = excluded.infohash, \
             language = excluded.language, \
-            released_at = excluded.released_at",
+            released_at = excluded.released_at, \
+            size_bytes = excluded.size_bytes",
     )
     .bind(id)
     .bind(item.tmdb_id)
@@ -191,6 +198,7 @@ pub async fn upsert_item(pool: &SqlitePool, item: &NewCatalogItem) -> Result<(),
     .bind(&item.infohash)
     .bind(&item.language)
     .bind(item.released_at)
+    .bind(item.size_bytes)
     .execute(pool)
     .await?;
     Ok(())
@@ -212,9 +220,9 @@ pub async fn upsert_anime(pool: &SqlitePool, item: &NewCatalogItem) -> Result<()
              poster_path, backdrop_path, overview, popularity, vote_average, release_date, \
              source, first_seen_at, last_refreshed_at, \
              availability, seeders, provider_id, external_id, download_url, infohash, \
-             language, released_at) \
+             language, released_at, size_bytes) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, \
-                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24) \
+                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25) \
          ON CONFLICT(anilist_id) WHERE anilist_id IS NOT NULL DO UPDATE SET \
             tmdb_id = excluded.tmdb_id, \
             kind = excluded.kind, \
@@ -237,7 +245,8 @@ pub async fn upsert_anime(pool: &SqlitePool, item: &NewCatalogItem) -> Result<()
             download_url = excluded.download_url, \
             infohash = excluded.infohash, \
             language = excluded.language, \
-            released_at = excluded.released_at",
+            released_at = excluded.released_at, \
+            size_bytes = excluded.size_bytes",
     )
     .bind(id)
     .bind(item.tmdb_id)
@@ -263,8 +272,22 @@ pub async fn upsert_anime(pool: &SqlitePool, item: &NewCatalogItem) -> Result<()
     .bind(&item.infohash)
     .bind(&item.language)
     .bind(item.released_at)
+    .bind(item.size_bytes)
     .execute(pool)
     .await?;
+    // Invariant: an anime row OWNS its `(tmdb_id, kind)`. Drop any non-anime twin
+    // left by a slice where the AniList match transiently failed (the genre16+ja
+    // anime gate then fell back to a plain `upsert_item` row). This is what
+    // prevents the anime/non-anime classification split at the source; migration
+    // 0028 heals legacy ones. Scoped to the same kind so a genuine movie/tv
+    // id-collision (different works sharing a numeric id) is never touched.
+    if let Some(tmdb_id) = item.tmdb_id {
+        sqlx::query("DELETE FROM catalog_items WHERE is_anime = 0 AND tmdb_id = ?1 AND kind = ?2")
+            .bind(tmdb_id)
+            .bind(&item.kind)
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -343,7 +366,7 @@ pub async fn watched_genre_signals(
          JOIN torrents t ON t.infohash = p.infohash \
          LEFT JOIN collections c ON c.id = t.collection_id \
          JOIN catalog_items ci \
-             ON ci.tmdb_id = COALESCE(c.tmdb_id, t.tmdb_id) AND ci.is_anime = 0 \
+             ON ci.tmdb_id = c.tmdb_id AND ci.kind = c.kind AND ci.is_anime = 0 \
          WHERE p.user_id = ?1 AND ci.tmdb_id IS NOT NULL \
          GROUP BY ci.id \
          ORDER BY watched_at DESC",
@@ -374,6 +397,26 @@ pub async fn download_url_for(
     Ok(row.and_then(|(u,)| u))
 }
 
+/// Fetch catalogue rows by id (arbitrary order) — hydrates id-keyed shelves
+/// (e.g. "Popular in your circle") into full cards. Order is not preserved;
+/// callers re-sort by their own ranking.
+pub async fn by_ids(pool: &SqlitePool, ids: &[Uuid]) -> Result<Vec<CatalogItem>, sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut qb = sqlx::QueryBuilder::new(concat!(
+        "SELECT ",
+        select_columns!(),
+        " FROM catalog_items WHERE id IN ("
+    ));
+    let mut sep = qb.separated(", ");
+    for id in ids {
+        sep.push_bind(*id);
+    }
+    sep.push_unseparated(")");
+    qb.build_query_as::<CatalogItem>().fetch_all(pool).await
+}
+
 /// Look up a single non-anime catalogue row by `tmdb_id` — used to
 /// rebuild a "because you watched" shelf from its key (the seed's genres
 /// + title).
@@ -389,6 +432,264 @@ pub async fn find_by_tmdb(
     .bind(tmdb_id)
     .fetch_optional(pool)
     .await
+}
+
+// ----------------------------------------------------------------- embeddings
+
+/// A catalogue row's text fields, for (re)building its content embedding.
+/// Genre *names* are resolved upstream (cached TMDB taxonomy); this layer only
+/// carries the raw ids it stores.
+#[derive(Debug, Clone)]
+pub struct EmbeddingInput {
+    pub id: Uuid,
+    pub title: String,
+    pub overview: Option<String>,
+    /// TMDB genre ids (parsed from the stored JSON array).
+    pub genres: Vec<i64>,
+    pub kind: String,
+}
+
+/// Catalogue rows whose content embedding is missing or stale (a different model
+/// than `model_id`), most-popular first, capped at `limit`. The ingest/backfill
+/// pass embeds these and writes the vectors back via [`set_embedding`].
+pub async fn items_needing_embedding(
+    pool: &SqlitePool,
+    model_id: &str,
+    limit: i64,
+) -> Result<Vec<EmbeddingInput>, sqlx::Error> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT id, title, overview, genres, kind FROM catalog_items \
+         WHERE content_embedding IS NULL OR embedding_model IS NULL OR embedding_model <> ?1 \
+         ORDER BY popularity DESC \
+         LIMIT ?2",
+    )
+    .bind(model_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let genres_json: String = r.get("genres");
+            EmbeddingInput {
+                id: r.get("id"),
+                title: r.get("title"),
+                overview: r.get("overview"),
+                genres: serde_json::from_str(&genres_json).unwrap_or_default(),
+                kind: r.get("kind"),
+            }
+        })
+        .collect())
+}
+
+/// Persist an item's L2-normalized embedding (little-endian f32 BLOB) plus the
+/// model id that produced it.
+pub async fn set_embedding(
+    pool: &SqlitePool,
+    id: Uuid,
+    vector: &[f32],
+    model_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE catalog_items SET content_embedding = ?1, embedding_model = ?2 WHERE id = ?3",
+    )
+    .bind(vec_to_blob(vector))
+    .bind(model_id)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Every catalogue item carrying a current-model embedding, as `(id, vector)`.
+/// Small enough (≈9 MB for the whole catalogue at dim 512) to hold in memory and
+/// rank over with dot products at request time.
+pub async fn load_embeddings(
+    pool: &SqlitePool,
+    model_id: &str,
+) -> Result<Vec<(Uuid, Vec<f32>)>, sqlx::Error> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT id, content_embedding FROM catalog_items \
+         WHERE content_embedding IS NOT NULL AND embedding_model = ?1",
+    )
+    .bind(model_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let blob: Vec<u8> = r.get("content_embedding");
+            let vec = blob_to_vec(&blob)?;
+            let id: Uuid = r.get("id");
+            Some((id, vec))
+        })
+        .collect())
+}
+
+/// Encode a vector as a little-endian f32 byte blob.
+fn vec_to_blob(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+
+/// Decode a little-endian f32 byte blob. `None` on a non-multiple-of-4 length
+/// (corrupt / truncated) so a bad row is skipped rather than panicking.
+fn blob_to_vec(blob: &[u8]) -> Option<Vec<f32>> {
+    if blob.is_empty() || !blob.len().is_multiple_of(4) {
+        return None;
+    }
+    Some(
+        blob.chunks_exact(4)
+            .map(|c| f32::from_le_bytes(c.try_into().expect("chunks_exact(4) yields 4 bytes")))
+            .collect(),
+    )
+}
+
+// --------------------------------------------------------- reco signals
+
+/// Confidence assigned to a *grab* (an explicit download = strong intent).
+const GRAB_CONFIDENCE: f32 = 0.7;
+/// Confidence for a play we can't grade (no duration recorded).
+const UNGRADED_PLAY_CONFIDENCE: f32 = 0.3;
+
+/// A user's positive catalogue items as `(catalog_id, confidence)` — the input
+/// to their multi-centroid taste profile. Confidence is graded (Hu-Koren-Volinsky
+/// confidence weighting, denoised): a completed play scores 1.0, a partial play
+/// the fraction watched, a grab `GRAB_CONFIDENCE`. Aggregated to the max per
+/// catalogue row so a series' many episodes collapse to one signal. Plays/grabs
+/// map to catalogue rows via the **collection's** `tmdb_id` only — `torrent.tmdb_id`
+/// is ignored (it can disagree; everything is a collection at minimum, so the
+/// collection id is authoritative).
+#[allow(clippy::cast_precision_loss)] // position/duration are small second counts
+pub async fn user_positive_catalog(
+    pool: &SqlitePool,
+    user_id: UserId,
+) -> Result<Vec<(Uuid, f32)>, sqlx::Error> {
+    use sqlx::Row;
+    let user: Uuid = user_id.into();
+    let mut conf: std::collections::HashMap<Uuid, f32> = std::collections::HashMap::new();
+
+    let plays = sqlx::query(
+        "SELECT ci.id AS cid, p.completed AS completed, \
+                p.position_seconds AS pos, p.duration_seconds AS dur \
+         FROM playback_progress p \
+         JOIN torrents t ON t.infohash = p.infohash \
+         LEFT JOIN collections c ON c.id = t.collection_id \
+         JOIN catalog_items ci ON ci.tmdb_id = c.tmdb_id AND ci.kind = c.kind \
+         WHERE p.user_id = ?1 AND ci.tmdb_id IS NOT NULL",
+    )
+    .bind(user)
+    .fetch_all(pool)
+    .await?;
+    for r in plays {
+        let cid: Uuid = r.get("cid");
+        let completed: bool = r.get("completed");
+        let pos: i64 = r.try_get("pos").unwrap_or(0);
+        let dur: i64 = r.try_get("dur").unwrap_or(0);
+        let c = if completed {
+            1.0
+        } else if dur > 0 {
+            (pos as f32 / dur as f32).clamp(0.0, 1.0)
+        } else {
+            UNGRADED_PLAY_CONFIDENCE
+        };
+        let e = conf.entry(cid).or_insert(0.0);
+        *e = e.max(c);
+    }
+
+    let grabs = sqlx::query(
+        "SELECT DISTINCT ci.id AS cid \
+         FROM torrents t \
+         LEFT JOIN collections c ON c.id = t.collection_id \
+         JOIN catalog_items ci ON ci.tmdb_id = c.tmdb_id AND ci.kind = c.kind \
+         WHERE t.added_by = ?1 AND ci.tmdb_id IS NOT NULL",
+    )
+    .bind(user)
+    .fetch_all(pool)
+    .await?;
+    for r in grabs {
+        let cid: Uuid = r.get("cid");
+        let e = conf.entry(cid).or_insert(0.0);
+        *e = e.max(GRAB_CONFIDENCE);
+    }
+
+    Ok(conf.into_iter().collect())
+}
+
+/// Catalogue rows watched or grabbed by *other* household users, ranked by how
+/// many distinct others touched them — the "Popular in your circle" signal.
+/// Returns `(catalog_id, distinct_other_users)`; the caller still filters out
+/// what this user already owns/saw.
+pub async fn circle_popular(
+    pool: &SqlitePool,
+    user_id: UserId,
+    limit: i64,
+) -> Result<Vec<(Uuid, i64)>, sqlx::Error> {
+    use sqlx::Row;
+    let user: Uuid = user_id.into();
+    let rows = sqlx::query(
+        "SELECT ci.id AS cid, COUNT(DISTINCT u.uid) AS n FROM ( \
+            SELECT p.user_id AS uid, c.tmdb_id AS tmdb, c.kind AS kind \
+            FROM playback_progress p \
+            JOIN torrents t ON t.infohash = p.infohash \
+            LEFT JOIN collections c ON c.id = t.collection_id \
+            WHERE p.user_id <> ?1 \
+            UNION \
+            SELECT t.added_by AS uid, c.tmdb_id AS tmdb, c.kind AS kind \
+            FROM torrents t \
+            LEFT JOIN collections c ON c.id = t.collection_id \
+            WHERE t.added_by IS NOT NULL AND t.added_by <> ?1 \
+         ) u \
+         JOIN catalog_items ci ON ci.tmdb_id = u.tmdb AND ci.kind = u.kind \
+         WHERE u.tmdb IS NOT NULL \
+         GROUP BY ci.id \
+         ORDER BY n DESC, ci.popularity DESC \
+         LIMIT ?2",
+    )
+    .bind(user)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get::<Uuid, _>("cid"), r.get::<i64, _>("n")))
+        .collect())
+}
+
+/// Household watched/grabbed `tmdb_id`s that have NO catalogue row yet — the
+/// out-of-window titles. Returns `(tmdb_id, is_tv_hint)`; the hint (presence in
+/// `series_follows`) disambiguates TMDB's separate movie/tv id namespaces for the
+/// metadata fetch. Backfilling these as metadata-only rows lets them be embedded,
+/// enriching users' taste profiles (more positives carry a vector) even though
+/// they're never recommended back (already seen).
+pub async fn watched_tmdbs_missing(pool: &SqlitePool) -> Result<Vec<(i64, bool)>, sqlx::Error> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT x.tmdb AS tmdb, \
+                MAX(CASE WHEN sf.tmdb_id IS NOT NULL THEN 1 ELSE 0 END) AS is_tv \
+         FROM ( \
+            SELECT c.tmdb_id AS tmdb, c.kind AS kind \
+            FROM playback_progress p \
+            JOIN torrents t ON t.infohash = p.infohash \
+            LEFT JOIN collections c ON c.id = t.collection_id \
+            UNION \
+            SELECT c.tmdb_id AS tmdb, c.kind AS kind \
+            FROM torrents t \
+            LEFT JOIN collections c ON c.id = t.collection_id \
+            WHERE t.added_by IS NOT NULL \
+         ) x \
+         LEFT JOIN catalog_items ci ON ci.tmdb_id = x.tmdb AND ci.kind = x.kind \
+         LEFT JOIN series_follows sf ON sf.tmdb_id = x.tmdb \
+         WHERE x.tmdb IS NOT NULL AND ci.id IS NULL \
+         GROUP BY x.tmdb",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get::<i64, _>("tmdb"), r.get::<i64, _>("is_tv") != 0))
+        .collect())
 }
 
 /// Drop rows not refreshed since `older_than` — keeps the catalogue from
@@ -420,9 +721,9 @@ pub async fn prune_window(
          ) \
          AND ( \
              tmdb_id IS NULL OR tmdb_id NOT IN ( \
-                 SELECT COALESCE(c.tmdb_id, t.tmdb_id) FROM torrents t \
+                 SELECT c.tmdb_id FROM torrents t \
                    LEFT JOIN collections c ON c.id = t.collection_id \
-                   WHERE t.deleted_at IS NULL AND COALESCE(c.tmdb_id, t.tmdb_id) IS NOT NULL \
+                   WHERE t.deleted_at IS NULL AND c.tmdb_id IS NOT NULL \
                  UNION \
                  SELECT tmdb_id FROM series_follows \
              ) \
@@ -465,6 +766,7 @@ mod tests {
             infohash: None,
             language: None,
             released_at: None,
+            size_bytes: None,
         }
     }
 

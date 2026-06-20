@@ -59,6 +59,7 @@ export function CatalogCardView({ card }: { card: CatalogCard }) {
         onClick={onClick}
         title={card.title}
         subtitle={subtitle}
+        note={card.reason}
         posterUrl={card.poster_url ?? undefined}
         tmdbId={card.tmdb_id}
         kind={card.kind}

@@ -9,6 +9,7 @@ pub mod health;
 pub mod library;
 pub mod me;
 pub mod metadata;
+pub mod moods;
 pub mod playback_preferences;
 pub mod preferences;
 pub mod providers;

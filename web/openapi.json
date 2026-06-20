@@ -7,7 +7,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.9.1"
+    "version": "1.0.0"
   },
   "paths": {
     "/api/admin/active-sessions": {
@@ -1183,6 +1183,83 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ForYou"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/moods": {
+      "get": {
+        "tags": [
+          "moods"
+        ],
+        "operationId": "get_mood_board",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`movie` (default) or `tv`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Genre mood board for the kind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoodBoard"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/moods/{id}": {
+      "get": {
+        "tags": [
+          "moods"
+        ],
+        "operationId": "get_mood_results",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Mood id (e.g. `scary`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`movie` (default) or `tv`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Mood results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoodResults"
                 }
               }
             }
@@ -2859,6 +2936,13 @@
             ],
             "description": "The recorded release's provider + id — enough for the client to open\nthe same preview dialog as a search hit. `None` for lazy reco\ncandidates (no resolved release yet → the client falls back to search)."
           },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why this card surfaced (e.g. \"Matches your taste\"). `None` on prior /\nsocial shelves where the row title is the context. Additive — clients\nthat ignore it are unaffected."
+          },
           "seeders": {
             "type": [
               "integer",
@@ -4418,6 +4502,68 @@
             "items": {
               "$ref": "#/components/schemas/VideoStream"
             }
+          }
+        }
+      },
+      "MoodBoard": {
+        "type": "object",
+        "required": [
+          "moods"
+        ],
+        "properties": {
+          "moods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MoodTile"
+            },
+            "description": "Moods ordered by how much the user watches each one's genres."
+          }
+        }
+      },
+      "MoodResults": {
+        "type": "object",
+        "required": [
+          "mood",
+          "kind",
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogCard"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "description": "`\"movie\"` | `\"tv\"`."
+          },
+          "mood": {
+            "type": "string"
+          }
+        }
+      },
+      "MoodTile": {
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "backdrop_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A backdrop from a representative on-taste title, or `None` (client shows\na gradient tile)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable routing id (e.g. `scary`)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Display label (`Scary`)."
           }
         }
       },
