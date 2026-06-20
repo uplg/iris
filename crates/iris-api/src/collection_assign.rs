@@ -190,9 +190,13 @@ async fn resolve_collection_tmdb(
     } else {
         crate::tmdb::TmdbKind::Movie
     };
-    let Some(resolved) =
-        crate::tmdb_resolve::resolve_release_name(pool, client, &collection.display_title, Some(hint))
-            .await
+    let Some(resolved) = crate::tmdb_resolve::resolve_release_name(
+        pool,
+        client,
+        &collection.display_title,
+        Some(hint),
+    )
+    .await
     else {
         return;
     };

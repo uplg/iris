@@ -15,6 +15,15 @@ ignore = [
     "RUSTSEC-2025-0141",
     # bincode 2.0.1 unmaintained — transitive via librqbit. No safe upgrade.
     "RUSTSEC-2025-0060",
+    # paste 1.0.15 unmaintained (dtolnay archived the repo). Transitive via
+    # model2vec-rs → tokenizers → macro_rules_attribute. A compile-time proc-macro
+    # helper, not a vulnerability; no safe upgrade exists. Goes away when
+    # tokenizers drops it.
+    "RUSTSEC-2024-0436",
+    # number_prefix 0.4.0 unmaintained — transitive via indicatif (hf-hub +
+    # tokenizers → model2vec-rs). Progress-bar byte formatting, not a
+    # vulnerability; no safe upgrade. Goes away when indicatif drops it.
+    "RUSTSEC-2025-0119",
 ]
 
 [licenses]

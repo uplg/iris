@@ -67,7 +67,11 @@ impl RecoEngine {
         let centroids = profile::taste_centroids(&points, self.centroids_k, CENTROID_SEED);
         candidates
             .iter()
-            .filter_map(|id| store.get(id).map(|v| (*id, score::nearest_centroid(v, &centroids))))
+            .filter_map(|id| {
+                store
+                    .get(id)
+                    .map(|v| (*id, score::nearest_centroid(v, &centroids)))
+            })
             .collect()
     }
 
@@ -191,15 +195,14 @@ impl RecoEngine {
                     .collect();
 
                 let job = embedder.clone();
-                let vectors =
-                    match tokio::task::spawn_blocking(move || job.embed(&texts)).await {
-                        Ok(v) => v,
-                        Err(e) => {
-                            tracing::error!(error = %e, "reco: embed task panicked");
-                            tokio::time::sleep(EMBED_IDLE).await;
-                            continue;
-                        }
-                    };
+                let vectors = match tokio::task::spawn_blocking(move || job.embed(&texts)).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::error!(error = %e, "reco: embed task panicked");
+                        tokio::time::sleep(EMBED_IDLE).await;
+                        continue;
+                    }
+                };
                 for (it, vector) in pending.iter().zip(&vectors) {
                     if let Err(e) =
                         iris_db::catalog::set_embedding(&pool, it.id, vector, &self.model_id).await

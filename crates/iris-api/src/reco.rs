@@ -400,9 +400,9 @@ fn kind_str(kind: TmdbKind) -> &'static str {
 /// (filters in-cinema / unreleased). Unknown date ⇒ permissive (rare; the
 /// dead-torrent guard is the final gate at grab time).
 fn plausibly_available(release_date: Option<&str>, now: DateTime<Utc>) -> bool {
-    let Some(d) = release_date
-        .and_then(|s| chrono::NaiveDate::parse_from_str(s.get(0..10).unwrap_or(s), "%Y-%m-%d").ok())
-    else {
+    let Some(d) = release_date.and_then(|s| {
+        chrono::NaiveDate::parse_from_str(s.get(0..10).unwrap_or(s), "%Y-%m-%d").ok()
+    }) else {
         return true;
     };
     (now.date_naive() - d).num_days() >= MIN_HOME_RELEASE_DAYS
@@ -447,7 +447,12 @@ pub async fn mood_board(
         .genre_list(kind)
         .await
         .into_iter()
-        .map(|g| (data.affinity.get(&i64::from(g.id)).copied().unwrap_or(0.0), g))
+        .map(|g| {
+            (
+                data.affinity.get(&i64::from(g.id)).copied().unwrap_or(0.0),
+                g,
+            )
+        })
         .collect();
     // Stable sort → affinity-desc; ties keep TMDB's order (the cold-start fallback).
     genres.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -668,7 +673,10 @@ fn mood_item_text(r: &CatalogItem, genre_names: &HashMap<i64, String>) -> String
 
 /// Cold-start ranking: TMDB popularity, with `available` items boosted.
 fn popularity_scored(rows: Vec<CatalogItem>) -> Vec<(f32, CatalogItem)> {
-    let max_pop = rows.iter().filter_map(|r| r.popularity).fold(0.0_f64, f64::max);
+    let max_pop = rows
+        .iter()
+        .filter_map(|r| r.popularity)
+        .fold(0.0_f64, f64::max);
     rows.into_iter()
         .map(|r| {
             #[allow(clippy::cast_possible_truncation)]
