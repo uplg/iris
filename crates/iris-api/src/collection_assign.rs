@@ -778,6 +778,90 @@ async fn rebuild_availability(
 /// to any that doesn't have one yet. Runs at boot to backfill the
 /// existing library after the SCENE-first migration. Idempotent —
 /// safe to call repeatedly.
+/// Boot self-heal for **batch / absolute-numbered anime** (`[Group] Title
+/// [tags]`, no season) — the case both season-coupled heals
+/// ([`heal_tv_collection_identity`], [`heal_anime_collection_identity`]) skip via
+/// their `season.is_none()` early-return. Such a collection kept a junk
+/// `display_title` like `[Delivroozzi] Sakamoto Desu ga` from the pre-fix parser,
+/// which both breaks the AniList search (it keys on the raw title) and leaks the
+/// fansub group into the UI. This re-derives the clean `display_title` from the
+/// torrent name (rename in place, collision-guarded) and re-resolves AniList off
+/// it. TMDB self-heals separately via `tmdb_backfill`, which already re-parses the
+/// `display_title` with the fixed parser. Idempotent: a no-op once the title is
+/// canonical and AniList is set.
+async fn heal_anime_batch_metadata(
+    pool: &SqlitePool,
+    anilist: Option<&AniListClient>,
+    infohash: &str,
+) {
+    let Ok(Some(torrent)) = iris_db::torrents::find_by_infohash(pool, infohash).await else {
+        return;
+    };
+    let Some(collection_id) = torrent.collection_id else {
+        return;
+    };
+    let Ok(Some(collection)) = collections::get(pool, collection_id).await else {
+        return;
+    };
+    if collection.kind != "tv" || !collection.is_anime {
+        return;
+    }
+    let Some(parsed) = filename::parse(&torrent.name) else {
+        return;
+    };
+    let new_key = parsed.collection_key_kind(true, true);
+    if new_key.is_empty() {
+        return;
+    }
+    let new_display = parsed.display_with_year(true);
+
+    // 1. Clean a leftover [group] display_title — rename in place, but never
+    //    merge into a collection that already owns the canonical key.
+    let current_key = collection
+        .parsed_title_normalized
+        .clone()
+        .unwrap_or_default();
+    if current_key != new_key {
+        if let Ok(Some(other)) = collections::find_by_parsed_title(pool, &new_key, Kind::Tv).await
+            && other.id != collection_id
+        {
+            return;
+        }
+        if let Err(e) =
+            collections::set_parsed_title_normalized(pool, collection_id, &new_key).await
+        {
+            tracing::warn!(error = %e, collection_id = %collection_id, "anime batch heal: set key failed");
+            return;
+        }
+        if let Err(e) = collections::set_display_title(pool, collection_id, &new_display).await {
+            tracing::warn!(error = %e, collection_id = %collection_id, "anime batch heal: set display failed");
+            return;
+        }
+        tracing::info!(
+            collection_id = %collection_id,
+            new_display = %new_display,
+            "anime batch identity self-healed from torrent name",
+        );
+    }
+
+    // 2. (Re)resolve AniList off the clean title — the original enrich keyed on
+    //    the junk "[Group] …" and came back empty.
+    if collection.anilist_id.is_none()
+        && let Some(id) = anilist_id_for(anilist, &new_display).await
+    {
+        match collections::set_is_anime(pool, collection_id, true, Some(id)).await {
+            Ok(()) => tracing::info!(
+                collection_id = %collection_id,
+                anilist_id = id,
+                "anime batch heal: enriched with AniList id",
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, collection_id = %collection_id, "anime batch heal: set anilist_id failed");
+            }
+        }
+    }
+}
+
 pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris_torrent::Engine) {
     let rows = match iris_db::torrents::list_active(pool).await {
         Ok(v) => v,
@@ -815,6 +899,10 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
                     heal_anime_collection_identity(pool, deps.providers, &row.infohash, files)
                         .await;
                 }
+                // Batch / absolute anime (no season) is skipped by the
+                // season-coupled heal above — clean its leftover [group]
+                // display_title + re-resolve AniList off the clean title.
+                heal_anime_batch_metadata(pool, deps.anilist, &row.infohash).await;
             } else {
                 // Self-heal TV collection identity. Earlier builds picked
                 // the first file's parse without checking for a season

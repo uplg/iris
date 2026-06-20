@@ -445,7 +445,7 @@ pub fn parse(filename: &str) -> Option<Parsed> {
         && let Some(am) = parse_anime(stem)
     {
         title = am.title;
-        absolute_episode = Some(am.episode);
+        absolute_episode = am.episode;
     }
 
     if title.is_empty() {
@@ -470,55 +470,52 @@ pub fn parse(filename: &str) -> Option<Parsed> {
 
 struct AnimeMatch {
     title: String,
-    episode: u32,
+    /// `None` for batch / season packs (`[Group] Title [tags]`, no per-episode
+    /// number) — still a valid anime match, just without absolute numbering.
+    episode: Option<u32>,
 }
 
-/// Parse the anime fansub shape `[Group] Title - NN [tags]` (absolute
-/// episode numbering). Requires the leading `[group]` bracket and a
-/// ` - NN` episode marker — deliberately strict so it only fires on real
-/// anime releases, never on dotted SCENE names.
+/// Parse the anime fansub shape `[Group] Title [- NN] [tags] [vN]` (absolute
+/// episode numbering). Requires the leading `[group]` bracket; the ` - NN`
+/// episode marker is OPTIONAL, because batch / season packs
+/// (`[Delivroozzi] Sakamoto Desu ga [VOSTFR BD x265 1080p] v2`) are common and
+/// must still yield a CLEAN title — otherwise the TMDB/AniList lookup keys on
+/// `[Group] …` and fails. The title is the segment between the group bracket and
+/// the first tag bracket (`[` / `(`), so leading group + trailing tags are both
+/// stripped regardless of an episode marker.
 fn parse_anime(stem: &str) -> Option<AnimeMatch> {
     let s = stem.trim();
     if !s.starts_with('[') {
         return None;
     }
     let close = s.find(']')?;
-    let after_group = strip_trailing_tag_groups(s[close + 1..].trim());
-    // `Title - NN` — the episode marker is the last ` - ` before digits.
-    let dash = after_group.rfind(" - ")?;
-    let ep_part = after_group[dash + 3..].trim_start();
-    let digits: String = ep_part.chars().take_while(char::is_ascii_digit).collect();
-    if digits.is_empty() {
-        return None;
-    }
-    let episode: u32 = digits.parse().ok()?;
-    let title = humanise(&after_group[..dash]);
+    let rest = s[close + 1..].trim();
+    // Anime puts group, then title, then bracketed tags — so the title runs up
+    // to the first tag bracket (or end-of-string for a bare name).
+    let title_region = match rest.find(['[', '(']) {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    // Optional trailing ` - NN` absolute episode inside the title region.
+    let (title_str, episode) = match title_region.rfind(" - ") {
+        Some(dash) => {
+            let digits: String = title_region[dash + 3..]
+                .trim_start()
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            match digits.parse::<u32>() {
+                Ok(ep) => (&title_region[..dash], Some(ep)),
+                Err(_) => (title_region, None),
+            }
+        }
+        None => (title_region, None),
+    };
+    let title = humanise(title_str.trim());
     if title.is_empty() {
         return None;
     }
     Some(AnimeMatch { title, episode })
-}
-
-/// Strip trailing `[...]` / `(...)` tag groups (quality, codec, CRC …) so
-/// the episode marker becomes the last token. Idempotent.
-fn strip_trailing_tag_groups(s: &str) -> String {
-    let mut s = s.trim();
-    loop {
-        if s.ends_with(']')
-            && let Some(open) = s.rfind('[')
-        {
-            s = s[..open].trim_end();
-            continue;
-        }
-        if s.ends_with(')')
-            && let Some(open) = s.rfind('(')
-        {
-            s = s[..open].trim_end();
-            continue;
-        }
-        break;
-    }
-    s.to_string()
 }
 
 /// Locate the byte index in `stem` where the title ends. Priority:
@@ -789,6 +786,20 @@ mod tests {
         assert_eq!(p.season, None);
         assert_eq!(p.episode, None);
         assert_eq!(p.year, None);
+    }
+
+    #[test]
+    fn parses_anime_batch_pack_without_episode() {
+        // A batch / season pack has no ` - NN` episode marker. The title must
+        // still drop the leading fansub group ([Delivroozzi]) and the trailing
+        // tag bracket — otherwise the TMDB/AniList lookup keys on the group and
+        // finds nothing (the prod regression).
+        let p = parse("[Delivroozzi] Sakamoto Desu ga [VOSTFR BD x265 10bits 1080p FLAC] v2.mkv")
+            .unwrap();
+        assert_eq!(p.title, "Sakamoto Desu ga");
+        assert_eq!(p.absolute_episode, None);
+        assert_eq!(p.season, None);
+        assert_eq!(p.episode, None);
     }
 
     #[test]
