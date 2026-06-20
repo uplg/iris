@@ -120,43 +120,6 @@ struct Ctx<'a> {
     /// Movies whose content year is below this are excluded from the discovery
     /// shelves (very old films freshly re-uploaded). TV is exempt.
     movie_cutoff_year: i32,
-    /// Recorded-release size ceiling (bytes) for movies / tv. Over-cap rows are
-    /// degraded to lazy candidates so the card re-searches for a saner release
-    /// instead of offering the huge grab. `None` ⇒ no cap.
-    max_movie_bytes: Option<i64>,
-    max_tv_bytes: Option<i64>,
-}
-
-impl Ctx<'_> {
-    /// Degrade an over-cap recorded release to a lazy candidate (see
-    /// [`degrade_oversize`]).
-    fn cap_oversize(&self, item: CatalogItem) -> CatalogItem {
-        degrade_oversize(item, self.max_movie_bytes, self.max_tv_bytes)
-    }
-}
-
-/// A recorded best release above the kind's size cap (typically a 4K REMUX) must
-/// not be proposed as-is. Strip its grab facts so the card becomes a lazy
-/// candidate — clicking re-searches for a saner release (the search applies the
-/// same `recommended_cmp` policy) instead of offering the 75 GB grab by default.
-fn degrade_oversize(
-    mut item: CatalogItem,
-    max_movie: Option<i64>,
-    max_tv: Option<i64>,
-) -> CatalogItem {
-    let cap = if item.kind == "tv" { max_tv } else { max_movie };
-    if let (Some(size), Some(cap)) = (item.size_bytes, cap)
-        && size > cap
-    {
-        item.availability = "unknown".to_string();
-        item.seeders = None;
-        item.provider_id = None;
-        item.external_id = None;
-        item.download_url = None;
-        item.infohash = None;
-        item.size_bytes = None;
-    }
-    item
 }
 
 /// Map a user's language preference token to a TMDB ISO 639-1 code. Kept
@@ -214,8 +177,6 @@ fn ctx_of<'a>(
     data: &'a UserData,
     languages: &'a [String],
     movie_cutoff_year: i32,
-    max_movie_bytes: Option<i64>,
-    max_tv_bytes: Option<i64>,
 ) -> Ctx<'a> {
     Ctx {
         pool,
@@ -224,18 +185,7 @@ fn ctx_of<'a>(
         affinity: &data.affinity,
         languages,
         movie_cutoff_year,
-        max_movie_bytes,
-        max_tv_bytes,
     }
-}
-
-/// Recorded-release size ceilings (bytes) for the reco shelves, by kind.
-fn reco_caps(state: &AppState) -> (Option<i64>, Option<i64>) {
-    let reco = &state.cfg().reco;
-    (
-        reco.max_bytes_for_kind("movie"),
-        reco.max_bytes_for_kind("tv"),
-    )
 }
 
 /// The oldest content year a MOVIE may have to appear in discovery, from the
@@ -254,15 +204,7 @@ pub async fn for_you(state: &AppState, user_id: UserId) -> Result<ForYou, sqlx::
     let pool = state.db();
     let data = load_user_data(pool, user_id).await?;
     let languages = languages_of(&data.prefs);
-    let (max_movie_bytes, max_tv_bytes) = reco_caps(state);
-    let ctx = ctx_of(
-        pool,
-        &data,
-        &languages,
-        movie_cutoff_year(state),
-        max_movie_bytes,
-        max_tv_bytes,
-    );
+    let ctx = ctx_of(pool, &data, &languages, movie_cutoff_year(state));
 
     let mut shown = HashSet::new();
     let mut shelves = Vec::new();
@@ -301,15 +243,7 @@ pub async fn for_you_page(state: &AppState, user_id: UserId) -> Result<ForYou, s
     let pool = state.db();
     let data = load_user_data(pool, user_id).await?;
     let languages = languages_of(&data.prefs);
-    let (max_movie_bytes, max_tv_bytes) = reco_caps(state);
-    let ctx = ctx_of(
-        pool,
-        &data,
-        &languages,
-        movie_cutoff_year(state),
-        max_movie_bytes,
-        max_tv_bytes,
-    );
+    let ctx = ctx_of(pool, &data, &languages, movie_cutoff_year(state));
 
     let mut shown = HashSet::new();
     let mut shelves = Vec::new();
@@ -612,12 +546,7 @@ async fn gather_mood_candidates(
             None => no_tmdb.push(r),
         }
     }
-    let (max_movie, max_tv) = reco_caps(state);
-    Ok(by_tmdb
-        .into_values()
-        .chain(no_tmdb)
-        .map(|r| degrade_oversize(r, max_movie, max_tv))
-        .collect())
+    Ok(by_tmdb.into_values().chain(no_tmdb).collect())
 }
 
 /// Rank mood candidates by taste centroids (embedded on the fly), `available`
@@ -774,7 +703,7 @@ async fn content_candidate_rows(
     rows.retain(|r| {
         !ctx.dismissed.contains(&r.id) && r.tmdb_id.is_none_or(|id| !ctx.excluded.contains(&id))
     });
-    Ok(rows.into_iter().map(|r| ctx.cap_oversize(r)).collect())
+    Ok(rows)
 }
 
 /// "Popular in your circle" — titles other household members watched or grabbed,
@@ -804,7 +733,6 @@ async fn circle_shelf(
     let cards: Vec<CatalogCard> = rows
         .into_iter()
         .take(SHELF_LIMIT)
-        .map(|r| ctx.cap_oversize(r))
         .map(card_from_row)
         .collect();
     for c in &cards {
@@ -891,7 +819,6 @@ async fn blended_feed(
             && !shown.contains(&r.id)
             && r.tmdb_id.is_none_or(|id| !ctx.excluded.contains(&id))
     });
-    let rows: Vec<CatalogItem> = rows.into_iter().map(|r| ctx.cap_oversize(r)).collect();
     let cards: Vec<CatalogCard> = score_and_sort(rows, ctx)
         .into_iter()
         .take(SHELF_LIMIT)
@@ -1103,7 +1030,6 @@ async fn collect_shelf(
         .into_iter()
         .filter(|r| !ctx.dismissed.contains(&r.id) && !shown.contains(&r.id))
         .filter(|r| r.tmdb_id.is_none_or(|id| !ctx.excluded.contains(&id)))
-        .map(|r| ctx.cap_oversize(r))
         .collect();
     // Rank by the fresh score (upload + content recency × affinity × pop) so
     // very-old movies sink even within a genre/anime shelf.
@@ -1314,9 +1240,16 @@ fn card_from_row(row: CatalogItem) -> CatalogCard {
         overview: row.overview,
         is_anime: row.is_anime,
         availability: row.availability,
-        seeders: row.seeders,
-        provider_id: row.provider_id,
-        external_id: row.external_id,
+        // Reco / mood cards are title-references, never a specific recorded
+        // release. The catalogue's "best release" comes from one latest-feed
+        // slice and is frequently an aberrant 4K REMUX (or sizeless backlog), so
+        // we never offer it directly: the client previews/grabs via search, which
+        // ranks a saner release first (`recommended_cmp`). No release facts ride
+        // on a recommendation card — `provider_id == null` routes both web and TV
+        // to search.
+        seeders: None,
+        provider_id: None,
+        external_id: None,
         year,
         already_in_library: false,
         library_infohash: None,

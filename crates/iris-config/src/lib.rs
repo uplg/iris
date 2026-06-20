@@ -62,17 +62,6 @@ pub struct RecoConfig {
     /// backfill never monopolises the box.
     #[serde(default = "default_reco_embed_batch")]
     pub embed_batch: i64,
-    /// Max recorded release size (GiB) a **movie** may have to be proposed by the
-    /// reco / mood shelves. The catalogue records one best release per title via
-    /// `recommended_cmp` (smallest-sane, seeders garde-fou), which can land on a
-    /// 4K REMUX (75 GB) when smaller encodes are low-seeded. Above this the row is
-    /// not proposed by default; the title can still surface via the discover path
-    /// (re-searched for a saner release at grab). `0` disables the cap.
-    #[serde(default = "default_max_movie_gib")]
-    pub max_movie_gib: i64,
-    /// Same cap for **tv** — higher, since a legit season pack is large.
-    #[serde(default = "default_max_tv_gib")]
-    pub max_tv_gib: i64,
 }
 
 fn default_reco_model() -> String {
@@ -84,27 +73,6 @@ fn default_reco_centroids() -> usize {
 fn default_reco_embed_batch() -> i64 {
     512
 }
-fn default_max_movie_gib() -> i64 {
-    40
-}
-fn default_max_tv_gib() -> i64 {
-    100
-}
-
-impl RecoConfig {
-    /// Size ceiling in bytes for a kind (`<= 0` ⇒ no cap). `kind` is the
-    /// catalogue's `"movie"` / `"tv"` tag.
-    #[must_use]
-    pub fn max_bytes_for_kind(&self, kind: &str) -> Option<i64> {
-        let gib = if kind == "tv" {
-            self.max_tv_gib
-        } else {
-            self.max_movie_gib
-        };
-        (gib > 0).then(|| gib.saturating_mul(1_073_741_824))
-    }
-}
-
 impl Default for RecoConfig {
     fn default() -> Self {
         Self {
@@ -112,8 +80,6 @@ impl Default for RecoConfig {
             model: default_reco_model(),
             centroids: default_reco_centroids(),
             embed_batch: default_reco_embed_batch(),
-            max_movie_gib: default_max_movie_gib(),
-            max_tv_gib: default_max_tv_gib(),
         }
     }
 }
