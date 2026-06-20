@@ -26,8 +26,13 @@ export function CatalogCardView({ card }: { card: CatalogCard }) {
   const dismiss = useMutation({
     mutationFn: () => meApi.dismissForYou(card.catalog_id),
     onSuccess: () => {
+      // The dismiss already records the signal server-side (reco_feedback →
+      // excluded from every reco surface). Refetch each surface that renders
+      // these cards so the dismissed one drops out immediately — including the
+      // mood ("Tonight") results, which were left stale before.
       void qc.invalidateQueries({ queryKey: ["for-you"] });
       void qc.invalidateQueries({ queryKey: ["for-you-page"] });
+      void qc.invalidateQueries({ queryKey: ["mood-results"] });
     },
   });
 
