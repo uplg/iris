@@ -33,8 +33,12 @@ invitation in /admin, and use it from /register.
 ```sh
 cp .env.example .env
 # fill everything
-docker compose up --build -d
+just deploy
+# or if you don't have just (with cloudflare setup)
+docker compose --profile cloudflared up --build -d
 ```
+
+See [deployment.md](./docs/DEPLOYMENT.md) for server setup.
 
 ## Android TV app
 
