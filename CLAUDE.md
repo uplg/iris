@@ -32,60 +32,15 @@ Three project-wide rules — never relax them without explicit user approval.
 
 | Layer       | Stack                                                                              |
 | ----------- | ---------------------------------------------------------------------------------- |
-| Backend     | Rust 2024 workspace (edition 2024, rust-version 1.85), Axum 0.8, sqlx 0.8 / SQLite |
-| Torrent     | librqbit 8.1                                                                       |
+| Backend     | Rust 2024 workspace (edition 2024, rust-version 1.85), Axum 0.8, sqlx 0.9 / SQLite |
+| Torrent     | librqbit 9.0.0.rc-0                                                                |
 | Media       | ffmpeg-driven remuxer + HLS manifest builder + JS subtitle pipeline                |
 | Auth        | JWT in HttpOnly cookies, argon2id, invitation-only registration                    |
-| Frontend    | React 19, Vite 8, Tailwind 4, shadcn/ui (radix), TanStack Query 5, react-router 7  |
+| Frontend    | React 19, Vite 8, Tailwind 4, shadcn/ui (radix), TanStack Query, Tanstack Router   |
 | Lint/format | oxlint + oxfmt (NOT eslint/prettier)                                               |
-| Package mgr | **bun** — never npm/pnpm/yarn (see `feedback_frontend_tooling`)                    |
+| Package mgr | **bun** — never npm/pnpm/yarn                                                      |
 | Android TV  | Compose-for-TV, Media3 (ExoPlayer), AGP 9, Kotlin via AGP built-in                 |
 | TMDB        | Movie/series metadata + SCENE-name resolution pipeline                             |
-
-## Repository layout
-
-```
-iris/
-├── Cargo.toml                  # workspace root; pins all dep versions
-├── rust-toolchain.toml         # stable channel, rustfmt + clippy components
-├── crates/
-│   ├── iris-core/              # domain types (SearchResult, TorrentSource, errors)
-│   ├── iris-config/            # figment-based config loader (config.toml + providers.toml)
-│   ├── iris-db/                # sqlx queries; one module per table-group
-│   ├── iris-auth/              # JWT, argon2, session, invitations
-│   ├── iris-providers/         # tracker integrations + SearchProvider trait
-│   │   ├── src/lib.rs          #   trait + factory
-│   │   ├── src/registry.rs     #   ProviderRegistry, search_all() fan-out
-│   │   ├── src/torznab.rs      #   generic Torznab XML provider (reusable)
-│   │   ├── src/c411.rs         #   c411 (Torznab + curated /api/homepage featured)
-│   │   ├── src/torr9.rs        #   Torr9 (JWT auth, JSON API)
-│   │   └── src/nfo.rs          #   MediaInfo NFO parser
-│   ├── iris-torrent/           # librqbit wrapper, GC, metadata
-│   ├── iris-media/             # ffmpeg remuxer, HLS manifests, subtitle conv
-│   ├── iris-caps/              # device-capability negotiation
-│   └── iris-api/               # Axum HTTP layer
-│       ├── src/lib.rs          #   wiring: setup_remuxer/setup_gc/run()
-│       ├── src/routes/         #   /api/{auth,discover,search,torrents,follows,…}
-│       ├── src/tmdb*.rs        #   TMDB client + resolve + backfill (see project_tmdb_resolution)
-│       └── src/follows_scheduler.rs  # background follow-poll loop
-├── config/
-│   ├── config.toml.example     # server / storage / auth / tmdb
-│   └── providers.toml.example  # one [[providers]] entry per tracker
-├── migrations/                 # sqlx-migrate SQL files, numbered
-├── web/                        # React app (Vite + bun)
-│   ├── src/App.tsx             # router root (BrowserRouter + RequireAuth)
-│   ├── src/pages/              # one file per route (Home/Search/Series/Watch/...)
-│   ├── src/components/         # AppShell, Shelf, MediaCard, PreviewDialog, …
-│   ├── src/lib/api.ts          # fetch wrapper + typed endpoints
-│   └── src/components/ui/      # shadcn-managed components (don't hand-edit)
-├── android-tv/                 # Compose-for-TV companion app
-│   └── app/src/main/java/studio/kahn/iris/tv/
-│       ├── ui/                 # screens / components / theme
-│       └── data/               # network + repos
-├── docs/SOTA_ARCHITECTURE.md   # long-form design doc
-├── docs/DEPLOYMENT.md          # production / docker notes
-└── docker-compose.yml          # single-service deploy (bind 8080 + torrent 45100)
-```
 
 ## Build & dev commands
 
@@ -119,7 +74,7 @@ single source of truth for the request/response shapes. **Nothing hand-maintains
 DTOs** — every client generates them:
 
 - **Backend** emits the spec: `bun run gen-api` (or `cargo run -p iris-api
-  --bin gen-openapi -- --write`). The `committed_spec_is_current` test fails
+--bin gen-openapi -- --write`). The `committed_spec_is_current` test fails
   until you regenerate + commit `web/openapi.json`.
 - **Web** generates TS types: `openapi-typescript` → `src/lib/api-types.ts`
   (auto via `predev`/`prebuild`). `api.ts` wraps them with the fetch client.
@@ -252,7 +207,7 @@ The backend middleware
   the install-base / staleness telemetry source. Use these logs to
   decide whether bumping `MIN_TV_VERSION` is safe.
 - **Gates** when `client.version < MIN_*_VERSION`: returns `426 Upgrade
-  Required` with `{"error":"client_outdated","message":...,"min_version":...}`.
+Required` with `{"error":"client_outdated","message":...,"min_version":...}`.
 - Legacy clients with **no header** are let through (we never break
   shipped APKs retroactively).
 
@@ -278,6 +233,7 @@ Iris ships **APKs to real users**. Backend deploys must never crash an
 older client. Discipline:
 
 **Adding a field to a response struct** — safe by default:
+
 - Web: TypeScript doesn't validate at runtime; unknown fields are
   inert. Mark new TS fields optional (`description_format?: …`) with
   a default fallback at the call site.
@@ -289,6 +245,7 @@ older client. Discipline:
   example — defaults to `Bbcode` for legacy torr9.)
 
 **Adding an enum variant** — needs forward-compat config:
+
 - Kotlin enums **throw** on unknown variants by default.
   `AppContainer.kt` has `coerceInputValues = true` so unknown values
   fall back to the Kotlin default. Every enum data class must declare a
@@ -297,6 +254,7 @@ older client. Discipline:
   exhaustive `switch` need a `default:` branch.
 
 **Removing or renaming a field** — never do it directly:
+
 - Treat as breaking. Either keep the old field around (deprecated) for
   one APK release cycle, or version the endpoint (`/api/v2/…`).
 
@@ -369,7 +327,5 @@ Kotlin sealed class side. See memory `project_serde_kotlinx_discriminator`.
 
 ## Where to look
 
-- Long-form architecture: `docs/SOTA_ARCHITECTURE.md`
 - Deployment / Cloudflare tunnel: `docs/DEPLOYMENT.md`
 - Database schema: `migrations/*.sql` in numeric order
-- Memory pointers: `~/.claude/projects/-Users-leonard-Github-iris/memory/MEMORY.md`
