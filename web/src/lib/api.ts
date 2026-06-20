@@ -300,6 +300,11 @@ export type CatalogCard = components["schemas"]["CatalogCard"];
 export type ForYouShelf = components["schemas"]["Shelf"];
 
 export type ForYouResponse = components["schemas"]["ForYou"];
+
+/** One tile on the mood board (a curated mood + a taste-derived backdrop). */
+export type MoodTile = components["schemas"]["MoodTile"];
+export type MoodBoard = components["schemas"]["MoodBoard"];
+export type MoodResults = components["schemas"]["MoodResults"];
 export const me = {
   continueWatching: () => api.get<ContinueWatchingItem[]>("/me/continue-watching"),
   watchlist: () => api.get<WatchlistItem[]>("/me/watchlist"),
@@ -311,6 +316,11 @@ export const me = {
   forYouPage: () => api.get<ForYouResponse>("/me/for-you/page"),
   /** Hide a recommendation candidate from future shelves. */
   dismissForYou: (catalog_id: string) => api.post<void>("/me/for-you/dismiss", { catalog_id }),
+  /** The mood board for a kind — TMDB genres ordered by the user's taste. */
+  moodBoard: (kind: MediaKind) => api.get<MoodBoard>(`/me/moods?kind=${kind}`),
+  /** Results for a genre — catalogue ∪ broad TMDB, recency-filtered, taste-ranked. */
+  moodResults: (id: string, kind: MediaKind) =>
+    api.get<MoodResults>(`/me/moods/${encodeURIComponent(id)}?kind=${kind}`),
   /** The user's preferred audio + subtitle language (applied across episodes
    *  / devices). */
   playbackPreferences: () => api.get<PlaybackPrefs>("/me/playback-preferences"),

@@ -69,6 +69,7 @@ import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -132,6 +133,8 @@ fun HomeScreen(
     onOpenCollection: (collectionId: String) -> Unit,
     /** Open the organized "For You" page. */
     onOpenForYou: () -> Unit,
+    /** Open the mood board ("Tonight"). */
+    onOpenMoods: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var continueWatching by remember { mutableStateOf<List<ContinueWatchingItem>>(emptyList()) }
@@ -279,6 +282,7 @@ fun HomeScreen(
                 onOpenLibrary = onOpenLibrary,
                 onOpenCollection = onOpenCollection,
                 onOpenForYou = onOpenForYou,
+                onOpenMoods = onOpenMoods,
                 onRetry = { loadVersion++ },
             )
         }
@@ -309,6 +313,7 @@ private fun HomeContent(
     onOpenLibrary: () -> Unit,
     onOpenCollection: (String) -> Unit,
     onOpenForYou: () -> Unit,
+    onOpenMoods: () -> Unit,
     onRetry: () -> Unit,
 ) {
     LazyColumn(
@@ -329,6 +334,7 @@ private fun HomeContent(
         val topBar: @Composable () -> Unit = {
             HomeTopBar(
                 onOpenForYou = onOpenForYou,
+                onOpenMoods = onOpenMoods,
                 onOpenSearch = onOpenSearch,
                 onOpenLibrary = onOpenLibrary,
                 onOpenTorrents = onOpenTorrents,
@@ -642,6 +648,7 @@ internal fun Shelf(
 @Composable
 private fun HomeTopBar(
     onOpenForYou: () -> Unit,
+    onOpenMoods: () -> Unit,
     onOpenSearch: (String?) -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenTorrents: () -> Unit,
@@ -655,14 +662,19 @@ private fun HomeTopBar(
         IrisWordmark(fontSize = 34.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             TvIconButton(
-                icon = Icons.Filled.Star,
-                contentDescription = "For You",
-                onClick = onOpenForYou,
-            )
-            TvIconButton(
                 icon = Icons.Filled.Search,
                 contentDescription = "Search",
                 onClick = { onOpenSearch(null) },
+            )
+            TvIconButton(
+                icon = Icons.Filled.Movie,
+                contentDescription = "Tonight",
+                onClick = onOpenMoods,
+            )
+            TvIconButton(
+                icon = Icons.Filled.Star,
+                contentDescription = "For You",
+                onClick = onOpenForYou,
             )
             TvIconButton(
                 icon = Icons.Filled.VideoLibrary,
@@ -948,6 +960,7 @@ internal fun CatalogCardTv(
         tmdbVerified = card.posterUrl == null && card.tmdbId != null,
         title = card.title,
         subtitle = subtitle,
+        note = card.reason,
         progress = null,
         progressColor = null,
         onClick = onClick,
@@ -1170,6 +1183,10 @@ private fun PosterCard(
     /** Optional top-right overlay (e.g., "X new" badge). Renders on
      *  top of the poster. */
     topBadge: (@Composable () -> Unit)? = null,
+    /** Tiny brand-accent line under the subtitle — a recommendation "why"
+     *  ("Matches your taste"). Mirrors the web card's `note`. Omitted when
+     *  null/blank. */
+    note: String? = null,
 ) {
     var meta by remember(tmdbId, tmdbVerified) { mutableStateOf<MediaMetadata?>(null) }
     LaunchedEffect(tmdbId, tmdbVerified, posterUrlOverride, kindHint) {
@@ -1289,6 +1306,14 @@ private fun PosterCard(
                     ),
                     color = IrisColors.FgDim,
                 )
+                if (!note.isNullOrBlank()) {
+                    Text(
+                        note,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = IrisColors.Brand,
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }

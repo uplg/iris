@@ -1,0 +1,19 @@
+[package]
+name = "iris-reco"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Static text embeddings (model2vec): a distilled lookup-table sentence model.
+# Runs on CPU at ~lookup speed (no transformer forward pass) — the only embedding
+# backend that fits a small server while staying current SOTA. See RECOSYS.md §4.
+model2vec-rs = { workspace = true }
+anyhow = { workspace = true }
+rand = { workspace = true }
+tracing = { workspace = true }

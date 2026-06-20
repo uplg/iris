@@ -422,14 +422,7 @@ pub async fn search_summaries(
     sqlx::query_as::<_, CollectionSummary>(
         "SELECT \
             c.id, \
-            COALESCE(c.tmdb_id, ( \
-              SELECT t3.tmdb_id FROM torrents t3 \
-              WHERE t3.collection_id = c.id \
-                AND t3.deleted_at IS NULL \
-                AND t3.tmdb_id IS NOT NULL \
-              ORDER BY t3.tmdb_verified DESC, COALESCE(t3.last_played_at, t3.added_at) DESC \
-              LIMIT 1 \
-            )) AS tmdb_id, \
+            c.tmdb_id AS tmdb_id, \
             c.display_title, c.kind, c.is_anime, c.created_at, \
             COUNT(DISTINCT t.id) AS torrent_count, \
             COALESCE(SUM(t.total_size_bytes), 0) AS total_size_bytes, \
@@ -454,23 +447,15 @@ pub async fn search_summaries(
 }
 
 pub async fn list_summaries(pool: &SqlitePool) -> Result<Vec<CollectionSummary>, sqlx::Error> {
-    // `tmdb_id` falls back to whichever member torrent has one set when
-    // the collection slot itself is null. Otherwise newly-ingested
-    // collections (before the SCENE backfill has stamped them) would
-    // render with no poster on the library card even when the
-    // underlying torrents already carry a usable id from torr9 / the
-    // ingestion-time resolver.
+    // `tmdb_id` is the collection's own resolved id — the single source of truth.
+    // A member torrent's `tmdb_id` is never consulted (it's an unreliable hint
+    // that disagreed with the collection in prod). A freshly-ingested collection
+    // shows no poster until its id is stamped (prewarm / verify / backfill), which
+    // is the correct trade vs. rendering a wrong poster from a stray torrent id.
     sqlx::query_as::<_, CollectionSummary>(
         "SELECT \
             c.id, \
-            COALESCE(c.tmdb_id, ( \
-              SELECT t3.tmdb_id FROM torrents t3 \
-              WHERE t3.collection_id = c.id \
-                AND t3.deleted_at IS NULL \
-                AND t3.tmdb_id IS NOT NULL \
-              ORDER BY t3.tmdb_verified DESC, COALESCE(t3.last_played_at, t3.added_at) DESC \
-              LIMIT 1 \
-            )) AS tmdb_id, \
+            c.tmdb_id AS tmdb_id, \
             c.display_title, c.kind, c.is_anime, c.created_at, \
             COUNT(DISTINCT t.id) AS torrent_count, \
             COALESCE(SUM(t.total_size_bytes), 0) AS total_size_bytes, \

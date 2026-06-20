@@ -379,7 +379,6 @@ pub(crate) async fn ingest(
             user.id,
             body.provider_id,
             body.external_id,
-            body.tmdb_id,
         )
         .await?,
     ))
@@ -442,7 +441,6 @@ pub(crate) async fn ingest_core(
     user_id: iris_core::ids::UserId,
     provider_id: String,
     external_id: String,
-    tmdb_id_hint: Option<i64>,
 ) -> ApiResult<IngestResponse> {
     let provider = state
         .providers()
@@ -462,25 +460,9 @@ pub(crate) async fn ingest_core(
     }
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
 
-    // Resolve `tmdb_id` from the SCENE-cleaned release name rather than
-    // trusting the indexer's value — torr9 mistags Silicon Valley
-    // releases with The Burning Bed's id, etc. Server-side cache makes
-    // this cheap on repeat ingestions of the same series. Falls back to
-    // the caller's `tmdb_id_hint` when the resolver finds nothing.
-    let release_name = result
-        .snapshot
-        .name
-        .clone()
-        .unwrap_or_else(|| result.snapshot.infohash.clone());
-    let resolved_tmdb_id = if let Some(tmdb) = state.tmdb() {
-        crate::tmdb_resolve::resolve_release_name(state.db(), tmdb, &release_name, None)
-            .await
-            .and_then(|r| i64::try_from(r.tmdb_id).ok())
-    } else {
-        None
-    };
-    let final_tmdb_id = resolved_tmdb_id.or(tmdb_id_hint);
-
+    // No torrent-level tmdb resolution: the collection's id is the single
+    // source of truth, resolved from the collection's SCENE identity in
+    // `collection_assign::resolve_collection_tmdb` once the torrent is assigned.
     let row = iris_db::torrents::upsert(
         state.db(),
         iris_db::torrents::NewTorrent {
@@ -493,7 +475,6 @@ pub(crate) async fn ingest_core(
             total_size_bytes: result.snapshot.total_size_bytes,
             source_provider: Some(provider_id),
             source_external_id: Some(external_id),
-            tmdb_id: final_tmdb_id,
             added_by: user_id,
         },
     )
@@ -521,7 +502,6 @@ pub(crate) async fn ingest_core(
         let providers = state.providers().clone();
         let infohash = result.snapshot.infohash.clone();
         let name = result.snapshot.name.clone().unwrap_or_default();
-        let tmdb_id = tmdb_id_hint;
         let files: Vec<(usize, String)> = result
             .snapshot
             .files
@@ -538,7 +518,6 @@ pub(crate) async fn ingest_core(
                 },
                 &infohash,
                 &name,
-                tmdb_id,
                 &files,
             )
             .await;
@@ -751,9 +730,10 @@ fn build_remux_plan(
 /// movie TMDB has metadata for.
 const TMDB_RUNTIME_TOLERANCE: f64 = 0.15;
 
-/// Confirm or reject a torrent's `tmdb_id` by matching declared runtime
-/// against the file's probed duration. Idempotent: once verified, never
-/// re-checked. No-op when `tmdb_id` is missing or the runtime is unknown.
+/// Confirm or reject the torrent's *collection* `tmdb_id` by matching its
+/// declared runtime against the file's probed duration. Idempotent: once
+/// verified, never re-checked. No-op when the collection has no id yet or the
+/// runtime is unknown.
 async fn verify_tmdb_match(state: &AppState, infohash: &str, probed_duration_secs: Option<f64>) {
     let Ok(Some(row)) = iris_db::torrents::find_by_infohash(state.db(), infohash).await else {
         return;
@@ -761,7 +741,7 @@ async fn verify_tmdb_match(state: &AppState, infohash: &str, probed_duration_sec
     if row.tmdb_verified {
         return;
     }
-    let Some(tmdb_id) = row.tmdb_id.filter(|id| *id > 0) else {
+    let Some(tmdb_id) = row.collection_tmdb_id.filter(|id| *id > 0) else {
         return;
     };
     let Some(probed) = probed_duration_secs.filter(|d| *d > 0.0) else {
@@ -794,12 +774,8 @@ async fn verify_tmdb_match(state: &AppState, infohash: &str, probed_duration_sec
         verified,
         "tmdb verification result",
     );
-    // On successful verification, propagate the now-trusted tmdb_id
-    // to the torrent's collection so the UI can pull poster /
-    // synopsis. Failures are logged inside enrich_after_verify.
-    if verified {
-        crate::collection_assign::enrich_after_verify(state.db(), infohash).await;
-    }
+    // The id lives on the collection already (resolved from its SCENE identity);
+    // this only flips the per-torrent `tmdb_verified` flag the UI trusts.
 }
 
 #[derive(Debug, Serialize, ToSchema)]

@@ -46,6 +46,11 @@ const TOP_GENRE_SHELVES: usize = 3;
 const AFFINITY_DECAY_DAYS: f64 = 30.0;
 /// Weight a watched title contributes vs. an explicit onboarding pick.
 const EXPLICIT_GENRE_WEIGHT: f64 = 2.0;
+/// Broad candidate pool fetched for content re-ranking (the whole catalogue is
+/// only a few thousand rows, so we rank over essentially all of it).
+const CONTENT_POOL: i64 = 4000;
+/// The reason chip on a content-personalized card (wording locked with the user).
+const PICKED_REASON: &str = "Matches your taste";
 
 static RECO_CACHE: LazyLock<Mutex<HashMap<Uuid, (Instant, ForYou)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -78,6 +83,10 @@ pub struct CatalogCard {
     pub year: Option<i32>,
     pub already_in_library: bool,
     pub library_infohash: Option<String>,
+    /// Why this card surfaced (e.g. "Matches your taste"). `None` on prior /
+    /// social shelves where the row title is the context. Additive — clients
+    /// that ignore it are unaffected.
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -111,6 +120,43 @@ struct Ctx<'a> {
     /// Movies whose content year is below this are excluded from the discovery
     /// shelves (very old films freshly re-uploaded). TV is exempt.
     movie_cutoff_year: i32,
+    /// Recorded-release size ceiling (bytes) for movies / tv. Over-cap rows are
+    /// degraded to lazy candidates so the card re-searches for a saner release
+    /// instead of offering the huge grab. `None` ⇒ no cap.
+    max_movie_bytes: Option<i64>,
+    max_tv_bytes: Option<i64>,
+}
+
+impl Ctx<'_> {
+    /// Degrade an over-cap recorded release to a lazy candidate (see
+    /// [`degrade_oversize`]).
+    fn cap_oversize(&self, item: CatalogItem) -> CatalogItem {
+        degrade_oversize(item, self.max_movie_bytes, self.max_tv_bytes)
+    }
+}
+
+/// A recorded best release above the kind's size cap (typically a 4K REMUX) must
+/// not be proposed as-is. Strip its grab facts so the card becomes a lazy
+/// candidate — clicking re-searches for a saner release (the search applies the
+/// same `recommended_cmp` policy) instead of offering the 75 GB grab by default.
+fn degrade_oversize(
+    mut item: CatalogItem,
+    max_movie: Option<i64>,
+    max_tv: Option<i64>,
+) -> CatalogItem {
+    let cap = if item.kind == "tv" { max_tv } else { max_movie };
+    if let (Some(size), Some(cap)) = (item.size_bytes, cap)
+        && size > cap
+    {
+        item.availability = "unknown".to_string();
+        item.seeders = None;
+        item.provider_id = None;
+        item.external_id = None;
+        item.download_url = None;
+        item.infohash = None;
+        item.size_bytes = None;
+    }
+    item
 }
 
 /// Map a user's language preference token to a TMDB ISO 639-1 code. Kept
@@ -168,6 +214,8 @@ fn ctx_of<'a>(
     data: &'a UserData,
     languages: &'a [String],
     movie_cutoff_year: i32,
+    max_movie_bytes: Option<i64>,
+    max_tv_bytes: Option<i64>,
 ) -> Ctx<'a> {
     Ctx {
         pool,
@@ -176,7 +224,18 @@ fn ctx_of<'a>(
         affinity: &data.affinity,
         languages,
         movie_cutoff_year,
+        max_movie_bytes,
+        max_tv_bytes,
     }
+}
+
+/// Recorded-release size ceilings (bytes) for the reco shelves, by kind.
+fn reco_caps(state: &AppState) -> (Option<i64>, Option<i64>) {
+    let reco = &state.cfg().reco;
+    (
+        reco.max_bytes_for_kind("movie"),
+        reco.max_bytes_for_kind("tv"),
+    )
 }
 
 /// The oldest content year a MOVIE may have to appear in discovery, from the
@@ -195,20 +254,40 @@ pub async fn for_you(state: &AppState, user_id: UserId) -> Result<ForYou, sqlx::
     let pool = state.db();
     let data = load_user_data(pool, user_id).await?;
     let languages = languages_of(&data.prefs);
-    let ctx = ctx_of(pool, &data, &languages, movie_cutoff_year(state));
+    let (max_movie_bytes, max_tv_bytes) = reco_caps(state);
+    let ctx = ctx_of(
+        pool,
+        &data,
+        &languages,
+        movie_cutoff_year(state),
+        max_movie_bytes,
+        max_tv_bytes,
+    );
 
     let mut shown = HashSet::new();
-    let items = blended_feed(&ctx, data.prefs.include_anime, &mut shown).await?;
-    let shelves = if items.is_empty() {
-        Vec::new()
-    } else {
-        vec![Shelf {
+    let mut shelves = Vec::new();
+
+    // Picked for you — the content engine, falling back to the legacy blended
+    // feed when the user is cold-start or the embedding store isn't warm yet.
+    let picked =
+        match picked_for_you(state, &ctx, data.prefs.include_anime, &mut shown, user_id).await? {
+            Some(cards) => cards,
+            None => blended_feed(&ctx, data.prefs.include_anime, &mut shown).await?,
+        };
+    if !picked.is_empty() {
+        shelves.push(Shelf {
             key: "for_you".to_string(),
-            title: "For You".to_string(),
+            title: "Picked for you".to_string(),
             kind: None,
-            items,
-        }]
-    };
+            items: picked,
+        });
+    }
+    if let Some(s) = circle_shelf(&ctx, &mut shown, user_id).await? {
+        shelves.push(s);
+    }
+    if let Some(s) = fresh_drops(&ctx, &mut shown).await? {
+        shelves.push(s);
+    }
 
     let result = ForYou { shelves };
     cache_put(uuid, result.clone());
@@ -222,21 +301,34 @@ pub async fn for_you_page(state: &AppState, user_id: UserId) -> Result<ForYou, s
     let pool = state.db();
     let data = load_user_data(pool, user_id).await?;
     let languages = languages_of(&data.prefs);
-    let ctx = ctx_of(pool, &data, &languages, movie_cutoff_year(state));
+    let (max_movie_bytes, max_tv_bytes) = reco_caps(state);
+    let ctx = ctx_of(
+        pool,
+        &data,
+        &languages,
+        movie_cutoff_year(state),
+        max_movie_bytes,
+        max_tv_bytes,
+    );
 
     let mut shown = HashSet::new();
     let mut shelves = Vec::new();
 
-    let top = blended_feed(&ctx, data.prefs.include_anime, &mut shown).await?;
-    if !top.is_empty() {
-        // Page header is already "For You" — name this section so it
-        // doesn't echo the page title.
+    let picked =
+        match picked_for_you(state, &ctx, data.prefs.include_anime, &mut shown, user_id).await? {
+            Some(cards) => cards,
+            None => blended_feed(&ctx, data.prefs.include_anime, &mut shown).await?,
+        };
+    if !picked.is_empty() {
         shelves.push(Shelf {
             key: "for_you".to_string(),
-            title: "Top picks".to_string(),
+            title: "Picked for you".to_string(),
             kind: None,
-            items: top,
+            items: picked,
         });
+    }
+    if let Some(s) = circle_shelf(&ctx, &mut shown, user_id).await? {
+        shelves.push(s);
     }
 
     let genre_names = genre_name_map(state).await;
@@ -249,8 +341,502 @@ pub async fn for_you_page(state: &AppState, user_id: UserId) -> Result<ForYou, s
     {
         shelves.push(s);
     }
+    if let Some(s) = fresh_drops(&ctx, &mut shown).await? {
+        shelves.push(s);
+    }
 
     Ok(ForYou { shelves })
+}
+
+// ----------------------------------------------------------- mood board
+
+/// Min days since release for a NON-catalogue title to be plausibly grabbable.
+/// A title still in cinemas / not yet home-released won't be on any tracker, so
+/// it's filtered out of mood results (user requirement). Catalogue `available`
+/// rows are exempt — a provider already has them. No UPPER bound: classics are
+/// the whole point of mood/genre browse.
+const MIN_HOME_RELEASE_DAYS: i64 = 120;
+/// Score bump for an instantly-grabbable (`available`) candidate so it outranks
+/// an equally-on-taste lazy/TMDB one (which needs a grab + may be slower).
+const AVAIL_BOOST: f32 = 0.15;
+/// Max cards in a mood result.
+const MOOD_LIMIT: usize = 40;
+/// Per-genre catalogue fetch when gathering mood candidates.
+const MOOD_CATALOG_FETCH: i64 = 100;
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MoodTile {
+    /// Stable routing id (e.g. `scary`).
+    pub id: String,
+    /// Display label (`Scary`).
+    pub label: String,
+    /// A backdrop from a representative on-taste title, or `None` (client shows
+    /// a gradient tile).
+    pub backdrop_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MoodBoard {
+    /// Moods ordered by how much the user watches each one's genres.
+    pub moods: Vec<MoodTile>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MoodResults {
+    pub mood: String,
+    /// `"movie"` | `"tv"`.
+    pub kind: String,
+    pub items: Vec<CatalogCard>,
+}
+
+fn kind_str(kind: TmdbKind) -> &'static str {
+    match kind {
+        TmdbKind::Movie => "movie",
+        TmdbKind::Tv => "tv",
+    }
+}
+
+/// True when a title is old enough to plausibly have a home release on a tracker
+/// (filters in-cinema / unreleased). Unknown date ⇒ permissive (rare; the
+/// dead-torrent guard is the final gate at grab time).
+fn plausibly_available(release_date: Option<&str>, now: DateTime<Utc>) -> bool {
+    let Some(d) = release_date
+        .and_then(|s| chrono::NaiveDate::parse_from_str(s.get(0..10).unwrap_or(s), "%Y-%m-%d").ok())
+    else {
+        return true;
+    };
+    (now.date_naive() - d).num_days() >= MIN_HOME_RELEASE_DAYS
+}
+
+/// Genre tiles shown on the board (the user's top genres).
+const MOOD_BOARD_LIMIT: usize = 12;
+
+/// Slugify a TMDB genre name for clean, stable mood URLs: lowercase ASCII
+/// alphanumerics, every other run collapsed to a single `-` ("Sci-Fi & Fantasy"
+/// → "sci-fi-fantasy"). Used as the mood route id (resolved back via the live
+/// taxonomy in [`mood_results`]) so the URL reads `?mood=horror`, not `?mood=27`.
+fn genre_slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
+/// The mood board: the **live TMDB genre taxonomy** for `kind`, ordered by the
+/// user's affinity (their genres first), capped, each tile a genre with a
+/// representative backdrop. Fully dynamic — the genres come from TMDB, the order
+/// from the user's taste. No curated list, no hardcoded ids.
+pub async fn mood_board(
+    state: &AppState,
+    user_id: UserId,
+    kind: TmdbKind,
+) -> Result<MoodBoard, sqlx::Error> {
+    let pool = state.db();
+    let data = load_user_data(pool, user_id).await?;
+    let languages = languages_of(&data.prefs);
+    let Some(tmdb) = state.tmdb() else {
+        return Ok(MoodBoard { moods: Vec::new() });
+    };
+
+    let mut genres: Vec<(f64, crate::tmdb::Genre)> = tmdb
+        .genre_list(kind)
+        .await
+        .into_iter()
+        .map(|g| (data.affinity.get(&i64::from(g.id)).copied().unwrap_or(0.0), g))
+        .collect();
+    // Stable sort → affinity-desc; ties keep TMDB's order (the cold-start fallback).
+    genres.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+    let mut tiles = Vec::new();
+    for (_, g) in genres.into_iter().take(MOOD_BOARD_LIMIT) {
+        let backdrop = mood_backdrop(pool, &languages, kind, g.id).await?;
+        tiles.push(MoodTile {
+            id: genre_slug(&g.name),
+            label: g.name,
+            backdrop_url: backdrop,
+        });
+    }
+    Ok(MoodBoard { moods: tiles })
+}
+
+/// Pick a backdrop for a genre tile: the most popular catalogue title in that
+/// genre (for the kind) that has a backdrop. `None` if none in the window.
+async fn mood_backdrop(
+    pool: &SqlitePool,
+    languages: &[String],
+    kind: TmdbKind,
+    genre_id: u32,
+) -> Result<Option<String>, sqlx::Error> {
+    let rows = iris_db::catalog::query_for_user(
+        pool,
+        &CatalogQuery {
+            languages: languages.to_vec(),
+            kind: Some(kind_str(kind).to_string()),
+            genre: Some(i64::from(genre_id)),
+            only_available: false,
+            order: CatalogOrder::Popularity,
+            limit: 10,
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(rows
+        .into_iter()
+        .find_map(|r| image_url(r.backdrop_path.as_deref(), "w780")))
+}
+
+/// Mood results: catalogue (fresh, instant) ∪ TMDB-discover (broad universe,
+/// grab on demand), recency-filtered to plausibly-grabbable titles, ranked by
+/// the user's taste centroids (embedded on the fly), `available` items boosted.
+/// Cold-start (no taste yet, or model not warm) falls back to popularity.
+pub async fn mood_results(
+    state: &AppState,
+    user_id: UserId,
+    mood_id: &str,
+    kind: TmdbKind,
+) -> Result<MoodResults, sqlx::Error> {
+    let result = |items: Vec<CatalogCard>, mood: &str| MoodResults {
+        mood: mood.to_string(),
+        kind: kind_str(kind).to_string(),
+        items,
+    };
+    // `mood_id` is the genre slug the board tile carries; resolve it back to a
+    // TMDB genre id via the live taxonomy.
+    let Some(tmdb) = state.tmdb() else {
+        return Ok(result(Vec::new(), mood_id));
+    };
+    let Some(genre) = tmdb
+        .genre_list(kind)
+        .await
+        .into_iter()
+        .find(|g| genre_slug(&g.name) == mood_id)
+    else {
+        return Ok(result(Vec::new(), mood_id));
+    };
+    let genre_id = genre.id;
+
+    let data = load_user_data(state.db(), user_id).await?;
+    let candidates = gather_mood_candidates(state, kind, &[genre_id], &data).await?;
+    let mut scored = rank_mood(state, user_id, candidates).await;
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let items: Vec<CatalogCard> = scored
+        .into_iter()
+        .take(MOOD_LIMIT)
+        .map(|(_, r)| card_from_row(r))
+        .collect();
+    Ok(result(items, mood_id))
+}
+
+/// Gather + filter + dedup mood candidates: catalogue (fresh) ∪ TMDB-discover
+/// (broad), recency-filtered to plausibly-grabbable titles, deduped by tmdb
+/// (an `available` row wins over a lazy/TMDB one for the same title).
+async fn gather_mood_candidates(
+    state: &AppState,
+    kind: TmdbKind,
+    genres: &[u32],
+    data: &UserData,
+) -> Result<Vec<CatalogItem>, sqlx::Error> {
+    let pool = state.db();
+    let languages = languages_of(&data.prefs);
+    let now = Utc::now();
+
+    // Catalogue candidates in any of the mood's genres (available + lazy).
+    let mut rows: Vec<CatalogItem> = Vec::new();
+    let mut seen: HashSet<Uuid> = HashSet::new();
+    for &g in genres {
+        let found = iris_db::catalog::query_for_user(
+            pool,
+            &CatalogQuery {
+                languages: languages.clone(),
+                kind: Some(kind_str(kind).to_string()),
+                genre: Some(i64::from(g)),
+                only_available: false,
+                order: CatalogOrder::Popularity,
+                limit: MOOD_CATALOG_FETCH,
+                ..Default::default()
+            },
+        )
+        .await?;
+        for r in found {
+            if seen.insert(r.id) {
+                rows.push(r);
+            }
+        }
+    }
+
+    // Broad TMDB universe — recency-filtered, reconciled to lazy rows.
+    if let Some(tmdb) = state.tmdb() {
+        for m in tmdb.discover_by_genre(kind, genres).await {
+            if !plausibly_available(m.release_date.as_deref(), now) {
+                continue;
+            }
+            if let Some(row) = get_or_create_lazy(pool, &m, kind).await?
+                && seen.insert(row.id)
+            {
+                rows.push(row);
+            }
+        }
+    }
+
+    // Exclusions + recency for non-available rows.
+    rows.retain(|r| {
+        !data.dismissed.contains(&r.id)
+            && r.tmdb_id.is_none_or(|id| !data.excluded.contains(&id))
+            && (r.availability == "available"
+                || plausibly_available(r.release_date.as_deref(), now))
+    });
+
+    // Dedup by tmdb, preferring the available row for a title.
+    let mut by_tmdb: HashMap<i64, CatalogItem> = HashMap::new();
+    let mut no_tmdb: Vec<CatalogItem> = Vec::new();
+    for r in rows {
+        match r.tmdb_id {
+            Some(id) => {
+                let replace = by_tmdb.get(&id).is_none_or(|cur| {
+                    cur.availability != "available" && r.availability == "available"
+                });
+                if replace {
+                    by_tmdb.insert(id, r);
+                }
+            }
+            None => no_tmdb.push(r),
+        }
+    }
+    let (max_movie, max_tv) = reco_caps(state);
+    Ok(by_tmdb
+        .into_values()
+        .chain(no_tmdb)
+        .map(|r| degrade_oversize(r, max_movie, max_tv))
+        .collect())
+}
+
+/// Rank mood candidates by taste centroids (embedded on the fly), `available`
+/// boosted; falls back to popularity when cold-start or the model isn't warm.
+async fn rank_mood(
+    state: &AppState,
+    user_id: UserId,
+    candidates: Vec<CatalogItem>,
+) -> Vec<(f32, CatalogItem)> {
+    let Ok(positives) = iris_db::catalog::user_positive_catalog(state.db(), user_id).await else {
+        return popularity_scored(candidates);
+    };
+    let centroids = state.reco().centroids_for(&positives).await;
+    if centroids.is_empty() {
+        return popularity_scored(candidates);
+    }
+    let genre_names = genre_name_map(state).await;
+    let texts: Vec<String> = candidates
+        .iter()
+        .map(|r| mood_item_text(r, &genre_names))
+        .collect();
+    let Some(vecs) = state.reco().embed_texts(&texts).await else {
+        return popularity_scored(candidates);
+    };
+    candidates
+        .into_iter()
+        .zip(vecs)
+        .map(|(r, v)| {
+            let mut s = iris_reco::score::nearest_centroid(&v, &centroids);
+            if r.availability == "available" {
+                s += AVAIL_BOOST;
+            }
+            (s, r)
+        })
+        .collect()
+}
+
+/// Build the embedding text for a candidate (title + overview + genre names),
+/// matching what the ingest embedding loop stores.
+fn mood_item_text(r: &CatalogItem, genre_names: &HashMap<i64, String>) -> String {
+    let genres: Vec<String> = parse_genre_ids(&r.genres)
+        .iter()
+        .filter_map(|id| genre_names.get(id).cloned())
+        .collect();
+    iris_reco::text::build(&iris_reco::text::ItemText {
+        title: &r.title,
+        overview: r.overview.as_deref(),
+        genres: &genres,
+        cast: &[],
+        keywords: &[],
+    })
+}
+
+/// Cold-start ranking: TMDB popularity, with `available` items boosted.
+fn popularity_scored(rows: Vec<CatalogItem>) -> Vec<(f32, CatalogItem)> {
+    let max_pop = rows.iter().filter_map(|r| r.popularity).fold(0.0_f64, f64::max);
+    rows.into_iter()
+        .map(|r| {
+            #[allow(clippy::cast_possible_truncation)]
+            let mut s = if max_pop > 0.0 {
+                (r.popularity.unwrap_or(0.0) / max_pop) as f32
+            } else {
+                0.0
+            };
+            if r.availability == "available" {
+                s += AVAIL_BOOST;
+            }
+            (s, r)
+        })
+        .collect()
+}
+
+/// CONTENT engine — "Picked for you": rank the catalogue by cosine to the user's
+/// nearest taste centroid (validated ~17× NDCG@10 over the legacy scorer). Returns
+/// `None` when the engine is disabled, the user has no embeddable positives, or
+/// the in-memory store isn't warm yet — the caller then falls back to the blended
+/// feed so a cold-start user still gets a populated shelf.
+async fn picked_for_you(
+    state: &AppState,
+    ctx: &Ctx<'_>,
+    include_anime: bool,
+    shown: &mut HashSet<Uuid>,
+    user_id: UserId,
+) -> Result<Option<Vec<CatalogCard>>, sqlx::Error> {
+    if !state.reco().enabled() {
+        return Ok(None);
+    }
+    let positives = iris_db::catalog::user_positive_catalog(ctx.pool, user_id).await?;
+    if positives.is_empty() {
+        return Ok(None);
+    }
+    let rows = content_candidate_rows(ctx, include_anime).await?;
+    let mut by_id: HashMap<Uuid, CatalogItem> = rows.into_iter().map(|r| (r.id, r)).collect();
+    let candidate_ids: Vec<Uuid> = by_id.keys().copied().collect();
+
+    let mut scored = state.reco().rank(&positives, &candidate_ids).await;
+    if scored.is_empty() {
+        return Ok(None); // store cold / nothing embedded yet
+    }
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+    let mut cards = Vec::new();
+    for (id, _) in scored {
+        let Some(row) = by_id.remove(&id) else {
+            continue;
+        };
+        shown.insert(id);
+        cards.push(card_with_reason(row, PICKED_REASON));
+        if cards.len() >= SHELF_LIMIT {
+            break;
+        }
+    }
+    Ok((!cards.is_empty()).then_some(cards))
+}
+
+/// Candidate pool for content ranking: the catalogue (available + lazy /
+/// out-of-window rows alike — content matches beyond the rolling window are the
+/// whole point), minus what the user owns, has seen, or dismissed. Anime only
+/// when opted in (and never language-filtered — VO).
+async fn content_candidate_rows(
+    ctx: &Ctx<'_>,
+    include_anime: bool,
+) -> Result<Vec<CatalogItem>, sqlx::Error> {
+    let mut rows = iris_db::catalog::query_for_user(
+        ctx.pool,
+        &CatalogQuery {
+            languages: ctx.languages.to_vec(),
+            is_anime: Some(false),
+            only_available: false,
+            order: CatalogOrder::Popularity,
+            limit: CONTENT_POOL,
+            ..Default::default()
+        },
+    )
+    .await?;
+    if include_anime {
+        rows.extend(
+            iris_db::catalog::query_for_user(
+                ctx.pool,
+                &CatalogQuery {
+                    is_anime: Some(true),
+                    only_available: false,
+                    order: CatalogOrder::Popularity,
+                    limit: CONTENT_POOL,
+                    ..Default::default()
+                },
+            )
+            .await?,
+        );
+    }
+    rows.retain(|r| {
+        !ctx.dismissed.contains(&r.id) && r.tmdb_id.is_none_or(|id| !ctx.excluded.contains(&id))
+    });
+    Ok(rows.into_iter().map(|r| ctx.cap_oversize(r)).collect())
+}
+
+/// "Popular in your circle" — titles other household members watched or grabbed,
+/// ranked by how many distinct others, minus what this user already has / saw.
+async fn circle_shelf(
+    ctx: &Ctx<'_>,
+    shown: &mut HashSet<Uuid>,
+    user_id: UserId,
+) -> Result<Option<Shelf>, sqlx::Error> {
+    let ranked = iris_db::catalog::circle_popular(ctx.pool, user_id, FETCH_LIMIT).await?;
+    if ranked.is_empty() {
+        return Ok(None);
+    }
+    let rank: HashMap<Uuid, i64> = ranked.iter().copied().collect();
+    let ids: Vec<Uuid> = ranked.iter().map(|(id, _)| *id).collect();
+    let mut rows = iris_db::catalog::by_ids(ctx.pool, &ids).await?;
+    rows.retain(|r| {
+        !ctx.dismissed.contains(&r.id)
+            && !shown.contains(&r.id)
+            && r.tmdb_id.is_none_or(|id| !ctx.excluded.contains(&id))
+    });
+    rows.sort_by(|a, b| {
+        rank.get(&b.id)
+            .unwrap_or(&0)
+            .cmp(rank.get(&a.id).unwrap_or(&0))
+    });
+    let cards: Vec<CatalogCard> = rows
+        .into_iter()
+        .take(SHELF_LIMIT)
+        .map(|r| ctx.cap_oversize(r))
+        .map(card_from_row)
+        .collect();
+    for c in &cards {
+        shown.insert(c.catalog_id);
+    }
+    Ok((!cards.is_empty()).then(|| Shelf {
+        key: "circle".to_string(),
+        title: "Popular in your circle".to_string(),
+        kind: None,
+        items: cards,
+    }))
+}
+
+/// "Fresh drops" — the freshness/popularity prior surface: newest available
+/// rolling-window releases. Deliberately NOT personalized (blending priors into
+/// the perso score hurts accuracy, §0.1) — they get their own shelf, skipping
+/// anything already shown above.
+async fn fresh_drops(
+    ctx: &Ctx<'_>,
+    shown: &mut HashSet<Uuid>,
+) -> Result<Option<Shelf>, sqlx::Error> {
+    let cards = collect_shelf(
+        ctx,
+        shown,
+        CatalogQuery {
+            languages: ctx.languages.to_vec(),
+            is_anime: Some(false),
+            only_available: true,
+            order: CatalogOrder::Released,
+            limit: FETCH_LIMIT,
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok((!cards.is_empty()).then(|| Shelf {
+        key: "fresh".to_string(),
+        title: "Fresh drops".to_string(),
+        kind: None,
+        items: cards,
+    }))
 }
 
 /// The blended ranking — every interest mixed into one score
@@ -297,6 +883,7 @@ async fn blended_feed(
             && !shown.contains(&r.id)
             && r.tmdb_id.is_none_or(|id| !ctx.excluded.contains(&id))
     });
+    let rows: Vec<CatalogItem> = rows.into_iter().map(|r| ctx.cap_oversize(r)).collect();
     let cards: Vec<CatalogCard> = score_and_sort(rows, ctx)
         .into_iter()
         .take(SHELF_LIMIT)
@@ -465,6 +1052,7 @@ async fn get_or_create_lazy(
         infohash: None,
         language: None,
         released_at: None,
+        size_bytes: None,
     };
     iris_db::catalog::upsert_item(pool, &item).await?;
     iris_db::catalog::find_by_tmdb(pool, tmdb_id).await
@@ -507,6 +1095,7 @@ async fn collect_shelf(
         .into_iter()
         .filter(|r| !ctx.dismissed.contains(&r.id) && !shown.contains(&r.id))
         .filter(|r| r.tmdb_id.is_none_or(|id| !ctx.excluded.contains(&id)))
+        .map(|r| ctx.cap_oversize(r))
         .collect();
     // Rank by the fresh score (upload + content recency × affinity × pop) so
     // very-old movies sink even within a genre/anime shelf.
@@ -665,7 +1254,7 @@ fn top_genres(affinity: &HashMap<i64, f64>, n: usize) -> Vec<i64> {
 
 /// Merged movie + TV genre id → name map, for section titles. Empty when
 /// TMDB is unconfigured (sections fall back to a generic title).
-async fn genre_name_map(state: &AppState) -> HashMap<i64, String> {
+pub(crate) async fn genre_name_map(state: &AppState) -> HashMap<i64, String> {
     let mut map = HashMap::new();
     if let Some(tmdb) = state.tmdb() {
         for kind in [TmdbKind::Movie, TmdbKind::Tv] {
@@ -723,6 +1312,15 @@ fn card_from_row(row: CatalogItem) -> CatalogCard {
         year,
         already_in_library: false,
         library_infohash: None,
+        reason: None,
+    }
+}
+
+/// A card carrying a "why" chip (the content-personalized shelf).
+fn card_with_reason(row: CatalogItem, reason: &str) -> CatalogCard {
+    CatalogCard {
+        reason: Some(reason.to_string()),
+        ..card_from_row(row)
     }
 }
 

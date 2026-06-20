@@ -406,6 +406,31 @@ impl TmdbClient {
             .await
     }
 
+    /// `/discover/{movie,tv}` filtered to ANY of `genre_ids` (OR), popularity-
+    /// sorted — the broad-universe candidate source for the mood/genre board,
+    /// reaching well beyond the rolling catalogue window (classics, back
+    /// catalogue). One page (~20). `vote_count` floor drops obscure noise.
+    pub async fn discover_by_genre(&self, kind: TmdbKind, genre_ids: &[u32]) -> Vec<MediaMetadata> {
+        if genre_ids.is_empty() {
+            return Vec::new();
+        }
+        let endpoint = kind_marker(kind);
+        // `%7C` = `|` = OR (a film matching any of the mood's genres qualifies);
+        // a literal `|` would break URL parsing in reqwest.
+        let genres = genre_ids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join("%7C");
+        let url = format!(
+            "https://api.themoviedb.org/3/discover/{endpoint}?api_key={}&page=1\
+             &sort_by=popularity.desc&include_adult=false&vote_count.gte=50&with_genres={genres}",
+            self.inner.api_key
+        );
+        self.fetch_list(format!("discover:{endpoint}:{genres}"), url, kind)
+            .await
+    }
+
     /// `/{movie,tv}/{id}/similar` — content-based (keyword/genre) neighbours.
     /// Complements [`Self::recommendations`] for the same shelf.
     pub async fn similar(&self, kind: TmdbKind, tmdb_id: u64) -> Vec<MediaMetadata> {

@@ -30,6 +30,7 @@ import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.screens.CollectionScreen
 import studio.kahn.iris.tv.ui.screens.DetailScreen
 import studio.kahn.iris.tv.ui.screens.ForYouScreen
+import studio.kahn.iris.tv.ui.screens.MoodsScreen
 import studio.kahn.iris.tv.ui.screens.HomeScreen
 import studio.kahn.iris.tv.ui.screens.LibraryScreen
 import studio.kahn.iris.tv.ui.screens.PairingScreen
@@ -55,6 +56,7 @@ object Routes {
     const val COLLECTION = "collection/{collectionId}"
     const val WATCH = "watch/{infohash}/{fileIdx}"
     const val FOR_YOU = "for-you"
+    const val MOODS = "moods"
     fun detail(infohash: String) = "detail/$infohash"
     fun collection(id: String): String {
         val cid = java.net.URLEncoder.encode(id, "UTF-8")
@@ -187,6 +189,25 @@ fun IrisRoot(
                     },
                     onOpenForYou = {
                         navController.navigate(Routes.FOR_YOU)
+                    },
+                    onOpenMoods = {
+                        navController.navigate(Routes.MOODS)
+                    },
+                )
+            }
+            composable(Routes.MOODS) {
+                MoodsScreen(
+                    container = container,
+                    onOpenCollection = { collectionId ->
+                        navController.navigate(Routes.collection(collectionId))
+                    },
+                    onPickResult = { providerId, externalId, tmdbId, kind ->
+                        navController.navigate(
+                            Routes.searchDetail(providerId, externalId, tmdbId, kind),
+                        )
+                    },
+                    onOpenSearch = { query ->
+                        navController.navigate(Routes.search(query))
                     },
                 )
             }

@@ -105,6 +105,18 @@ const forYouRoute = createRoute({
   component: lazyRouteComponent(() => import("@/pages/ForYouPage"), "ForYouPage"),
 });
 
+const moodsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/moods",
+  // `mood` selects a tile's results; `kind` toggles Film/Series. Empty `mood`
+  // shows the board grid.
+  validateSearch: (search: Record<string, unknown>): { mood?: string; kind?: "movie" | "tv" } => ({
+    mood: str(search.mood),
+    kind: search.kind === "tv" ? "tv" : search.kind === "movie" ? "movie" : undefined,
+  }),
+  component: lazyRouteComponent(() => import("@/pages/MoodsPage"), "MoodsPage"),
+});
+
 const searchRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/search",
@@ -188,6 +200,7 @@ const routeTree = rootRoute.addChildren([
     shellRoute.addChildren([
       indexRoute,
       forYouRoute,
+      moodsRoute,
       searchRoute,
       seriesAliasRoute,
       collectionRoute,

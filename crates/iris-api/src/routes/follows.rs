@@ -978,7 +978,6 @@ pub(crate) async fn grab_episode_core(
             state,
             user_id,
             display_title,
-            tmdb_id,
             pack,
             season,
             episode,
@@ -1023,17 +1022,13 @@ pub(crate) async fn grab_episode_core(
             total_size_bytes: result.snapshot.total_size_bytes,
             source_provider: Some(pick.indexer_provider.clone()),
             source_external_id: Some(pick.indexer_torrent_id.clone()),
-            // Carry the resolved tmdb_id through to the torrent so
-            // the runtime probe can attempt a verify match. Stays
-            // unverified until the probe confirms.
-            tmdb_id,
             added_by: user_id,
         },
     )
     .await?;
 
     let file_idx = pick_largest_video_file(&result.snapshot.files);
-    finalise_grabbed_episode(state.clone(), &result, tmdb_id, season, episode, file_idx).await?;
+    finalise_grabbed_episode(state.clone(), &result, season, episode, file_idx).await?;
 
     Ok(GrabResponse {
         infohash: result.snapshot.infohash,
@@ -1064,7 +1059,6 @@ fn pick_largest_video_file(files: &[iris_torrent::FileEntry]) -> i64 {
 async fn finalise_grabbed_episode(
     state: AppState,
     result: &iris_torrent::IngestResult,
-    tmdb_id: Option<i64>,
     season: i64,
     episode: i64,
     file_idx: i64,
@@ -1084,7 +1078,6 @@ async fn finalise_grabbed_episode(
         },
         &result.snapshot.infohash,
         &result.snapshot.name.clone().unwrap_or_default(),
-        tmdb_id,
         &files,
     )
     .await;
@@ -1364,7 +1357,6 @@ async fn ingest_pack_and_pick_episode(
     state: &AppState,
     user_id: iris_core::ids::UserId,
     display_title: &str,
-    tmdb_id: Option<i64>,
     pack: PickedAvailability,
     season: i64,
     episode: i64,
@@ -1418,7 +1410,6 @@ async fn ingest_pack_and_pick_episode(
             total_size_bytes: result.snapshot.total_size_bytes,
             source_provider: Some(pack.indexer_provider.clone()),
             source_external_id: Some(pack.indexer_torrent_id.clone()),
-            tmdb_id,
             added_by: user_id,
         },
     )
@@ -1429,7 +1420,7 @@ async fn ingest_pack_and_pick_episode(
     // episode_files for the FULL season in one shot, so subsequent
     // calls for sibling episodes short-circuit through the on-disk
     // check.
-    finalise_grabbed_episode(state.clone(), &result, tmdb_id, season, episode, file_idx).await?;
+    finalise_grabbed_episode(state.clone(), &result, season, episode, file_idx).await?;
 
     Ok(GrabResponse {
         infohash: result.snapshot.infohash,

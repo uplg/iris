@@ -89,6 +89,8 @@ use utoipa::OpenApi;
         crate::routes::foryou::for_you,
         crate::routes::foryou::for_you_page,
         crate::routes::foryou::dismiss,
+        crate::routes::moods::board,
+        crate::routes::moods::results,
         crate::routes::discover::featured,
         crate::routes::providers::list,
         crate::routes::metadata::tmdb_lookup,

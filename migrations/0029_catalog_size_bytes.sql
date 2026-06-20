@@ -1,0 +1,12 @@
+-- Record the best release's total size on each catalogue row.
+--
+-- The reco / mood shelves recorded a single "best release" per title via the
+-- shared `recommended_cmp` policy (smallest-sane size first, seeders as a
+-- garde-fou) but never stored its SIZE — so a 4K REMUX (75 GB) that won on
+-- seeders could be proposed by default with no way to skip it. With the size on
+-- the row, the reco can drop absurdly-large releases for a kind (a 75 GB movie)
+-- while keeping legit big TV season packs.
+--
+-- Additive + nullable: legacy rows and lazy reco candidates (no recorded
+-- release) carry NULL.
+ALTER TABLE catalog_items ADD COLUMN size_bytes INTEGER;

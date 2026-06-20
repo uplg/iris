@@ -9,11 +9,12 @@ members = [
     "crates/iris-torrent",
     "crates/iris-media",
     "crates/iris-caps",
+    "crates/iris-reco",
     "crates/iris-api",
 ]
 
 [workspace.package]
-version = "0.9.1"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.94"
 license = "MIT OR Apache-2.0"
@@ -40,6 +41,7 @@ iris-providers = { path = "crates/iris-providers" }
 iris-torrent = { path = "crates/iris-torrent" }
 iris-media = { path = "crates/iris-media" }
 iris-caps = { path = "crates/iris-caps" }
+iris-reco = { path = "crates/iris-reco" }
 
 # Async runtime + http
 tokio = { version = "1.52.3", features = ["full"] }
@@ -100,6 +102,10 @@ once_cell = "1.21.4"
 # knob. The git patch is gone now that the option is in a published crate;
 # bump to the stable 9.0.0 once ikatson ships it.
 librqbit = "=9.0.0-rc.0"
+
+# Recommendation — static text embeddings (model2vec). Official Rust impl,
+# CPU-only lookup-table inference; see crates/iris-reco + RECOSYS.md §4.
+model2vec-rs = "0.2.1"
 
 [profile.release]
 lto = "thin"

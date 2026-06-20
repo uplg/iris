@@ -14,11 +14,10 @@
 //! wrong show's poster or synopsis attached to a correctly-titled
 //! folder.
 //!
-//! `collections.tmdb_id` (used by the UI to fetch poster / synopsis)
-//! is written exclusively by [`enrich_after_verify`] — invoked from
-//! `verify_tmdb_match` once we've matched the file's probed runtime
-//! against TMDB's declared duration. That's the only signal strong
-//! enough to justify pulling third-party metadata.
+//! `collections.tmdb_id` (used by the UI to fetch poster / synopsis) is the
+//! single source of truth, resolved from the collection's SCENE identity by
+//! [`resolve_collection_tmdb`]. The runtime probe (`verify_tmdb_match`) only
+//! flips the per-torrent `tmdb_verified` flag — it never writes the id.
 //!
 //! For TV torrents we also populate `episode_files` from any file
 //! whose name parses to a `(season, episode)` — this is what lets
@@ -51,19 +50,15 @@ pub struct EnrichDeps<'a> {
 /// logged, not returned, since collection assignment is metadata
 /// not playback.
 ///
-/// Does NOT touch `collections.tmdb_id` — that field is reserved
-/// for [`enrich_after_verify`] which writes it only after the
-/// runtime-match probe has confirmed the indexer's tmdb hint.
-///
-/// `tmdb_id` is accepted for log/trace context but deliberately not
-/// stored on the collection here. `_tmdb` is kept in the signature
-/// for symmetry with future hooks; currently unused.
+/// Resolves the collection's `tmdb_id` from its SCENE identity via
+/// [`resolve_collection_tmdb`] — THE single resolution path (movies + TV).
+/// The runtime probe (`verify_tmdb_match`) later only confirms it; the
+/// torrent's own id is never consulted.
 pub async fn assign_after_ingest(
     pool: &SqlitePool,
     deps: EnrichDeps<'_>,
     infohash: &str,
     name: &str,
-    tmdb_id: Option<i64>,
     files: &[(usize, String)],
 ) {
     // Parse the torrent name first — it's the highest-signal SCENE
@@ -122,9 +117,13 @@ pub async fn assign_after_ingest(
         collection_id = %collection.id,
         kind = collection.kind,
         title = %collection.display_title,
-        unverified_tmdb_hint = ?tmdb_id,
         "collection assigned",
     );
+
+    // THE single tmdb resolution path: from the collection's SCENE identity
+    // (`display_title`), for movies AND TV alike. No torrent-level resolution
+    // duplicates this. (TV additionally pre-warms episodes/anime below.)
+    resolve_collection_tmdb(pool, deps, &collection, kind).await;
 
     // For TV: turn any SCENE-parseable filename into an episode_files
     // row so the Series page picks it up. Keyed on collection_id
@@ -170,16 +169,58 @@ pub async fn assign_after_ingest(
     }
 }
 
-/// Best-effort: resolve a TMDB id from the SCENE name and kick the
-/// collections scheduler against the brand-new collection so the
-/// user's first visit to the collection page sees a poster + a
-/// populated "available episodes" panel.
-///
-/// Both operations are tolerant of failure — the runtime probe
-/// (`enrich_after_verify`) and the periodic scheduler tick still run
-/// independently and will eventually fill the gaps. The point of
-/// this pre-warm is just to shorten the visible "empty" window from
-/// minutes to seconds.
+/// THE single TMDB-id resolution path for a collection: resolve from its SCENE
+/// identity (`display_title`) and stamp it (first-writer-wins, so `tmdb_backfill`
+/// or a prior grab is never clobbered). Runs for movies AND TV. The result is
+/// unverified (poster-grade) until the runtime probe confirms it in
+/// `verify_tmdb_match`. The torrent's own name is deliberately never used —
+/// c411 season packs are named "Saison N" (no title) and resolve to garbage.
+async fn resolve_collection_tmdb(
+    pool: &SqlitePool,
+    deps: EnrichDeps<'_>,
+    collection: &iris_db::collections::CollectionRow,
+    kind: Kind,
+) {
+    if collection.tmdb_id.is_some() {
+        return;
+    }
+    let Some(client) = deps.tmdb else { return };
+    let hint = if kind == Kind::Tv {
+        crate::tmdb::TmdbKind::Tv
+    } else {
+        crate::tmdb::TmdbKind::Movie
+    };
+    let Some(resolved) =
+        crate::tmdb_resolve::resolve_release_name(pool, client, &collection.display_title, Some(hint))
+            .await
+    else {
+        return;
+    };
+    let Ok(id) = i64::try_from(resolved.tmdb_id) else {
+        tracing::warn!(
+            tmdb_id = resolved.tmdb_id,
+            collection_id = %collection.id,
+            "resolve_collection_tmdb: id overflowed i64 (shouldn't happen)",
+        );
+        return;
+    };
+    if let Err(e) = iris_db::collections::set_tmdb_id_if_missing(pool, collection.id, id).await {
+        tracing::warn!(error = %e, collection_id = %collection.id, "resolve_collection_tmdb: write failed");
+    } else {
+        tracing::info!(
+            collection_id = %collection.id,
+            tmdb_id = id,
+            "resolved collection TMDB id from identity (unverified — poster only)",
+        );
+    }
+}
+
+/// Best-effort: enrich a TV collection's anime id and kick the collections
+/// scheduler against the brand-new collection so the user's first visit sees a
+/// populated "available episodes" panel. Tolerant of failure — the periodic
+/// scheduler tick still runs independently and fills any gap; the point is just
+/// to shorten the visible "empty" window from minutes to seconds. (The TMDB id
+/// itself is resolved up in `assign_after_ingest` via `resolve_collection_tmdb`.)
 async fn prewarm_tv_collection(
     pool: &SqlitePool,
     deps: EnrichDeps<'_>,
@@ -207,52 +248,9 @@ async fn prewarm_tv_collection(
             );
         }
     }
-    // Resolve from the collection's SCENE *identity* (`display_title`),
-    // never the raw torrent name. The torrent name is frequently
-    // useless for resolution — c411 names season packs "Saison N"
-    // (French "Season N"), which carries no title, so feeding it to
-    // `multi_search` returned an unrelated French show's poster
-    // (Supernatural → "Pimp my ride version FR"). `display_title` was
-    // derived at ingest from the canonical season-marked file leaf and
-    // re-parses cleanly: a trailing "(YYYY)" becomes the year hint that
-    // disambiguates same-title shows.
-    if collection.tmdb_id.is_none()
-        && let Some(client) = deps.tmdb
-        && let Some(resolved) = crate::tmdb_resolve::resolve_release_name(
-            pool,
-            client,
-            &collection.display_title,
-            Some(crate::tmdb::TmdbKind::Tv),
-        )
-        .await
-    {
-        // TMDB ids never exceed ~i32::MAX in practice; reject
-        // anything that doesn't fit i64 cleanly rather than
-        // forcing an `as` cast — keeps `cargo clippy` happy
-        // without an `allow` blanket.
-        let Ok(id) = i64::try_from(resolved.tmdb_id) else {
-            tracing::warn!(
-                tmdb_id = resolved.tmdb_id,
-                collection_id = %collection.id,
-                "prewarm: TMDB id overflowed i64 — dropping (shouldn't happen)",
-            );
-            return;
-        };
-        if let Err(e) = iris_db::collections::set_tmdb_id_if_missing(pool, collection.id, id).await
-        {
-            tracing::warn!(
-                error = %e,
-                collection_id = %collection.id,
-                "prewarm: set_tmdb_id_if_missing failed",
-            );
-        } else {
-            tracing::info!(
-                collection_id = %collection.id,
-                tmdb_id = id,
-                "prewarm: resolved TMDB id via SCENE name (unverified — poster only)",
-            );
-        }
-    }
+    // The collection's TMDB id is resolved once, up in `assign_after_ingest`
+    // via `resolve_collection_tmdb` (movies + TV) — not here, to keep a single
+    // resolution path. This prewarm only kicks the episode scheduler below.
     if let Some(reg) = deps.providers
         && let Err(e) =
             crate::collections_scheduler::scan_collection(pool, reg, collection.id).await
@@ -383,44 +381,6 @@ async fn resolve_collection(
     // Truly nothing parseable — standalone collection (one entry,
     // never merged) named after the raw torrent.
     collections::create_standalone(pool, torrent_name, kind).await
-}
-
-/// Stamp `collection.tmdb_id` from a torrent that has just been
-/// runtime-verified. Called by `verify_tmdb_match` after flipping
-/// `tmdb_verified=true`. First-writer-wins on the collection slot
-/// — once a verified id is on file, a later torrent with a
-/// different id can't overwrite it (would need explicit manual
-/// re-tagging, future feature).
-///
-/// Also called from [`run_backfill`] for torrents that are already
-/// verified at boot (the verification flag persists across
-/// restarts, but the enrichment write didn't happen pre-rework).
-pub async fn enrich_after_verify(pool: &SqlitePool, infohash: &str) {
-    let row = match iris_db::torrents::find_by_infohash(pool, infohash).await {
-        Ok(Some(r)) => r,
-        Ok(None) => return,
-        Err(e) => {
-            tracing::warn!(error = %e, infohash, "enrich_after_verify: lookup failed");
-            return;
-        }
-    };
-    if !row.tmdb_verified {
-        return;
-    }
-    let Some(tmdb_id) = row.tmdb_id else { return };
-    let Some(collection_id) = row.collection_id else {
-        return;
-    };
-    if let Err(e) = collections::set_tmdb_id_if_missing(pool, collection_id, tmdb_id).await {
-        tracing::warn!(error = %e, infohash, "enrich_after_verify: write failed");
-        return;
-    }
-    tracing::debug!(
-        infohash,
-        collection_id = %collection_id,
-        tmdb_id,
-        "collection enriched with verified tmdb_id",
-    );
 }
 
 /// Re-derive `scene_parse` episode rows for a torrent that already has
@@ -824,14 +784,9 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
     };
     let mut done = 0;
     for row in rows {
-        // Re-enrich verified torrents whose collection.tmdb_id is
-        // still NULL (pre-rework databases, or torrents that got
-        // verified after their initial assignment). No-op when the
-        // slot is already filled.
         if row.collection_id.is_some() {
-            if row.tmdb_verified {
-                enrich_after_verify(pool, &row.infohash).await;
-            }
+            // (collection.tmdb_id is filled by `tmdb_backfill` from the
+            // collection's identity — the single resolution path.)
             // Self-heal stale episode numbers from a since-improved
             // parser. Needs the engine file list; torrents not yet
             // loaded are retried on a later tick (same as the
@@ -876,10 +831,7 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
         };
         let files: Vec<(usize, String)> =
             snap.files.into_iter().map(|f| (f.index, f.path)).collect();
-        assign_after_ingest(pool, deps, &row.infohash, &row.name, row.tmdb_id, &files).await;
-        if row.tmdb_verified {
-            enrich_after_verify(pool, &row.infohash).await;
-        }
+        assign_after_ingest(pool, deps, &row.infohash, &row.name, &files).await;
         done += 1;
     }
     if done > 0 {

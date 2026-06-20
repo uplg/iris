@@ -9,6 +9,7 @@ use iris_torrent::{Engine, Gc};
 
 use crate::anilist::AniListClient;
 use crate::presence::Presence;
+use crate::reco_engine::RecoEngine;
 use crate::tmdb::TmdbClient;
 
 #[derive(Clone)]
@@ -28,6 +29,7 @@ struct Inner {
     pub tmdb: Option<TmdbClient>,
     pub anilist: Option<AniListClient>,
     pub presence: Presence,
+    pub reco: Arc<RecoEngine>,
 }
 
 impl AppState {
@@ -55,6 +57,7 @@ impl AppState {
             cfg.auth.access_ttl_secs,
             cfg.auth.refresh_ttl_secs,
         );
+        let reco = Arc::new(RecoEngine::new(&cfg.reco));
         // Keyless public GraphQL client — used to enrich anime
         // collections with an AniList id (poster / recommendations) and
         // to corroborate the offline anime classifier. Best-effort: a
@@ -79,6 +82,7 @@ impl AppState {
                 tmdb,
                 anilist,
                 presence: Presence::new(),
+                reco,
             }),
         }
     }
@@ -115,6 +119,9 @@ impl AppState {
     }
     pub fn presence(&self) -> &Presence {
         &self.inner.presence
+    }
+    pub fn reco(&self) -> &Arc<RecoEngine> {
+        &self.inner.reco
     }
 }
 

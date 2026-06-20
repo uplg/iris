@@ -32,6 +32,9 @@ export type MediaCardProps = {
   title: string;
   /** Secondary line; truncates to one line. */
   subtitle?: string;
+  /** Tiny accent line under the subtitle — a recommendation "why"
+   *  ("Matches your taste"). Omitted when null/empty. */
+  note?: string | null;
   /** Top-right overlay (e.g., "3 new", "freeleech", a status pill).
    *  Render-as-is — caller picks the styling. */
   badge?: ReactNode;
@@ -64,6 +67,7 @@ export function MediaCard(props: MediaCardProps) {
     kind,
     title,
     subtitle,
+    note,
     badge,
     progress,
     progressColor = "bg-primary",
@@ -129,6 +133,11 @@ export function MediaCard(props: MediaCardProps) {
         </span>
         {subtitle && (
           <span className="line-clamp-1 break-words text-[11.5px] text-fg-dim">{subtitle}</span>
+        )}
+        {note && (
+          <span className="line-clamp-1 break-words text-[10.5px] font-medium text-primary/85">
+            {note}
+          </span>
         )}
       </div>
     </div>

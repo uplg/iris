@@ -22,6 +22,7 @@ iris-providers = { workspace = true }
 iris-torrent = { workspace = true }
 iris-media = { workspace = true }
 iris-caps = { workspace = true }
+iris-reco = { workspace = true }
 
 tokio = { workspace = true }
 tokio-util = { workspace = true }

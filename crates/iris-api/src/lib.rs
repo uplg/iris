@@ -12,12 +12,14 @@ pub mod presence;
 pub mod ranking;
 pub mod rate_limit;
 pub mod reco;
+pub mod reco_engine;
 pub mod routes;
 pub mod seed_stats;
 pub mod state;
 pub mod tmdb;
 pub mod tmdb_backfill;
 pub mod tmdb_resolve;
+pub mod watched_backfill;
 
 use std::path::{Path, PathBuf};
 
@@ -300,6 +302,21 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
     );
 
     spawn_background_jobs(&app_state, pool.clone(), provider_registry);
+
+    // Content-reco embedding loop (ingest path). Resolve the TMDB genre taxonomy
+    // once for the embedding text, then embed pending catalogue rows + keep the
+    // in-memory vector table warm. The request path only reads that table.
+    let genre_names = reco::genre_name_map(&app_state).await;
+    app_state
+        .reco()
+        .clone()
+        .spawn_embedding_loop(pool.clone(), genre_names);
+
+    // Backfill out-of-window watched titles into the catalogue so they get
+    // embedded and enrich taste profiles (WS2). Needs TMDB for the metadata.
+    if let Some(tmdb) = app_state.tmdb() {
+        watched_backfill::spawn(pool.clone(), tmdb.clone());
+    }
 
     let router = app::build_router(app_state);
     let service = app::into_service(router);
