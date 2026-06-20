@@ -974,15 +974,8 @@ pub(crate) async fn grab_episode_core(
         None
     };
     if let Some(pack) = pack_pick {
-        return ingest_pack_and_pick_episode(
-            state,
-            user_id,
-            display_title,
-            pack,
-            season,
-            episode,
-        )
-        .await;
+        return ingest_pack_and_pick_episode(state, user_id, display_title, pack, season, episode)
+            .await;
     }
     let pick = match best_available(state.db(), normalized_name, season, episode, &language).await?
     {

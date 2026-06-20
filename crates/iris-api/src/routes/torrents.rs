@@ -374,13 +374,7 @@ pub(crate) async fn ingest(
     Json(body): Json<ResolveBody>,
 ) -> ApiResult<Json<IngestResponse>> {
     Ok(Json(
-        ingest_core(
-            &state,
-            user.id,
-            body.provider_id,
-            body.external_id,
-        )
-        .await?,
+        ingest_core(&state, user.id, body.provider_id, body.external_id).await?,
     ))
 }
 

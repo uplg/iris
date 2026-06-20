@@ -35,7 +35,10 @@ impl Embedder {
         let model = StaticModel::from_pretrained(model_id, None, Some(true), None)
             .with_context(|| format!("loading model2vec model '{model_id}'"))?;
         let dim = model.encode_single("dimension probe").len();
-        anyhow::ensure!(dim > 0, "model '{model_id}' produced a zero-length embedding");
+        anyhow::ensure!(
+            dim > 0,
+            "model '{model_id}' produced a zero-length embedding"
+        );
         Ok(Self {
             model,
             model_id: model_id.to_owned(),

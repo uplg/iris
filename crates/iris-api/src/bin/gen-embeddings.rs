@@ -46,9 +46,12 @@ async fn main() -> Result<()> {
 
     let mut total = 0usize;
     loop {
-        let batch =
-            iris_db::catalog::items_needing_embedding(&pool, embedder.model_id(), cfg.reco.embed_batch)
-                .await?;
+        let batch = iris_db::catalog::items_needing_embedding(
+            &pool,
+            embedder.model_id(),
+            cfg.reco.embed_batch,
+        )
+        .await?;
         if batch.is_empty() {
             break;
         }

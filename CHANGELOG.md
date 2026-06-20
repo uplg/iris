@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-20
+
+### Added
+
+- **Content-first recommendation engine** (new `iris-reco` crate). Lightweight,
+  CPU-only `model2vec` embeddings plus a per-user multi-centroid taste profile
+  rank the catalogue by cosine similarity, surfacing relevant titles **beyond the
+  rolling discovery window** — not just the freshest uploads. The model runs only
+  on the ingest path; requests rank over cached vectors. New shelves: "Picked for
+  you", "Popular in your circle", "Fresh drops", each card carrying a short reason.
+  (migrations 0027 / 0029)
+- **"Tonight" genre/mood browse** (web **and** Android TV). The board is the live
+  TMDB genre taxonomy ordered by the user's taste (their genres first); picking
+  one returns a recency-filtered, taste-ranked, grabbable selection (catalogue ∪
+  broad TMDB discover), with clean slug URLs (`?mood=horror`).
+- Out-of-window watched-title backfill (with AniList correlation for anime) so a
+  user's full taste profile is embedded.
+
+### Changed
+
+- **Unified TMDB identity on `collection.tmdb_id`** — `torrent.tmdb_id` is no
+  longer written anywhere; every read and API facade resolves through the
+  collection's single verified id. One logic, no duplication.
+- Recommendation candidates no longer propose an aberrant release size for their
+  kind (e.g. a 4K REMUX movie); an over-cap row degrades to a re-searchable
+  candidate so the grab picks a saner release. Configurable via
+  `[reco] max_movie_gib` / `max_tv_gib`.
+- Navigation order: Home › Search › Tonight › For You › Library › Admin (web);
+  Search moved first on Android TV.
+
+### Fixed
+
+- Reco "Because you watched …" could name an unrelated title when a movie and a
+  TV show shared a numeric TMDB id — every recommendation join is now kind-aware.
+- Anime / live-action collection splits self-heal (migration 0028).
+
 ## [0.9.1] - 2026-06-18
 
 ### Fixed

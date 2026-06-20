@@ -67,5 +67,7 @@ pub(crate) async fn results(
     Path(id): Path<String>,
     Query(q): Query<MoodQuery>,
 ) -> ApiResult<Json<reco::MoodResults>> {
-    Ok(Json(reco::mood_results(&state, user.id, &id, kind_of(&q)).await?))
+    Ok(Json(
+        reco::mood_results(&state, user.id, &id, kind_of(&q)).await?,
+    ))
 }
