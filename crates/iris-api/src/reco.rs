@@ -392,8 +392,9 @@ pub async fn mood_board(
     genres.sort_by(|a, b| b.0.total_cmp(&a.0));
 
     let mut tiles = Vec::new();
+    let mut used_backdrops: HashSet<String> = HashSet::new();
     for (_, g) in genres.into_iter().take(MOOD_BOARD_LIMIT) {
-        let backdrop = mood_backdrop(pool, &languages, kind, g.id).await?;
+        let backdrop = mood_backdrop(pool, &languages, kind, g.id, &mut used_backdrops).await?;
         tiles.push(MoodTile {
             id: genre_slug(&g.name),
             label: g.name,
@@ -410,6 +411,7 @@ async fn mood_backdrop(
     languages: &[String],
     kind: TmdbKind,
     genre_id: u32,
+    used: &mut HashSet<String>,
 ) -> Result<Option<String>, sqlx::Error> {
     let rows = iris_db::catalog::query_for_user(
         pool,
@@ -419,14 +421,22 @@ async fn mood_backdrop(
             genre: Some(i64::from(genre_id)),
             only_available: false,
             order: CatalogOrder::Popularity,
-            limit: 10,
+            limit: 24,
             ..Default::default()
         },
     )
     .await?;
-    Ok(rows
-        .into_iter()
-        .find_map(|r| image_url(r.backdrop_path.as_deref(), "w780")))
+    // First backdrop not already shown on another tile: a film tagged in two
+    // genres (e.g. Horror ∧ Fantasy) is the popularity-top of both, so without
+    // this the two tiles would share one image.
+    for r in rows {
+        if let Some(url) = image_url(r.backdrop_path.as_deref(), "w780")
+            && used.insert(url.clone())
+        {
+            return Ok(Some(url));
+        }
+    }
+    Ok(None)
 }
 
 /// Mood results: catalogue (fresh, instant) ∪ TMDB-discover (broad universe,
