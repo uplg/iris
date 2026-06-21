@@ -626,12 +626,26 @@ async fn prewarm_default_remux(state: &AppState, infohash: &str) {
 /// copy anyway).
 ///
 /// Names disambiguate sources sharing a language tag: `fre`, `fre2`, …
-/// Decide how to treat the video stream for `key`. The catch-up transcode
-/// fires only when the client *explicitly* advertises software-only decode of
-/// the source codec (`av1-sw`) AND the content is heavy (10-bit) — the case
-/// where a box with no AV1 silicon (e.g. Amlogic S905X2) stutters on a 1080p
-/// 10-bit AV1 in software. Everything else stream-copies, so legacy clients
-/// (bare `vdec=…,av1`) and the caps-less prewarm path are never transcoded.
+/// Decide how to treat the video stream for `key`. Re-encode (capped at
+/// 1080p) fires in two cases; everything else stream-copies.
+///
+/// 1. **Resolution downscale.** A client only ever requests the remux
+///    *after* it failed to direct-play the source (the TV flips to the HLS
+///    fallback on `ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES`; the web
+///    client uses it as its last-resort tier). So a source taller than 1080p
+///    means the client's hardware decoder rejected that frame size — a
+///    level-4.2 H.264 decoder (common on TV boxes) chokes on a 1440p/4K
+///    stream even though it plays the 1080p siblings fine. Stream-copying
+///    would hand it back the exact size it just refused → it fails again, and
+///    the TV's one-shot fallback won't re-fire → the remux loader spins
+///    forever. Re-encode down to the universal 1080p H.264 baseline. Gated on
+///    a *real* client (non-empty caps) so the speculative, caps-less prewarm
+///    keeps its bare `infohash_idx` stream-copy key.
+/// 2. **AV1 software-decode catch-up.** A box with no AV1 silicon (e.g.
+///    Amlogic S905X2) stutters on a 10-bit AV1 in software; when it
+///    *explicitly* advertises `av1-sw` we re-encode proactively to the
+///    operator's configured codec. Legacy clients (bare `vdec=…,av1`) and the
+///    caps-less prewarm are never transcoded for this.
 fn decide_video_mode(
     probe: &iris_media::MediaProbe,
     caps: &iris_caps::ClientCapabilities,
@@ -642,14 +656,28 @@ fn decide_video_mode(
     };
     let codec = v.codec.to_ascii_lowercase();
     let ten_bit_source = v.bit_depth.is_some_and(|d| d >= 10);
-    let needs_transcode = codec == "av1" && caps.has_video_decoder("av1-sw") && ten_bit_source;
-    if !needs_transcode {
+
+    // Only a real client (TV / browser) advertises decoders; the speculative
+    // prewarm passes default (empty) caps. Re-encoding only earns its CPU for
+    // a client that actually reached `/play` because it couldn't direct-play.
+    let live_client = !caps.video_decoders.is_empty();
+    let over_1080p = v.height.is_some_and(|h| h > 1080) || v.width.is_some_and(|w| w > 1920);
+    let downscale = live_client && over_1080p;
+
+    let av1_sw_catchup = codec == "av1" && caps.has_video_decoder("av1-sw") && ten_bit_source;
+
+    if !downscale && !av1_sw_catchup {
         return iris_media::VideoMode::Copy;
     }
-    let target = if transcode.codec.eq_ignore_ascii_case("h264") {
-        iris_media::VideoCodec::H264
-    } else {
+
+    // The AV1 catch-up honours the operator's configured codec; a pure
+    // resolution downscale targets H.264 — the universal baseline every client
+    // (and certainly this one, which direct-played the 1080p siblings)
+    // hardware-decodes at 1080p.
+    let target = if av1_sw_catchup && transcode.codec.eq_ignore_ascii_case("hevc") {
         iris_media::VideoCodec::Hevc
+    } else {
+        iris_media::VideoCodec::H264
     };
     // H.264 is 8-bit only; HEVC keeps 10-bit only when the operator opts in.
     let ten_bit = matches!(target, iris_media::VideoCodec::Hevc) && transcode.ten_bit;
@@ -2309,5 +2337,100 @@ fn map_provider_err(e: iris_core::Error) -> ApiError {
         }
         iris_core::Error::InvalidInput(m) => ApiError::BadRequest(m),
         other => ApiError::Internal(anyhow::anyhow!(other)),
+    }
+}
+
+#[cfg(test)]
+mod video_mode_tests {
+    use super::decide_video_mode;
+    use iris_caps::ClientCapabilities;
+    use iris_config::TranscodeConfig;
+    use iris_media::{HdrKind, MediaProbe, VideoMode, VideoStream};
+
+    fn probe(codec: &str, width: u32, height: u32, bit_depth: u8) -> MediaProbe {
+        MediaProbe {
+            container: "matroska".into(),
+            duration_seconds: Some(1200.0),
+            size_bytes: None,
+            bit_rate: None,
+            video: vec![VideoStream {
+                index: 0,
+                absolute_index: 0,
+                codec: codec.into(),
+                profile: None,
+                level: None,
+                width: Some(width),
+                height: Some(height),
+                bit_rate: None,
+                frame_rate: None,
+                frame_rate_num: None,
+                frame_rate_den: None,
+                bit_depth: Some(bit_depth),
+                color_primaries: None,
+                color_transfer: None,
+                color_space: None,
+                hdr: HdrKind::None,
+                max_cll: None,
+                max_fall: None,
+            }],
+            audio: Vec::new(),
+            subtitle: Vec::new(),
+        }
+    }
+
+    // A 1440p H.264 file a TV-class decoder (level 4.2 = 1080p) rejects: the
+    // client only reaches /play after direct play already failed, so a
+    // stream-copy would hand back the exact frame size it refused → loop. Must
+    // re-encode (the Transcode path caps output at 1080p).
+    #[test]
+    fn downscales_high_res_h264_for_a_real_client() {
+        let caps = ClientCapabilities::parse("vdec=h264,hevc-hw; platform=android-tv-14");
+        let mode = decide_video_mode(
+            &probe("h264", 2560, 1440, 8),
+            &caps,
+            &TranscodeConfig::default(),
+        );
+        assert!(
+            matches!(mode, VideoMode::Transcode { .. }),
+            "1440p must downscale, got {mode:?}",
+        );
+    }
+
+    #[test]
+    fn copies_1080p_h264_directly() {
+        let caps = ClientCapabilities::parse("vdec=h264,hevc-hw");
+        let mode = decide_video_mode(
+            &probe("h264", 1920, 1080, 8),
+            &caps,
+            &TranscodeConfig::default(),
+        );
+        assert_eq!(mode, VideoMode::Copy, "1080p H.264 must stream-copy");
+    }
+
+    // The caps-less prewarm hardcodes the bare `infohash_idx` (Copy) key, so it
+    // MUST resolve to Copy even for a 1440p source — only a real client's
+    // request triggers the downscale (under its own `_h264` key).
+    #[test]
+    fn prewarm_never_transcodes_high_res() {
+        let mode = decide_video_mode(
+            &probe("h264", 2560, 1440, 8),
+            &ClientCapabilities::default(),
+            &TranscodeConfig::default(),
+        );
+        assert_eq!(mode, VideoMode::Copy, "caps-less prewarm stays Copy");
+    }
+
+    #[test]
+    fn av1_sw_10bit_still_transcodes() {
+        let caps = ClientCapabilities::parse("vdec=h264,av1-sw");
+        let mode = decide_video_mode(
+            &probe("av1", 1920, 1080, 10),
+            &caps,
+            &TranscodeConfig::default(),
+        );
+        assert!(
+            matches!(mode, VideoMode::Transcode { .. }),
+            "10-bit AV1 on a software-only box still transcodes, got {mode:?}",
+        );
     }
 }

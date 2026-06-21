@@ -1,14 +1,3 @@
-// Score arithmetic mixes i64 (DB), u32/u16 (parsed), u64 (size_bytes)
-// and f64 (final composite). Values are domain-bounded and we only
-// need approximate ordering — pedantic numeric-cast warnings are
-// noise here.
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
-)]
-
 //! Search result post-processing — runs once per `/api/search` call
 //! after the provider fan-out has aggregated. Two responsibilities:
 //!
@@ -85,7 +74,7 @@ impl LibraryIndex {
             // owned torrent is fine for the "Play existing" deep link.
             file_idx_by_infohash
                 .entry(k.infohash.to_ascii_lowercase())
-                .or_insert(k.file_idx as u32);
+                .or_insert(u32::try_from(k.file_idx).unwrap_or(u32::MAX));
         }
         Self {
             owned_infohashes,
@@ -355,7 +344,7 @@ mod tests {
     fn mk_result(
         title: &str,
         seeders: u32,
-        size_gib: f64,
+        size_gib: u32,
         kind: Option<MediaKind>,
     ) -> SearchResult {
         SearchResult {
@@ -363,7 +352,7 @@ mod tests {
             external_id: title.into(),
             title: title.into(),
             year: None,
-            size_bytes: Some((size_gib * 1_073_741_824.0) as u64),
+            size_bytes: Some(u64::from(size_gib) * 1_073_741_824),
             seeders: Some(seeders),
             leechers: None,
             infohash: None,
@@ -449,14 +438,14 @@ mod tests {
         let pack = mk_result(
             "Classroom.of.the.Elite.S04.MULTi.1080p.WEB.AAC.x264-XYZ",
             200,
-            12.0,
+            12,
             Some(MediaKind::Tv),
         );
         // The specific episode: half the seeders, much smaller.
         let ep = mk_result(
             "Classroom.of.the.Elite.S04E11.MULTi.1080p.WEB.AAC.x264-Tsundere-Raws",
             80,
-            1.0,
+            1,
             Some(MediaKind::Tv),
         );
 
@@ -483,13 +472,13 @@ mod tests {
         let monster = mk_result(
             "The.Matrix.2160p.UHD.BluRay.x265-GRP",
             800,
-            50.0,
+            50,
             Some(MediaKind::Movie),
         );
         let light = mk_result(
             "The.Matrix.1080p.BluRay.x264-GRP",
             40,
-            8.0,
+            8,
             Some(MediaKind::Movie),
         );
         let mut agg = AggregatedResults {
@@ -511,13 +500,13 @@ mod tests {
         let single = mk_result(
             "Dune.Part.Two.2024.VOSTFR.1080p.BluRay.x264-GRP",
             100,
-            10.0,
+            10,
             Some(MediaKind::Movie),
         );
         let multi = mk_result(
             "Dune.Part.Two.2024.MULTi.1080p.BluRay.x264-GRP",
             90,
-            10.0,
+            10,
             Some(MediaKind::Movie),
         );
         let mut agg = AggregatedResults {
@@ -543,13 +532,13 @@ mod tests {
         let tight = mk_result(
             "The.Matrix.1999.MULTi.1080p.BluRay.x264-GRP",
             10,
-            8.0,
+            8,
             Some(MediaKind::Movie),
         );
         let padded = mk_result(
             "Matrix.Resurrections.Making.Of.Behind.The.Scenes.Bonus.2021.1080p-GRP",
             999,
-            2.0,
+            2,
             Some(MediaKind::Movie),
         );
         let mut agg = AggregatedResults {
@@ -570,13 +559,8 @@ mod tests {
         // tied both at +80 (each is a substring of the query) and fell back
         // to popularity.
         let q = mk_query("la prisonniere du desert", None, None);
-        let more = mk_result(
-            "La.Prisonniere.2021.FRENCH.1080p.WEB.x264-GRP",
-            5,
-            4.0,
-            None,
-        );
-        let less = mk_result("Desert.2019.MULTi.1080p.BluRay.x264-GRP", 900, 3.0, None);
+        let more = mk_result("La.Prisonniere.2021.FRENCH.1080p.WEB.x264-GRP", 5, 4, None);
+        let less = mk_result("Desert.2019.MULTi.1080p.BluRay.x264-GRP", 900, 3, None);
         let mut agg = AggregatedResults {
             results: vec![less, more],
             ..Default::default()
@@ -610,7 +594,7 @@ mod tests {
             mk_result(
                 "Classroom.of.the.Elite.S04E11.MULTi.1080p.WEB.AAC.x264-Tsundere-Raws",
                 120,
-                1.0,
+                1,
                 Some(MediaKind::Tv),
             ),
             "abc",
@@ -619,7 +603,7 @@ mod tests {
             mk_result(
                 "Classroom.of.the.Elite.S04E12.VOSTFR.1080p.WEBRip.x265-TLC",
                 40,
-                1.2,
+                1,
                 Some(MediaKind::Tv),
             ),
             "xyz",
@@ -677,7 +661,7 @@ mod tests {
             mk_result(
                 "Classroom.of.the.Elite.S04E11.MULTi.1080p.WEB.AAC.x264-Tsundere-Raws",
                 120,
-                1.0,
+                1,
                 Some(MediaKind::Tv),
             ),
             "owned-multi",
@@ -686,7 +670,7 @@ mod tests {
             mk_result(
                 "Classroom.of.the.Elite.S04E11.VOSTFR.1080p.WEBRip.x265-TLC",
                 40,
-                1.2,
+                1,
                 Some(MediaKind::Tv),
             ),
             "other-fr",
@@ -726,7 +710,7 @@ mod tests {
         let mut r = mk_result(
             "Show.Name.S01E01.MULTi.1080p.WEB.x264-GRP",
             10,
-            1.0,
+            1,
             Some(MediaKind::Tv),
         );
         r.magnet = Some(format!(
@@ -776,13 +760,13 @@ mod tests {
         let pack = mk_result(
             "Classroom.of.the.Elite.S04.MULTi.1080p.WEB.AAC.x264-XYZ",
             200,
-            12.0,
+            12,
             Some(MediaKind::Tv),
         );
         let ep = mk_result(
             "Classroom.of.the.Elite.S04E11.MULTi.1080p.WEB.AAC.x264-Tsundere-Raws",
             80,
-            1.0,
+            1,
             Some(MediaKind::Tv),
         );
         let mut agg = AggregatedResults {
