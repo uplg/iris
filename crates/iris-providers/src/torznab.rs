@@ -614,10 +614,17 @@ fn parse_torznab_xml(body: &str) -> Result<ParsedTorznab> {
                 }
             }
             Ok(Event::CData(c)) => {
-                if let (Some(item), Some(TagKind::Description)) = (current.as_mut(), last_tag)
+                // Some indexers (Nexum) wrap `<title>` — and occasionally
+                // `<link>` / `<guid>` — in CDATA, which quick-xml surfaces
+                // here rather than as `Event::Text`. Route it through the same
+                // field dispatch so those values aren't silently dropped (the
+                // symptom: items parse but render with an empty title). CDATA
+                // is literal text — no XML-entity unescaping, unlike the
+                // `Event::Text` path.
+                if let (Some(item), Some(kind)) = (current.as_mut(), last_tag)
                     && let Ok(text) = std::str::from_utf8(c.as_ref())
                 {
-                    item.description = Some(text.to_string());
+                    apply_text(item, kind, text.trim().to_string());
                 }
             }
             Ok(Event::End(e)) => {
@@ -872,6 +879,60 @@ mod tests {
                 pub_date: self.pub_date.clone(),
             }
         }
+    }
+
+    /// Nexum wraps `<title>` in CDATA, which quick-xml surfaces as
+    /// `Event::CData` (not `Text`). Before the CDATA routing fix the item
+    /// parsed but with an EMPTY title — the "results show but every row is
+    /// blank" bug. The rest of Nexum's feed is standard: plain-text
+    /// guid/link, `torznab:attr` metadata, enclosure download URL.
+    #[test]
+    fn parses_cdata_wrapped_title_nexum() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <newznab:response offset="0" total="1"/>
+    <item>
+      <title><![CDATA[Avatar.The.Way.of.Water.2022.MULTi.VF2.1080p.WEBRip.x265-FW]]></title>
+      <guid>https://nexum-core.com/api/torznab?t=download&amp;id=64513&amp;apikey=KEY</guid>
+      <link>https://nexum-core.com/torrents/64513</link>
+      <size>8450042943</size>
+      <enclosure url="https://nexum-core.com/api/torznab?t=download&amp;id=64513&amp;apikey=KEY" length="8450042943" type="application/x-bittorrent"/>
+      <category>2000</category>
+      <torznab:attr name="seeders" value="6"/>
+      <torznab:attr name="infohash" value="474e0c2b81d6cd8fa8443f1bfc4f5bd2ee80c170"/>
+      <torznab:attr name="tmdbid" value="76600"/>
+    </item>
+  </channel>
+</rss>"#;
+        let p = parse_torznab_xml(xml).expect("parse");
+        assert_eq!(p.total, Some(1));
+        assert_eq!(p.items.len(), 1);
+        let item = &p.items[0];
+        // The fix: the CDATA-wrapped title is no longer dropped.
+        assert_eq!(
+            item.title,
+            "Avatar.The.Way.of.Water.2022.MULTi.VF2.1080p.WEBRip.x265-FW",
+        );
+        assert_eq!(item.seeders, Some(6));
+        assert_eq!(item.size, Some(8_450_042_943));
+        assert_eq!(
+            item.infohash.as_deref(),
+            Some("474e0c2b81d6cd8fa8443f1bfc4f5bd2ee80c170"),
+        );
+        assert_eq!(item.tmdb_id, Some(76600));
+        // Enclosure (the real .torrent) wins over the HTML `<link>` page.
+        assert!(
+            item.download_url
+                .as_deref()
+                .is_some_and(|u| u.contains("t=download")),
+        );
+        let sr = item.clone_for_test().into_search_result("nexum");
+        assert_eq!(sr.kind, Some(MediaKind::Movie));
+        assert_eq!(
+            sr.title,
+            "Avatar.The.Way.of.Water.2022.MULTi.VF2.1080p.WEBRip.x265-FW",
+        );
     }
 
     /// Some indexers (c411) put the HTML detail page in `<link>` and

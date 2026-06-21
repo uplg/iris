@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Nexum (Torznab) search results rendered with **empty titles** — the indexer
+  wraps `<title>` in CDATA, which the parser only handled for `<description>`.
+  CDATA is now routed through the same field dispatch as plain text, so any
+  CDATA-wrapping Torznab indexer parses correctly.
+
 ## [1.0.1] - 2026-06-21
 
 ### Added
