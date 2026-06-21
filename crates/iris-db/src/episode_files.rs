@@ -218,6 +218,26 @@ pub async fn delete_for_infohash(pool: &SqlitePool, infohash: &str) -> Result<u6
     Ok(res.rows_affected())
 }
 
+/// Re-home every episode-file row from collection `from` to `to`. Part of
+/// the anime noise-split merge: the surviving (anime) collection absorbs the
+/// plain twin's rows BEFORE the twin is deleted (its `collection_id` FK is
+/// `ON DELETE CASCADE`, so a delete-first order would wipe them). Safe wrt
+/// the `UNIQUE(infohash, file_idx)` constraint — a given infohash lives in
+/// exactly one collection, so the winner can't already hold a moved row.
+/// Returns the number of rows re-homed.
+pub async fn reassign_collection(
+    pool: &SqlitePool,
+    from: Uuid,
+    to: Uuid,
+) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query("UPDATE episode_files SET collection_id = ?2 WHERE collection_id = ?1")
+        .bind(from)
+        .bind(to)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
 #[derive(Debug, Clone)]
 pub struct UpsertEpisodeFile {
     pub collection_id: Uuid,

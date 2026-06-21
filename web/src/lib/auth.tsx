@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { AUTH_EXPIRED_EVENT, auth as authApi, type User } from "./api";
+import { ApiError, AUTH_EXPIRED_EVENT, auth as authApi, type User } from "./api";
 
 type AuthState =
   | { status: "loading" }
@@ -64,9 +64,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       void authApi
         .refresh()
         .then((user) => setState({ status: "authenticated", user }))
-        .catch(() => {
-          // Refresh token expired or revoked → bounce to login.
-          setState({ status: "anonymous" });
+        .catch((e: unknown) => {
+          // Only a genuine auth death (refresh token expired/revoked → 401/403)
+          // logs the user out. A transient failure — rate-limit (429), a 5xx
+          // during a redeploy, or a network blip — must NOT: the session is
+          // still valid and the next tick (or any user action) recovers. The
+          // old code bounced to login on ANY rejection, which is the main
+          // "logged out for no reason" path.
+          if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+            setState({ status: "anonymous" });
+          }
         });
     }, 25 * 60_000);
     return () => window.clearInterval(interval);

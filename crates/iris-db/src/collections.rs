@@ -282,6 +282,20 @@ pub async fn set_tmdb_id(pool: &SqlitePool, id: Uuid, tmdb_id: i64) -> Result<()
     Ok(())
 }
 
+/// Hard-delete a collection row. Member torrents are `ON DELETE SET NULL`
+/// (re-orphaned, then re-assigned on the next backfill tick); member
+/// `episode_files` are `ON DELETE CASCADE`. So callers that need to PRESERVE
+/// those children — the anime noise-split merge — must re-home them onto the
+/// surviving collection FIRST (see `torrents::reassign_collection` /
+/// `episode_files::reassign_collection`), then delete the emptied loser here.
+pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM collections WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Standalone collection — used when neither TMDB id nor a parseable
 /// SCENE title is available. Each call inserts a fresh row (no dedup),
 /// since "no identity" by definition can't merge.
@@ -471,4 +485,74 @@ pub async fn list_summaries(pool: &SqlitePool) -> Result<Vec<CollectionSummary>,
     )
     .fetch_all(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn migrated_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory sqlite");
+        crate::migrate::run(&pool).await.expect("run migrations");
+        pool
+    }
+
+    async fn ef_count(pool: &SqlitePool, cid: Uuid) -> i64 {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM episode_files WHERE collection_id = ?1")
+            .bind(cid)
+            .fetch_one(pool)
+            .await
+            .expect("count episode_files")
+    }
+
+    /// The anime noise-split merge re-homes children BEFORE deleting the loser,
+    /// because `episode_files.collection_id` is `ON DELETE CASCADE` — a
+    /// delete-first order would silently wipe the merged-in episodes.
+    #[tokio::test]
+    async fn merge_primitives_rehome_children_then_delete_loser() {
+        let pool = migrated_pool().await;
+        // Two halves of a noise split sharing one tmdb entity.
+        let anime = find_or_create(&pool, "anime:nippon", "NIPPON", Kind::Tv, true)
+            .await
+            .unwrap();
+        let plain = find_or_create(&pool, "nippon", "NIPPON", Kind::Tv, false)
+            .await
+            .unwrap();
+        set_tmdb_id(&pool, anime.id, 312_474).await.unwrap();
+        set_tmdb_id(&pool, plain.id, 312_474).await.unwrap();
+
+        // An episode file under the plain twin (raw count avoids needing a
+        // torrents row, which `list_for_collection` would require).
+        crate::episode_files::upsert(
+            &pool,
+            crate::episode_files::UpsertEpisodeFile {
+                collection_id: plain.id,
+                season: 1,
+                episode: 9,
+                infohash: "abc".into(),
+                file_idx: 0,
+                derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                absolute_episode: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ef_count(&pool, plain.id).await, 1);
+
+        crate::episode_files::reassign_collection(&pool, plain.id, anime.id)
+            .await
+            .unwrap();
+        assert_eq!(ef_count(&pool, plain.id).await, 0);
+        assert_eq!(ef_count(&pool, anime.id).await, 1);
+
+        delete(&pool, plain.id).await.unwrap();
+        assert!(get(&pool, plain.id).await.unwrap().is_none());
+        // The survivor keeps the moved episode file (no cascade wipe).
+        assert_eq!(ef_count(&pool, anime.id).await, 1);
+    }
 }

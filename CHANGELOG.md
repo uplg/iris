@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-21
+
+### Added
+
+- **Nexum indexer** — a new tracker consumed through the generic `torznab`
+  kind (no bespoke module). Drop `NEXUM_API_KEY` into `.env` to enable it;
+  until then the registry logs one line and skips it (never blocks boot).
+- **Android TV — "Back to Home" button in the player.** A focusable control in
+  the ExoPlayer controller header wired to the nav-up callback, so the remote's
+  D-pad reaches it without leaving the video surface.
+
+### Fixed
+
+- **Sessions no longer drop under concurrent token refreshes.** When several
+  clients refresh near-simultaneously (multiple tabs sharing a cookie jar, a
+  request retried after a network blip) the first rotation revoked the token and
+  the stragglers got a 401, logging the user out of a live session — aggravated
+  by the household sharing one Cloudflare/NAT IP. Fixes: a refresh-token
+  **rotation grace** window (migration 0030 — `rotated_at` distinguishes a
+  rotated token from an explicitly revoked one, and a straggler within the
+  window is re-issued instead of rejected); the web client refreshes
+  **single-flight** and only a genuine 401/403 clears the session; auth cookies
+  carry `Max-Age` so a session survives a browser restart; the rate limiter
+  splits auth refreshes into their own lane so they aren't throttled alongside
+  logins; Android TV pairing polls with backoff.
+- **Anime shows splitting into two identical-looking collections (with episodes
+  going missing).** A series that ships under both a fansub group (`-Tsundere-Raws`
+  → flagged anime) and a scene/Seedpool group (`-MonoDiSC` → not) used to land in
+  two collections with the *same* display title, and a new episode only ever
+  attached to the half matching its release group — so it appeared "nowhere" on
+  the half the user was watching. When an `anime:K` and a plain `K` collection
+  resolve to the **same** TMDB id they now auto-merge into one (the legitimate
+  same-title split — anime vs live-action *One Piece*, which carry *different*
+  ids — is preserved). The episode scheduler now collects **both** naming styles
+  for a collection that's alone on its title, so cross-convention releases stop
+  being dropped. Self-heals on boot and every 5 minutes; no manual fix needed.
+
 ## [1.0.0] - 2026-06-20
 
 ### Added

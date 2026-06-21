@@ -986,6 +986,11 @@ private fun ReadyPlayer(
                 // is dropped automatically when the view is detached.
                 keepScreenOn = true
                 titleView = findViewById(R.id.iris_title)
+                // Back-to-Home lives in the controller layout so it's D-pad
+                // reachable like the transport controls (the PlayerView keeps
+                // focus); wire its click to the nav-up callback.
+                findViewById<android.widget.ImageButton>(R.id.iris_back_home)
+                    ?.setOnClickListener { onBack() }
                 installIrisTrackNameProvider(this)
                 // Sync the current value — defensive belt-and-braces for
                 // the rare case the platform raced past the listener
@@ -1109,15 +1114,20 @@ private fun ReadyPlayer(
             }
         }
 
-        if (playerEnded && nextEpisode == null) {
+        // Movies have no episode taxonomy, so `currentEpisode` is null — show a
+        // movie-worded end pill instead of the series-finale copy, and suppress
+        // any same-torrent "Up next" (for a movie that'd be a stray extra file).
+        // A followed series with no next keeps its own finale copy.
+        val isMovie = currentEpisode == null
+        if (playerEnded && (isMovie || nextEpisode == null)) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(bottom = 96.dp),
             ) {
-                EndOfSeriesPill(onBack = onBack)
+                EndOfPlaybackPill(isMovie = isMovie)
             }
-        } else if ((nearEnd || playerEnded) && !pillDismissed) {
+        } else if ((nearEnd || playerEnded) && !pillDismissed && !isMovie) {
             // Bigger Netflix-style "Up next" pill in the bottom-right
             // corner, appearing once we're past 95 % of the runtime.
             // No countdown, no auto-advance — a single deliberate
@@ -1266,7 +1276,11 @@ private fun EpisodeNavChip(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun EndOfSeriesPill(onBack: () -> Unit) {
+private fun EndOfPlaybackPill(isMovie: Boolean) {
+    // Informational only — the reachable "Back to Home" action is the button in
+    // the player controller (exo_player_control_view.xml). A button here would
+    // sit in a Compose overlay the D-pad can't reach while the PlayerView holds
+    // focus, so it's intentionally absent.
     Surface(
         shape = RoundedCornerShape(12.dp),
         colors = SurfaceDefaults.colors(
@@ -1277,13 +1291,12 @@ private fun EndOfSeriesPill(onBack: () -> Unit) {
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Eyebrow("You're all caught up")
+            Eyebrow(if (isMovie) "You're all set" else "You're all caught up")
             Text(
-                "No more episodes available.",
+                if (isMovie) "You've finished watching." else "No more episodes available.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            IrisButton("Back to Home", onBack, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }

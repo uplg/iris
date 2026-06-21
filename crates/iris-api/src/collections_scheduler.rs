@@ -144,6 +144,23 @@ pub async fn scan_collection(
     Ok(())
 }
 
+/// Whether a SCENE-parsed search result belongs to the collection being
+/// scanned. `normalized` is the collection's key (possibly `anime:`-prefixed),
+/// `result_key` the result's own anime-aware key, `sibling_exists` true when a
+/// distinct collection of the opposite anime-classification owns the same base
+/// title. Matches on the BASE title so a lone collection picks up both fansub-
+/// and scene-named releases of one show; when the opposite-classification
+/// sibling exists (One Piece anime vs live-action), tightens to an exact key
+/// match so the two entities stay separate.
+fn result_belongs(normalized: &str, result_key: &str, sibling_exists: bool) -> bool {
+    let base = normalized.strip_prefix("anime:").unwrap_or(normalized);
+    let result_base = result_key.strip_prefix("anime:").unwrap_or(result_key);
+    if result_base != base {
+        return false;
+    }
+    !sibling_exists || result_key == normalized
+}
+
 async fn check_one(
     pool: &SqlitePool,
     providers: &ProviderRegistry,
@@ -185,6 +202,27 @@ async fn check_one(
         return Ok(());
     }
 
+    // A collection owns its base title across BOTH naming styles UNLESS a
+    // distinct sibling of the opposite anime-classification exists (the
+    // legitimate One Piece anime-vs-live split). Look that sibling up once:
+    // when this collection is the only one on its base key, accept fansub-
+    // AND scene-named releases alike, so an episode that classifies the
+    // "other" way (a `-MonoDiSC` scene release for an otherwise-fansub anime)
+    // isn't silently dropped — the NIPPON SANGOKU missing-episode bug.
+    let base = normalized.strip_prefix("anime:").unwrap_or(normalized);
+    let sibling_key = if normalized.starts_with("anime:") {
+        base.to_string()
+    } else {
+        format!("anime:{base}")
+    };
+    let sibling_exists = iris_db::collections::find_by_parsed_title(
+        pool,
+        &sibling_key,
+        iris_db::collections::Kind::Tv,
+    )
+    .await?
+    .is_some();
+
     // Group results by (S, E, language); within each group pick
     // the highest-seeded entry. Normalised title match keeps
     // unrelated indexer noise (e.g., "Squid Game Documentary")
@@ -203,15 +241,14 @@ async fn check_one(
         // name like `Lucky.Luke.1991.S01E01...` (which normalises to
         // `"lucky luke 1991"`) still matches a collection whose
         // `parsed_title_normalized` was derived from the original
-        // ingest filename (= `"lucky luke"`), AND so an anime
-        // collection only ingests anime offers: a live-action
-        // `One Piece S01E01` keys to `"one piece"` while the anime
-        // collection is `"anime:one piece"` (and vice-versa). This
-        // per-result identity check is what stops the cross-entity
-        // 23-"season" dump.
+        // ingest filename (= `"lucky luke"`). The base-title match keeps
+        // unrelated indexer noise out; the `sibling_exists` gate inside
+        // `result_belongs` is what still stops the cross-entity dump when
+        // a genuine anime/live-action split (One Piece) exists.
         let result_is_anime =
             filename::looks_like_anime_release(&r.title, parsed.season, parsed.episode);
-        if parsed.collection_key_kind(true, result_is_anime) != normalized {
+        let result_key = parsed.collection_key_kind(true, result_is_anime);
+        if !result_belongs(normalized, &result_key, sibling_exists) {
             continue;
         }
         let Some(s) = parsed.season else { continue };
@@ -324,4 +361,57 @@ fn extract_quality_from_title(title: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::result_belongs;
+
+    #[test]
+    fn lone_anime_collection_takes_both_naming_styles() {
+        // After the NIPPON SANGOKU merge the plain twin is gone, so no sibling
+        // exists. The surviving `anime:` collection must accept BOTH the
+        // fansub-keyed offers (its own key) and the scene-keyed ones (the
+        // `-MonoDiSC` / Seedpool releases) — that's what makes the missing
+        // episode reappear.
+        let norm = "anime:nippon sangoku the three nations of the crimson sun";
+        assert!(result_belongs(norm, norm, false)); // Tsundere-Raws (anime)
+        assert!(result_belongs(
+            norm,
+            "nippon sangoku the three nations of the crimson sun",
+            false,
+        )); // MonoDiSC / Seedpool (scene)
+    }
+
+    #[test]
+    fn lone_plain_collection_also_takes_both_styles() {
+        // Symmetric: a non-anime collection with no anime sibling still owns
+        // its base title across fansub-named releases.
+        let norm = "squid game";
+        assert!(result_belongs(norm, "squid game", false));
+        assert!(result_belongs(norm, "anime:squid game", false));
+    }
+
+    #[test]
+    fn genuine_split_stays_strict_when_sibling_exists() {
+        // One Piece: the anime and the live-action are distinct entities that
+        // both legitimately exist. With the sibling present, only the exact
+        // key matches — the live-action `one piece` offers must NOT leak into
+        // the anime collection, and vice-versa.
+        let anime = "anime:one piece";
+        assert!(result_belongs(anime, "anime:one piece", true));
+        assert!(!result_belongs(anime, "one piece", true));
+
+        let live = "one piece";
+        assert!(result_belongs(live, "one piece", true));
+        assert!(!result_belongs(live, "anime:one piece", true));
+    }
+
+    #[test]
+    fn different_show_never_matches() {
+        let norm = "anime:nippon sangoku the three nations of the crimson sun";
+        assert!(!result_belongs(norm, "anime:frieren", false));
+        assert!(!result_belongs(norm, "frieren", false));
+        assert!(!result_belongs(norm, "frieren", true));
+    }
 }

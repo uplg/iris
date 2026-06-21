@@ -128,6 +128,27 @@ pub async fn delete(pool: &SqlitePool, user_id: UserId, id: Uuid) -> Result<bool
     Ok(res.rows_affected() > 0)
 }
 
+/// Re-key every follow from normalized name `from` onto `to` during an
+/// anime noise-split collection merge. A user who already follows `to`
+/// keeps that row — the `UPDATE OR IGNORE` skips the collision against the
+/// `(user_id, normalized_name)` unique index — and the now-orphaned `from`
+/// row is then removed. Users who only followed `from` are migrated in
+/// place, preserving their "X new" badge / last-visited state.
+pub async fn reassign_or_drop(pool: &SqlitePool, from: &str, to: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE OR IGNORE series_follows SET normalized_name = ?2 WHERE normalized_name = ?1",
+    )
+    .bind(from)
+    .bind(to)
+    .execute(pool)
+    .await?;
+    sqlx::query("DELETE FROM series_follows WHERE normalized_name = ?1")
+        .bind(from)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Bumped every time the user opens the series detail page.
 pub async fn mark_visited(pool: &SqlitePool, user_id: UserId, id: Uuid) -> Result<(), sqlx::Error> {
     let user: Uuid = user_id.into();

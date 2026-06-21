@@ -468,7 +468,14 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
     if parsed.season.is_none() {
         return;
     }
-    let new_key = parsed.collection_key(true);
+    // Honour the COLLECTION's anime identity, not just this torrent's name.
+    // After an anime noise-split merge the surviving `anime:K` collection
+    // holds non-anime-named torrents too (a `-MonoDiSC` scene release sitting
+    // next to the `-Tsundere-Raws` fansubs); keying off the plain
+    // `collection_key` here would strip the `anime:` prefix and re-split the
+    // show on the next grab. `collection_key_kind` re-applies the prefix when
+    // the collection is anime, so this stays a no-op for it.
+    let new_key = parsed.collection_key_kind(true, collection.is_anime);
     if new_key.is_empty() {
         return;
     }
@@ -862,7 +869,139 @@ async fn heal_anime_batch_metadata(
     }
 }
 
+/// Collapse anime/live-action **noise splits**. A single show can ship under
+/// release groups that classify inconsistently — a `-Tsundere-Raws` fansub
+/// fires the offline anime gate (`anime:K` identity) while a `-MonoDiSC`
+/// scene release doesn't (plain `K` identity) — so it ends up as TWO
+/// collections with the SAME display title (the *NIPPON SANGOKU* incident:
+/// one card per release-group convention, with new episodes scattered across
+/// both). When both an `anime:K` and a plain `K` TV collection exist AND they
+/// resolve to the same non-null `tmdb_id`, they're one show: merge the plain
+/// twin INTO the anime one.
+///
+/// Gated on a MATCHING, non-null tmdb id, so the *legitimate* same-title
+/// split — the anime *One Piece* vs the live-action *One Piece*, which carry
+/// DIFFERENT tmdb ids — is never collapsed. Idempotent: once the plain twin is
+/// gone the pair no longer matches and the sweep is a no-op. Runs from
+/// [`run_backfill`] (boot + every 5 min), so a re-created twin self-heals.
+async fn merge_anime_noise_splits(
+    pool: &SqlitePool,
+    providers: Option<&iris_providers::ProviderRegistry>,
+) {
+    let cols = match collections::list_all(pool).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "anime merge: list_all collections failed");
+            return;
+        }
+    };
+    // Kick from the anime side only — `try_merge_twin` resolves the full pair,
+    // so processing each anime collection once covers every split.
+    for anime in cols.iter().filter(|c| {
+        c.is_anime
+            && c.parsed_title_normalized
+                .as_deref()
+                .is_some_and(|k| k.starts_with("anime:"))
+    }) {
+        try_merge_twin(pool, providers, anime).await;
+    }
+}
+
+/// If `col` is one half of an anime/live-action noise split whose other half
+/// shares the same TMDB entity, merge the two — the anime side always wins
+/// (it carries `anilist_id` + AniList artwork and the correct dedup space).
+/// No-op unless both halves exist, are TV, and agree on a non-null tmdb id.
+async fn try_merge_twin(
+    pool: &SqlitePool,
+    providers: Option<&iris_providers::ProviderRegistry>,
+    col: &CollectionRow,
+) {
+    if col.kind != "tv" {
+        return;
+    }
+    let Some(tmdb) = col.tmdb_id else { return };
+    let Some(key) = col.parsed_title_normalized.as_deref() else {
+        return;
+    };
+    // Resolve the (anime winner key, plain loser key) pair regardless of which
+    // side `col` is on.
+    let (anime_key, plain_key) = match key.strip_prefix("anime:") {
+        Some(base) => (key.to_string(), base.to_string()),
+        None => (format!("anime:{key}"), key.to_string()),
+    };
+    let (Ok(Some(anime)), Ok(Some(plain))) = (
+        collections::find_by_parsed_title(pool, &anime_key, Kind::Tv).await,
+        collections::find_by_parsed_title(pool, &plain_key, Kind::Tv).await,
+    ) else {
+        return;
+    };
+    if anime.id == plain.id {
+        return;
+    }
+    // Same entity only. Differing (or unresolved) ids are kept apart — the
+    // legitimate One Piece anime-vs-live split, or a twin whose tmdb hasn't
+    // been stamped yet (the next sweep retries once it is).
+    if anime.tmdb_id != Some(tmdb) || plain.tmdb_id != Some(tmdb) {
+        return;
+    }
+    merge_collection_into(pool, providers, &plain, &anime).await;
+}
+
+/// Fold `loser` into `winner`: re-home torrents + episode files, re-key
+/// per-user follows, drop the loser's stale availability cache, delete the
+/// emptied loser, then rescan the winner so availability repopulates under
+/// the surviving key (now collecting BOTH naming styles — see
+/// `collections_scheduler`). Order matters: children move BEFORE the delete
+/// because `episode_files.collection_id` is `ON DELETE CASCADE`.
+async fn merge_collection_into(
+    pool: &SqlitePool,
+    providers: Option<&iris_providers::ProviderRegistry>,
+    loser: &CollectionRow,
+    winner: &CollectionRow,
+) {
+    if let Err(e) = iris_db::torrents::reassign_collection(pool, loser.id, winner.id).await {
+        tracing::warn!(error = %e, loser = %loser.id, "anime merge: reassign torrents failed");
+        return;
+    }
+    if let Err(e) = episode_files::reassign_collection(pool, loser.id, winner.id).await {
+        tracing::warn!(error = %e, loser = %loser.id, "anime merge: reassign episode_files failed");
+        return;
+    }
+    if let (Some(lnorm), Some(wnorm)) = (
+        loser.parsed_title_normalized.as_deref(),
+        winner.parsed_title_normalized.as_deref(),
+    ) {
+        if let Err(e) = iris_db::follows::reassign_or_drop(pool, lnorm, wnorm).await {
+            tracing::warn!(error = %e, "anime merge: reassign follows failed");
+        }
+        // The loser's availability cache is keyed by its now-dead name; drop
+        // it and let the winner's rescan below repopulate under the survivor.
+        let _ = iris_db::available_episodes::delete_for_series(pool, lnorm).await;
+    }
+    if let Err(e) = iris_db::collections::delete(pool, loser.id).await {
+        tracing::warn!(error = %e, loser = %loser.id, "anime merge: delete loser failed");
+        return;
+    }
+    tracing::info!(
+        loser = %loser.id,
+        winner = %winner.id,
+        tmdb_id = ?winner.tmdb_id,
+        title = %winner.display_title,
+        "merged anime noise split (plain twin folded into anime collection)",
+    );
+    // Rebuild the winner's availability so the previously-dropped opposite-
+    // style episodes (and anything newly released) surface under one key.
+    if let Some(wnorm) = winner.parsed_title_normalized.as_deref() {
+        rebuild_availability(pool, providers, wnorm, winner.id).await;
+    }
+}
+
 pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris_torrent::Engine) {
+    // Collapse any anime/live-action noise split FIRST, so the per-torrent
+    // heals below evaluate every torrent against its surviving (merged)
+    // collection identity rather than re-splitting it.
+    merge_anime_noise_splits(pool, deps.providers).await;
+
     let rows = match iris_db::torrents::list_active(pool).await {
         Ok(v) => v,
         Err(e) => {

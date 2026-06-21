@@ -304,6 +304,23 @@ pub async fn set_collection(
     Ok(())
 }
 
+/// Move every torrent attached to collection `from` over to `to`. Used by
+/// the anime noise-split merge (`collection_assign`) that collapses an
+/// `anime:K` + plain `K` pair pointing at the same TMDB entity into one.
+/// Returns the number of torrents re-homed.
+pub async fn reassign_collection(
+    pool: &SqlitePool,
+    from: Uuid,
+    to: Uuid,
+) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query("UPDATE torrents SET collection_id = ?2 WHERE collection_id = ?1")
+        .bind(from)
+        .bind(to)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
 /// All torrents currently attached to a collection. Powers the Series
 /// detail page when it walks "every file across every torrent in the
 /// collection" to build the merged episode list.

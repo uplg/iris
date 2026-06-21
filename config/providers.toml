@@ -37,3 +37,19 @@ api_key_env = "SEEDPOOL_API_KEY"
 # users without a visual cue. The francophone trackers tag releases
 # explicitly (VOSTFR / VFF / MULTI) so they don't need a default.
 default_language = "english"
+
+# Nexum — generic Torznab indexer, consumed via the shared `torznab` kind
+# (no bespoke module — see CLAUDE.md: compose `TorznabProvider`). The
+# endpoint is https://nexum-core.com/api/torznab; `Url::join` replaces the
+# path, so `base_url` is the bare origin and `api_path` carries the rest.
+# Drop the key into `.env` as NEXUM_API_KEY before deploying — until it's
+# set the registry logs one line and skips this provider (it never crashes
+# boot). Categories default to the Torznab spec buckets (2xxx movies / 5xxx
+# tv); override only if Nexum uses non-standard codes.
+[[providers]]
+id = "nexum"
+kind = "torznab"
+enabled = true
+base_url = "https://nexum-core.com"
+api_path = "/api/torznab"
+api_key_env = "NEXUM_API_KEY"

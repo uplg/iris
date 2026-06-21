@@ -125,7 +125,12 @@ pub(crate) async fn poll(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    if row.expires_at < Utc::now() && row.claimed_at.is_none() {
+    // Expiry bounds session issuance even after the code is CLAIMED. A claimed
+    // code re-issues a session on every poll, so without checking expiry here a
+    // client that never stops polling (an old/misbehaving APK) would mint an
+    // unbounded number of refresh-token rows. The 10-min code TTL caps that;
+    // past it the device must re-pair.
+    if row.expires_at < Utc::now() {
         return Ok((jar, Json(PollResponse::Expired)));
     }
 

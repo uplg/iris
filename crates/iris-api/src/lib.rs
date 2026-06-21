@@ -327,7 +327,13 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
     tracing::info!(addr = %cfg.server.bind, "iris listening");
     axum::serve(
         listener,
-        axum::ServiceExt::<axum::extract::Request>::into_make_service(service),
+        // `_with_connect_info::<SocketAddr>` makes the peer socket address
+        // available as `ConnectInfo<SocketAddr>` in each request's extensions
+        // — the rate limiter reads it to key non-Cloudflare (LAN) callers per
+        // device instead of collapsing them onto one shared bucket.
+        axum::ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<
+            std::net::SocketAddr,
+        >(service),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await

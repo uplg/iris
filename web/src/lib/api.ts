@@ -48,6 +48,45 @@ function clientHeaders(extra?: HeadersInit): HeadersInit {
   return base;
 }
 
+/** Outcome of a session refresh. `ok` carries the refreshed user; otherwise
+ *  `status` separates a genuine auth death (401/403 → the refresh token is
+ *  gone, the user must log in again) from a transient failure (429 rate-limit,
+ *  5xx, or 0 = network error → the session is still valid, keep it). */
+type RefreshOutcome = { ok: true; user: User } | { ok: false; status: number };
+
+/** Single-flight guard around POST /auth/refresh. A watch page fires several
+ *  polls at once, so the moment the access cookie expires they all 401 in the
+ *  same tick. Without this, each independently POSTs /auth/refresh and races
+ *  the server's refresh-token rotation: the first rotates the token, the
+ *  stragglers present the now-revoked one, get 401, and each logs the user out
+ *  even though the session is alive. Funnelling every refresh through one
+ *  in-flight promise collapses the stampede into a single rotation. */
+let inFlightRefresh: Promise<RefreshOutcome> | null = null;
+
+function refreshSession(): Promise<RefreshOutcome> {
+  if (inFlightRefresh) return inFlightRefresh;
+  const run = (async (): Promise<RefreshOutcome> => {
+    try {
+      const res = await fetch("/api/auth/refresh", {
+        method: "POST",
+        credentials: "include",
+        headers: clientHeaders(),
+      });
+      if (res.ok) return { ok: true, user: (await res.json()) as User };
+      return { ok: false, status: res.status };
+    } catch {
+      return { ok: false, status: 0 }; // network error — not an auth failure
+    }
+  })();
+  inFlightRefresh = run;
+  // Release the singleton once settled so the next expiry refreshes anew;
+  // current awaiters already hold `run`.
+  void run.finally(() => {
+    if (inFlightRefresh === run) inFlightRefresh = null;
+  });
+  return run;
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const fire = () =>
     fetch(`/api${path}`, {
@@ -63,18 +102,18 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   // which then renders the raw error message ("Unauthorized" / "Forbidden")
   // instead of the actual content.
   if (res.status === 401 && !NO_RETRY_PATHS.has(path)) {
-    const refreshed = await fetch("/api/auth/refresh", {
-      method: "POST",
-      credentials: "include",
-    });
-    if (refreshed.ok) {
-      res = await fire();
-    } else {
-      // Refresh token itself dead — bounce the user to login. Done via
-      // a window event so api.ts stays unaware of the auth context's
+    const outcome = await refreshSession();
+    if (outcome.ok) {
+      res = await fire(); // retry once with the rotated cookie
+    } else if (outcome.status === 401 || outcome.status === 403) {
+      // The refresh token itself is dead — genuinely logged out. Bounce to
+      // login via a window event so api.ts stays unaware of the auth context's
       // setState; AuthProvider wires the listener.
       window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
     }
+    // 429 / 5xx / network (status 0): the session is still valid, so do NOT
+    // log out. The original 401 surfaces to the caller as a transient error;
+    // the next poll or the keep-alive recovers once the backend is reachable.
   }
   // 426 = the server has decided this cached bundle is below
   // `MIN_WEB_VERSION`. Surface globally so App.tsx can lock the UI
@@ -110,7 +149,14 @@ export const auth = {
   login: (email: string, password: string) => api.post<User>("/auth/login", { email, password }),
   register: (invite_token: string, email: string, password: string) =>
     api.post<User>("/auth/register", { invite_token, email, password }),
-  refresh: () => api.post<User>("/auth/refresh"),
+  // Shares the single-flight guard with the reactive 401 retry path, and
+  // throws a typed ApiError on failure so callers can tell a genuine auth
+  // death (401/403) from a transient one (429/5xx/network).
+  refresh: async (): Promise<User> => {
+    const outcome = await refreshSession();
+    if (outcome.ok) return outcome.user;
+    throw new ApiError(outcome.status, "refresh_failed", "session refresh failed");
+  },
   logout: () => api.post<void>("/auth/logout"),
   changePassword: (old_password: string, new_password: string) =>
     api.post<void>("/me/password", { old_password, new_password }),

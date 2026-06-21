@@ -6,7 +6,7 @@ use axum::extract::State;
 use axum::routing::post;
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
-use chrono::{Duration, Utc};
+use chrono::Duration;
 use iris_auth::{hash_invitation_token, hash_password, verify_password};
 use iris_core::ids::{InvitationId, UserId};
 use serde::{Deserialize, Serialize};
@@ -36,10 +36,30 @@ fn dummy_password_hash() -> &'static str {
     })
 }
 
-pub fn router() -> Router<AppState> {
+/// A refresh token rotated this many seconds ago is still honoured as a
+/// straggler (see [`refresh`]): when several clients refresh near-simultaneously
+/// the first rotates the token and the rest arrive holding the now-revoked jti.
+/// Re-issuing for them — instead of 401-ing — is what stops a multi-tab / retry
+/// race from spuriously logging the user out. Bounded so a genuinely stale
+/// token can't be replayed long after the fact.
+const REFRESH_ROTATION_GRACE_SECS: i64 = 60;
+
+/// Argon2-bearing endpoints: `login`/`register` each run a ~100 ms password
+/// hash, so this is the brute-force / CPU-exhaustion surface. Gets the TIGHT
+/// rate-limit lane (see `app.rs`).
+pub fn strict_router() -> Router<AppState> {
     Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
+}
+
+/// Cheap, idempotent session endpoints, protected by opaque tokens rather than
+/// passwords and hit by every client on a routine cadence (silent re-auth,
+/// keep-alive). Gets the GENEROUS rate-limit lane — a 429 on `/refresh` logs
+/// the user out, so it must never fire under normal multi-tab / multi-device
+/// household load.
+pub fn session_router() -> Router<AppState> {
+    Router::new()
         .route("/refresh", post(refresh))
         .route("/logout", post(logout))
 }
@@ -216,13 +236,35 @@ pub(crate) async fn refresh(
         ApiError::Unauthorized
     })?;
 
-    let Some(prev) =
+    // Resolve the device tagging to carry forward, tolerating a rotation race.
+    // Normal path: the jti is active → rotate it (`mark_rotated`, not `revoke`,
+    // so a straggler can still be recognised below). Race path: the jti isn't
+    // active but was rotated within the grace window → a near-simultaneous
+    // refresh already rotated it, the session is alive, so re-issue instead of
+    // logging the user out. An explicitly revoked token (logout / device
+    // revoke; `rotated_at` IS NULL) matches neither branch and still 401s.
+    //
+    // Device tagging is carried across the rotation so a paired TV keeps its
+    // `device_kind` (else it drops off the account device list), and devices
+    // get the SLIDING full device TTL re-issued on every refresh — a TV in
+    // regular use never expires; only one left off longer than the whole window
+    // needs re-pairing. Browsers keep `None` (the default, also re-issued).
+    let (device_label, device_kind) = if let Some(prev) =
         iris_db::refresh_tokens::get_active_device_info(state.db(), claims.jti).await?
-    else {
-        // Token is well-formed but not active in the DB: already rotated
-        // (its jti was revoked by a prior refresh), explicitly revoked, or
-        // expired server-side. This is the branch a rotation race / double
-        // refresh would hit.
+    {
+        iris_db::refresh_tokens::mark_rotated(state.db(), claims.jti).await?;
+        (prev.device_label, prev.device_kind)
+    } else if let Some(rot) = iris_db::refresh_tokens::recently_rotated(
+        state.db(),
+        claims.jti,
+        REFRESH_ROTATION_GRACE_SECS,
+    )
+    .await?
+    {
+        // Straggler from a near-simultaneous rotation — the session is alive.
+        tracing::debug!(jti = %claims.jti, "refresh straggler within rotation grace; re-issuing");
+        (rot.device_label, rot.device_kind)
+    } else {
         tracing::warn!(jti = %claims.jti, "refresh rejected: refresh-token row not active (revoked/rotated/expired)");
         return Err(ApiError::Unauthorized);
     };
@@ -232,20 +274,7 @@ pub(crate) async fn refresh(
         .await?
         .ok_or(ApiError::Unauthorized)?;
 
-    iris_db::refresh_tokens::revoke(state.db(), claims.jti).await?;
-    // Carry the device tagging forward across the rotation. Without this,
-    // a paired TV's first refresh strips `device_kind` from the row and
-    // it disappears from the account-page device list.
-    //
-    // SLIDING window for devices: re-issue the FULL device TTL on every
-    // refresh rather than carrying the remaining lifetime. The old code
-    // passed `remaining_ttl`, which pinned the expiry to the original pairing
-    // — so a TV in daily use still hard-expired at pairing+90d and dumped the
-    // user onto a dead "401 / Retry" screen. A fresh full window means a TV in
-    // regular use never expires; only one left off for longer than the entire
-    // window needs re-pairing. Browsers keep `None` (the configured default,
-    // which is already re-issued fresh each refresh → also sliding).
-    let ttl_override = if prev.device_kind.is_some() {
+    let ttl_override = if device_kind.is_some() {
         Some(state.cfg().auth.device_refresh_ttl_secs)
     } else {
         None
@@ -256,8 +285,8 @@ pub(crate) async fn refresh(
         user.id,
         user.is_admin,
         ttl_override,
-        prev.device_label.as_deref(),
-        prev.device_kind.as_deref(),
+        device_label.as_deref(),
+        device_kind.as_deref(),
     )
     .await?;
 
@@ -342,17 +371,20 @@ pub async fn issue_session_for_kind(
     )
     .await?;
 
+    let secure = state.cfg().cookie_secure();
     let access_cookie = build_cookie(
         ACCESS_COOKIE,
         access,
         Duration::seconds(state.cfg().auth.access_ttl_secs),
         "/",
+        secure,
     );
     let refresh_cookie = build_cookie(
         REFRESH_COOKIE,
         refresh,
         Duration::seconds(refresh_ttl),
         "/api/auth",
+        secure,
     );
 
     let _ = is_admin; // claim already encoded in the access token
@@ -364,13 +396,20 @@ fn build_cookie(
     value: String,
     ttl: Duration,
     path: &'static str,
+    secure: bool,
 ) -> Cookie<'static> {
-    let expires = Utc::now() + ttl;
     Cookie::build((name, value))
         .http_only(true)
         .same_site(SameSite::Lax)
-        .secure(false) // flipped to true behind TLS reverse proxy via config later
+        // `Secure` derived from the public URL scheme (config: auth.cookie_secure):
+        // on behind the TLS tunnel, off for http://localhost dev so login works.
+        .secure(secure)
         .path(path)
-        .expires(time::OffsetDateTime::from_unix_timestamp(expires.timestamp()).unwrap())
+        // Max-Age, not an absolute Expires: a client whose clock runs behind
+        // the server's would treat a freshly-set Expires cookie as already
+        // stale and drop it immediately, logging the user straight back out.
+        // Max-Age is a relative duration anchored to the browser's own clock,
+        // so it is immune to skew.
+        .max_age(time::Duration::seconds(ttl.num_seconds()))
         .build()
 }

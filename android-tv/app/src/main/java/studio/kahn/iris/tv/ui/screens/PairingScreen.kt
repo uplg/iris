@@ -37,6 +37,17 @@ import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 import studio.kahn.iris.tv.ui.components.IrisWordmark
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.irisAmbient
+import android.os.SystemClock
+import java.io.IOException
+import kotlin.random.Random
+import kotlinx.coroutines.CancellationException
+import retrofit2.HttpException
+
+/** Pairing poll cadence: a calm 2 s base, exponential backoff up to 15 s on
+ *  transient errors, plus jitter so multiple TVs / retries don't synchronise. */
+private const val POLL_INTERVAL_MS = 2_000L
+private const val POLL_BACKOFF_MAX_MS = 15_000L
+private const val POLL_JITTER_MS = 500L
 
 /**
  * Default unauthenticated screen on TV. Asks for the Iris URL, then walks
@@ -79,10 +90,15 @@ fun PairingScreen(
         container.sessionStore.saveSession(
             IrisSession(serverUrl = serverUrl, email = "", isAdmin = false, cookies = emptyList())
         )
-        while (true) {
+        // Poll only for the code's own server-side lifetime; past it the row is
+        // gone and there's nothing left to link. `elapsedRealtime` is monotonic
+        // so a wall-clock change can't cut the window short or stretch it.
+        val deadline = SystemClock.elapsedRealtime() + p.expiresIn.coerceAtLeast(1) * 1_000
+        var backoffMs = POLL_INTERVAL_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            var waitMs = POLL_INTERVAL_MS
             try {
-                val res = api.pollDeviceCode(p.deviceId.toString())
-                when (res) {
+                when (val res = api.pollDeviceCode(p.deviceId.toString())) {
                     is PollResponse.LinkedWrapper -> {
                         // CookieJar persisted Set-Cookie. Save user-visible
                         // fields so the next launch knows who it is.
@@ -103,15 +119,36 @@ fun PairingScreen(
                         pairing = null
                         return@LaunchedEffect
                     }
-                    is PollResponse.PendingWrapper -> Unit // keep polling
+                    is PollResponse.PendingWrapper -> backoffMs = POLL_INTERVAL_MS // clean poll → reset
                 }
-            } catch (e: Exception) {
-                error = e.message ?: "Polling failed"
-                pairing = null
-                return@LaunchedEffect
+            } catch (e: CancellationException) {
+                throw e // never swallow coroutine cancellation (e.g. Cancel pressed)
+            } catch (e: HttpException) {
+                if (e.code() == 404) {
+                    // The code row is gone server-side → treat as expired.
+                    error = "Pairing code expired. Generate a new one."
+                    pairing = null
+                    return@LaunchedEffect
+                }
+                // 429 / 5xx / any other transient HTTP error: KEEP the code on
+                // screen and back off — a single rate-limit or server blip must
+                // NOT tear down the pairing session (the old bug, where any
+                // exception nulled the code and dumped the user back to the
+                // form). Honour Retry-After when the server sends one (429).
+                backoffMs = (backoffMs * 2).coerceAtMost(POLL_BACKOFF_MAX_MS)
+                val retryAfterMs = e.response()?.headers()?.get("Retry-After")
+                    ?.toLongOrNull()?.times(1_000) ?: 0L
+                waitMs = maxOf(backoffMs, retryAfterMs)
+            } catch (e: IOException) {
+                // Network blip: keep the code, back off, keep trying.
+                backoffMs = (backoffMs * 2).coerceAtMost(POLL_BACKOFF_MAX_MS)
+                waitMs = backoffMs
             }
-            delay(2_000)
+            delay(waitMs + Random.nextLong(POLL_JITTER_MS))
         }
+        // The code's TTL elapsed with no link → expired.
+        error = "Pairing code expired. Generate a new one."
+        pairing = null
     }
 
     Box(Modifier.fillMaxSize().background(IrisColors.Background), contentAlignment = Alignment.Center) {

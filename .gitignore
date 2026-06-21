@@ -31,3 +31,4 @@
 /android-tv/.kotlin/
 /android-tv/app/.cxx/
 /android-tv/.idea/
+.repository-analysis/

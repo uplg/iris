@@ -2241,7 +2241,7 @@ checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 
 [[package]]
 name = "iris-api"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "iris-auth"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -2296,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "iris-caps"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2304,7 +2304,7 @@ dependencies = [
 
 [[package]]
 name = "iris-config"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "figment",
  "iris-core",
@@ -2316,7 +2316,7 @@ dependencies = [
 
 [[package]]
 name = "iris-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "serde",
@@ -2328,7 +2328,7 @@ dependencies = [
 
 [[package]]
 name = "iris-db"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "iris-core",
@@ -2343,7 +2343,7 @@ dependencies = [
 
 [[package]]
 name = "iris-media"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2361,7 +2361,7 @@ dependencies = [
 
 [[package]]
 name = "iris-providers"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2383,7 +2383,7 @@ dependencies = [
 
 [[package]]
 name = "iris-reco"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "model2vec-rs",
@@ -2393,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "iris-torrent"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bytes",

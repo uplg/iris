@@ -8,13 +8,24 @@
 //! origin is through the tunnel, an attacker cannot spoof it without
 //! first bypassing Cloudflare.
 //!
-//! Requests arriving without `CF-Connecting-IP` (direct origin access
-//! during dev, or anything that bypassed the tunnel) collapse onto a
-//! single shared key (`127.0.0.1`). That keeps a header-strip bypass
-//! from giving the attacker a fresh bucket per request.
+//! Normal traffic — including a LAN Android TV reaching Iris through the
+//! Cloudflare URL — always carries `CF-Connecting-IP`, set to the client's
+//! public IP. A household sits behind one NAT, so that is a single shared key
+//! for every device in the home; the per-lane bucket sizing in `app.rs`
+//! accounts for that aggregate.
+//!
+//! Requests arriving WITHOUT `CF-Connecting-IP` only happen on direct origin
+//! access (dev, or something bypassing the tunnel). Those are keyed on the
+//! real peer socket IP so each direct caller gets its own bucket instead of
+//! all of them collapsing onto one shared key. A tunnelled header-strip
+//! attempt still cannot earn fresh quota: its socket IP is the tunnel's
+//! loopback, so all such requests share the loopback bucket. Connect-info is
+//! absent only if the server is served without
+//! `into_make_service_with_connect_info`; we fall back to loopback then.
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use axum::extract::ConnectInfo;
 use http::HeaderName;
 use tower_governor::GovernorError;
 use tower_governor::key_extractor::KeyExtractor;
@@ -34,9 +45,15 @@ impl KeyExtractor for CloudflareIpKeyExtractor {
         {
             return Ok(ip);
         }
-        // No CF header => direct origin access (dev, or a bypass
-        // attempt). Collapse all such callers onto one bucket so an
-        // attacker can't strip the header and earn a fresh quota.
+        // No CF header => the request didn't come through the tunnel. Key on
+        // the real peer socket IP so each LAN device gets its own bucket
+        // (see module docs). Tunnelled traffic always carries the CF header
+        // and is handled above; everything reaching here is a direct peer.
+        if let Some(ConnectInfo(addr)) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
+            return Ok(addr.ip());
+        }
+        // Connect-info absent (server not serving with connect-info) — collapse
+        // onto one bucket rather than handing out unlimited fresh quota.
         Ok(IpAddr::V4(Ipv4Addr::LOCALHOST))
     }
 }

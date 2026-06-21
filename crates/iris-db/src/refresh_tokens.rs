@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use iris_core::ids::UserId;
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -141,6 +141,57 @@ pub async fn revoke(pool: &SqlitePool, jti: Uuid) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+/// Mark a refresh token as ROTATED: revoked, but flagged `rotated_at` so a
+/// near-simultaneous straggler refresh can be recognised and tolerated (see
+/// [`recently_rotated`]). Used by `/auth/refresh` in place of [`revoke`] —
+/// `revoke` (logout / device revoke) leaves `rotated_at` NULL so a session
+/// the user deliberately killed is never resurrected by the grace window.
+pub async fn mark_rotated(pool: &SqlitePool, jti: Uuid) -> Result<(), sqlx::Error> {
+    let now = Utc::now();
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = ?1, rotated_at = ?1 \
+         WHERE jti = ?2 AND revoked_at IS NULL",
+    )
+    .bind(now)
+    .bind(jti)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Device tagging carried on a token ROTATED within the grace window — the
+/// straggler-refresh recovery path. `Some` only when the jti was rotated (not
+/// explicitly revoked) no longer ago than `grace_secs`; `None` otherwise, so
+/// the caller falls back to a 401.
+#[derive(Debug, Clone)]
+pub struct RotatedInfo {
+    pub device_label: Option<String>,
+    pub device_kind: Option<String>,
+}
+
+pub async fn recently_rotated(
+    pool: &SqlitePool,
+    jti: Uuid,
+    grace_secs: i64,
+) -> Result<Option<RotatedInfo>, sqlx::Error> {
+    // Text comparison on the RFC3339 `rotated_at` — same proven shape as the
+    // `expires_at > ?` filters above (sqlx encodes DateTime<Utc> consistently,
+    // and the format sorts lexicographically).
+    let cutoff = Utc::now() - Duration::seconds(grace_secs);
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT device_label, device_kind FROM refresh_tokens \
+         WHERE jti = ?1 AND rotated_at IS NOT NULL AND rotated_at >= ?2",
+    )
+    .bind(jti)
+    .bind(cutoff)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(device_label, device_kind)| RotatedInfo {
+        device_label,
+        device_kind,
+    }))
+}
+
 pub async fn revoke_all_for_user(pool: &SqlitePool, user_id: UserId) -> Result<(), sqlx::Error> {
     let user: Uuid = user_id.into();
     sqlx::query(
@@ -151,4 +202,116 @@ pub async fn revoke_all_for_user(pool: &SqlitePool, user_id: UserId) -> Result<(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    /// Single-connection in-memory pool, migrated through the latest schema.
+    async fn migrated_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory sqlite");
+        crate::migrate::run(&pool).await.expect("run migrations");
+        pool
+    }
+
+    /// The rotation grace contract: a token ROTATED (the happy path of
+    /// `/auth/refresh`) drops out of the active lookup but stays recoverable —
+    /// with its device tagging — for a straggler refresh within the grace
+    /// window; outside the window, and for an explicitly REVOKED token, it is
+    /// gone for good. This is what stops a multi-tab / retry race from logging
+    /// the user out while never resurrecting a session they deliberately killed.
+    #[tokio::test]
+    async fn rotation_is_recoverable_within_grace_but_revocation_is_not() {
+        let pool = migrated_pool().await;
+        let user = crate::users::create(
+            &pool,
+            crate::users::NewUser {
+                email: "tv@example.com".into(),
+                password_hash: "x".into(),
+                is_admin: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+
+        // A device-tagged token, active for an hour, then rotated.
+        let rotated = Uuid::new_v4();
+        insert_with_device(
+            &pool,
+            rotated,
+            user,
+            Utc::now() + Duration::hours(1),
+            Some("Living room"),
+            Some("android-tv"),
+        )
+        .await
+        .unwrap();
+        mark_rotated(&pool, rotated).await.unwrap();
+
+        // No longer active for the normal refresh lookup …
+        assert!(
+            get_active_device_info(&pool, rotated)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(!is_active(&pool, rotated).await.unwrap());
+
+        // … but a straggler within the grace window recovers it, carrying the
+        // device tagging forward.
+        let info = recently_rotated(&pool, rotated, 60)
+            .await
+            .unwrap()
+            .expect("rotated token recoverable within grace");
+        assert_eq!(info.device_kind.as_deref(), Some("android-tv"));
+        assert_eq!(info.device_label.as_deref(), Some("Living room"));
+
+        // Backdate the rotation past the grace window → no longer recoverable.
+        sqlx::query("UPDATE refresh_tokens SET rotated_at = ?1 WHERE jti = ?2")
+            .bind(Utc::now() - Duration::minutes(2))
+            .bind(rotated)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            recently_rotated(&pool, rotated, 60)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // An explicitly REVOKED token (logout / device revoke) leaves
+        // `rotated_at` NULL and is never resurrected by the grace window.
+        let revoked = Uuid::new_v4();
+        insert_with_device(
+            &pool,
+            revoked,
+            user,
+            Utc::now() + Duration::hours(1),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        revoke(&pool, revoked).await.unwrap();
+        assert!(
+            get_active_device_info(&pool, revoked)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            recently_rotated(&pool, revoked, 60)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
 }

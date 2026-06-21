@@ -15,23 +15,46 @@
       android:layout_height="0dp"
       android:background="@color/exo_black_opacity_60"/>
 
-  <!-- Title shown at the top of the controller. Visibility tracks the
-       controller (hidden when the controls fade out). -->
-  <TextView android:id="@+id/iris_title"
+  <!-- Top-left header: a focusable Back-to-Home button next to the title.
+       The button lives INSIDE the controller (not in a Compose overlay) so the
+       D-pad reaches it like any transport control while the PlayerView keeps
+       focus — wired to the nav-up callback in WatchScreen via
+       findViewById(R.id.iris_back_home). Title visibility still tracks the
+       controller (bound manually from MediaMetadata.title). -->
+  <LinearLayout
       android:layout_width="wrap_content"
       android:layout_height="wrap_content"
       android:layout_gravity="top|start"
-      android:layout_marginStart="48dp"
-      android:layout_marginLeft="48dp"
-      android:layout_marginTop="32dp"
+      android:layout_marginStart="40dp"
+      android:layout_marginLeft="40dp"
+      android:layout_marginTop="24dp"
       android:layout_marginEnd="48dp"
       android:layout_marginRight="48dp"
-      android:textColor="@android:color/white"
-      android:textSize="22sp"
-      android:fontFamily="sans-serif-medium"
-      android:singleLine="true"
-      android:ellipsize="end"
-      android:maxWidth="900dp"/>
+      android:gravity="center_vertical"
+      android:orientation="horizontal">
+
+    <ImageButton android:id="@+id/iris_back_home"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginRight="12dp"
+        android:padding="8dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/iris_ic_back"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:focusable="true"
+        android:contentDescription="Back to Home"/>
+
+    <TextView android:id="@+id/iris_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="@android:color/white"
+        android:textSize="22sp"
+        android:fontFamily="sans-serif-medium"
+        android:singleLine="true"
+        android:ellipsize="end"
+        android:maxWidth="900dp"/>
+  </LinearLayout>
 
   <FrameLayout android:id="@id/exo_bottom_bar"
       android:layout_width="match_parent"

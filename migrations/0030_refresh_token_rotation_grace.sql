@@ -1,0 +1,14 @@
+-- Distinguishes a refresh token that was ROTATED (replaced by /auth/refresh
+-- issuing its successor) from one that was explicitly REVOKED (logout, or a
+-- device revoked from the account UI). Both set `revoked_at`; only rotation
+-- also sets `rotated_at`.
+--
+-- Purpose: a short rotation GRACE window. When several clients refresh
+-- near-simultaneously (multiple browser tabs sharing one cookie jar, a
+-- request retried after a blip), the first rotation revokes the jti and the
+-- stragglers arrive still holding it. Without this they get a 401 and the
+-- user is logged out even though the session is alive. /auth/refresh checks
+-- `rotated_at` to recognise a straggler whose token was rotated within the
+-- grace window and re-issues a session instead of rejecting it. An explicitly
+-- revoked token (rotated_at IS NULL) is never resurrected.
+ALTER TABLE refresh_tokens ADD COLUMN rotated_at TEXT;

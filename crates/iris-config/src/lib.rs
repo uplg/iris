@@ -254,6 +254,12 @@ pub struct AuthConfig {
     pub device_refresh_ttl_secs: i64,
     #[serde(default = "default_invite_ttl")]
     pub invitation_ttl_secs: i64,
+    /// `Secure` attribute on session cookies (cookie withheld over plain HTTP).
+    /// `None` (default) derives it from `server.public_url`: behind TLS (https)
+    /// → secure, plain-http dev (localhost) → not, so dev login keeps working.
+    /// Set explicitly to force either way. See [`AppConfig::cookie_secure`].
+    #[serde(default)]
+    pub cookie_secure: Option<bool>,
     #[serde(default)]
     pub bootstrap_admin: Option<BootstrapAdmin>,
 }
@@ -315,6 +321,16 @@ impl AppConfig {
             .extract()
             .map_err(Box::new)?;
         Ok(cfg)
+    }
+
+    /// Whether session cookies get the `Secure` attribute. Explicit
+    /// `auth.cookie_secure` wins; otherwise inferred from the public URL scheme
+    /// (`https://` → secure). Keeps dev (`http://localhost`) working with no
+    /// config, and turns Secure on automatically once deployed behind TLS.
+    pub fn cookie_secure(&self) -> bool {
+        self.auth
+            .cookie_secure
+            .unwrap_or_else(|| self.server.public_url.trim_start().starts_with("https://"))
     }
 
     pub fn load_providers(&self, fallback: Option<&Path>) -> Result<ProvidersConfig, ConfigError> {

@@ -20,26 +20,56 @@ use crate::routes;
 use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
-    // Per-CF-client-IP token bucket on `/api/auth/*` (login, register,
-    // refresh, logout, device pairing). 5 req/s steady-state, burst
-    // 20 — leaves normal multi-tab / multi-device usage unaffected
-    // but caps an attacker's Argon2 spend at ~5 verifies/sec per
-    // attacker IP. Key extraction reads `CF-Connecting-IP`; see
-    // `rate_limit::CloudflareIpKeyExtractor` for the bypass story.
-    let auth_governor = Arc::new(
+    // TWO rate-limit lanes on `/api/auth/*`, keyed per client IP
+    // (`CF-Connecting-IP`; peer socket IP only for non-tunnelled/dev access —
+    // see `rate_limit::CloudflareIpKeyExtractor`).
+    //
+    // NOTE on the key: every device in a household reaches Iris through the
+    // same Cloudflare URL, so `CF-Connecting-IP` is the household's single
+    // public (NAT) IP — ONE bucket shared by every browser, phone and TV in
+    // the home. That makes the split below the real lever, not the key:
+    //
+    //  - STRICT (login / register): these run a ~100 ms Argon2 hash, so they
+    //    are the brute-force / CPU surface. 5 req/s, burst 20 caps an
+    //    attacker's verify spend while leaving real sign-ins untouched.
+    //  - GENEROUS (refresh / logout / device pairing + polling): cheap,
+    //    idempotent, token-protected, and hit on a routine cadence by every
+    //    client at once (silent re-auth, keep-alive, TV poll every ~2 s). A 429
+    //    here logs users out / breaks pairing, so the bucket is sized for the
+    //    whole-household aggregate: 20 req/s, burst 60.
+    //
+    // Before the split, the TV's pairing polls shared the strict login bucket
+    // with everyone's `/refresh`; draining it 429'd the TV (whose old client
+    // then cleared the code and regenerated — a 429 feedback spiral) AND
+    // collaterally 429'd browser refreshes into a logout. The generous lane
+    // keeps the TV's poll answering cleanly so it never spirals.
+    let login_governor = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(5)
             .burst_size(20)
             .key_extractor(CloudflareIpKeyExtractor)
             .finish()
-            .expect("auth governor config is hard-coded and valid"),
+            .expect("login governor config is hard-coded and valid"),
     );
-    // Device-pairing endpoints are merged INTO the auth and me routers
-    // (rather than nested separately) because axum forbids overlapping
-    // nest paths like `/auth` and `/auth/device`.
-    let auth = routes::auth::router()
-        .nest("/device", routes::devices::auth_router())
-        .layer(GovernorLayer::new(auth_governor));
+    let session_governor = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(20)
+            .burst_size(60)
+            .key_extractor(CloudflareIpKeyExtractor)
+            .finish()
+            .expect("session governor config is hard-coded and valid"),
+    );
+    // Device-pairing endpoints are nested under the generous session lane
+    // (rather than as a separate top-level group) because axum forbids
+    // overlapping nest paths like `/auth` and `/auth/device`. Each subtree
+    // keeps its own governor across the merge.
+    let auth = routes::auth::strict_router()
+        .layer(GovernorLayer::new(login_governor))
+        .merge(
+            routes::auth::session_router()
+                .nest("/device", routes::devices::auth_router())
+                .layer(GovernorLayer::new(session_governor)),
+        );
     let me = routes::me::router()
         .nest("/devices", routes::devices::me_router())
         .nest("/follows", routes::follows::router())
