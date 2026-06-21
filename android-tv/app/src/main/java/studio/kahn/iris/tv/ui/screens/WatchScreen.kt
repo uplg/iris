@@ -404,16 +404,25 @@ private fun ReadyPlayer(
         ((probe.durationSeconds ?: 0.0) * 1000).toLong()
     }
 
-    // The GROWING server transcode (`needsServerTranscode`) streams as an HLS
-    // EVENT playlist that only lists segments up to the encoder's edge. Seeking
-    // to a resume position past that edge would make Media3 wait for the encode
-    // to catch up (a 30-min resume waits for ~half the movie). So when resuming
-    // into a transcode we DON'T prepare the player yet: we show a determinate
-    // progress bar and only start playback — directly at the resume position —
-    // once `/status` reports the encode has passed it. Everything else (raw
-    // `/stream`, Copy-remux Tier-F) is fully seekable, so it plays immediately.
-    val gateOnTranscode = needsServerTranscode && resumeMs > 0
-    var portionReady by remember(playUrl) { mutableStateOf(!gateOnTranscode) }
+    // BOTH server paths stream a GROWING HLS EVENT playlist that only lists
+    // segments up to the encoder's edge: the proactive transcode
+    // (`needsServerTranscode`) AND — since the Tier-F remux now RE-ENCODES to
+    // downscale >1080p sources (it used to stream-copy, fully seekable) — the
+    // reactive `useRemuxFallback`. Preparing the player against such a stream
+    // before the encoder has reached the playhead is the "stuck on loading"
+    // bug: a resume seek past the edge waits for the encode to catch up, and a
+    // cold `master.m3u8` blocks server-side until the head — long enough on a
+    // CPU transcode to out-wait the player's IO timeout, exhaust its retries,
+    // and leave it dead even after the encode finishes (the user had to back
+    // out + re-enter). So we DON'T prepare yet: show a determinate bar and only
+    // start once `/status` says the encoder passed the resume point (+10 s
+    // lead) — i.e. against a warm cache, exactly what re-entering achieves.
+    //
+    // The proactive path keeps its resume-only gate (a fresh AV1 start direct
+    // from the head was already fine); the reactive remux is ALWAYS gated,
+    // because its cold-start is precisely what was failing.
+    val gateOnServerBuild = useRemuxFallback || (needsServerTranscode && resumeMs > 0)
+    var portionReady by remember(playUrl) { mutableStateOf(!gateOnServerBuild) }
     // Latest `/status` payload, polled here and rendered by the loader overlay.
     var serverStatus by remember(playUrl) {
         mutableStateOf<studio.kahn.iris.tv.data.PlayStatus?>(null)
@@ -429,10 +438,12 @@ private fun ReadyPlayer(
                 val st = runCatching { api.playStatus(infohash, fileIdx) }.getOrNull()
                 if (st != null) {
                     serverStatus = st
-                    if (gateOnTranscode && !portionReady) {
+                    if (gateOnServerBuild && !portionReady) {
                         // Encoded seconds = fraction × runtime. Start once the
                         // encoder is a touch past the resume point so the seek
                         // lands with buffer ahead instead of on the live edge.
+                        // (resumeSec == 0 → fires after ~10 s encoded, i.e. a
+                        // warm head, never a cold blocking request.)
                         val encodedSec = (st.progress ?: 0.0) * durationSec
                         if (st.ready || durationSec <= 0.0 || encodedSec >= resumeSec + 10.0) {
                             portionReady = true
@@ -444,11 +455,36 @@ private fun ReadyPlayer(
         }
     }
 
-    // No more external subtitle injection — the source MKV / MP4
-    // already contains every subtitle track and Media3 has parsers
-    // for SRT, ASS/SSA and PGS bitmap. Defaults are honored below
-    // via `trackSelectionParameters` once the player surfaces the
-    // available tracks.
+    // Subtitles. On the raw `/stream` path the source MKV / MP4 already
+    // carries every track and Media3 parses SRT / ASS / PGS in-process — no
+    // injection needed. But the server HLS path (`useRemuxFallback` /
+    // `needsServerTranscode`) ships a master playlist with NO subtitle
+    // renditions (subs stay external), so Media3 would surface none. There we
+    // side-load each text-based source sub as WebVTT from the dedicated route
+    // (`/sub/{absoluteIndex}/track.vtt`). PGS bitmap subs can't become WebVTT
+    // and are skipped on this path — rare, and the direct path still shows them.
+    val sideLoadedSubs = remember(
+        probe,
+        serverUrl,
+        infohash,
+        fileIdx,
+        useRemuxFallback,
+        needsServerTranscode,
+    ) {
+        if (!useRemuxFallback && !needsServerTranscode) {
+            emptyList()
+        } else {
+            val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
+            probe.subtitle.filter { it.textBased }.map { s ->
+                studio.kahn.iris.tv.data.webVttSubtitle(
+                    url = "${base}api/torrents/$infohash/files/$fileIdx/sub/${s.absoluteIndex}/track.vtt",
+                    language = s.language,
+                    label = s.title ?: s.language,
+                    forced = s.forced,
+                )
+            }
+        }
+    }
 
     val title by remember(torrent?.name, currentEpisode) {
         mutableStateOf(buildPlaybackTitle(torrent?.name, currentEpisode))
@@ -461,7 +497,7 @@ private fun ReadyPlayer(
     // immediately, preserving the prior "prepare on mount" behaviour.
     LaunchedEffect(player, portionReady) {
         if (!portionReady) return@LaunchedEffect
-        player.setMediaItem(buildMediaItem(playUrl, title), resumeMs)
+        player.setMediaItem(buildMediaItem(playUrl, title, subtitles = sideLoadedSubs), resumeMs)
         player.prepare()
         player.playWhenReady = true
     }

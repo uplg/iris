@@ -166,6 +166,25 @@ pub async fn assign_after_ingest(
         //     `available_episodes` so the "next episodes" picker
         //     has data on first render.
         prewarm_tv_collection(pool, deps, &collection).await;
+
+        // Close the anime/live-action "noise-split" window AT INGEST instead
+        // of waiting for the periodic backfill sweep. The split happens when
+        // two releases of one anime classify differently (a `[Fansub]` release
+        // → `anime:<title>`, a scene-named one → `<title>`), so they land in
+        // separate collections. `resolve_collection_tmdb` just stamped this
+        // collection's tmdb_id, so re-read the row and run the SAME safe merge
+        // the backfill uses: `try_merge_twin` only folds the two halves
+        // together when BOTH resolve to the same tmdb entity — the legitimate
+        // One Piece anime-vs-live-action split (differing/unresolved ids) is
+        // never merged. No-op (defers to the backfill sweep) when the twin
+        // doesn't exist yet or either side's tmdb isn't resolved.
+        match collections::get(pool, collection.id).await {
+            Ok(Some(fresh)) => try_merge_twin(pool, deps.providers, &fresh).await,
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, infohash, "ingest twin-merge: reload failed");
+            }
+        }
     }
 }
 

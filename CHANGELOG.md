@@ -5,14 +5,62 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.2] - 2026-06-21
+
+### Added
+
+- **Native Nexum provider** (`kind = "nexum"`), replacing the generic Torznab
+  bridge for Nexum. It talks to Nexum's REST API directly, which exposes the
+  real per-torrent category — so games / software / audio / ebooks are filtered
+  out instead of leaking into search as fake "Movies" (Nexum's Torznab bridge
+  collapsed every non-video category into `2000`). Also brings stable numeric
+  torrent ids, BBCode descriptions and `tmdb_id`.
 
 ### Fixed
 
-- Nexum (Torznab) search results rendered with **empty titles** — the indexer
-  wraps `<title>` in CDATA, which the parser only handled for `<description>`.
-  CDATA is now routed through the same field dispatch as plain text, so any
-  CDATA-wrapping Torznab indexer parses correctly.
+- **Android TV search crash on multi-result Nexum / Torznab queries.**
+  quick-xml 0.40 splits an element's text at every `&` entity, so a `<guid>`
+  download URL (`…?t=download&id=…&apikey=…`) was reduced to just the shared
+  apikey — handing every result the SAME `external_id`. The TV keys its result
+  grid on `provider_id:external_id`, and a duplicate key throws in Compose, so
+  the app crashed (only on searches returning ≥2 such results). The Torznab
+  parser now joins entity-split fragments and pulls the unique torrent id; this
+  also fixed `resolve()` grabbing the wrong torrent (the link cache shares that
+  id) and any title / link containing `&`.
+- **Search relevance ("Recommended") now favours tighter title matches.** The
+  old exact/substring buckets dropped every loose match into one tier, then
+  size + seeders decided order — so a release merely *containing* a query word
+  could outrank the real match. Scoring is now graded by query-token coverage
+  with a padding penalty, so the closest title wins on relevance before
+  popularity is consulted.
+- **Large (>1080p) H.264 on a 1080p-capped device now plays via a server
+  downscale instead of looping.** A 1440p / 4K H.264 file the device's hardware
+  decoder rejects (e.g. a Chromecast HD, capped at 1080p) used to be
+  stream-copied unchanged on the Tier-F remux — i.e. handed back the exact frame
+  size it just refused → an endless "remux" loop. The server now re-encodes such
+  sources down to a 1080p H.264 baseline.
+- **Android TV — that downscale no longer hangs on "loading".** The downscale
+  streams as a growing HLS playlist; the fallback prepared the player against a
+  cold cache and timed out, leaving it stuck until the user backed out and
+  re-entered. The player now waits for the server build to pass the resume point
+  before its single `prepare()` (as the proactive transcode path already did),
+  so it starts on a warm cache and streams while the encoder runs ahead — never
+  waiting for the full encode.
+- **Android TV — subtitles on the server remux/transcode path.** That path's
+  HLS master playlist carries no subtitle renditions (subs stay external), so
+  it showed none. Text subtitle tracks are now side-loaded as WebVTT from the
+  per-track route; the raw `/stream` path is byte-identical to before (Media3
+  still reads its container subs — incl. PGS — natively).
+- **Anime collections — duplicate split now merged at ingest.** When two
+  releases of one anime classify differently (a `[Fansub]` release →
+  `anime:title`, a scene-named one → `title`) they land in separate
+  collections. The safe twin-merge — gated on both halves resolving to the same
+  TMDB id, so the legitimate One Piece anime-vs-live-action split is never
+  collapsed — now also runs at ingest instead of only on the 5-minute backfill
+  sweep, closing the window where a duplicate is briefly visible.
+- **Torznab CDATA titles.** Indexers that wrap `<title>` (and occasionally
+  `<link>` / `<guid>`) in CDATA no longer render with empty titles — CDATA is
+  routed through the same field dispatch as plain text.
 
 ## [1.0.1] - 2026-06-21
 

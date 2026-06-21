@@ -222,11 +222,34 @@ fun isRemuxableError(e: PlaybackException): Boolean = when (e.errorCode) {
  * The caller seeks via `Player.setMediaItem(item, startPositionMs)`
  * which positions the playhead without touching the timeline.
  */
+/**
+ * Side-loaded WebVTT subtitle track for the server HLS path. The remux /
+ * transcode master playlist carries NO subtitle renditions (subs stay
+ * external, served by `/sub/{stream_idx}/track.vtt`), and Media3 only reads
+ * embedded subs off the raw `/stream` container — so without side-loading,
+ * the remux path shows no subtitles at all. `streamIdx` is the source's
+ * ABSOLUTE stream index (`SubtitleStream.absoluteIndex`), matching the route.
+ */
+@UnstableApi
+fun webVttSubtitle(
+    url: String,
+    language: String?,
+    label: String?,
+    forced: Boolean,
+): MediaItem.SubtitleConfiguration =
+    MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(url))
+        .setMimeType(MimeTypes.TEXT_VTT)
+        .setLanguage(language)
+        .setLabel(label ?: language ?: "Subtitles")
+        .setSelectionFlags(if (forced) C.SELECTION_FLAG_FORCED else 0)
+        .build()
+
 @UnstableApi
 fun buildMediaItem(
     playUrl: String,
     title: String? = null,
     mimeType: String = MimeTypes.APPLICATION_MATROSKA,
+    subtitles: List<MediaItem.SubtitleConfiguration> = emptyList(),
 ): MediaItem {
     // CRITICAL: the server HLS routes (`/play/master.m3u8`, used by BOTH the
     // proactive AV1-10-bit transcode path AND the Tier-F error fallback) MUST
@@ -243,6 +266,16 @@ fun buildMediaItem(
         .setUri(playUrl)
         .setMimeType(resolvedMime)
         .apply {
+            // Attach side-loaded subs ONLY when we have some (the server HLS
+            // path). An empty list is a no-op AND `subtitleConfigurations`
+            // already defaults to empty, but skipping the call entirely keeps
+            // the raw `/stream` MediaItem byte-identical to before — zero risk
+            // to Media3's native container-subtitle detection (the extractor
+            // surfaces embedded SRT/ASS/PGS independently of this list; the
+            // side-loaded tracks are merged ADDITIVELY via MergingMediaSource).
+            if (subtitles.isNotEmpty()) {
+                setSubtitleConfigurations(subtitles)
+            }
             if (!title.isNullOrBlank()) {
                 setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
             }
