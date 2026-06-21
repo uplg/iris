@@ -229,7 +229,9 @@ fn candidate(r: &SearchResult) -> iris_core::ranking::Candidate {
 /// the tie-break *after* relevance, so a relevant-but-huge season pack no
 /// longer out-scores a relevant, lighter release on raw seeders.
 ///
-/// - title match: +200 exact, +80 substring, 0 unrelated
+/// - title match: 0–200 via [`title_relevance`] — graded by query-token
+///   coverage (200 exact, full-coverage high, partial scaled) with a
+///   padding penalty, so a tight title outranks a loose longer one
 /// - `SxxExx` match: +150 both, +80 season-only / pack accept,
 ///   -50 conflicting S/E
 /// - year match: +30
@@ -250,11 +252,7 @@ fn relevance_score(
         && !qt.is_empty()
         && !rt.is_empty()
     {
-        if qt == rt {
-            score += 200.0;
-        } else if rt.contains(qt) || qt.contains(rt) {
-            score += 80.0;
-        }
+        score += title_relevance(qt, rt);
     }
 
     match (q.season, q.episode, result_season, result_episode) {
@@ -295,6 +293,58 @@ fn relevance_score(
     }
 
     score
+}
+
+/// Continuous title-relevance score in `[0, 200]`.
+///
+/// The old buckets — exact `+200`, any substring `+80`, none `0` — dumped
+/// every loose match into the single `+80` tier, so the size/seeders
+/// tie-break (not title quality) decided their order. Worse, the
+/// `query.contains(result)` direction handed `+80` to a SHORT result title
+/// that's merely a fragment of a longer query (search "la prisonniere du
+/// desert" → an unrelated movie titled just "Prisonniere" scored the same
+/// `+80` as the real match, then floated up on seeders). We now grade by
+/// how much of the query the result's title covers and penalise padding,
+/// so the tightest title wins on relevance before popularity is consulted.
+///
+/// Both titles arrive SCENE-normalised (`series_key`): lowercased, spaced,
+/// trailing year stripped — so word-set comparison is meaningful.
+fn title_relevance(query_title: &str, result_title: &str) -> f64 {
+    if query_title == result_title {
+        return 200.0;
+    }
+    let q_tokens: Vec<&str> = query_title.split_whitespace().collect();
+    let r_tokens: Vec<&str> = result_title.split_whitespace().collect();
+    if q_tokens.is_empty() || r_tokens.is_empty() {
+        return 0.0;
+    }
+    let matched = q_tokens.iter().filter(|t| r_tokens.contains(*t)).count();
+    if matched == 0 {
+        return 0.0;
+    }
+    // Token counts are tiny; convert losslessly to keep clippy::pedantic
+    // (`cast_precision_loss`) quiet.
+    let to_f = |n: usize| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
+
+    // Base: all query words present is a strong signal; partial coverage
+    // scales down proportionally.
+    let mut score = if matched == q_tokens.len() {
+        150.0
+    } else {
+        110.0 * (to_f(matched) / to_f(q_tokens.len()))
+    };
+    // Contiguous phrase ("la prisonniere" appears verbatim) beats the same
+    // words scattered across a longer title.
+    if result_title.contains(query_title) {
+        score += 30.0;
+    }
+    // Padding penalty: result words beyond the query dilute the match, so
+    // "Prisonniere" outranks "Prisonniere du Desert Vol 2" for query
+    // "Prisonniere". Capped so a long-but-relevant title never collapses.
+    let extra = r_tokens.len().saturating_sub(matched);
+    score -= (to_f(extra) * 6.0).min(48.0);
+    // Stay strictly under the exact-match ceiling so `qt == rt` always wins.
+    score.clamp(0.0, 199.0)
 }
 
 #[cfg(test)]
@@ -478,6 +528,58 @@ mod tests {
         assert!(
             agg.results[0].title.contains("MULTi"),
             "MULTi must win a same-size, same-relevance tie",
+        );
+    }
+
+    #[test]
+    fn tighter_title_beats_padded_one_despite_seeders() {
+        // The reported "good title ranked behind" bug. A single-word query
+        // gives full coverage to every result that contains it, so the OLD
+        // exact/substring buckets tied them all at +80 and the size/seeders
+        // tie-break decided — a bloated, loosely-related release could beat
+        // the clean match. The padding penalty now keeps the tight title on
+        // top before popularity is ever consulted.
+        let q = mk_query("matrix", None, None);
+        let tight = mk_result(
+            "The.Matrix.1999.MULTi.1080p.BluRay.x264-GRP",
+            10,
+            8.0,
+            Some(MediaKind::Movie),
+        );
+        let padded = mk_result(
+            "Matrix.Resurrections.Making.Of.Behind.The.Scenes.Bonus.2021.1080p-GRP",
+            999,
+            2.0,
+            Some(MediaKind::Movie),
+        );
+        let mut agg = AggregatedResults {
+            results: vec![padded, tight],
+            ..Default::default()
+        };
+        rerank_results(&mut agg, &q, &LibraryIndex::empty());
+        assert_eq!(
+            agg.results[0].title, "The.Matrix.1999.MULTi.1080p.BluRay.x264-GRP",
+            "clean title must beat a padded, loosely-related release regardless of seeders",
+        );
+    }
+
+    #[test]
+    fn higher_query_coverage_outranks_thinner_match() {
+        // Multi-word query, two partial matches: the result covering MORE
+        // of the query words ranks first, independent of seeders. Old code
+        // tied both at +80 (each is a substring of the query) and fell back
+        // to popularity.
+        let q = mk_query("la prisonniere du desert", None, None);
+        let more = mk_result("La.Prisonniere.2021.FRENCH.1080p.WEB.x264-GRP", 5, 4.0, None);
+        let less = mk_result("Desert.2019.MULTi.1080p.BluRay.x264-GRP", 900, 3.0, None);
+        let mut agg = AggregatedResults {
+            results: vec![less, more],
+            ..Default::default()
+        };
+        rerank_results(&mut agg, &q, &LibraryIndex::empty());
+        assert!(
+            agg.results[0].title.contains("Prisonniere"),
+            "the title covering more query words wins on relevance, not seeders",
         );
     }
 

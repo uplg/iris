@@ -179,6 +179,7 @@ pub fn build_provider(entry: &ProviderEntry) -> Result<Arc<dyn SearchProvider>> 
         "torznab" => Ok(crate::torznab::TorznabProvider::from_config(entry)?),
         "unit3d" => Ok(crate::unit3d::Unit3dProvider::from_config(entry)?),
         "c411" => Ok(crate::c411::C411::from_config(entry)?),
+        "nexum" => Ok(crate::nexum::NexumProvider::from_config(entry)?),
         other => Err(Error::Provider(format!(
             "unknown provider kind: {other} (provider id: {})",
             entry.id

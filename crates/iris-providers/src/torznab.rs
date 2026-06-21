@@ -41,7 +41,7 @@ use iris_core::search::{
 use quick_xml::Reader;
 use quick_xml::escape::unescape as xml_unescape;
 use quick_xml::events::attributes::Attribute;
-use quick_xml::events::{BytesText, Event};
+use quick_xml::events::{BytesRef, BytesText, Event};
 use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, REFERER, USER_AGENT};
 use reqwest::{Client, StatusCode};
 use tokio::sync::Mutex;
@@ -591,11 +591,23 @@ fn parse_torznab_xml(body: &str) -> Result<ParsedTorznab> {
     let mut current: Option<RawItem> = None;
     let mut in_channel = false;
     let mut last_tag: Option<TagKind> = None;
+    // Accumulator for the *current* element's character data. We can't
+    // apply text the moment we see it: quick-xml splits an element's
+    // content into separate events at every entity reference, so a
+    // `<guid>…?t=download&amp;id=61563&amp;apikey=…</guid>` arrives as
+    // Text / GeneralRef("amp") / Text / GeneralRef("amp") / Text. Applying
+    // each fragment as it lands (the old code's `item.field = fragment`)
+    // kept only the LAST one — the shared apikey — so every result from a
+    // download-URL-guid indexer (Nexum) collapsed onto the same
+    // `external_id`. Instead we join all fragments and apply once at the
+    // element's End. Same fix protects plain-text titles containing `&`.
+    let mut text_acc = String::new();
     let mut buf = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
+                text_acc.clear();
                 handle_start(
                     e.name().as_ref(),
                     &mut in_channel,
@@ -607,27 +619,45 @@ fn parse_torznab_xml(body: &str) -> Result<ParsedTorznab> {
                 handle_empty(&e, current.as_mut(), &mut out);
             }
             Ok(Event::Text(t)) => {
-                if let (Some(item), Some(kind)) = (current.as_mut(), last_tag)
+                if current.is_some()
+                    && last_tag.is_some()
                     && let Some(text) = text_value(&t)
                 {
-                    apply_text(item, kind, text);
+                    text_acc.push_str(&text);
                 }
             }
             Ok(Event::CData(c)) => {
                 // Some indexers (Nexum) wrap `<title>` — and occasionally
-                // `<link>` / `<guid>` — in CDATA, which quick-xml surfaces
-                // here rather than as `Event::Text`. Route it through the same
-                // field dispatch so those values aren't silently dropped (the
-                // symptom: items parse but render with an empty title). CDATA
-                // is literal text — no XML-entity unescaping, unlike the
-                // `Event::Text` path.
-                if let (Some(item), Some(kind)) = (current.as_mut(), last_tag)
+                // `<link>` / `<guid>` — in CDATA. CDATA is literal text (no
+                // XML-entity unescaping), so push the raw bytes verbatim.
+                if current.is_some()
+                    && last_tag.is_some()
                     && let Ok(text) = std::str::from_utf8(c.as_ref())
                 {
-                    apply_text(item, kind, text.trim().to_string());
+                    text_acc.push_str(text);
+                }
+            }
+            Ok(Event::GeneralRef(r)) => {
+                // Entity reference inside element text (`&amp;`, `&#38;`, …).
+                // Resolve it back to its character so `&`-separated query
+                // params in `<guid>` / `<link>` URLs survive intact.
+                if current.is_some()
+                    && last_tag.is_some()
+                    && let Some(ch) = resolve_general_ref(&r)
+                {
+                    text_acc.push(ch);
                 }
             }
             Ok(Event::End(e)) => {
+                // Flush the joined character data into the field for the
+                // element we're closing, then reset for the next one.
+                if let (Some(item), Some(kind)) = (current.as_mut(), last_tag) {
+                    let text = text_acc.trim();
+                    if !text.is_empty() {
+                        apply_text(item, kind, text.to_string());
+                    }
+                }
+                text_acc.clear();
                 match e.name().as_ref() {
                     b"item" => {
                         if let Some(item) = current.take() {
@@ -744,13 +774,7 @@ fn apply_text(item: &mut RawItem, kind: TagKind, text: String) {
                 item.download_url.get_or_insert(text);
             }
         }
-        TagKind::Guid => {
-            // GUIDs can be a permalink URL — try to keep a stable numeric
-            // id by taking the last path segment, falling back to the raw
-            // string.
-            let id = text.rsplit('/').next().unwrap_or(&text).to_string();
-            item.external_id = id;
-        }
+        TagKind::Guid => item.external_id = extract_torrent_id(&text),
         TagKind::Size => {
             if let Ok(n) = text.parse() {
                 item.size.get_or_insert(n);
@@ -763,6 +787,61 @@ fn apply_text(item: &mut RawItem, kind: TagKind, text: String) {
         }
         TagKind::Description => item.description = Some(text),
         TagKind::PubDate => item.pub_date = Some(text),
+    }
+}
+
+/// Derive a stable, **unique** torrent id from a Torznab `<guid>`.
+///
+/// Guids come in two shapes:
+///   * permalink path — `https://indexer/details/61563` — where the last
+///     path segment is the id;
+///   * signed download URL — Nexum emits
+///     `https://nexum-core.com/api/torznab?t=download&id=61563&apikey=…` —
+///     where the *path* (`/api/torznab`) is identical for every result and
+///     only the `id=` query param is unique.
+///
+/// Taking the last path segment on the second shape yields the apikey,
+/// which is the same across all results → every result collapses onto one
+/// `external_id`. That is fatal downstream: clients key their result list
+/// on `provider_id:external_id` (a Compose `LazyColumn`/grid throws on a
+/// duplicate key — the reported TV crash), and the link cache is keyed by
+/// `external_id` too, so only the last item's download URL survives and
+/// `resolve()` grabs the wrong torrent. So prefer an explicit `id=` query
+/// param; fall back to the last path segment (query/fragment stripped) for
+/// permalink and bare numeric / infohash guids.
+fn extract_torrent_id(guid: &str) -> String {
+    if let Ok(url) = Url::parse(guid)
+        && let Some((_, id)) = url.query_pairs().find(|(k, _)| k.as_ref() == "id")
+        && !id.is_empty()
+    {
+        return id.into_owned();
+    }
+    let path = guid.split(['?', '#']).next().unwrap_or(guid);
+    match path.rsplit('/').next() {
+        Some(seg) if !seg.is_empty() => seg.to_string(),
+        _ => guid.to_string(),
+    }
+}
+
+/// Resolve a `&entity;` reference into its character. quick-xml 0.40
+/// surfaces entity references inside element text as standalone
+/// [`Event::GeneralRef`] events; we resolve and re-join them so the
+/// `&`-separated query params in `<guid>` / `<link>` URLs (and any `&` in
+/// a plain-text `<title>`) are reconstructed faithfully. Returns `None`
+/// for unknown entities, which are then dropped.
+fn resolve_general_ref(r: &BytesRef<'_>) -> Option<char> {
+    // Numeric character refs (`&#38;`, `&#x26;`) resolve directly.
+    if let Ok(Some(ch)) = r.resolve_char_ref() {
+        return Some(ch);
+    }
+    // The five predefined XML named entities.
+    match r.decode().ok()?.as_ref() {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        _ => None,
     }
 }
 
@@ -861,6 +940,65 @@ mod tests {
         assert_eq!(sr2.kind, Some(MediaKind::Tv));
     }
 
+    /// Nexum's `<guid>` is a signed *download URL* whose path
+    /// (`/api/torznab`) is shared across every result; only the `id=`
+    /// query param differs. quick-xml 0.40 splits the `&amp;`-separated
+    /// URL into Text + `GeneralRef` fragments, and the old parser kept
+    /// only the last fragment (the apikey) as `external_id` — so every
+    /// result got the SAME id. Two consequences, both reproduced here:
+    /// clients key their result list on `provider_id:external_id`, so a
+    /// duplicate key crashes a Compose `LazyColumn`/grid (the reported TV
+    /// crash on multi-result Nexum searches); and the link cache is keyed
+    /// by `external_id`, so only the last item's download URL would survive
+    /// → wrong-torrent grab. Both are fixed by joining the entity-split
+    /// fragments and pulling the unique `id=` out of the query string.
+    #[test]
+    fn nexum_download_url_guids_yield_unique_ids() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <newznab:response offset="0" total="2"/>
+    <item>
+      <title><![CDATA[Subnautica.2.PORTABLE-InsaneRamZes]]></title>
+      <guid>https://nexum-core.com/api/torznab?t=download&amp;id=61503&amp;apikey=8c28e7c988c4a40a05f3e4b82334649d</guid>
+      <link>https://nexum-core.com/torrents/61503</link>
+      <size>15673872446</size>
+      <enclosure url="https://nexum-core.com/api/torznab?t=download&amp;id=61503&amp;apikey=8c28e7c988c4a40a05f3e4b82334649d" length="15673872446" type="application/x-bittorrent"/>
+      <category>2000</category>
+      <torznab:attr name="seeders" value="1"/>
+      <torznab:attr name="infohash" value="9b917e3ec8cf7acf3a663775671e538aef696217"/>
+    </item>
+    <item>
+      <title><![CDATA[Forza.Horizon.6.PORTABLE-InsaneRamZes]]></title>
+      <guid>https://nexum-core.com/api/torznab?t=download&amp;id=61498&amp;apikey=8c28e7c988c4a40a05f3e4b82334649d</guid>
+      <link>https://nexum-core.com/torrents/61498</link>
+      <size>167125333508</size>
+      <enclosure url="https://nexum-core.com/api/torznab?t=download&amp;id=61498&amp;apikey=8c28e7c988c4a40a05f3e4b82334649d" length="167125333508" type="application/x-bittorrent"/>
+      <category>2000</category>
+      <torznab:attr name="seeders" value="1"/>
+      <torznab:attr name="infohash" value="7a26034007b7d74c4f986c3ce620d0481f6c35d6"/>
+    </item>
+  </channel>
+</rss>"#;
+        let p = parse_torznab_xml(xml).expect("parse");
+        assert_eq!(p.items.len(), 2);
+        // The unique torrent id is pulled from the `id=` query param, not
+        // the shared apikey tail.
+        assert_eq!(p.items[0].external_id, "61503");
+        assert_eq!(p.items[1].external_id, "61498");
+        assert_ne!(
+            p.items[0].external_id, p.items[1].external_id,
+            "every result must carry a distinct external_id (clients use it as a list key)",
+        );
+        // Each item's enclosure URL is cached under its OWN id (no collision).
+        assert!(
+            p.items[0]
+                .download_url
+                .as_deref()
+                .is_some_and(|u| u.contains("id=61503")),
+        );
+    }
+
     impl RawItem {
         fn clone_for_test(&self) -> Self {
             Self {
@@ -921,6 +1059,10 @@ mod tests {
             Some("474e0c2b81d6cd8fa8443f1bfc4f5bd2ee80c170"),
         );
         assert_eq!(item.tmdb_id, Some(76600));
+        // The `<guid>` is a download URL — `external_id` must be the unique
+        // `id=` query param, not the shared apikey tail (see
+        // `nexum_download_url_guids_yield_unique_ids`).
+        assert_eq!(item.external_id, "64513");
         // Enclosure (the real .torrent) wins over the HTML `<link>` page.
         assert!(
             item.download_url
