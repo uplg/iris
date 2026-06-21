@@ -570,7 +570,12 @@ mod tests {
         // tied both at +80 (each is a substring of the query) and fell back
         // to popularity.
         let q = mk_query("la prisonniere du desert", None, None);
-        let more = mk_result("La.Prisonniere.2021.FRENCH.1080p.WEB.x264-GRP", 5, 4.0, None);
+        let more = mk_result(
+            "La.Prisonniere.2021.FRENCH.1080p.WEB.x264-GRP",
+            5,
+            4.0,
+            None,
+        );
         let less = mk_result("Desert.2019.MULTi.1080p.BluRay.x264-GRP", 900, 3.0, None);
         let mut agg = AggregatedResults {
             results: vec![less, more],

@@ -111,7 +111,12 @@ impl NexumProvider {
         Ok(u.into())
     }
 
-    async fn fetch_list(&self, qs: &[(&str, String)], page: u32, limit: u32) -> Result<ProviderPage> {
+    async fn fetch_list(
+        &self,
+        qs: &[(&str, String)],
+        page: u32,
+        limit: u32,
+    ) -> Result<ProviderPage> {
         let url = self.url("/api/v1/torrents")?;
         let body = self
             .http
@@ -220,10 +225,8 @@ impl SearchProvider for NexumProvider {
         let limit = q.limit.unwrap_or(25).clamp(1, 100);
         let page = q.page.unwrap_or(1).max(1);
 
-        let mut qs: Vec<(&str, String)> = vec![
-            ("per_page", limit.to_string()),
-            ("page", page.to_string()),
-        ];
+        let mut qs: Vec<(&str, String)> =
+            vec![("per_page", limit.to_string()), ("page", page.to_string())];
         if !q.q.trim().is_empty() {
             qs.push(("q", q.q.clone()));
         }
@@ -370,12 +373,22 @@ fn sort_field(field: SortField) -> &'static str {
 /// than leaking a new non-video bucket as a fake movie — see module docs).
 fn classify_category(name: &str) -> Option<MediaKind> {
     match name.trim().to_lowercase().as_str() {
-        "films" | "film documentaire" | "concerts / spectacles" | "concerts" | "spectacles"
+        "films"
+        | "film documentaire"
+        | "concerts / spectacles"
+        | "concerts"
+        | "spectacles"
         | "sports" => Some(MediaKind::Movie),
-        "séries tv" | "series tv" | "séries" | "series" | "série documentaire"
-        | "serie documentaire" | "animés" | "animes" | "émissions tv" | "emissions tv" => {
-            Some(MediaKind::Tv)
-        }
+        "séries tv"
+        | "series tv"
+        | "séries"
+        | "series"
+        | "série documentaire"
+        | "serie documentaire"
+        | "animés"
+        | "animes"
+        | "émissions tv"
+        | "emissions tv" => Some(MediaKind::Tv),
         _ => None,
     }
 }
@@ -509,10 +522,9 @@ mod tests {
         assert_eq!(kept[0].infohash.as_deref(), Some("abcdef"));
         assert!(kept[0].freeleech);
         assert!(
-            kept[0]
-                .download_url
-                .as_deref()
-                .is_some_and(|u| u.contains("/api/v1/torrents/42/download") && u.contains("apikey=")),
+            kept[0].download_url.as_deref().is_some_and(|u| u
+                .contains("/api/v1/torrents/42/download")
+                && u.contains("apikey=")),
         );
         assert_eq!(kept[1].external_id, "43");
         assert_eq!(kept[1].kind, Some(MediaKind::Tv));
@@ -521,13 +533,27 @@ mod tests {
 
     #[test]
     fn classify_covers_video_and_drops_the_rest() {
-        for v in ["Films", "Film documentaire", "Sports", "Concerts / Spectacles"] {
+        for v in [
+            "Films",
+            "Film documentaire",
+            "Sports",
+            "Concerts / Spectacles",
+        ] {
             assert_eq!(classify_category(v), Some(MediaKind::Movie), "{v}");
         }
         for v in ["Séries TV", "Animés", "Série documentaire", "Émissions TV"] {
             assert_eq!(classify_category(v), Some(MediaKind::Tv), "{v}");
         }
-        for v in ["Windows", "Linux", "MacOS", "Nintendo", "Jeux Vidéo", "Musique", "eBooks", "Formation"] {
+        for v in [
+            "Windows",
+            "Linux",
+            "MacOS",
+            "Nintendo",
+            "Jeux Vidéo",
+            "Musique",
+            "eBooks",
+            "Formation",
+        ] {
             assert_eq!(classify_category(v), None, "{v}");
         }
     }
