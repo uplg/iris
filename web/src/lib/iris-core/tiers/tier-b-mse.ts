@@ -933,6 +933,34 @@ export const mountTierB: EngineMount = async (opts) => {
     const videoSrc = new EncodedVideoPacketSource(sourceVideoCodec);
     newOutput.addVideoTrack(videoSrc);
 
+    // Resolve the video start packet up front. `getKeyPacket(t)` returns null
+    // when `t` is BEFORE the track's first keyframe — which happens whenever
+    // the container's first video sample isn't at exactly 0 (a small start
+    // offset, e.g. a first IDR at 0.083s, common on remuxed BluRay rips). On
+    // the initial mount `seekStart` is 0, so that null used to abort the WHOLE
+    // video feed (`if (!startPacket) return`): the muxer never received a
+    // single video sample, `allTracksAreKnown()` stayed false, no fragment was
+    // ever emitted, and playback hung forever at t=0 with an empty SourceBuffer
+    // (audio decoded fine — it starts via the sample sink, not a key packet —
+    // which is why ONLY video stalled). A user seek to any t ≥ firstKeyframe
+    // landed on a real keyframe and "fixed" it. Fall back to the track's first
+    // keyframe so a non-zero start time just works.
+    const videoPacketSink = new EncodedPacketSink(videoTrack);
+    let videoStartPacket = await videoPacketSink.getKeyPacket(seekStart);
+    if (!videoStartPacket) {
+      videoStartPacket = await videoPacketSink.getFirstKeyPacket();
+    }
+    // Media time the playhead must land on. `getKeyPacket` returns the keyframe
+    // at/just BEFORE seekStart, so for a normal in-stream seek this stays
+    // `seekStart`. It exceeds `seekStart` ONLY in the start-offset fallback
+    // above (first keyframe after 0) — there we must anchor to it, else the
+    // playhead sits at 0 in an unbuffered gap and both Firefox and Chrome stall
+    // exactly as before the fix.
+    const playheadTarget =
+      videoStartPacket && videoStartPacket.timestamp > seekStart
+        ? videoStartPacket.timestamp
+        : seekStart;
+
     const allAudio = await liveInput.getAudioTracks();
     const audioTrack = allAudio[chosenAudioIdx] ?? null;
     type AudioFeed =
@@ -1016,10 +1044,10 @@ export const mountTierB: EngineMount = async (opts) => {
     // we do it here, AFTER the SourceBuffer has been cleared and
     // the init segment has been pushed, so Firefox sees a
     // coherent state from the next `appendBuffer` onward.
-    if (seekStart > 0) {
+    if (playheadTarget > 0) {
       try {
-        if (Math.abs(video.currentTime - seekStart) > 0.05) {
-          video.currentTime = seekStart;
+        if (Math.abs(video.currentTime - playheadTarget) > 0.05) {
+          video.currentTime = playheadTarget;
         }
       } catch {
         /* swallow */
@@ -1036,8 +1064,7 @@ export const mountTierB: EngineMount = async (opts) => {
 
     // Pump video + audio concurrently.
     const videoP = (async () => {
-      const packetSink = new EncodedPacketSink(videoTrack);
-      const startPacket = await packetSink.getKeyPacket(seekStart);
+      const startPacket = videoStartPacket;
       if (!startPacket) return;
       const decoderConfig = await videoTrack.getDecoderConfig();
       let firstMeta = true;
@@ -1065,7 +1092,7 @@ export const mountTierB: EngineMount = async (opts) => {
       // use `appendWindowStart` — RASL decode AFTER the keyframe, so dropping
       // them via the append window trips MSE's need-random-access-point and
       // kills the whole GOP's trailing pics → a buffer hole → stall.)
-      for await (const packet of packetSink.packets(startPacket)) {
+      for await (const packet of videoPacketSink.packets(startPacket)) {
         if (disposed || newGen !== conversionGeneration) break;
         if (packet.timestamp < startPacket.timestamp) continue;
         // Don't race ahead of the audio feed (else the muxer hoards video).
@@ -1104,7 +1131,14 @@ export const mountTierB: EngineMount = async (opts) => {
         ? (async () => {
             if (audioFeed.kind === "passthrough") {
               const packetSink = new EncodedPacketSink(audioTrack);
-              const startPacket = await packetSink.getKeyPacket(seekStart);
+              // Same start-offset guard as video: when the first audio packet
+              // isn't at exactly 0, `getKeyPacket(0)` returns null. Fall back to
+              // the first key packet so a non-zero start doesn't silently drop
+              // the whole (browser-native) audio track.
+              let startPacket = await packetSink.getKeyPacket(seekStart);
+              if (!startPacket) {
+                startPacket = await packetSink.getFirstKeyPacket();
+              }
               if (!startPacket) {
                 await audioFeed.source.close();
                 audioFedMax = Number.POSITIVE_INFINITY;
