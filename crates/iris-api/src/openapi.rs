@@ -100,6 +100,7 @@ use utoipa::OpenApi;
         crate::routes::admin::watch_history,
         crate::routes::admin::list_users,
         crate::routes::admin::reset_user_password,
+        crate::routes::admin::set_user_display_name,
         crate::routes::admin::trigger_gc,
         crate::routes::admin::storage_stats,
         crate::routes::admin::list_invitations,

@@ -1,12 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowLeft,
   KeyRound,
   List,
+  Pencil,
   Plus,
   RotateCcw,
+  Search,
   ShieldCheck,
   Terminal,
   Trash2,
@@ -396,70 +399,152 @@ function UsersCard() {
     queryKey: ["admin", "users"],
     queryFn: admin.listUsers,
   });
-  const [target, setTarget] = useState<UserView | null>(null);
+  const [resetTarget, setResetTarget] = useState<UserView | null>(null);
+  const [renameTarget, setRenameTarget] = useState<UserView | null>(null);
+  const [filter, setFilter] = useState("");
+
+  const all = users.data;
+  const q = filter.trim().toLowerCase();
+  const filtered = useMemo(() => {
+    if (!all) return [];
+    if (!q) return all;
+    return all.filter(
+      (u) => u.display_name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q),
+    );
+  }, [all, q]);
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Users</CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <CardTitle className="flex items-center gap-2">
+            Users
+            {all ? <Tag variant="plain">{all.length}</Tag> : null}
+          </CardTitle>
+          {all && all.length > 0 ? (
+            <div className="relative w-full sm:w-64">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter by name or email…"
+                className="pl-8"
+              />
+            </div>
+          ) : null}
+        </div>
       </CardHeader>
-      <CardContent className="grid gap-4">
+      <CardContent className="grid gap-3">
         {users.isLoading ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : users.error ? (
           <p className="text-sm text-destructive">
             {users.error instanceof Error ? users.error.message : "failed"}
           </p>
-        ) : users.data?.length ? (
-          <div className="overflow-x-auto rounded-md border border-border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2 text-left sm:px-4">Email</th>
-                  <th className="px-3 py-2 text-left sm:px-4">Role</th>
-                  <th className="hidden px-3 py-2 text-left sm:table-cell sm:px-4">Joined</th>
-                  <th className="px-3 py-2 sm:px-4"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.data.map((u) => (
-                  <tr key={u.id} className="border-t border-border">
-                    <td className="break-all px-3 py-2 sm:px-4">{u.email}</td>
-                    <td className="px-3 py-2 sm:px-4">
-                      {u.is_admin ? (
-                        <Tag variant="accent" upper>
-                          <ShieldCheck className="size-2.5" />
-                          Admin
-                        </Tag>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">user</span>
-                      )}
-                    </td>
-                    <td className="hidden px-3 py-2 text-xs text-muted-foreground sm:table-cell sm:px-4">
-                      {new Date(u.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-3 py-2 text-right sm:px-4">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setTarget(u)}
-                        title="Reset password"
-                      >
-                        <KeyRound className="size-3.5" />
-                        <span className="sr-only sm:not-sr-only sm:ml-1">Reset password</span>
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
+        ) : !all?.length ? (
           <p className="text-sm text-muted-foreground">No users yet.</p>
+        ) : filtered.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No users match “{filter.trim()}”.</p>
+        ) : (
+          <>
+            <UserList users={filtered} onReset={setResetTarget} onRename={setRenameTarget} />
+            {q ? (
+              <p className="text-xs text-muted-foreground">
+                Showing {filtered.length} of {all.length}.
+              </p>
+            ) : null}
+          </>
         )}
       </CardContent>
-      <ResetPasswordDialog target={target} onOpenChange={(open) => !open && setTarget(null)} />
+      <ResetPasswordDialog
+        target={resetTarget}
+        onOpenChange={(open) => !open && setResetTarget(null)}
+      />
+      <DisplayNameDialog
+        target={renameTarget}
+        onOpenChange={(open) => !open && setRenameTarget(null)}
+      />
     </Card>
+  );
+}
+
+// Virtualized so the list stays smooth as the household grows past a
+// few dozen accounts. Rows are a fixed height, so a constant
+// `estimateSize` is exact — no `measureElement` needed.
+function UserList({
+  users,
+  onReset,
+  onRename,
+}: {
+  users: UserView[];
+  onReset: (u: UserView) => void;
+  onRename: (u: UserView) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const ROW_HEIGHT = 60;
+  const virtualizer = useVirtualizer({
+    count: users.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 8,
+    getItemKey: (i) => users[i]!.id,
+  });
+
+  return (
+    <div ref={parentRef} className="max-h-[28rem] overflow-y-auto rounded-md border border-border">
+      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+        {virtualizer.getVirtualItems().map((v) => {
+          const u = users[v.index]!;
+          return (
+            <div
+              key={v.key}
+              data-index={v.index}
+              className="absolute inset-x-0 flex items-center gap-3 border-b border-border px-3 sm:px-4"
+              style={{ top: 0, height: v.size, transform: `translateY(${v.start}px)` }}
+            >
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium uppercase text-muted-foreground">
+                {(u.display_name || u.email).charAt(0)}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-sm font-medium">{u.display_name}</span>
+                  {u.is_admin ? (
+                    <Tag variant="accent" upper>
+                      <ShieldCheck className="size-2.5" />
+                      Admin
+                    </Tag>
+                  ) : null}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">{u.email}</div>
+              </div>
+              <span className="hidden shrink-0 text-xs text-muted-foreground md:block">
+                {new Date(u.created_at).toLocaleDateString()}
+              </span>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onRename(u)}
+                  title="Edit display name"
+                >
+                  <Pencil className="size-3.5" />
+                  <span className="sr-only">Edit display name</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onReset(u)}
+                  title="Reset password"
+                >
+                  <KeyRound className="size-3.5" />
+                  <span className="sr-only">Reset password</span>
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -561,6 +646,105 @@ function ResetPasswordDialog({
           >
             <KeyRound className="size-4" />
             {reset.isPending ? "Resetting…" : "Reset"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DisplayNameDialog({
+  target,
+  onOpenChange,
+}: {
+  target: UserView | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const qc = useQueryClient();
+  const [name, setName] = useState("");
+  const [seededFor, setSeededFor] = useState<string | null>(null);
+
+  // Seed the field from the target's current name when the dialog opens
+  // for a (new) user. Adjusting state during render — the React-sanctioned
+  // alternative to a useEffect/timer — so the input is correct on first
+  // paint; React re-renders immediately before committing.
+  if (target && target.id !== seededFor) {
+    setSeededFor(target.id);
+    setName(target.display_name);
+  }
+
+  const rename = useMutation({
+    mutationFn: ({ id, n }: { id: string; n: string }) => admin.setDisplayName(id, n),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      onOpenChange(false);
+    },
+  });
+
+  const open = target != null;
+  const onClose = (next: boolean) => {
+    if (!next) {
+      setSeededFor(null);
+      rename.reset();
+    }
+    onOpenChange(next);
+  };
+
+  const trimmed = name.trim();
+  const localErr = trimmed.length > 64 ? "Display name too long (max 64 characters)." : null;
+  const submitDisabled =
+    !target ||
+    trimmed.length === 0 ||
+    trimmed.length > 64 ||
+    trimmed === target.display_name ||
+    rename.isPending;
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Edit display name</DialogTitle>
+          <DialogDescription>
+            {target ? (
+              <>
+                The public handle for <span className="font-medium">{target.email}</span>.
+              </>
+            ) : null}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <div className="grid gap-2">
+            <Label htmlFor="adminDisplayName">Display name</Label>
+            <Input
+              id="adminDisplayName"
+              value={name}
+              maxLength={64}
+              autoComplete="off"
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !submitDisabled && target) {
+                  rename.mutate({ id: target.id, n: trimmed });
+                }
+              }}
+            />
+          </div>
+          {localErr && <p className="text-sm text-destructive">{localErr}</p>}
+          {rename.error && (
+            <p className="text-sm text-destructive">
+              {rename.error instanceof Error ? rename.error.message : "failed"}
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onClose(false)}>
+            Cancel
+          </Button>
+          <Button
+            disabled={submitDisabled}
+            onClick={() => target && rename.mutate({ id: target.id, n: trimmed })}
+          >
+            <Pencil className="size-4" />
+            {rename.isPending ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>
       </DialogContent>

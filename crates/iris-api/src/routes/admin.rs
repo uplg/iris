@@ -31,6 +31,10 @@ pub fn router() -> Router<AppState> {
             "/users/{id}/password",
             axum::routing::post(reset_user_password),
         )
+        .route(
+            "/users/{id}/display-name",
+            axum::routing::post(set_user_display_name),
+        )
         .route("/remux", get(list_remux_jobs))
         .route("/remux/{key}", axum::routing::delete(wipe_remux_job))
         .route("/tmdb/diagnose/{infohash}", get(diagnose_tmdb))
@@ -274,6 +278,51 @@ pub(crate) async fn reset_user_password(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("hash: {e}")))?;
     iris_db::users::update_password_hash(state.db(), user_id, &hash).await?;
     iris_db::refresh_tokens::revoke_all_for_user(state.db(), user_id).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct SetDisplayNameRequest {
+    display_name: String,
+}
+
+/// Admin-set another user's public display name. Mirrors the
+/// self-service `POST /api/me/display-name` validation (non-empty,
+/// max 64 chars after trimming) so both entry points agree.
+#[utoipa::path(
+    post,
+    path = "/api/admin/users/{id}/display-name",
+    operation_id = "set_user_display_name",
+    params(("id" = Uuid, Path)),
+    request_body = SetDisplayNameRequest,
+    responses(
+        (status = 204, description = "Display name updated"),
+        (status = 400, description = "Empty / too-long display name (max 64)"),
+        (status = 403, description = "Caller is not an admin"),
+        (status = 404, description = "No such user"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn set_user_display_name(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SetDisplayNameRequest>,
+) -> ApiResult<axum::http::StatusCode> {
+    let trimmed = body.display_name.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError::BadRequest("display name cannot be empty".into()));
+    }
+    if trimmed.len() > 64 {
+        return Err(ApiError::BadRequest(
+            "display name too long (max 64)".into(),
+        ));
+    }
+    let user_id = iris_core::ids::UserId::from(id);
+    let updated = iris_db::users::update_display_name(state.db(), user_id, trimmed).await?;
+    if !updated {
+        return Err(ApiError::NotFound);
+    }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 

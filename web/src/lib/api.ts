@@ -189,6 +189,8 @@ export const admin = {
   listUsers: () => api.get<UserView[]>("/admin/users"),
   resetPassword: (userId: string, new_password: string) =>
     api.post<void>(`/admin/users/${userId}/password`, { new_password }),
+  setDisplayName: (userId: string, display_name: string) =>
+    api.post<void>(`/admin/users/${userId}/display-name`, { display_name }),
   listRemux: () => api.get<RemuxJobView[]>("/admin/remux"),
   wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${key}`),
   activeSessions: () => api.get<ActiveSession[]>("/admin/active-sessions"),

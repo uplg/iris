@@ -302,6 +302,50 @@
         }
       }
     },
+    "/api/admin/users/{id}/display-name": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin-set another user's public display name. Mirrors the\nself-service `POST /api/me/display-name` validation (non-empty,\nmax 64 chars after trimming) so both entry points agree.",
+        "operationId": "set_user_display_name",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDisplayNameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Display name updated"
+          },
+          "400": {
+            "description": "Empty / too-long display name (max 64)"
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          },
+          "404": {
+            "description": "No such user"
+          }
+        }
+      }
+    },
     "/api/admin/users/{id}/password": {
       "post": {
         "tags": [
@@ -5349,6 +5393,17 @@
               "null"
             ],
             "format": "double"
+          }
+        }
+      },
+      "SetDisplayNameRequest": {
+        "type": "object",
+        "required": [
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
           }
         }
       },
