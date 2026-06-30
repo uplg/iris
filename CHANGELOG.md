@@ -5,6 +5,56 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-30
+
+### Added
+
+- **Watch History** (web + Android TV): a per-episode log of everything
+  watched, in-progress and completed — including episodes whose source
+  torrent has since been deleted (disk-reclaim GC, admin cleanup), which
+  used to just vanish from "Continue watching" with no way to find "where
+  was I". Virtualized list on both clients; reachable from the web's
+  primary navigation and from TV Settings. Admins can drill into any
+  household member's history from the Users list on `/admin`.
+- **Admin audit log**: a persisted, queryable record of sensitive actions
+  (torrent deletions, password resets, display-name changes,
+  admin-triggered GC, remux-cache wipes) — replaces the previous ephemeral
+  `tracing::` logs, which rotated out and weren't visible anywhere.
+  Virtualized list on the admin page.
+- **Web — grab the next episode straight from the player.** The watch
+  page's side panel now also lists episodes Iris has discovered but not
+  downloaded yet ("S01E17 available"); a single "Grab & Play" click grabs
+  it and jumps straight to playback.
+- **Android TV — software-decode awareness on search results.** Release
+  titles are now parsed for a coarse codec hint (H.264 / HEVC / AV1 /
+  VP9); the TV badges and deprioritises (never hides) AV1 / VP9 results
+  the connected box can't hardware-decode.
+- **Season-pack suggestions no longer redundant with what's already
+  owned.** If a `MULTi` episode release already exists for a season, FR
+  and EN season-pack offers are hidden; if a French episode release
+  exists, `MULTi` and another French pack are hidden. English packs are
+  never suppressed by French coverage alone.
+
+### Fixed
+
+- **Android TV — season selection reset to Season 1 after Back from the
+  player.** Browsing Season 2, playing an episode, then pressing Back
+  used to land back on Season 1 — the selection was held in `remember`
+  instead of `rememberSaveable` and didn't survive the back-stack restore.
+- **Android TV — D-Pad Up from Prepare/Play skipped the season tabs.**
+  Compose's default spatial focus search picked the hero's Back button as
+  the nearest target across the nested season-tabs/episode-list layout;
+  Up now explicitly lands on the active season pill.
+- **Android TV — playback kept streaming after leaving via Home.** No
+  lifecycle observer existed anywhere in the player path, so the torrent
+  stream and the progress heartbeat kept running in the background. The
+  player now pauses (and the admin "Now watching" view reflects it) on
+  `ON_STOP`.
+- **Android TV — the "Next episode" prompt was unreachable by D-Pad.** It
+  lived in a Compose overlay on top of the native `PlayerView`, outside
+  its focus hierarchy. It's now a native control-bar button, reachable
+  like every other transport control.
+
 ## [1.0.2] - 2026-06-21
 
 ### Added

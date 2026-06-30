@@ -1,22 +1,22 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/iris-core",
-    "crates/iris-config",
-    "crates/iris-db",
-    "crates/iris-auth",
-    "crates/iris-providers",
-    "crates/iris-torrent",
-    "crates/iris-media",
-    "crates/iris-caps",
-    "crates/iris-reco",
-    "crates/iris-api",
+  "crates/iris-core",
+  "crates/iris-config",
+  "crates/iris-db",
+  "crates/iris-auth",
+  "crates/iris-providers",
+  "crates/iris-torrent",
+  "crates/iris-media",
+  "crates/iris-caps",
+  "crates/iris-reco",
+  "crates/iris-api",
 ]
 
 [workspace.package]
-version = "1.0.2"
+version = "1.1.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.96"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -51,10 +51,25 @@ async-trait = "0.1.89"
 axum = { version = "0.8.9", features = ["macros", "http2"] }
 axum-extra = { version = "0.12.6", features = ["typed-header", "cookie", "cookie-private"] }
 tower = { version = "0.5.3", features = ["util"] }
-tower-http = { version = "0.7.0", features = ["trace", "cors", "fs", "compression-gzip", "set-header", "normalize-path"] }
+tower-http = { version = "0.7.0", features = [
+  "trace",
+  "cors",
+  "fs",
+  "compression-gzip",
+  "set-header",
+  "normalize-path",
+] }
 hyper = "1.10.1"
 http = "1.4.2"
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls", "gzip", "brotli", "stream", "http2"] }
+reqwest = { version = "0.13.4", default-features = false, features = [
+  "json",
+  "query",
+  "rustls",
+  "gzip",
+  "brotli",
+  "stream",
+  "http2",
+] }
 bytes = "1.11.1"
 
 # Serde / config
@@ -70,7 +85,15 @@ figment = { version = "0.10.19", features = ["toml", "env"] }
 utoipa = { version = "5.5.0", features = ["axum_extras", "uuid", "chrono"] }
 
 # DB (latest stable)
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "macros", "migrate", "uuid", "chrono"] }
+sqlx = { version = "0.9.0", default-features = false, features = [
+  "runtime-tokio",
+  "tls-rustls",
+  "sqlite",
+  "macros",
+  "migrate",
+  "uuid",
+  "chrono",
+] }
 
 # Auth (latest stable; argon2 0.6 is rc)
 argon2 = "0.5.3"
@@ -79,7 +102,7 @@ rand = "0.10.1"
 
 # Errors / logging
 thiserror = "2.0.18"
-anyhow = "1.0.102"
+anyhow = "1.0.103"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 

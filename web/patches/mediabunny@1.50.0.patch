@@ -1,5 +1,5 @@
 diff --git a/dist/mediabunny.d.ts b/dist/mediabunny.d.ts
-index 988d9ff4b32d222c4ce8fbff2c7a4f0a102e3428..05aa6fcc0877c65739803217fba0f20db2e6b866 100644
+index 0d2596cdfda4244cde06fce3554a8e41bf4f111e..5d2ba6384c5b74650a9777c49f1f9a4416adc71c 100644
 --- a/dist/mediabunny.d.ts
 +++ b/dist/mediabunny.d.ts
 @@ -149,7 +149,7 @@ export declare type AttachedImage = {
@@ -11,7 +11,7 @@ index 988d9ff4b32d222c4ce8fbff2c7a4f0a102e3428..05aa6fcc0877c65739803217fba0f20d
  
  /**
   * A sink that retrieves decoded audio samples from an audio track and converts them to `AudioBuffer` instances. This is
-@@ -3223,7 +3223,7 @@ export declare type MpegTsOutputFormatOptions = {
+@@ -3284,7 +3284,7 @@ export declare type MpegTsOutputFormatOptions = {
   * @group Codecs
   * @public
   */
@@ -21,7 +21,7 @@ index 988d9ff4b32d222c4ce8fbff2c7a4f0a102e3428..05aa6fcc0877c65739803217fba0f20d
  /**
   * This target just discards all incoming data. It is useful for when you need an {@link Output} but extract data from
 diff --git a/dist/modules/src/codec.d.ts b/dist/modules/src/codec.d.ts
-index 0d60cca0ed37973ae73d17fd621a71789fd9cca4..a9f3f5963bef905c17a0e354007218142f22b770 100644
+index 164aa274a02d80aeb57c1787815242bb76c8b144..0edd98f6cc659485ec89952ce97bede1300bcb63 100644
 --- a/dist/modules/src/codec.d.ts
 +++ b/dist/modules/src/codec.d.ts
 @@ -24,13 +24,13 @@ export declare const PCM_AUDIO_CODECS: readonly ["pcm-s16", "pcm-s16be", "pcm-s2
@@ -41,10 +41,10 @@ index 0d60cca0ed37973ae73d17fd621a71789fd9cca4..a9f3f5963bef905c17a0e35400721814
   * List of known subtitle codecs, ordered by encoding preference.
   * @group Codecs
 diff --git a/dist/modules/src/codec.js b/dist/modules/src/codec.js
-index 039b9fc16ab7336e2a8cee553cb0833c72c9341a..39b2cb9000bd444e20cefd4d11c647ddd5462c83 100644
+index a207683005de64a4f03bf811783e49ded13e7b28..5f71217805e8d519d76bcd59e72f48943ed8aab5 100644
 --- a/dist/modules/src/codec.js
 +++ b/dist/modules/src/codec.js
-@@ -53,6 +53,7 @@ export const NON_PCM_AUDIO_CODECS = [
+@@ -54,6 +54,7 @@ export const NON_PCM_AUDIO_CODECS = [
      'flac',
      'ac3',
      'eac3',
@@ -52,7 +52,7 @@ index 039b9fc16ab7336e2a8cee553cb0833c72c9341a..39b2cb9000bd444e20cefd4d11c647dd
  ];
  /**
   * List of known audio codecs, ordered by encoding preference.
-@@ -422,6 +423,13 @@ export const buildAudioCodecString = (codec, numberOfChannels, sampleRate) => {
+@@ -463,6 +464,13 @@ export const buildAudioCodecString = (codec, numberOfChannels, sampleRate) => {
      else if (codec === 'eac3') {
          return 'ec-3';
      }
@@ -66,7 +66,7 @@ index 039b9fc16ab7336e2a8cee553cb0833c72c9341a..39b2cb9000bd444e20cefd4d11c647dd
      else if (PCM_AUDIO_CODECS.includes(codec)) {
          return codec;
      }
-@@ -466,6 +474,12 @@ export const extractAudioCodecString = (trackInfo) => {
+@@ -507,6 +515,12 @@ export const extractAudioCodecString = (trackInfo) => {
      else if (codec === 'eac3') {
          return 'ec-3';
      }
@@ -111,10 +111,10 @@ index a55e563040bbfd00553b6c875847c2dcfcad2da9..a0340db1eb5c6a80ae991949fd3d47d2
                  trackData.lastSample.timescaleUnitsToNextSample = delta;
                  if (!this.isFragmented) {
 diff --git a/dist/modules/src/matroska/ebml.js b/dist/modules/src/matroska/ebml.js
-index 50cfea7ec0a82b9360dec35174a2c14789241513..06e73c63d53c1b78d75d150e86f4b09de95261a5 100644
+index 42eeea93c04d41ad4441fa576bb53a76c165f1a5..a71b1300a2502995c7ba56e2b0c4918313c16999 100644
 --- a/dist/modules/src/matroska/ebml.js
 +++ b/dist/modules/src/matroska/ebml.js
-@@ -663,6 +663,7 @@ export const CODEC_STRING_MAP = {
+@@ -664,6 +664,7 @@ export const CODEC_STRING_MAP = {
      'flac': 'A_FLAC',
      'ac3': 'A_AC3',
      'eac3': 'A_EAC3',
@@ -123,10 +123,10 @@ index 50cfea7ec0a82b9360dec35174a2c14789241513..06e73c63d53c1b78d75d150e86f4b09d
      'pcm-s16': 'A_PCM/INT/LIT',
      'pcm-s16be': 'A_PCM/INT/BIG',
 diff --git a/dist/modules/src/matroska/matroska-demuxer.js b/dist/modules/src/matroska/matroska-demuxer.js
-index b40fdc6290c5ea1ad8739f75a5adb9a494915c28..8d895c98ac39f8b8c0aaf51acb0a7d77f4fd63a7 100644
+index e3b492a219f2422a2fa8e229b33cddf7757a4913..33bfbe194f02db90f027da64be56d1f0f434dcdf 100644
 --- a/dist/modules/src/matroska/matroska-demuxer.js
 +++ b/dist/modules/src/matroska/matroska-demuxer.js
-@@ -780,6 +780,10 @@ export class MatroskaDemuxer extends Demuxer {
+@@ -794,6 +794,10 @@ export class MatroskaDemuxer extends Demuxer {
                                  this.currentTrack.info.codec = 'eac3';
                                  this.currentTrack.info.codecDescription = this.currentTrack.codecPrivate;
                              }

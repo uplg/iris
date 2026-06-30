@@ -46,7 +46,13 @@ tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
 
 clap = { version = "4.6.1", features = ["derive", "env"] }
-time = "0.3.49"
+# `time` 0.3.52 changed `Parsable::parse`'s signature (added a required
+# `Option<Parsed>` defaults param) — a breaking change inside what semver
+# treats as a same-line 0.3.x patch bump. `cookie 0.18.1` (the latest
+# release, pulled in via axum-extra's cookie/cookie-private features) calls
+# the old 1-arg form and fails to compile against it. No fixed `cookie`
+# release exists yet. Pinned below the break; revisit when cookie adapts.
+time = ">=0.3.49, <0.3.52"
 reqwest = { workspace = true }
 rand = { workspace = true }
 semver = { workspace = true }

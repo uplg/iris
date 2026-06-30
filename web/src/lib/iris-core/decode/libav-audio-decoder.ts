@@ -116,7 +116,7 @@ let libavSingleton: Promise<LibavLike> | null = null;
  *  servers running outside Docker fall back to `default`. */
 async function detectIrisVariant(): Promise<boolean> {
   try {
-    const res = await fetch("/libavjs/libav-6.8.8.0-iris.wasm.mjs", {
+    const res = await fetch("/libavjs/libav-6.9.8.1-iris.wasm.mjs", {
       method: "HEAD",
       cache: "no-store",
     });
