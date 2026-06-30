@@ -514,7 +514,26 @@ export function WatchPage() {
         currentSeason != null
           ? availableEpisodes.filter((a) => a.season === currentSeason)
           : availableEpisodes;
-      const downloaded = seasonEpisodes.map((e) => {
+      // One row per (season, episode), same dedup as `discovered` below:
+      // a household can have the SAME episode downloaded more than once
+      // (a French release grabbed today, an old English one from before) —
+      // without this, the panel showed every duplicate as its own row,
+      // languages mixed together. Preference order: whichever file is
+      // actually playing right now (so the active row never disappears),
+      // else `currentLanguage`, else Multi, else whatever's first.
+      const downloadedBySeasonEpisode = new Map<string, typeof seasonEpisodes>();
+      for (const e of seasonEpisodes) {
+        const key = `${e.season}:${e.episode}`;
+        const list = downloadedBySeasonEpisode.get(key);
+        if (list) list.push(e);
+        else downloadedBySeasonEpisode.set(key, [e]);
+      }
+      const downloaded = Array.from(downloadedBySeasonEpisode.values()).map((variants) => {
+        const e =
+          variants.find((v) => v.infohash === infohash && v.file_idx === fileIdx) ||
+          (currentLanguage && variants.find((v) => v.language === currentLanguage)) ||
+          variants.find((v) => v.language === "multi") ||
+          variants[0]!;
         const prog = e.infohash === infohash ? progressByFileIdx.get(e.file_idx) : undefined;
         const lang = e.language && e.language !== "unknown" ? e.language : "";
         return {
@@ -533,8 +552,19 @@ export function WatchPage() {
       // `currentLanguage`, else a Multi offer (it satisfies any language
       // preference), else whatever's first — never show the same episode
       // 2-3 times over because it happens to be offered in Multi/FR/EN.
+      // Also drop any (season, episode) already covered by a `downloaded`
+      // row above — the collection API deliberately keeps an alternate-
+      // language offer "available" even once one language is owned (so
+      // `CollectionPage`'s full chip picker can still surface it), but
+      // this compact panel promises one row per episode: an episode
+      // already on disk (e.g. auto-grabbed by prepare-next in the
+      // series' dominant language) must never also show a redundant
+      // "grab the other language" row next to it.
+      const seasonAvailableUnowned = seasonAvailable.filter(
+        (a) => !downloadedBySeasonEpisode.has(`${a.season}:${a.episode}`),
+      );
       const bySeasonEpisode = new Map<string, AvailableEpisodeEntry[]>();
-      for (const a of seasonAvailable) {
+      for (const a of seasonAvailableUnowned) {
         const key = `${a.season}:${a.episode}`;
         const list = bySeasonEpisode.get(key);
         if (list) list.push(a);
