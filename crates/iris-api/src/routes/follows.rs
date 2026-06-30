@@ -1324,8 +1324,18 @@ async fn find_pack_offer(
     season: i64,
     sel: &LangSel,
 ) -> Result<Option<PickedAvailability>, sqlx::Error> {
-    let packs =
-        iris_db::available_episodes::list_season_packs_for_series(pool, normalized_name).await?;
+    // No redundancy filtering here: this is the GRAB fallback for a
+    // specific (season, episode) with no singleton offer, not the display
+    // list — a pack that `list_season_packs_for_series`'s display-side
+    // caller would hide as "redundant" (e.g. an FR pack when Multi is
+    // owned) must still be grabbable if that's genuinely the only way to
+    // cover this leaf.
+    let packs = iris_db::available_episodes::list_season_packs_for_series(
+        pool,
+        normalized_name,
+        &std::collections::HashMap::new(),
+    )
+    .await?;
     let tagged: Vec<(Language, iris_db::available_episodes::AvailableEpisodeRow)> = packs
         .into_iter()
         .filter(|p| p.season == season)

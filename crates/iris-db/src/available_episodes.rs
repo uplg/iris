@@ -139,15 +139,30 @@ pub async fn list_best_for_series(
 /// (NULL) seeder counts are kept — we can't confirm those are dead.
 ///
 /// Packs redundant with episode-level coverage the series already has are
-/// also dropped (see [`season_language_coverage`]): a `MULTi` episode
-/// release satisfies both FR and EN, so a FR or EN pack adds nothing once
-/// one exists; a French episode release already meets the household's
-/// language need, so a `MULTi` (heavier, redundant audio) or another
-/// French pack adds nothing either. English packs are never suppressed by
-/// French coverage alone — only `MULTi`/French redundancy is filtered.
+/// also dropped (see [`pack_is_redundant`]): a `MULTi` episode release
+/// satisfies both FR and EN, so a FR or EN pack adds nothing once one
+/// exists; a French episode release already meets the household's language
+/// need, so a `MULTi` (heavier, redundant audio) or another French pack
+/// adds nothing either. English packs are never suppressed by French
+/// coverage alone — only `MULTi`/French redundancy is filtered.
+///
+/// `owned_coverage` is per-season language coverage from what's actually in
+/// the library (`episode_files`, keyed by season → the set of languages
+/// already on disk for that season) — NOT from this module's own
+/// `available_episodes` cache. A season grabbed as one Multi season-pack
+/// torrent has no individual `episode > 0` rows in `available_episodes` at
+/// all (the indexer only ever offered it as the pack the household grabbed,
+/// or those offer rows since expired from the cache), so deriving coverage
+/// from this table alone missed exactly the "already own the whole season
+/// in Multi" case — the suppression never fired and a redundant FR/EN pack
+/// kept showing. The caller (`library.rs`'s `build_tv_episode_view`) already
+/// computes this map for the per-episode "available" filter; pass the same
+/// one here instead of re-deriving a second, incomplete coverage signal.
+#[allow(clippy::implicit_hasher)] // internal app, not a generic-hasher-consuming library
 pub async fn list_season_packs_for_series(
     pool: &SqlitePool,
     normalized_name: &str,
+    owned_coverage: &HashMap<i64, HashSet<String>>,
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
     let mut qb = sqlx::QueryBuilder::new(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
@@ -173,34 +188,10 @@ pub async fn list_season_packs_for_series(
         .fetch_all(pool)
         .await?;
 
-    let coverage = season_language_coverage(pool, normalized_name).await?;
     Ok(packs
         .into_iter()
-        .filter(|pack| !pack_is_redundant(pack, &coverage))
+        .filter(|pack| !pack_is_redundant(pack, owned_coverage))
         .collect())
-}
-
-/// Per-season set of languages already available at the episode level
-/// (`episode > 0`) for a series — feeds the redundancy filter in
-/// [`list_season_packs_for_series`].
-async fn season_language_coverage(
-    pool: &SqlitePool,
-    normalized_name: &str,
-) -> Result<HashMap<i64, HashSet<String>>, sqlx::Error> {
-    let rows: Vec<(i64, Option<String>)> = sqlx::query_as(
-        "SELECT DISTINCT season, language FROM available_episodes \
-         WHERE normalized_name = ?1 AND episode > 0",
-    )
-    .bind(normalized_name)
-    .fetch_all(pool)
-    .await?;
-    let mut coverage: HashMap<i64, HashSet<String>> = HashMap::new();
-    for (season, language) in rows {
-        if let Some(lang) = language {
-            coverage.entry(season).or_default().insert(lang);
-        }
-    }
-    Ok(coverage)
 }
 
 /// `true` when `pack`'s language is redundant with the episode-level

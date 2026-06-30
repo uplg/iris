@@ -545,6 +545,7 @@ async fn build_available_singletons(
 /// rewrites those rows to real numbers once the improved parser
 /// re-derives them. Clients MUST key on `(infohash, file_idx)`,
 /// not `(season, episode)` — the latter is derived and may collide.
+#[allow(clippy::too_many_lines)] // one linear collection-view assembly
 async fn build_tv_episode_view(
     state: &AppState,
     collection: &iris_db::collections::CollectionRow,
@@ -621,10 +622,6 @@ async fn build_tv_episode_view(
             .await
             .unwrap_or(None)
             .is_some_and(|p| p.completed);
-        // Same resolver as above so a chip's badge agrees with the
-        // owned_languages dedup map — keeps the UI from disagreeing
-        // with the server about whether an offer's language is
-        // already covered.
         let language = Some(
             resolve_torrent_language(
                 state,
@@ -669,10 +666,21 @@ async fn build_tv_episode_view(
         // — once the user has a pack in the library every leaf
         // has an `episode_files` row and the banner would just
         // nudge them to re-download what they already own.
-        let packs =
-            iris_db::available_episodes::list_season_packs_for_series(state.db(), normalized)
-                .await
-                .unwrap_or_default();
+        //
+        // Redundant-language packs (FR/EN pack when a Multi episode
+        // release is already owned, etc.) are filtered too — collapse
+        // `owned_languages` (per-episode) down to per-season language
+        // coverage from what's actually on disk, not from the indexer's
+        // offer cache (a season grabbed as a single Multi pack has no
+        // `episode > 0` cache rows to derive coverage from otherwise).
+        let owned_season_coverage = season_language_coverage(&owned_languages);
+        let packs = iris_db::available_episodes::list_season_packs_for_series(
+            state.db(),
+            normalized,
+            &owned_season_coverage,
+        )
+        .await
+        .unwrap_or_default();
         for p in packs {
             if owned_torrent_ids
                 .contains(&(p.indexer_provider.clone(), p.indexer_torrent_id.clone()))
@@ -693,6 +701,23 @@ async fn build_tv_episode_view(
         packs_out.sort_by_key(|p| (p.season, p.language.clone().unwrap_or_default()));
     }
     Ok((episodes_out, available_out, packs_out, new_count))
+}
+
+/// Collapses a per-`(season, episode)` owned-language map down to
+/// per-season language coverage — feeds the redundant-season-pack filter
+/// in [`list_season_packs_for_series`](iris_db::available_episodes::list_season_packs_for_series).
+fn season_language_coverage(
+    owned_languages: &std::collections::HashMap<(i64, i64), Vec<iris_media::filename::Language>>,
+) -> std::collections::HashMap<i64, std::collections::HashSet<String>> {
+    let mut coverage: std::collections::HashMap<i64, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    for ((season, _episode), langs) in owned_languages {
+        let entry = coverage.entry(*season).or_default();
+        for lang in langs {
+            entry.insert(lang.as_str().to_string());
+        }
+    }
+    coverage
 }
 
 /// `POST /api/library/collections/:id/grab/:season/:episode` —
