@@ -13,6 +13,7 @@ import {
   me as meApi,
   progress as progressApi,
   torrents,
+  type AvailableEpisodeEntry,
   type FileEntry,
   type FileProgressEntry,
   type PlaybackPrefs,
@@ -451,11 +452,39 @@ export function WatchPage() {
   });
   const collectionEpisodes = collectionQ.data?.episodes;
   // Episodes Iris has discovered on a tracker but not grabbed yet — same
-  // field CollectionPage renders as "available" chips. The server already
-  // excludes (season, episode, language) combos already on disk, so no
-  // client-side dedup against `collectionEpisodes` is needed.
+  // field CollectionPage renders as "available" chips, where every
+  // language variant gets its own chip so the user can explicitly pick one.
+  // This side panel is a compact "what's next" list, not a language picker,
+  // so it dedupes to ONE row per (season, episode) below — see `discovered`.
   const availableEpisodes = collectionQ.data?.available_episodes ?? [];
   const isTvCollection = !!collectionId && data?.kind === "tv";
+
+  // The language to prefer when an episode has several offers (Multi / FR /
+  // EN, …): the language of the file currently playing, falling back to
+  // whichever language is most common among already-downloaded episodes
+  // (the series' "dominant owned language" — same concept the prepare-next
+  // flow already uses server-side).
+  const currentLanguage = useMemo(() => {
+    const current = (collectionEpisodes ?? []).find(
+      (e) => e.infohash === infohash && e.file_idx === fileIdx,
+    );
+    if (current?.language && current.language !== "unknown") return current.language;
+    const counts = new Map<string, number>();
+    for (const e of collectionEpisodes ?? []) {
+      if (e.language && e.language !== "unknown") {
+        counts.set(e.language, (counts.get(e.language) ?? 0) + 1);
+      }
+    }
+    let best: string | null = null;
+    let bestCount = 0;
+    for (const [lang, count] of counts) {
+      if (count > bestCount) {
+        best = lang;
+        bestCount = count;
+      }
+    }
+    return best;
+  }, [collectionEpisodes, infohash, fileIdx]);
 
   // Side-panel rows: the collection's episodes (downloaded + discovered)
   // when this is a TV collection (so separate-episode torrents list the
@@ -480,10 +509,25 @@ export function WatchPage() {
           active: e.infohash === infohash && e.file_idx === fileIdx,
         } satisfies SideRow;
       });
-      const discovered = availableEpisodes.map((a) => {
+      // One row per (season, episode): pick the variant matching
+      // `currentLanguage`, else a Multi offer (it satisfies any language
+      // preference), else whatever's first — never show the same episode
+      // 2-3 times over because it happens to be offered in Multi/FR/EN.
+      const bySeasonEpisode = new Map<string, AvailableEpisodeEntry[]>();
+      for (const a of availableEpisodes) {
+        const key = `${a.season}:${a.episode}`;
+        const list = bySeasonEpisode.get(key);
+        if (list) list.push(a);
+        else bySeasonEpisode.set(key, [a]);
+      }
+      const discovered = Array.from(bySeasonEpisode.values()).map((variants) => {
+        const a =
+          (currentLanguage && variants.find((v) => v.language === currentLanguage)) ||
+          variants.find((v) => v.language === "multi") ||
+          variants[0]!;
         const lang = a.language && a.language !== "unknown" ? a.language : "";
         return {
-          key: `av:${a.season}:${a.episode}:${a.language ?? ""}:${a.indexer_torrent_id}`,
+          key: `av:${a.season}:${a.episode}`,
           infohash: "",
           fileIdx: -1,
           primary: `S${String(a.season).padStart(2, "0")}E${String(a.episode).padStart(2, "0")}`,
@@ -515,6 +559,7 @@ export function WatchPage() {
     isTvCollection,
     collectionEpisodes,
     availableEpisodes,
+    currentLanguage,
     videoFiles,
     progressByFileIdx,
     infohash,
