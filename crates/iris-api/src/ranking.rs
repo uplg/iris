@@ -369,6 +369,7 @@ mod tests {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            codec: None,
             download_url: None,
             parsed_season: None,
             parsed_episode: None,

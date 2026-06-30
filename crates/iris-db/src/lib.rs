@@ -1,5 +1,6 @@
 //! `SQLite` persistence layer for Iris.
 
+pub mod audit;
 pub mod available_episodes;
 pub mod catalog;
 pub mod collections;

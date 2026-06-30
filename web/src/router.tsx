@@ -171,6 +171,12 @@ const watchRoute = createRoute({
   component: lazyRouteComponent(() => import("@/pages/WatchPage"), "WatchPage"),
 });
 
+const historyRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/history",
+  component: lazyRouteComponent(() => import("@/pages/HistoryPage"), "HistoryPage"),
+});
+
 const accountRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/account",
@@ -193,6 +199,15 @@ const adminRoute = createRoute({
   component: lazyRouteComponent(() => import("@/pages/AdminPage"), "AdminPage"),
 });
 
+const adminUserHistoryRoute = createRoute({
+  getParentRoute: () => adminGuardRoute,
+  path: "/admin/users/$userId/history",
+  component: lazyRouteComponent(
+    () => import("@/pages/AdminUserHistoryPage"),
+    "AdminUserHistoryPage",
+  ),
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   registerRoute,
@@ -206,8 +221,9 @@ const routeTree = rootRoute.addChildren([
       collectionRoute,
       libraryRoute,
       watchRoute,
+      historyRoute,
       accountRoute,
-      adminGuardRoute.addChildren([adminRoute]),
+      adminGuardRoute.addChildren([adminRoute, adminUserHistoryRoute]),
     ]),
   ]),
 ]);

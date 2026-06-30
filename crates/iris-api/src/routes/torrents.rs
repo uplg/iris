@@ -921,7 +921,7 @@ pub(crate) async fn get_one(
 )]
 pub(crate) async fn remove(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(infohash): Path<String>,
 ) -> ApiResult<StatusCode> {
     let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
@@ -959,6 +959,18 @@ pub(crate) async fn remove(
     // sweep on the cache dir, so it's enough to soft-delete the row and
     // let the next eviction tick clean up the leftovers.
     iris_db::torrents::soft_delete(state.db(), TorrentId::from(row.id)).await?;
+    if let Err(e) = iris_db::audit::record(
+        state.db(),
+        user.id,
+        "torrent.delete",
+        "torrent",
+        Some(&row.infohash),
+        Some(&row.name),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, infohash = %row.infohash, "audit log write failed");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

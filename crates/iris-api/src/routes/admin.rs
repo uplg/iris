@@ -40,6 +40,8 @@ pub fn router() -> Router<AppState> {
         .route("/tmdb/diagnose/{infohash}", get(diagnose_tmdb))
         .route("/active-sessions", get(active_sessions))
         .route("/watch-history", get(watch_history))
+        .route("/users/{id}/history", get(user_history))
+        .route("/audit-log", get(audit_log))
 }
 
 /// Resolve the on-disk file name for `(infohash, file_idx)` from the live
@@ -201,6 +203,85 @@ pub(crate) async fn watch_history(
     ))
 }
 
+/// One row of a single user's full watch history for the admin drill-down
+/// (`GET /admin/users/{id}/history`) — same shape as `me::HistoryItem`
+/// (in-progress AND completed, survives source-torrent deletion via
+/// `deleted`), just reached through the admin-only route instead of the
+/// caller's own session.
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct UserHistoryView {
+    infohash: String,
+    torrent_name: String,
+    file_path: Option<String>,
+    tmdb_id: Option<i64>,
+    tmdb_verified: bool,
+    kind: Option<MediaKind>,
+    file_idx: i64,
+    position_seconds: f64,
+    duration_seconds: Option<f64>,
+    completed: bool,
+    last_watched_at: chrono::DateTime<Utc>,
+    deleted: bool,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct UserHistoryQuery {
+    /// Max rows to return (clamped 1..=200, defaults to 50).
+    limit: Option<i64>,
+    /// Pagination offset (defaults to 0).
+    offset: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/admin/users/{id}/history",
+    operation_id = "list_user_history",
+    params(
+        ("id" = Uuid, Path, description = "Target user id"),
+        UserHistoryQuery,
+    ),
+    responses(
+        (status = 200, description = "Full watch history for one user, including deleted-source items", body = [UserHistoryView]),
+        (status = 403, description = "Caller is not an admin"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn user_history(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(id): Path<Uuid>,
+    axum::extract::Query(q): axum::extract::Query<UserHistoryQuery>,
+) -> ApiResult<Json<Vec<UserHistoryView>>> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let rows = iris_db::playback::user_history(
+        state.db(),
+        iris_core::ids::UserId::from(id),
+        limit,
+        offset,
+    )
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| UserHistoryView {
+                file_path: resolve_file_path(&state, &r.infohash, r.file_idx),
+                infohash: r.infohash,
+                torrent_name: r.torrent_name,
+                tmdb_id: r.tmdb_id,
+                tmdb_verified: r.tmdb_verified,
+                kind: r.kind.as_deref().and_then(MediaKind::from_wire),
+                file_idx: r.file_idx,
+                position_seconds: r.position_seconds,
+                duration_seconds: r.duration_seconds,
+                completed: r.completed,
+                last_watched_at: r.last_watched_at,
+                deleted: r.deleted,
+            })
+            .collect(),
+    ))
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct UserView {
     id: Uuid,
@@ -260,7 +341,7 @@ pub(crate) struct ResetPasswordRequest {
 )]
 pub(crate) async fn reset_user_password(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(id): Path<Uuid>,
     Json(body): Json<ResetPasswordRequest>,
 ) -> ApiResult<axum::http::StatusCode> {
@@ -270,14 +351,25 @@ pub(crate) async fn reset_user_password(
         ));
     }
     let user_id = iris_core::ids::UserId::from(id);
-    let exists = iris_db::users::find_by_id(state.db(), user_id).await?;
-    if exists.is_none() {
+    let Some(target) = iris_db::users::find_by_id(state.db(), user_id).await? else {
         return Err(ApiError::NotFound);
-    }
+    };
     let hash = iris_auth::hash_password(&body.new_password)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("hash: {e}")))?;
     iris_db::users::update_password_hash(state.db(), user_id, &hash).await?;
     iris_db::refresh_tokens::revoke_all_for_user(state.db(), user_id).await?;
+    if let Err(e) = iris_db::audit::record(
+        state.db(),
+        admin.0.id,
+        "user.password_reset",
+        "user",
+        Some(&id.to_string()),
+        Some(&target.email),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, user_id = %id, "audit log write failed");
+    }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -305,7 +397,7 @@ pub(crate) struct SetDisplayNameRequest {
 )]
 pub(crate) async fn set_user_display_name(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(id): Path<Uuid>,
     Json(body): Json<SetDisplayNameRequest>,
 ) -> ApiResult<axum::http::StatusCode> {
@@ -323,6 +415,18 @@ pub(crate) async fn set_user_display_name(
     if !updated {
         return Err(ApiError::NotFound);
     }
+    if let Err(e) = iris_db::audit::record(
+        state.db(),
+        admin.0.id,
+        "user.display_name_update",
+        "user",
+        Some(&id.to_string()),
+        Some(trimmed),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, user_id = %id, "audit log write failed");
+    }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -339,13 +443,33 @@ pub(crate) async fn set_user_display_name(
 )]
 pub(crate) async fn trigger_gc(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
 ) -> ApiResult<Json<iris_torrent::GcReport>> {
     let report = state
         .gc()
         .run_once()
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("gc: {e}")))?;
+    // Only the manually-triggered run is audited — the background scheduler
+    // sweep has no admin actor to attribute it to.
+    let freed = report
+        .used_bytes_before
+        .saturating_sub(report.used_bytes_after);
+    if let Err(e) = iris_db::audit::record(
+        state.db(),
+        admin.0.id,
+        "gc.evict",
+        "torrent",
+        None,
+        Some(&format!(
+            "{} torrent(s) evicted, {freed} bytes freed",
+            report.evicted.len()
+        )),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, "audit log write failed");
+    }
     Ok(Json(report))
 }
 
@@ -759,7 +883,7 @@ pub(crate) async fn diagnose_tmdb(
 )]
 pub(crate) async fn wipe_remux_job(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(key): Path<String>,
 ) -> ApiResult<Json<WipeRemuxResponse>> {
     // Defensive: only accept `<hex>_<digits>` to keep this path-traversal-free.
@@ -771,5 +895,76 @@ pub(crate) async fn wipe_remux_job(
         .wipe(&key)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("remux wipe: {e}")))?;
+    if let Err(e) = iris_db::audit::record(
+        state.db(),
+        admin.0.id,
+        "remux.wipe",
+        "remux_job",
+        Some(&key),
+        Some(&format!("{freed} bytes freed")),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, key = %key, "audit log write failed");
+    }
     Ok(Json(WipeRemuxResponse { freed_bytes: freed }))
+}
+
+/// One row of `GET /admin/audit-log` — a persisted, queryable record of
+/// sensitive actions (deletions, password resets, admin-triggered GC),
+/// replacing the previous ephemeral `tracing::` logs.
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct AuditLogView {
+    id: i64,
+    actor_id: Uuid,
+    actor_display_name: String,
+    action: String,
+    resource_type: String,
+    resource_id: Option<String>,
+    details: Option<String>,
+    created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct AuditLogQuery {
+    /// Max rows to return (clamped 1..=200, defaults to 50).
+    limit: Option<i64>,
+    /// Pagination offset (defaults to 0).
+    offset: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/admin/audit-log",
+    operation_id = "list_audit_log",
+    params(AuditLogQuery),
+    responses(
+        (status = 200, description = "Audited actions, newest first", body = [AuditLogView]),
+        (status = 403, description = "Caller is not an admin"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn audit_log(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    axum::extract::Query(q): axum::extract::Query<AuditLogQuery>,
+) -> ApiResult<Json<Vec<AuditLogView>>> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let rows = iris_db::audit::list(state.db(), limit, offset).await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| AuditLogView {
+                id: r.id,
+                actor_id: r.actor_id,
+                actor_display_name: r.actor_display_name,
+                action: r.action,
+                resource_type: r.resource_type,
+                resource_id: r.resource_id,
+                details: r.details,
+                created_at: r.created_at,
+            })
+            .collect(),
+    ))
 }

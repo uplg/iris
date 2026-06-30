@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowLeft,
+  History as HistoryIcon,
   KeyRound,
   List,
   Pencil,
@@ -18,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { AuditLog } from "@/components/AuditLog";
 import { Container } from "@/components/Container";
 import { NowWatching } from "@/components/NowWatching";
 import { Tag } from "@/components/Tag";
@@ -121,6 +123,8 @@ export function AdminPage() {
         </header>
 
         <NowWatching />
+
+        <AuditLog />
 
         <Card>
           <CardHeader>
@@ -521,6 +525,12 @@ function UserList({
                 {new Date(u.created_at).toLocaleDateString()}
               </span>
               <div className="flex shrink-0 items-center gap-1.5">
+                <Button size="sm" variant="outline" asChild title="View watch history">
+                  <Link to="/admin/users/$userId/history" params={{ userId: u.id }}>
+                    <HistoryIcon className="size-3.5" />
+                    <span className="sr-only">View watch history</span>
+                  </Link>
+                </Button>
                 <Button
                   size="sm"
                   variant="outline"

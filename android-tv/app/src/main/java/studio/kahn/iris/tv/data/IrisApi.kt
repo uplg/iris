@@ -40,6 +40,14 @@ interface IrisApi {
     @GET("api/me/continue-watching")
     suspend fun continueWatching(): List<ContinueWatchingItem>
 
+    /** Full watch history — in-progress AND completed, including items whose
+     *  source torrent has since been deleted (see [HistoryItem.deleted]). */
+    @GET("api/me/history")
+    suspend fun history(
+        @Query("limit") limit: Int? = null,
+        @Query("offset") offset: Int? = null,
+    ): List<HistoryItem>
+
     /** Per-user recommendation preferences (languages / genres / anime).
      *  A never-onboarded user gets the all-empty default with
      *  `onboarding_completed = false`. */

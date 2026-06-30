@@ -97,6 +97,19 @@
         android:layout_gravity="center_vertical|end"
         android:layoutDirection="ltr">
 
+      <!-- Next-episode button. Lives in the controller layout (not a
+           Compose overlay) so the D-pad reaches it like every other
+           transport control while PlayerView keeps focus — same pattern
+           as `iris_back_home` above. Hidden by default; WatchScreen
+           toggles visibility once near the end of the episode and wires
+           the click to play/grab-then-play the next one. -->
+      <ImageButton android:id="@+id/iris_next_episode"
+          style="@style/ExoStyledControls.Button.Bottom"
+          android:src="@drawable/iris_ic_skip_next"
+          android:focusable="true"
+          android:visibility="gone"
+          android:contentDescription="Next episode"/>
+
       <ImageButton android:id="@id/exo_vr"
           style="@style/ExoStyledControls.Button.Bottom.VR"/>
 

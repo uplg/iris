@@ -159,6 +159,14 @@ pub struct SearchResult {
     /// deserialisers stay tolerant to future variants.
     #[serde(default)]
     pub language: Option<String>,
+    /// Coarse video-codec tag derived server-side from the SCENE release
+    /// name: `"h264"` / `"hevc"` / `"av1"` / `"vp9"` / `"unknown"`. Lets
+    /// Android TV badge / deprioritise results the connected box can't
+    /// hardware-decode without hiding them. `"unknown"` (most titles omit
+    /// a codec tag) is never penalised — absence of evidence isn't
+    /// evidence of `av1`.
+    #[serde(default)]
+    pub codec: Option<String>,
     /// Pre-signed `.torrent` download URL when the provider
     /// surfaces one in its search response (Torznab `<link>`,
     /// UNIT3D `download_link`). Internal only — not returned to
@@ -390,6 +398,7 @@ mod tests {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            codec: None,
             download_url: None,
             parsed_season: None,
             parsed_episode: None,

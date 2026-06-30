@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { admin, type ActiveSession, type WatchHistoryEntry } from "@/lib/api";
+import { formatRecentTime } from "@/lib/format";
 
 /** Max rows shown in "Recent activity". The list is scrollable, so this
  *  bounds the request, not the page height. */
@@ -21,17 +22,6 @@ function pct(position: number, duration: number | null): number {
 function watchedLabel(filePath: string | null, torrentName: string | null): string {
   const base = filePath ? (filePath.split("/").pop() ?? filePath) : null;
   return base ?? torrentName ?? "Unknown";
-}
-
-/** Short "2m ago" / "just now" relative time. Recomputed on each render
- *  (the queries refetch on an interval), so no timer of our own. */
-function relTime(iso: string): string {
-  const secs = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (secs < 10) return "just now";
-  if (secs < 60) return `${Math.floor(secs)}s ago`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
 }
 
 /** Elapsed watch time since the session started, as "for 12m". */
@@ -117,7 +107,8 @@ function HistoryRow({ h }: { h: WatchHistoryEntry }) {
           </span>
         </span>
         <span className="text-xs text-muted-foreground">
-          {h.completed ? "Finished" : `${progress.toFixed(0)}%`} · {relTime(h.last_watched_at)}
+          {h.completed ? "Finished" : `${progress.toFixed(0)}%`} ·{" "}
+          {formatRecentTime(h.last_watched_at)}
         </span>
       </div>
       {h.completed ? (

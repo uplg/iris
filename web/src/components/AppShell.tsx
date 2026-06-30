@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, type LinkProps, Outlet, useLocation } from "@tanstack/react-router";
 import {
+  History as HistoryIcon,
   Home as HomeIcon,
   Library as LibraryIcon,
   Popcorn as MoodIcon,
@@ -51,6 +52,7 @@ export function AppShell() {
     { to: "/moods", label: "Tonight", icon: MoodIcon },
     { to: "/for-you", label: "For You", icon: ForYouIcon },
     { to: "/library", label: "Library", icon: LibraryIcon },
+    { to: "/history", label: "History", icon: HistoryIcon },
     ...(auth.user.is_admin
       ? [{ to: "/admin", label: "Admin", icon: ShieldCheck } satisfies NavEntry]
       : []),

@@ -305,6 +305,11 @@ private fun ReadyPlayer(
     var currentEpisode by remember(infohash, fileIdx) {
         mutableStateOf<EpisodePoint?>(null)
     }
+    // Movies have no episode taxonomy, so `currentEpisode` is null — used to
+    // pick the series-finale vs. movie-worded end copy, and to suppress any
+    // same-torrent "Next episode" affordance (for a movie that'd be a stray
+    // extra file).
+    val isMovie = currentEpisode == null
     // Player.STATE_ENDED — used to surface the "End of series"
     // banner when there's no next episode to chain into. Reset to
     // false on STATE_READY so a buffer-underrun retry doesn't keep
@@ -313,15 +318,10 @@ private fun ReadyPlayer(
         mutableStateOf(false)
     }
     // Crossed the 95 % mark at least once this mount. Drives the
-    // bigger bottom-right "Up next" pill — Netflix-style nudge that
-    // shows up around the credit roll, complementing the always-on
-    // top-right chips. Deliberate action only (no countdown).
+    // native "Next episode" control-bar button — Netflix-style nudge
+    // that shows up around the credit roll, complementing the
+    // always-on top-right chips. Deliberate action only (no countdown).
     var nearEnd by remember(infohash, fileIdx) {
-        mutableStateOf(false)
-    }
-    // User explicitly closed the credit-roll pill. The top-right
-    // chips stay; only the prominent bottom-right pill is silenced.
-    var pillDismissed by remember(infohash, fileIdx) {
         mutableStateOf(false)
     }
     var grabbing by remember(infohash, fileIdx) { mutableStateOf(false) }
@@ -914,6 +914,7 @@ private fun ReadyPlayer(
                                         subtitleTrackIdx = subIdx?.toLong(),
                                         completed = completed,
                                         seek = pendingSeekSave.getAndSet(false),
+                                        playing = true,
                                     ),
                                 )
                             }
@@ -959,6 +960,48 @@ private fun ReadyPlayer(
         }
     }
 
+    // Pause + cut the stream when the user leaves via Home (`ON_STOP`).
+    // Without this the torrent stream and the tick loop above kept running
+    // in the background, draining bandwidth indefinitely. `pause()` stops
+    // ExoPlayer from pulling further byte ranges — `WAKE_MODE_NETWORK`
+    // (see `PlayerFactory.buildPlayer`) releases its wake lock automatically
+    // once paused — and we push one immediate progress save (instead of
+    // waiting for the next 7s tick) so the admin presence view reflects the
+    // paused state right away. No auto-resume on `ON_START`: the user
+    // presses Play explicitly, matching the Netflix/YouTube-TV convention.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(player, lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                player.pause()
+                val pos = player.currentPosition
+                if (pos > 0) {
+                    val dur = filmDurationMs.takeIf { it > 0 } ?: player.duration.takeIf { it > 0 }
+                    val audioIdx = currentAudioIdxRef.get()
+                    val subIdx = currentSubIdxRef.get()
+                    container.applicationScope.launch {
+                        runCatching {
+                            container.apiFor(serverUrl).saveProgress(
+                                infohash = infohash,
+                                idx = fileIdx,
+                                body = ProgressUpdate(
+                                    positionSeconds = pos / 1000.0,
+                                    durationSeconds = dur?.div(1000.0),
+                                    audioTrackIdx = audioIdx?.toLong(),
+                                    subtitleTrackIdx = subIdx?.toLong(),
+                                    completed = dur != null && pos >= dur - 30_000,
+                                    playing = false,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // The title TextView lives inside our overridden controller layout
     // (`@+id/iris_title`). Held here so we can keep it in sync with the
     // S/E suffix once the episode context resolves.
@@ -971,6 +1014,10 @@ private fun ReadyPlayer(
     // dismiss the controller overlay before the second one actually
     // leaves the screen.
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
+    // `iris_next_episode` lives in the controller layout (not a Compose
+    // overlay) so the D-pad reaches it like every other transport control —
+    // see the LaunchedEffect below for the visibility/click wiring.
+    var nextEpisodeButton by remember { mutableStateOf<android.widget.ImageButton?>(null) }
     // Pushed by PlayerView's `ControllerVisibilityListener` whenever the
     // play/pause overlay shows or hides. Drives the top-right nav chips
     // — they only make sense alongside the rest of the chrome, so we
@@ -1027,6 +1074,7 @@ private fun ReadyPlayer(
                 // focus); wire its click to the nav-up callback.
                 findViewById<android.widget.ImageButton>(R.id.iris_back_home)
                     ?.setOnClickListener { onBack() }
+                nextEpisodeButton = findViewById(R.id.iris_next_episode)
                 installIrisTrackNameProvider(this)
                 // Sync the current value — defensive belt-and-braces for
                 // the rare case the platform raced past the listener
@@ -1037,6 +1085,44 @@ private fun ReadyPlayer(
         },
         update = { it.player = player },
     )
+
+    // Next-episode button: visible once we're past 95% of the runtime (or
+    // the player has ended) and there's somewhere to go. A single tap plays
+    // it immediately if already downloaded, otherwise grabs it first (the
+    // prepare-next auto-continuation usually means it's already downloaded
+    // by the time playback gets here). Lives in the native controller layout
+    // — see `nextEpisodeButton` above — so the D-pad reaches it like any
+    // other transport control instead of being stranded in a Compose overlay
+    // outside PlayerView's focus hierarchy.
+    LaunchedEffect(nextEpisodeButton, nearEnd, playerEnded, isMovie, nextEpisode, grabbing) {
+        val btn = nextEpisodeButton ?: return@LaunchedEffect
+        val next = nextEpisode
+        val visible = (nearEnd || playerEnded) && !isMovie && next != null
+        btn.visibility = if (visible) android.view.View.VISIBLE else android.view.View.GONE
+        if (!visible) return@LaunchedEffect
+        btn.isEnabled = !(grabbing && next.status == EpisodeStatus.available)
+        btn.setOnClickListener {
+            val ih = next.infohash
+            val idx = next.fileIdx
+            if (next.status == EpisodeStatus.downloaded && ih != null && idx != null) {
+                onNavigateToFile(ih, idx.toInt())
+                return@setOnClickListener
+            }
+            val fid = next.followId ?: return@setOnClickListener
+            grabbing = true
+            scope.launch {
+                val grabbed = runCatching {
+                    container.apiFor(serverUrl).grabEpisode(
+                        id = fid.toString(),
+                        season = next.season.toInt(),
+                        episode = next.episode.toInt(),
+                    )
+                }.getOrNull()
+                grabbing = false
+                if (grabbed != null) onNavigateToFile(grabbed.infohash, grabbed.fileIdx.toInt())
+            }
+        }
+    }
 
     // Always-on episode-navigation overlay. Two small chips in the
     // top-right corner of the player surface: "‹ Prev" and "Next ›",
@@ -1151,10 +1237,10 @@ private fun ReadyPlayer(
         }
 
         // Movies have no episode taxonomy, so `currentEpisode` is null — show a
-        // movie-worded end pill instead of the series-finale copy, and suppress
-        // any same-torrent "Up next" (for a movie that'd be a stray extra file).
-        // A followed series with no next keeps its own finale copy.
-        val isMovie = currentEpisode == null
+        // movie-worded end pill instead of the series-finale copy. A followed
+        // series with no next keeps its own finale copy. The "play the next
+        // episode" action itself now lives in the native control bar (see
+        // `nextEpisodeButton` above), not here.
         if (playerEnded && (isMovie || nextEpisode == null)) {
             Box(
                 modifier = Modifier
@@ -1162,96 +1248,6 @@ private fun ReadyPlayer(
                     .padding(bottom = 96.dp),
             ) {
                 EndOfPlaybackPill(isMovie = isMovie)
-            }
-        } else if ((nearEnd || playerEnded) && !pillDismissed && !isMovie) {
-            // Bigger Netflix-style "Up next" pill in the bottom-right
-            // corner, appearing once we're past 95 % of the runtime.
-            // No countdown, no auto-advance — a single deliberate
-            // "Play next" tap (or Dismiss to silence it).
-            val next = nextEpisode
-            if (next != null) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(bottom = 96.dp),
-                ) {
-                    UpNextPill(
-                        next = next,
-                        grabbing = grabbing && next.status == EpisodeStatus.available,
-                        onPlay = {
-                            val ih = next.infohash
-                            val idx = next.fileIdx
-                            if (ih != null && idx != null) onNavigateToFile(ih, idx.toInt())
-                        },
-                        onPrepare = {
-                            val fid = next.followId ?: return@UpNextPill
-                            grabbing = true
-                            scope.launch {
-                                val grabbed = runCatching {
-                                    container.apiFor(serverUrl).grabEpisode(
-                                        id = fid.toString(),
-                                        season = next.season.toInt(),
-                                        episode = next.episode.toInt(),
-                                    )
-                                }.getOrNull()
-                                grabbing = false
-                                if (grabbed != null) {
-                                    nextEpisode = next.copy(
-                                        status = EpisodeStatus.downloaded,
-                                        infohash = grabbed.infohash,
-                                        fileIdx = grabbed.fileIdx,
-                                    )
-                                }
-                            }
-                        },
-                        onDismiss = { pillDismissed = true },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun UpNextPill(
-    next: EpisodePoint,
-    grabbing: Boolean,
-    onPlay: () -> Unit,
-    onPrepare: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val downloaded = next.status == EpisodeStatus.downloaded && next.infohash != null && next.fileIdx != null
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        colors = SurfaceDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-        ),
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Eyebrow("Up next")
-            Text(
-                "S%02dE%02d".format(next.season, next.episode),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 4.dp),
-            ) {
-                if (downloaded) {
-                    IrisButton("Play next", onPlay)
-                } else {
-                    IrisButton(
-                        if (grabbing) "Preparing…" else "Prepare",
-                        onPrepare,
-                        enabled = !grabbing && next.followId != null,
-                    )
-                }
-                IrisButton("Dismiss", onDismiss, variant = IrisButtonVariant.Ghost)
             }
         }
     }

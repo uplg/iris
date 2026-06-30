@@ -179,6 +179,10 @@ export type ActiveSession = components["schemas"]["ActiveSessionView"];
 /** A recent playback row from `/admin/watch-history` (all users). */
 export type WatchHistoryEntry = components["schemas"]["WatchHistoryView"];
 
+/** One persisted audit-log row — a sensitive action (deletion, password
+ *  reset, admin-triggered GC) and who performed it. */
+export type AuditLogEntry = components["schemas"]["AuditLogView"];
+
 export const admin = {
   listInvitations: () => api.get<Invitation[]>("/admin/invitations"),
   createInvitation: (ttl_secs?: number) =>
@@ -196,6 +200,24 @@ export const admin = {
   activeSessions: () => api.get<ActiveSession[]>("/admin/active-sessions"),
   watchHistory: (limit?: number) =>
     api.get<WatchHistoryEntry[]>(`/admin/watch-history${limit ? `?limit=${limit}` : ""}`),
+  /** Full watch history for one user — admin drill-down equivalent of
+   *  `me.history()`. */
+  userHistory: (userId: string, limit?: number, offset?: number) =>
+    api.get<UserHistoryItem[]>(
+      `/admin/users/${userId}/history?${new URLSearchParams({
+        ...(limit ? { limit: String(limit) } : {}),
+        ...(offset ? { offset: String(offset) } : {}),
+      }).toString()}`,
+    ),
+  /** Persisted "who changed/deleted what" log — deletions, password resets,
+   *  admin-triggered GC. */
+  auditLog: (limit?: number, offset?: number) =>
+    api.get<AuditLogEntry[]>(
+      `/admin/audit-log?${new URLSearchParams({
+        ...(limit ? { limit: String(limit) } : {}),
+        ...(offset ? { offset: String(offset) } : {}),
+      }).toString()}`,
+    ),
 };
 
 export type DeviceView = components["schemas"]["DeviceView"];
@@ -307,6 +329,16 @@ export type PlaybackPrefs = components["schemas"]["PlaybackPrefsResponse"];
 
 export type ContinueWatchingItem = components["schemas"]["ContinueWatchingItem"];
 
+/** A row of the caller's full watch history (in-progress AND completed),
+ *  including items whose source torrent has since been deleted —
+ *  `deleted: true` means there's nothing left to resume. */
+export type HistoryItem = components["schemas"]["HistoryItem"];
+
+/** Admin per-user drill-down equivalent of {@link HistoryItem} — same
+ *  shape, reached through `/admin/users/{id}/history` instead of the
+ *  caller's own session. */
+export type UserHistoryItem = components["schemas"]["UserHistoryView"];
+
 export type FileProgressEntry = components["schemas"]["FileProgressEntry"];
 
 export const progress = {
@@ -355,6 +387,15 @@ export type MoodBoard = components["schemas"]["MoodBoard"];
 export type MoodResults = components["schemas"]["MoodResults"];
 export const me = {
   continueWatching: () => api.get<ContinueWatchingItem[]>("/me/continue-watching"),
+  /** Full watch history — in-progress AND completed, survives deletion of
+   *  the source torrent (see {@link HistoryItem}). */
+  history: (limit?: number, offset?: number) =>
+    api.get<HistoryItem[]>(
+      `/me/history?${new URLSearchParams({
+        ...(limit ? { limit: String(limit) } : {}),
+        ...(offset ? { offset: String(offset) } : {}),
+      }).toString()}`,
+    ),
   watchlist: () => api.get<WatchlistItem[]>("/me/watchlist"),
   preferences: () => api.get<Preferences>("/me/preferences"),
   savePreferences: (body: Preferences) => api.put<Preferences>("/me/preferences", body),

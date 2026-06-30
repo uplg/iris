@@ -26,11 +26,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -107,7 +109,7 @@ fun CollectionScreen(
     val scope = rememberCoroutineScope()
     var detail by remember(collectionId) { mutableStateOf<CollectionDetail?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var selectedSeason by remember(collectionId) { mutableIntStateOf(-1) }
+    var selectedSeason by rememberSaveable(collectionId) { mutableIntStateOf(-1) }
 
     suspend fun reload() {
         val url = container.sessionStore.serverUrl.first() ?: run {
@@ -161,6 +163,11 @@ fun CollectionScreen(
     // latest row only when nothing is downloaded yet.
     val listState = rememberLazyListState()
     val focusTarget = remember(collectionId) { FocusRequester() }
+    // D-pad Up from the first row below the season tabs (a pack banner or
+    // the first episode) must land on the active season pill — without
+    // this, Compose's default spatial search skips the LazyRow entirely
+    // and jumps straight to the hero's Back button.
+    val seasonTabsFocus = remember(collectionId) { FocusRequester() }
     val focusRowIdx = remember(absoluteRows) {
         absoluteRows
             .indexOfLast { row -> row.variants.any { it is EpisodeVariant.Downloaded } }
@@ -240,19 +247,35 @@ fun CollectionScreen(
                             seasons = seasons.keys.toList(),
                             value = activeSeason,
                             onChange = { selectedSeason = it },
+                            focusRequester = seasonTabsFocus,
                         )
                     }
                 }
             }
 
             val currentPacks = d.seasonPacks.orEmpty().filter { it.season.toInt() == activeSeason }
+            // Up-navigation from the first row below the tabs must land back
+            // on the season pill — only wire it on row index 0, and only
+            // when there's actually a tab row above to land on.
+            val firstRowGetsUpFocus = seasons.size > 1
             if (currentPacks.isNotEmpty()) {
-                items(currentPacks, key = { "pack:${it.season}:${it.language ?: "_"}:${it.indexerTorrentId}" }) { pack ->
+                itemsIndexed(
+                    currentPacks,
+                    key = { _, it -> "pack:${it.season}:${it.language ?: "_"}:${it.indexerTorrentId}" },
+                ) { index, pack ->
                     Box(
-                        Modifier.padding(
-                            horizontal = layout.gutterHorizontal,
-                            vertical = Spacing.xs,
-                        ),
+                        Modifier
+                            .padding(
+                                horizontal = layout.gutterHorizontal,
+                                vertical = Spacing.xs,
+                            )
+                            .then(
+                                if (index == 0 && firstRowGetsUpFocus) {
+                                    Modifier.focusProperties { up = seasonTabsFocus }
+                                } else {
+                                    Modifier
+                                },
+                            ),
                     ) {
                         SeasonPackBanner(
                             pack = pack,
@@ -274,12 +297,20 @@ fun CollectionScreen(
             }
 
             val currentRows = seasons[activeSeason].orEmpty()
-            items(currentRows, key = { "${it.season}:${it.episode}" }) { ep ->
+            itemsIndexed(currentRows, key = { _, it -> "${it.season}:${it.episode}" }) { index, ep ->
                 Box(
-                    Modifier.padding(
-                        horizontal = layout.gutterHorizontal,
-                        vertical = Spacing.xs,
-                    ),
+                    Modifier
+                        .padding(
+                            horizontal = layout.gutterHorizontal,
+                            vertical = Spacing.xs,
+                        )
+                        .then(
+                            if (index == 0 && currentPacks.isEmpty() && firstRowGetsUpFocus) {
+                                Modifier.focusProperties { up = seasonTabsFocus }
+                            } else {
+                                Modifier
+                            },
+                        ),
                 ) {
                     EpisodeRow(
                         ep = ep,
@@ -657,7 +688,12 @@ private fun CollectionHero(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun SeasonTabs(seasons: List<Int>, value: Int, onChange: (Int) -> Unit) {
+private fun SeasonTabs(
+    seasons: List<Int>,
+    value: Int,
+    onChange: (Int) -> Unit,
+    focusRequester: FocusRequester? = null,
+) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         items(seasons) { s ->
             val selected = s == value
@@ -672,6 +708,11 @@ private fun SeasonTabs(seasons: List<Int>, value: Int, onChange: (Int) -> Unit) 
             val pill = RoundedCornerShape(Radius.pill)
             Surface(
                 onClick = { onChange(s) },
+                modifier = if (selected && focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                },
                 shape = ClickableSurfaceDefaults.shape(shape = pill),
                 // Disable the default focus scale — the tabs sit in a
                 // dense LazyRow and a 1.1× pop on focus shoves

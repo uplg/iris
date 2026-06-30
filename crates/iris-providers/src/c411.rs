@@ -262,6 +262,7 @@ impl C411 {
                 library_infohash: None,
                 library_file_idx: None,
                 language: None,
+                codec: None,
                 // c411 featured items don't ship a `.torrent` URL
                 // — they're identified by infohash and resolved
                 // through the underlying Torznab search at grab

@@ -629,6 +629,7 @@ impl FeaturedItem {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            codec: None,
             // torr9 fetches the `.torrent` bytes on demand via a
             // per-id authenticated endpoint — no URL to persist
             // ahead of time, no in-memory cache to lose at
@@ -791,6 +792,7 @@ impl Torrent {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            codec: None,
             // torr9 fetches the `.torrent` bytes on demand via a
             // per-id authenticated endpoint — no URL to persist
             // ahead of time, no in-memory cache to lose at
@@ -898,6 +900,7 @@ impl RssItem {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            codec: None,
             // The signed .torrent URL — restart-safe grab via fetch_bytes.
             download_url: self.enclosure_url,
             parsed_season: None,

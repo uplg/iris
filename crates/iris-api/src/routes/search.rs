@@ -139,6 +139,11 @@ pub(crate) async fn search(
             detected
         };
         r.language = Some(resolved.as_str().to_string());
+        r.codec = Some(
+            iris_media::filename::detect_codec(&r.title)
+                .as_str()
+                .to_string(),
+        );
     }
     agg.parsed_query = ranking::parsed_query_summary(&q);
     let library_matches = library_matches_for(&state, &q).await;

@@ -200,6 +200,7 @@ impl NexumProvider {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            codec: None,
             download_url,
             parsed_season: None,
             parsed_episode: None,

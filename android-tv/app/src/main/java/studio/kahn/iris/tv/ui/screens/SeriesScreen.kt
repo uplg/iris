@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -21,9 +22,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -76,7 +81,11 @@ fun SeriesScreen(
     var episodes by remember(followId) { mutableStateOf<EpisodesResponse?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var unfollowBusy by remember { mutableStateOf(false) }
-    var selectedSeason by remember(followId) { mutableIntStateOf(-1) }
+    var selectedSeason by rememberSaveable(followId) { mutableIntStateOf(-1) }
+    // D-pad Up from the first episode row must land on the active season
+    // pill, not skip past it to the hero's Back button — see CollectionScreen
+    // for the identical fix and rationale.
+    val seasonTabsFocus = remember(followId) { FocusRequester() }
 
     LaunchedEffect(followId) {
         error = null
@@ -199,18 +208,27 @@ fun SeriesScreen(
                         seasons = seasons.keys.toList(),
                         value = selectedSeason,
                         onChange = { selectedSeason = it },
+                        focusRequester = seasonTabsFocus,
                     )
                 }
             }
         }
 
         val visible = (seasons[selectedSeason] ?: emptyList()).sortedBy { it.episode }
-        items(visible, key = { "${it.season}:${it.episode}" }) { ep ->
+        itemsIndexed(visible, key = { _, it -> "${it.season}:${it.episode}" }) { index, ep ->
             Box(
-                Modifier.padding(
-                    horizontal = layout.gutterHorizontal,
-                    vertical = Spacing.xs,
-                ),
+                Modifier
+                    .padding(
+                        horizontal = layout.gutterHorizontal,
+                        vertical = Spacing.xs,
+                    )
+                    .then(
+                        if (index == 0 && seasons.size > 1) {
+                            Modifier.focusProperties { up = seasonTabsFocus }
+                        } else {
+                            Modifier
+                        },
+                    ),
             ) {
                 EpisodeRow(ep = ep, onPlay = onPickFile, onGrab = onGrab)
             }
@@ -323,13 +341,23 @@ private fun Hero(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun SeasonTabs(seasons: List<Int>, value: Int, onChange: (Int) -> Unit) {
+private fun SeasonTabs(
+    seasons: List<Int>,
+    value: Int,
+    onChange: (Int) -> Unit,
+    focusRequester: FocusRequester? = null,
+) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(seasons) { s ->
             val selected = s == value
             val pill = RoundedCornerShape(Radius.pill)
             Surface(
                 onClick = { onChange(s) },
+                modifier = if (selected && focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                },
                 shape = ClickableSurfaceDefaults.shape(shape = pill),
                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
                 colors = ClickableSurfaceDefaults.colors(

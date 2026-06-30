@@ -31,6 +31,7 @@ import studio.kahn.iris.tv.ui.screens.CollectionScreen
 import studio.kahn.iris.tv.ui.screens.DetailScreen
 import studio.kahn.iris.tv.ui.screens.ForYouScreen
 import studio.kahn.iris.tv.ui.screens.MoodsScreen
+import studio.kahn.iris.tv.ui.screens.HistoryScreen
 import studio.kahn.iris.tv.ui.screens.HomeScreen
 import studio.kahn.iris.tv.ui.screens.LibraryScreen
 import studio.kahn.iris.tv.ui.screens.PairingScreen
@@ -57,6 +58,7 @@ object Routes {
     const val WATCH = "watch/{infohash}/{fileIdx}"
     const val FOR_YOU = "for-you"
     const val MOODS = "moods"
+    const val HISTORY = "history"
     fun detail(infohash: String) = "detail/$infohash"
     fun collection(id: String): String {
         val cid = java.net.URLEncoder.encode(id, "UTF-8")
@@ -281,6 +283,16 @@ fun IrisRoot(
                         navController.navigate(Routes.PAIRING) {
                             popUpTo(Routes.HOME) { inclusive = true }
                         }
+                    },
+                    onOpenHistory = { navController.navigate(Routes.HISTORY) },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(Routes.HISTORY) {
+                HistoryScreen(
+                    container = container,
+                    onPickFile = { infohash, fileIdx ->
+                        navController.navigate(Routes.watch(infohash, fileIdx))
                     },
                     onBack = { navController.popBackStack() },
                 )

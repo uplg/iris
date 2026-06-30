@@ -76,6 +76,7 @@ import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.SearchResponse
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.IrisApi
+import studio.kahn.iris.tv.data.IrisCaps
 import studio.kahn.iris.tv.data.LibraryMatch
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.SearchResult
@@ -264,10 +265,17 @@ fun SearchScreen(
                 // {movie, tv} or size ≥ 200 MB), then re-rank by
                 // composite score. Books / music / samples drop out
                 // entirely instead of dominating the top spots.
+                // Software-only AV1/VP9 results (no hardware decoder on
+                // THIS box) sort below otherwise-equal hardware-decodable
+                // ones — never hidden, just deprioritised; see
+                // `needsSoftwareDecode`.
                 res.copy(
                     results = res.results
                         .filter(::isLikelyVideo)
-                        .sortedByDescending(::recommendedScore),
+                        .sortedWith(
+                            compareBy<SearchResult> { needsSoftwareDecode(it) }
+                                .thenByDescending(::recommendedScore),
+                        ),
                 )
             } else {
                 res
@@ -602,6 +610,21 @@ private fun recommendedScore(r: SearchResult): Double {
     } else {
         seeders
     }
+}
+
+/** Codecs this box can only decode in software, when at all (`dav1d` makes
+ *  `av1` always at least playable — see `IrisCaps`/`PlayerFactory` — but
+ *  it costs more power/CPU than the SoC's hardware path; `vp9` has no
+ *  bundled fallback). Used to badge + deprioritise (never hide — the
+ *  release may still be the best/only option) results in the Recommended
+ *  sort. `"unknown"`/missing codec is never penalised — most release
+ *  titles omit a codec tag entirely, and absence of evidence isn't
+ *  evidence of `av1`. */
+private val SOFTWARE_DECODE_CANDIDATES = setOf("av1", "vp9")
+
+private fun needsSoftwareDecode(r: SearchResult): Boolean {
+    val codec = r.codec?.lowercase() ?: return false
+    return codec in SOFTWARE_DECODE_CANDIDATES && !IrisCaps.hasHardwareDecoder(codec)
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -1064,7 +1087,8 @@ private fun ResultCard(
                 // cleaner.
                 val hasLangSignal =
                     !result.language.isNullOrBlank() && result.language != "unknown"
-                if (hasLangSignal || parsed.subs) {
+                val swDecode = needsSoftwareDecode(result)
+                if (hasLangSignal || parsed.subs || swDecode) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1072,6 +1096,9 @@ private fun ResultCard(
                         LanguageBadge(language = result.language)
                         if (parsed.subs) {
                             BadgePill("SUB", Color(0xFF6366F1), small = true)
+                        }
+                        if (swDecode) {
+                            BadgePill("SW DECODE", Color(0xFFF59E0B), small = true)
                         }
                     }
                 }
@@ -1215,6 +1242,9 @@ private fun ResultRow(
                 LanguageBadge(language = result.language)
                 if (parsed.subs) {
                     BadgePill("SUB", Color(0xFF6366F1), small = true)
+                }
+                if (needsSoftwareDecode(result)) {
+                    BadgePill("SW DECODE", Color(0xFFF59E0B), small = true)
                 }
                 if (result.freeleech == true) {
                     BadgePill("FL", Color(0xFF10B981), small = true)

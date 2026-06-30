@@ -208,7 +208,10 @@ pub struct ContinueWatchingRow {
 
 /// Recent in-progress items for the user (excluding completed). Joined with
 /// torrents so we already have a display name and the `tmdb_id` (when known
-/// AND `tmdb_verified`) for poster lookups.
+/// AND `tmdb_verified`) for poster lookups. Deliberately excludes
+/// soft-deleted torrents — a deleted file can't be resumed, so it has no
+/// place in a "continue here" shelf. The full per-episode answer to "where
+/// was I" (surviving deletion) lives in [`user_history`] instead.
 pub async fn continue_watching(
     pool: &SqlitePool,
     user_id: UserId,
@@ -323,4 +326,193 @@ pub async fn recent_activity(
     .bind(limit)
     .fetch_all(pool)
     .await
+}
+
+/// One row of a user's complete watch history — in-progress AND completed,
+/// including items whose source torrent has since been soft-deleted
+/// (`deleted = true`). Unlike [`continue_watching`] / [`recent_activity`],
+/// which both `JOIN torrents t ON … AND t.deleted_at IS NULL` and so drop a
+/// row the moment its torrent is GC'd or admin-removed, this query keeps
+/// every row — a deletion (disk-reclaim, admin cleanup) must never erase
+/// "what did I watch and how far did I get" (`torrents` rows are only ever
+/// soft-deleted, so `t.name` / `c.tmdb_id` stay resolvable).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct HistoryRow {
+    pub infohash: String,
+    pub torrent_name: String,
+    pub tmdb_id: Option<i64>,
+    pub tmdb_verified: bool,
+    pub file_idx: i64,
+    pub position_seconds: f64,
+    pub duration_seconds: Option<f64>,
+    pub last_watched_at: DateTime<Utc>,
+    pub completed: bool,
+    pub kind: Option<String>,
+    /// `true` when the source torrent has been soft-deleted — clients show
+    /// a "no longer available" state instead of a resume link.
+    pub deleted: bool,
+}
+
+/// Full watch history for one user, newest first, paginated. Powers both
+/// the user's own `/me/history` page and the admin per-user drill-down
+/// (`user_id` is the caller's own id in the former, the target user's id
+/// in the latter — same query, different caller).
+pub async fn user_history(
+    pool: &SqlitePool,
+    user_id: UserId,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<HistoryRow>, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query_as::<_, HistoryRow>(
+        "SELECT p.infohash, t.name as torrent_name, \
+            c.tmdb_id as tmdb_id, \
+            t.tmdb_verified, p.file_idx, \
+            p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
+            c.kind as kind, (t.deleted_at IS NOT NULL) as deleted \
+         FROM playback_progress p \
+         JOIN torrents t ON t.infohash = p.infohash \
+         LEFT JOIN collections c ON c.id = t.collection_id \
+         WHERE p.user_id = ?1 \
+         ORDER BY p.last_watched_at DESC \
+         LIMIT ?2 OFFSET ?3",
+    )
+    .bind(user)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn migrated_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory sqlite");
+        crate::migrate::run(&pool).await.expect("run migrations");
+        pool
+    }
+
+    async fn make_user(pool: &SqlitePool) -> UserId {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, email, password_hash, display_name, is_admin, created_at) \
+             VALUES (?1, ?2, '', 'T', 0, ?3)",
+        )
+        .bind(id)
+        .bind(format!("{id}@t.test"))
+        .bind(Utc::now())
+        .execute(pool)
+        .await
+        .expect("insert user");
+        UserId::from(id)
+    }
+
+    async fn make_torrent(
+        pool: &SqlitePool,
+        owner: UserId,
+        name: &str,
+    ) -> crate::torrents::TorrentRow {
+        crate::torrents::upsert(
+            pool,
+            crate::torrents::NewTorrent {
+                infohash: Uuid::new_v4().to_string(),
+                name: name.to_string(),
+                total_size_bytes: 1_000,
+                source_provider: None,
+                source_external_id: None,
+                added_by: owner,
+            },
+        )
+        .await
+        .expect("insert torrent")
+    }
+
+    fn progress(user: UserId, infohash: String, completed: bool) -> UpsertProgress {
+        UpsertProgress {
+            user_id: user,
+            infohash,
+            file_idx: 0,
+            position_seconds: 120.0,
+            duration_seconds: Some(1_300.0),
+            audio_track_idx: None,
+            subtitle_track_idx: None,
+            completed,
+        }
+    }
+
+    #[tokio::test]
+    async fn user_history_includes_completed_unlike_continue_watching() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let t = make_torrent(&pool, user, "Show S01E01").await;
+        upsert(&pool, progress(user, t.infohash.clone(), true))
+            .await
+            .unwrap();
+
+        assert!(
+            continue_watching(&pool, user, 10).await.unwrap().is_empty(),
+            "continue_watching excludes completed items",
+        );
+
+        let hist = user_history(&pool, user, 10, 0).await.unwrap();
+        assert_eq!(hist.len(), 1);
+        assert!(hist[0].completed);
+        assert!(!hist[0].deleted);
+    }
+
+    #[tokio::test]
+    async fn user_history_survives_torrent_deletion() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let t = make_torrent(&pool, user, "Movie Night").await;
+        upsert(&pool, progress(user, t.infohash.clone(), false))
+            .await
+            .unwrap();
+
+        assert_eq!(continue_watching(&pool, user, 10).await.unwrap().len(), 1);
+        assert_eq!(user_history(&pool, user, 10, 0).await.unwrap().len(), 1);
+
+        crate::torrents::soft_delete(&pool, iris_core::ids::TorrentId::from(t.id))
+            .await
+            .unwrap();
+
+        // `continue_watching` drops it — a deleted file can't be resumed, so
+        // it has no place in a "continue here" shelf. `user_history` keeps
+        // it and flags `deleted` so the UI can show "no longer available"
+        // instead of just losing the entry — that's the dedicated per-episode
+        // answer to "where was I" after a cleanup.
+        assert!(continue_watching(&pool, user, 10).await.unwrap().is_empty());
+        let hist = user_history(&pool, user, 10, 0).await.unwrap();
+        assert_eq!(hist.len(), 1);
+        assert!(hist[0].deleted);
+        assert_eq!(hist[0].torrent_name, "Movie Night");
+    }
+
+    #[tokio::test]
+    async fn user_history_is_scoped_per_user_and_paginated() {
+        let pool = migrated_pool().await;
+        let user_a = make_user(&pool).await;
+        let user_b = make_user(&pool).await;
+        for i in 0..3 {
+            let t = make_torrent(&pool, user_a, &format!("A Show {i}")).await;
+            upsert(&pool, progress(user_a, t.infohash, false))
+                .await
+                .unwrap();
+        }
+        let t_b = make_torrent(&pool, user_b, "B Show").await;
+        upsert(&pool, progress(user_b, t_b.infohash, false))
+            .await
+            .unwrap();
+
+        assert_eq!(user_history(&pool, user_b, 10, 0).await.unwrap().len(), 1);
+        assert_eq!(user_history(&pool, user_a, 2, 0).await.unwrap().len(), 2);
+        assert_eq!(user_history(&pool, user_a, 2, 2).await.unwrap().len(), 1);
+    }
 }

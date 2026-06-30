@@ -1,3 +1,26 @@
+/** `H:MM:SS` (or `M:SS` under an hour) — playback position display, shared
+ *  by Continue Watching and the Watch History page. */
+export function formatTimecode(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** Short "2m ago" / "just now" relative time for recent (sub-day) activity —
+ *  finer-grained than {@link formatRelative}, which only resolves to whole
+ *  days. Recompute on each render (e.g. driven by a query's
+ *  `refetchInterval`) rather than with a timer of your own. */
+export function formatRecentTime(iso: string): string {
+  const secs = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (secs < 10) return "just now";
+  if (secs < 60) return `${Math.floor(secs)}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
+}
+
 export function formatSize(bytes: number | null | undefined): string {
   if (bytes == null) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];

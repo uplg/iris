@@ -9,6 +9,8 @@
 //! NOT per-user: if iris knows a SCENE-named series has S03E12
 //! grabbable, every authorised user sees the same offer.
 
+use std::collections::{HashMap, HashSet};
+
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -135,6 +137,14 @@ pub async fn list_best_for_series(
 /// they're un-grabbable, so they must never surface as a "Grab full
 /// Season N" affordance nor be picked by the grab fallback. Unknown
 /// (NULL) seeder counts are kept — we can't confirm those are dead.
+///
+/// Packs redundant with episode-level coverage the series already has are
+/// also dropped (see [`season_language_coverage`]): a `MULTi` episode
+/// release satisfies both FR and EN, so a FR or EN pack adds nothing once
+/// one exists; a French episode release already meets the household's
+/// language need, so a `MULTi` (heavier, redundant audio) or another
+/// French pack adds nothing either. English packs are never suppressed by
+/// French coverage alone — only `MULTi`/French redundancy is filtered.
 pub async fn list_season_packs_for_series(
     pool: &SqlitePool,
     normalized_name: &str,
@@ -158,9 +168,53 @@ pub async fn list_season_packs_for_series(
          WHERE _rn = 1 \
          ORDER BY season, language",
     );
-    qb.build_query_as::<AvailableEpisodeRow>()
+    let packs = qb
+        .build_query_as::<AvailableEpisodeRow>()
         .fetch_all(pool)
-        .await
+        .await?;
+
+    let coverage = season_language_coverage(pool, normalized_name).await?;
+    Ok(packs
+        .into_iter()
+        .filter(|pack| !pack_is_redundant(pack, &coverage))
+        .collect())
+}
+
+/// Per-season set of languages already available at the episode level
+/// (`episode > 0`) for a series — feeds the redundancy filter in
+/// [`list_season_packs_for_series`].
+async fn season_language_coverage(
+    pool: &SqlitePool,
+    normalized_name: &str,
+) -> Result<HashMap<i64, HashSet<String>>, sqlx::Error> {
+    let rows: Vec<(i64, Option<String>)> = sqlx::query_as(
+        "SELECT DISTINCT season, language FROM available_episodes \
+         WHERE normalized_name = ?1 AND episode > 0",
+    )
+    .bind(normalized_name)
+    .fetch_all(pool)
+    .await?;
+    let mut coverage: HashMap<i64, HashSet<String>> = HashMap::new();
+    for (season, language) in rows {
+        if let Some(lang) = language {
+            coverage.entry(season).or_default().insert(lang);
+        }
+    }
+    Ok(coverage)
+}
+
+/// `true` when `pack`'s language is redundant with the episode-level
+/// coverage already available for its season — see
+/// [`list_season_packs_for_series`]'s doc comment for the exact rule.
+fn pack_is_redundant(pack: &AvailableEpisodeRow, coverage: &HashMap<i64, HashSet<String>>) -> bool {
+    let Some(langs) = coverage.get(&pack.season) else {
+        return false;
+    };
+    let has_multi = langs.contains("multi");
+    let has_fr = langs.contains("french");
+    let pack_lang = pack.language.as_deref().unwrap_or("unknown");
+    (has_multi && matches!(pack_lang, "french" | "english"))
+        || (has_fr && matches!(pack_lang, "multi" | "french"))
 }
 
 /// Find the best season-pack offer for a specific `(normalized_name,
@@ -222,6 +276,73 @@ pub async fn count_new_for_series(
     .fetch_one(pool)
     .await?;
     Ok(row.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pack(season: i64, language: Option<&str>) -> AvailableEpisodeRow {
+        AvailableEpisodeRow {
+            id: Uuid::new_v4(),
+            normalized_name: "test".to_string(),
+            season,
+            episode: 0,
+            indexer_provider: "test".to_string(),
+            indexer_torrent_id: "1".to_string(),
+            magnet: "magnet:?xt=urn:btih:test".to_string(),
+            quality: None,
+            seeders: Some(5),
+            size_bytes: None,
+            found_at: Utc::now(),
+            language: language.map(str::to_string),
+            download_url: None,
+            absolute_episode: None,
+        }
+    }
+
+    fn coverage(season: i64, langs: &[&str]) -> HashMap<i64, HashSet<String>> {
+        let mut m = HashMap::new();
+        m.insert(season, langs.iter().map(ToString::to_string).collect());
+        m
+    }
+
+    #[test]
+    fn no_coverage_never_redundant() {
+        let p = pack(1, Some("french"));
+        assert!(!pack_is_redundant(&p, &HashMap::new()));
+    }
+
+    #[test]
+    fn multi_coverage_suppresses_french_and_english_packs() {
+        let cov = coverage(1, &["multi"]);
+        assert!(pack_is_redundant(&pack(1, Some("french")), &cov));
+        assert!(pack_is_redundant(&pack(1, Some("english")), &cov));
+        // A fresh Multi pack itself is still worth surfacing (e.g. better
+        // quality/seeders than the episode-level offers).
+        assert!(!pack_is_redundant(&pack(1, Some("multi")), &cov));
+    }
+
+    #[test]
+    fn french_coverage_suppresses_multi_and_french_packs_but_not_english() {
+        let cov = coverage(1, &["french"]);
+        assert!(pack_is_redundant(&pack(1, Some("multi")), &cov));
+        assert!(pack_is_redundant(&pack(1, Some("french")), &cov));
+        assert!(!pack_is_redundant(&pack(1, Some("english")), &cov));
+    }
+
+    #[test]
+    fn unknown_language_pack_is_never_suppressed() {
+        let cov = coverage(1, &["multi"]);
+        assert!(!pack_is_redundant(&pack(1, None), &cov));
+    }
+
+    #[test]
+    fn coverage_is_scoped_per_season() {
+        let cov = coverage(1, &["multi"]);
+        // Season 2 has no recorded coverage, so its packs are untouched.
+        assert!(!pack_is_redundant(&pack(2, Some("french")), &cov));
+    }
 }
 
 #[derive(Debug, Clone)]

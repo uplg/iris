@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 
 import { MediaCard } from "@/components/MediaCard";
 import { me } from "@/lib/api";
+import { formatTimecode } from "@/lib/format";
 
 /**
  * Continue Watching shelf on the home page. Renders shared MediaCards
@@ -60,12 +61,4 @@ export function ContinueWatching() {
       </div>
     </section>
   );
-}
-
-function formatTimecode(sec: number): string {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = Math.floor(sec % 60);
-  if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }

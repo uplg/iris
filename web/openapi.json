@@ -36,6 +36,54 @@
         }
       }
     },
+    "/api/admin/audit-log": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_audit_log",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows to return (clamped 1..=200, defaults to 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Pagination offset (defaults to 0).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audited actions, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditLogView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          }
+        }
+      }
+    },
     "/api/admin/gc": {
       "post": {
         "tags": [
@@ -342,6 +390,64 @@
           },
           "404": {
             "description": "No such user"
+          }
+        }
+      }
+    },
+    "/api/admin/users/{id}/history": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_user_history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Target user id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows to return (clamped 1..=200, defaults to 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Pagination offset (defaults to 0).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full watch history for one user, including deleted-source items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserHistoryView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
           }
         }
       }
@@ -1230,6 +1336,54 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/me/history": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "list_my_history",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows to return (clamped 1..=200, defaults to 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Pagination offset (defaults to 0).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Caller's full watch history, including deleted-source items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HistoryItem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
           }
         }
       }
@@ -2828,6 +2982,53 @@
           }
         }
       },
+      "AuditLogView": {
+        "type": "object",
+        "description": "One row of `GET /admin/audit-log` — a persisted, queryable record of\nsensitive actions (deletions, password resets, admin-triggered GC),\nreplacing the previous ephemeral `tracing::` logs.",
+        "required": [
+          "id",
+          "actor_id",
+          "actor_display_name",
+          "action",
+          "resource_type",
+          "created_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actor_display_name": {
+            "type": "string"
+          },
+          "actor_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "details": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "resource_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_type": {
+            "type": "string"
+          }
+        }
+      },
       "AvailableEpisodeEntry": {
         "type": "object",
         "required": [
@@ -3939,6 +4140,79 @@
           "dovi",
           "hlg"
         ]
+      },
+      "HistoryItem": {
+        "type": "object",
+        "description": "One row of the caller's full watch history (in-progress AND completed),\nincluding items whose source torrent has since been deleted\n(disk-reclaim GC, admin cleanup) — unlike [`ContinueWatchingItem`], an\nentry never just vanishes; `deleted` flags it instead so the client can\nshow \"no longer available\" rather than a dead resume link.",
+        "required": [
+          "infohash",
+          "torrent_name",
+          "tmdb_verified",
+          "file_idx",
+          "position_seconds",
+          "last_watched_at",
+          "completed",
+          "deleted"
+        ],
+        "properties": {
+          "completed": {
+            "type": "boolean"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "file_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MediaKind"
+              }
+            ]
+          },
+          "last_watched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "position_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "tmdb_verified": {
+            "type": "boolean"
+          },
+          "torrent_name": {
+            "type": "string"
+          }
+        }
       },
       "IngestResponse": {
         "type": "object",
@@ -5178,6 +5452,13 @@
               "null"
             ]
           },
+          "codec": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Coarse video-codec tag derived server-side from the SCENE release\nname: `\"h264\"` / `\"hevc\"` / `\"av1\"` / `\"vp9\"` / `\"unknown\"`. Lets\nAndroid TV badge / deprioritise results the connected box can't\nhardware-decode without hiding them. `\"unknown\"` (most titles omit\na codec tag) is never penalised — absence of evidence isn't\nevidence of `av1`."
+          },
           "external_id": {
             "type": "string"
           },
@@ -6269,6 +6550,79 @@
           },
           "onboarding_completed": {
             "type": "boolean"
+          }
+        }
+      },
+      "UserHistoryView": {
+        "type": "object",
+        "description": "One row of a single user's full watch history for the admin drill-down\n(`GET /admin/users/{id}/history`) — same shape as `me::HistoryItem`\n(in-progress AND completed, survives source-torrent deletion via\n`deleted`), just reached through the admin-only route instead of the\ncaller's own session.",
+        "required": [
+          "infohash",
+          "torrent_name",
+          "tmdb_verified",
+          "file_idx",
+          "position_seconds",
+          "completed",
+          "last_watched_at",
+          "deleted"
+        ],
+        "properties": {
+          "completed": {
+            "type": "boolean"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "file_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MediaKind"
+              }
+            ]
+          },
+          "last_watched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "position_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "tmdb_verified": {
+            "type": "boolean"
+          },
+          "torrent_name": {
+            "type": "string"
           }
         }
       },

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { CheckCircle2, Download, Library as LibraryIcon, Loader2, Play } from "lucide-react";
@@ -56,6 +56,11 @@ type SideRow = {
   watched: boolean;
   watchedPct: number | null;
   active: boolean;
+  /** Set for an episode Iris has discovered but not downloaded yet —
+   *  `infohash`/`fileIdx` are empty/-1 placeholders. The row renders a
+   *  "Grab & Play" button instead of Play; clicking it grabs the episode
+   *  then navigates straight to it once ready. */
+  grab?: { season: number; episode: number; language: string | null };
 };
 
 function watchedPctOf(p?: FileProgressEntry): number | null {
@@ -88,6 +93,7 @@ export function WatchPage() {
   const { infohash, idx } = watchRoute.useParams();
   const fileIdx = Number(idx);
   const navigate = useNavigate();
+  const qc = useQueryClient();
 
   const [playerError, setPlayerError] = useState<string | null>(null);
   const lastTimeRef = useRef(0);
@@ -444,30 +450,52 @@ export function WatchPage() {
     enabled: !!collectionId && data?.kind === "tv",
   });
   const collectionEpisodes = collectionQ.data?.episodes;
+  // Episodes Iris has discovered on a tracker but not grabbed yet — same
+  // field CollectionPage renders as "available" chips. The server already
+  // excludes (season, episode, language) combos already on disk, so no
+  // client-side dedup against `collectionEpisodes` is needed.
+  const availableEpisodes = collectionQ.data?.available_episodes ?? [];
+  const isTvCollection = !!collectionId && data?.kind === "tv";
 
-  // Side-panel rows: the collection's episodes when this is a TV
-  // collection (so separate-episode torrents list the whole season), else
-  // the current torrent's video files (season pack / movie extras /
-  // orphan). Episode rows link to their own `(infohash, fileIdx)`.
+  // Side-panel rows: the collection's episodes (downloaded + discovered)
+  // when this is a TV collection (so separate-episode torrents list the
+  // whole season), else the current torrent's video files (season pack /
+  // movie extras / orphan). Episode rows link to their own
+  // `(infohash, fileIdx)`; discovered-but-ungrabbed rows carry a `grab`
+  // payload instead and trigger `grabMutation` on click.
   const sideRows = useMemo<SideRow[]>(() => {
-    if (collectionEpisodes && collectionEpisodes.length > 0) {
-      return [...collectionEpisodes]
-        .sort((a, b) => a.season - b.season || a.episode - b.episode)
-        .map((e) => {
-          const prog = e.infohash === infohash ? progressByFileIdx.get(e.file_idx) : undefined;
-          const lang = e.language && e.language !== "unknown" ? e.language : "";
-          return {
-            key: `${e.infohash}:${e.file_idx}`,
-            infohash: e.infohash,
-            fileIdx: e.file_idx,
-            primary: `S${String(e.season).padStart(2, "0")}E${String(e.episode).padStart(2, "0")}`,
-            secondary: lang,
-            mono: false,
-            watched: e.watched || !!prog?.completed,
-            watchedPct: watchedPctOf(prog),
-            active: e.infohash === infohash && e.file_idx === fileIdx,
-          };
-        });
+    if (isTvCollection && ((collectionEpisodes?.length ?? 0) > 0 || availableEpisodes.length > 0)) {
+      const downloaded = (collectionEpisodes ?? []).map((e) => {
+        const prog = e.infohash === infohash ? progressByFileIdx.get(e.file_idx) : undefined;
+        const lang = e.language && e.language !== "unknown" ? e.language : "";
+        return {
+          key: `dl:${e.infohash}:${e.file_idx}`,
+          infohash: e.infohash,
+          fileIdx: e.file_idx,
+          primary: `S${String(e.season).padStart(2, "0")}E${String(e.episode).padStart(2, "0")}`,
+          secondary: lang,
+          mono: false,
+          watched: e.watched || !!prog?.completed,
+          watchedPct: watchedPctOf(prog),
+          active: e.infohash === infohash && e.file_idx === fileIdx,
+        } satisfies SideRow;
+      });
+      const discovered = availableEpisodes.map((a) => {
+        const lang = a.language && a.language !== "unknown" ? a.language : "";
+        return {
+          key: `av:${a.season}:${a.episode}:${a.language ?? ""}:${a.indexer_torrent_id}`,
+          infohash: "",
+          fileIdx: -1,
+          primary: `S${String(a.season).padStart(2, "0")}E${String(a.episode).padStart(2, "0")}`,
+          secondary: lang,
+          mono: false,
+          watched: false,
+          watchedPct: null,
+          active: false,
+          grab: { season: a.season, episode: a.episode, language: a.language ?? null },
+        } satisfies SideRow;
+      });
+      return [...downloaded, ...discovered].sort((a, b) => a.primary.localeCompare(b.primary));
     }
     return videoFiles.map((f) => {
       const prog = progressByFileIdx.get(f.index);
@@ -483,9 +511,34 @@ export function WatchPage() {
         active: f.index === fileIdx,
       };
     });
-  }, [collectionEpisodes, videoFiles, progressByFileIdx, infohash, fileIdx]);
+  }, [
+    isTvCollection,
+    collectionEpisodes,
+    availableEpisodes,
+    videoFiles,
+    progressByFileIdx,
+    infohash,
+    fileIdx,
+  ]);
+
+  // Grabs a discovered-but-ungrabbed episode then jumps straight to it —
+  // single action, mirrors the Play button's own navigate-on-click.
+  const grabMutation = useMutation({
+    mutationFn: ({ season, episode, language }: NonNullable<SideRow["grab"]>) =>
+      library.grabCollectionEpisode(collectionId!, season, episode, language),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+      navigate({
+        to: "/watch/$infohash/$idx",
+        params: { infohash: res.infohash, idx: String(res.file_idx) },
+      });
+    },
+  });
+
   const sidePanelTitle =
-    collectionEpisodes && collectionEpisodes.length > 0 ? "Episodes" : "Other files";
+    isTvCollection && ((collectionEpisodes?.length ?? 0) > 0 || availableEpisodes.length > 0)
+      ? "Episodes"
+      : "Other files";
 
   // First-load resume position. Applied once via `onCanPlay` (see below) —
   // we want a single deterministic seek before playback starts, not a
@@ -944,32 +997,56 @@ export function WatchPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <Button
-                        size="sm"
-                        variant={row.active ? "secondary" : "default"}
-                        disabled={row.active}
-                        className="flex-1"
-                        onClick={() =>
-                          navigate({
-                            to: "/watch/$infohash/$idx",
-                            params: { infohash: row.infohash, idx: String(row.fileIdx) },
-                          })
-                        }
-                      >
-                        <Play className="size-3.5" />
-                        {row.watchedPct != null && row.watchedPct > 0 && !row.watched
-                          ? "Resume"
-                          : "Play"}
-                      </Button>
-                      <Button asChild size="sm" variant="outline">
-                        <a
-                          href={torrents.downloadUrl(row.infohash, row.fileIdx)}
-                          download={row.primary}
+                      {row.grab ? (
+                        <Button
+                          size="sm"
+                          className="flex-1"
+                          disabled={
+                            grabMutation.isPending &&
+                            grabMutation.variables?.season === row.grab.season &&
+                            grabMutation.variables?.episode === row.grab.episode
+                          }
+                          onClick={() => grabMutation.mutate(row.grab!)}
                         >
-                          <Download className="size-3.5" />
-                          <span className="sr-only">Download</span>
-                        </a>
-                      </Button>
+                          {grabMutation.isPending &&
+                          grabMutation.variables?.season === row.grab.season &&
+                          grabMutation.variables?.episode === row.grab.episode ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Download className="size-3.5" />
+                          )}
+                          Grab & Play
+                        </Button>
+                      ) : (
+                        <>
+                          <Button
+                            size="sm"
+                            variant={row.active ? "secondary" : "default"}
+                            disabled={row.active}
+                            className="flex-1"
+                            onClick={() =>
+                              navigate({
+                                to: "/watch/$infohash/$idx",
+                                params: { infohash: row.infohash, idx: String(row.fileIdx) },
+                              })
+                            }
+                          >
+                            <Play className="size-3.5" />
+                            {row.watchedPct != null && row.watchedPct > 0 && !row.watched
+                              ? "Resume"
+                              : "Play"}
+                          </Button>
+                          <Button asChild size="sm" variant="outline">
+                            <a
+                              href={torrents.downloadUrl(row.infohash, row.fileIdx)}
+                              download={row.primary}
+                            >
+                              <Download className="size-3.5" />
+                              <span className="sr-only">Download</span>
+                            </a>
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </li>
                 ))}

@@ -52,6 +52,7 @@ import studio.kahn.iris.tv.ui.theme.Spacing
 fun SettingsScreen(
     container: AppContainer,
     onSignOut: () -> Unit,
+    onOpenHistory: () -> Unit,
     onBack: () -> Unit,
 ) {
     var serverUrl by remember { mutableStateOf<String?>(null) }
@@ -88,6 +89,31 @@ fun SettingsScreen(
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Eyebrow("Server")
                 Text(serverUrl ?: "—", style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+
+        // Passive (non-clickable) Surface wrapping a real button — same
+        // pattern as the Server card above and `UpdaterCard` below, so the
+        // D-pad lands on the button directly instead of a focus-stealing
+        // clickable container.
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = cardShape,
+            colors = SurfaceDefaults.colors(containerColor = IrisColors.Card),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(20.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Eyebrow("Watch history")
+                    Text(
+                        "Everything you've watched, including removed titles.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IrisButton("View history", onOpenHistory, variant = IrisButtonVariant.Ghost)
             }
         }
 

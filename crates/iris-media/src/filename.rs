@@ -346,6 +346,62 @@ impl Language {
     }
 }
 
+/// Coarse video-codec signal extracted from a SCENE release name. Used
+/// by the Android TV client to badge / deprioritise (never hide — see
+/// `feedback_no_hide_bad_data`) results the connected box can't
+/// hardware-decode. `Unknown` is the safe default for titles that omit a
+/// codec tag entirely (common) — absence of evidence isn't evidence of
+/// `Av1`, so an `Unknown` result is never penalised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Codec {
+    H264,
+    Hevc,
+    Av1,
+    Vp9,
+    #[default]
+    Unknown,
+}
+
+/// Detect a coarse codec signal from a SCENE-style release name. Order
+/// matters: check the more specific/exotic tags first so a title doesn't
+/// fall through to the wrong bucket — there's no overlap risk here (each
+/// tag set is disjoint) but keeping the same shape as
+/// [`detect_language`] makes the two easy to read side by side.
+pub fn detect_codec(title: &str) -> Codec {
+    let upper = title.to_ascii_uppercase();
+    if has_token(&upper, "AV1") {
+        return Codec::Av1;
+    }
+    for marker in ["HEVC", "X265", "H265", "H.265"] {
+        if has_token(&upper, marker) {
+            return Codec::Hevc;
+        }
+    }
+    for marker in ["X264", "H264", "H.264", "AVC"] {
+        if has_token(&upper, marker) {
+            return Codec::H264;
+        }
+    }
+    if has_token(&upper, "VP9") {
+        return Codec::Vp9;
+    }
+    Codec::Unknown
+}
+
+impl Codec {
+    /// Stable string form shipped on `SearchResult.codec`. Lowercase for
+    /// grep-friendliness, matches `Language::as_str`'s convention.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Codec::H264 => "h264",
+            Codec::Hevc => "hevc",
+            Codec::Av1 => "av1",
+            Codec::Vp9 => "vp9",
+            Codec::Unknown => "unknown",
+        }
+    }
+}
+
 /// Token-boundary contains: only matches `needle` when it sits
 /// between separators (or at string ends). Without this `FRENCH`
 /// would match against `FRENCHTOAST` and similar; matters less in
@@ -1075,6 +1131,48 @@ mod tests {
         assert_eq!(
             detect_language("FRENCHTOAST.S01E01.FRENCH.1080p.WEB.H264"),
             Language::French,
+        );
+    }
+
+    #[test]
+    fn detect_codec_real_world_titles() {
+        assert_eq!(
+            detect_codec("Squid.Game.S02E03.1080p.NF.WEB-DL.x264-BULiTT.mkv"),
+            Codec::H264,
+        );
+        assert_eq!(
+            detect_codec("My.Dearest.Assassin.2026.MULTi.1080p.WEB.H265-BULiTT.mkv"),
+            Codec::Hevc,
+        );
+        assert_eq!(
+            detect_codec("[SubsPlease] Frieren - 12 [1080p][HEVC].mkv"),
+            Codec::Hevc,
+        );
+        assert_eq!(
+            detect_codec(
+                "[Delivroozzi] Sakamoto Desu ga [VOSTFR BD x265 10bits 1080p FLAC] v2.mkv"
+            ),
+            Codec::Hevc,
+        );
+        // Dotted `H.264` — a real Seedpool naming convention, also
+        // exercised by `detect_language_real_world_titles` above.
+        assert_eq!(
+            detect_codec("Classroom.of.the.Elite.S04E11.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG"),
+            Codec::H264,
+        );
+        assert_eq!(
+            detect_codec("Show.Name.S01E01.1080p.WEB.AV1-XYZ"),
+            Codec::Av1,
+        );
+        assert_eq!(
+            detect_codec("Show.Name.S01E01.1080p.WEB.VP9-XYZ"),
+            Codec::Vp9,
+        );
+        // No codec tag at all — common, never claim a codec without
+        // evidence.
+        assert_eq!(
+            detect_codec("Show.Name.S01E01.1080p.WEB-DL.AAC2.0-GROUP"),
+            Codec::Unknown,
         );
     }
 

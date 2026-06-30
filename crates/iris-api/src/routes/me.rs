@@ -4,8 +4,8 @@ use axum::extract::State;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
 use iris_core::search::MediaKind;
-use serde::Serialize;
-use utoipa::ToSchema;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -16,6 +16,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(me))
         .route("/continue-watching", get(continue_watching))
+        .route("/history", get(history))
         .route("/watchlist", get(watchlist))
         .route("/password", axum::routing::post(change_password))
         .route("/display-name", axum::routing::post(change_display_name))
@@ -295,6 +296,84 @@ pub(crate) async fn continue_watching(
                 duration_seconds: r.duration_seconds,
                 last_watched_at: r.last_watched_at,
                 completed: r.completed,
+            }
+        })
+        .collect();
+    Ok(Json(out))
+}
+
+/// One row of the caller's full watch history (in-progress AND completed),
+/// including items whose source torrent has since been deleted
+/// (disk-reclaim GC, admin cleanup) — unlike [`ContinueWatchingItem`], an
+/// entry never just vanishes; `deleted` flags it instead so the client can
+/// show "no longer available" rather than a dead resume link.
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct HistoryItem {
+    infohash: String,
+    torrent_name: String,
+    tmdb_id: Option<i64>,
+    tmdb_verified: bool,
+    kind: Option<MediaKind>,
+    file_idx: i64,
+    file_path: Option<String>,
+    position_seconds: f64,
+    duration_seconds: Option<f64>,
+    last_watched_at: chrono::DateTime<chrono::Utc>,
+    completed: bool,
+    deleted: bool,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct HistoryQuery {
+    /// Max rows to return (clamped 1..=200, defaults to 50).
+    limit: Option<i64>,
+    /// Pagination offset (defaults to 0).
+    offset: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/me/history",
+    operation_id = "list_my_history",
+    params(HistoryQuery),
+    responses(
+        (status = 200, description = "Caller's full watch history, including deleted-source items", body = [HistoryItem]),
+        (status = 401, description = "Not authenticated"),
+    ),
+    tag = "me",
+)]
+pub(crate) async fn history(
+    State(state): State<AppState>,
+    user: AuthUser,
+    axum::extract::Query(q): axum::extract::Query<HistoryQuery>,
+) -> ApiResult<Json<Vec<HistoryItem>>> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let rows = iris_db::playback::user_history(state.db(), user.id, limit, offset).await?;
+    let out = rows
+        .into_iter()
+        .map(|r| {
+            let file_path = state.engine().get_by_infohash(&r.infohash).and_then(|s| {
+                let file_idx = usize::try_from(r.file_idx).ok()?;
+                s.files
+                    .into_iter()
+                    .find(|f| f.index == file_idx)
+                    .map(|f| f.path)
+            });
+            HistoryItem {
+                infohash: r.infohash,
+                torrent_name: r.torrent_name,
+                tmdb_id: r.tmdb_id,
+                tmdb_verified: r.tmdb_verified,
+                kind: r.kind.as_deref().and_then(MediaKind::from_wire),
+                file_idx: r.file_idx,
+                file_path,
+                position_seconds: r.position_seconds,
+                duration_seconds: r.duration_seconds,
+                last_watched_at: r.last_watched_at,
+                completed: r.completed,
+                deleted: r.deleted,
             }
         })
         .collect();
