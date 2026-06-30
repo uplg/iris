@@ -151,6 +151,19 @@ const ANIME_GROUP_TOKENS: &[&str] = &[
     "ASW",
 ];
 
+/// Anime-specific release-FORMAT tokens — `OAV`/`OVA` ("Original
+/// Animation/Video Video"), `ONA` ("Original Net Animation"). Unlike a high
+/// episode count or a `VOSTFR` tag (both also occur on live-action
+/// releases), these terms are anime-exclusive — no live-action distributor
+/// ships an "OVA". Catches a season-0 special (`Show.S00E01.(OAV).VOSTFR…
+/// -GROUP`) released by a plain scene group: no bracket fansub prefix, no
+/// known fansub-group token, and the `season == 1`-gated fleuve check below
+/// never fires for season 0 — without this, such a special's `is_anime`
+/// flag disagrees with the main series' (set from its season-1 episodes),
+/// which changes `collection_key_kind`'s `anime:` prefix and splits the
+/// special into its own orphan collection instead of joining the show.
+const ANIME_FORMAT_TOKENS: &[&str] = &["OAV", "OVA", "ONA"];
+
 /// Best-effort, **offline** "is this an anime release?" classifier, run
 /// at ingest to decide collection identity (see
 /// [`Parsed::collection_key_kind`]). Deliberately conservative — it
@@ -158,7 +171,9 @@ const ANIME_GROUP_TOKENS: &[&str] = &[
 /// count alone, so a long-running Western show isn't mis-split:
 ///
 ///   * a known fansub group token (`-Tsundere-Raws`, `[Erai-raws]`, …),
-///   * the bracketed `[Group] …` fansub shape, or
+///   * the bracketed `[Group] …` fansub shape,
+///   * an anime-format token (`OAV`/`OVA`/`ONA` — see
+///     [`ANIME_FORMAT_TOKENS`]), or
 ///   * the fleuve pattern (`S01` with an episode number above the
 ///     [`ABSOLUTE_EPISODE_THRESHOLD`]) **corroborated** by a `VOSTFR`
 ///     subbing tag.
@@ -173,6 +188,9 @@ pub fn looks_like_anime_release(name: &str, season: Option<u32>, episode: Option
         return true;
     }
     if name.trim_start().starts_with('[') {
+        return true;
+    }
+    if ANIME_FORMAT_TOKENS.iter().any(|t| has_token(&upper, t)) {
         return true;
     }
     let fleuve = season == Some(1) && episode.is_some_and(|e| e > ABSOLUTE_EPISODE_THRESHOLD);
@@ -1275,6 +1293,25 @@ mod tests {
         assert_eq!(anime_key, "anime:one piece");
         assert_eq!(live_action_key, "one piece");
         assert_ne!(anime_key, live_action_key);
+    }
+
+    #[test]
+    fn season_zero_oav_special_classifies_as_anime() {
+        // The reported bug: a season-0 OAV special from a plain scene
+        // group (no bracket fansub prefix, no known fansub-group token)
+        // used to slip through unclassified because the fleuve check is
+        // gated on `season == Some(1)`, which never matches season 0 —
+        // silently splitting the special into its own orphan collection
+        // instead of joining the main (anime-classified) series.
+        let name = "Another.S00E01.(OAV).VOSTFR.1080p.10bits.BluRay.x265.AAC-Punisher694.mkv";
+        let p = parse(name).unwrap();
+        assert_eq!(p.title, "Another");
+        assert_eq!(p.season, Some(0));
+        assert_eq!(p.episode, Some(1));
+        assert!(looks_like_anime_release(name, p.season, p.episode));
+        // Must key the same way as the main S01 episodes so the special
+        // joins the existing anime collection instead of forking one.
+        assert_eq!(p.collection_key_kind(true, true), "anime:another");
     }
 
     #[test]

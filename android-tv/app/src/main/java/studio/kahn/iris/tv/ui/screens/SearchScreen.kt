@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as lazyListItems
@@ -66,6 +67,7 @@ import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -86,6 +88,7 @@ import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Warning
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
@@ -1098,7 +1101,7 @@ private fun ResultCard(
                             BadgePill("SUB", Color(0xFF6366F1), small = true)
                         }
                         if (swDecode) {
-                            BadgePill("SW DECODE", Color(0xFFF59E0B), small = true)
+                            SoftwareDecodeHint()
                         }
                     }
                 }
@@ -1244,7 +1247,7 @@ private fun ResultRow(
                     BadgePill("SUB", Color(0xFF6366F1), small = true)
                 }
                 if (needsSoftwareDecode(result)) {
-                    BadgePill("SW DECODE", Color(0xFFF59E0B), small = true)
+                    SoftwareDecodeHint()
                 }
                 if (result.freeleech == true) {
                     BadgePill("FL", Color(0xFF10B981), small = true)
@@ -1278,6 +1281,21 @@ private fun BadgePill(
             modifier = Modifier.padding(horizontal = pad.first, vertical = pad.second),
         )
     }
+}
+
+/** Compact warning glyph standing in for the old "SW DECODE" text pill —
+ *  a release needing software decode on this box still plays fine (dav1d
+ *  fallback), so this is a heads-up, not an error. An icon reads instantly
+ *  next to the language badge instead of forcing the eye to stop and parse
+ *  another acronym in the row. */
+@Composable
+private fun SoftwareDecodeHint(modifier: Modifier = Modifier) {
+    Icon(
+        imageVector = Icons.Filled.Warning,
+        contentDescription = "Plays via software decode on this device",
+        tint = Color(0xFFF59E0B),
+        modifier = modifier.size(14.dp),
+    )
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)

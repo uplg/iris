@@ -472,7 +472,11 @@ function EpisodeList({
   const [activeSeason, setActiveSeason] = useState<number | null>(null);
   useEffect(() => {
     if (activeSeason == null && seasons.length > 0) {
-      setActiveSeason(seasons[0].season);
+      // Season 0 is "Specials" — land on the first REAL season by default
+      // so a show with OAVs/specials doesn't open on the specials tab.
+      // Falls back to season 0 only when it's the only season available.
+      const firstReal = seasons.find((s) => s.season > 0);
+      setActiveSeason((firstReal ?? seasons[0]).season);
     }
   }, [activeSeason, seasons]);
 
@@ -592,7 +596,7 @@ function SeasonTabs({
               : "border-transparent text-muted-foreground hover:bg-accent hover:text-foreground",
           )}
         >
-          Season {s}
+          {s === 0 ? "Specials" : `Season ${s}`}
         </button>
       ))}
     </div>

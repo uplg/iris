@@ -459,16 +459,26 @@ export function WatchPage() {
   const availableEpisodes = collectionQ.data?.available_episodes ?? [];
   const isTvCollection = !!collectionId && data?.kind === "tv";
 
+  // The episode currently playing, looked up in the collection's merged
+  // list — drives both the season scope and the language preference below.
+  const currentEpisode = useMemo(
+    () => (collectionEpisodes ?? []).find((e) => e.infohash === infohash && e.file_idx === fileIdx),
+    [collectionEpisodes, infohash, fileIdx],
+  );
+  // `null` when the current file isn't in the collection's episode list yet
+  // (e.g. a season pack not individually indexed) — the side panel then
+  // shows every season rather than nothing.
+  const currentSeason = currentEpisode?.season ?? null;
+
   // The language to prefer when an episode has several offers (Multi / FR /
   // EN, …): the language of the file currently playing, falling back to
   // whichever language is most common among already-downloaded episodes
   // (the series' "dominant owned language" — same concept the prepare-next
   // flow already uses server-side).
   const currentLanguage = useMemo(() => {
-    const current = (collectionEpisodes ?? []).find(
-      (e) => e.infohash === infohash && e.file_idx === fileIdx,
-    );
-    if (current?.language && current.language !== "unknown") return current.language;
+    if (currentEpisode?.language && currentEpisode.language !== "unknown") {
+      return currentEpisode.language;
+    }
     const counts = new Map<string, number>();
     for (const e of collectionEpisodes ?? []) {
       if (e.language && e.language !== "unknown") {
@@ -484,17 +494,27 @@ export function WatchPage() {
       }
     }
     return best;
-  }, [collectionEpisodes, infohash, fileIdx]);
+  }, [collectionEpisodes, currentEpisode]);
 
   // Side-panel rows: the collection's episodes (downloaded + discovered)
   // when this is a TV collection (so separate-episode torrents list the
   // whole season), else the current torrent's video files (season pack /
   // movie extras / orphan). Episode rows link to their own
   // `(infohash, fileIdx)`; discovered-but-ungrabbed rows carry a `grab`
-  // payload instead and trigger `grabMutation` on click.
+  // payload instead and trigger `grabMutation` on click. Scoped to the
+  // CURRENT season only — a multi-season collection otherwise dumps every
+  // season's episodes into one flat list.
   const sideRows = useMemo<SideRow[]>(() => {
     if (isTvCollection && ((collectionEpisodes?.length ?? 0) > 0 || availableEpisodes.length > 0)) {
-      const downloaded = (collectionEpisodes ?? []).map((e) => {
+      const seasonEpisodes =
+        currentSeason != null
+          ? (collectionEpisodes ?? []).filter((e) => e.season === currentSeason)
+          : (collectionEpisodes ?? []);
+      const seasonAvailable =
+        currentSeason != null
+          ? availableEpisodes.filter((a) => a.season === currentSeason)
+          : availableEpisodes;
+      const downloaded = seasonEpisodes.map((e) => {
         const prog = e.infohash === infohash ? progressByFileIdx.get(e.file_idx) : undefined;
         const lang = e.language && e.language !== "unknown" ? e.language : "";
         return {
@@ -514,7 +534,7 @@ export function WatchPage() {
       // preference), else whatever's first — never show the same episode
       // 2-3 times over because it happens to be offered in Multi/FR/EN.
       const bySeasonEpisode = new Map<string, AvailableEpisodeEntry[]>();
-      for (const a of availableEpisodes) {
+      for (const a of seasonAvailable) {
         const key = `${a.season}:${a.episode}`;
         const list = bySeasonEpisode.get(key);
         if (list) list.push(a);
@@ -559,6 +579,7 @@ export function WatchPage() {
     isTvCollection,
     collectionEpisodes,
     availableEpisodes,
+    currentSeason,
     currentLanguage,
     videoFiles,
     progressByFileIdx,

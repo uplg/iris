@@ -117,7 +117,11 @@ fun HistoryScreen(
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             IrisButton("← Back", onBack, variant = IrisButtonVariant.Ghost)
-            Text("Watch history", style = MaterialTheme.typography.displaySmall)
+            Text(
+                "Watch history",
+                style = MaterialTheme.typography.displaySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
         }
 
         when {
@@ -180,12 +184,19 @@ private fun HistoryRow(
     item: HistoryItem,
     onClick: () -> Unit,
 ) {
-    var meta by remember(item.tmdbId, item.tmdbVerified) { mutableStateOf<MediaMetadata?>(null) }
-    LaunchedEffect(item.tmdbId, item.tmdbVerified, item.kind) {
-        if (!item.tmdbVerified || item.tmdbId == null) return@LaunchedEffect
+    // `item.tmdbId` is already the COLLECTION's id (authoritative — see
+    // `project_collection_tmdb_authority`), but `tmdbVerified` reflects the
+    // SOURCE TORRENT's own (often-unset) flag, not the collection's. Gating
+    // on it here dropped posters for plenty of legitimately-resolved
+    // history rows. Other poster lookups (`HomeScreen`'s Continue Watching
+    // row, `LibraryScreen`'s `LibraryGridCard`) only check for a non-null
+    // id — match that.
+    var meta by remember(item.tmdbId) { mutableStateOf<MediaMetadata?>(null) }
+    LaunchedEffect(item.tmdbId, item.kind) {
+        val id = item.tmdbId ?: return@LaunchedEffect
         val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
         meta = runCatching {
-            container.apiFor(url).tmdbMetadata(item.tmdbId, item.kind?.value)
+            container.apiFor(url).tmdbMetadata(id, item.kind?.value)
         }.getOrNull()
     }
     val posterUrl = tmdbPosterUrl(meta?.posterPath, "w185")

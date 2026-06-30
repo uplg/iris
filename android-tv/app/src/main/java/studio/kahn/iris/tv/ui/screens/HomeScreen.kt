@@ -69,6 +69,7 @@ import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -135,6 +136,8 @@ fun HomeScreen(
     onOpenForYou: () -> Unit,
     /** Open the mood board ("Tonight"). */
     onOpenMoods: () -> Unit,
+    /** Open the full watch-history list. */
+    onOpenHistory: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var continueWatching by remember { mutableStateOf<List<ContinueWatchingItem>>(emptyList()) }
@@ -283,6 +286,7 @@ fun HomeScreen(
                 onOpenCollection = onOpenCollection,
                 onOpenForYou = onOpenForYou,
                 onOpenMoods = onOpenMoods,
+                onOpenHistory = onOpenHistory,
                 onRetry = { loadVersion++ },
             )
         }
@@ -314,6 +318,7 @@ private fun HomeContent(
     onOpenCollection: (String) -> Unit,
     onOpenForYou: () -> Unit,
     onOpenMoods: () -> Unit,
+    onOpenHistory: () -> Unit,
     onRetry: () -> Unit,
 ) {
     LazyColumn(
@@ -338,6 +343,7 @@ private fun HomeContent(
                 onOpenSearch = onOpenSearch,
                 onOpenLibrary = onOpenLibrary,
                 onOpenTorrents = onOpenTorrents,
+                onOpenHistory = onOpenHistory,
                 onOpenSettings = onOpenSettings,
             )
         }
@@ -652,6 +658,7 @@ private fun HomeTopBar(
     onOpenSearch: (String?) -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenTorrents: () -> Unit,
+    onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     Row(
@@ -685,6 +692,11 @@ private fun HomeTopBar(
                 icon = Icons.Filled.Storage,
                 contentDescription = "Seedbox / Torrents",
                 onClick = onOpenTorrents,
+            )
+            TvIconButton(
+                icon = Icons.Filled.History,
+                contentDescription = "Watch history",
+                onClick = onOpenHistory,
             )
             TvIconButton(
                 icon = Icons.Filled.Settings,

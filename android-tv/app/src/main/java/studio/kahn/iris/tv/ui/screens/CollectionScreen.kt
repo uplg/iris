@@ -152,7 +152,11 @@ fun CollectionScreen(
         map.mapValues { it.value.toList() }.toSortedMap()
     }
     if (selectedSeason == -1 && seasons.isNotEmpty()) {
-        selectedSeason = seasons.keys.first()
+        // Season 0 is "Specials" — land on the first REAL season by
+        // default so a show with OAVs/specials doesn't open on the
+        // specials tab. Falls back to season 0 only when it's the only
+        // season available.
+        selectedSeason = seasons.keys.firstOrNull { it > 0 } ?: seasons.keys.first()
     }
     val activeSeason = selectedSeason
 
@@ -730,7 +734,7 @@ private fun SeasonTabs(
                 ),
             ) {
                 Text(
-                    "Season $s",
+                    if (s == 0) "Specials" else "Season $s",
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )

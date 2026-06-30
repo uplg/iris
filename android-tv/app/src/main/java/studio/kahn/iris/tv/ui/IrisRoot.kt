@@ -195,6 +195,9 @@ fun IrisRoot(
                     onOpenMoods = {
                         navController.navigate(Routes.MOODS)
                     },
+                    onOpenHistory = {
+                        navController.navigate(Routes.HISTORY)
+                    },
                 )
             }
             composable(Routes.MOODS) {
