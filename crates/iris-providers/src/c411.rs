@@ -108,7 +108,7 @@ impl C411 {
                 .map_err(|e| Error::Provider(format!("c411 referer invalid: {e}")))?,
         );
 
-        let http = Client::builder()
+        let http = crate::tls::client_builder()
             .default_headers(headers)
             .timeout(Duration::from_secs(15))
             .build()

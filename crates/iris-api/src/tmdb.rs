@@ -149,7 +149,7 @@ pub struct MediaMetadata {
 
 impl TmdbClient {
     pub fn new(api_key: String) -> anyhow::Result<Self> {
-        let http = reqwest::Client::builder()
+        let http = iris_providers::tls::client_builder()
             .timeout(Duration::from_secs(10))
             .build()?;
         Ok(Self {

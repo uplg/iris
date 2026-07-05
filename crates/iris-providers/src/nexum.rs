@@ -81,7 +81,7 @@ impl NexumProvider {
                 .map_err(|e| Error::Provider(format!("nexum api key invalid: {e}")))?,
         );
 
-        let http = Client::builder()
+        let http = crate::tls::client_builder()
             .default_headers(headers)
             .timeout(Duration::from_secs(20))
             .build()

@@ -13,6 +13,7 @@
 pub mod c411;
 pub mod nexum;
 pub mod registry;
+pub mod tls;
 pub mod torr9;
 pub mod torznab;
 pub mod unit3d;

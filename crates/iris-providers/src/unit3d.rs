@@ -148,7 +148,7 @@ impl Unit3dProvider {
         headers.insert(ACCEPT, HeaderValue::from_static("application/json, */*"));
         headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
 
-        let http = Client::builder()
+        let http = crate::tls::client_builder()
             .default_headers(headers)
             .timeout(Duration::from_secs(20))
             .build()

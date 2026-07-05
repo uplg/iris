@@ -81,7 +81,7 @@ query ($mediaId: Int) {
 
 impl AniListClient {
     pub fn new() -> anyhow::Result<Self> {
-        let http = reqwest::Client::builder()
+        let http = iris_providers::tls::client_builder()
             .timeout(Duration::from_secs(15))
             .user_agent("iris/1.0 (+https://uplg.xyz)")
             .build()?;

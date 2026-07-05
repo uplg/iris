@@ -261,7 +261,7 @@ pub struct LiveTvService {
 
 impl LiveTvService {
     pub fn new(cfg: iris_config::LiveTvConfig, jwt_secret: &str) -> anyhow::Result<Self> {
-        let http = reqwest::Client::builder()
+        let http = iris_providers::tls::client_builder()
             .user_agent(DEFAULT_UA)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))

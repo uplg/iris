@@ -5,6 +5,68 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-06
+
+### Added
+
+- **Live TV** (web + Android TV). A new "Live TV" section streams free
+  over-the-air channels — France's TNT curated and pinned in Arcom order,
+  then the rest of the country's catalogue by category, and **any other
+  country** via a picker. Channels come from the community
+  [iptv-org](https://iptv-org.github.io/) database. Everything plays through
+  a backend HLS proxy: the upstreams are plain-HTTP, CORS-less and often
+  demand a browser `User-Agent`, so clients never touch them directly; proxy
+  URLs are HMAC-signed so the endpoint can't be turned into an open proxy.
+  - **Now / Next guide.** Each channel shows the current and upcoming
+    programme with a progress bar, from a nightly XMLTV feed.
+  - **Stability-first fallback.** iptv-org lists several feeds per channel;
+    Iris probes them, never elects a feed that doesn't respond, escalates a
+    dead feed's cooldown, and rotates to the next candidate when the one
+    you're watching dies (a "Try another source" control is there too). The
+    player itself reports unplayable feeds so a bad source is demoted for
+    everyone.
+  - **E-AC-3 audio in the browser** — handled client-side by the same
+    decoder path the VOD player uses, no server-side transcoding.
+  - **Adaptive channel logos.** Logos are proxied (killing hotlink/CORS
+    noise) and sit on a plate whose shade is picked from the logo's own
+    luminance, so a black-on-black or white-on-white logo stays legible.
+- **Continue Watching now moves with you.**
+  - Finish an episode (pass 90 %) and the shelf automatically advances to the
+    **next episode** of that season — even one you haven't started yet —
+    instead of the show dropping off.
+  - **Manage a tile**: web shows a hover menu, Android TV a long-press menu,
+    each with **Mark as watched** and **Remove from Continue Watching**.
+    Removing a series hides it until you play a newer episode (it doesn't
+    silently come back), Netflix-style.
+
+### Changed
+
+- **A title counts as "watched" at 90 %** of its runtime, not the last 30
+  seconds. Movies leave Continue Watching once you pass 90 % and stop; an
+  episode counts as finished at 90 % so the shelf can advance. Applied
+  identically on web and Android TV.
+- **`quick-xml` upgraded to 0.41** to clear two upstream security advisories
+  (RUSTSEC-2026-0194 / -0195 — a quadratic-parse and an unbounded-allocation
+  DoS in XML parsing).
+
+### Fixed
+
+- **Anime "Specials" were mis-tagged as regular episodes**, producing a bogus
+  season/episode and polluting the release list; the SCENE filename parser
+  now recognises the Specials bucket.
+- **The "currently watching" surface listed duplicates / the wrong entry** in
+  some multi-release cases; episodes are now de-duplicated on a stable
+  identity.
+- **Season-pack suggestions no longer fight what you already own** — the
+  available-episodes/library logic was tightened so already-covered seasons
+  and languages aren't re-offered.
+- **Android TV history UI** polish (navigation and layout fixes).
+- **Android TV player — removed the top-right "‹ Prev / Next ›" episode
+  chips.** They lived in a Compose overlay above the native player, outside
+  its focus hierarchy, so the D-pad could never reach them. Next-episode
+  navigation is the native control-bar button (which *is* reachable);
+  previous-episode selection lives on the series screen.
+
 ## [1.1.0] - 2026-06-30
 
 ### Added
@@ -399,7 +461,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/0.9.1...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.2.0...HEAD
+[1.2.0]: https://github.com/uplg/iris/compare/1.1.0...1.2.0
 [0.9.1]: https://github.com/uplg/iris/compare/0.9.0...0.9.1
 [0.9.0]: https://github.com/uplg/iris/compare/0.8.1...0.9.0
 [0.8.1]: https://github.com/uplg/iris/compare/0.8.0...0.8.1

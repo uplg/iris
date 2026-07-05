@@ -71,6 +71,9 @@ reqwest = { version = "0.13.4", default-features = false, features = [
   "http2",
 ] }
 bytes = "1.11.1"
+# Mozilla's CA root bundle, compiled into the binary — so outbound TLS trust
+# doesn't depend on the (stale/incomplete) CA store of the Wolfi runtime image.
+webpki-root-certs = "1.0.8"
 
 # Serde / config
 serde = { version = "1.0.228", features = ["derive"] }
