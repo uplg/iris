@@ -147,7 +147,10 @@ http://example.com/arte.m3u8
         assert_eq!(tf1.name, "TF1 (720p)");
         assert_eq!(tf1.attrs.get("tvg-id").unwrap(), "TF1.fr@SD");
         assert_eq!(tf1.attrs.get("http-user-agent").unwrap(), "Mozilla/5.0 UA");
-        assert_eq!(tf1.vlc_opts.get("http-user-agent").unwrap(), "Mozilla/5.0 UA");
+        assert_eq!(
+            tf1.vlc_opts.get("http-user-agent").unwrap(),
+            "Mozilla/5.0 UA"
+        );
         assert_eq!(tf1.url, "https://example.com/tf1/index.m3u8");
 
         let a24 = &entries[1];
@@ -156,7 +159,10 @@ http://example.com/arte.m3u8
 
         let arte = &entries[2];
         assert_eq!(arte.name, "Arte (720p) [Geo-blocked]");
-        assert_eq!(arte.vlc_opts.get("http-referrer").unwrap(), "https://arte.tv/");
+        assert_eq!(
+            arte.vlc_opts.get("http-referrer").unwrap(),
+            "https://arte.tv/"
+        );
     }
 
     #[test]
@@ -166,7 +172,10 @@ http://example.com/arte.m3u8
         );
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "Chaîne, la télé");
-        assert_eq!(entries[0].attrs.get("tvg-logo").unwrap(), "https://x/y,z.png");
+        assert_eq!(
+            entries[0].attrs.get("tvg-logo").unwrap(),
+            "https://x/y,z.png"
+        );
     }
 
     #[test]

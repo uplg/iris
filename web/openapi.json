@@ -1224,6 +1224,29 @@
         }
       }
     },
+    "/api/me/continue-watching/dismiss": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "dismiss_continue_watching",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DismissCwRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Removed from the caller's Continue Watching"
+          }
+        }
+      }
+    },
     "/api/me/devices": {
       "get": {
         "tags": [
@@ -2634,6 +2657,68 @@
             "description": "Progress saved"
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "delete_progress",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed from the caller's Continue Watching / history"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/files/{idx}/progress/complete": {
+      "post": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "mark_watched",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Marked watched for the caller"
+          }
+        }
       }
     },
     "/api/torrents/{infohash}/files/{idx}/seek": {
@@ -3680,9 +3765,18 @@
           "file_idx",
           "position_seconds",
           "last_watched_at",
-          "completed"
+          "completed",
+          "next_up"
         ],
         "properties": {
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Parent collection id (TV series). Sent back to\n`/api/me/continue-watching/dismiss` so \"remove\" hides the whole\nseries, not just one episode. Null for movies / standalone."
+          },
           "completed": {
             "type": "boolean"
           },
@@ -3720,6 +3814,10 @@
           "last_watched_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "next_up": {
+            "type": "boolean",
+            "description": "True when this is the NEXT unstarted episode (the previous one is\nfinished) rather than a mid-way resume. Clients label it \"Up next\"."
           },
           "position_seconds": {
             "type": "number",
@@ -3866,6 +3964,33 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "DismissCwRequest": {
+        "type": "object",
+        "properties": {
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Series to hide (TV). When set, the whole collection is removed from\nContinue Watching until the user plays a newer episode."
+          },
+          "file_idx": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "infohash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Movie / standalone fallback: the exact file whose progress row is\ndeleted. Ignored when `collection_id` is present."
           }
         }
       },

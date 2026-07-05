@@ -50,7 +50,10 @@ const TNT_CHANNELS: &[(u16, &[&str])] = &[
     (5, &["france5"]),
     (6, &["m6"]),
     (7, &["arte"]),
-    (8, &["lachaineparlementaire", "lcp", "lcpan", "lcppublicsenat"]),
+    (
+        8,
+        &["lachaineparlementaire", "lcp", "lcpan", "lcppublicsenat"],
+    ),
     (9, &["w9"]),
     (10, &["tmc"]),
     (11, &["tfx", "nt1"]),
@@ -63,7 +66,10 @@ const TNT_CHANNELS: &[(u16, &[&str])] = &[
     (18, &["t18", "cmitv"]),
     (19, &["novo19", "oftv"]),
     (20, &["tf1seriesfilms", "hd1"]),
-    (21, &["lequipe", "lequipetv", "equipetv", "equipe21", "lequipe21"]),
+    (
+        21,
+        &["lequipe", "lequipetv", "equipetv", "equipe21", "lequipe21"],
+    ),
     (22, &["6ter"]),
     (23, &["rmcstory", "numero23"]),
     (24, &["rmcdecouverte"]),
@@ -115,7 +121,11 @@ pub fn build_channels(
                 // Fill blanks the first entry lacked; flags are OR'd per
                 // source so one reliable source clears nothing.
                 if ch.logo_url.is_none() {
-                    ch.logo_url = entry.attrs.get("tvg-logo").cloned().filter(|s| !s.is_empty());
+                    ch.logo_url = entry
+                        .attrs
+                        .get("tvg-logo")
+                        .cloned()
+                        .filter(|s| !s.is_empty());
                 }
                 ch.geo_blocked &= geo_blocked;
                 ch.not_24_7 &= not_24_7;
@@ -128,7 +138,11 @@ pub fn build_channels(
                 id: identity,
                 name,
                 tvg_id: tvg_id.cloned(),
-                logo_url: entry.attrs.get("tvg-logo").cloned().filter(|s| !s.is_empty()),
+                logo_url: entry
+                    .attrs
+                    .get("tvg-logo")
+                    .cloned()
+                    .filter(|s| !s.is_empty()),
                 categories: entry
                     .attrs
                     .get("group-title")
@@ -161,7 +175,10 @@ pub fn build_channels(
         let key = |c: &Channel| {
             (
                 c.tnt_number.unwrap_or(u16::MAX),
-                c.categories.first().cloned().map_or((1u8, String::new()), |g| (0, g)),
+                c.categories
+                    .first()
+                    .cloned()
+                    .map_or((1u8, String::new()), |g| (0, g)),
                 c.name.to_lowercase(),
             )
         };
@@ -347,7 +364,10 @@ mod tests {
         ]];
         let channels = build_channels(&playlists, Some(&HashMap::new()));
         let names: Vec<&str> = channels.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, vec!["TF1", "M6", "Aardvark", "Zebra TV", "Mystery Channel"]);
+        assert_eq!(
+            names,
+            vec!["TF1", "M6", "Aardvark", "Zebra TV", "Mystery Channel"]
+        );
         assert_eq!(channels[0].tnt_number, Some(1));
         assert_eq!(channels[1].tnt_number, Some(6));
         assert_eq!(channels[4].tnt_number, None);
@@ -358,7 +378,12 @@ mod tests {
         let playlists = vec![
             vec![
                 entry("Gulli.fr@SD", "Gulli", "http://x/gulli-sd", "Kids"),
-                entry("Gulli.fr@HD", "Gulli HD (720p)", "http://x/gulli-hd", "Kids"),
+                entry(
+                    "Gulli.fr@HD",
+                    "Gulli HD (720p)",
+                    "http://x/gulli-hd",
+                    "Kids",
+                ),
             ],
             // second playlist: same channel via name match → extra fallback
             vec![entry("", "Gulli (1080p)", "http://y/gulli", "Kids")],
@@ -368,10 +393,18 @@ mod tests {
         let ch = &channels[0];
         assert_eq!(ch.tnt_number, Some(12));
         let urls: Vec<&str> = ch.sources.iter().map(|s| s.url.as_str()).collect();
-        assert_eq!(urls, vec!["http://y/gulli", "http://x/gulli-hd", "http://x/gulli-sd"]);
+        assert_eq!(
+            urls,
+            vec!["http://y/gulli", "http://x/gulli-hd", "http://x/gulli-sd"]
+        );
         // duplicate URL is not re-added
         let playlists2 = vec![playlists[0].clone(), playlists[0].clone()];
-        assert_eq!(build_channels(&playlists2, Some(&HashMap::new()))[0].sources.len(), 2);
+        assert_eq!(
+            build_channels(&playlists2, Some(&HashMap::new()))[0]
+                .sources
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -394,7 +427,12 @@ mod tests {
 
     #[test]
     fn db_merge_adds_alternate_feeds_without_duplicates() {
-        let playlists = vec![vec![entry("M6.fr@HD", "M6 (1080p)", "http://dead/M6.m3u8", "Entertainment")]];
+        let playlists = vec![vec![entry(
+            "M6.fr@HD",
+            "M6 (1080p)",
+            "http://dead/M6.m3u8",
+            "Entertainment",
+        )]];
         let mut channels = build_channels(&playlists, Some(&HashMap::new()));
         let mut db: HashMap<String, Vec<StreamSource>> = HashMap::new();
         db.insert(
@@ -417,7 +455,10 @@ mod tests {
         );
         merge_db_sources(&mut channels, &db);
         let urls: Vec<&str> = channels[0].sources.iter().map(|s| s.url.as_str()).collect();
-        assert_eq!(urls, vec!["http://dead/M6.m3u8", "http://alt/M6-HD/index.m3u8"]);
+        assert_eq!(
+            urls,
+            vec!["http://dead/M6.m3u8", "http://alt/M6-HD/index.m3u8"]
+        );
         // channel without tvg-id or without db entry is untouched
         let playlists2 = vec![vec![entry("", "Mystery", "http://x/mys.m3u8", "")]];
         let mut channels2 = build_channels(&playlists2, None);
@@ -443,6 +484,9 @@ mod tests {
     #[test]
     fn legacy_alias_matches_tfx() {
         let playlists = vec![vec![entry("NT1.fr", "TFX", "http://x/tfx", "Series")]];
-        assert_eq!(build_channels(&playlists, Some(&HashMap::new()))[0].tnt_number, Some(11));
+        assert_eq!(
+            build_channels(&playlists, Some(&HashMap::new()))[0].tnt_number,
+            Some(11)
+        );
     }
 }

@@ -85,7 +85,14 @@ pub fn router() -> Router<AppState> {
             // `navigator.sendBeacon` (used at unload to flush the last
             // playback position) is hard-wired to POST.
             "/{infohash}/files/{idx}/progress",
-            get(get_progress).put(put_progress).post(put_progress),
+            get(get_progress)
+                .put(put_progress)
+                .post(put_progress)
+                .delete(delete_progress),
+        )
+        .route(
+            "/{infohash}/files/{idx}/progress/complete",
+            post(mark_watched),
         )
         .route("/{infohash}/progress", get(get_torrent_progress))
 }
@@ -305,6 +312,40 @@ pub(crate) async fn put_progress(
             })
             .await;
     }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/torrents/{infohash}/files/{idx}/progress",
+    params(("infohash" = String, Path), ("idx" = i32, Path)),
+    responses((status = 204, description = "Removed from the caller's Continue Watching / history")),
+    tag = "torrents",
+)]
+pub(crate) async fn delete_progress(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((infohash, idx)): Path<(String, usize)>,
+) -> ApiResult<StatusCode> {
+    let infohash = infohash.to_ascii_lowercase();
+    iris_db::playback::delete(state.db(), user.id, &infohash, file_idx_to_i64(idx)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/torrents/{infohash}/files/{idx}/progress/complete",
+    params(("infohash" = String, Path), ("idx" = i32, Path)),
+    responses((status = 204, description = "Marked watched for the caller")),
+    tag = "torrents",
+)]
+pub(crate) async fn mark_watched(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((infohash, idx)): Path<(String, usize)>,
+) -> ApiResult<StatusCode> {
+    let infohash = infohash.to_ascii_lowercase();
+    iris_db::playback::mark_completed(state.db(), user.id, &infohash, file_idx_to_i64(idx)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

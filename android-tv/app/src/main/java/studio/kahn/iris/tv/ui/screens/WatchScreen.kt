@@ -73,6 +73,16 @@ import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 
+/** A title counts as watched/done once playback passes this fraction — the
+ *  last ~10 % is credits / recap, so 90 % is "finished" for both movies
+ *  (removed from Continue Watching) and episodes (Continue Watching then
+ *  advances to the next one). Mirrors the web player. */
+private const val WATCHED_FRACTION = 0.90
+
+/** Whether `posMs` into `durMs` counts as watched. */
+private fun isWatched(posMs: Long, durMs: Long?): Boolean =
+    durMs != null && durMs > 0 && posMs >= durMs * WATCHED_FRACTION
+
 /**
  * Full-screen Media3 PlayerView. Pre-mount we poll `/play/status` so
  * the user sees real download / remux progress instead of a silent
@@ -626,7 +636,7 @@ private fun ReadyPlayer(
                             durationSeconds = dur?.div(1000.0),
                             audioTrackIdx = currentAudioIdxRef.get()?.toLong(),
                             subtitleTrackIdx = currentSubIdxRef.get()?.toLong(),
-                            completed = dur != null && pos >= dur - 30_000,
+                            completed = isWatched(pos, dur),
                         ),
                     )
                 }
@@ -899,7 +909,7 @@ private fun ReadyPlayer(
                     }
                     if (pos - lastSavedMs >= 7_000) {
                         lastSavedMs = pos
-                        val completed = durationMs > 0 && pos >= durationMs - 30_000
+                        val completed = isWatched(pos, durationMs.takeIf { it > 0 })
                         val audioIdx = currentAudioIdxRef.get()
                         val subIdx = currentSubIdxRef.get()
                         scope.launch {
@@ -950,7 +960,7 @@ private fun ReadyPlayer(
                             durationSeconds = dur?.div(1000.0),
                             audioTrackIdx = audioIdx?.toLong(),
                             subtitleTrackIdx = subIdx?.toLong(),
-                            completed = dur != null && pos >= dur - 30_000,
+                            completed = isWatched(pos, dur),
                             seek = pendingSeekSave.getAndSet(false),
                         ),
                     )
@@ -989,7 +999,7 @@ private fun ReadyPlayer(
                                     durationSeconds = dur?.div(1000.0),
                                     audioTrackIdx = audioIdx?.toLong(),
                                     subtitleTrackIdx = subIdx?.toLong(),
-                                    completed = dur != null && pos >= dur - 30_000,
+                                    completed = isWatched(pos, dur),
                                     playing = false,
                                 ),
                             )

@@ -41,6 +41,14 @@ import { IrisPlayer } from "@/lib/iris-core/IrisPlayer";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
+/** A title counts as watched/done once playback passes this fraction — the
+ *  last ~10% is credits/recap, so 90% is "finished" for both movies (dropped
+ *  from Continue Watching) and episodes (Continue Watching then advances to
+ *  the next). Mirrors the Android TV player. */
+const WATCHED_FRACTION = 0.9;
+const isWatched = (t: number, dur: number | null): boolean =>
+  dur != null && dur > 0 && t >= dur * WATCHED_FRACTION;
+
 /** One row of the watch-page side panel — either an episode of the parent
  *  collection (possibly in a different torrent) or a file of the current
  *  torrent. Keyed on `(infohash, fileIdx)` since episodes can span
@@ -692,7 +700,7 @@ export function WatchPage() {
       if (infohash && t > 5 && t - lastSavedTimeRef.current > 7) {
         lastSavedTimeRef.current = t;
         const dur = lastDurationRef.current ?? null;
-        const completed = dur != null && t >= dur - 30;
+        const completed = isWatched(t, dur);
         const seek = seekPendingRef.current;
         seekPendingRef.current = false;
         void progressApi.put(infohash, fileIdx, {
@@ -785,7 +793,7 @@ export function WatchPage() {
       if (t <= 0 || t === lastSavedTimeRef.current) return;
       lastSavedTimeRef.current = t;
       const dur = lastDurationRef.current ?? null;
-      const completed = dur != null && t >= dur - 30;
+      const completed = isWatched(t, dur);
       const body = JSON.stringify({
         position_seconds: t,
         duration_seconds: dur,

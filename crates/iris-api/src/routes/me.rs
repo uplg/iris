@@ -16,6 +16,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(me))
         .route("/continue-watching", get(continue_watching))
+        .route(
+            "/continue-watching/dismiss",
+            axum::routing::post(dismiss_continue_watching),
+        )
         .route("/history", get(history))
         .route("/watchlist", get(watchlist))
         .route("/password", axum::routing::post(change_password))
@@ -150,6 +154,13 @@ pub(crate) struct ContinueWatchingItem {
     duration_seconds: Option<f64>,
     last_watched_at: chrono::DateTime<chrono::Utc>,
     completed: bool,
+    /// Parent collection id (TV series). Sent back to
+    /// `/api/me/continue-watching/dismiss` so "remove" hides the whole
+    /// series, not just one episode. Null for movies / standalone.
+    collection_id: Option<uuid::Uuid>,
+    /// True when this is the NEXT unstarted episode (the previous one is
+    /// finished) rather than a mid-way resume. Clients label it "Up next".
+    next_up: bool,
 }
 
 /// Post-0.4 "My Watchlist" payload. Derived from TV collections
@@ -273,8 +284,37 @@ pub(crate) async fn continue_watching(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<Vec<ContinueWatchingItem>>> {
-    let rows = iris_db::playback::continue_watching(state.db(), user.id, 12).await?;
-    let out = rows
+    // Two sources: episodes/movies the user paused mid-way (resume), and the
+    // NEXT owned episode for any series whose most-recent episode is finished
+    // (next-up). Merge them into one shelf, one tile per series — a resume
+    // tile wins over a next-up tile, and within a series the most-recently
+    // active wins — then trim to the shelf size.
+    let resume = iris_db::playback::continue_watching(state.db(), user.id, 24).await?;
+    let next_up = iris_db::playback::continue_watching_next_up(state.db(), user.id, 24).await?;
+
+    let mut merged: Vec<iris_db::playback::ContinueWatchingRow> = Vec::new();
+    // collection_id → index into `merged`, so a series appears once.
+    let mut by_collection: std::collections::HashMap<uuid::Uuid, usize> =
+        std::collections::HashMap::new();
+    // Resume rows first so they take precedence over a next-up tile for the
+    // same series; both lists are already newest-first.
+    for r in resume.into_iter().chain(next_up) {
+        if let Some(cid) = r.collection_id {
+            if let Some(&i) = by_collection.get(&cid) {
+                // Keep whichever is more recent for this series.
+                if r.last_watched_at > merged[i].last_watched_at {
+                    merged[i] = r;
+                }
+                continue;
+            }
+            by_collection.insert(cid, merged.len());
+        }
+        merged.push(r);
+    }
+    merged.sort_by_key(|r| std::cmp::Reverse(r.last_watched_at));
+    merged.truncate(12);
+
+    let out = merged
         .into_iter()
         .map(|r| {
             let file_path = state.engine().get_by_infohash(&r.infohash).and_then(|s| {
@@ -296,10 +336,60 @@ pub(crate) async fn continue_watching(
                 duration_seconds: r.duration_seconds,
                 last_watched_at: r.last_watched_at,
                 completed: r.completed,
+                collection_id: r.collection_id,
+                next_up: r.next_up,
             }
         })
         .collect();
     Ok(Json(out))
+}
+
+#[derive(Debug, serde::Deserialize, ToSchema)]
+pub(crate) struct DismissCwRequest {
+    /// Series to hide (TV). When set, the whole collection is removed from
+    /// Continue Watching until the user plays a newer episode.
+    collection_id: Option<uuid::Uuid>,
+    /// Movie / standalone fallback: the exact file whose progress row is
+    /// deleted. Ignored when `collection_id` is present.
+    infohash: Option<String>,
+    file_idx: Option<i64>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/me/continue-watching/dismiss",
+    request_body = DismissCwRequest,
+    responses((status = 204, description = "Removed from the caller's Continue Watching")),
+    tag = "me",
+)]
+pub(crate) async fn dismiss_continue_watching(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<DismissCwRequest>,
+) -> ApiResult<axum::http::StatusCode> {
+    if let Some(cid) = body.collection_id {
+        // TV series — hide the whole collection (survives frontier regen).
+        // Guard on existence: a stale id (series GC'd between the shelf fetch
+        // and this call) has nothing to hide, and inserting it would trip the
+        // `cw_dismissed` → `collections` foreign key. No-op is the right answer.
+        if iris_db::collections::get(state.db(), cid).await?.is_some() {
+            iris_db::playback::dismiss_collection(state.db(), user.id, cid).await?;
+        }
+    } else if let (Some(infohash), Some(file_idx)) = (body.infohash, body.file_idx) {
+        // Movie / standalone — just drop the one progress row.
+        iris_db::playback::delete(
+            state.db(),
+            user.id,
+            &infohash.to_ascii_lowercase(),
+            file_idx,
+        )
+        .await?;
+    } else {
+        return Err(ApiError::BadRequest(
+            "need collection_id or (infohash, file_idx)".into(),
+        ));
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// One row of the caller's full watch history (in-progress AND completed),

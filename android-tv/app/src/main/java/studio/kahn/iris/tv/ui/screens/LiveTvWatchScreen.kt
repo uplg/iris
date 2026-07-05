@@ -52,6 +52,9 @@ import studio.kahn.iris.tv.ui.theme.Spacing
 /** Now/next refresh cadence while watching (drives the overlay). */
 private const val EPG_REFRESH_MS = 30_000L
 
+/** How long the channel-name strip stays up after it (re)appears. */
+private const val OVERLAY_VISIBLE_MS = 4_000L
+
 /**
  * Live channel playback. Deliberately NOT [WatchScreen] — that one is
  * torrent-coupled (probe, /play/status gating, saved progress, episode
@@ -83,6 +86,17 @@ fun LiveTvWatchScreen(
     var autoRetried by remember(channelId) { mutableStateOf(false) }
     // Bumped by the Retry button to force a re-prepare of the same channel.
     var retryNonce by remember { mutableStateOf(0) }
+
+    // Channel-name/now-next strip auto-hides a few seconds after it appears —
+    // it must not sit persistently over the picture. `overlayTick` is bumped
+    // to (re)show it: on a zap (channelId change) and on any remote key.
+    var overlayVisible by remember { mutableStateOf(true) }
+    var overlayTick by remember { mutableStateOf(0) }
+    LaunchedEffect(channelId, overlayTick) {
+        overlayVisible = true
+        delay(OVERLAY_VISIBLE_MS)
+        overlayVisible = false
+    }
 
     LaunchedEffect(Unit) {
         serverUrl = container.sessionStore.serverUrl.first()
@@ -171,6 +185,8 @@ fun LiveTvWatchScreen(
                 if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN) {
                     return@onPreviewKeyEvent false
                 }
+                // Any remote press brings the channel strip back for a beat.
+                overlayTick++
                 val controllerUp = playerViewRef?.isControllerFullyVisible == true
                 when (event.nativeKeyEvent.keyCode) {
                     KeyEvent.KEYCODE_CHANNEL_UP -> {
@@ -221,18 +237,18 @@ fun LiveTvWatchScreen(
             update = { it.player = player.value },
         )
 
-        // DPAD up/down zap hints + channel/now overlay, always visible for a
-        // few seconds after a zap would be nicer; keep it simple: show the
-        // strip whenever we have guide data, bottom-aligned above the
-        // controller area.
-        ChannelOverlay(
-            channel = channels.firstOrNull { it.id == channelId },
-            fallbackName = channelId,
-            nowNext = epg[channelId],
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(Spacing.xl),
-        )
+        // Channel name + now/next strip: shown on entry / zap / any key, then
+        // auto-hidden so it doesn't sit persistently over the picture.
+        if (overlayVisible) {
+            ChannelOverlay(
+                channel = channels.firstOrNull { it.id == channelId },
+                fallbackName = channelId,
+                nowNext = epg[channelId],
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(Spacing.xl),
+            )
+        }
 
         if (errorMessage != null) {
             Box(

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -25,6 +26,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -275,13 +277,19 @@ private fun ChannelCard(
             var tone by remember(logo) {
                 mutableStateOf(logo?.let { logoToneCache[it] } ?: LogoTone.Neutral)
             }
+            // Many logo hosts are dead/missing — a failed load must fall back
+            // to the letter tile, not a blank plate.
+            var logoFailed by remember(logo) { mutableStateOf(false) }
             Box(
                 Modifier
                     .fillMaxWidth()
                     .height(56.dp)
-                    .background(tone.well(), RoundedCornerShape(Radius.md)),
+                    .background(
+                        if (logo != null && !logoFailed) tone.well() else Color.Transparent,
+                        RoundedCornerShape(Radius.md),
+                    ),
             ) {
-                if (logo != null) {
+                if (logo != null && !logoFailed) {
                     AsyncImage(
                         // Software bitmap so the pixels are readable for the
                         // luminance pass (hardware bitmaps throw on getPixel).
@@ -292,6 +300,7 @@ private fun ChannelCard(
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize().padding(Spacing.sm),
                         contentScale = ContentScale.Fit,
+                        onError = { logoFailed = true },
                         onSuccess = { state ->
                             tone = logoToneCache.getOrPut(logo) {
                                 runCatching { logoTone(state.result.image.toBitmap()) }
@@ -300,12 +309,7 @@ private fun ChannelCard(
                         },
                     )
                 } else {
-                    Text(
-                        channel.name.take(1).uppercase(),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = IrisColors.Foreground,
-                        modifier = Modifier.align(Alignment.Center),
-                    )
+                    LogoLetterTile(channel.name, Modifier.align(Alignment.Center))
                 }
                 val badge = channel.tntNumber?.toString()
                 if (badge != null) {
@@ -364,6 +368,28 @@ private fun ChannelCard(
 private fun absolutize(base: String, path: String?): String? {
     if (path == null || !path.startsWith('/')) return path
     return base.trimEnd('/') + path
+}
+
+/** Branded first-letter tile — the fallback when a channel has no logo or
+ *  its logo fails to load. */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun LogoLetterTile(name: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(44.dp)
+            .background(
+                Brush.linearGradient(listOf(IrisColors.Brand3, IrisColors.Brand)),
+                RoundedCornerShape(Radius.md),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            name.take(1).uppercase(),
+            style = MaterialTheme.typography.titleMedium,
+            color = IrisColors.OnBrand,
+        )
+    }
 }
 
 /** Well plate tones behind a channel logo, elected from its luminance. */

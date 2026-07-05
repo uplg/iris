@@ -219,7 +219,13 @@ mod tests {
         let s = signer();
         let up = Url::parse("http://up.example/live/playlist.m3u8?token=abc&x=1").unwrap();
         let proxied = proxied_url("fr:tf1", &up, &s);
-        let u_param = proxied.split("u=").nth(1).unwrap().split('&').next().unwrap();
+        let u_param = proxied
+            .split("u=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap();
         let decoded = decode_upstream(u_param).unwrap();
         assert_eq!(decoded, up);
     }
@@ -253,7 +259,10 @@ mod tests {
         assert!(out.contains(&proxied_url("fr:tf1", &variant_abs, &s)));
         // EXT-X-MEDIA URI attribute rewritten
         let expected_audio = Url::parse("https://cdn.example/live/tf1/audio/fr.m3u8").unwrap();
-        assert!(out.contains(&format!("URI=\"{}\"", proxied_url("fr:tf1", &expected_audio, &s))));
+        assert!(out.contains(&format!(
+            "URI=\"{}\"",
+            proxied_url("fr:tf1", &expected_audio, &s)
+        )));
         // stream-inf line itself untouched
         assert!(out.contains("#EXT-X-STREAM-INF:BANDWIDTH=5000000,AUDIO=\"aud\"\n"));
         // no upstream URL left in clear
@@ -279,7 +288,10 @@ mod tests {
         let seg_rel = Url::parse("http://cdn.example/hls/ch/seg001.ts?tok=1").unwrap();
         let seg_abs = Url::parse("http://cdn.example/abs/seg002.ts").unwrap();
         for u in [&key, &map, &seg_rel, &seg_abs] {
-            assert!(out.contains(&proxied_url("fr:m6", u, &s)), "missing rewrite for {u}");
+            assert!(
+                out.contains(&proxied_url("fr:m6", u, &s)),
+                "missing rewrite for {u}"
+            );
         }
         // non-URI tags untouched
         assert!(out.contains("#EXT-X-TARGETDURATION:6\n"));
@@ -306,7 +318,10 @@ mod tests {
             strip_codecs_attr("#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS=\"avc1,mp4a.40.2\""),
             "#EXT-X-STREAM-INF:BANDWIDTH=1"
         );
-        assert_eq!(strip_codecs_attr("#EXT-X-STREAM-INF:BANDWIDTH=1"), "#EXT-X-STREAM-INF:BANDWIDTH=1");
+        assert_eq!(
+            strip_codecs_attr("#EXT-X-STREAM-INF:BANDWIDTH=1"),
+            "#EXT-X-STREAM-INF:BANDWIDTH=1"
+        );
     }
 
     #[test]

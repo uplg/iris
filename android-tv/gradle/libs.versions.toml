@@ -102,6 +102,9 @@ datastore-preferences = { group = "androidx.datastore", name = "datastore-prefer
 #   - coil-network-okhttp: pluggable network module (Coil 3 makes networking opt-in)
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
+# SVG decoder — some channel logos (iptv-org) are raw .svg, which Coil can't
+# render without this (a browser <img> can). See IrisApp.newImageLoader.
+coil-svg = { group = "io.coil-kt.coil3", name = "coil-svg", version.ref = "coil" }
 
 # TV Channels (PreviewPrograms exposed on the Android TV home launcher)
 tvprovider = { group = "androidx.tvprovider", name = "tvprovider", version.ref = "tvprovider" }

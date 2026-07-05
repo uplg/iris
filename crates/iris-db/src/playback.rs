@@ -67,6 +67,53 @@ pub async fn list_for_torrent(
     .await
 }
 
+/// Remove the user's progress for one file — "remove from Continue Watching".
+/// Deletes the row outright (per-user; the file on disk is untouched), so the
+/// tile leaves both the shelf and the caller's history.
+pub async fn delete(
+    pool: &SqlitePool,
+    user_id: UserId,
+    infohash: &str,
+    file_idx: i64,
+) -> Result<(), sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query(
+        "DELETE FROM playback_progress WHERE user_id = ?1 AND infohash = ?2 AND file_idx = ?3",
+    )
+    .bind(user)
+    .bind(infohash)
+    .bind(file_idx)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Mark one file watched — "mark as watched". Sets `completed = 1` on an
+/// existing row, or inserts a completed row (position 0) when the user never
+/// started it (e.g. skipping a "next up" episode). Idempotent.
+pub async fn mark_completed(
+    pool: &SqlitePool,
+    user_id: UserId,
+    infohash: &str,
+    file_idx: i64,
+) -> Result<(), sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query(
+        "INSERT INTO playback_progress \
+            (user_id, infohash, file_idx, position_seconds, completed, last_watched_at) \
+         VALUES (?1, ?2, ?3, 0, 1, ?4) \
+         ON CONFLICT(user_id, infohash, file_idx) DO UPDATE SET \
+            completed = 1, last_watched_at = excluded.last_watched_at",
+    )
+    .bind(user)
+    .bind(infohash)
+    .bind(file_idx)
+    .bind(Utc::now())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// "Moved on to the next episode" ⇒ the previous one is done.
 ///
 /// Given the episode the user just sent a heartbeat for (`current_*`), find the
@@ -204,6 +251,13 @@ pub struct ContinueWatchingRow {
     /// without the hint, an id collision between TMDB's separate
     /// movie / tv namespaces returns the wrong entry's poster.
     pub kind: Option<String>,
+    /// Parent collection id — de-duplicates the shelf to one tile per series
+    /// and identifies the series for "remove from Continue Watching".
+    pub collection_id: Option<Uuid>,
+    /// True when this tile is the NEXT (not-yet-started) episode surfaced
+    /// because the previous one is finished — vs a mid-way resume tile.
+    /// Clients label it "Up next" and manage it accordingly.
+    pub next_up: bool,
 }
 
 /// Recent in-progress items for the user (excluding completed). Joined with
@@ -223,12 +277,101 @@ pub async fn continue_watching(
             c.tmdb_id as tmdb_id, \
             t.tmdb_verified, p.file_idx, \
             p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
-            p.audio_track_idx, p.subtitle_track_idx, c.kind as kind \
+            p.audio_track_idx, p.subtitle_track_idx, c.kind as kind, \
+            t.collection_id as collection_id, 0 AS next_up \
          FROM playback_progress p \
          JOIN torrents t ON t.infohash = p.infohash AND t.deleted_at IS NULL \
          LEFT JOIN collections c ON c.id = t.collection_id \
          WHERE p.user_id = ?1 AND p.completed = FALSE \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM cw_dismissed d \
+             WHERE d.user_id = ?1 AND d.collection_id = t.collection_id \
+               AND d.dismissed_at >= p.last_watched_at) \
          ORDER BY p.last_watched_at DESC \
+         LIMIT ?2",
+    )
+    .bind(user)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// Remove a whole series from the caller's Continue Watching. Recorded at the
+/// collection level (see the `cw_dismissed` migration) so it survives the
+/// frontier-regeneration problem; it self-expires once the user plays a newer
+/// episode. Idempotent — re-dismissing just refreshes the timestamp.
+pub async fn dismiss_collection(
+    pool: &SqlitePool,
+    user_id: UserId,
+    collection_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query(
+        "INSERT INTO cw_dismissed (user_id, collection_id, dismissed_at) \
+         VALUES (?1, ?2, ?3) \
+         ON CONFLICT(user_id, collection_id) DO UPDATE SET dismissed_at = excluded.dismissed_at",
+    )
+    .bind(user)
+    .bind(collection_id)
+    .bind(Utc::now())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// "Next up" episodes for the Continue Watching shelf: for every collection
+/// whose MOST-RECENT playback is a COMPLETED episode, the next owned episode
+/// the user hasn't started yet — surfaced at position 0. This is what makes
+/// the shelf advance from "you finished S02E04" to "play S02E05" once an
+/// episode crosses the watched threshold, instead of the series dropping off.
+///
+/// Each row inherits the completed episode's `last_watched_at` so it sorts
+/// among the resume tiles by recency (and naturally ages out of the shelf).
+/// "Next" = the smallest `(season, episode)` strictly greater than the
+/// completed one that exists on disk — robust to episode/season gaps.
+pub async fn continue_watching_next_up(
+    pool: &SqlitePool,
+    user_id: UserId,
+    limit: i64,
+) -> Result<Vec<ContinueWatchingRow>, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query_as::<_, ContinueWatchingRow>(
+        "SELECT nf.infohash AS infohash, nt.name AS torrent_name, \
+            c.tmdb_id AS tmdb_id, nt.tmdb_verified AS tmdb_verified, \
+            nf.file_idx AS file_idx, 0.0 AS position_seconds, \
+            NULL AS duration_seconds, latest.last_watched_at AS last_watched_at, \
+            0 AS completed, NULL AS audio_track_idx, NULL AS subtitle_track_idx, \
+            c.kind AS kind, c.id AS collection_id, 1 AS next_up \
+         FROM ( \
+            SELECT ef.collection_id AS cid, ef.season AS s, ef.episode AS e, \
+                   p.last_watched_at AS last_watched_at \
+            FROM playback_progress p \
+            JOIN episode_files ef ON ef.infohash = p.infohash AND ef.file_idx = p.file_idx \
+            WHERE p.user_id = ?1 AND p.completed = 1 \
+              AND NOT EXISTS ( \
+                SELECT 1 FROM playback_progress p2 \
+                JOIN episode_files ef2 ON ef2.infohash = p2.infohash AND ef2.file_idx = p2.file_idx \
+                WHERE p2.user_id = ?1 AND ef2.collection_id = ef.collection_id \
+                  AND p2.last_watched_at > p.last_watched_at) \
+         ) latest \
+         JOIN collections c ON c.id = latest.cid \
+         JOIN episode_files nf ON nf.collection_id = latest.cid \
+              AND (nf.season > latest.s OR (nf.season = latest.s AND nf.episode > latest.e)) \
+         JOIN torrents nt ON nt.infohash = nf.infohash AND nt.deleted_at IS NULL \
+         WHERE NOT EXISTS ( \
+                SELECT 1 FROM playback_progress pp \
+                WHERE pp.user_id = ?1 AND pp.infohash = nf.infohash AND pp.file_idx = nf.file_idx) \
+           AND NOT EXISTS ( \
+                SELECT 1 FROM episode_files nf2 \
+                JOIN torrents nt2 ON nt2.infohash = nf2.infohash AND nt2.deleted_at IS NULL \
+                WHERE nf2.collection_id = latest.cid \
+                  AND (nf2.season > latest.s OR (nf2.season = latest.s AND nf2.episode > latest.e)) \
+                  AND (nf2.season < nf.season OR (nf2.season = nf.season AND nf2.episode < nf.episode))) \
+           AND NOT EXISTS ( \
+                SELECT 1 FROM cw_dismissed d \
+                WHERE d.user_id = ?1 AND d.collection_id = latest.cid \
+                  AND d.dismissed_at >= latest.last_watched_at) \
+         ORDER BY latest.last_watched_at DESC \
          LIMIT ?2",
     )
     .bind(user)

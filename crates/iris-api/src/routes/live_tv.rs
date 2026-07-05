@@ -292,7 +292,8 @@ pub(crate) async fn live_proxy(
     // For segments, feed the outcome into source health so a persistently
     // broken origin gets demoted and the next feed elected.
     if !is_playlist {
-        svc.note_segment_result(&params.c, status.is_success()).await;
+        svc.note_segment_result(&params.c, status.is_success())
+            .await;
     }
     if !status.is_success() {
         return Response::builder()
@@ -373,30 +374,22 @@ pub(crate) async fn live_logo(
     Query(params): Query<LiveLogoParams>,
 ) -> ApiResult<Response> {
     let svc = service(&state)?;
-    let resp = svc.fetch_logo(&params.u, &params.s).await?;
-    let status = resp.status();
-    if !status.is_success() {
-        // Dead logo host → forward its status; the card shows a letter tile.
+    let logo = svc.fetch_logo(&params.u, &params.s).await?;
+    if logo.status != 200 {
+        // Dead / rate-limited logo host → forward a 404 so the card shows its
+        // letter-tile fallback, and let the client cache that miss briefly so
+        // it doesn't re-hammer us (and us the upstream) on every re-render.
         return Response::builder()
-            .status(status.as_u16())
+            .status(axum::http::StatusCode::NOT_FOUND)
+            .header(header::CACHE_CONTROL, "public, max-age=300")
             .body(Body::empty())
             .map_err(|e| ApiError::Internal(e.into()));
     }
-    let content_type = resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("image/png")
-        .to_string();
-    let body = resp
-        .bytes()
-        .await
-        .map_err(|e| ApiError::Upstream(e.to_string()))?;
     Response::builder()
-        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_TYPE, logo.content_type)
         // Logos are effectively static — let clients cache for a day.
         .header(header::CACHE_CONTROL, "public, max-age=86400")
-        .body(Body::from(body))
+        .body(Body::from(logo.bytes))
         .map_err(|e| ApiError::Internal(e.into()))
 }
 

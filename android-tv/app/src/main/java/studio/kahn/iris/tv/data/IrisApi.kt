@@ -146,6 +146,25 @@ interface IrisApi {
         @Body body: ProgressUpdate,
     )
 
+    /** Remove a file from the caller's Continue Watching + history. */
+    @retrofit2.http.DELETE("api/torrents/{infohash}/files/{idx}/progress")
+    suspend fun removeProgress(
+        @Path("infohash") infohash: String,
+        @Path("idx") idx: Int,
+    )
+
+    /** Mark a file watched for the caller (also skips a "next up" tile). */
+    @POST("api/torrents/{infohash}/files/{idx}/progress/complete")
+    suspend fun markWatched(
+        @Path("infohash") infohash: String,
+        @Path("idx") idx: Int,
+    )
+
+    /** Remove a tile from Continue Watching — a whole TV series (pass its
+     *  `collectionId`) or a movie / standalone (pass `infohash` + `fileIdx`). */
+    @POST("api/me/continue-watching/dismiss")
+    suspend fun dismissContinueWatching(@Body body: DismissCwRequest)
+
     /** Single-file progress with `audio_track_idx` + `subtitle_track_idx`.
      *  Returns `null` when no entry exists yet (first watch). */
     @GET("api/torrents/{infohash}/files/{idx}/progress")

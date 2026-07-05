@@ -1,8 +1,15 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { Check, MoreVertical, X } from "lucide-react";
 
 import { MediaCard } from "@/components/MediaCard";
-import { me } from "@/lib/api";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { me, progress } from "@/lib/api";
 import { formatTimecode } from "@/lib/format";
 
 /**
@@ -15,11 +22,24 @@ import { formatTimecode } from "@/lib/format";
  */
 export function ContinueWatching() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ["continue-watching"],
     queryFn: me.continueWatching,
     staleTime: 30_000,
   });
+
+  const refresh = () => void qc.invalidateQueries({ queryKey: ["continue-watching"] });
+  const remove = (it: { collection_id?: string | null; infohash: string; file_idx: number }) =>
+    void me
+      .dismissContinueWatching(
+        it.collection_id
+          ? { collection_id: it.collection_id }
+          : { infohash: it.infohash, file_idx: it.file_idx },
+      )
+      .then(refresh);
+  const markWatched = (infohash: string, idx: number) =>
+    void progress.markWatched(infohash, idx).then(refresh);
 
   if (isLoading) return null;
   if (!data || data.length === 0) return null;
@@ -37,25 +57,46 @@ export function ContinueWatching() {
           // fall back to the torrent name otherwise.
           const fileName = it.file_path ? it.file_path.split("/").pop() : null;
           const primary = fileName ?? it.torrent_name;
-          const subtitle =
-            pct > 0
+          const subtitle = it.next_up
+            ? "Up next"
+            : pct > 0
               ? `${(pct * 100).toFixed(0)}% · ${formatTimecode(it.position_seconds)}`
               : "Just started";
           return (
-            <MediaCard
-              key={`${it.infohash}:${it.file_idx}`}
-              tmdbId={it.tmdb_id}
-              kind={it.kind ?? null}
-              title={primary}
-              subtitle={subtitle}
-              progress={pct}
-              onClick={() =>
-                navigate({
-                  to: "/watch/$infohash/$idx",
-                  params: { infohash: it.infohash, idx: String(it.file_idx) },
-                })
-              }
-            />
+            <div key={`${it.infohash}:${it.file_idx}`} className="group relative">
+              <MediaCard
+                tmdbId={it.tmdb_id}
+                kind={it.kind ?? null}
+                title={primary}
+                subtitle={subtitle}
+                progress={pct}
+                onClick={() =>
+                  navigate({
+                    to: "/watch/$infohash/$idx",
+                    params: { infohash: it.infohash, idx: String(it.file_idx) },
+                  })
+                }
+              />
+              {/* Manage menu — remove / mark watched. Shown on hover/focus. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label="Manage"
+                  onClick={(e) => e.stopPropagation()}
+                  className="focus-ring absolute top-2 right-2 grid size-8 place-items-center rounded-full bg-black/60 text-white opacity-0 backdrop-blur transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                >
+                  <MoreVertical className="size-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                  <DropdownMenuItem onSelect={() => markWatched(it.infohash, it.file_idx)}>
+                    <Check className="size-4" />
+                    {it.next_up ? "Mark watched & skip" : "Mark as watched"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => remove(it)}>
+                    <X className="size-4" /> Remove from Continue Watching
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           );
         })}
       </div>

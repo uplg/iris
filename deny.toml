@@ -24,6 +24,14 @@ ignore = [
     # tokenizers → model2vec-rs). Progress-bar byte formatting, not a
     # vulnerability; no safe upgrade. Goes away when indicatif drops it.
     "RUSTSEC-2025-0119",
+    # quick-xml <0.41 memory/CPU DoS pair (unbounded NsReader namespace alloc;
+    # quadratic duplicate-attribute check). Our OWN quick-xml is 0.41.0 (Live
+    # TV EPG + torznab, plain `Reader`, never `NsReader`). These fire only on
+    # the transitive quick-xml 0.38.4 pulled by librqbit-upnp, which parses the
+    # LAN gateway's UPnP device description (semi-trusted, DoS-only). No safe
+    # upgrade until the pinned librqbit RC bumps it. Revisit on librqbit 9.0.0.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
 
 [licenses]

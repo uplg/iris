@@ -364,6 +364,12 @@ export const progress = {
       seek?: boolean;
     },
   ) => api.put<void>(`/torrents/${infohash}/files/${idx}/progress`, body),
+  /** Remove this file from the caller's Continue Watching + history. */
+  remove: (infohash: string, idx: number) =>
+    api.delete<void>(`/torrents/${infohash}/files/${idx}/progress`),
+  /** Mark this file watched for the caller (also skips a "next up" tile). */
+  markWatched: (infohash: string, idx: number) =>
+    api.post<void>(`/torrents/${infohash}/files/${idx}/progress/complete`),
 };
 
 /** Per-user recommendation preferences (Slice 1 of "For You"). The
@@ -387,6 +393,14 @@ export type MoodBoard = components["schemas"]["MoodBoard"];
 export type MoodResults = components["schemas"]["MoodResults"];
 export const me = {
   continueWatching: () => api.get<ContinueWatchingItem[]>("/me/continue-watching"),
+  /** Remove a tile from Continue Watching. For a TV series pass its
+   *  `collection_id` (hides the whole show until a newer episode plays);
+   *  for a movie / standalone pass `infohash` + `file_idx`. */
+  dismissContinueWatching: (body: {
+    collection_id?: string | null;
+    infohash?: string;
+    file_idx?: number;
+  }) => api.post<void>("/me/continue-watching/dismiss", body),
   /** Full watch history — in-progress AND completed, survives deletion of
    *  the source torrent (see {@link HistoryItem}). */
   history: (limit?: number, offset?: number) =>

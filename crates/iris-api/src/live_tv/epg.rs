@@ -126,7 +126,10 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
             },
             Ok(Event::Text(t)) => {
                 if let (Some(field), Some((_, prog))) = (field, current.as_mut()) {
-                    let text = t.decode().map(std::borrow::Cow::into_owned).unwrap_or_default();
+                    let text = t
+                        .decode()
+                        .map(std::borrow::Cow::into_owned)
+                        .unwrap_or_default();
                     if !text.is_empty() {
                         match field {
                             "title" => prog.title = text,
@@ -253,8 +256,7 @@ mod tests {
 
     #[test]
     fn gzip_roundtrip() {
-        let mut enc =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(GUIDE.as_bytes()).unwrap();
         let gz = enc.finish().unwrap();
         assert_eq!(decode_gzip(&gz).unwrap(), GUIDE);

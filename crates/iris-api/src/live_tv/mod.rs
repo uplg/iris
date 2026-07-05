@@ -51,6 +51,24 @@ const PLAYLIST_TIMEOUT: Duration = Duration::from_secs(8);
 /// Playlists (m3u / m3u8) are text and small; cap protects the rewriter.
 const MAX_PLAYLIST_BYTES: usize = 4 * 1024 * 1024;
 
+/// How long a fetched logo stays served from memory (they're effectively
+/// static). A dead / rate-limited host is re-tried after the shorter
+/// negative TTL rather than on every request.
+const LOGO_CACHE_TTL: Duration = Duration::from_hours(24);
+const LOGO_NEG_TTL: Duration = Duration::from_mins(5);
+
+/// Max concurrent upstream logo fetches — low enough to stay under logo-host
+/// rate limits while a full grid warms the cache.
+const LOGO_FETCH_CONCURRENCY: usize = 6;
+
+/// Hard cap on cached logo entries (each a few KB). Cleared wholesale if
+/// exceeded — trivial to re-warm and far simpler than LRU bookkeeping.
+const LOGO_CACHE_MAX: usize = 4096;
+
+/// Logos above this many bytes aren't cached in memory (channel logos are
+/// tiny PNG/SVG; anything larger is almost certainly not a real logo).
+const LOGO_MAX_BYTES: usize = 512 * 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum LiveTvError {
     #[error("unknown country")]
@@ -119,7 +137,9 @@ impl SourceHealth {
 
     fn mark_failure(&self, now_ms: u64) {
         let failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
-        let exp = u32::try_from(failures.saturating_sub(1)).unwrap_or(u32::MAX).min(16);
+        let exp = u32::try_from(failures.saturating_sub(1))
+            .unwrap_or(u32::MAX)
+            .min(16);
         let backoff = SOURCE_COOLDOWN_BASE
             .saturating_mul(2u32.saturating_pow(exp))
             .min(SOURCE_COOLDOWN_MAX);
@@ -171,6 +191,44 @@ struct ServiceInner {
     /// Serializes cold loads so N concurrent first-requests for a country
     /// fetch its playlist once.
     load_lock: tokio::sync::Mutex<()>,
+    /// Fetched channel logos, keyed by upstream URL. Third-party logo hosts
+    /// (GitHub raw, various CDNs) rate-limit a burst of ~200 concurrent GETs
+    /// from one server IP — so a whole grid loading cold used to 429. We fetch
+    /// each logo at most once per TTL and serve every later request (reloads,
+    /// other household members) from here. Negative results are cached too
+    /// (short TTL) so a dead host isn't re-hammered.
+    logo_cache: RwLock<HashMap<String, Arc<CachedLogo>>>,
+    /// Caps concurrent upstream logo fetches so a cold grid warms the cache
+    /// without tripping the host's rate limit.
+    logo_sem: tokio::sync::Semaphore,
+}
+
+/// A cached logo — the bytes + content-type on success, or just the forwarded
+/// status on failure (so the negative result also short-circuits refetching).
+struct CachedLogo {
+    status: u16,
+    content_type: String,
+    bytes: Vec<u8>,
+    fetched_at: Instant,
+}
+
+impl CachedLogo {
+    fn is_fresh(&self, now: Instant) -> bool {
+        let ttl = if self.status == 200 {
+            LOGO_CACHE_TTL
+        } else {
+            LOGO_NEG_TTL
+        };
+        now.duration_since(self.fetched_at) < ttl
+    }
+}
+
+/// Served logo — bytes + content-type on success, or the upstream error status
+/// to forward (empty body → the client's letter-tile fallback).
+pub struct LogoResponse {
+    pub status: u16,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -197,6 +255,8 @@ impl LiveTvService {
                 streams_db: RwLock::new(None),
                 health: RwLock::new(HashMap::new()),
                 load_lock: tokio::sync::Mutex::new(()),
+                logo_cache: RwLock::new(HashMap::new()),
+                logo_sem: tokio::sync::Semaphore::new(LOGO_FETCH_CONCURRENCY),
             }),
         })
     }
@@ -228,8 +288,7 @@ impl LiveTvService {
             .await
             .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
         let fetched = Arc::new(fetched);
-        *self.inner.countries.write().expect("poisoned") =
-            Some((fetched.clone(), Instant::now()));
+        *self.inner.countries.write().expect("poisoned") = Some((fetched.clone(), Instant::now()));
         Ok(fetched)
     }
 
@@ -354,12 +413,24 @@ impl LiveTvService {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!(error = %e, "live tv streams db parse failed");
-                    return self.inner.streams_db.read().expect("poisoned").clone().map(|(db, _)| db);
+                    return self
+                        .inner
+                        .streams_db
+                        .read()
+                        .expect("poisoned")
+                        .clone()
+                        .map(|(db, _)| db);
                 }
             },
             Err(e) => {
                 tracing::warn!(error = %e, "live tv streams db fetch failed");
-                return self.inner.streams_db.read().expect("poisoned").clone().map(|(db, _)| db);
+                return self
+                    .inner
+                    .streams_db
+                    .read()
+                    .expect("poisoned")
+                    .clone()
+                    .map(|(db, _)| db);
             }
         };
 
@@ -386,11 +457,7 @@ impl LiveTvService {
         Some(db)
     }
 
-    async fn fetch_text(
-        &self,
-        url: &str,
-        timeout: Duration,
-    ) -> Result<(String, Url), LiveTvError> {
+    async fn fetch_text(&self, url: &str, timeout: Duration) -> Result<(String, Url), LiveTvError> {
         let resp = self
             .inner
             .http
@@ -486,31 +553,124 @@ impl LiveTvService {
     /// channel-list response). Kills the CORS noise of hotlinking hundreds
     /// of third-party hosts and lets clients read pixels for the
     /// luminance-adaptive logo well.
-    pub async fn fetch_logo(
-        &self,
-        encoded: &str,
-        sig: &str,
-    ) -> Result<reqwest::Response, LiveTvError> {
+    pub async fn fetch_logo(&self, encoded: &str, sig: &str) -> Result<LogoResponse, LiveTvError> {
         let upstream = proxy::decode_upstream(encoded).ok_or(LiveTvError::BadProxyRequest)?;
-        if !self.inner.signer.verify(proxy::LOGO_KEY, upstream.as_str(), sig) {
+        if !self
+            .inner
+            .signer
+            .verify(proxy::LOGO_KEY, upstream.as_str(), sig)
+        {
             return Err(LiveTvError::BadProxyRequest);
         }
-        // Forward the upstream status as-is (a dead logo host → 404 → the
-        // card's letter-tile fallback), rather than a 502 that spams the
-        // error log for a purely cosmetic asset.
-        self.inner
-            .http
-            .get(upstream)
-            .send()
+        let key = upstream.as_str().to_string();
+        let now = Instant::now();
+
+        // Fast path: a fresh cache entry (success OR recent failure) means no
+        // upstream request at all — this is what stops the grid 429'ing.
+        if let Some(hit) = self.cached_logo(&key, now) {
+            return Ok(hit);
+        }
+
+        // Cap concurrent upstream fetches so a cold grid doesn't fan hundreds
+        // of parallel GETs at one host. The permit is released on drop.
+        let _permit = self
+            .inner
+            .logo_sem
+            .acquire()
             .await
-            .map_err(|e| LiveTvError::Upstream(e.to_string()))
+            .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
+
+        // Re-check under the permit: while we waited, another task may have
+        // fetched the same logo (single-flight-ish for the common case where
+        // the grid requests each URL once).
+        if let Some(hit) = self.cached_logo(&key, now) {
+            return Ok(hit);
+        }
+
+        // Forward the upstream status as-is (a dead logo host → 404 → the
+        // card's letter-tile fallback), rather than a 502 that spams the error
+        // log for a purely cosmetic asset. A transport error is cached as a
+        // 502 so we don't retry it on every tile this minute.
+        let cached = match self.inner.http.get(upstream).send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                if resp.status().is_success() {
+                    let content_type = resp
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("image/png")
+                        .to_string();
+                    let bytes = resp
+                        .bytes()
+                        .await
+                        .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
+                    if bytes.len() <= LOGO_MAX_BYTES {
+                        CachedLogo {
+                            status,
+                            content_type,
+                            bytes: bytes.to_vec(),
+                            fetched_at: now,
+                        }
+                    } else {
+                        // Oversized — serve once, don't cache the blob.
+                        return Ok(LogoResponse {
+                            status,
+                            content_type,
+                            bytes: bytes.to_vec(),
+                        });
+                    }
+                } else {
+                    CachedLogo {
+                        status,
+                        content_type: String::new(),
+                        bytes: Vec::new(),
+                        fetched_at: now,
+                    }
+                }
+            }
+            Err(_) => CachedLogo {
+                status: 502,
+                content_type: String::new(),
+                bytes: Vec::new(),
+                fetched_at: now,
+            },
+        };
+
+        let response = LogoResponse {
+            status: cached.status,
+            content_type: cached.content_type.clone(),
+            bytes: cached.bytes.clone(),
+        };
+        self.store_logo(key, Arc::new(cached));
+        Ok(response)
+    }
+
+    /// Return a fresh cached logo for `key`, if any.
+    fn cached_logo(&self, key: &str, now: Instant) -> Option<LogoResponse> {
+        let cache = self.inner.logo_cache.read().ok()?;
+        let entry = cache.get(key)?;
+        entry.is_fresh(now).then(|| LogoResponse {
+            status: entry.status,
+            content_type: entry.content_type.clone(),
+            bytes: entry.bytes.clone(),
+        })
+    }
+
+    /// Insert a cached logo, wholesale-clearing if the cache got too big.
+    fn store_logo(&self, key: String, entry: Arc<CachedLogo>) {
+        if let Ok(mut cache) = self.inner.logo_cache.write() {
+            if cache.len() >= LOGO_CACHE_MAX && !cache.contains_key(&key) {
+                cache.clear();
+            }
+            cache.insert(key, entry);
+        }
     }
 
     /// Signed same-origin URL for a channel logo (`None` for unusable URLs).
     pub fn logo_proxy_url(&self, logo_url: &str) -> Option<String> {
         let url = Url::parse(logo_url).ok()?;
-        matches!(url.scheme(), "http" | "https")
-            .then(|| proxy::logo_url(&url, &self.inner.signer))
+        matches!(url.scheme(), "http" | "https").then(|| proxy::logo_url(&url, &self.inner.signer))
     }
 
     /// A client failed to PLAY the stream it was served (unsupported audio
@@ -533,8 +693,7 @@ impl LiveTvService {
         let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
         snap.health[idx][active].mark_failure(now_ms);
         // Re-elect: first source not cooling down, if any.
-        let next = (0..channel.sources.len())
-            .find(|&si| !snap.health[idx][si].in_cooldown(now_ms));
+        let next = (0..channel.sources.len()).find(|&si| !snap.health[idx][si].in_cooldown(now_ms));
         if let Some(si) = next {
             snap.active_source[idx].store(si, Ordering::Relaxed);
         }
@@ -576,8 +735,8 @@ impl LiveTvService {
             let now_ms = epoch_ms();
             let mut alive = 0usize;
             for (ci, channel) in snap.channels.iter().enumerate() {
-                let elected = (0..channel.sources.len())
-                    .find(|&si| !snap.health[ci][si].in_cooldown(now_ms));
+                let elected =
+                    (0..channel.sources.len()).find(|&si| !snap.health[ci][si].in_cooldown(now_ms));
                 if let Some(si) = elected {
                     snap.active_source[ci].store(si, Ordering::Relaxed);
                     alive += 1;
@@ -632,7 +791,11 @@ impl LiveTvService {
         sig: &str,
     ) -> Result<(reqwest::Response, Url), LiveTvError> {
         let upstream = proxy::decode_upstream(encoded_url).ok_or(LiveTvError::BadProxyRequest)?;
-        if !self.inner.signer.verify(channel_key, upstream.as_str(), sig) {
+        if !self
+            .inner
+            .signer
+            .verify(channel_key, upstream.as_str(), sig)
+        {
             return Err(LiveTvError::BadProxyRequest);
         }
         // Recover the channel's pinned headers; a channel that vanished in a
@@ -675,7 +838,8 @@ impl LiveTvService {
         let Some(idx) = snap.channel_index(id) else {
             return;
         };
-        let active = snap.active_source[idx].load(Ordering::Relaxed) % snap.channels[idx].sources.len().max(1);
+        let active = snap.active_source[idx].load(Ordering::Relaxed)
+            % snap.channels[idx].sources.len().max(1);
         let health = &snap.health[idx][active];
         if ok {
             health.segment_failures.store(0, Ordering::Relaxed);
@@ -802,7 +966,9 @@ impl LiveTvService {
             .map_err(|_| LiveTvError::Upstream("guide is neither gzip nor utf-8 xml".into()))?;
         let index = epg::parse_xmltv(&xml, chrono::Utc::now());
         if index.is_empty() {
-            return Err(LiveTvError::Upstream("guide parsed to zero programmes".into()));
+            return Err(LiveTvError::Upstream(
+                "guide parsed to zero programmes".into(),
+            ));
         }
         Ok(index)
     }
@@ -875,7 +1041,11 @@ impl LiveTvService {
             epgs.iter()
                 .filter(|(_, s)| s.fetched_at.elapsed() > epg_ttl)
                 .filter_map(|(c, _)| {
-                    self.inner.cfg.epg_urls.get(c).map(|u| (c.clone(), u.clone()))
+                    self.inner
+                        .cfg
+                        .epg_urls
+                        .get(c)
+                        .map(|u| (c.clone(), u.clone()))
                 })
                 .collect()
         };

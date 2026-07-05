@@ -1,6 +1,10 @@
 package studio.kahn.iris.tv.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -144,6 +148,9 @@ fun HomeScreen(
 ) {
     val scope = rememberCoroutineScope()
     var continueWatching by remember { mutableStateOf<List<ContinueWatchingItem>>(emptyList()) }
+    // The Continue Watching tile whose manage sheet (remove / mark-watched)
+    // is open, if any.
+    var cwManageItem by remember { mutableStateOf<ContinueWatchingItem?>(null) }
     // Two separate states for the two shelves so a tick that only touches
     // a Downloading entry's progress/speed doesn't invalidate Library —
     // those cards stay frozen and skip recomposition entirely.
@@ -292,6 +299,51 @@ fun HomeScreen(
                 onOpenHistory = onOpenHistory,
                 onOpenLiveTv = onOpenLiveTv,
                 onRetry = { loadVersion++ },
+                onManageCw = { cwManageItem = it },
+            )
+        }
+
+        // Held-select on a Continue Watching tile opens this manage sheet.
+        cwManageItem?.let { item ->
+            ContinueWatchingManageDialog(
+                item = item,
+                onDismiss = { cwManageItem = null },
+                onRemove = {
+                    cwManageItem = null
+                    scope.launch {
+                        val url = container.sessionStore.serverUrl.first()
+                        if (url != null) {
+                            runCatching {
+                                // A TV series hides its whole collection; a
+                                // movie / standalone drops its single row.
+                                val body = if (item.collectionId != null) {
+                                    studio.kahn.iris.tv.data.DismissCwRequest(
+                                        collectionId = item.collectionId,
+                                    )
+                                } else {
+                                    studio.kahn.iris.tv.data.DismissCwRequest(
+                                        infohash = item.infohash,
+                                        fileIdx = item.fileIdx,
+                                    )
+                                }
+                                container.apiFor(url).dismissContinueWatching(body)
+                            }
+                            loadVersion++
+                        }
+                    }
+                },
+                onMarkWatched = {
+                    cwManageItem = null
+                    scope.launch {
+                        val url = container.sessionStore.serverUrl.first()
+                        if (url != null) {
+                            runCatching {
+                                container.apiFor(url).markWatched(item.infohash, item.fileIdx.toInt())
+                            }
+                            loadVersion++
+                        }
+                    }
+                },
             )
         }
     }
@@ -325,6 +377,7 @@ private fun HomeContent(
     onOpenHistory: () -> Unit,
     onOpenLiveTv: () -> Unit,
     onRetry: () -> Unit,
+    onManageCw: (ContinueWatchingItem) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier
@@ -409,6 +462,7 @@ private fun HomeContent(
                             container = container,
                             item = item,
                             onClick = { onPickFile(item.infohash, item.fileIdx.toInt()) },
+                            onLongClick = { onManageCw(item) },
                         )
                     }
                 }
@@ -895,11 +949,13 @@ private fun ContinueWatchingCard(
     container: AppContainer,
     item: ContinueWatchingItem,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
     val rawTitle = item.filePath?.substringAfterLast('/') ?: item.torrentName
     val pct = item.durationSeconds?.takeIf { it > 0 }
         ?.let { ((item.positionSeconds / it).toFloat()).coerceIn(0f, 1f) }
     PosterCard(
+        onLongClick = onLongClick,
         container = container,
         tmdbId = item.tmdbId,
         // Trust the server's tmdb_id — `playback::continue_watching`
@@ -914,11 +970,78 @@ private fun ContinueWatchingCard(
         // strings without truncating the SxxExx out of view.
         title = rawTitle,
         marqueeTitle = true,
-        subtitle = pct?.let { "${(it * 100).toInt()}% watched" } ?: "Just started",
+        subtitle = when {
+            item.nextUp -> "Up next"
+            pct != null -> "${(pct * 100).toInt()}% watched"
+            else -> "Just started"
+        },
         progress = pct,
         progressColor = null, // primary = watch progress
         onClick = onClick,
     )
+}
+
+/** Manage sheet for a Continue Watching tile — focusable overlay with
+ *  "Mark as watched" / "Remove from Continue Watching". tv-material has no
+ *  built-in dialog, so it's a scrim + centered card; Back or the scrim
+ *  dismisses, and the first button grabs focus on open. */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun ContinueWatchingManageDialog(
+    item: ContinueWatchingItem,
+    onDismiss: () -> Unit,
+    onRemove: () -> Unit,
+    onMarkWatched: () -> Unit,
+) {
+    BackHandler(enabled = true, onBack = onDismiss)
+    val title = item.filePath?.substringAfterLast('/') ?: item.torrentName
+    val firstFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.7f))
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .widthIn(max = 460.dp)
+                .background(IrisColors.Elev2, RoundedCornerShape(Radius.lg))
+                .padding(Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
+            Eyebrow("Continue Watching")
+            androidx.tv.material3.Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = IrisColors.Foreground,
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            IrisButton(
+                if (item.nextUp) "Mark watched & skip" else "Mark as watched",
+                onMarkWatched,
+                modifier = Modifier.fillMaxWidth().focusRequester(firstFocus),
+            )
+            IrisButton(
+                "Remove from Continue Watching",
+                onRemove,
+                variant = IrisButtonVariant.Ghost,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            IrisButton(
+                "Cancel",
+                onDismiss,
+                variant = IrisButtonVariant.Ghost,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -1211,6 +1334,9 @@ private fun PosterCard(
      *  ("Matches your taste"). Mirrors the web card's `note`. Omitted when
      *  null/blank. */
     note: String? = null,
+    /** Held-select ("long press") on the focused card — opens a manage menu
+     *  (Continue Watching uses it for remove / mark-watched). Null = no menu. */
+    onLongClick: (() -> Unit)? = null,
 ) {
     var meta by remember(tmdbId, tmdbVerified) { mutableStateOf<MediaMetadata?>(null) }
     LaunchedEffect(tmdbId, tmdbVerified, posterUrlOverride, kindHint) {
@@ -1230,9 +1356,36 @@ private fun PosterCard(
 
     val layout = LocalTvLayout.current
     val posterShape = RoundedCornerShape(Radius.poster)
+    // Held-select detection: a repeating DPAD_CENTER whose down-to-now span
+    // passes the long-press timeout fires `onLongClick`; the flag then
+    // swallows the click that the key-up would otherwise produce. tv-material
+    // Card has no onLongClick, so we do it on the modifier.
+    var suppressNextClick by remember { mutableStateOf(false) }
+    var centerDownAt by remember { mutableStateOf(0L) }
+    val longPressMod = if (onLongClick != null) {
+        Modifier.onKeyEvent { ev ->
+            val ne = ev.nativeKeyEvent
+            val isSelect = ne.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+                ne.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
+                ne.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
+            if (!isSelect || ne.action != android.view.KeyEvent.ACTION_DOWN) return@onKeyEvent false
+            if (ne.repeatCount == 0) {
+                centerDownAt = ne.eventTime
+                false
+            } else if (!suppressNextClick && ne.eventTime - centerDownAt >= 450) {
+                suppressNextClick = true
+                onLongClick()
+                true
+            } else {
+                false
+            }
+        }
+    } else {
+        Modifier
+    }
     Card(
-        onClick = onClick,
-        modifier = Modifier.width(layout.shelfPosterWidth),
+        onClick = { if (suppressNextClick) suppressNextClick = false else onClick() },
+        modifier = Modifier.width(layout.shelfPosterWidth).then(longPressMod),
         shape = irisPosterShape(posterShape),
         scale = irisPosterScale(),
         border = irisPosterBorder(posterShape),

@@ -190,6 +190,7 @@ dependencies {
     // the OkHttp network module to share our auth-aware client.
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    implementation(libs.coil.svg)
 
     // TV Channels (Library / Continue Watching rows on the Android TV home).
     implementation(libs.tvprovider)
