@@ -5,7 +5,9 @@
 package studio.kahn.iris.tv.ui.screens
 
 import android.view.KeyEvent
+import android.view.ViewGroup
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +25,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +59,11 @@ private const val EPG_REFRESH_MS = 30_000L
 /** How long the channel-name strip stays up after it (re)appears. */
 private const val OVERLAY_VISIBLE_MS = 4_000L
 
+/** Automatic reconnect attempts on a playback error before giving up to the
+ *  Retry UI. Each attempt first tells the backend to demote the dead source,
+ *  then reloads — so the retries walk through a channel's fallback feeds. */
+private const val MAX_AUTO_RETRIES = 3
+
 /**
  * Live channel playback. Deliberately NOT [WatchScreen] — that one is
  * torrent-coupled (probe, /play/status gating, saved progress, episode
@@ -83,9 +92,20 @@ fun LiveTvWatchScreen(
     var channelId by remember { mutableStateOf(initialChannelId) }
     var epg by remember { mutableStateOf<Map<String, LiveNowNext>>(emptyMap()) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var autoRetried by remember(channelId) { mutableStateOf(false) }
-    // Bumped by the Retry button to force a re-prepare of the same channel.
+    // Automatic reconnects used up on THIS channel (reset when zapping away).
+    var autoRetryCount by remember(channelId) { mutableStateOf(0) }
+    // Bumped to force a re-prepare of the current channel (Retry button + the
+    // post-demotion auto-reconnect).
     var retryNonce by remember { mutableStateOf(0) }
+    // First video frame rendered for the current (channel, attempt)? Drives the
+    // "Connecting…" placeholder so a reconnect isn't a silent black screen.
+    var rendered by remember(channelId, retryNonce) { mutableStateOf(false) }
+    // Compose owns focus + input on this screen (the PlayerView is pure
+    // display). `rootFocus` holds focus during playback so DPAD zapping works;
+    // `retryFocus` takes it when the error card appears so its buttons are
+    // reachable — the exact bug where "Back to channels" couldn't be focused.
+    val rootFocus = remember { FocusRequester() }
+    val retryFocus = remember { FocusRequester() }
 
     // Channel-name/now-next strip auto-hides a few seconds after it appears —
     // it must not sit persistently over the picture. `overlayTick` is bumped
@@ -130,28 +150,36 @@ fun LiveTvWatchScreen(
         p.playWhenReady = true
     }
 
-    // Error listener: report the failure (backend cools the source down and
-    // elects the next feed), then one silent re-prepare — the reload fetches
-    // a fresh master, i.e. the newly elected source. Second failure shows
-    // the error UI.
+    // Error listener: on failure, tell the backend to demote the dead source
+    // and — crucially — WAIT for that POST to land before bumping `retryNonce`
+    // to reload. The old code re-prepared immediately, racing the async demote,
+    // so the reload usually got the same dead source back (why M6 never
+    // recovered). We walk up to MAX_AUTO_RETRIES feeds this way, then surface
+    // the Retry card. `onRenderedFirstFrame` clears the "Connecting…" state.
     DisposableEffect(player.value) {
         val p = player.value ?: return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                serverUrl?.let { url ->
+                val url = serverUrl
+                if (url != null && autoRetryCount < MAX_AUTO_RETRIES) {
+                    autoRetryCount++
                     container.applicationScope.launch {
-                        runCatching {
-                            container.apiFor(url).liveTvPlaybackError(country, channelId)
+                        runCatching { container.apiFor(url).liveTvPlaybackError(country, channelId) }
+                        // Source is demoted now → reload elects the next feed.
+                        retryNonce++
+                    }
+                } else {
+                    url?.let {
+                        container.applicationScope.launch {
+                            runCatching { container.apiFor(it).liveTvPlaybackError(country, channelId) }
                         }
                     }
-                }
-                if (!autoRetried) {
-                    autoRetried = true
-                    p.prepare()
-                    p.playWhenReady = true
-                } else {
                     errorMessage = humanizePlaybackError(error).first
                 }
+            }
+
+            override fun onRenderedFirstFrame() {
+                rendered = true
             }
         }
         p.addListener(listener)
@@ -172,10 +200,14 @@ fun LiveTvWatchScreen(
         channelId = next.id
     }
 
-    // Held so the key handler can tell whether the controller overlay is up —
-    // DPAD up/down must keep navigating the controller when it's visible and
-    // only zap channels when it's hidden. CHANNEL_UP/DOWN always zap.
-    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+    // Focus routing: the error card's buttons take focus when it appears (so
+    // "Back to channels" is reachable), and focus returns to the root — which
+    // handles zapping — the rest of the time.
+    LaunchedEffect(errorMessage) {
+        runCatching {
+            if (errorMessage != null) retryFocus.requestFocus() else rootFocus.requestFocus()
+        }
+    }
 
     Box(
         Modifier
@@ -187,55 +219,56 @@ fun LiveTvWatchScreen(
                 }
                 // Any remote press brings the channel strip back for a beat.
                 overlayTick++
-                val controllerUp = playerViewRef?.isControllerFullyVisible == true
+                // Preview phase: DPAD/CHANNEL up-down zap even while the error
+                // card's buttons hold focus (letting the viewer escape a dead
+                // channel); left/right/center fall through to those buttons.
                 when (event.nativeKeyEvent.keyCode) {
-                    KeyEvent.KEYCODE_CHANNEL_UP -> {
+                    KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_DPAD_UP -> {
                         zap(-1)
                         true
                     }
-                    KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                    KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_DPAD_DOWN -> {
                         zap(1)
                         true
                     }
-                    KeyEvent.KEYCODE_DPAD_UP -> {
-                        if (controllerUp) false else {
-                            zap(-1)
-                            true
-                        }
-                    }
-                    KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (controllerUp) false else {
-                            zap(1)
-                            true
-                        }
-                    }
                     else -> false
                 }
-            },
+            }
+            .focusRequester(rootFocus)
+            .focusable(),
     ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     this.player = player.value
-                    useController = true
-                    controllerAutoShow = true
-                    // Live stream: no timeline scrubbing / episode chrome.
-                    setShowFastForwardButton(false)
-                    setShowRewindButton(false)
-                    setShowNextButton(false)
-                    setShowPreviousButton(false)
-                    setShowSubtitleButton(false)
+                    // Pure display — Compose owns focus + input. Leaving the
+                    // controller focusable is what trapped D-pad focus on the
+                    // dead player and stranded the error card.
+                    useController = false
+                    isFocusable = false
+                    descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
                     keepScreenOn = true
                     layoutParams = android.widget.FrameLayout.LayoutParams(
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
                     )
-                    playerViewRef = this
                 }
             },
             update = { it.player = player.value },
         )
+
+        // "Connecting…" while a (re)load hasn't rendered its first frame yet,
+        // so an auto-reconnect isn't a silent black screen.
+        if (errorMessage == null && !rendered) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "Connecting…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = IrisColors.MutedForeground,
+                )
+            }
+        }
 
         // Channel name + now/next strip: shown on entry / zap / any key, then
         // auto-hidden so it doesn't sit persistently over the picture.
@@ -272,10 +305,15 @@ fun LiveTvWatchScreen(
                         color = IrisColors.MutedForeground,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                        IrisButton("Retry", onClick = {
-                            autoRetried = false
-                            retryNonce++
-                        })
+                        IrisButton(
+                            "Retry",
+                            onClick = {
+                                autoRetryCount = 0
+                                errorMessage = null
+                                retryNonce++
+                            },
+                            modifier = Modifier.focusRequester(retryFocus),
+                        )
                         IrisButton(
                             "Back to channels",
                             onClick = onBack,
