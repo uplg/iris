@@ -70,6 +70,7 @@ import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -138,6 +139,8 @@ fun HomeScreen(
     onOpenMoods: () -> Unit,
     /** Open the full watch-history list. */
     onOpenHistory: () -> Unit,
+    /** Open the Live TV channel grid. */
+    onOpenLiveTv: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var continueWatching by remember { mutableStateOf<List<ContinueWatchingItem>>(emptyList()) }
@@ -287,6 +290,7 @@ fun HomeScreen(
                 onOpenForYou = onOpenForYou,
                 onOpenMoods = onOpenMoods,
                 onOpenHistory = onOpenHistory,
+                onOpenLiveTv = onOpenLiveTv,
                 onRetry = { loadVersion++ },
             )
         }
@@ -319,6 +323,7 @@ private fun HomeContent(
     onOpenForYou: () -> Unit,
     onOpenMoods: () -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenLiveTv: () -> Unit,
     onRetry: () -> Unit,
 ) {
     LazyColumn(
@@ -344,6 +349,7 @@ private fun HomeContent(
                 onOpenLibrary = onOpenLibrary,
                 onOpenTorrents = onOpenTorrents,
                 onOpenHistory = onOpenHistory,
+                onOpenLiveTv = onOpenLiveTv,
                 onOpenSettings = onOpenSettings,
             )
         }
@@ -659,6 +665,7 @@ private fun HomeTopBar(
     onOpenLibrary: () -> Unit,
     onOpenTorrents: () -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenLiveTv: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     Row(
@@ -692,6 +699,11 @@ private fun HomeTopBar(
                 icon = Icons.Filled.Storage,
                 contentDescription = "Seedbox / Torrents",
                 onClick = onOpenTorrents,
+            )
+            TvIconButton(
+                icon = Icons.Filled.LiveTv,
+                contentDescription = "Live TV",
+                onClick = onOpenLiveTv,
             )
             TvIconButton(
                 icon = Icons.Filled.History,

@@ -14,9 +14,19 @@ export IRIS_WEB_BUILD_ID := `git rev-parse --short HEAD 2>/dev/null || true`
 default:
     @just --list
 
-# Rebuild + restart (cloudflared profile, build-id stamped); extra flags pass through.
+# Rebuild + restart (cloudflared profile, build-id stamped); extra flags pass
+# through. The token guard lives HERE (not as `:?` in docker-compose.yml)
+# because Compose interpolates profile-disabled services too — a hard `:?`
+# would break `just dev` on machines without the tunnel token.
 deploy *ARGS:
+    @[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ] || grep -q '^CLOUDFLARE_TUNNEL_TOKEN=..*' .env 2>/dev/null || { echo "deploy needs CLOUDFLARE_TUNNEL_TOKEN in .env (the cloudflared profile dials the tunnel with it)"; exit 1; }
     docker compose {{ ARGS }} --profile cloudflared up -d --build
+
+# Local docker deploy (no tunnel/proxy profile), build-id stamped.
+# `just dev` serves on :8080; `just dev 18080` picks another host port
+# (container keeps 8080 internally — only the mapping changes).
+dev port="8080":
+    IRIS_BIND_PORT={{ port }} docker compose up -d --build
 
 # --- Backend (Rust workspace) -----------------------------------------------
 

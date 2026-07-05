@@ -907,6 +907,274 @@
         }
       }
     },
+    "/api/livetv/countries": {
+      "get": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_countries",
+        "responses": {
+          "200": {
+            "description": "Countries available in the live TV catalogue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveCountriesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/livetv/logo": {
+      "get": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_logo",
+        "parameters": [
+          {
+            "name": "u",
+            "in": "query",
+            "description": "base64url-encoded upstream logo URL.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "s",
+            "in": "query",
+            "description": "HMAC signature.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proxied channel logo bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing / invalid signature"
+          }
+        }
+      }
+    },
+    "/api/livetv/proxy": {
+      "get": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_proxy",
+        "parameters": [
+          {
+            "name": "c",
+            "in": "query",
+            "description": "Channel key (`country:id`) the URL was minted for.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "u",
+            "in": "query",
+            "description": "base64url-encoded upstream URL.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "s",
+            "in": "query",
+            "description": "HMAC signature over channel key + URL.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proxied upstream bytes (media playlists re-rewritten, segments streamed through)",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing / invalid signature"
+          },
+          "502": {
+            "description": "Upstream fetch failed"
+          }
+        }
+      }
+    },
+    "/api/livetv/{country}/channels": {
+      "get": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_channels",
+        "parameters": [
+          {
+            "name": "country",
+            "in": "path",
+            "description": "ISO 3166-1 alpha-2 country code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channels for the country — TNT-pinned first (fr), then grouped by category",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveChannelsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown country / live TV disabled"
+          },
+          "502": {
+            "description": "Upstream playlist unavailable"
+          }
+        }
+      }
+    },
+    "/api/livetv/{country}/channels/{id}/master.m3u8": {
+      "get": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_master",
+        "parameters": [
+          {
+            "name": "country",
+            "in": "path",
+            "description": "ISO 3166-1 alpha-2 country code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel id from the channel list",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HLS master playlist with every URI rewritten to the signed proxy",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown country / channel"
+          },
+          "502": {
+            "description": "Every upstream source for the channel is down"
+          }
+        }
+      }
+    },
+    "/api/livetv/{country}/channels/{id}/playback-error": {
+      "post": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_playback_error",
+        "parameters": [
+          {
+            "name": "country",
+            "in": "path",
+            "description": "ISO 3166-1 alpha-2 country code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel id from the channel list",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Active source demoted; the next master request elects the next candidate"
+          },
+          "404": {
+            "description": "Unknown country / channel"
+          }
+        }
+      }
+    },
+    "/api/livetv/{country}/epg/now": {
+      "get": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_epg_now",
+        "parameters": [
+          {
+            "name": "country",
+            "in": "path",
+            "description": "ISO 3166-1 alpha-2 country code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current + next programme per channel (channels without guide data are omitted; empty when the country has no guide source)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveEpgNowResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/me": {
       "get": {
         "tags": [
@@ -4472,6 +4740,202 @@
           }
         }
       },
+      "LiveChannel": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "categories",
+          "geo_blocked",
+          "not_24_7"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "geo_blocked": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable slug, unique within a country. Play via\n`/api/livetv/{country}/channels/{id}/master.m3u8`."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "not_24_7": {
+            "type": "boolean"
+          },
+          "quality": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Best available vertical resolution when known (e.g. 1080).",
+            "minimum": 0
+          },
+          "tnt_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "French TNT number (Arcom) — set only for `fr` national networks;\ndrives the pinned \"TNT\" section.",
+            "minimum": 0
+          }
+        }
+      },
+      "LiveChannelsResponse": {
+        "type": "object",
+        "required": [
+          "country",
+          "channels"
+        ],
+        "properties": {
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveChannel"
+            }
+          },
+          "country": {
+            "type": "string"
+          }
+        }
+      },
+      "LiveCountriesResponse": {
+        "type": "object",
+        "required": [
+          "default_country",
+          "countries"
+        ],
+        "properties": {
+          "countries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveCountry"
+            }
+          },
+          "default_country": {
+            "type": "string",
+            "description": "Country pre-selected by clients (config `live_tv.default_country`)."
+          }
+        }
+      },
+      "LiveCountry": {
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "flag"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "ISO 3166-1 alpha-2, lowercase."
+          },
+          "flag": {
+            "type": "string",
+            "description": "Emoji flag."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "LiveEpgNowResponse": {
+        "type": "object",
+        "required": [
+          "entries",
+          "fetched_at"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveNowNext"
+            }
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LiveNowNext": {
+        "type": "object",
+        "required": [
+          "channel_id"
+        ],
+        "properties": {
+          "channel_id": {
+            "type": "string"
+          },
+          "next": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LiveProgramme"
+              }
+            ]
+          },
+          "now": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LiveProgramme"
+              }
+            ]
+          }
+        }
+      },
+      "LiveProgramme": {
+        "type": "object",
+        "required": [
+          "title",
+          "start",
+          "stop"
+        ],
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "stop": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "required": [
@@ -7171,6 +7635,10 @@
     {
       "name": "discover",
       "description": "Featured movie / series carousels aggregated across trackers."
+    },
+    {
+      "name": "live-tv",
+      "description": "Live TV — per-country IPTV channel lists, now/next guide, signed HLS proxy."
     },
     {
       "name": "providers",

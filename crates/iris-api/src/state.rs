@@ -8,6 +8,7 @@ use iris_providers::ProviderRegistry;
 use iris_torrent::{Engine, Gc};
 
 use crate::anilist::AniListClient;
+use crate::live_tv::LiveTvService;
 use crate::presence::Presence;
 use crate::reco_engine::RecoEngine;
 use crate::tmdb::TmdbClient;
@@ -30,6 +31,7 @@ struct Inner {
     pub anilist: Option<AniListClient>,
     pub presence: Presence,
     pub reco: Arc<RecoEngine>,
+    pub live_tv: Option<LiveTvService>,
 }
 
 impl AppState {
@@ -58,6 +60,19 @@ impl AppState {
             cfg.auth.refresh_ttl_secs,
         );
         let reco = Arc::new(RecoEngine::new(&cfg.reco));
+        // Live TV proxy/catalogue — config-gated; a build failure disables
+        // the feature instead of blocking boot.
+        let live_tv = cfg
+            .live_tv
+            .enabled
+            .then(|| LiveTvService::new(cfg.live_tv.clone(), &cfg.auth.jwt_secret))
+            .and_then(|r| match r {
+                Ok(svc) => Some(svc),
+                Err(e) => {
+                    tracing::warn!(error = %e, "live tv init failed; feature disabled");
+                    None
+                }
+            });
         // Keyless public GraphQL client — used to enrich anime
         // collections with an AniList id (poster / recommendations) and
         // to corroborate the offline anime classifier. Best-effort: a
@@ -83,6 +98,7 @@ impl AppState {
                 anilist,
                 presence: Presence::new(),
                 reco,
+                live_tv,
             }),
         }
     }
@@ -122,6 +138,9 @@ impl AppState {
     }
     pub fn reco(&self) -> &Arc<RecoEngine> {
         &self.inner.reco
+    }
+    pub fn live_tv(&self) -> Option<&LiveTvService> {
+        self.inner.live_tv.as_ref()
     }
 }
 

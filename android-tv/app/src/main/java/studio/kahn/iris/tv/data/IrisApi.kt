@@ -284,4 +284,29 @@ interface IrisApi {
         @Path("episode") episode: Int,
         @Query("language") language: String? = null,
     ): GrabResponse
+
+    // ------------------------------ Live TV ------------------------------
+    // Channels play via `api/livetv/{country}/channels/{id}/master.m3u8`
+    // (built as a URL for Media3, not a Retrofit call) — the backend
+    // rewrites every HLS URI to its signed proxy, so ExoPlayer only ever
+    // talks to Iris.
+
+    @GET("api/livetv/countries")
+    suspend fun liveTvCountries(): LiveCountriesResponse
+
+    @GET("api/livetv/{country}/channels")
+    suspend fun liveTvChannels(@Path("country") country: String): LiveChannelsResponse
+
+    /** Now/next programme per channel; empty when the country has no
+     *  configured XMLTV guide. */
+    @GET("api/livetv/{country}/epg/now")
+    suspend fun liveTvEpgNow(@Path("country") country: String): LiveEpgNowResponse
+
+    /** The served stream is unplayable client-side: the backend cools the
+     *  active source down and elects the channel's next feed. */
+    @POST("api/livetv/{country}/channels/{channelId}/playback-error")
+    suspend fun liveTvPlaybackError(
+        @Path("country") country: String,
+        @Path("channelId") channelId: String,
+    )
 }

@@ -171,6 +171,22 @@ const watchRoute = createRoute({
   component: lazyRouteComponent(() => import("@/pages/WatchPage"), "WatchPage"),
 });
 
+const liveRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/live",
+  // `country` persists the picker choice in the URL (ISO alpha-2).
+  validateSearch: (search: Record<string, unknown>): { country?: string } => ({
+    country: str(search.country),
+  }),
+  component: lazyRouteComponent(() => import("@/pages/LiveTvPage"), "LiveTvPage"),
+});
+
+const liveWatchRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/live/$country/$channelId",
+  component: lazyRouteComponent(() => import("@/pages/LiveTvWatchPage"), "LiveTvWatchPage"),
+});
+
 const historyRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/history",
@@ -221,6 +237,8 @@ const routeTree = rootRoute.addChildren([
       collectionRoute,
       libraryRoute,
       watchRoute,
+      liveRoute,
+      liveWatchRoute,
       historyRoute,
       accountRoute,
       adminGuardRoute.addChildren([adminRoute, adminUserHistoryRoute]),

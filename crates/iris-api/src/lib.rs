@@ -5,6 +5,7 @@ pub mod collection_assign;
 pub mod collections_scheduler;
 pub mod error;
 pub mod freshness_scheduler;
+pub mod live_tv;
 pub mod middleware;
 pub mod observability;
 pub mod openapi;
@@ -164,6 +165,14 @@ fn spawn_background_jobs(
     // upload counters into `torrents.uploaded_bytes_total` so the value
     // survives restarts and GC evictions.
     seed_stats::spawn(pool.clone(), app_state.engine().clone());
+
+    // Live TV: keep lazily-loaded country playlists + programme guides
+    // fresh. Countries load on first client access; this loop only
+    // re-fetches what's already resident, keeping the previous snapshot on
+    // failure.
+    if let Some(live_tv) = app_state.live_tv() {
+        live_tv.clone().spawn_refresh_loop();
+    }
 
     // One-shot TMDB id migration: legacy torrents were ingested with
     // the indexer's (often wrong) tmdb_id; this sweep re-resolves each

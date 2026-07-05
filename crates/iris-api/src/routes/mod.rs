@@ -7,6 +7,7 @@ pub mod follows;
 pub mod foryou;
 pub mod health;
 pub mod library;
+pub mod live_tv;
 pub mod me;
 pub mod metadata;
 pub mod moods;

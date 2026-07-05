@@ -64,7 +64,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api": "http://localhost:8080",
+      // IRIS_API_PROXY lets a dev session target a backend on another port
+      // (e.g. when docker already owns 8080).
+      "/api": process.env.IRIS_API_PROXY ?? "http://localhost:8080",
     },
   },
 });

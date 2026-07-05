@@ -103,6 +103,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/languages", routes::preferences::languages_router())
         .nest("/discover", routes::discover::router())
         .nest("/library", routes::library::router())
+        .nest("/livetv", routes::live_tv::router())
         .nest("/torrents", torrents)
         .nest("/providers", routes::providers::router())
         .nest("/metadata", routes::metadata::router())

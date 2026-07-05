@@ -20,6 +20,10 @@ pub enum ApiError {
     /// Distinct code so clients can show a "dead torrent" message.
     #[error("this release has no seeders and can't be downloaded")]
     DeadTorrent,
+    /// A remote origin we depend on (live TV playlist / stream / guide)
+    /// failed. 502 so clients can distinguish "their side" from "our side".
+    #[error("upstream unavailable: {0}")]
+    Upstream(String),
     #[error("internal: {0}")]
     Internal(#[from] anyhow::Error),
     #[error("database: {0}")]
@@ -35,6 +39,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request", self.to_string()),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "conflict", self.to_string()),
             ApiError::DeadTorrent => (StatusCode::CONFLICT, "dead_torrent", self.to_string()),
+            ApiError::Upstream(_) => (StatusCode::BAD_GATEWAY, "upstream", self.to_string()),
             ApiError::Db(_) | ApiError::Internal(_) => {
                 tracing::error!(error = ?self, "internal error");
                 (

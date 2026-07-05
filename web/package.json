@@ -22,12 +22,12 @@
     "@fontsource-variable/inter": "5.2.8",
     "@fontsource-variable/jetbrains-mono": "5.2.8",
     "@fontsource/cal-sans": "5.2.3",
-    "@hevcjs/core": "^1.3.0",
+    "@hevcjs/core": "^1.3.1",
     "@hookform/resolvers": "^5.4.0",
     "@jellyfin/libass-wasm": "^4.2.4",
     "@tailwindcss/vite": "^4.3.2",
     "@tanstack/react-query": "^5.101.2",
-    "@tanstack/react-router": "^1.170.16",
+    "@tanstack/react-router": "^1.170.17",
     "@tanstack/react-virtual": "^3.14.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -36,14 +36,14 @@
     "libav.js": "^6.9.8",
     "libavjs-webcodecs-bridge": "^0.3.2",
     "libpgs": "^0.8.1",
-    "lucide-react": "^1.22.0",
-    "mediabunny": "^1.50.0",
+    "lucide-react": "^1.23.0",
+    "mediabunny": "^1.50.6",
     "next-themes": "^0.4.6",
     "radix-ui": "^1.6.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-hook-form": "^7.80.0",
-    "shadcn": "^4.12.0",
+    "react-hook-form": "^7.81.0",
+    "shadcn": "^4.13.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.2",
@@ -51,7 +51,7 @@
   },
   "devDependencies": {
     "@types/dompurify": "^3.2.0",
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.1.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
@@ -60,9 +60,9 @@
     "oxfmt": "^0.57.0",
     "oxlint": "^1.72.0",
     "typescript": "^6.0.3",
-    "vite": "^8.1.2"
+    "vite": "^8.1.3"
   },
   "patchedDependencies": {
-    "mediabunny@1.50.0": "patches/mediabunny@1.50.0.patch"
+    "mediabunny@1.50.6": "patches/mediabunny@1.50.6.patch"
   }
 }

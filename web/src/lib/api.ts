@@ -571,3 +571,33 @@ export const follows = {
       `/me/follows/episode-context?infohash=${encodeURIComponent(infohash)}&file_idx=${file_idx}`,
     ),
 };
+
+// ---------------------------------------------------------------------------
+// Live TV: per-country IPTV channels + now/next guide, played through the
+// backend's signed HLS proxy (see crates/iris-api/src/live_tv).
+// ---------------------------------------------------------------------------
+
+export type LiveCountry = components["schemas"]["LiveCountry"];
+export type LiveCountriesResponse = components["schemas"]["LiveCountriesResponse"];
+export type LiveChannel = components["schemas"]["LiveChannel"];
+export type LiveChannelsResponse = components["schemas"]["LiveChannelsResponse"];
+export type LiveProgramme = components["schemas"]["LiveProgramme"];
+export type LiveNowNext = components["schemas"]["LiveNowNext"];
+export type LiveEpgNowResponse = components["schemas"]["LiveEpgNowResponse"];
+
+export const livetv = {
+  countries: () => api.get<LiveCountriesResponse>("/livetv/countries"),
+  channels: (country: string) =>
+    api.get<LiveChannelsResponse>(`/livetv/${encodeURIComponent(country)}/channels`),
+  epgNow: (country: string) =>
+    api.get<LiveEpgNowResponse>(`/livetv/${encodeURIComponent(country)}/epg/now`),
+  /** HLS master playlist for a channel — hand to hls.js / native HLS. */
+  masterUrl: (country: string, channelId: string) =>
+    `/api/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/master.m3u8`,
+  /** The served stream is unplayable client-side: the backend cools the
+   *  active source down and elects the next feed. */
+  reportPlaybackError: (country: string, channelId: string) =>
+    api.post<void>(
+      `/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/playback-error`,
+    ),
+};

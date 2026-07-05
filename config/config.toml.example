@@ -92,3 +92,30 @@ crf = 26
 # faster, smaller, and invisible for SDR sources. true preserves the source's
 # 10-bit precision at some encode-speed + size cost.
 ten_bit = false
+
+[live_tv]
+# Live TV: per-country IPTV channel lists (iptv-org playlists) played through
+# the backend's signed HLS proxy — upstream streams are plain-http, CORS-less,
+# and several demand a browser User-Agent, so clients never hit them directly.
+# Countries are fetched lazily on first access, then kept fresh in background.
+enabled = true
+# Country pre-selected by clients (ISO 3166-1 alpha-2, lowercase).
+default_country = "fr"
+# Where playlists / the country catalogue come from ({code} = country code).
+# playlist_url_template = "https://iptv-org.github.io/iptv/countries/{code}.m3u"
+# countries_url = "https://iptv-org.github.io/api/countries.json"
+# Gzipped XMLTV guides per country, for the now/next overlay. Countries
+# without an entry simply show no programme info.
+# [live_tv.epg_urls]
+# fr = "https://xmltvfr.fr/xmltv/xmltv_tnt.xml.gz"
+# Extra fallback playlists per country: entries matching a channel already in
+# the iptv-org list (by tvg-id / name) merge in as additional sources the
+# proxy rotates to when the primary stream dies.
+# [live_tv.extra_playlists]
+# fr = ["https://raw.githubusercontent.com/LeBazarDeBryan/XTVZ_/main/IPTV/TNTenDirect.m3u"]
+# Re-pin a channel's French TNT number without a release (tvg-id base → n°).
+# [live_tv.tnt_overrides]
+# CanalPlus = 40
+# Map a channel id to its XMLTV guide id when they don't match.
+# [live_tv.epg_id_overrides]
+# france4hd = "France4.fr"

@@ -57,3 +57,12 @@ reqwest = { workspace = true }
 rand = { workspace = true }
 semver = { workspace = true }
 utoipa = { workspace = true }
+
+# Live TV: playlist proxy signing + XMLTV guide decoding
+url = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+quick-xml = { workspace = true }
+flate2 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }

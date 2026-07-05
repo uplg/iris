@@ -36,7 +36,102 @@ pub struct AppConfig {
     #[serde(default)]
     pub reco: RecoConfig,
     #[serde(default)]
+    pub live_tv: LiveTvConfig,
+    #[serde(default)]
     pub providers_file: Option<PathBuf>,
+}
+
+/// Live TV: per-country IPTV playlists (iptv-org) exposed as channel lists
+/// and played through the backend HLS proxy (upstreams are plain-http /
+/// CORS-less and some require a browser User-Agent, so clients can never hit
+/// them direct). Countries are loaded lazily on first access and refreshed
+/// in the background.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveTvConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Country pre-selected by clients (ISO 3166-1 alpha-2, lowercase).
+    #[serde(default = "default_livetv_country")]
+    pub default_country: String,
+    /// Per-country playlist URL; `{code}` is replaced by the lowercase
+    /// country code.
+    #[serde(default = "default_livetv_playlist_template")]
+    pub playlist_url_template: String,
+    /// Country catalogue (code / name / flag) shown in the country picker.
+    #[serde(default = "default_livetv_countries_url")]
+    pub countries_url: String,
+    /// iptv-org's full stream database. The per-country playlists only embed
+    /// ONE feed per channel; this database lists them all, and every extra
+    /// feed becomes a fallback source the proxy can rotate to.
+    #[serde(default = "default_livetv_streams_url")]
+    pub streams_url: String,
+    /// Extra fallback playlists per country code. Entries matching a channel
+    /// already found in the iptv-org playlist (by tvg-id / name) merge in as
+    /// additional fallback sources — cross-provider redundancy, not dupes.
+    #[serde(default)]
+    pub extra_playlists: HashMap<String, Vec<String>>,
+    /// Gzipped XMLTV programme guide per country code, for the now/next
+    /// overlay. Countries without an entry simply have no guide.
+    #[serde(default = "default_livetv_epg_urls")]
+    pub epg_urls: HashMap<String, String>,
+    #[serde(default = "default_livetv_playlist_refresh_hours")]
+    pub playlist_refresh_hours: u64,
+    #[serde(default = "default_livetv_epg_refresh_hours")]
+    pub epg_refresh_hours: u64,
+    /// tvg-id base (e.g. "TF1") → TNT channel number; merged over the
+    /// built-in table so a renamed tvg-id can be re-pinned without a
+    /// release. Only meaningful for `fr`.
+    #[serde(default)]
+    pub tnt_overrides: HashMap<String, u16>,
+    /// channel id (slug) → XMLTV channel id, for guide ids that don't match
+    /// the playlist's tvg-id.
+    #[serde(default)]
+    pub epg_id_overrides: HashMap<String, String>,
+}
+
+fn default_livetv_country() -> String {
+    "fr".to_string()
+}
+fn default_livetv_playlist_template() -> String {
+    "https://iptv-org.github.io/iptv/countries/{code}.m3u".to_string()
+}
+fn default_livetv_countries_url() -> String {
+    "https://iptv-org.github.io/api/countries.json".to_string()
+}
+fn default_livetv_streams_url() -> String {
+    "https://iptv-org.github.io/api/streams.json".to_string()
+}
+fn default_livetv_epg_urls() -> HashMap<String, String> {
+    HashMap::from([(
+        "fr".to_string(),
+        "https://xmltvfr.fr/xmltv/xmltv_tnt.xml.gz".to_string(),
+    )])
+}
+fn default_livetv_playlist_refresh_hours() -> u64 {
+    // iptv-org regenerates its playlists + stream database several times a
+    // day (dead feeds pruned, alternates added) — track it reasonably close.
+    6
+}
+fn default_livetv_epg_refresh_hours() -> u64 {
+    6
+}
+
+impl Default for LiveTvConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_country: default_livetv_country(),
+            playlist_url_template: default_livetv_playlist_template(),
+            countries_url: default_livetv_countries_url(),
+            streams_url: default_livetv_streams_url(),
+            extra_playlists: HashMap::new(),
+            epg_urls: default_livetv_epg_urls(),
+            playlist_refresh_hours: default_livetv_playlist_refresh_hours(),
+            epg_refresh_hours: default_livetv_epg_refresh_hours(),
+            tnt_overrides: HashMap::new(),
+            epg_id_overrides: HashMap::new(),
+        }
+    }
 }
 
 /// Tuning for the content-first recommendation engine (see `RECOSYS.md`). The

@@ -9,6 +9,7 @@ import {
   Search as SearchIcon,
   ShieldCheck,
   Sparkles as ForYouIcon,
+  Tv as LiveTvIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Brand } from "@/components/Brand";
@@ -52,6 +53,7 @@ export function AppShell() {
     { to: "/moods", label: "Tonight", icon: MoodIcon },
     { to: "/for-you", label: "For You", icon: ForYouIcon },
     { to: "/library", label: "Library", icon: LibraryIcon },
+    { to: "/live", label: "Live TV", icon: LiveTvIcon },
     { to: "/history", label: "History", icon: HistoryIcon },
     ...(auth.user.is_admin
       ? [{ to: "/admin", label: "Admin", icon: ShieldCheck } satisfies NavEntry]

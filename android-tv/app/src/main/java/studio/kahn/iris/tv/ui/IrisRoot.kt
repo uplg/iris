@@ -34,6 +34,8 @@ import studio.kahn.iris.tv.ui.screens.MoodsScreen
 import studio.kahn.iris.tv.ui.screens.HistoryScreen
 import studio.kahn.iris.tv.ui.screens.HomeScreen
 import studio.kahn.iris.tv.ui.screens.LibraryScreen
+import studio.kahn.iris.tv.ui.screens.LiveTvScreen
+import studio.kahn.iris.tv.ui.screens.LiveTvWatchScreen
 import studio.kahn.iris.tv.ui.screens.PairingScreen
 import studio.kahn.iris.tv.ui.screens.SearchDetailScreen
 import studio.kahn.iris.tv.ui.screens.SearchScreen
@@ -59,6 +61,8 @@ object Routes {
     const val FOR_YOU = "for-you"
     const val MOODS = "moods"
     const val HISTORY = "history"
+    const val LIVE_TV = "livetv"
+    const val LIVE_TV_WATCH = "livetv/{country}/{channelId}"
     fun detail(infohash: String) = "detail/$infohash"
     fun collection(id: String): String {
         val cid = java.net.URLEncoder.encode(id, "UTF-8")
@@ -85,6 +89,11 @@ object Routes {
         return "search-detail/$p/$e?tmdbId=$t&kind=$k"
     }
     fun watch(infohash: String, fileIdx: Int) = "watch/$infohash/$fileIdx"
+    fun liveTvWatch(country: String, channelId: String): String {
+        val c = java.net.URLEncoder.encode(country, "UTF-8")
+        val ch = java.net.URLEncoder.encode(channelId, "UTF-8")
+        return "livetv/$c/$ch"
+    }
     fun series(followId: String): String {
         val id = java.net.URLEncoder.encode(followId, "UTF-8")
         return "series/$id"
@@ -198,6 +207,36 @@ fun IrisRoot(
                     onOpenHistory = {
                         navController.navigate(Routes.HISTORY)
                     },
+                    onOpenLiveTv = {
+                        navController.navigate(Routes.LIVE_TV)
+                    },
+                )
+            }
+            composable(Routes.LIVE_TV) {
+                LiveTvScreen(
+                    container = container,
+                    onOpenChannel = { country, channelId ->
+                        navController.navigate(Routes.liveTvWatch(country, channelId))
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(
+                Routes.LIVE_TV_WATCH,
+                arguments = listOf(
+                    navArgument("country") { type = NavType.StringType },
+                    navArgument("channelId") { type = NavType.StringType },
+                ),
+            ) { backStackEntry ->
+                LiveTvWatchScreen(
+                    container = container,
+                    country = java.net.URLDecoder.decode(
+                        backStackEntry.arguments!!.getString("country")!!, "UTF-8",
+                    ),
+                    initialChannelId = java.net.URLDecoder.decode(
+                        backStackEntry.arguments!!.getString("channelId")!!, "UTF-8",
+                    ),
+                    onBack = { navController.popBackStack() },
                 )
             }
             composable(Routes.MOODS) {
