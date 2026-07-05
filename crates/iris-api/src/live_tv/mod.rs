@@ -52,14 +52,26 @@ const PLAYLIST_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_PLAYLIST_BYTES: usize = 4 * 1024 * 1024;
 
 /// How long a fetched logo stays served from memory (they're effectively
-/// static). A dead / rate-limited host is re-tried after the shorter
-/// negative TTL rather than on every request.
+/// static). Failures are cached too, so a dead host isn't re-hammered — but
+/// with two very different TTLs: a genuine miss (404/403/410) sticks for
+/// [`LOGO_NEG_TTL`]; a RETRYABLE failure (429 rate-limit, 5xx, network error)
+/// only sticks for [`LOGO_RETRY_TTL`] so it self-heals on the next render
+/// instead of blanking a tile for minutes. This is the imgur/wikimedia case:
+/// hotlink hosts 429 a datacenter IP on a cold burst, then serve fine seconds
+/// later.
 const LOGO_CACHE_TTL: Duration = Duration::from_hours(24);
 const LOGO_NEG_TTL: Duration = Duration::from_mins(5);
+const LOGO_RETRY_TTL: Duration = Duration::from_secs(20);
 
 /// Max concurrent upstream logo fetches — low enough to stay under logo-host
 /// rate limits while a full grid warms the cache.
-const LOGO_FETCH_CONCURRENCY: usize = 6;
+const LOGO_FETCH_CONCURRENCY: usize = 4;
+
+/// Upstream statuses (and our own 502 for a transport error) that are worth
+/// retrying soon rather than caching as a durable miss.
+pub(crate) fn logo_status_retryable(status: u16) -> bool {
+    matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
+}
 
 /// Hard cap on cached logo entries (each a few KB). Cleared wholesale if
 /// exceeded — trivial to re-warm and far simpler than LRU bookkeeping.
@@ -225,6 +237,8 @@ impl CachedLogo {
     fn is_fresh(&self, now: Instant) -> bool {
         let ttl = if self.status == 200 {
             LOGO_CACHE_TTL
+        } else if logo_status_retryable(self.status) {
+            LOGO_RETRY_TTL
         } else {
             LOGO_NEG_TTL
         };

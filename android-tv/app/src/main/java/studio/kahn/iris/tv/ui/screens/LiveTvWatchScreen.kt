@@ -64,6 +64,12 @@ private const val OVERLAY_VISIBLE_MS = 4_000L
  *  then reloads — so the retries walk through a channel's fallback feeds. */
 private const val MAX_AUTO_RETRIES = 3
 
+/** A feed that never starts playing within this window counts as a failure.
+ *  Live restreams (M6's especially) can hang in BUFFERING forever WITHOUT
+ *  ever firing `onPlayerError`, so error-only handling left "Connecting…" up
+ *  indefinitely — this converts a silent stall into a demote-and-retry. */
+private const val CONNECT_TIMEOUT_MS = 12_000L
+
 /**
  * Live channel playback. Deliberately NOT [WatchScreen] — that one is
  * torrent-coupled (probe, /play/status gating, saved progress, episode
@@ -92,14 +98,18 @@ fun LiveTvWatchScreen(
     var channelId by remember { mutableStateOf(initialChannelId) }
     var epg by remember { mutableStateOf<Map<String, LiveNowNext>>(emptyMap()) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    // Automatic reconnects used up on THIS channel (reset when zapping away).
-    var autoRetryCount by remember(channelId) { mutableStateOf(0) }
+    // Automatic reconnects used up on THIS channel. STABLE state (not re-keyed)
+    // + reset via the LaunchedEffect below — a long-lived Player.Listener would
+    // otherwise capture a stale re-keyed state object after a zap and count
+    // against the wrong channel.
+    var autoRetryCount by remember { mutableStateOf(0) }
     // Bumped to force a re-prepare of the current channel (Retry button + the
     // post-demotion auto-reconnect).
     var retryNonce by remember { mutableStateOf(0) }
-    // First video frame rendered for the current (channel, attempt)? Drives the
-    // "Connecting…" placeholder so a reconnect isn't a silent black screen.
-    var rendered by remember(channelId, retryNonce) { mutableStateOf(false) }
+    // Has the current attempt actually started playing? Drives the "Connecting…"
+    // placeholder AND cancels the connect timeout. Stable state + reset in the
+    // (re)load effect (same stale-capture reasoning as `autoRetryCount`).
+    var playing by remember { mutableStateOf(false) }
     // Compose owns focus + input on this screen (the PlayerView is pure
     // display). `rootFocus` holds focus during playback so DPAD zapping works;
     // `retryFocus` takes it when the error card appears so its buttons are
@@ -135,10 +145,36 @@ fun LiveTvWatchScreen(
 
     val player = remember { mutableStateOf<ExoPlayer?>(null) }
 
+    // New channel ⇒ fresh retry budget. Keyed on channelId only (NOT retryNonce)
+    // so a reconnect doesn't reset the count it's incrementing.
+    LaunchedEffect(channelId) { autoRetryCount = 0 }
+
+    // Shared failure path, used by BOTH the error listener and the connect
+    // timeout: demote the dead source, WAIT for that POST to land, then bump
+    // `retryNonce` to reload the newly elected feed. (The old code re-prepared
+    // immediately, racing the async demote → same dead source back, why M6
+    // never recovered.) After MAX_AUTO_RETRIES, surface the Retry card.
+    val onFail: (String) -> Unit = onFail@{ message ->
+        val url = serverUrl ?: return@onFail
+        if (autoRetryCount < MAX_AUTO_RETRIES) {
+            autoRetryCount++
+            container.applicationScope.launch {
+                runCatching { container.apiFor(url).liveTvPlaybackError(country, channelId) }
+                retryNonce++
+            }
+        } else {
+            container.applicationScope.launch {
+                runCatching { container.apiFor(url).liveTvPlaybackError(country, channelId) }
+            }
+            errorMessage = message
+        }
+    }
+
     // (Re)load the stream whenever the channel changes or Retry is pressed.
     LaunchedEffect(channelId, serverUrl, retryNonce) {
         val url = serverUrl ?: return@LaunchedEffect
         errorMessage = null
+        playing = false
         val base = if (url.endsWith("/")) url else "$url/"
         val masterUrl = "${base}api/livetv/$country/channels/$channelId/master.m3u8"
         val name = channels.firstOrNull { it.id == channelId }?.name ?: channelId
@@ -150,39 +186,32 @@ fun LiveTvWatchScreen(
         p.playWhenReady = true
     }
 
-    // Error listener: on failure, tell the backend to demote the dead source
-    // and — crucially — WAIT for that POST to land before bumping `retryNonce`
-    // to reload. The old code re-prepared immediately, racing the async demote,
-    // so the reload usually got the same dead source back (why M6 never
-    // recovered). We walk up to MAX_AUTO_RETRIES feeds this way, then surface
-    // the Retry card. `onRenderedFirstFrame` clears the "Connecting…" state.
+    // Connect timeout: if this attempt hasn't started playing within the
+    // window, treat it as a failure. A live feed can hang in BUFFERING forever
+    // WITHOUT firing onPlayerError (M6), which used to leave "Connecting…" up
+    // for good. Re-keyed per attempt; cancelled implicitly once `playing` flips.
+    LaunchedEffect(channelId, retryNonce) {
+        delay(CONNECT_TIMEOUT_MS)
+        if (!playing && errorMessage == null) onFail("Stream unavailable — no data")
+    }
+
+    // Player listener: errors go through the shared failure path; onIsPlaying
+    // clears "Connecting…". We ALSO sync from the current state right after
+    // attaching, because on a fast channel the frame can start before this
+    // effect runs and we'd otherwise miss the event and hang on "Connecting…".
     DisposableEffect(player.value) {
         val p = player.value ?: return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                val url = serverUrl
-                if (url != null && autoRetryCount < MAX_AUTO_RETRIES) {
-                    autoRetryCount++
-                    container.applicationScope.launch {
-                        runCatching { container.apiFor(url).liveTvPlaybackError(country, channelId) }
-                        // Source is demoted now → reload elects the next feed.
-                        retryNonce++
-                    }
-                } else {
-                    url?.let {
-                        container.applicationScope.launch {
-                            runCatching { container.apiFor(it).liveTvPlaybackError(country, channelId) }
-                        }
-                    }
-                    errorMessage = humanizePlaybackError(error).first
-                }
+                onFail(humanizePlaybackError(error).first)
             }
 
-            override fun onRenderedFirstFrame() {
-                rendered = true
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) playing = true
             }
         }
         p.addListener(listener)
+        if (p.isPlaying) playing = true
         onDispose { p.removeListener(listener) }
     }
 
@@ -258,9 +287,10 @@ fun LiveTvWatchScreen(
             update = { it.player = player.value },
         )
 
-        // "Connecting…" while a (re)load hasn't rendered its first frame yet,
-        // so an auto-reconnect isn't a silent black screen.
-        if (errorMessage == null && !rendered) {
+        // "Connecting…" until the attempt actually starts playing, so a
+        // (re)connect isn't a silent black screen. Cleared by onIsPlayingChanged
+        // (or the connect timeout, which flips to the error card).
+        if (errorMessage == null && !playing) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     "Connecting…",

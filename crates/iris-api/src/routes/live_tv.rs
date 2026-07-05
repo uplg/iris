@@ -377,11 +377,18 @@ pub(crate) async fn live_logo(
     let logo = svc.fetch_logo(&params.u, &params.s).await?;
     if logo.status != 200 {
         // Dead / rate-limited logo host → forward a 404 so the card shows its
-        // letter-tile fallback, and let the client cache that miss briefly so
-        // it doesn't re-hammer us (and us the upstream) on every re-render.
+        // letter-tile fallback. Cache-control mirrors the server-side TTL: a
+        // retryable failure (429/5xx) gets a SHORT max-age so the browser
+        // re-requests soon and the tile self-heals; a genuine miss sticks
+        // longer. (Fixes the imgur/wikimedia 429 that used to blank the grid.)
+        let max_age = if crate::live_tv::logo_status_retryable(logo.status) {
+            "public, max-age=20"
+        } else {
+            "public, max-age=300"
+        };
         return Response::builder()
             .status(axum::http::StatusCode::NOT_FOUND)
-            .header(header::CACHE_CONTROL, "public, max-age=300")
+            .header(header::CACHE_CONTROL, max_age)
             .body(Body::empty())
             .map_err(|e| ApiError::Internal(e.into()));
     }
