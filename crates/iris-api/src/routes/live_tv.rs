@@ -278,15 +278,33 @@ pub(crate) async fn live_proxy(
 ) -> ApiResult<Response> {
     let svc = service(&state)?;
     let (resp, final_url) = svc.proxy_fetch(&params.c, &params.u, &params.s).await?;
+    let status = resp.status();
     let upstream_ct = resp
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
+    let is_playlist = proxy::is_playlist(&final_url, upstream_ct.as_deref());
+
+    // Forward the upstream status verbatim (a live segment that has rolled
+    // off the window legitimately 404s — the player retries / gap-skips it).
+    // Only genuine connection failures became a 502 back in `proxy_fetch`.
+    // For segments, feed the outcome into source health so a persistently
+    // broken origin gets demoted and the next feed elected.
+    if !is_playlist {
+        svc.note_segment_result(&params.c, status.is_success()).await;
+    }
+    if !status.is_success() {
+        return Response::builder()
+            .status(status.as_u16())
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(Body::empty())
+            .map_err(|e| ApiError::Internal(e.into()));
+    }
 
     // Nested playlists (media playlists reached through the master) get the
     // same rewrite treatment as the master itself.
-    if proxy::is_playlist(&final_url, upstream_ct.as_deref()) {
+    if is_playlist {
         let body = resp
             .text()
             .await
@@ -356,6 +374,14 @@ pub(crate) async fn live_logo(
 ) -> ApiResult<Response> {
     let svc = service(&state)?;
     let resp = svc.fetch_logo(&params.u, &params.s).await?;
+    let status = resp.status();
+    if !status.is_success() {
+        // Dead logo host → forward its status; the card shows a letter tile.
+        return Response::builder()
+            .status(status.as_u16())
+            .body(Body::empty())
+            .map_err(|e| ApiError::Internal(e.into()));
+    }
     let content_type = resp
         .headers()
         .get(header::CONTENT_TYPE)

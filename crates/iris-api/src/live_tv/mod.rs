@@ -40,6 +40,10 @@ const SOURCE_COOLDOWN_MAX: Duration = Duration::from_hours(24);
 /// Concurrency cap for the background health probe.
 const PROBE_CONCURRENCY: usize = 12;
 
+/// Consecutive segment/key fetch failures on the live source before it is
+/// demoted and the next feed elected.
+const SEGMENT_FAIL_THRESHOLD: u64 = 5;
+
 /// Per-source fetch timeout for playlist requests — bounds the worst case
 /// when rotating through several dead sources in one request.
 const PLAYLIST_TIMEOUT: Duration = Duration::from_secs(8);
@@ -103,6 +107,9 @@ pub struct SourceHealth {
     failures: AtomicU64,
     /// Epoch-millis until which the source must not be elected (0 = ok).
     cooldown_until_ms: AtomicU64,
+    /// Consecutive failed segment/key fetches while this source is live
+    /// (reset on any success). Demotes the source past a threshold.
+    segment_failures: AtomicU64,
 }
 
 impl SourceHealth {
@@ -488,12 +495,14 @@ impl LiveTvService {
         if !self.inner.signer.verify(proxy::LOGO_KEY, upstream.as_str(), sig) {
             return Err(LiveTvError::BadProxyRequest);
         }
+        // Forward the upstream status as-is (a dead logo host → 404 → the
+        // card's letter-tile fallback), rather than a 502 that spams the
+        // error log for a purely cosmetic asset.
         self.inner
             .http
             .get(upstream)
             .send()
             .await
-            .and_then(reqwest::Response::error_for_status)
             .map_err(|e| LiveTvError::Upstream(e.to_string()))
     }
 
@@ -637,13 +646,61 @@ impl LiveTvService {
         if let Some(r) = referrer {
             req = req.header(reqwest::header::REFERER, r);
         }
+        // NOTE: no `error_for_status` here. Live segments roll off the
+        // window, so a slightly-late fetch legitimately 404s — that must be
+        // forwarded to the player AS a 404 (hls.js retries / gap-skips it),
+        // NOT rewritten to a 502 that reads as a dead gateway and tanks the
+        // stream. Only a real connection failure (can't reach the host) maps
+        // to Upstream/502 below.
         let resp = req
             .send()
             .await
-            .and_then(reqwest::Response::error_for_status)
             .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
         let final_url = resp.url().clone();
         Ok((resp, final_url))
+    }
+
+    /// Record the outcome of a segment/key fetch for the channel's active
+    /// source. A run of failures (broken origin that serves a valid playlist
+    /// but 404s its segments) demotes the source and re-elects, so the
+    /// client's next master reload lands on a working feed — the automatic
+    /// "sanity check → fallback" the household expects.
+    pub async fn note_segment_result(&self, channel_key: &str, ok: bool) {
+        let Some((country, id)) = channel_key.split_once(':') else {
+            return;
+        };
+        let Ok(snap) = self.channels(country).await else {
+            return;
+        };
+        let Some(idx) = snap.channel_index(id) else {
+            return;
+        };
+        let active = snap.active_source[idx].load(Ordering::Relaxed) % snap.channels[idx].sources.len().max(1);
+        let health = &snap.health[idx][active];
+        if ok {
+            health.segment_failures.store(0, Ordering::Relaxed);
+            return;
+        }
+        let fails = health.segment_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        if fails < SEGMENT_FAIL_THRESHOLD {
+            return;
+        }
+        // Too many bad segments — cool this source down and elect the next
+        // healthy one. Reset the counter so the replacement gets a clean run.
+        health.mark_failure(epoch_ms());
+        health.segment_failures.store(0, Ordering::Relaxed);
+        let now_ms = epoch_ms();
+        let next = (0..snap.channels[idx].sources.len())
+            .find(|&si| si != active && !snap.health[idx][si].in_cooldown(now_ms));
+        if let Some(si) = next {
+            snap.active_source[idx].store(si, Ordering::Relaxed);
+        }
+        tracing::info!(
+            channel = channel_key,
+            demoted = active,
+            elected = ?next,
+            "live tv source demoted after repeated segment failures"
+        );
     }
 
     async fn channel_headers(&self, channel_key: &str) -> (Option<String>, Option<String>) {
