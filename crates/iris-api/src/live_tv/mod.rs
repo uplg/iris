@@ -201,6 +201,15 @@ struct ServiceInner {
     /// Caps concurrent upstream logo fetches so a cold grid warms the cache
     /// without tripping the host's rate limit.
     logo_sem: tokio::sync::Semaphore,
+    /// Logo-only HTTP client that does NOT verify TLS certificates. Channel
+    /// logos are cosmetic third-party assets on a long tail of hosts (imgur,
+    /// random broadcaster CDNs) whose certs are routinely expired, self-signed
+    /// or from an issuer this box doesn't trust — and a skewed server clock
+    /// makes even valid certs read as expired. A bad logo is harmless (served
+    /// same-origin, rendered only in `<img>`/Coil where nothing executes), so
+    /// we don't let cert pedantry blank the whole grid. Streams / EPG / TMDB
+    /// keep the strict [`Self::http`] client.
+    logo_http: reqwest::Client,
 }
 
 /// A cached logo — the bytes + content-type on success, or just the forwarded
@@ -244,6 +253,16 @@ impl LiveTvService {
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()?;
+        // Logo-only client: same knobs, but tolerant of bad TLS certs on the
+        // cosmetic third-party logo hosts (see `logo_http`). Shorter timeout —
+        // a logo is never worth blocking a tile for long.
+        let logo_http = reqwest::Client::builder()
+            .user_agent(DEFAULT_UA)
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .danger_accept_invalid_certs(true)
+            .build()?;
         Ok(Self {
             inner: Arc::new(ServiceInner {
                 signer: proxy::Signer::new(jwt_secret),
@@ -257,6 +276,7 @@ impl LiveTvService {
                 load_lock: tokio::sync::Mutex::new(()),
                 logo_cache: RwLock::new(HashMap::new()),
                 logo_sem: tokio::sync::Semaphore::new(LOGO_FETCH_CONCURRENCY),
+                logo_http,
             }),
         })
     }
@@ -591,7 +611,7 @@ impl LiveTvService {
         // card's letter-tile fallback), rather than a 502 that spams the error
         // log for a purely cosmetic asset. A transport error is cached as a
         // 502 so we don't retry it on every tile this minute.
-        let cached = match self.inner.http.get(upstream).send().await {
+        let cached = match self.inner.logo_http.get(upstream).send().await {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 if resp.status().is_success() {
