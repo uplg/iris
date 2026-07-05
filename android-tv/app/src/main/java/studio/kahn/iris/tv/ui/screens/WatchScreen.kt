@@ -17,7 +17,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -46,8 +45,6 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
@@ -302,13 +299,10 @@ private fun ReadyPlayer(
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Episode navigation context — fetched once per mount. Drives
-    // the small "Prev / Next" chips overlaid on the player. Both
-    // sides may be null (movie / first episode / last episode), in
-    // which case the corresponding chip simply doesn't render.
-    var prevEpisode by remember(infohash, fileIdx) {
-        mutableStateOf<EpisodePoint?>(null)
-    }
+    // Episode navigation context — fetched once per mount. `nextEpisode`
+    // drives the native control-bar "Next episode" button; `currentEpisode`
+    // picks the finale-vs-movie end copy. Either may be null (movie / last
+    // episode).
     var nextEpisode by remember(infohash, fileIdx) {
         mutableStateOf<EpisodePoint?>(null)
     }
@@ -327,10 +321,9 @@ private fun ReadyPlayer(
     var playerEnded by remember(infohash, fileIdx) {
         mutableStateOf(false)
     }
-    // Crossed the 95 % mark at least once this mount. Drives the
-    // native "Next episode" control-bar button — Netflix-style nudge
-    // that shows up around the credit roll, complementing the
-    // always-on top-right chips. Deliberate action only (no countdown).
+    // Crossed the 95 % mark at least once this mount. Drives the native
+    // "Next episode" control-bar button — a Netflix-style nudge that shows up
+    // around the credit roll. Deliberate action only (no countdown).
     var nearEnd by remember(infohash, fileIdx) {
         mutableStateOf(false)
     }
@@ -341,7 +334,6 @@ private fun ReadyPlayer(
         }.getOrNull()
         currentEpisode = ctx?.current
         nextEpisode = ctx?.next
-        prevEpisode = ctx?.prev
     }
 
     // Tier-F fallback gate: flipped to `true` by the error listener
@@ -1028,13 +1020,6 @@ private fun ReadyPlayer(
     // overlay) so the D-pad reaches it like every other transport control —
     // see the LaunchedEffect below for the visibility/click wiring.
     var nextEpisodeButton by remember { mutableStateOf<android.widget.ImageButton?>(null) }
-    // Pushed by PlayerView's `ControllerVisibilityListener` whenever the
-    // play/pause overlay shows or hides. Drives the top-right nav chips
-    // — they only make sense alongside the rest of the chrome, so we
-    // gate them on the same signal. Starts `false` so the chips stay
-    // hidden on entry; the listener flips it to `true` if/when the
-    // controller comes up.
-    var controllerVisible by remember { mutableStateOf(false) }
 
     // Intercept the back gesture: if the controller overlay is
     // currently showing, hide it instead of leaving the watch
@@ -1054,17 +1039,6 @@ private fun ReadyPlayer(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
             PlayerView(ctx).apply {
-                // Register the visibility listener BEFORE attaching the
-                // player. Once the player is set, Media3 may fire the
-                // initial `controllerAutoShow` synchronously — anything
-                // we register afterwards would miss that first event
-                // and the chips would sit stuck at their default value
-                // until the user wiggled the controller manually.
-                setControllerVisibilityListener(
-                    PlayerView.ControllerVisibilityListener { visibility ->
-                        controllerVisible = visibility == android.view.View.VISIBLE
-                    },
-                )
                 this.player = player
                 useController = true
                 setShowSubtitleButton(true)
@@ -1086,10 +1060,6 @@ private fun ReadyPlayer(
                     ?.setOnClickListener { onBack() }
                 nextEpisodeButton = findViewById(R.id.iris_next_episode)
                 installIrisTrackNameProvider(this)
-                // Sync the current value — defensive belt-and-braces for
-                // the rare case the platform raced past the listener
-                // registration on slower devices.
-                controllerVisible = isControllerFullyVisible
                 playerView = this
             }
         },
@@ -1134,105 +1104,17 @@ private fun ReadyPlayer(
         }
     }
 
-    // Always-on episode-navigation overlay. Two small chips in the
-    // top-right corner of the player surface: "‹ Prev" and "Next ›",
-    // each appearing only when the backend resolved an episode in
-    // that direction. The chips never auto-advance — every action is
-    // a deliberate D-pad click. Subtle enough to ignore during the
-    // show, discoverable enough to reach for at the credits.
-    //
-    // Exception: when the player has reached STATE_ENDED AND there's
-    // no next episode at all, swap the next chip for a more visible
-    // "End of series — Back to Home" banner so the user has a clear
-    // exit path instead of staring at a frozen final frame.
+    // Episode navigation is the native control-bar "Next episode" button
+    // (`nextEpisodeButton`, wired above) — D-pad-reachable inside PlayerView's
+    // focus hierarchy. The old top-right "‹ Prev / Next ›" Compose chips lived
+    // OUTSIDE that hierarchy, so the controller always held focus and they
+    // could never be reached; removed. Previous-episode selection lives on the
+    // series screen. This Box still hosts the remux + end-of-playback overlays.
     Box(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 32.dp, vertical = 24.dp),
     ) {
-        // Top chips ride with the rest of the chrome: visible while
-        // PlayerView's controller overlay is up, or once we're near
-        // the end of the episode (≥ 95 %) or after it has ended —
-        // those two moments are when next-episode navigation is the
-        // most relevant action and the user shouldn't have to wake
-        // the controller first.
-        val chipsVisible = controllerVisible || nearEnd || playerEnded
-        if (chipsVisible) {
-            Row(
-                modifier = Modifier.align(Alignment.TopEnd),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                prevEpisode?.let { prev ->
-                EpisodeNavChip(
-                    label = "S%02dE%02d".format(prev.season, prev.episode),
-                    direction = NavDirection.Prev,
-                    grabbing = grabbing && prev.status == EpisodeStatus.available,
-                    point = prev,
-                    onPlay = {
-                        val ih = prev.infohash
-                        val idx = prev.fileIdx
-                        if (ih != null && idx != null) onNavigateToFile(ih, idx.toInt())
-                    },
-                    onPrepare = {
-                        val fid = prev.followId ?: return@EpisodeNavChip
-                        grabbing = true
-                        scope.launch {
-                            val grabbed = runCatching {
-                                container.apiFor(serverUrl).grabEpisode(
-                                    id = fid.toString(),
-                                    season = prev.season.toInt(),
-                                    episode = prev.episode.toInt(),
-                                )
-                            }.getOrNull()
-                            grabbing = false
-                            if (grabbed != null) {
-                                prevEpisode = prev.copy(
-                                    status = EpisodeStatus.downloaded,
-                                    infohash = grabbed.infohash,
-                                    fileIdx = grabbed.fileIdx,
-                                )
-                            }
-                        }
-                    },
-                )
-            }
-            nextEpisode?.let { next ->
-                EpisodeNavChip(
-                    label = "S%02dE%02d".format(next.season, next.episode),
-                    direction = NavDirection.Next,
-                    grabbing = grabbing && next.status == EpisodeStatus.available,
-                    point = next,
-                    onPlay = {
-                        val ih = next.infohash
-                        val idx = next.fileIdx
-                        if (ih != null && idx != null) onNavigateToFile(ih, idx.toInt())
-                    },
-                    onPrepare = {
-                        val fid = next.followId ?: return@EpisodeNavChip
-                        grabbing = true
-                        scope.launch {
-                            val grabbed = runCatching {
-                                container.apiFor(serverUrl).grabEpisode(
-                                    id = fid.toString(),
-                                    season = next.season.toInt(),
-                                    episode = next.episode.toInt(),
-                                )
-                            }.getOrNull()
-                            grabbing = false
-                            if (grabbed != null) {
-                                nextEpisode = next.copy(
-                                    status = EpisodeStatus.downloaded,
-                                    infohash = grabbed.infohash,
-                                    fileIdx = grabbed.fileIdx,
-                                )
-                            }
-                        }
-                    },
-                )
-            }
-            }
-        }
-
         // Remux/transcode overlay: poll `/play/status` and surface the
         // server's progress while it builds the HLS variant. Shown when the
         // error listener swapped us onto the remux (`useRemuxFallback`) OR when
@@ -1260,59 +1142,6 @@ private fun ReadyPlayer(
                 EndOfPlaybackPill(isMovie = isMovie)
             }
         }
-    }
-}
-
-private enum class NavDirection { Prev, Next }
-
-/**
- * Small focusable chip overlaid on the player. "Prev" → left arrow
- * prefix, "Next" → right arrow suffix. Surface is semi-transparent
- * so it doesn't pull focus from the playing video; the focus ring
- * (TV-Material's default) makes it obvious where the D-pad is. For
- * downloaded episodes a tap navigates immediately; for available
- * ones it kicks off a `/grab` and the chip flips to "Preparing…",
- * then once the grab returns the parent re-renders us with
- * `status == "downloaded"`.
- */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun EpisodeNavChip(
-    label: String,
-    direction: NavDirection,
-    grabbing: Boolean,
-    point: EpisodePoint,
-    onPlay: () -> Unit,
-    onPrepare: () -> Unit,
-) {
-    val downloaded = point.status == EpisodeStatus.downloaded && point.infohash != null && point.fileIdx != null
-    val text = when {
-        grabbing -> "Preparing $label…"
-        downloaded && direction == NavDirection.Prev -> "‹ $label"
-        downloaded && direction == NavDirection.Next -> "$label ›"
-        direction == NavDirection.Prev -> "‹ Prepare $label"
-        else -> "Prepare $label ›"
-    }
-    Button(
-        onClick = {
-            when {
-                grabbing -> Unit
-                downloaded -> onPlay()
-                else -> onPrepare()
-            }
-        },
-        enabled = !grabbing && (downloaded || point.followId != null),
-        shape = ButtonDefaults.shape(shape = RoundedCornerShape(20.dp)),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-        colors = ButtonDefaults.colors(
-            // Translucent so the chip reads as overlay, not chrome —
-            // matches the visual weight of subtitle blocks rather
-            // than the bottom controller bar.
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
-            contentColor = MaterialTheme.colorScheme.onSurface,
-        ),
-    ) {
-        Text(text, style = MaterialTheme.typography.labelMedium)
     }
 }
 
