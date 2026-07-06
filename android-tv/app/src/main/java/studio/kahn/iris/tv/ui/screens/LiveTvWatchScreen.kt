@@ -70,24 +70,48 @@ private const val MAX_AUTO_RETRIES = 3
  *  on interlaced/corrupt H.264 restreams) — without an escape hatch, such a
  *  channel is an eternal "Connecting…" with no retry and no error.
  *
- *  HARDWARE → [HW_STALL_MS] → SOFTWARE (same source, no demote — election
- *  untouched, so this window can be tight) → [SW_STALL_MS] → SERVER (the
- *  backend deinterlaces + re-encodes the feed; verified necessary on-device:
- *  M6's only living feed defeats BOTH local decoders) → [SRV_STALL_MS] →
- *  error card. The software window stays generous: a healthy-but-slow
- *  restream can legitimately need >12 s to start, and demoting the one good
- *  source before it ever starts was a real regression. */
+ *  HARDWARE → [HW_STALL_MS] → SOFTWARE (same source) → [SW_STALL_MS] →
+ *  SERVER (the backend deinterlaces + re-encodes; verified necessary
+ *  on-device: M6's only living feed defeats BOTH local decoders) →
+ *  [SRV_STALL_MS] → error card.
+ *
+ *  The windows are deliberately TIGHT: advancing a stage never demotes a
+ *  source (a stall is a local decode problem), so a false positive on a
+ *  slow-starting healthy feed only costs efficiency — the next stage plays
+ *  it anyway. A wrongly-demoted source was the historical regression; a
+ *  wrongly-escalated decode stage is harmless. */
 private enum class DecodeStage { Hardware, Software, Server }
 
-private const val HW_STALL_MS = 20_000L
-private const val SW_STALL_MS = 45_000L
+private const val HW_STALL_MS = 12_000L
+private const val SW_STALL_MS = 18_000L
 
 /** ffmpeg needs to probe the live input + emit its first segments. */
 private const val SRV_STALL_MS = 40_000L
 
-/** Per-channel (`country:id`) stage that actually played this session —
- *  the next open of that channel skips the doomed earlier stages. */
-private val stageNeeded = java.util.concurrent.ConcurrentHashMap<String, DecodeStage>()
+/** Persisted per-channel decode stage, so a channel that needed the ladder
+ *  starts DIRECTLY at its working stage on later opens — across app
+ *  restarts. Entries expire after [STAGE_TTL_MS]: these restreams vary with
+ *  programming (interlaced tonight, clean tomorrow), so once a day the
+ *  channel gets a fresh shot at plain hardware playback. */
+private const val STAGE_PREFS = "livetv_decode_stage"
+private const val STAGE_TTL_MS = 24L * 60 * 60 * 1_000
+
+private fun recallStage(context: android.content.Context, key: String): DecodeStage {
+    val raw = context.getSharedPreferences(STAGE_PREFS, android.content.Context.MODE_PRIVATE)
+        .getString(key, null) ?: return DecodeStage.Hardware
+    val (name, ts) = raw.split(':', limit = 2).let {
+        (it.getOrNull(0) ?: "") to (it.getOrNull(1)?.toLongOrNull() ?: 0L)
+    }
+    if (System.currentTimeMillis() - ts > STAGE_TTL_MS) return DecodeStage.Hardware
+    return runCatching { DecodeStage.valueOf(name) }.getOrDefault(DecodeStage.Hardware)
+}
+
+private fun persistStage(context: android.content.Context, key: String, stage: DecodeStage) {
+    context.getSharedPreferences(STAGE_PREFS, android.content.Context.MODE_PRIVATE)
+        .edit()
+        .putString(key, "${stage.name}:${System.currentTimeMillis()}")
+        .apply()
+}
 
 /**
  * Live channel playback. Deliberately NOT [WatchScreen] — that one is
@@ -172,16 +196,16 @@ fun LiveTvWatchScreen(
     val playerStage = remember { mutableStateOf(DecodeStage.Hardware) }
 
     // New channel ⇒ fresh retry budget; stage primed from what this channel
-    // needed earlier in the session (skip the doomed stages on a known-bad
-    // feed). Keyed on channelId only (NOT retryNonce) so a reconnect doesn't
-    // reset the count it's incrementing.
+    // needed on previous plays (persisted — skip the doomed stages on a
+    // known-bad feed even across app restarts). Keyed on channelId only (NOT
+    // retryNonce) so a reconnect doesn't reset the count it's incrementing.
     LaunchedEffect(channelId) {
         autoRetryCount = 0
-        stage = stageNeeded["$country:$channelId"] ?: DecodeStage.Hardware
+        stage = recallStage(context, "$country:$channelId")
     }
     // Once an attempt actually plays, remember which stage did it.
     LaunchedEffect(playing) {
-        if (playing) stageNeeded["$country:$channelId"] = playerStage.value
+        if (playing) persistStage(context, "$country:$channelId", playerStage.value)
     }
 
     // Shared failure path, used by BOTH the error listener and the connect

@@ -1,6 +1,18 @@
 import java.text.SimpleDateFormat
 import java.util.Date
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
 import org.openapitools.generator.gradle.plugin.tasks.GenerateTask
+
+/** Fresh per-build timestamp that SURVIVES the configuration cache: a plain
+ *  `Date()` at configuration time gets frozen into the cached configuration
+ *  and every later build reuses the stale stamp. `ValueSource`s are
+ *  re-evaluated on each build to validate the cache — a changed minute
+ *  invalidates it, which is exactly the behaviour a build stamp needs.
+ *  (Cost: reconfiguration about once a minute — fine at this scale.) */
+abstract class BuildStampSource : ValueSource<String, ValueSourceParameters.None> {
+    override fun obtain(): String = SimpleDateFormat("yyyyMMdd-HHmm").format(Date())
+}
 
 plugins {
     alias(libs.plugins.android.application)
@@ -21,12 +33,13 @@ android {
         versionName = "1.2.0"
         // Build stamp surfaced in Settings: versionName/versionCode stay equal
         // across pre-release iterations, so without this there's no way to tell
-        // WHICH build actually runs on the device. (Deliberately busts the
-        // compile cache every build — fine at this project's scale.)
+        // WHICH build actually runs on the device. Via BuildStampSource — see
+        // its doc for why a plain Date() here silently freezes under the
+        // configuration cache.
         buildConfigField(
             "String",
             "BUILD_STAMP",
-            "\"${SimpleDateFormat("yyyyMMdd-HHmm").format(Date())}\"",
+            "\"${providers.of(BuildStampSource::class) {}.get()}\"",
         )
     }
 
