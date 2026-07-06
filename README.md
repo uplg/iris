@@ -43,7 +43,7 @@ See [deployment.md](./docs/DEPLOYMENT.md) for server setup.
 ## Android TV app
 
 - Install Downloader by AFTVNews on Google play store.
-- Use this url : https://uplg.xyz/app-release.apk
+- Type the code : **8737385** or use this url : https://uplg.xyz/app-release.apk
 - Install (allow unknown sources if needed)
 
 (New updates can be done after using Iris settings screen > Update app.)
