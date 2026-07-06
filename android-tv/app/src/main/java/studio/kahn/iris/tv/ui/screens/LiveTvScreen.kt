@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,6 +33,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -113,16 +117,27 @@ fun LiveTvScreen(
             .getOrNull() ?: emptyList()
     }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(Unit) {
         val url = container.sessionStore.serverUrl.first()
             ?: run { error = "Not signed in"; loading = false; return@LaunchedEffect }
         serverUrl = url
+        // Last picked country wins over the server default, across restarts.
+        val saved = context.getSharedPreferences("livetv", android.content.Context.MODE_PRIVATE)
+            .getString("country", null)
+        if (country == null && saved != null) country = saved
         runCatching { container.apiFor(url).liveTvCountries() }
             .onSuccess { res ->
                 countries = res.countries
                 if (country == null) country = res.defaultCountry
             }
             .onFailure { if (country == null) country = "fr" }
+    }
+    LaunchedEffect(country) {
+        country?.let {
+            context.getSharedPreferences("livetv", android.content.Context.MODE_PRIVATE)
+                .edit().putString("country", it).apply()
+        }
     }
 
     // (Re)load channels whenever the country changes.
@@ -268,7 +283,7 @@ fun LiveTvScreen(
                                 categories = listOf(
                                     "Results · ${results.size}" to results.map { r ->
                                         LiveChannel(
-                                            id = r.id,
+                                            id = "${r.country}:${r.id}",
                                             // Country tag inline: results span
                                             // every country.
                                             name = "${r.name} · ${r.country.uppercase()}",
@@ -284,8 +299,10 @@ fun LiveTvScreen(
                                 ),
                                 epg = emptyMap(),
                                 onOpen = { ch ->
-                                    val hit = results.firstOrNull { "${it.name} · ${it.country.uppercase()}" == ch.name }
-                                    if (hit != null) onOpenChannel(hit.country, hit.id)
+                                    // id carries "country:id" (slugs are
+                                    // alphanumeric, ':' is safe).
+                                    val parts = ch.id.split(":", limit = 2)
+                                    if (parts.size == 2) onOpenChannel(parts[0], parts[1])
                                 },
                             )
                         }
@@ -303,6 +320,23 @@ private fun ChannelGrid(
     epg: Map<String, LiveNowNext>,
     onOpen: (LiveChannel) -> Unit,
 ) {
+    // Initial D-pad focus belongs on the FIRST CHANNEL, not the search field
+    // (which is first in composition order). The first card requests focus
+    // once, after it is actually placed (onGloballyPositioned — a bare
+    // LaunchedEffect can fire before the lazy item exists).
+    val firstFocus = remember { FocusRequester() }
+    val focusedOnce = remember { androidx.compose.runtime.mutableStateOf(false) }
+    fun Modifier.firstCard(isFirst: Boolean): Modifier = if (!isFirst) this else {
+        this
+            .focusRequester(firstFocus)
+            .onGloballyPositioned {
+                if (!focusedOnce.value) {
+                    focusedOnce.value = true
+                    runCatching { firstFocus.requestFocus() }
+                }
+            }
+    }
+
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 200.dp),
         modifier = Modifier.fillMaxSize(),
@@ -314,16 +348,27 @@ private fun ChannelGrid(
             item(key = "head-tnt", span = { GridItemSpan(maxLineSpan) }) {
                 GridSectionHeader("TNT")
             }
-            items(tnt, key = { "tnt-${it.id}" }) { ch ->
-                ChannelCard(channel = ch, nowNext = epg[ch.id], onClick = { onOpen(ch) })
+            itemsIndexed(tnt, key = { _, c -> "tnt-${c.id}" }) { i, ch ->
+                ChannelCard(
+                    channel = ch,
+                    nowNext = epg[ch.id],
+                    onClick = { onOpen(ch) },
+                    modifier = Modifier.firstCard(i == 0),
+                )
             }
         }
-        for ((title, list) in categories) {
+        for ((ci, section) in categories.withIndex()) {
+            val (title, list) = section
             item(key = "head-$title", span = { GridItemSpan(maxLineSpan) }) {
                 GridSectionHeader(title)
             }
-            items(list, key = { "$title-${it.id}" }) { ch ->
-                ChannelCard(channel = ch, nowNext = epg[ch.id], onClick = { onOpen(ch) })
+            itemsIndexed(list, key = { _, c -> "$title-${c.id}" }) { i, ch ->
+                ChannelCard(
+                    channel = ch,
+                    nowNext = epg[ch.id],
+                    onClick = { onOpen(ch) },
+                    modifier = Modifier.firstCard(tnt.isEmpty() && ci == 0 && i == 0),
+                )
             }
         }
     }
@@ -345,10 +390,12 @@ private fun ChannelCard(
     channel: LiveChannel,
     nowNext: LiveNowNext?,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(Radius.lg)
     Surface(
         onClick = onClick,
+        modifier = modifier,
         shape = ClickableSurfaceDefaults.shape(shape = shape),
         scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
         colors = ClickableSurfaceDefaults.colors(

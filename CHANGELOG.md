@@ -5,6 +5,31 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-07-06
+
+### Added
+
+- **Live TV channel search, across every country.** The channel grid (web +
+  Android TV) gains a search box resolved server-side against the iptv-org
+  channel database: type "bbc" from the France view and open BBC One directly.
+  Matching is accent-insensitive and only playable channels are returned.
+- **Android TV shows the escalation stage while a live channel connects**
+  (hardware / software decoder / server transcode, with elapsed time), and
+  Settings displays the exact build stamp of the installed APK.
+
+### Fixed
+
+- **Android TV kept streaming Live TV after leaving with the Home button** —
+  the stream now stops immediately on Home and resumes at the live edge when
+  you come back (the same lifecycle hole fixed for VOD in 1.1.0).
+- **Stubborn interlaced/corrupt feeds (M6) now play on the TV** via a
+  last-resort server-side deinterlace/transcode, engaged automatically only
+  after both the hardware and software decoders failed; the working method is
+  remembered per channel for a day, so later opens are instant.
+- **Channel logos self-heal**: rate-limited logo hosts (imgur) no longer
+  blank tiles for minutes; clients fall back to fetching the original logo
+  directly, and failed lookups retry quickly instead of sticking.
+
 ## [1.2.0] - 2026-07-06
 
 ### Added
@@ -461,7 +486,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.2.0...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.2.1...HEAD
+[1.2.1]: https://github.com/uplg/iris/compare/1.2.0...1.2.1
 [1.2.0]: https://github.com/uplg/iris/compare/1.1.0...1.2.0
 [0.9.1]: https://github.com/uplg/iris/compare/0.9.0...0.9.1
 [0.9.0]: https://github.com/uplg/iris/compare/0.8.1...0.9.0

@@ -651,8 +651,13 @@ impl LiveTvService {
             is_nsfw: bool,
             #[serde(default)]
             closed: Option<String>,
-            #[serde(default)]
-            logo: Option<String>,
+        }
+        // Logos moved out of channels.json into a sibling logos.json
+        // (one or more per channel id) — join them in.
+        #[derive(serde::Deserialize)]
+        struct ApiLogo {
+            channel: String,
+            url: String,
         }
 
         let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
@@ -663,6 +668,19 @@ impl LiveTvService {
         }
         // Playability filter — a name hit without any stream is a dead card.
         let streams = self.streams_db().await?;
+        let logos_url = self
+            .inner
+            .cfg
+            .channels_url
+            .replace("channels.json", "logos.json");
+        let mut logo_by_channel: HashMap<String, String> = HashMap::new();
+        if let Ok(resp) = self.inner.http.get(&logos_url).send().await
+            && let Ok(logos) = resp.json::<Vec<ApiLogo>>().await
+        {
+            for l in logos {
+                logo_by_channel.entry(l.channel).or_insert(l.url);
+            }
+        }
 
         let fetched: Vec<ApiChannel> = match self
             .inner
@@ -702,9 +720,9 @@ impl LiveTvService {
                 Some(SearchEntry {
                     country: c.country.to_lowercase(),
                     channel_id,
-                    name: c.name,
                     keys,
-                    logo_url: c.logo.filter(|l| !l.is_empty()),
+                    logo_url: logo_by_channel.get(&c.id).cloned(),
+                    name: c.name,
                 })
             })
             .collect();
