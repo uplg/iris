@@ -273,23 +273,29 @@ private fun ChannelCard(
             // classic black-on-black trap). The plate color is derived from
             // the decoded logo's own luminance: dark logo → light plate,
             // light logo → near-black plate, colorful/mid → neutral gray.
-            val logo = channel.logoUrl
+            //
+            // Fallback chain: signed proxy URL first, then the raw origin URL
+            // (`logo_origin`) — logo hosts rate-limit the SERVER's datacenter
+            // IP (the proxy 302s or 404s) while this device's residential IP
+            // is fine —, and only then the letter tile.
+            val logoCandidates = remember(channel.logoUrl, channel.logoOrigin) {
+                listOfNotNull(channel.logoUrl, channel.logoOrigin).distinct()
+            }
+            var logoIdx by remember(logoCandidates) { mutableStateOf(0) }
+            val logo = logoCandidates.getOrNull(logoIdx)
             var tone by remember(logo) {
                 mutableStateOf(logo?.let { logoToneCache[it] } ?: LogoTone.Neutral)
             }
-            // Many logo hosts are dead/missing — a failed load must fall back
-            // to the letter tile, not a blank plate.
-            var logoFailed by remember(logo) { mutableStateOf(false) }
             Box(
                 Modifier
                     .fillMaxWidth()
                     .height(56.dp)
                     .background(
-                        if (logo != null && !logoFailed) tone.well() else Color.Transparent,
+                        if (logo != null) tone.well() else Color.Transparent,
                         RoundedCornerShape(Radius.md),
                     ),
             ) {
-                if (logo != null && !logoFailed) {
+                if (logo != null) {
                     AsyncImage(
                         // Software bitmap so the pixels are readable for the
                         // luminance pass (hardware bitmaps throw on getPixel).
@@ -300,7 +306,9 @@ private fun ChannelCard(
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize().padding(Spacing.sm),
                         contentScale = ContentScale.Fit,
-                        onError = { logoFailed = true },
+                        // Advance to the next candidate; past the end `logo`
+                        // becomes null → letter tile.
+                        onError = { logoIdx++ },
                         onSuccess = { state ->
                             tone = logoToneCache.getOrPut(logo) {
                                 runCatching { logoTone(state.result.image.toBitmap()) }

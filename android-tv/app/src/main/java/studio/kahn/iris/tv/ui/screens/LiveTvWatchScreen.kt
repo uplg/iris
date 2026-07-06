@@ -64,6 +64,24 @@ private const val OVERLAY_VISIBLE_MS = 4_000L
  *  then reloads — so the retries walk through a channel's fallback feeds. */
 private const val MAX_AUTO_RETRIES = 3
 
+/** Silent-stall windows. ExoPlayer can sit in BUFFERING forever WITHOUT
+ *  raising `onPlayerError` (hardware decoders wedge on interlaced/corrupt
+ *  H.264 restreams) — without an escape hatch, such a channel is an eternal
+ *  "Connecting…" with no retry and no error.
+ *
+ *  Escalation: hardware attempt → [HW_STALL_MS] → software-decoder retry of
+ *  the SAME source (no demote — election untouched, so this window can be
+ *  tight) → [SW_STALL_MS] → demote / walk alternate sources / Retry card.
+ *  The software window stays GENEROUS: a healthy-but-slow restream can
+ *  legitimately need >12 s to start, and demoting the one good source before
+ *  it ever starts was a real regression. */
+private const val HW_STALL_MS = 20_000L
+private const val SW_STALL_MS = 45_000L
+
+/** Channels (as `country:id`) that needed software decoding this session —
+ *  their next open skips the doomed hardware attempt entirely. */
+private val softwareVideoNeeded = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
 /**
  * Live channel playback. Deliberately NOT [WatchScreen] — that one is
  * torrent-coupled (probe, /play/status gating, saved progress, episode
@@ -139,9 +157,27 @@ fun LiveTvWatchScreen(
 
     val player = remember { mutableStateOf<ExoPlayer?>(null) }
 
-    // New channel ⇒ fresh retry budget. Keyed on channelId only (NOT retryNonce)
-    // so a reconnect doesn't reset the count it's incrementing.
-    LaunchedEffect(channelId) { autoRetryCount = 0 }
+    // Live-TV rescue mode: after a HARDWARE attempt stalls without ever
+    // starting, retry the SAME source with software decoders before touching
+    // the source election — interlaced/corrupt H.264 restreams (M6) wedge
+    // hardware decoders silently but software copes (see buildPlayer).
+    var softwareVideo by remember { mutableStateOf(false) }
+    // Which flavor the CURRENT ExoPlayer instance was built with — switching
+    // requires a rebuild (renderers are fixed at construction).
+    val playerIsSoftware = remember { mutableStateOf(false) }
+
+    // New channel ⇒ fresh retry budget; decoder flavor primed from what this
+    // channel needed earlier in the session (skip the doomed hardware attempt
+    // on a known-interlaced feed). Keyed on channelId only (NOT retryNonce) so
+    // a reconnect doesn't reset the count it's incrementing.
+    LaunchedEffect(channelId) {
+        autoRetryCount = 0
+        softwareVideo = softwareVideoNeeded["$country:$channelId"] == true
+    }
+    // Once an attempt actually plays, remember which decoder flavor did it.
+    LaunchedEffect(playing) {
+        if (playing) softwareVideoNeeded["$country:$channelId"] = playerIsSoftware.value
+    }
 
     // Shared failure path, used by BOTH the error listener and the connect
     // timeout: demote the dead source, WAIT for that POST to land, then bump
@@ -164,29 +200,50 @@ fun LiveTvWatchScreen(
         }
     }
 
-    // (Re)load the stream whenever the channel changes or Retry is pressed.
-    LaunchedEffect(channelId, serverUrl, retryNonce) {
+    // (Re)load the stream whenever the channel changes, Retry is pressed, or
+    // the decoder flavor flips (hardware → software rescue).
+    LaunchedEffect(channelId, serverUrl, retryNonce, softwareVideo) {
         val url = serverUrl ?: return@LaunchedEffect
         errorMessage = null
         playing = false
         val base = if (url.endsWith("/")) url else "$url/"
         val masterUrl = "${base}api/livetv/$country/channels/$channelId/master.m3u8"
         val name = channels.firstOrNull { it.id == channelId }?.name ?: channelId
-        val p = player.value ?: buildPlayer(context, container.mediaOkHttpClient).also {
+        // Renderers are fixed at construction — a decoder-flavor switch needs
+        // a fresh ExoPlayer.
+        if (player.value != null && playerIsSoftware.value != softwareVideo) {
+            player.value?.release()
+            player.value = null
+        }
+        val p = player.value ?: buildPlayer(
+            context,
+            container.mediaOkHttpClient,
+            preferSoftwareVideo = softwareVideo,
+        ).also {
             player.value = it
+            playerIsSoftware.value = softwareVideo
         }
         p.setMediaItem(buildMediaItem(masterUrl, name))
         p.prepare()
         p.playWhenReady = true
     }
 
-    // NOTE: no artificial connect timeout. A slow-but-healthy live restream
-    // (M6 especially, with eac3 decode init) routinely needs >10 s to paint
-    // its first frame; a timeout here would demote the working source before
-    // it starts and the channel would never play. ExoPlayer already raises
-    // onPlayerError on a genuinely dead feed (segment/manifest load failures
-    // exhaust its own retries), which drives the reconnect below — so buffering
-    // is left to finish on its own, and "Connecting…" clears via onIsPlaying.
+    // Stall escape hatch (see HW_STALL_MS / SW_STALL_MS): re-armed per
+    // attempt, implicitly cancelled by the effect restarting on
+    // zap/retry/decoder switch. Escalation on a silent no-start: first retry
+    // the SAME source with software decoders (hardware wedges on
+    // interlaced/corrupt H.264 — the source itself is fine, web plays it),
+    // and only if software stalls too, demote / walk alternatives via onFail.
+    LaunchedEffect(channelId, retryNonce, serverUrl, softwareVideo) {
+        delay(if (softwareVideo) SW_STALL_MS else HW_STALL_MS)
+        if (!playing && errorMessage == null) {
+            if (!softwareVideo) {
+                softwareVideo = true
+            } else {
+                onFail("The stream did not start — it may be down or unsupported")
+            }
+        }
+    }
 
     // Player listener: errors go through the shared failure path; "Connecting…"
     // clears on ANY "we're past connecting" signal — first rendered frame,

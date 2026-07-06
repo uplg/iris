@@ -27,6 +27,13 @@ fun buildPlayer(
     context: Context,
     mediaOkHttp: OkHttpClient,
     userAgent: String = "iris-tv/${BuildConfig.VERSION_NAME} (Media3)",
+    /** Rank software MediaCodec decoders above hardware ones. Live-TV rescue
+     *  mode: some IPTV restreams are interlaced + reference-frame-corrupt
+     *  H.264 (M6 notably) that a box's HARDWARE decoder swallows without ever
+     *  producing a frame — an eternal silent BUFFERING with no error — while
+     *  software decoders power through like browsers do. Costs CPU, so only
+     *  the live player flips it, and only after a hardware attempt stalled. */
+    preferSoftwareVideo: Boolean = false,
 ): ExoPlayer {
     val dataSourceFactory = OkHttpDataSource.Factory(mediaOkHttp).setUserAgent(userAgent)
     val mediaSourceFactory = DefaultMediaSourceFactory(context)
@@ -78,6 +85,17 @@ fun buildPlayer(
     val renderersFactory = DefaultRenderersFactory(context)
         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
         .setEnableDecoderFallback(true)
+        .apply {
+            // See the `preferSoftwareVideo` doc above. PREFER_SOFTWARE ranks
+            // software codecs first for every MediaCodec renderer; audio is
+            // unaffected in practice (the ffmpeg extension already outranks
+            // MediaCodec audio via EXTENSION_RENDERER_MODE_PREFER).
+            if (preferSoftwareVideo) {
+                setMediaCodecSelector(
+                    androidx.media3.exoplayer.mediacodec.MediaCodecSelector.PREFER_SOFTWARE,
+                )
+            }
+        }
 
     return ExoPlayer.Builder(context)
         .setRenderersFactory(renderersFactory)

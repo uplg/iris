@@ -76,6 +76,11 @@ pub(crate) struct LiveChannel {
     pub id: String,
     pub name: String,
     pub logo_url: Option<String>,
+    /// Raw upstream logo URL (https only). Fallback for clients whose image
+    /// stack fails on the proxy path (e.g. a redirect it won't follow): load
+    /// this directly — logo hosts rate-limit the server's datacenter IP, not
+    /// residential client IPs.
+    pub logo_origin: Option<String>,
     pub categories: Vec<String>,
     /// Best available vertical resolution when known (e.g. 1080).
     pub quality: Option<u32>,
@@ -186,6 +191,13 @@ pub(crate) async fn live_channels(
                 // Same-origin signed proxy URL: no hotlink CORS noise, and
                 // clients can read pixels for the adaptive logo plate.
                 logo_url: c.logo_url.as_deref().and_then(|u| svc.logo_proxy_url(u)),
+                // Direct fallback (https only — http would be mixed content
+                // on web and blocked cleartext on TV).
+                logo_origin: c
+                    .logo_url
+                    .as_ref()
+                    .filter(|u| u.starts_with("https://"))
+                    .cloned(),
                 categories: c.categories.clone(),
                 quality: c.sources.iter().filter_map(|s| s.quality).max(),
                 geo_blocked: c.geo_blocked,

@@ -4888,6 +4888,13 @@
             "type": "string",
             "description": "Stable slug, unique within a country. Play via\n`/api/livetv/{country}/channels/{id}/master.m3u8`."
           },
+          "logo_origin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw upstream logo URL (https only). Fallback for clients whose image\nstack fails on the proxy path (e.g. a redirect it won't follow): load\nthis directly — logo hosts rate-limit the server's datacenter IP, not\nresidential client IPs."
+          },
           "logo_url": {
             "type": [
               "string",
