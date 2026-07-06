@@ -374,18 +374,34 @@ pub(crate) async fn live_logo(
     Query(params): Query<LiveLogoParams>,
 ) -> ApiResult<Response> {
     let svc = service(&state)?;
+    // `fetch_logo` validated the HMAC before returning, so decoding `u` again
+    // here is the same trusted upstream URL (used for the redirect fallback).
     let logo = svc.fetch_logo(&params.u, &params.s).await?;
     if logo.status != 200 {
-        // Dead / rate-limited logo host → forward a 404 so the card shows its
-        // letter-tile fallback. Cache-control mirrors the server-side TTL: a
-        // retryable failure (429/5xx) gets a SHORT max-age so the browser
-        // re-requests soon and the tile self-heals; a genuine miss sticks
-        // longer. (Fixes the imgur/wikimedia 429 that used to blank the grid.)
+        // The server's datacenter IP is often rate-limited/blocked by logo
+        // hosts (imgur 429s us with `retry-after: 0` — a hard edge throttle no
+        // backoff can beat), while the CLIENT's residential IP is not. So when
+        // the proxy fetch fails on an HTTPS original, 302 the client to fetch
+        // the logo directly from its own IP. `<img>` and Coil both follow the
+        // redirect; CORS-friendly hosts (imgur sends `ACAO: *`) even keep the
+        // luminance plate working, the rest fall back to a neutral plate.
+        // A short cache-control lets a transient failure self-heal.
         let max_age = if crate::live_tv::logo_status_retryable(logo.status) {
             "public, max-age=20"
         } else {
             "public, max-age=300"
         };
+        if let Some(orig) = crate::live_tv::proxy::decode_upstream(&params.u)
+            && orig.scheme() == "https"
+        {
+            return Response::builder()
+                .status(axum::http::StatusCode::FOUND)
+                .header(header::LOCATION, orig.as_str())
+                .header(header::CACHE_CONTROL, max_age)
+                .body(Body::empty())
+                .map_err(|e| ApiError::Internal(e.into()));
+        }
+        // http original (mixed-content on web) or undecodable → letter tile.
         return Response::builder()
             .status(axum::http::StatusCode::NOT_FOUND)
             .header(header::CACHE_CONTROL, max_age)

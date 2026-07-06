@@ -64,12 +64,6 @@ private const val OVERLAY_VISIBLE_MS = 4_000L
  *  then reloads — so the retries walk through a channel's fallback feeds. */
 private const val MAX_AUTO_RETRIES = 3
 
-/** A feed that never starts playing within this window counts as a failure.
- *  Live restreams (M6's especially) can hang in BUFFERING forever WITHOUT
- *  ever firing `onPlayerError`, so error-only handling left "Connecting…" up
- *  indefinitely — this converts a silent stall into a demote-and-retry. */
-private const val CONNECT_TIMEOUT_MS = 12_000L
-
 /**
  * Live channel playback. Deliberately NOT [WatchScreen] — that one is
  * torrent-coupled (probe, /play/status gating, saved progress, episode
@@ -186,19 +180,19 @@ fun LiveTvWatchScreen(
         p.playWhenReady = true
     }
 
-    // Connect timeout: if this attempt hasn't started playing within the
-    // window, treat it as a failure. A live feed can hang in BUFFERING forever
-    // WITHOUT firing onPlayerError (M6), which used to leave "Connecting…" up
-    // for good. Re-keyed per attempt; cancelled implicitly once `playing` flips.
-    LaunchedEffect(channelId, retryNonce) {
-        delay(CONNECT_TIMEOUT_MS)
-        if (!playing && errorMessage == null) onFail("Stream unavailable — no data")
-    }
+    // NOTE: no artificial connect timeout. A slow-but-healthy live restream
+    // (M6 especially, with eac3 decode init) routinely needs >10 s to paint
+    // its first frame; a timeout here would demote the working source before
+    // it starts and the channel would never play. ExoPlayer already raises
+    // onPlayerError on a genuinely dead feed (segment/manifest load failures
+    // exhaust its own retries), which drives the reconnect below — so buffering
+    // is left to finish on its own, and "Connecting…" clears via onIsPlaying.
 
-    // Player listener: errors go through the shared failure path; onIsPlaying
-    // clears "Connecting…". We ALSO sync from the current state right after
-    // attaching, because on a fast channel the frame can start before this
-    // effect runs and we'd otherwise miss the event and hang on "Connecting…".
+    // Player listener: errors go through the shared failure path; "Connecting…"
+    // clears on ANY "we're past connecting" signal — first rendered frame,
+    // isPlaying, or reaching STATE_READY. We ALSO sync from the current state
+    // right after attaching, because on a fast channel playback can start
+    // before this effect runs and we'd otherwise miss the event and hang.
     DisposableEffect(player.value) {
         val p = player.value ?: return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
@@ -209,9 +203,17 @@ fun LiveTvWatchScreen(
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (isPlaying) playing = true
             }
+
+            override fun onRenderedFirstFrame() {
+                playing = true
+            }
+
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) playing = true
+            }
         }
         p.addListener(listener)
-        if (p.isPlaying) playing = true
+        if (p.isPlaying || p.playbackState == Player.STATE_READY) playing = true
         onDispose { p.removeListener(listener) }
     }
 

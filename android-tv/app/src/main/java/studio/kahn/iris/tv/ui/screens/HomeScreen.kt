@@ -4,7 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -1297,6 +1297,9 @@ private fun prettifyFilename(raw: String): String {
     return noExt.replace('.', ' ').replace('_', ' ').trim()
 }
 
+/** Hold duration (ms) that turns a DPAD-center press into a "long press". */
+private const val LONG_PRESS_MS = 400L
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun PosterCard(
@@ -1356,35 +1359,44 @@ private fun PosterCard(
 
     val layout = LocalTvLayout.current
     val posterShape = RoundedCornerShape(Radius.poster)
-    // Held-select detection: a repeating DPAD_CENTER whose down-to-now span
-    // passes the long-press timeout fires `onLongClick`; the flag then
-    // swallows the click that the key-up would otherwise produce. tv-material
-    // Card has no onLongClick, so we do it on the modifier.
-    var suppressNextClick by remember { mutableStateOf(false) }
+    // Held-select ("long press") detection. We measure the DPAD_CENTER
+    // down→up hold duration rather than relying on key-repeat events — most TV
+    // remotes / the emulator DON'T repeat a held center, which is why the old
+    // repeatCount approach never fired. `onPreviewKeyEvent` runs in the tunnel
+    // phase, BEFORE the Card's own click handling, so consuming the key-up on a
+    // long hold suppresses the click. We fire on RELEASE (not while held) so
+    // the same press can't also activate the menu that just opened.
     var centerDownAt by remember { mutableStateOf(0L) }
     val longPressMod = if (onLongClick != null) {
-        Modifier.onKeyEvent { ev ->
+        Modifier.onPreviewKeyEvent { ev ->
             val ne = ev.nativeKeyEvent
             val isSelect = ne.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
                 ne.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
                 ne.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
-            if (!isSelect || ne.action != android.view.KeyEvent.ACTION_DOWN) return@onKeyEvent false
-            if (ne.repeatCount == 0) {
-                centerDownAt = ne.eventTime
-                false
-            } else if (!suppressNextClick && ne.eventTime - centerDownAt >= 450) {
-                suppressNextClick = true
-                onLongClick()
-                true
-            } else {
-                false
+            if (!isSelect) return@onPreviewKeyEvent false
+            when (ne.action) {
+                android.view.KeyEvent.ACTION_DOWN -> {
+                    if (ne.repeatCount == 0) centerDownAt = ne.eventTime
+                    false
+                }
+                android.view.KeyEvent.ACTION_UP -> {
+                    val held = if (centerDownAt > 0L) ne.eventTime - centerDownAt else 0L
+                    centerDownAt = 0L
+                    if (held >= LONG_PRESS_MS) {
+                        onLongClick()
+                        true // consume the up → the Card's onClick won't fire
+                    } else {
+                        false
+                    }
+                }
+                else -> false
             }
         }
     } else {
         Modifier
     }
     Card(
-        onClick = { if (suppressNextClick) suppressNextClick = false else onClick() },
+        onClick = onClick,
         modifier = Modifier.width(layout.shelfPosterWidth).then(longPressMod),
         shape = irisPosterShape(posterShape),
         scale = irisPosterScale(),

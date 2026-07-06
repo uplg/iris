@@ -326,7 +326,6 @@ fun IrisRoot(
                             popUpTo(Routes.HOME) { inclusive = true }
                         }
                     },
-                    onOpenHistory = { navController.navigate(Routes.HISTORY) },
                     onBack = { navController.popBackStack() },
                 )
             }
