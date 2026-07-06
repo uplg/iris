@@ -97,6 +97,7 @@ use utoipa::OpenApi;
         crate::routes::moods::results,
         crate::routes::discover::featured,
         crate::routes::live_tv::live_countries,
+        crate::routes::live_tv::live_search,
         crate::routes::live_tv::live_channels,
         crate::routes::live_tv::live_epg_now,
         crate::routes::live_tv::live_master,

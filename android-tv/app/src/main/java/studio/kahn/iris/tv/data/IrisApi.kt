@@ -1,8 +1,10 @@
 package studio.kahn.iris.tv.data
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -54,7 +56,7 @@ interface IrisApi {
     @GET("api/me/preferences")
     suspend fun preferences(): PreferencesResponse
 
-    @retrofit2.http.PUT("api/me/preferences")
+    @PUT("api/me/preferences")
     suspend fun savePreferences(@Body body: UpdatePreferencesRequest): PreferencesResponse
 
     /** Merged movie + TV genre taxonomy for the onboarding picker. Anime
@@ -94,7 +96,7 @@ interface IrisApi {
     suspend fun playbackPreferences(): PlaybackPrefsResponse
 
     /** Save preferred audio + subtitle language. Send the full current state. */
-    @retrofit2.http.PUT("api/me/playback-preferences")
+    @PUT("api/me/playback-preferences")
     suspend fun savePlaybackPreferences(@Body body: UpdatePlaybackPrefs)
 
     @GET("api/torrents")
@@ -106,7 +108,7 @@ interface IrisApi {
     /** Remove a torrent: the backend also wipes its files from disk and
      *  soft-deletes the row (204 No Content). Any authenticated user —
      *  the seedbox view is single-household, same as the web client. */
-    @retrofit2.http.DELETE("api/torrents/{infohash}")
+    @DELETE("api/torrents/{infohash}")
     suspend fun deleteTorrent(@Path("infohash") infohash: String)
 
     @GET("api/torrents/{infohash}/progress")
@@ -139,7 +141,7 @@ interface IrisApi {
         @Path("idx") idx: Int,
     ): PlayStatus
 
-    @retrofit2.http.PUT("api/torrents/{infohash}/files/{idx}/progress")
+    @PUT("api/torrents/{infohash}/files/{idx}/progress")
     suspend fun saveProgress(
         @Path("infohash") infohash: String,
         @Path("idx") idx: Int,
@@ -147,7 +149,7 @@ interface IrisApi {
     )
 
     /** Remove a file from the caller's Continue Watching + history. */
-    @retrofit2.http.DELETE("api/torrents/{infohash}/files/{idx}/progress")
+    @DELETE("api/torrents/{infohash}/files/{idx}/progress")
     suspend fun removeProgress(
         @Path("infohash") infohash: String,
         @Path("idx") idx: Int,
@@ -239,7 +241,7 @@ interface IrisApi {
     @GET("api/me/devices")
     suspend fun listDevices(): List<DeviceView>
 
-    @retrofit2.http.DELETE("api/me/devices/{jti}")
+    @DELETE("api/me/devices/{jti}")
     suspend fun revokeDevice(@Path("jti") jti: String)
 
     // ----------- Discovery + series follows (Phase 2 / Phase 4) -----------
@@ -253,7 +255,7 @@ interface IrisApi {
     @POST("api/me/follows")
     suspend fun addFollow(@Body body: CreateFollowRequest): FollowSummary
 
-    @retrofit2.http.DELETE("api/me/follows/{id}")
+    @DELETE("api/me/follows/{id}")
     suspend fun removeFollow(@Path("id") id: String)
 
     @GET("api/me/follows/{id}/episodes")
@@ -315,6 +317,10 @@ interface IrisApi {
 
     @GET("api/livetv/{country}/channels")
     suspend fun liveTvChannels(@Path("country") country: String): LiveChannelsResponse
+
+    /** Cross-country channel search (server-side, diacritics-insensitive). */
+    @GET("api/livetv/search")
+    suspend fun liveTvSearch(@Query("q") q: String): LiveSearchResponse
 
     /** Now/next programme per channel; empty when the country has no
      *  configured XMLTV guide. */

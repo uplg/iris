@@ -65,6 +65,10 @@ pub struct LiveTvConfig {
     /// feed becomes a fallback source the proxy can rotate to.
     #[serde(default = "default_livetv_streams_url")]
     pub streams_url: String,
+    /// iptv-org's channel metadata database (names, countries, logos) —
+    /// powers the cross-country channel search.
+    #[serde(default = "default_livetv_channels_url")]
+    pub channels_url: String,
     /// Extra fallback playlists per country code. Entries matching a channel
     /// already found in the iptv-org playlist (by tvg-id / name) merge in as
     /// additional fallback sources — cross-provider redundancy, not dupes.
@@ -101,6 +105,9 @@ fn default_livetv_countries_url() -> String {
 fn default_livetv_streams_url() -> String {
     "https://iptv-org.github.io/api/streams.json".to_string()
 }
+fn default_livetv_channels_url() -> String {
+    "https://iptv-org.github.io/api/channels.json".to_string()
+}
 fn default_livetv_epg_urls() -> HashMap<String, String> {
     HashMap::from([(
         "fr".to_string(),
@@ -124,6 +131,7 @@ impl Default for LiveTvConfig {
             playlist_url_template: default_livetv_playlist_template(),
             countries_url: default_livetv_countries_url(),
             streams_url: default_livetv_streams_url(),
+            channels_url: default_livetv_channels_url(),
             extra_playlists: HashMap::new(),
             epg_urls: default_livetv_epg_urls(),
             playlist_refresh_hours: default_livetv_playlist_refresh_hours(),

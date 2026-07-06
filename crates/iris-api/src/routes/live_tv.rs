@@ -21,6 +21,7 @@ use axum::routing::post;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/countries", get(live_countries))
+        .route("/search", get(live_search))
         .route("/proxy", get(live_proxy))
         .route("/logo", get(live_logo))
         .route("/{country}/channels", get(live_channels))
@@ -277,6 +278,69 @@ pub(crate) async fn live_master(
         headers.insert("x-iris-live-upstream", v);
     }
     Ok(resp)
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+pub(crate) struct LiveSearchParams {
+    /// Channel-name query (2+ characters, diacritics-insensitive).
+    pub q: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct LiveSearchResult {
+    /// ISO 3166-1 alpha-2 country code — open the hit via the regular
+    /// per-country channel routes.
+    pub country: String,
+    /// Channel id within that country (same slug as the channel list).
+    pub id: String,
+    pub name: String,
+    /// Proxied logo (same-origin, luminance-readable), when the channels DB
+    /// has one.
+    pub logo_url: Option<String>,
+    /// Raw upstream logo URL (https only) — client-side fallback, see
+    /// `LiveChannel::logo_origin`.
+    pub logo_origin: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct LiveSearchResponse {
+    pub results: Vec<LiveSearchResult>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/livetv/search",
+    operation_id = "live_tv_search",
+    params(LiveSearchParams),
+    responses(
+        (status = 200, description = "Cross-country channel matches", body = LiveSearchResponse),
+    ),
+    tag = "live-tv",
+)]
+pub(crate) async fn live_search(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(params): Query<LiveSearchParams>,
+) -> ApiResult<Json<LiveSearchResponse>> {
+    let svc = service(&state)?;
+    let results = svc
+        .search(&params.q, 50)
+        .await
+        .into_iter()
+        .map(|e| {
+            let origin = e.logo_url.as_deref();
+            LiveSearchResult {
+                logo_url: origin.and_then(|u| svc.logo_proxy_url(u)),
+                logo_origin: origin
+                    .filter(|u| u.starts_with("https://"))
+                    .map(str::to_string),
+                country: e.country,
+                id: e.channel_id,
+                name: e.name,
+            }
+        })
+        .collect();
+    Ok(Json(LiveSearchResponse { results }))
 }
 
 #[utoipa::path(

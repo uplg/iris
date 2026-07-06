@@ -112,6 +112,20 @@ fn lowercase<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error>
 /// stream database.
 type StreamsDb = HashMap<String, Vec<channels::StreamSource>>;
 
+/// One row of the cross-country search index. `channel_id` uses the SAME
+/// slug derivation as `build_channels` (`normalize(tvg_id_base(id))`), so a
+/// hit is directly openable as `(country, channel_id)` by every client.
+#[derive(Clone)]
+pub struct SearchEntry {
+    pub country: String,
+    pub channel_id: String,
+    pub name: String,
+    /// Folded name + alt names, for diacritics/case-insensitive matching.
+    keys: String,
+    /// Raw upstream logo URL from the channels DB.
+    pub logo_url: Option<String>,
+}
+
 /// A served master playlist plus which upstream produced it — surfaced as
 /// response headers so "which feed am I actually watching?" is one glance
 /// at the network tab when a household member reports bad sound/video.
@@ -199,6 +213,10 @@ struct ServiceInner {
     /// iptv-org's full stream database (all alternate feeds per channel),
     /// cached like the playlists.
     streams_db: RwLock<Option<(Arc<StreamsDb>, Instant)>>,
+    /// Cross-country channel-search index (from iptv-org's channels DB,
+    /// intersected with the streams DB so every hit is playable), cached
+    /// like the playlists.
+    search_index: RwLock<Option<(Arc<Vec<SearchEntry>>, Instant)>>,
     /// Per-URL liveness, shared across snapshots (see [`SourceHealth`]).
     health: RwLock<HashMap<String, Arc<SourceHealth>>>,
     /// Serializes cold loads so N concurrent first-requests for a country
@@ -290,6 +308,7 @@ impl LiveTvService {
                 snapshots: RwLock::new(HashMap::new()),
                 epg: RwLock::new(HashMap::new()),
                 streams_db: RwLock::new(None),
+                search_index: RwLock::new(None),
                 health: RwLock::new(HashMap::new()),
                 load_lock: tokio::sync::Mutex::new(()),
                 logo_cache: RwLock::new(HashMap::new()),
@@ -586,6 +605,122 @@ impl LiveTvService {
             }
         }
         Err(LiveTvError::Upstream(last_err))
+    }
+
+    /// Cross-country channel search. Matches folded channel names (and alt
+    /// names) against a folded query; prefix hits rank first. Only playable
+    /// channels are indexed (present in the streams DB), so every result can
+    /// be opened as `(country, channel_id)`.
+    pub async fn search(&self, query: &str, limit: usize) -> Vec<SearchEntry> {
+        let q = channels::normalize(query);
+        if q.len() < 2 {
+            return Vec::new();
+        }
+        let Some(index) = self.search_index().await else {
+            return Vec::new();
+        };
+        let mut hits: Vec<(usize, &SearchEntry)> = index
+            .iter()
+            .filter_map(|entry| {
+                if entry.keys.starts_with(&q) {
+                    Some((0, entry))
+                } else if entry.keys.contains(&q) {
+                    Some((1, entry))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.len().cmp(&b.1.name.len())));
+        hits.into_iter()
+            .take(limit)
+            .map(|(_, e)| e.clone())
+            .collect()
+    }
+
+    /// Build (or serve the cached) search index from iptv-org's channels DB.
+    async fn search_index(&self) -> Option<Arc<Vec<SearchEntry>>> {
+        #[derive(serde::Deserialize)]
+        struct ApiChannel {
+            id: String,
+            name: String,
+            #[serde(default)]
+            alt_names: Vec<String>,
+            country: String,
+            #[serde(default)]
+            is_nsfw: bool,
+            #[serde(default)]
+            closed: Option<String>,
+            #[serde(default)]
+            logo: Option<String>,
+        }
+
+        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
+        if let Some((idx, at)) = self.inner.search_index.read().expect("poisoned").clone()
+            && at.elapsed() < ttl
+        {
+            return Some(idx);
+        }
+        // Playability filter — a name hit without any stream is a dead card.
+        let streams = self.streams_db().await?;
+
+        let fetched: Vec<ApiChannel> = match self
+            .inner
+            .http
+            .get(&self.inner.cfg.channels_url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+        {
+            Ok(resp) => match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "live tv channels db parse failed");
+                    return self.cached_search_index();
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "live tv channels db fetch failed");
+                return self.cached_search_index();
+            }
+        };
+
+        let index: Vec<SearchEntry> = fetched
+            .into_iter()
+            .filter(|c| c.closed.is_none() && !c.is_nsfw)
+            .filter(|c| streams.contains_key(&c.id.to_lowercase()))
+            .filter_map(|c| {
+                let channel_id = channels::normalize(channels::tvg_id_base(&c.id));
+                if channel_id.is_empty() {
+                    return None;
+                }
+                let mut keys = channels::normalize(&c.name);
+                for alt in &c.alt_names {
+                    keys.push('\u{1F}');
+                    keys.push_str(&channels::normalize(alt));
+                }
+                Some(SearchEntry {
+                    country: c.country.to_lowercase(),
+                    channel_id,
+                    name: c.name,
+                    keys,
+                    logo_url: c.logo.filter(|l| !l.is_empty()),
+                })
+            })
+            .collect();
+        tracing::info!(channels = index.len(), "live tv search index built");
+        let index = Arc::new(index);
+        *self.inner.search_index.write().expect("poisoned") = Some((index.clone(), Instant::now()));
+        Some(index)
+    }
+
+    fn cached_search_index(&self) -> Option<Arc<Vec<SearchEntry>>> {
+        self.inner
+            .search_index
+            .read()
+            .expect("poisoned")
+            .clone()
+            .map(|(idx, _)| idx)
     }
 
     /// Last-resort transcoded playlist for a channel (see [`transcode`]).

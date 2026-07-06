@@ -1025,6 +1025,37 @@
         }
       }
     },
+    "/api/livetv/search": {
+      "get": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_search",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Channel-name query (2+ characters, diacritics-insensitive).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cross-country channel matches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveSearchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/livetv/{country}/channels": {
       "get": {
         "tags": [
@@ -5165,6 +5196,55 @@
             "format": "date-time"
           },
           "title": {
+            "type": "string"
+          }
+        }
+      },
+      "LiveSearchResponse": {
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveSearchResult"
+            }
+          }
+        }
+      },
+      "LiveSearchResult": {
+        "type": "object",
+        "required": [
+          "country",
+          "id",
+          "name"
+        ],
+        "properties": {
+          "country": {
+            "type": "string",
+            "description": "ISO 3166-1 alpha-2 country code — open the hit via the regular\nper-country channel routes."
+          },
+          "id": {
+            "type": "string",
+            "description": "Channel id within that country (same slug as the channel list)."
+          },
+          "logo_origin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw upstream logo URL (https only) — client-side fallback, see\n`LiveChannel::logo_origin`."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Proxied logo (same-origin, luminance-readable), when the channels DB\nhas one."
+          },
+          "name": {
             "type": "string"
           }
         }

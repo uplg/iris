@@ -324,6 +324,37 @@ fun LiveTvWatchScreen(
         }
     }
 
+    // Cut the stream when the user leaves via Home (`ON_STOP`) — the same
+    // hole we plugged for VOD in WatchScreen: without this, live segments
+    // keep downloading in the background indefinitely. Unlike VOD (which
+    // deliberately does NOT auto-resume), a live CHANNEL resumes by itself
+    // on return (`ON_START`): a paused live stream would fall behind the
+    // window anyway, so we reload at the live edge via a `retryNonce` bump,
+    // which also re-arms the stall ladder.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val stoppedByLifecycle = remember { mutableStateOf(false) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                    if (player.value != null) {
+                        stoppedByLifecycle.value = true
+                        player.value?.stop()
+                    }
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_START -> {
+                    if (stoppedByLifecycle.value) {
+                        stoppedByLifecycle.value = false
+                        retryNonce++
+                    }
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val zap: (Int) -> Unit = zap@{ delta ->
         if (channels.isEmpty()) return@zap
         val idx = channels.indexOfFirst { it.id == channelId }.coerceAtLeast(0)

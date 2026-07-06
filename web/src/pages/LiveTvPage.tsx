@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Radio as LiveIcon } from "lucide-react";
@@ -27,6 +27,18 @@ export function LiveTvPage() {
     queryFn: () => livetv.channels(country),
     staleTime: 10 * 60 * 1000,
   });
+  // Cross-country channel search (server-side). useDeferredValue keeps
+  // typing snappy without a timer (banned in web/); the endpoint is an
+  // in-memory index, per-keystroke queries are cheap.
+  const [query, setQuery] = useState("");
+  const deferredQ = useDeferredValue(query.trim());
+  const searchQ = useQuery({
+    queryKey: ["livetv", "search", deferredQ],
+    queryFn: () => livetv.search(deferredQ),
+    enabled: deferredQ.length >= 2,
+    staleTime: 60_000,
+  });
+
   const epgQ = useQuery({
     queryKey: ["livetv", "epg-now", country],
     queryFn: () => livetv.epgNow(country),
@@ -53,11 +65,15 @@ export function LiveTvPage() {
     return { tnt, categories: [...byCategory.entries()] };
   }, [channelsQ.data]);
 
-  const openChannel = (c: LiveChannel) =>
+  const openChannel = (c: LiveChannel) => {
+    // Search results carry their own country as "cc:id" (see below);
+    // regular grid channels use the picker's country.
+    const [ctry, id] = c.id.includes(":") ? c.id.split(":", 2) : [country, c.id];
     navigate({
       to: "/live/$country/$channelId",
-      params: { country, channelId: c.id },
+      params: { country: ctry, channelId: id },
     });
+  };
 
   return (
     <Container>
@@ -69,6 +85,14 @@ export function LiveTvPage() {
               Live TV
             </h1>
           </div>
+          <div className="flex flex-wrap items-center gap-4">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search channels (all countries)…"
+              className="focus-ring h-9 w-64 rounded-md border border-border bg-elev px-3 text-sm text-foreground placeholder:text-muted-foreground"
+            />
           <label className="flex items-center gap-2 text-sm text-muted-foreground">
             Country
             <select
@@ -83,9 +107,35 @@ export function LiveTvPage() {
               ))}
             </select>
           </label>
+          </div>
         </header>
 
-        {channelsQ.isLoading ? (
+        {deferredQ.length >= 2 ? (
+          (searchQ.data?.results ?? []).length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {searchQ.isLoading ? "Searching…" : `No channel matches "${deferredQ}".`}
+            </p>
+          ) : (
+            <ChannelSection
+              title={`Results · ${searchQ.data?.results.length ?? 0}`}
+              channels={(searchQ.data?.results ?? []).map((r) => ({
+                // country smuggled through the id (slugs are alphanumeric,
+                // ":" is safe) — unpacked by openChannel below.
+                id: `${r.country}:${r.id}`,
+                name: `${r.name} · ${r.country.toUpperCase()}`,
+                logo_url: r.logo_url ?? null,
+                logo_origin: r.logo_origin ?? null,
+                categories: [],
+                geo_blocked: false,
+                not_24_7: false,
+                quality: null,
+                tnt_number: null,
+              }))}
+              epg={epgByChannel}
+              onOpen={openChannel}
+            />
+          )
+        ) : channelsQ.isLoading ? (
           <p className="text-sm text-muted-foreground">Loading channels…</p>
         ) : channelsQ.isError ? (
           <p className="text-sm text-muted-foreground">

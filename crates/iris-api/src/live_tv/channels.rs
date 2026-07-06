@@ -247,7 +247,7 @@ pub fn parse_quality(q: &str) -> Option<u32> {
 
 /// `"TF1SeriesFilms.fr@HD"` → `"TF1SeriesFilms"`: strip the `@variant`
 /// qualifier then a trailing 2-letter country TLD.
-fn tvg_id_base(tvg_id: &str) -> &str {
+pub(crate) fn tvg_id_base(tvg_id: &str) -> &str {
     let base = tvg_id.split('@').next().unwrap_or(tvg_id);
     match base.rsplit_once('.') {
         Some((head, tld)) if tld.len() == 2 && tld.chars().all(|c| c.is_ascii_alphabetic()) => head,
@@ -256,7 +256,7 @@ fn tvg_id_base(tvg_id: &str) -> &str {
 }
 
 /// Lowercase alphanumeric fold: `"L'Équipe TV"` → `"lequipetv"`.
-fn normalize(s: &str) -> String {
+pub(crate) fn normalize(s: &str) -> String {
     s.chars()
         .filter_map(|c| {
             let c = match c {

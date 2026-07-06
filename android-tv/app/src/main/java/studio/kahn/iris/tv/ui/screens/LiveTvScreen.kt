@@ -16,7 +16,13 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -29,8 +35,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -48,6 +57,7 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.LiveChannel
 import studio.kahn.iris.tv.data.LiveCountry
 import studio.kahn.iris.tv.data.LiveNowNext
+import studio.kahn.iris.tv.data.LiveSearchResult
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
@@ -85,6 +95,23 @@ fun LiveTvScreen(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var pickingCountry by remember { mutableStateOf(false) }
+    // Channel-name search. Survives back-navigation from a channel
+    // (rememberSaveable) so zap-shopping within results keeps the query.
+    // Resolved SERVER-SIDE across every country (iptv-org channels DB),
+    // debounced as-you-type.
+    var query by rememberSaveable { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf<List<LiveSearchResult>?>(null) }
+    LaunchedEffect(query, serverUrl) {
+        val url = serverUrl ?: return@LaunchedEffect
+        val q = query.trim()
+        if (q.length < 2) {
+            searchResults = null
+            return@LaunchedEffect
+        }
+        delay(300) // debounce keystrokes; cancelled by the next edit
+        searchResults = runCatching { container.apiFor(url).liveTvSearch(q).results }
+            .getOrNull() ?: emptyList()
+    }
 
     LaunchedEffect(Unit) {
         val url = container.sessionStore.serverUrl.first()
@@ -154,7 +181,40 @@ fun LiveTvScreen(
                     Eyebrow("Live")
                     SectionTitle("Live TV")
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val keyboard = LocalSoftwareKeyboardController.current
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        placeholder = {
+                            androidx.compose.material3.Text(
+                                "Search channels…",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { keyboard?.hide() }),
+                        // Forced text colour: same Android-TV-IME gotcha as
+                        // SearchScreen (LocalTextStyle wins over colors()).
+                        textStyle = LocalTextStyle.current.copy(
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 16.sp,
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                            cursorColor = MaterialTheme.colorScheme.primary,
+                        ),
+                        modifier = Modifier.width(280.dp),
+                    )
                     val current = countries.firstOrNull { it.code == country }
                     IrisButton(
                         text = current?.let { "${it.flag} ${it.name}" } ?: "Country",
@@ -184,12 +244,53 @@ fun LiveTvScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = IrisColors.MutedForeground,
                 )
-                else -> ChannelGrid(
-                    tnt = sections.first,
-                    categories = sections.second,
-                    epg = epg,
-                    onOpen = { ch -> country?.let { onOpenChannel(it, ch.id) } },
-                )
+                else -> {
+                    // A 2+ char query switches to CROSS-COUNTRY server
+                    // results; hits carry their own country so opening one
+                    // works regardless of the picker.
+                    val results = searchResults
+                    when {
+                        query.trim().length < 2 || results == null -> ChannelGrid(
+                            tnt = sections.first,
+                            categories = sections.second,
+                            epg = epg,
+                            onOpen = { ch -> country?.let { onOpenChannel(it, ch.id) } },
+                        )
+                        results.isEmpty() -> Text(
+                            "No channel matches \"${query.trim()}\".",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = IrisColors.MutedForeground,
+                        )
+                        else -> {
+                            val base = serverUrl
+                            ChannelGrid(
+                                tnt = emptyList(),
+                                categories = listOf(
+                                    "Results · ${results.size}" to results.map { r ->
+                                        LiveChannel(
+                                            id = r.id,
+                                            // Country tag inline: results span
+                                            // every country.
+                                            name = "${r.name} · ${r.country.uppercase()}",
+                                            categories = emptyList(),
+                                            geoBlocked = false,
+                                            not247 = false,
+                                            logoUrl = base?.let { absolutize(it, r.logoUrl) },
+                                            logoOrigin = r.logoOrigin,
+                                            quality = null,
+                                            tntNumber = null,
+                                        )
+                                    },
+                                ),
+                                epg = emptyMap(),
+                                onOpen = { ch ->
+                                    val hit = results.firstOrNull { "${it.name} · ${it.country.uppercase()}" == ch.name }
+                                    if (hit != null) onOpenChannel(hit.country, hit.id)
+                                },
+                            )
+                        }
+                    }
+                }
             }
         }
     }
