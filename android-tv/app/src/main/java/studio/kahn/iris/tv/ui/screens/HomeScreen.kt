@@ -57,6 +57,8 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import studio.kahn.iris.tv.BuildConfig
+import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.AppContainer
@@ -110,6 +112,13 @@ import studio.kahn.iris.tv.ui.theme.irisAmbient
  * `loadVersion` is a coarse re-fetch trigger — bumping it re-runs the
  * LaunchedEffect, used by the Retry button when a fetch fails.
  */
+/** Process-level cache for the "update available" badge check, so returning
+ *  to Home doesn't refetch the version sidecar every time. Best-effort: an
+ *  unreachable sidecar just means no badge. */
+private var updateBadgeCheckedAtMs = 0L
+private var updateBadgeAvailable = false
+private const val UPDATE_BADGE_TTL_MS = 6L * 60 * 60 * 1_000
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -151,6 +160,19 @@ fun HomeScreen(
     // The Continue Watching tile whose manage sheet (remove / mark-watched)
     // is open, if any.
     var cwManageItem by remember { mutableStateOf<ContinueWatchingItem?>(null) }
+    // "Update available" badge on the Settings icon — reads the same version
+    // sidecar as the Settings card, throttled process-wide (see the cache
+    // vars above the composable).
+    var updateAvailable by remember { mutableStateOf(updateBadgeAvailable) }
+    LaunchedEffect(Unit) {
+        if (System.currentTimeMillis() - updateBadgeCheckedAtMs > UPDATE_BADGE_TTL_MS) {
+            val latest = AppUpdater.fetchLatestVersion(container.okHttpClient)
+            val status = AppUpdater.versionStatus(BuildConfig.VERSION_NAME, latest)
+            updateBadgeAvailable = status is AppUpdater.VersionStatus.UpdateAvailable
+            updateBadgeCheckedAtMs = System.currentTimeMillis()
+        }
+        updateAvailable = updateBadgeAvailable
+    }
     // Two separate states for the two shelves so a tick that only touches
     // a Downloading entry's progress/speed doesn't invalidate Library —
     // those cards stay frozen and skip recomposition entirely.
@@ -300,6 +322,7 @@ fun HomeScreen(
                 onOpenLiveTv = onOpenLiveTv,
                 onRetry = { loadVersion++ },
                 onManageCw = { cwManageItem = it },
+                updateAvailable = updateAvailable,
             )
         }
 
@@ -378,6 +401,7 @@ private fun HomeContent(
     onOpenLiveTv: () -> Unit,
     onRetry: () -> Unit,
     onManageCw: (ContinueWatchingItem) -> Unit,
+    updateAvailable: Boolean,
 ) {
     LazyColumn(
         modifier = Modifier
@@ -404,6 +428,7 @@ private fun HomeContent(
                 onOpenHistory = onOpenHistory,
                 onOpenLiveTv = onOpenLiveTv,
                 onOpenSettings = onOpenSettings,
+                updateAvailable = updateAvailable,
             )
         }
         if (resumePick != null) {
@@ -721,6 +746,7 @@ private fun HomeTopBar(
     onOpenHistory: () -> Unit,
     onOpenLiveTv: () -> Unit,
     onOpenSettings: () -> Unit,
+    updateAvailable: Boolean,
 ) {
     Row(
         Modifier.fillMaxWidth(),
@@ -768,6 +794,8 @@ private fun HomeTopBar(
                 icon = Icons.Filled.Settings,
                 contentDescription = "Settings",
                 onClick = onOpenSettings,
+                // "An update is waiting behind this door."
+                badge = updateAvailable,
             )
         }
     }

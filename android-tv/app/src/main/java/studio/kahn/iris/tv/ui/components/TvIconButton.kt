@@ -1,7 +1,9 @@
 package studio.kahn.iris.tv.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -35,6 +37,10 @@ fun TvIconButton(
     enabled: Boolean = true,
     size: Dp = 48.dp,
     iconSize: Dp = 22.dp,
+    /** Small brand-colored dot on the icon's shoulder — "something new here"
+     *  (e.g. an app update waiting behind Settings). Indicator only; the
+     *  button behaves identically. */
+    badge: Boolean = false,
 ) {
     Surface(
         onClick = onClick,
@@ -64,6 +70,15 @@ fun TvIconButton(
                 contentDescription = contentDescription,
                 modifier = Modifier.size(iconSize),
             )
+            if (badge) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 9.dp, end = 9.dp)
+                        .size(8.dp)
+                        .background(IrisColors.Brand, CircleShape),
+                )
+            }
         }
     }
 }
