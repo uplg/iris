@@ -15,6 +15,7 @@ pub mod channels;
 pub mod epg;
 pub mod m3u;
 pub mod proxy;
+pub mod transcode;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -222,6 +223,9 @@ struct ServiceInner {
     /// we don't let cert pedantry blank the whole grid. Streams / EPG / TMDB
     /// keep the strict [`Self::http`] client.
     logo_http: reqwest::Client,
+    /// Last-resort per-channel deinterlace/transcode sessions (see
+    /// [`transcode::TranscodeManager`]).
+    transcode: transcode::TranscodeManager,
 }
 
 /// A cached logo — the bytes + content-type on success, or just the forwarded
@@ -291,6 +295,7 @@ impl LiveTvService {
                 logo_cache: RwLock::new(HashMap::new()),
                 logo_sem: tokio::sync::Semaphore::new(LOGO_FETCH_CONCURRENCY),
                 logo_http,
+                transcode: transcode::TranscodeManager::default(),
             }),
         })
     }
@@ -581,6 +586,41 @@ impl LiveTvService {
             }
         }
         Err(LiveTvError::Upstream(last_err))
+    }
+
+    /// Last-resort transcoded playlist for a channel (see [`transcode`]).
+    /// Reuses the CURRENT elected source — the client already exercised the
+    /// normal proxy path (that's how it learned it can't decode the feed), so
+    /// the election is warm and identical to what the plain master serves.
+    pub async fn transcode_master(&self, country: &str, id: &str) -> Result<String, LiveTvError> {
+        let country = validate_country(country)?;
+        let snap = self.channels(&country).await?;
+        let idx = snap.channel_index(id).ok_or(LiveTvError::UnknownChannel)?;
+        let channel = &snap.channels[idx];
+        let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
+        let source = &channel.sources[active];
+        let channel_key = format!("{country}:{id}");
+        self.inner
+            .transcode
+            .master_playlist(
+                &channel_key,
+                &source.url,
+                source.user_agent.as_deref().unwrap_or(DEFAULT_UA),
+                source.referrer.as_deref(),
+            )
+            .await
+    }
+
+    /// One transcoded segment (name validated inside the manager).
+    pub async fn transcode_segment(
+        &self,
+        country: &str,
+        id: &str,
+        name: &str,
+    ) -> Result<Vec<u8>, LiveTvError> {
+        let country = validate_country(country)?;
+        let channel_key = format!("{country}:{id}");
+        self.inner.transcode.segment(&channel_key, name).await
     }
 
     /// Fetch a channel logo through the backend (signed URL minted by the
@@ -1030,6 +1070,19 @@ impl LiveTvService {
     pub fn spawn_refresh_loop(self) {
         let playlist_ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
         let epg_ttl = Duration::from_hours(self.inner.cfg.epg_refresh_hours.max(1));
+        // Transcode idle reaper: its 60 s idle window needs a much faster
+        // cadence than the 15 min refresh ticker below.
+        {
+            let svc = self.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(30));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    ticker.tick().await;
+                    svc.inner.transcode.reap_idle().await;
+                }
+            });
+        }
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_mins(15));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

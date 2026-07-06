@@ -1,3 +1,5 @@
+import java.text.SimpleDateFormat
+import java.util.Date
 import org.openapitools.generator.gradle.plugin.tasks.GenerateTask
 
 plugins {
@@ -17,6 +19,15 @@ android {
         targetSdk = 37
         versionCode = 21
         versionName = "1.2.0"
+        // Build stamp surfaced in Settings: versionName/versionCode stay equal
+        // across pre-release iterations, so without this there's no way to tell
+        // WHICH build actually runs on the device. (Deliberately busts the
+        // compile cache every build — fine at this project's scale.)
+        buildConfigField(
+            "String",
+            "BUILD_STAMP",
+            "\"${SimpleDateFormat("yyyyMMdd-HHmm").format(Date())}\"",
+        )
     }
 
     // We're never publishing this on Play Store — the TV is the only target

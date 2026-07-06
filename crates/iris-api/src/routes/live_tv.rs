@@ -26,6 +26,14 @@ pub fn router() -> Router<AppState> {
         .route("/{country}/channels", get(live_channels))
         .route("/{country}/channels/{id}/master.m3u8", get(live_master))
         .route(
+            "/{country}/channels/{id}/transcode/master.m3u8",
+            get(live_transcode_master),
+        )
+        .route(
+            "/{country}/channels/{id}/transcode/{segment}",
+            get(live_transcode_segment),
+        )
+        .route(
             "/{country}/channels/{id}/playback-error",
             post(live_playback_error),
         )
@@ -269,6 +277,66 @@ pub(crate) async fn live_master(
         headers.insert("x-iris-live-upstream", v);
     }
     Ok(resp)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/livetv/{country}/channels/{id}/transcode/master.m3u8",
+    operation_id = "live_tv_transcode_master",
+    params(
+        ("country" = String, Path, description = "ISO 3166-1 alpha-2 country code"),
+        ("id" = String, Path, description = "Channel id from the channel list"),
+    ),
+    responses(
+        (status = 200, description = "Deinterlaced/re-encoded HLS playlist (last-resort compatibility path)", body = String, content_type = "application/vnd.apple.mpegurl"),
+        (status = 404, description = "Unknown country / channel"),
+        (status = 502, description = "Transcoder failed to start"),
+    ),
+    tag = "live-tv",
+)]
+// Last-resort path for clients whose decoders reject the original feed
+// (interlaced/corrupt H.264 restreams wedge TV hardware AND platform software
+// decoders — verified on-device). Segment URIs in the ffmpeg-emitted playlist
+// are bare filenames, resolved by the player relative to THIS url, i.e. onto
+// the sibling `transcode/{segment}` route — no rewriting needed.
+pub(crate) async fn live_transcode_master(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path((country, id)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    let svc = service(&state)?;
+    let body = svc.transcode_master(&country, &id).await?;
+    playlist_response(body)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/livetv/{country}/channels/{id}/transcode/{segment}",
+    operation_id = "live_tv_transcode_segment",
+    params(
+        ("country" = String, Path, description = "ISO 3166-1 alpha-2 country code"),
+        ("id" = String, Path, description = "Channel id from the channel list"),
+        ("segment" = String, Path, description = "Segment filename from the transcoded playlist"),
+    ),
+    responses(
+        (status = 200, description = "Transcoded MPEG-TS segment", body = String, content_type = "video/mp2t"),
+        (status = 400, description = "Invalid segment name"),
+        (status = 404, description = "No active transcode session"),
+    ),
+    tag = "live-tv",
+)]
+pub(crate) async fn live_transcode_segment(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path((country, id, segment)): Path<(String, String, String)>,
+) -> ApiResult<Response> {
+    let svc = service(&state)?;
+    let bytes = svc.transcode_segment(&country, &id, &segment).await?;
+    Response::builder()
+        .header(header::CONTENT_TYPE, "video/mp2t")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(bytes))
+        .map_err(|e| ApiError::Internal(e.into()))
 }
 
 #[utoipa::path(

@@ -100,6 +100,8 @@ use utoipa::OpenApi;
         crate::routes::live_tv::live_channels,
         crate::routes::live_tv::live_epg_now,
         crate::routes::live_tv::live_master,
+        crate::routes::live_tv::live_transcode_master,
+        crate::routes::live_tv::live_transcode_segment,
         crate::routes::live_tv::live_proxy,
         crate::routes::live_tv::live_logo,
         crate::routes::live_tv::live_playback_error,

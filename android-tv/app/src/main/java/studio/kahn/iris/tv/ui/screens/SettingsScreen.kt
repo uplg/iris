@@ -156,7 +156,7 @@ private fun UpdaterCard(container: AppContainer) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Eyebrow("App update")
             Text(
-                "Installed version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                "Installed version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · build ${BuildConfig.BUILD_STAMP}",
                 style = MaterialTheme.typography.bodyLarge,
             )
             VersionStatusLine(versionStatus)

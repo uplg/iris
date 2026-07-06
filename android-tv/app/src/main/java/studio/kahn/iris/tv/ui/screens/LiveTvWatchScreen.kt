@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -64,23 +65,29 @@ private const val OVERLAY_VISIBLE_MS = 4_000L
  *  then reloads — so the retries walk through a channel's fallback feeds. */
 private const val MAX_AUTO_RETRIES = 3
 
-/** Silent-stall windows. ExoPlayer can sit in BUFFERING forever WITHOUT
- *  raising `onPlayerError` (hardware decoders wedge on interlaced/corrupt
- *  H.264 restreams) — without an escape hatch, such a channel is an eternal
- *  "Connecting…" with no retry and no error.
+/** Decode escalation ladder for a silent no-start. ExoPlayer can sit in
+ *  BUFFERING forever WITHOUT raising `onPlayerError` (hardware decoders wedge
+ *  on interlaced/corrupt H.264 restreams) — without an escape hatch, such a
+ *  channel is an eternal "Connecting…" with no retry and no error.
  *
- *  Escalation: hardware attempt → [HW_STALL_MS] → software-decoder retry of
- *  the SAME source (no demote — election untouched, so this window can be
- *  tight) → [SW_STALL_MS] → demote / walk alternate sources / Retry card.
- *  The software window stays GENEROUS: a healthy-but-slow restream can
- *  legitimately need >12 s to start, and demoting the one good source before
- *  it ever starts was a real regression. */
+ *  HARDWARE → [HW_STALL_MS] → SOFTWARE (same source, no demote — election
+ *  untouched, so this window can be tight) → [SW_STALL_MS] → SERVER (the
+ *  backend deinterlaces + re-encodes the feed; verified necessary on-device:
+ *  M6's only living feed defeats BOTH local decoders) → [SRV_STALL_MS] →
+ *  error card. The software window stays generous: a healthy-but-slow
+ *  restream can legitimately need >12 s to start, and demoting the one good
+ *  source before it ever starts was a real regression. */
+private enum class DecodeStage { Hardware, Software, Server }
+
 private const val HW_STALL_MS = 20_000L
 private const val SW_STALL_MS = 45_000L
 
-/** Channels (as `country:id`) that needed software decoding this session —
- *  their next open skips the doomed hardware attempt entirely. */
-private val softwareVideoNeeded = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+/** ffmpeg needs to probe the live input + emit its first segments. */
+private const val SRV_STALL_MS = 40_000L
+
+/** Per-channel (`country:id`) stage that actually played this session —
+ *  the next open of that channel skips the doomed earlier stages. */
+private val stageNeeded = java.util.concurrent.ConcurrentHashMap<String, DecodeStage>()
 
 /**
  * Live channel playback. Deliberately NOT [WatchScreen] — that one is
@@ -157,26 +164,24 @@ fun LiveTvWatchScreen(
 
     val player = remember { mutableStateOf<ExoPlayer?>(null) }
 
-    // Live-TV rescue mode: after a HARDWARE attempt stalls without ever
-    // starting, retry the SAME source with software decoders before touching
-    // the source election — interlaced/corrupt H.264 restreams (M6) wedge
-    // hardware decoders silently but software copes (see buildPlayer).
-    var softwareVideo by remember { mutableStateOf(false) }
-    // Which flavor the CURRENT ExoPlayer instance was built with — switching
-    // requires a rebuild (renderers are fixed at construction).
-    val playerIsSoftware = remember { mutableStateOf(false) }
+    // Decode escalation stage (see DecodeStage). Advances on silent stalls;
+    // primed per channel from what worked earlier this session.
+    var stage by remember { mutableStateOf(DecodeStage.Hardware) }
+    // Which stage the CURRENT ExoPlayer instance was built for — a stage
+    // switch needs a rebuild (renderers are fixed at construction).
+    val playerStage = remember { mutableStateOf(DecodeStage.Hardware) }
 
-    // New channel ⇒ fresh retry budget; decoder flavor primed from what this
-    // channel needed earlier in the session (skip the doomed hardware attempt
-    // on a known-interlaced feed). Keyed on channelId only (NOT retryNonce) so
-    // a reconnect doesn't reset the count it's incrementing.
+    // New channel ⇒ fresh retry budget; stage primed from what this channel
+    // needed earlier in the session (skip the doomed stages on a known-bad
+    // feed). Keyed on channelId only (NOT retryNonce) so a reconnect doesn't
+    // reset the count it's incrementing.
     LaunchedEffect(channelId) {
         autoRetryCount = 0
-        softwareVideo = softwareVideoNeeded["$country:$channelId"] == true
+        stage = stageNeeded["$country:$channelId"] ?: DecodeStage.Hardware
     }
-    // Once an attempt actually plays, remember which decoder flavor did it.
+    // Once an attempt actually plays, remember which stage did it.
     LaunchedEffect(playing) {
-        if (playing) softwareVideoNeeded["$country:$channelId"] = playerIsSoftware.value
+        if (playing) stageNeeded["$country:$channelId"] = playerStage.value
     }
 
     // Shared failure path, used by BOTH the error listener and the connect
@@ -201,46 +206,60 @@ fun LiveTvWatchScreen(
     }
 
     // (Re)load the stream whenever the channel changes, Retry is pressed, or
-    // the decoder flavor flips (hardware → software rescue).
-    LaunchedEffect(channelId, serverUrl, retryNonce, softwareVideo) {
+    // the escalation stage advances.
+    LaunchedEffect(channelId, serverUrl, retryNonce, stage) {
         val url = serverUrl ?: return@LaunchedEffect
         errorMessage = null
         playing = false
         val base = if (url.endsWith("/")) url else "$url/"
-        val masterUrl = "${base}api/livetv/$country/channels/$channelId/master.m3u8"
+        // SERVER stage plays the backend's deinterlaced/re-encoded variant;
+        // the earlier stages play the plain proxied original.
+        val masterUrl = if (stage == DecodeStage.Server) {
+            "${base}api/livetv/$country/channels/$channelId/transcode/master.m3u8"
+        } else {
+            "${base}api/livetv/$country/channels/$channelId/master.m3u8"
+        }
         val name = channels.firstOrNull { it.id == channelId }?.name ?: channelId
-        // Renderers are fixed at construction — a decoder-flavor switch needs
-        // a fresh ExoPlayer.
-        if (player.value != null && playerIsSoftware.value != softwareVideo) {
+        // Renderers are fixed at construction — a stage switch needs a fresh
+        // ExoPlayer (Server output is clean progressive H.264 → hardware).
+        if (player.value != null && playerStage.value != stage) {
             player.value?.release()
             player.value = null
         }
         val p = player.value ?: buildPlayer(
             context,
             container.mediaOkHttpClient,
-            preferSoftwareVideo = softwareVideo,
+            preferSoftwareVideo = stage == DecodeStage.Software,
         ).also {
             player.value = it
-            playerIsSoftware.value = softwareVideo
+            playerStage.value = stage
         }
         p.setMediaItem(buildMediaItem(masterUrl, name))
         p.prepare()
         p.playWhenReady = true
     }
 
-    // Stall escape hatch (see HW_STALL_MS / SW_STALL_MS): re-armed per
-    // attempt, implicitly cancelled by the effect restarting on
-    // zap/retry/decoder switch. Escalation on a silent no-start: first retry
-    // the SAME source with software decoders (hardware wedges on
-    // interlaced/corrupt H.264 — the source itself is fine, web plays it),
-    // and only if software stalls too, demote / walk alternatives via onFail.
-    LaunchedEffect(channelId, retryNonce, serverUrl, softwareVideo) {
-        delay(if (softwareVideo) SW_STALL_MS else HW_STALL_MS)
+    // Stall escape hatch (see DecodeStage): re-armed per attempt, implicitly
+    // cancelled by the effect restarting on zap/retry/stage switch. A silent
+    // no-start walks the ladder — hardware → software (same source, no
+    // demote) → server transcode → error card. A stall is a LOCAL decode
+    // problem (web plays these feeds), so unlike onPlayerError it never
+    // demotes the source nor burns the retry walk.
+    LaunchedEffect(channelId, retryNonce, serverUrl, stage) {
+        delay(
+            when (stage) {
+                DecodeStage.Hardware -> HW_STALL_MS
+                DecodeStage.Software -> SW_STALL_MS
+                DecodeStage.Server -> SRV_STALL_MS
+            },
+        )
         if (!playing && errorMessage == null) {
-            if (!softwareVideo) {
-                softwareVideo = true
-            } else {
-                onFail("The stream did not start — it may be down or unsupported")
+            when (stage) {
+                DecodeStage.Hardware -> stage = DecodeStage.Software
+                DecodeStage.Software -> stage = DecodeStage.Server
+                DecodeStage.Server ->
+                    errorMessage = "This feed defeats this device's decoders and the " +
+                        "server transcoder — it may be down or badly corrupted."
             }
         }
     }
@@ -346,16 +365,50 @@ fun LiveTvWatchScreen(
             update = { it.player = player.value },
         )
 
-        // "Connecting…" until the attempt actually starts playing, so a
-        // (re)connect isn't a silent black screen. Cleared by onIsPlayingChanged
-        // (or the connect timeout, which flips to the error card).
+        // Connection overlay until the attempt actually starts playing, so a
+        // (re)connect isn't a silent black screen. DIAGNOSTIC by design: no
+        // adb on the household TVs, so the stage line + elapsed seconds ARE
+        // the debugging story ("which step is it stuck on?"). Cleared by the
+        // player listener (or the stall ladder flips to the error card).
         if (errorMessage == null && !playing) {
+            // Per-attempt elapsed ticker (Android timers are fine — the
+            // no-timer rule is web-only).
+            var elapsedS by remember(channelId, retryNonce, stage) {
+                mutableStateOf(0)
+            }
+            LaunchedEffect(channelId, retryNonce, stage) {
+                while (true) {
+                    delay(1_000)
+                    elapsedS++
+                }
+            }
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    "Connecting…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = IrisColors.MutedForeground,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        when (stage) {
+                            DecodeStage.Hardware -> "Connecting…"
+                            DecodeStage.Software -> "Slow start — retrying with the software decoder…"
+                            DecodeStage.Server -> "Preparing a compatible stream on the server…"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = IrisColors.MutedForeground,
+                    )
+                    Text(
+                        buildString {
+                            append("${elapsedS}s")
+                            if (autoRetryCount > 0) append(" · source attempt ${autoRetryCount + 1}")
+                            append(
+                                when (stage) {
+                                    DecodeStage.Hardware -> " · hw"
+                                    DecodeStage.Software -> " · sw"
+                                    DecodeStage.Server -> " · srv"
+                                },
+                            )
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = IrisColors.FgDim,
+                    )
+                }
             }
         }
 
@@ -380,6 +433,11 @@ fun LiveTvWatchScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Column(
+                    // Bounded + centered so a long diagnostic message wraps
+                    // instead of overflowing the screen edge.
+                    modifier = Modifier
+                        .widthIn(max = 560.dp)
+                        .padding(horizontal = Spacing.xl),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
@@ -392,6 +450,7 @@ fun LiveTvWatchScreen(
                         errorMessage ?: "",
                         style = MaterialTheme.typography.bodyMedium,
                         color = IrisColors.MutedForeground,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                         IrisButton(

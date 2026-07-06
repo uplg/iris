@@ -1144,6 +1144,107 @@
         }
       }
     },
+    "/api/livetv/{country}/channels/{id}/transcode/master.m3u8": {
+      "get": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_transcode_master",
+        "parameters": [
+          {
+            "name": "country",
+            "in": "path",
+            "description": "ISO 3166-1 alpha-2 country code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel id from the channel list",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deinterlaced/re-encoded HLS playlist (last-resort compatibility path)",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown country / channel"
+          },
+          "502": {
+            "description": "Transcoder failed to start"
+          }
+        }
+      }
+    },
+    "/api/livetv/{country}/channels/{id}/transcode/{segment}": {
+      "get": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_transcode_segment",
+        "parameters": [
+          {
+            "name": "country",
+            "in": "path",
+            "description": "ISO 3166-1 alpha-2 country code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel id from the channel list",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "segment",
+            "in": "path",
+            "description": "Segment filename from the transcoded playlist",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transcoded MPEG-TS segment",
+            "content": {
+              "video/mp2t": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid segment name"
+          },
+          "404": {
+            "description": "No active transcode session"
+          }
+        }
+      }
+    },
     "/api/livetv/{country}/epg/now": {
       "get": {
         "tags": [
