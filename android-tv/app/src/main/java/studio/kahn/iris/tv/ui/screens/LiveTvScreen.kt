@@ -99,6 +99,10 @@ fun LiveTvScreen(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var pickingCountry by remember { mutableStateOf(false) }
+    // One-shot initial-focus flag, SCREEN-scoped: ChannelGrid remounts when
+    // search results swap in/out, and a grid-scoped flag made every remount
+    // steal focus from the search field mid-typing.
+    val gridFocusedOnce = remember { androidx.compose.runtime.mutableStateOf(false) }
     // Channel-name search. Survives back-navigation from a channel
     // (rememberSaveable) so zap-shopping within results keeps the query.
     // Resolved SERVER-SIDE across every country (iptv-org channels DB),
@@ -269,6 +273,7 @@ fun LiveTvScreen(
                             tnt = sections.first,
                             categories = sections.second,
                             epg = epg,
+                            focusedOnce = gridFocusedOnce,
                             onOpen = { ch -> country?.let { onOpenChannel(it, ch.id) } },
                         )
                         results.isEmpty() -> Text(
@@ -298,6 +303,7 @@ fun LiveTvScreen(
                                     },
                                 ),
                                 epg = emptyMap(),
+                                focusedOnce = gridFocusedOnce,
                                 onOpen = { ch ->
                                     // id carries "country:id" (slugs are
                                     // alphanumeric, ':' is safe).
@@ -319,13 +325,13 @@ private fun ChannelGrid(
     categories: List<Pair<String, List<LiveChannel>>>,
     epg: Map<String, LiveNowNext>,
     onOpen: (LiveChannel) -> Unit,
+    focusedOnce: androidx.compose.runtime.MutableState<Boolean>,
 ) {
     // Initial D-pad focus belongs on the FIRST CHANNEL, not the search field
     // (which is first in composition order). The first card requests focus
     // once, after it is actually placed (onGloballyPositioned — a bare
     // LaunchedEffect can fire before the lazy item exists).
     val firstFocus = remember { FocusRequester() }
-    val focusedOnce = remember { androidx.compose.runtime.mutableStateOf(false) }
     fun Modifier.firstCard(isFirst: Boolean): Modifier = if (!isFirst) this else {
         this
             .focusRequester(firstFocus)
