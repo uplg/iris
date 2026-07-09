@@ -93,20 +93,20 @@ export function LiveTvPage() {
               placeholder="Search channels (all countries)…"
               className="focus-ring h-9 w-64 rounded-md border border-border bg-elev px-3 text-sm text-foreground placeholder:text-muted-foreground"
             />
-          <label className="flex items-center gap-2 text-sm text-muted-foreground">
-            Country
-            <select
-              className="focus-ring h-9 rounded-md border border-border bg-elev px-2 text-sm text-foreground"
-              value={country}
-              onChange={(e) => navigate({ to: "/live", search: { country: e.target.value } })}
-            >
-              {(countriesQ.data?.countries ?? []).map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.flag} {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              Country
+              <select
+                className="focus-ring h-9 rounded-md border border-border bg-elev px-2 text-sm text-foreground"
+                value={country}
+                onChange={(e) => navigate({ to: "/live", search: { country: e.target.value } })}
+              >
+                {(countriesQ.data?.countries ?? []).map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.flag} {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </header>
 

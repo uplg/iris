@@ -1,0 +1,12 @@
+{
+  "name": "iris-api-gen",
+  "private": true,
+  "description": "Isolated install for openapi-typescript: it needs the TypeScript 6 compiler API (ts.factory), which the TypeScript 7 native compiler used by the main build no longer ships.",
+  "scripts": {
+    "gen": "openapi-typescript ../../openapi.json -o ../../src/lib/api-types.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.13.0",
+    "typescript": "6.0.3"
+  }
+}

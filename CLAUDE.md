@@ -78,6 +78,10 @@ DTOs** — every client generates them:
   until you regenerate + commit `web/openapi.json`.
 - **Web** generates TS types: `openapi-typescript` → `src/lib/api-types.ts`
   (auto via `predev`/`prebuild`). `api.ts` wraps them with the fetch client.
+  The generator lives in its own mini-package (`web/tools/api-gen/`) pinned
+  to TypeScript 6: it needs the TS compiler API (`ts.factory`), which the
+  TS 7 native compiler used by the main build no longer ships. Don't
+  "unify" the two TypeScript versions.
 - **Android TV** generates `@Serializable` models: the `org.openapi.generator`
   Gradle plugin (`openApiGenerate` task, wired before compile via the AGP
   Variant API) → `app/build/generated/openapi/…/data/` in package

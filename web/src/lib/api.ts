@@ -604,8 +604,7 @@ export type LiveSearchResult = components["schemas"]["LiveSearchResult"];
 export const livetv = {
   countries: () => api.get<LiveCountriesResponse>("/livetv/countries"),
   /** Cross-country channel search (server-side, diacritics-insensitive). */
-  search: (q: string) =>
-    api.get<LiveSearchResponse>(`/livetv/search?q=${encodeURIComponent(q)}`),
+  search: (q: string) => api.get<LiveSearchResponse>(`/livetv/search?q=${encodeURIComponent(q)}`),
   channels: (country: string) =>
     api.get<LiveChannelsResponse>(`/livetv/${encodeURIComponent(country)}/channels`),
   epgNow: (country: string) =>

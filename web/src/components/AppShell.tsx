@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Brand } from "@/components/Brand";
-import { FirefoxWarning } from "@/components/FirefoxWarning";
 import { TweaksDrawer } from "@/components/TweaksDrawer";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -117,7 +116,6 @@ export function AppShell() {
       <BottomBar nav={nav} />
 
       <TweaksDrawer open={tweaksOpen} onClose={() => setTweaksOpen(false)} />
-      <FirefoxWarning />
     </div>
   );
 }
