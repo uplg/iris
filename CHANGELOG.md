@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **"Download again"** on a reclaimed history entry re-grabs the exact
     same release — same infohash, so playback resumes precisely where you
     left off, while the download streams in.
+  - **The collection page lists "Previously on disk" releases** (web +
+    Android TV) with the same "Download again" action — this is what makes
+    a ghost **movie** recoverable (series could already re-grab from their
+    episode offers). Nothing is automatic: opening a ghost never downloads
+    anything by itself.
 - **Android TV search: recent searches + TMDB suggestions.** The empty
   search screen offers your last 3 searches as one-click chips, and while
   you type, live TMDB suggestions (poster, title, year, TV/Movie) appear
@@ -47,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Android TV home hero**: dropped the redundant "Continue tonight ·
+  Resume" eyebrow (the Resume button says it all); the hero layout is
+  unchanged.
 - **Dependency refresh**: Compose BOM 2026.06.01 (picks up the upstream
   `ui-text` crash fix for long `maxLines` texts), `dompurify` 3.4.12,
   Rust lockfile patch bumps. `time` stays capped (`cookie` 0.18.1 still
