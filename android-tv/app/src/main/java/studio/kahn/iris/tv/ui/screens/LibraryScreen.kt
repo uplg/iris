@@ -30,9 +30,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,6 +47,7 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
+import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
@@ -328,13 +332,21 @@ private fun LibraryGridCard(
     }
     val poster = tmdbPosterUrl(meta?.posterPath, "w342")
     val title = prettify(collection.displayTitle)
-    val subtitle = buildString {
-        if (collection.kind == MediaKind.tv && collection.episodeCount > 0) {
-            append("${collection.episodeCount} ep")
-        } else {
-            append(formatBytesLib(collection.totalSizeBytes))
+    // Ghost = every torrent reclaimed by the GC, but the CALLER watched
+    // this (the server only sends *your* ghosts). Kept in the grid,
+    // greyed. Clicking only NAVIGATES to the collection page — any
+    // re-download stays a deliberate user action there.
+    val subtitle = if (collection.ghost) {
+        "No longer on disk"
+    } else {
+        buildString {
+            if (collection.kind == MediaKind.tv && collection.episodeCount > 0) {
+                append("${collection.episodeCount} ep")
+            } else {
+                append(formatBytesLib(collection.totalSizeBytes))
+            }
+            if (collection.torrentCount > 1) append(" · ${collection.torrentCount}×")
         }
-        if (collection.torrentCount > 1) append(" · ${collection.torrentCount}×")
     }
     val shape = RoundedCornerShape(Radius.poster)
 
@@ -355,8 +367,15 @@ private fun LibraryGridCard(
                     AsyncImage(
                         model = poster,
                         contentDescription = title,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .let { if (collection.ghost) it.alpha(0.45f) else it },
                         contentScale = ContentScale.Crop,
+                        colorFilter = if (collection.ghost) {
+                            ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
+                        } else {
+                            null
+                        },
                     )
                 } else {
                     Box(Modifier.fillMaxSize().background(irisPosterPlaceholder()))
@@ -367,9 +386,29 @@ private fun LibraryGridCard(
                         Text(
                             title,
                             style = MaterialTheme.typography.headlineSmall,
-                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.92f),
+                            color = androidx.compose.ui.graphics.Color.White.copy(
+                                alpha = if (collection.ghost) 0.5f else 0.92f,
+                            ),
                             maxLines = 3,
                             overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (collection.ghost) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp),
+                        shape = RoundedCornerShape(6.dp),
+                        colors = SurfaceDefaults.colors(
+                            containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.65f),
+                        ),
+                    ) {
+                        Text(
+                            "GONE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = IrisColors.MutedForeground,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                         )
                     }
                 }
@@ -378,6 +417,7 @@ private fun LibraryGridCard(
                 Text(
                     title,
                     style = MaterialTheme.typography.titleSmall,
+                    color = if (collection.ghost) IrisColors.MutedForeground else androidx.compose.ui.graphics.Color.Unspecified,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )

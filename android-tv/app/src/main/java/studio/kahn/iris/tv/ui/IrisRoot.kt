@@ -335,6 +335,9 @@ fun IrisRoot(
                     onPickFile = { infohash, fileIdx ->
                         navController.navigate(Routes.watch(infohash, fileIdx))
                     },
+                    onOpenCollection = { collectionId ->
+                        navController.navigate(Routes.collection(collectionId))
+                    },
                     onBack = { navController.popBackStack() },
                 )
             }

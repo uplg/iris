@@ -209,6 +209,19 @@ pub async fn set_tmdb_id_if_missing(
     Ok(())
 }
 
+/// Detach the `tmdb_id` from a collection. Used by the identity
+/// self-heal when the SCENE key changes: the id was resolved from the
+/// OLD title and is presumed poison, so first-writer-wins semantics
+/// restart from a clean slate and the next resolve stamps the id that
+/// matches the corrected identity.
+pub async fn clear_tmdb_id(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE collections SET tmdb_id = NULL WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Rewrite the `kind` ("movie" / "tv") on an existing collection. Used
 /// by `tmdb_backfill` when a torrent's filename re-parses to a kind
 /// that disagrees with the stored value (a Silicon Valley S01 pack
@@ -487,6 +500,44 @@ pub async fn list_summaries(pool: &SqlitePool) -> Result<Vec<CollectionSummary>,
     .await
 }
 
+/// The caller's GHOST collections: rows whose every torrent has been
+/// reclaimed (soft-deleted — GC, admin cleanup) but that THIS user has
+/// watch history in. Surfaced greyed-out in the Library so the user
+/// can navigate back to the collection page, re-grab and resume —
+/// without leaking other users' history (each user only ever sees the
+/// ghosts they themselves watched; the shared live listing stays
+/// [`list_summaries`]). Ordered by the user's most recent watch.
+pub async fn list_ghost_summaries_for_user(
+    pool: &SqlitePool,
+    user_id: iris_core::ids::UserId,
+) -> Result<Vec<CollectionSummary>, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query_as::<_, CollectionSummary>(
+        "SELECT \
+            c.id, \
+            c.tmdb_id AS tmdb_id, \
+            c.display_title, c.kind, c.is_anime, c.created_at, \
+            0 AS torrent_count, \
+            0 AS total_size_bytes, \
+            (SELECT COUNT(*) FROM episode_files ef WHERE ef.collection_id = c.id) AS episode_count, \
+            NULL AS representative_infohash \
+         FROM collections c \
+         WHERE NOT EXISTS ( \
+             SELECT 1 FROM torrents t \
+             WHERE t.collection_id = c.id AND t.deleted_at IS NULL) \
+           AND EXISTS ( \
+             SELECT 1 FROM playback_progress p \
+             JOIN torrents pt ON pt.infohash = p.infohash \
+             WHERE p.user_id = ?1 AND pt.collection_id = c.id) \
+         ORDER BY (SELECT MAX(p2.last_watched_at) FROM playback_progress p2 \
+                   JOIN torrents pt2 ON pt2.infohash = p2.infohash \
+                   WHERE p2.user_id = ?1 AND pt2.collection_id = c.id) DESC",
+    )
+    .bind(user)
+    .fetch_all(pool)
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,5 +605,88 @@ mod tests {
         assert!(get(&pool, plain.id).await.unwrap().is_none());
         // The survivor keeps the moved episode file (no cascade wipe).
         assert_eq!(ef_count(&pool, anime.id).await, 1);
+    }
+
+    async fn make_user(pool: &SqlitePool) -> iris_core::ids::UserId {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, email, password_hash, display_name, is_admin, created_at) \
+             VALUES (?1, ?2, '', 'T', 0, ?3)",
+        )
+        .bind(id)
+        .bind(format!("{id}@t.test"))
+        .bind(Utc::now())
+        .execute(pool)
+        .await
+        .expect("insert user");
+        iris_core::ids::UserId::from(id)
+    }
+
+    /// Ghosts are scoped to the user who watched them: a fully-GC'd
+    /// collection appears in the watcher's ghost list only, and stops
+    /// being a ghost as soon as any live torrent re-attaches.
+    #[tokio::test]
+    async fn ghost_summaries_are_scoped_to_the_watcher() {
+        let pool = migrated_pool().await;
+        let watcher = make_user(&pool).await;
+        let stranger = make_user(&pool).await;
+        let col = find_or_create(&pool, "goblin", "Goblin", Kind::Tv, false)
+            .await
+            .unwrap();
+        let t = crate::torrents::upsert(
+            &pool,
+            crate::torrents::NewTorrent {
+                infohash: Uuid::new_v4().to_string(),
+                name: "Goblin.S01E01".into(),
+                total_size_bytes: 1_000,
+                source_provider: None,
+                source_external_id: None,
+                added_by: watcher,
+            },
+        )
+        .await
+        .unwrap();
+        crate::torrents::set_collection(&pool, &t.infohash, Some(col.id))
+            .await
+            .unwrap();
+        crate::playback::upsert(
+            &pool,
+            crate::playback::UpsertProgress {
+                user_id: watcher,
+                infohash: t.infohash.clone(),
+                file_idx: 0,
+                position_seconds: 60.0,
+                duration_seconds: Some(1_200.0),
+                audio_track_idx: None,
+                subtitle_track_idx: None,
+                completed: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Live torrent → not a ghost for anyone.
+        assert!(
+            list_ghost_summaries_for_user(&pool, watcher)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        crate::torrents::soft_delete(&pool, iris_core::ids::TorrentId::from(t.id))
+            .await
+            .unwrap();
+
+        let ghosts = list_ghost_summaries_for_user(&pool, watcher).await.unwrap();
+        assert_eq!(ghosts.len(), 1);
+        assert_eq!(ghosts[0].id, col.id);
+        assert_eq!(ghosts[0].torrent_count, 0);
+        // The stranger never watched it — no ghost leaks across users.
+        assert!(
+            list_ghost_summaries_for_user(&pool, stranger)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -411,6 +411,33 @@ pub(crate) struct HistoryItem {
     last_watched_at: chrono::DateTime<chrono::Utc>,
     completed: bool,
     deleted: bool,
+    /// Parent collection — survives GC (collections are never dropped),
+    /// so clients group history under the show/movie and can route to
+    /// the collection page even when every torrent was reclaimed (the
+    /// "ghost collection" resume path). Additive — old clients ignore it.
+    #[serde(default)]
+    collection_id: Option<uuid::Uuid>,
+    /// The collection's clean display title — the readable label to
+    /// render instead of the raw SCENE torrent name.
+    #[serde(default)]
+    collection_title: Option<String>,
+    /// SCENE-derived episode coordinates of the exact file watched
+    /// (`S01E03`). Survive GC; a manual per-torrent remove drops them.
+    #[serde(default)]
+    season: Option<i64>,
+    #[serde(default)]
+    episode: Option<i64>,
+    /// Absolute episode number for fleuve anime (render "Episode N").
+    #[serde(default)]
+    absolute_episode: Option<i64>,
+    /// Source-torrent provenance: with both set, clients can offer
+    /// "Download again" on a deleted row — re-resolving the same
+    /// release yields the same infohash, so the stored resume
+    /// position applies untouched.
+    #[serde(default)]
+    source_provider: Option<String>,
+    #[serde(default)]
+    source_external_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -464,6 +491,13 @@ pub(crate) async fn history(
                 last_watched_at: r.last_watched_at,
                 completed: r.completed,
                 deleted: r.deleted,
+                collection_id: r.collection_id,
+                collection_title: r.collection_title,
+                season: r.season,
+                episode: r.episode,
+                absolute_episode: r.absolute_episode,
+                source_provider: r.source_provider,
+                source_external_id: r.source_external_id,
             }
         })
         .collect();

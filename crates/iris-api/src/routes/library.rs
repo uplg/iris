@@ -82,6 +82,15 @@ pub(crate) struct CollectionListItem {
     /// routing (or for collections without a `tmdb_id`). Always present
     /// when `torrent_count > 0`.
     representative_infohash: Option<String>,
+    /// `true` for a GHOST collection: every torrent was reclaimed
+    /// (disk GC / cleanup) but the REQUESTING user has watch history
+    /// in it. Ghosts are per-caller (nobody sees another user's
+    /// ghosts), render greyed-out, and stay navigable — the
+    /// collection page still lists indexer offers, so the user can
+    /// re-grab and resume exactly where they were. Additive — older
+    /// clients render them as ordinary (empty) cards.
+    #[serde(default)]
+    ghost: bool,
 }
 
 #[utoipa::path(
@@ -132,23 +141,33 @@ pub(crate) async fn list_library(
             total_uploaded_bytes,
         }));
     }
-    // Default: collections.
+    // Default: collections — the shared live listing, plus the CALLER's
+    // ghost collections (fully-GC'd shows/movies this user watched)
+    // appended after. Ghosts are per-user by construction: they're
+    // derived from the caller's own playback history, so Lyros' ghosts
+    // never appear in anyone else's Library.
     let summaries = iris_db::collections::list_summaries(state.db()).await?;
+    let ghosts = iris_db::collections::list_ghost_summaries_for_user(state.db(), user.id)
+        .await
+        .unwrap_or_default();
+    let to_item = |s: iris_db::collections::CollectionSummary, ghost: bool| CollectionListItem {
+        id: s.id,
+        tmdb_id: s.tmdb_id,
+        display_title: s.display_title,
+        // `collections.kind` is `NOT NULL CHECK (kind IN ('tv','movie'))`,
+        // so `from_wire` only ever returns `None` on a corrupt row.
+        kind: MediaKind::from_wire(&s.kind).unwrap_or(MediaKind::Tv),
+        is_anime: s.is_anime,
+        torrent_count: s.torrent_count,
+        total_size_bytes: s.total_size_bytes,
+        episode_count: s.episode_count,
+        representative_infohash: s.representative_infohash,
+        ghost,
+    };
     let items = summaries
         .into_iter()
-        .map(|s| CollectionListItem {
-            id: s.id,
-            tmdb_id: s.tmdb_id,
-            display_title: s.display_title,
-            // `collections.kind` is `NOT NULL CHECK (kind IN ('tv','movie'))`,
-            // so `from_wire` only ever returns `None` on a corrupt row.
-            kind: MediaKind::from_wire(&s.kind).unwrap_or(MediaKind::Tv),
-            is_anime: s.is_anime,
-            torrent_count: s.torrent_count,
-            total_size_bytes: s.total_size_bytes,
-            episode_count: s.episode_count,
-            representative_infohash: s.representative_infohash,
-        })
+        .map(|s| to_item(s, false))
+        .chain(ghosts.into_iter().map(|s| to_item(s, true)))
         .collect();
     Ok(Json(LibraryResponse::Collections { items }))
 }

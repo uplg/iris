@@ -1,7 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
-import { CheckCircle2, Download, Library as LibraryIcon, Loader2, Play } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  Library as LibraryIcon,
+  Loader2,
+  Play,
+  RectangleHorizontal,
+} from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -96,6 +103,21 @@ function writeStoredVolume(v: number): void {
   localStorage.setItem(VOLUME_KEY, String(Math.max(0, Math.min(1, v))));
 }
 
+// Theater mode (YouTube-style): full-width player, the episodes/files
+// panel restacks below it (same order as the responsive layout).
+// A device-level display choice like volume, so it's persisted locally
+// and sticks across episodes + sessions.
+const THEATER_KEY = "iris:theater";
+
+function readStoredTheater(): boolean {
+  return typeof localStorage !== "undefined" && localStorage.getItem(THEATER_KEY) === "1";
+}
+
+function writeStoredTheater(on: boolean): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(THEATER_KEY, on ? "1" : "0");
+}
+
 const watchRoute = getRouteApi("/auth/shell/watch/$infohash/$idx");
 
 export function WatchPage() {
@@ -105,6 +127,35 @@ export function WatchPage() {
   const qc = useQueryClient();
 
   const [playerError, setPlayerError] = useState<string | null>(null);
+  // Theater mode: the player spans the full viewport width and the
+  // episodes/files panel restacks below it. Toggled by the header
+  // button or the "t" key (YouTube muscle memory).
+  const [theater, setTheater] = useState(readStoredTheater);
+  const toggleTheater = useCallback(() => {
+    setTheater((v) => {
+      writeStoredTheater(!v);
+      return !v;
+    });
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "t" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target;
+      // Never steal the key from text entry.
+      if (
+        t instanceof HTMLInputElement ||
+        t instanceof HTMLTextAreaElement ||
+        t instanceof HTMLSelectElement ||
+        (t instanceof HTMLElement && t.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      toggleTheater();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleTheater]);
   const lastTimeRef = useRef(0);
   const lastSavedTimeRef = useRef(0);
   const lastDurationRef = useRef<number | null>(null);
@@ -879,7 +930,7 @@ export function WatchPage() {
   void hlsUrl; // kept exported for parity; no direct use here yet
 
   return (
-    <Container>
+    <Container wide={theater}>
       <div className="grid gap-6 pt-2">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -896,6 +947,19 @@ export function WatchPage() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant={theater ? "secondary" : "ghost"}
+              size="sm"
+              onClick={toggleTheater}
+              aria-pressed={theater}
+              title="Theater mode (t)"
+              // Below lg the layout is single-column already — nothing
+              // to enlarge, so the toggle only shows where it acts.
+              className="hidden lg:inline-flex"
+            >
+              <RectangleHorizontal className="size-4" />
+              Theater
+            </Button>
             <Button asChild variant="outline" size="sm">
               <a href={torrents.downloadUrl(infohash, fileIdx)} download={fileName}>
                 <Download className="size-4" />
@@ -927,11 +991,19 @@ export function WatchPage() {
         <div
           className={cn(
             "grid gap-6",
-            sideRows.length > 1 && "lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start",
+            sideRows.length > 1 && !theater && "lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start",
           )}
         >
           <div className="grid min-w-0 gap-6">
-            <div className="aspect-video w-full overflow-hidden rounded-xl border border-border bg-black shadow-2xl">
+            <div
+              className={cn(
+                "aspect-video w-full overflow-hidden rounded-xl border border-border bg-black shadow-2xl",
+                // Theater: full-width strip, height capped to the viewport
+                // (minus header + title row) — the video letterboxes inside
+                // via its own `object-contain`, YouTube-style.
+                theater && "max-h-[calc(100svh-var(--header-h)-8rem)]",
+              )}
+            >
               {playSrc && !progressQ.isPending && sourceReady && manifest ? (
                 <IrisPlayer
                   // Per-file identity: navigating to another episode must
@@ -1063,7 +1135,16 @@ export function WatchPage() {
           </div>
 
           {sideRows.length > 1 && (
-            <aside className="glass grid h-fit gap-3 self-start rounded-xl p-4 lg:sticky lg:top-20 lg:max-h-[calc(100svh-5.5rem)] lg:overflow-auto">
+            <aside
+              className={cn(
+                "glass grid h-fit gap-3 self-start rounded-xl p-4",
+                // Side-column mode pins the panel and scrolls it
+                // internally. In theater it flows BELOW the full-width
+                // player (same stacking as the responsive layout), where
+                // pinning/inner-scroll would fight the page scroll.
+                !theater && "lg:sticky lg:top-20 lg:max-h-[calc(100svh-5.5rem)] lg:overflow-auto",
+              )}
+            >
               <span className="eyebrow">
                 {sidePanelTitle} ({sideRows.length})
               </span>

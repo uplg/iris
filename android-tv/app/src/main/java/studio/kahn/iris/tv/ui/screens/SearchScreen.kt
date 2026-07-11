@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items as lazyListItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -200,6 +201,50 @@ fun SearchScreen(
     // wrong poster carried over to half the rows. Mirrors the web's
     // `["tmdb-by-title", cleaned, result.kind ?? "any"]` query key.
     val tmdbCache = remember { mutableStateMapOf<Pair<String, String?>, TmdbSuggestion?>() }
+
+    // The device's last few submitted searches — one-click chips on the
+    // empty state, so a remote user re-runs yesterday's search without
+    // fighting the on-screen keyboard.
+    val recentSearches by container.prefsStore.recentSearches
+        .collectAsState(initial = emptyList())
+    // Every submitted search (typed, voice, deep-link, suggestion pick)
+    // funnels through `submittedQuery`, so one hook records them all.
+    LaunchedEffect(submittedQuery) {
+        if (submittedQuery.length >= 2) {
+            container.prefsStore.addRecentSearch(submittedQuery)
+        }
+    }
+
+    // Live TMDB typeahead (mirrors the web's suggestion dropdown): fires
+    // while the TYPED text differs from the submitted search, debounced
+    // via coroutine cancellation (each keystroke restarts the effect, so
+    // the delay only elapses once typing pauses). Best-effort — a flaky
+    // network just means no suggestion row.
+    var suggestions by remember { mutableStateOf<List<TmdbSuggestion>>(emptyList()) }
+    LaunchedEffect(query, submittedQuery) {
+        val q = query.trim()
+        if (q.length < 2 || q == submittedQuery) {
+            suggestions = emptyList()
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(300)
+        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
+        suggestions = runCatching { container.apiFor(url).tmdbSearch(q) }
+            .getOrNull().orEmpty().take(8)
+    }
+    // Search with a suggestion's canonical title (and align the Type
+    // filter with its kind — that's the whole point of picking one).
+    val pickSuggestion = { s: TmdbSuggestion ->
+        query = s.title
+        submittedQuery = s.title
+        page = 1
+        kind = if (s.kind == studio.kahn.iris.tv.data.TmdbKind.tv) {
+            KindFilter.Series
+        } else {
+            KindFilter.Movies
+        }
+        suggestions = emptyList()
+    }
 
     val voiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -453,6 +498,12 @@ fun SearchScreen(
             )
         }
 
+        // --- TMDB typeahead suggestions (only while the typed text
+        //     differs from the submitted search) ---
+        if (suggestions.isNotEmpty()) {
+            SuggestionsRow(suggestions = suggestions, onPick = pickSuggestion)
+        }
+
         // --- Sort chips + view-mode toggle on a thin row ---
         Row(
             Modifier.fillMaxWidth(),
@@ -483,9 +534,13 @@ fun SearchScreen(
         // server repeats them on every page.
         val libMatches = if (page == 1) data?.libraryMatches.orEmpty() else emptyList()
         when {
-            submittedQuery.length < 2 -> EmptyHint(
-                title = "Type a title, then press Search",
-                body = "Or hit the 🎤 button — voice search is the fastest path on a remote.",
+            submittedQuery.length < 2 -> EmptySearchState(
+                recents = recentSearches,
+                onPickRecent = { r ->
+                    query = r
+                    submittedQuery = r
+                    page = 1
+                },
             )
             error != null -> ErrorBlock(message = error!!) {
                 submittedQuery = query.trim().ifEmpty { submittedQuery }
@@ -1338,6 +1393,130 @@ private fun SkeletonGrid(minSize: androidx.compose.ui.unit.Dp) {
                 )
             }
         }
+    }
+}
+
+/**
+ * Horizontal strip of TMDB typeahead hits under the input: tiny poster +
+ * canonical "Title (year)" + kind pill. Picking one submits the indexer
+ * search with the CANONICAL title — the fastest path from a half-typed
+ * (or misspelled) query to real results on a remote.
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun SuggestionsRow(
+    suggestions: List<TmdbSuggestion>,
+    onPick: (TmdbSuggestion) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+    ) {
+        Eyebrow("TMDB")
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            lazyListItems(
+                suggestions,
+                key = { "${it.kind}:${it.tmdbId}" },
+            ) { s ->
+                SuggestionChip(suggestion = s, onClick = { onPick(s) })
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun SuggestionChip(suggestion: TmdbSuggestion, onClick: () -> Unit) {
+    val pill = RoundedCornerShape(Radius.pill)
+    val poster = tmdbPosterUrl(suggestion.posterPath, "w92")
+    Surface(
+        onClick = onClick,
+        shape = ClickableSurfaceDefaults.shape(shape = pill),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = IrisColors.Overlay06,
+            contentColor = IrisColors.Foreground,
+            focusedContainerColor = IrisColors.Overlay12,
+            focusedContentColor = IrisColors.Foreground,
+        ),
+        border = ClickableSurfaceDefaults.border(
+            border = Border.None,
+            focusedBorder = Border(
+                border = androidx.compose.foundation.BorderStroke(Focus.ring, IrisColors.Brand),
+                shape = pill,
+            ),
+        ),
+    ) {
+        Row(
+            Modifier.padding(start = 6.dp, end = 14.dp, top = 4.dp, bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .width(22.dp)
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(4.dp)),
+            ) {
+                if (poster != null) {
+                    AsyncImage(
+                        model = poster,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize().background(irisPosterPlaceholder()))
+                }
+            }
+            Text(
+                buildString {
+                    append(suggestion.title)
+                    suggestion.year?.let { append(" ($it)") }
+                },
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            BadgePill(
+                label = if (suggestion.kind == studio.kahn.iris.tv.data.TmdbKind.tv) "TV" else "Movie",
+                bg = Color.Black.copy(alpha = 0.5f),
+                small = true,
+            )
+        }
+    }
+}
+
+/**
+ * Pre-search screen: the device's recent searches as one-click chips
+ * (when any exist) above the usual "type or talk" hint.
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun EmptySearchState(
+    recents: List<String>,
+    onPickRecent: (String) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md),
+    ) {
+        if (recents.isNotEmpty()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                modifier = Modifier.padding(top = Spacing.md),
+            ) {
+                Eyebrow("Recent")
+                recents.forEach { r ->
+                    Chip(label = r, selected = false, onClick = { onPickRecent(r) })
+                }
+            }
+        }
+        EmptyHint(
+            title = "Type a title, then press Search",
+            body = "Or hit the 🎤 button — voice search is the fastest path on a remote.",
+        )
     }
 }
 

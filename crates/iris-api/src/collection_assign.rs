@@ -338,16 +338,30 @@ fn guess_kind(
     Kind::Movie
 }
 
+/// True when a parse found a real structural boundary (season marker
+/// or year) — the guarantee that `title` is the clean segment BEFORE
+/// the metadata tail, not tail-cruft from a quality/end-of-stem
+/// fallback ("Saison 2", "Show COMPLETE VOSTFR", …).
+fn is_structural(p: &filename::Parsed) -> bool {
+    !p.title.is_empty() && (p.season.is_some() || p.year.is_some())
+}
+
 /// Pick the canonical Parsed used to derive collection identity.
 ///
-/// For TV: prefer the first SCENE-parseable file leaf. Season packs
-/// name themselves `Show.S02.COMPLETE.1080p…` — `S02` alone (no E)
-/// doesn't satisfy `find_se_marker`, so the parser tail-trims to
-/// "1080p" and the title becomes `Show S02 COMPLETE` (cruft). The
-/// individual files inside the pack each have proper `S02EXX`
-/// markers and parse to a clean title — using one of them keeps
-/// season packs in the same collection as standalone-episode
-/// torrents.
+/// The torrent NAME is the highest-signal SCENE string we have —
+/// indexers consistently SCENE-name top-level releases, while the
+/// files inside are routinely renamed to short forms that lose the
+/// full title. The reported case: files named `Goblin S01E01.mkv`
+/// inside `Goblin.The.Lonely.and.Great.God.2016.COMPLETE.VOSTFR…` —
+/// keying on the file title "Goblin" resolves TMDB to the wrong
+/// entity, while the torrent name carries the full disambiguated
+/// title. So for TV the name wins whenever its parse is *structural*
+/// (season marker or year — see [`is_structural`]); junk names with
+/// neither (c411 season packs are literally named "Saison 2") fall
+/// back to the first season-marked file leaf, whose `S02EXX` marker
+/// guarantees a clean title. Plex-style `NxNN` file names (no marker
+/// our parser reads) never drive identity — the whole filename would
+/// leak into `display_title` as junk.
 ///
 /// For movies: the torrent name wins when usable (it's the only
 /// thing carrying the year — files are sometimes renamed to
@@ -360,18 +374,11 @@ fn pick_identity<'a>(
     parsed_files: &'a [(usize, filename::Parsed)],
 ) -> Option<&'a filename::Parsed> {
     if kind == Kind::Tv {
-        // File names usually carry the most canonical SCENE form for
-        // TV releases, BUT only when our parser actually recognised
-        // a season marker. A file like
-        // `Silicon Valley - 1x01 - Minimum Viable Product.mkv`
-        // uses the Plex-style `NxNN` convention the SCENE parser
-        // doesn't recognise — the parse falls through and the
-        // whole filename ends up in `title`. Letting that drive
-        // the collection's display_title leaks junk like
-        // "Silicon Valley - 1x01 - Minimum Viable Product Multi Papaya"
-        // into the UI. Only trust the file parse when it produced
-        // a real season; otherwise fall back to the torrent name
-        // (which for season packs is canonical: `Silicon.Valley.S01.…`).
+        if let Some(p) = parsed_name
+            && is_structural(p)
+        {
+            return Some(p);
+        }
         if let Some((_, p)) = parsed_files.first()
             && !p.title.is_empty()
             && p.season.is_some()
@@ -454,21 +461,31 @@ async fn reconcile_scene_episodes(pool: &SqlitePool, infohash: &str, files: &[(u
     }
 }
 
-/// Boot-time repair for TV collections whose `parsed_title_normalized`
-/// and `display_title` were set from a junk file-leaf parse by an
-/// older [`pick_identity`] (which trusted any non-empty file title,
-/// even when no season was found). Today's `pick_identity` requires
-/// a season-marked file parse and falls back to the torrent name —
-/// this self-heal back-applies the same rule to rows already on disk.
+/// Boot/periodic repair for TV collections whose identity was derived
+/// from a low-signal source: a junk file-leaf parse by an older
+/// [`pick_identity`] ("Silicon Valley - 1x01 - Minimum Viable Product
+/// Multi Papaya"), or a truncated file title kept over a richer
+/// torrent name ("Goblin" from `Goblin S01E01.mkv` when the torrent
+/// itself is `Goblin.The.Lonely.and.Great.God.2016.…`). Re-derives the
+/// identity that today's name-first `pick_identity` would produce —
+/// by CONSENSUS over every live sibling's torrent name, so two
+/// torrents whose names yield different keys can't make the row
+/// flip-flop between backfill ticks: the winner (longest structural
+/// key, deterministic tie-break) only changes when the sibling set
+/// itself changes.
 ///
 /// Conservative on purpose:
 /// - Movies are left alone (their identity isn't affected by the
-///   `pick_identity` bug fix).
+///   `pick_identity` changes).
 /// - Skipped when the canonical key would collide with another
-///   existing TV collection (that's a merge we don't auto-resolve).
-/// - Only repairs rows whose torrent name parses with a season —
-///   without that we have no canonical key to write.
-async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
+///   existing TV collection — that's a split the same-tmdb merge
+///   sweep resolves instead (see [`merge_same_tmdb_splits`]).
+/// - Only names with a structural parse (season or year) are
+///   candidates — without that we have no clean title to write.
+/// - When the key DOES change, the collection's `tmdb_id` was
+///   resolved from the old (wrong) title: it is cleared and
+///   immediately re-resolved from the corrected identity.
+async fn heal_tv_collection_identity(pool: &SqlitePool, deps: EnrichDeps<'_>, infohash: &str) {
     let Ok(Some(torrent)) = iris_db::torrents::find_by_infohash(pool, infohash).await else {
         return;
     };
@@ -481,12 +498,14 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
     if collection.kind != "tv" {
         return;
     }
-    let Some(parsed) = filename::parse(&torrent.name) else {
+    let siblings = iris_db::torrents::list_in_collection(pool, collection_id)
+        .await
+        .unwrap_or_default();
+    // Ghost collections (every torrent GC'd) have no candidates left —
+    // keep whatever identity they died with; History still needs it.
+    let Some(parsed) = consensus_identity(siblings.iter().map(|t| t.name.as_str())) else {
         return;
     };
-    if parsed.season.is_none() {
-        return;
-    }
     // Honour the COLLECTION's anime identity, not just this torrent's name.
     // After an anime noise-split merge the surviving `anime:K` collection
     // holds non-anime-named torrents too (a `-MonoDiSC` scene release sitting
@@ -504,10 +523,10 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
     }
     // A different collection already owns the canonical key — would
     // need a torrent-migration to merge; defer instead of corrupting
-    // the existing row. debug, not warn: this is a benign, permanent
-    // state (e.g. a legacy "silicon valley s01 multi" row next to the
-    // canonical "silicon valley") re-evaluated on every backfill tick,
-    // so at warn it reprints every 5 min forever with nothing to act on.
+    // the existing row (the same-tmdb sweep folds true duplicates).
+    // debug, not warn: this is a benign, persistent state re-evaluated
+    // on every backfill tick, so at warn it reprints every 5 min
+    // forever with nothing to act on.
     if let Ok(Some(other)) =
         iris_db::collections::find_by_parsed_title(pool, &new_key, Kind::Tv).await
         && other.id != collection_id
@@ -533,13 +552,54 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, infohash: &str) {
         tracing::warn!(error = %e, collection_id = %collection_id, "heal: set_display_title failed");
         return;
     }
+    // The old tmdb_id was resolved from the old title — poison now that
+    // the identity changed. Clear it and re-resolve from the corrected
+    // display title right away (first-writer-wins semantics start over).
+    if let Err(e) = iris_db::collections::clear_tmdb_id(pool, collection_id).await {
+        tracing::warn!(error = %e, collection_id = %collection_id, "heal: clear_tmdb_id failed");
+    } else if let Ok(Some(fresh)) = iris_db::collections::get(pool, collection_id).await {
+        resolve_collection_tmdb(pool, deps, &fresh, Kind::Tv).await;
+    }
     tracing::info!(
         collection_id = %collection_id,
         old_key = %current_key,
         new_key = %new_key,
         new_display = %new_display,
-        "TV collection identity self-healed from torrent name",
+        "TV collection identity self-healed from torrent-name consensus",
     );
+}
+
+/// The identity the collection's torrent names agree on: among all
+/// structural parses (see [`is_structural`]), the one with the longest
+/// normalised key — a truncated short form ("goblin") never beats the
+/// full title ("goblin the lonely and great god") while it's still
+/// attached. Deterministic tie-break (lexicographic) so repeated runs
+/// over the same sibling set always pick the same winner.
+fn consensus_identity<'a, I>(names: I) -> Option<filename::Parsed>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut best: Option<(String, filename::Parsed)> = None;
+    for name in names {
+        let Some(p) = filename::parse(name) else {
+            continue;
+        };
+        if !is_structural(&p) {
+            continue;
+        }
+        let key = p.collection_key(true);
+        if key.is_empty() {
+            continue;
+        }
+        let wins = match &best {
+            None => true,
+            Some((bk, _)) => key.len() > bk.len() || (key.len() == bk.len() && key < *bk),
+        };
+        if wins {
+            best = Some((key, p));
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// Boot/periodic self-heal for the anime/live-action amalgam. Before
@@ -888,41 +948,57 @@ async fn heal_anime_batch_metadata(
     }
 }
 
-/// Collapse anime/live-action **noise splits**. A single show can ship under
-/// release groups that classify inconsistently — a `-Tsundere-Raws` fansub
-/// fires the offline anime gate (`anime:K` identity) while a `-MonoDiSC`
-/// scene release doesn't (plain `K` identity) — so it ends up as TWO
-/// collections with the SAME display title (the *NIPPON SANGOKU* incident:
-/// one card per release-group convention, with new episodes scattered across
-/// both). When both an `anime:K` and a plain `K` TV collection exist AND they
-/// resolve to the same non-null `tmdb_id`, they're one show: merge the plain
-/// twin INTO the anime one.
+/// Collapse SAME-ENTITY splits: two collections of the same kind that
+/// resolve to the same non-null `tmdb_id` are one entity that got two
+/// SCENE identities. Two ways this happens:
+/// - anime/live-action **noise splits** (a `-Tsundere-Raws` fansub fires
+///   the offline anime gate → `anime:K` while a `-MonoDiSC` scene release
+///   stays plain `K` — the *NIPPON SANGOKU* incident);
+/// - **naming-length splits** — one release carries the full title
+///   (`Goblin.The.Lonely.and.Great.God.2016.…`) while another ships the
+///   short form (`Goblin.S01E01.…`), yielding two keys for one show.
 ///
-/// Gated on a MATCHING, non-null tmdb id, so the *legitimate* same-title
-/// split — the anime *One Piece* vs the live-action *One Piece*, which carry
-/// DIFFERENT tmdb ids — is never collapsed. Idempotent: once the plain twin is
-/// gone the pair no longer matches and the sweep is a no-op. Runs from
-/// [`run_backfill`] (boot + every 5 min), so a re-created twin self-heals.
-async fn merge_anime_noise_splits(
+/// Winner policy, deterministic: anime side first (it carries
+/// `anilist_id` + the correct dedup space), then the longest normalised
+/// key (most-specific SCENE identity), then the older row. Gated on a
+/// MATCHING, non-null tmdb id, so the *legitimate* same-title split —
+/// the anime *One Piece* vs the live-action *One Piece*, which carry
+/// DIFFERENT tmdb ids — is never collapsed. Idempotent: once merged the
+/// group has one member and the sweep is a no-op. Runs from
+/// [`run_backfill`] (boot + every 5 min), so a re-created split self-heals.
+async fn merge_same_tmdb_splits(
     pool: &SqlitePool,
     providers: Option<&iris_providers::ProviderRegistry>,
 ) {
     let cols = match collections::list_all(pool).await {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!(error = %e, "anime merge: list_all collections failed");
+            tracing::warn!(error = %e, "same-tmdb merge: list_all collections failed");
             return;
         }
     };
-    // Kick from the anime side only — `try_merge_twin` resolves the full pair,
-    // so processing each anime collection once covers every split.
-    for anime in cols.iter().filter(|c| {
-        c.is_anime
-            && c.parsed_title_normalized
-                .as_deref()
-                .is_some_and(|k| k.starts_with("anime:"))
-    }) {
-        try_merge_twin(pool, providers, anime).await;
+    let mut by_entity: std::collections::HashMap<(String, i64), Vec<&CollectionRow>> =
+        std::collections::HashMap::new();
+    for c in &cols {
+        if let Some(tmdb) = c.tmdb_id {
+            by_entity.entry((c.kind.clone(), tmdb)).or_default().push(c);
+        }
+    }
+    for mut group in by_entity.into_values() {
+        if group.len() < 2 {
+            continue;
+        }
+        let key_len = |c: &CollectionRow| c.parsed_title_normalized.as_deref().unwrap_or("").len();
+        group.sort_by(|a, b| {
+            b.is_anime
+                .cmp(&a.is_anime)
+                .then_with(|| key_len(b).cmp(&key_len(a)))
+                .then_with(|| a.created_at.cmp(&b.created_at))
+        });
+        let (winner, losers) = group.split_first().expect("len >= 2");
+        for loser in losers {
+            merge_collection_into(pool, providers, loser, winner).await;
+        }
     }
 }
 
@@ -1016,10 +1092,10 @@ async fn merge_collection_into(
 }
 
 pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris_torrent::Engine) {
-    // Collapse any anime/live-action noise split FIRST, so the per-torrent
-    // heals below evaluate every torrent against its surviving (merged)
-    // collection identity rather than re-splitting it.
-    merge_anime_noise_splits(pool, deps.providers).await;
+    // Collapse any same-entity split FIRST, so the per-torrent heals below
+    // evaluate every torrent against its surviving (merged) collection
+    // identity rather than re-splitting it.
+    merge_same_tmdb_splits(pool, deps.providers).await;
 
     let rows = match iris_db::torrents::list_active(pool).await {
         Ok(v) => v,
@@ -1062,13 +1138,12 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
                 // display_title + re-resolve AniList off the clean title.
                 heal_anime_batch_metadata(pool, deps.anilist, &row.infohash).await;
             } else {
-                // Self-heal TV collection identity. Earlier builds picked
-                // the first file's parse without checking for a season
-                // marker, so Plex-style `NxNN` filenames produced junk
-                // `display_title` like "Silicon Valley - 1x01 - Minimum
-                // Viable Product Multi Papaya" when the torrent name
-                // (`Silicon.Valley.S01.…`) was the right answer.
-                heal_tv_collection_identity(pool, &row.infohash).await;
+                // Self-heal TV collection identity. Earlier builds keyed
+                // on the first file's parse, which leaked Plex-style junk
+                // ("Silicon Valley - 1x01 - … Multi Papaya") AND kept
+                // truncated file titles ("Goblin") over the richer torrent
+                // name. Re-derives from torrent-name consensus.
+                heal_tv_collection_identity(pool, deps, &row.infohash).await;
             }
             continue;
         }
@@ -1086,5 +1161,66 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
     }
     if done > 0 {
         tracing::info!(count = done, "collection backfill complete");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(leaf: &str) -> (usize, filename::Parsed) {
+        (0, filename::parse(leaf).expect("leaf parses"))
+    }
+
+    #[test]
+    fn tv_identity_prefers_structural_torrent_name_over_short_file_title() {
+        // The reported Goblin case: files renamed to a short form lose the
+        // disambiguating tail; the year-anchored torrent name must win.
+        let name = filename::parse(
+            "Goblin.The.Lonely.and.Great.God.2016.COMPLETE.VOSTFR.1080p.WEB.x265.OPUS-NewBe",
+        );
+        let files = vec![file("Goblin S01E01.mkv")];
+        let id = pick_identity(Kind::Tv, name.as_ref(), &files).expect("identity");
+        assert_eq!(id.title, "Goblin The Lonely and Great God");
+    }
+
+    #[test]
+    fn tv_identity_falls_back_to_files_when_name_is_junk() {
+        // c411 season packs are literally named "Saison 2": no season
+        // marker our parser reads, no year → non-structural name.
+        let name = filename::parse("Saison 2");
+        let files = vec![file("Show.Name.S02E01.1080p.WEB.x264-GRP.mkv")];
+        let id = pick_identity(Kind::Tv, name.as_ref(), &files).expect("identity");
+        assert_eq!(id.title, "Show Name");
+        assert_eq!(id.season, Some(2));
+    }
+
+    #[test]
+    fn tv_identity_ignores_plex_style_file_names() {
+        // The NxNN leaf parses without a season → its junk full-filename
+        // title must never drive identity; the season-marked name wins.
+        let name = filename::parse("Silicon.Valley.S01.MULTI.1080p.WEB.x264-GRP");
+        let files = vec![file("Silicon Valley - 1x01 - Minimum Viable Product.mkv")];
+        let id = pick_identity(Kind::Tv, name.as_ref(), &files).expect("identity");
+        assert_eq!(id.title, "Silicon Valley");
+    }
+
+    #[test]
+    fn consensus_prefers_longest_structural_key() {
+        let got = consensus_identity(
+            [
+                "Goblin.S01E05.VOSTFR.1080p.WEB.x265-A",
+                "Goblin.The.Lonely.and.Great.God.2016.COMPLETE.VOSTFR.1080p.WEB.x265.OPUS-NewBe",
+                "Saison 2",
+            ]
+            .into_iter(),
+        )
+        .expect("consensus");
+        assert_eq!(got.title, "Goblin The Lonely and Great God");
+    }
+
+    #[test]
+    fn consensus_is_none_without_a_structural_name() {
+        assert!(consensus_identity(["Saison 2"].into_iter()).is_none());
     }
 }

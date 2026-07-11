@@ -1,27 +1,51 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 
 import { Container } from "@/components/Container";
 import { HistoryList } from "@/components/HistoryList";
-import { me } from "@/lib/api";
+import { me, torrents, type HistoryItem } from "@/lib/api";
 
 // The list is virtualized, so there's no rendering reason to paginate —
 // just ask for the backend's max in one shot.
 const LIMIT = 200;
 
 /**
- * The caller's own full watch history — in-progress and completed, one row
- * per episode, including titles whose source torrent has since been
- * deleted (see `HistoryList`). Distinct from the home page's "Continue
- * watching" shelf, which only shows unfinished items and drops deleted
- * ones entirely — this is the dedicated "where was I" answer after a
- * cleanup.
+ * The caller's own full watch history, grouped by collection — including
+ * "ghost" collections whose every torrent has since been reclaimed (they
+ * stay listed under their clean title + poster; see `HistoryList`).
+ * Distinct from the home page's "Continue watching" shelf, which only
+ * shows unfinished items and drops deleted ones entirely — this is the
+ * dedicated "where was I" answer after a cleanup: headers navigate to
+ * the collection page (re-grab from the indexer offers), and GC'd rows
+ * offer "Download again" (same release → same infohash → the saved
+ * position resumes untouched).
  */
 export function HistoryPage() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ["history"],
     queryFn: () => me.history(LIMIT, 0),
+  });
+
+  const [restoringKey, setRestoringKey] = useState<string | null>(null);
+  const restore = useMutation({
+    // `canRestore` in HistoryList guarantees both source fields are set.
+    mutationFn: (it: HistoryItem) =>
+      torrents.ingest(it.source_provider!, it.source_external_id!, it.tmdb_id),
+    onSuccess: (_res, it) => {
+      void qc.invalidateQueries({ queryKey: ["history"] });
+      void qc.invalidateQueries({ queryKey: ["library"] });
+      // Straight back into playback: the stream path serves while the
+      // torrent downloads, and the stored progress row picks the resume
+      // position up — "reprend exactement où il était".
+      void navigate({
+        to: "/watch/$infohash/$idx",
+        params: { infohash: it.infohash, idx: String(it.file_idx) },
+      });
+    },
+    onSettled: () => setRestoringKey(null),
   });
 
   return (
@@ -47,6 +71,12 @@ export function HistoryPage() {
                 params: { infohash: it.infohash, idx: String(it.file_idx) },
               })
             }
+            onOpenCollection={(id) => navigate({ to: "/collection/$id", params: { id } })}
+            onRestore={(it) => {
+              setRestoringKey(`${it.infohash}:${it.file_idx}`);
+              restore.mutate(it as HistoryItem);
+            }}
+            restoringKey={restoringKey}
           />
         )}
       </div>

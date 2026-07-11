@@ -494,6 +494,25 @@ pub struct HistoryRow {
     /// `true` when the source torrent has been soft-deleted — clients show
     /// a "no longer available" state instead of a resume link.
     pub deleted: bool,
+    /// Parent collection — survives GC (torrents are only soft-deleted,
+    /// collections are never dropped), so history can stay grouped by
+    /// show/movie ("ghost collection") after a disk-reclaim pass.
+    pub collection_id: Option<Uuid>,
+    /// The collection's clean display title ("Goblin The Lonely and
+    /// Great God") — the readable label history renders instead of the
+    /// raw SCENE torrent name.
+    pub collection_title: Option<String>,
+    /// SCENE-derived (season, episode) of the exact file watched.
+    /// Present while the `episode_files` row lives (survives GC; a
+    /// manual per-torrent remove hard-deletes it).
+    pub season: Option<i64>,
+    pub episode: Option<i64>,
+    pub absolute_episode: Option<i64>,
+    /// Provenance of the source torrent — lets clients offer
+    /// "download again" on a GC'd row (same release → same infohash →
+    /// the resume position in `playback_progress` still applies).
+    pub source_provider: Option<String>,
+    pub source_external_id: Option<String>,
 }
 
 /// Full watch history for one user, newest first, paginated. Powers both
@@ -512,10 +531,17 @@ pub async fn user_history(
             c.tmdb_id as tmdb_id, \
             t.tmdb_verified, p.file_idx, \
             p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
-            c.kind as kind, (t.deleted_at IS NOT NULL) as deleted \
+            c.kind as kind, (t.deleted_at IS NOT NULL) as deleted, \
+            t.collection_id as collection_id, c.display_title as collection_title, \
+            ef.season as season, ef.episode as episode, \
+            ef.absolute_episode as absolute_episode, \
+            t.source_provider as source_provider, \
+            t.source_external_id as source_external_id \
          FROM playback_progress p \
          JOIN torrents t ON t.infohash = p.infohash \
          LEFT JOIN collections c ON c.id = t.collection_id \
+         LEFT JOIN episode_files ef \
+            ON ef.infohash = p.infohash AND ef.file_idx = p.file_idx \
          WHERE p.user_id = ?1 \
          ORDER BY p.last_watched_at DESC \
          LIMIT ?2 OFFSET ?3",
@@ -636,6 +662,74 @@ mod tests {
         assert_eq!(hist.len(), 1);
         assert!(hist[0].deleted);
         assert_eq!(hist[0].torrent_name, "Movie Night");
+    }
+
+    #[tokio::test]
+    async fn user_history_carries_collection_grouping_and_provenance_after_gc() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let t = crate::torrents::upsert(
+            &pool,
+            crate::torrents::NewTorrent {
+                infohash: Uuid::new_v4().to_string(),
+                name: "Goblin.The.Lonely.and.Great.God.2016.COMPLETE.VOSTFR.1080p".to_string(),
+                total_size_bytes: 1_000,
+                source_provider: Some("c411".to_string()),
+                source_external_id: Some("12345".to_string()),
+                added_by: user,
+            },
+        )
+        .await
+        .expect("insert torrent");
+        let col = crate::collections::find_or_create(
+            &pool,
+            "goblin the lonely and great god",
+            "Goblin The Lonely and Great God",
+            crate::collections::Kind::Tv,
+            false,
+        )
+        .await
+        .expect("collection");
+        crate::torrents::set_collection(&pool, &t.infohash, Some(col.id))
+            .await
+            .expect("attach");
+        crate::episode_files::upsert(
+            &pool,
+            crate::episode_files::UpsertEpisodeFile {
+                collection_id: col.id,
+                season: 1,
+                episode: 3,
+                infohash: t.infohash.clone(),
+                file_idx: 0,
+                derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                absolute_episode: None,
+            },
+        )
+        .await
+        .expect("episode file");
+        upsert(&pool, progress(user, t.infohash.clone(), false))
+            .await
+            .unwrap();
+
+        // GC = soft-delete only. The grouping identity (collection),
+        // episode coordinates and re-grab provenance must all survive —
+        // that's what lets History stay readable and resumable.
+        crate::torrents::soft_delete(&pool, iris_core::ids::TorrentId::from(t.id))
+            .await
+            .unwrap();
+
+        let hist = user_history(&pool, user, 10, 0).await.unwrap();
+        assert_eq!(hist.len(), 1);
+        let row = &hist[0];
+        assert!(row.deleted);
+        assert_eq!(row.collection_id, Some(col.id));
+        assert_eq!(
+            row.collection_title.as_deref(),
+            Some("Goblin The Lonely and Great God"),
+        );
+        assert_eq!((row.season, row.episode), (Some(1), Some(3)));
+        assert_eq!(row.source_provider.as_deref(), Some("c411"));
+        assert_eq!(row.source_external_id.as_deref(), Some("12345"));
     }
 
     #[tokio::test]

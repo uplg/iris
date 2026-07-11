@@ -483,6 +483,11 @@ function VirtualCollectionsGrid({
                     kind={c.kind}
                     onClick={() => onPick(c)}
                     badge={collectionBadge(c)}
+                    // Ghost = every torrent reclaimed, but the caller
+                    // watched this — kept in place, greyed. Clicking
+                    // only NAVIGATES to the collection page; any
+                    // re-download stays a deliberate user action there.
+                    className={cn(c.ghost && "opacity-55 grayscale")}
                   />
                 ))}
               </div>
@@ -524,6 +529,7 @@ function useResizeObserver(
 }
 
 function collectionSubtitle(c: CollectionListItem): string {
+  if (c.ghost) return "No longer on disk";
   const parts: string[] = [];
   if (c.kind === "tv" && c.episode_count > 0) {
     parts.push(`${c.episode_count} ep`);
@@ -535,6 +541,13 @@ function collectionSubtitle(c: CollectionListItem): string {
 }
 
 function collectionBadge(c: CollectionListItem): React.ReactNode {
+  if (c.ghost) {
+    return (
+      <Badge variant="outline" className="bg-background/70 text-[10px] shadow-md">
+        Gone
+      </Badge>
+    );
+  }
   if (c.kind === "tv" && c.episode_count > 0) {
     return (
       <Badge variant="secondary" className="text-[10px] shadow-md">

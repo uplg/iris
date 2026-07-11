@@ -7,7 +7,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "1.2.1"
+    "version": "1.3.0"
   },
   "paths": {
     "/api/admin/active-sessions": {
@@ -3852,6 +3852,10 @@
             "format": "int64",
             "description": "Distinct (season, episode) pairs we have on disk. Drives the\n\"X / Y épisodes\" subtitle on the collection card."
           },
+          "ghost": {
+            "type": "boolean",
+            "description": "`true` for a GHOST collection: every torrent was reclaimed\n(disk GC / cleanup) but the REQUESTING user has watch history\nin it. Ghosts are per-caller (nobody sees another user's\nghosts), render greyed-out, and stay navigable — the\ncollection page still lists indexer offers, so the user can\nre-grab and resume exactly where they were. Additive — older\nclients render them as ordinary (empty) cards."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -4680,6 +4684,29 @@
           "deleted"
         ],
         "properties": {
+          "absolute_episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Absolute episode number for fleuve anime (render \"Episode N\")."
+          },
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Parent collection — survives GC (collections are never dropped),\nso clients group history under the show/movie and can route to\nthe collection page even when every torrent was reclaimed (the\n\"ghost collection\" resume path). Additive — old clients ignore it."
+          },
+          "collection_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The collection's clean display title — the readable label to\nrender instead of the raw SCENE torrent name."
+          },
           "completed": {
             "type": "boolean"
           },
@@ -4692,6 +4719,13 @@
               "null"
             ],
             "format": "double"
+          },
+          "episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           },
           "file_idx": {
             "type": "integer",
@@ -4723,6 +4757,27 @@
           "position_seconds": {
             "type": "number",
             "format": "double"
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "SCENE-derived episode coordinates of the exact file watched\n(`S01E03`). Survive GC; a manual per-torrent remove drops them."
+          },
+          "source_external_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Source-torrent provenance: with both set, clients can offer\n\"Download again\" on a deleted row — re-resolving the same\nrelease yields the same infohash, so the stored resume\nposition applies untouched."
           },
           "tmdb_id": {
             "type": [
@@ -7344,6 +7399,27 @@
           "deleted"
         ],
         "properties": {
+          "absolute_episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Same additive grouping/provenance fields as `me::HistoryItem` —\nthe admin drill-down renders through the identical client list."
+          },
+          "collection_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "completed": {
             "type": "boolean"
           },
@@ -7356,6 +7432,13 @@
               "null"
             ],
             "format": "double"
+          },
+          "episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           },
           "file_idx": {
             "type": "integer",
@@ -7387,6 +7470,25 @@
           "position_seconds": {
             "type": "number",
             "format": "double"
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "source_external_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_provider": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tmdb_id": {
             "type": [

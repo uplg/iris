@@ -222,6 +222,22 @@ pub(crate) struct UserHistoryView {
     completed: bool,
     last_watched_at: chrono::DateTime<Utc>,
     deleted: bool,
+    /// Same additive grouping/provenance fields as `me::HistoryItem` —
+    /// the admin drill-down renders through the identical client list.
+    #[serde(default)]
+    collection_id: Option<Uuid>,
+    #[serde(default)]
+    collection_title: Option<String>,
+    #[serde(default)]
+    season: Option<i64>,
+    #[serde(default)]
+    episode: Option<i64>,
+    #[serde(default)]
+    absolute_episode: Option<i64>,
+    #[serde(default)]
+    source_provider: Option<String>,
+    #[serde(default)]
+    source_external_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -277,6 +293,13 @@ pub(crate) async fn user_history(
                 completed: r.completed,
                 last_watched_at: r.last_watched_at,
                 deleted: r.deleted,
+                collection_id: r.collection_id,
+                collection_title: r.collection_title,
+                season: r.season,
+                episode: r.episode,
+                absolute_episode: r.absolute_episode,
+                source_provider: r.source_provider,
+                source_external_id: r.source_external_id,
             })
             .collect(),
     ))
