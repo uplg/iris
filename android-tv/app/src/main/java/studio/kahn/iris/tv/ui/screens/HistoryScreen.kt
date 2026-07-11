@@ -505,7 +505,8 @@ private fun SoloRow(
             onClick = {
                 when {
                     playable -> onPlay()
-                    openable -> group.collectionId?.let(onOpenCollection)
+                    // `openable` smart-casts `collectionId` to non-null.
+                    openable -> onOpenCollection(group.collectionId)
                 }
             },
             modifier = Modifier.weight(1f),

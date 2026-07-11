@@ -336,7 +336,10 @@ private fun LibraryGridCard(
     // this (the server only sends *your* ghosts). Kept in the grid,
     // greyed. Clicking only NAVIGATES to the collection page — any
     // re-download stays a deliberate user action there.
-    val subtitle = if (collection.ghost) {
+    // The generated field is `Boolean?` (additive spec field, absent on
+    // older payloads) — absent means "not a ghost".
+    val isGhost = collection.ghost == true
+    val subtitle = if (isGhost) {
         "No longer on disk"
     } else {
         buildString {
@@ -369,9 +372,9 @@ private fun LibraryGridCard(
                         contentDescription = title,
                         modifier = Modifier
                             .fillMaxSize()
-                            .let { if (collection.ghost) it.alpha(0.45f) else it },
+                            .let { if (isGhost) it.alpha(0.45f) else it },
                         contentScale = ContentScale.Crop,
-                        colorFilter = if (collection.ghost) {
+                        colorFilter = if (isGhost) {
                             ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
                         } else {
                             null
@@ -387,14 +390,14 @@ private fun LibraryGridCard(
                             title,
                             style = MaterialTheme.typography.headlineSmall,
                             color = androidx.compose.ui.graphics.Color.White.copy(
-                                alpha = if (collection.ghost) 0.5f else 0.92f,
+                                alpha = if (isGhost) 0.5f else 0.92f,
                             ),
                             maxLines = 3,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
-                if (collection.ghost) {
+                if (isGhost) {
                     Surface(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
@@ -417,7 +420,7 @@ private fun LibraryGridCard(
                 Text(
                     title,
                     style = MaterialTheme.typography.titleSmall,
-                    color = if (collection.ghost) IrisColors.MutedForeground else androidx.compose.ui.graphics.Color.Unspecified,
+                    color = if (isGhost) IrisColors.MutedForeground else androidx.compose.ui.graphics.Color.Unspecified,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )

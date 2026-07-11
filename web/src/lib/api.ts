@@ -516,6 +516,9 @@ export type LibraryResponse = components["schemas"]["LibraryResponse"];
 export type CollectionEpisodeEntry = components["schemas"]["EpisodeEntry"];
 export type SeasonPackEntry = components["schemas"]["SeasonPackEntry"];
 export type AvailableEpisodeEntry = components["schemas"]["AvailableEpisodeEntry"];
+/** A reclaimed (GC'd) release with surviving indexer provenance —
+ *  re-ingestable via {@link torrents.ingest} for the ghost-resume path. */
+export type GoneReleaseEntry = components["schemas"]["GoneReleaseEntry"];
 export type CollectionDetail = components["schemas"]["CollectionDetail"];
 
 export const library = {

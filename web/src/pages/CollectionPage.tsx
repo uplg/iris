@@ -11,9 +11,11 @@ import {
   library,
   me,
   tmdbImage,
+  torrents,
   type AvailableEpisodeEntry,
   type CollectionDetail,
   type CollectionEpisodeEntry,
+  type GoneReleaseEntry,
 } from "@/lib/api";
 import { formatSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -122,8 +124,81 @@ export function CollectionPage() {
             }
           />
         )}
+        {(data.gone_releases?.length ?? 0) > 0 && (
+          <GoneReleases collectionId={id} releases={data.gone_releases ?? []} />
+        )}
       </Container>
     </div>
+  );
+}
+
+/**
+ * "Previously on disk" — the ghost-resume surface. Every release the GC
+ * (or a cleanup) reclaimed but whose indexer provenance survived gets a
+ * "Download again" row. This is what makes a ghost MOVIE recoverable
+ * from its collection page (TV also re-grabs via the episode offers):
+ * re-ingesting the same release yields the same infohash, so saved
+ * positions resume untouched. For a single-file movie the page's
+ * auto-redirect to /watch kicks in as soon as the refetch sees the
+ * resurrected torrent — straight back into playback.
+ */
+function GoneReleases({
+  collectionId,
+  releases,
+}: {
+  collectionId: string;
+  releases: GoneReleaseEntry[];
+}) {
+  const qc = useQueryClient();
+  const [busyInfohash, setBusyInfohash] = useState<string | null>(null);
+  const regrab = useMutation({
+    mutationFn: (r: GoneReleaseEntry) => torrents.ingest(r.source_provider, r.source_external_id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+      void qc.invalidateQueries({ queryKey: ["library"] });
+      void qc.invalidateQueries({ queryKey: ["history"] });
+    },
+    onSettled: () => setBusyInfohash(null),
+  });
+
+  return (
+    <section className="glass mt-8 grid gap-3 rounded-xl p-4">
+      <span className="eyebrow">Previously on disk ({releases.length})</span>
+      <ul className="grid gap-1">
+        {releases.map((r) => {
+          const busy = busyInfohash === r.infohash;
+          return (
+            <li key={r.infohash} className="flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm">
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-mono text-xs" title={r.name}>
+                  {r.name}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {formatSize(r.total_size_bytes)} · via {r.source_provider}
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => {
+                  setBusyInfohash(r.infohash);
+                  regrab.mutate(r);
+                }}
+                title="Re-download this exact release — your watch position is kept"
+              >
+                {busy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+                {busy ? "Restoring…" : "Download again"}
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

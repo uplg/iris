@@ -30,6 +30,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -62,6 +63,8 @@ import studio.kahn.iris.tv.data.AvailableEpisodeEntry
 import studio.kahn.iris.tv.data.CollectionDetail
 import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.FileEntry
+import studio.kahn.iris.tv.data.GoneReleaseEntry
+import studio.kahn.iris.tv.data.ResolveBody
 import studio.kahn.iris.tv.data.SeasonPackEntry
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
@@ -110,6 +113,9 @@ fun CollectionScreen(
     var detail by remember(collectionId) { mutableStateOf<CollectionDetail?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedSeason by rememberSaveable(collectionId) { mutableIntStateOf(-1) }
+    // Infohash of the reclaimed release currently being re-ingested via
+    // "Download again" — drives the row's busy state, one at a time.
+    var restoringInfohash by remember { mutableStateOf<String?>(null) }
 
     suspend fun reload() {
         val url = container.sessionStore.serverUrl.first() ?: run {
@@ -365,9 +371,103 @@ fun CollectionScreen(
             }
         }
 
+        // "Previously on disk" — the ghost-resume surface, movies
+        // especially (TV also re-grabs via the episode offers above).
+        // Re-ingesting the same release yields the same infohash, so the
+        // saved playback position resumes untouched. Nothing automatic:
+        // the download only starts on the button press.
+        val goneReleases = d.goneReleases.orEmpty()
+        if (goneReleases.isNotEmpty()) {
+            item(key = "gone-header") {
+                Eyebrow(
+                    "Previously on disk",
+                    modifier = Modifier.padding(
+                        horizontal = layout.gutterHorizontal,
+                        vertical = Spacing.md,
+                    ),
+                )
+            }
+            items(goneReleases, key = { "gone:${it.infohash}" }) { r ->
+                Box(
+                    Modifier.padding(
+                        horizontal = layout.gutterHorizontal,
+                        vertical = Spacing.xs,
+                    ),
+                ) {
+                    GoneReleaseRow(
+                        release = r,
+                        busy = restoringInfohash == r.infohash,
+                        enabled = restoringInfohash == null,
+                        onDownloadAgain = {
+                            scope.launch {
+                                restoringInfohash = r.infohash
+                                try {
+                                    val url = container.sessionStore.serverUrl.first()
+                                        ?: run { error = "Not signed in"; return@launch }
+                                    container.apiFor(url).ingest(
+                                        ResolveBody(
+                                            providerId = r.sourceProvider,
+                                            externalId = r.sourceExternalId,
+                                            tmdbId = d.tmdbId,
+                                        ),
+                                    )
+                                    reload()
+                                } catch (e: Exception) {
+                                    error = e.message ?: "Restore failed"
+                                } finally {
+                                    restoringInfohash = null
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+
         item(key = "trailing") {
             Box(Modifier.padding(vertical = Spacing.xl))
         }
+    }
+}
+
+/** One reclaimed release: SCENE name + size + provider, and the
+ *  "Download again" action. Mirrors the web's `GoneReleases` rows. */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun GoneReleaseRow(
+    release: GoneReleaseEntry,
+    busy: Boolean,
+    enabled: Boolean,
+    onDownloadAgain: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                release.name,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "${formatFileSize(release.totalSizeBytes)} · via ${release.sourceProvider}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        IrisButton(
+            if (busy) "Restoring…" else "Download again",
+            onDownloadAgain,
+            variant = IrisButtonVariant.Ghost,
+            enabled = enabled && !busy,
+        )
     }
 }
 

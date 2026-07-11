@@ -5,6 +5,53 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-07-12
+
+### Added
+
+- **Ghost collections — nothing you watched ever vanishes.** When the
+  disk-reclaim GC (or a cleanup) removes every torrent of a show or movie
+  you've watched, its collection now stays visible **to you** (ghosts are
+  scoped to each user's own watch history — nobody sees anyone else's):
+  - **Library** keeps the card in place, greyed out with a "Gone" badge and
+    a "No longer on disk" caption. Clicking it just opens the collection
+    page — re-downloading stays a deliberate action there.
+  - **Watch history** (web + Android TV) is now grouped by collection:
+    poster + clean title as a header, one `S01E03 · 43%` line per episode,
+    instead of a flat log of raw release names. Ghost collections stay
+    listed and navigable.
+  - **"Download again"** on a reclaimed history entry re-grabs the exact
+    same release — same infohash, so playback resumes precisely where you
+    left off, while the download streams in.
+- **Android TV search: recent searches + TMDB suggestions.** The empty
+  search screen offers your last 3 searches as one-click chips, and while
+  you type, live TMDB suggestions (poster, title, year, TV/Movie) appear
+  under the input — picking one searches the indexers with the canonical
+  title and aligns the Type filter.
+- **Theater mode on the web player.** The "Theater" button (or the `t`
+  key) stretches the player across the full viewport width; the
+  episodes/files panel restacks below it, like the responsive layout. The
+  choice is remembered per device.
+
+### Fixed
+
+- **Wrong posters when a release hides its real title in the file names.**
+  Collection identity now prefers the torrent's own name whenever it
+  carries a structural marker (season or year) — a release like
+  `Goblin.The.Lonely.and.Great.God.2016.…` whose files are just
+  `Goblin S01E01.mkv` no longer resolves to the wrong TMDB entry.
+  Existing mis-titled collections self-heal at boot (identity re-derived
+  from the torrent names by consensus, poster re-resolved), and two
+  collections that resolve to the same TMDB entity are automatically
+  merged into one.
+
+### Changed
+
+- **Dependency refresh**: Compose BOM 2026.06.01 (picks up the upstream
+  `ui-text` crash fix for long `maxLines` texts), `dompurify` 3.4.12,
+  Rust lockfile patch bumps. `time` stays capped (`cookie` 0.18.1 still
+  incompatible with 0.3.52+), api-gen stays on TypeScript 6 by design.
+
 ## [1.2.1] - 2026-07-06
 
 ### Added
@@ -487,6 +534,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
 [Unreleased]: https://github.com/uplg/iris/compare/1.2.1...HEAD
+[1.3.0]: https://github.com/uplg/iris/compare/1.2.1...1.3.0
 [1.2.1]: https://github.com/uplg/iris/compare/1.2.0...1.2.1
 [1.2.0]: https://github.com/uplg/iris/compare/1.1.0...1.2.0
 [0.9.1]: https://github.com/uplg/iris/compare/0.9.0...0.9.1

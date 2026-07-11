@@ -803,10 +803,11 @@ private fun HomeTopBar(
 
 /**
  * Full-bleed resume billboard — the latest Continue-Watching pick.
- * 1:1 port of the web `ResumeHero` (`web/src/pages/HomePage.tsx`): backdrop
- * at 50% opacity under bottom + left scrims, eyebrow "Continue tonight ·
- * Resume", display title, dotted meta, overview, a Resume CTA, and a thin
- * progress bar with "Xh Ym left". TMDB art is only pulled once the server
+ * Port of the web `ResumeHero` (`web/src/pages/HomePage.tsx`): backdrop
+ * at 50% opacity under bottom + left scrims, display title, dotted meta,
+ * overview, a Resume CTA, and a thin progress bar with "Xh Ym left" (the
+ * web's "Continue tonight · Resume" eyebrow is dropped here — redundant
+ * with the CTA on a 10-foot UI). TMDB art is only pulled once the server
  * has *verified* the match — a wrong backdrop on the giant hero is worse
  * than the bare release name.
  */
@@ -892,13 +893,10 @@ private fun ResumeHero(
                 Modifier.fillMaxWidth(0.62f),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Eyebrow("Continue tonight", color = IrisColors.Brand)
-                    Eyebrow("· Resume")
-                }
+                // The "Continue tonight · Resume" eyebrow said nothing the
+                // Resume CTA doesn't — dropped, but its slot height is kept
+                // so the bottom-anchored hero lockup doesn't shift.
+                Spacer(Modifier.height(16.dp))
                 Text(
                     title,
                     style = MaterialTheme.typography.displaySmall,

@@ -13,7 +13,7 @@ nav-compose = "2.9.8"
 # ----- Compose -----
 # BOM pins the whole compose.* family; only override individual artifacts if
 # you really need a newer one. Compose-for-TV lives outside the BOM.
-compose-bom = "2026.06.00"
+compose-bom = "2026.06.01"
 # Note: tv-foundation hasn't shipped a 1.1.0 stable as of writing — the
 # androidx.tv 1.1 release line is `tv-material` only. Stay on 1.0.0 here.
 compose-tv-foundation = "1.0.0"

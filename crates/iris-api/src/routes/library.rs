@@ -226,6 +226,28 @@ pub(crate) struct CollectionDetail {
     /// `0` for movies / no-SCENE collections.
     #[serde(default)]
     has_new_since_last_visit: u32,
+    /// Releases that used to be on disk (reclaimed by the GC / a
+    /// cleanup) and can be re-grabbed from their source indexer.
+    /// This is the ghost-resume path for MOVIES — TV additionally has
+    /// `available_episodes` — but is populated for both kinds:
+    /// re-resolving the same release yields the same infohash, so any
+    /// saved playback position resumes untouched. Only releases whose
+    /// source provenance survived are listed (the actionable ones).
+    /// Additive — older clients ignore it.
+    #[serde(default)]
+    gone_releases: Vec<GoneReleaseEntry>,
+}
+
+/// One reclaimed release the user can re-download from the collection
+/// page. `source_provider` + `source_external_id` feed the existing
+/// ingest endpoint (`POST /api/torrents`) unchanged.
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct GoneReleaseEntry {
+    infohash: String,
+    name: String,
+    source_provider: String,
+    source_external_id: String,
+    total_size_bytes: i64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -433,6 +455,25 @@ pub(crate) async fn collection_detail(
         _ => (None, None),
     };
 
+    // Reclaimed releases with surviving provenance — the "Download
+    // again" list. Movies especially: without this a ghost movie
+    // collection is a dead end (no available_episodes to re-grab).
+    let gone_releases = iris_db::torrents::list_deleted_in_collection(state.db(), id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|t| match (t.source_provider, t.source_external_id) {
+            (Some(provider), Some(external_id)) => Some(GoneReleaseEntry {
+                infohash: t.infohash,
+                name: t.name,
+                source_provider: provider,
+                source_external_id: external_id,
+                total_size_bytes: t.total_size_bytes,
+            }),
+            _ => None,
+        })
+        .collect();
+
     let numbering = derive_numbering(&episodes, &available_episodes);
     Ok(Json(CollectionDetail {
         id: collection.id,
@@ -449,6 +490,7 @@ pub(crate) async fn collection_detail(
         available_episodes,
         season_packs,
         has_new_since_last_visit,
+        gone_releases,
     }))
 }
 

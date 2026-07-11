@@ -343,3 +343,28 @@ pub async fn list_in_collection(
     .fetch_all(pool)
     .await
 }
+
+/// The collection's RECLAIMED torrents (soft-deleted by the GC / a
+/// cleanup), newest deletion first. Powers the collection page's
+/// "Download again" list — the ghost-resume path for movies, which
+/// have no `available_episodes` offers to re-grab from. Callers keep
+/// only rows with source provenance (the actionable ones).
+pub async fn list_deleted_in_collection(
+    pool: &SqlitePool,
+    collection_id: Uuid,
+) -> Result<Vec<TorrentRow>, sqlx::Error> {
+    sqlx::query_as::<_, TorrentRow>(
+        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
+         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
+         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
+         FROM torrents t \
+         JOIN users u ON u.id = t.added_by \
+         LEFT JOIN collections c ON c.id = t.collection_id \
+         WHERE t.collection_id = ?1 AND t.deleted_at IS NOT NULL \
+         ORDER BY t.deleted_at DESC",
+    )
+    .bind(collection_id)
+    .fetch_all(pool)
+    .await
+}

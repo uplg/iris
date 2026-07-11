@@ -3782,6 +3782,13 @@
             },
             "description": "Merged episode list across every torrent in the collection.\nEmpty for movie-kind collections (which usually have a single\ntorrent + a single video file)."
           },
+          "gone_releases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GoneReleaseEntry"
+            },
+            "description": "Releases that used to be on disk (reclaimed by the GC / a\ncleanup) and can be re-grabbed from their source indexer.\nThis is the ghost-resume path for MOVIES — TV additionally has\n`available_episodes` — but is populated for both kinds:\nre-resolving the same release yields the same infohash, so any\nsaved playback position resumes untouched. Only releases whose\nsource provenance survived are listed (the actionable ones).\nAdditive — older clients ignore it."
+          },
           "has_new_since_last_visit": {
             "type": "integer",
             "format": "int32",
@@ -4637,6 +4644,35 @@
             "items": {
               "$ref": "#/components/schemas/GenreOption"
             }
+          }
+        }
+      },
+      "GoneReleaseEntry": {
+        "type": "object",
+        "description": "One reclaimed release the user can re-download from the collection\npage. `source_provider` + `source_external_id` feed the existing\ningest endpoint (`POST /api/torrents`) unchanged.",
+        "required": [
+          "infohash",
+          "name",
+          "source_provider",
+          "source_external_id",
+          "total_size_bytes"
+        ],
+        "properties": {
+          "infohash": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source_external_id": {
+            "type": "string"
+          },
+          "source_provider": {
+            "type": "string"
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
