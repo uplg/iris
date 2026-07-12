@@ -176,7 +176,7 @@ export function LivePlayer({
           <div className="grid justify-items-center gap-3">
             <p className="font-medium text-white">Stream unavailable</p>
             <p className="max-w-sm text-sm text-white/70">
-              {channelName} isn't reachable right now — the channel may be geo-blocked, offline, or
+              {channelName} isn't reachable right now. The channel may be geo-blocked, offline, or
               its source is down.
             </p>
             <button

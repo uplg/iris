@@ -401,6 +401,13 @@ export const me = {
     infohash?: string;
     file_idx?: number;
   }) => api.post<void>("/me/continue-watching/dismiss", body),
+  /** Hide a Gone entry, per-user and non-destructive (History keeps every
+   *  row). Pass `collection_id` to hide a whole ghost collection from the
+   *  Library grid, or `infohash` to hide one reclaimed release from the
+   *  collection page. Newer activity (re-reclaim / newer watch) makes the
+   *  dismissal stale and the entry returns. */
+  dismissGone: (body: { collection_id?: string | null; infohash?: string }) =>
+    api.post<void>("/me/gone/dismiss", body),
   /** Full watch history — in-progress AND completed, survives deletion of
    *  the source torrent (see {@link HistoryItem}). */
   history: (limit?: number, offset?: number) =>
@@ -517,8 +524,14 @@ export type CollectionEpisodeEntry = components["schemas"]["EpisodeEntry"];
 export type SeasonPackEntry = components["schemas"]["SeasonPackEntry"];
 export type AvailableEpisodeEntry = components["schemas"]["AvailableEpisodeEntry"];
 /** A reclaimed (GC'd) release with surviving indexer provenance —
- *  re-ingestable via {@link torrents.ingest} for the ghost-resume path. */
+ *  re-ingestable via {@link torrents.ingest} for the ghost-resume path.
+ *  Carries the caller's watch state (`watched`, resume position). */
 export type GoneReleaseEntry = components["schemas"]["GoneReleaseEntry"];
+/** The ghost twin of {@link CollectionEpisodeEntry}: a reclaimed
+ *  (S, E) row with the caller's watch state — merged into the episode
+ *  list so a ghost collection renders as it did before the GC, with
+ *  "Download again" instead of Play. */
+export type GoneEpisodeEntry = components["schemas"]["GoneEpisodeEntry"];
 export type CollectionDetail = components["schemas"]["CollectionDetail"];
 
 export const library = {

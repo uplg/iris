@@ -507,6 +507,10 @@ pub async fn list_summaries(pool: &SqlitePool) -> Result<Vec<CollectionSummary>,
 /// without leaking other users' history (each user only ever sees the
 /// ghosts they themselves watched; the shared live listing stays
 /// [`list_summaries`]). Ordered by the user's most recent watch.
+///
+/// Ghosts the caller dismissed ([`dismiss_ghost`]) are hidden while the
+/// dismissal is at-or-after their latest watch in the collection —
+/// watching anything newer makes it stale and the card returns.
 pub async fn list_ghost_summaries_for_user(
     pool: &SqlitePool,
     user_id: iris_core::ids::UserId,
@@ -529,6 +533,13 @@ pub async fn list_ghost_summaries_for_user(
              SELECT 1 FROM playback_progress p \
              JOIN torrents pt ON pt.infohash = p.infohash \
              WHERE p.user_id = ?1 AND pt.collection_id = c.id) \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM ghost_dismissed gh \
+             WHERE gh.user_id = ?1 AND gh.collection_id = c.id \
+               AND gh.dismissed_at >= (SELECT MAX(p3.last_watched_at) \
+                                       FROM playback_progress p3 \
+                                       JOIN torrents pt3 ON pt3.infohash = p3.infohash \
+                                       WHERE p3.user_id = ?1 AND pt3.collection_id = c.id)) \
          ORDER BY (SELECT MAX(p2.last_watched_at) FROM playback_progress p2 \
                    JOIN torrents pt2 ON pt2.infohash = p2.infohash \
                    WHERE p2.user_id = ?1 AND pt2.collection_id = c.id) DESC",
@@ -536,6 +547,30 @@ pub async fn list_ghost_summaries_for_user(
     .bind(user)
     .fetch_all(pool)
     .await
+}
+
+/// Hide a whole ghost collection from the CALLER's Library grid.
+/// Timestamped like `cw_dismissed`: watching anything newer in the
+/// collection makes the dismissal stale and the ghost card returns.
+/// The collection page itself stays reachable (History still lists it),
+/// and `playback_progress` is never touched.
+pub async fn dismiss_ghost(
+    pool: &SqlitePool,
+    user_id: iris_core::ids::UserId,
+    collection_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query(
+        "INSERT INTO ghost_dismissed (user_id, collection_id, dismissed_at) \
+         VALUES (?1, ?2, ?3) \
+         ON CONFLICT(user_id, collection_id) DO UPDATE SET dismissed_at = excluded.dismissed_at",
+    )
+    .bind(user)
+    .bind(collection_id)
+    .bind(chrono::Utc::now())
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -687,6 +722,43 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+
+        // Dismissal hides the ghost card for the watcher…
+        dismiss_ghost(&pool, watcher, col.id).await.unwrap();
+        assert!(
+            list_ghost_summaries_for_user(&pool, watcher)
+                .await
+                .unwrap()
+                .is_empty(),
+            "dismissed ghost leaves the Library grid",
+        );
+
+        // …until newer watch activity makes it stale (same Netflix-style
+        // staleness as cw_dismissed): re-watching bumps last_watched_at
+        // past dismissed_at and the ghost returns.
+        crate::playback::upsert(
+            &pool,
+            crate::playback::UpsertProgress {
+                user_id: watcher,
+                infohash: t.infohash.clone(),
+                file_idx: 0,
+                position_seconds: 300.0,
+                duration_seconds: Some(1_200.0),
+                audio_track_idx: None,
+                subtitle_track_idx: None,
+                completed: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            list_ghost_summaries_for_user(&pool, watcher)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "newer watch activity resurfaces the dismissed ghost",
         );
     }
 }

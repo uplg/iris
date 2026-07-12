@@ -481,7 +481,11 @@ private fun HomeContent(
 
         if (continueWatching.isNotEmpty()) {
             item(key = "shelf-cw") {
-                Shelf(title = "Continue Watching", eyebrow = "For you") {
+                // Shelf eyebrows that only restated the title ("For
+                // you", "On disk", …) are dropped across the home
+                // page; the ones that carried a count keep just the
+                // count.
+                Shelf(title = "Continue Watching") {
                     items(continueWatching, key = { "${it.infohash}:${it.fileIdx}" }) { item ->
                         ContinueWatchingCard(
                             container = container,
@@ -506,7 +510,7 @@ private fun HomeContent(
                 // header icon. One horizontal row doesn't scale to a big lib.
                 Shelf(
                     title = "My Library",
-                    eyebrow = "On disk · ${collections.size}",
+                    eyebrow = "${collections.size} titles",
                     onSeeAll = onOpenLibrary,
                 ) {
                     items(collections.take(12), key = { it.id }) { c ->
@@ -529,7 +533,7 @@ private fun HomeContent(
 
         if (watchlist.isNotEmpty()) {
             item(key = "shelf-watchlist") {
-                Shelf(title = "My Watchlist", eyebrow = "Following · ${watchlist.size}") {
+                Shelf(title = "My Watchlist", eyebrow = "${watchlist.size} series") {
                     items(watchlist, key = { it.id }) { w ->
                         // Post-0.4: the Watchlist item's `id` IS
                         // the collection id (sourced from
@@ -554,7 +558,6 @@ private fun HomeContent(
                 item(key = "shelf-${shelf.key}") {
                     Shelf(
                         title = shelf.title,
-                        eyebrow = "Recommended",
                         onSeeAll = onOpenForYou,
                     ) {
                         items(shelf.items, key = { it.catalogId }) { card ->
@@ -576,7 +579,7 @@ private fun HomeContent(
 
         if (downloading.isNotEmpty()) {
             item(key = "shelf-downloading") {
-                Shelf(title = "Downloading", eyebrow = "Active · ${downloading.size}") {
+                Shelf(title = "Downloading", eyebrow = "${downloading.size} active") {
                     items(downloading, key = { it.infohash }) { t ->
                         DownloadingCard(
                             container = container,

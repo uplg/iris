@@ -506,7 +506,12 @@ pub fn parse(filename: &str) -> Option<Parsed> {
     // Find the structural boundary that separates the title from the
     // metadata tail. Priority: SXXEXX > year > quality > end-of-stem.
     let (title_end_byte, season, episode, year) = find_title_boundary(stem);
-    let mut title = humanise(&stem[..title_end_byte]);
+    // Leading "[GROUP]" prefixes ("[H4KIG] Ted 2 (2015)…") are release
+    // metadata, not title — left in place they poison the collection
+    // key AND the TMDB lookup (no poster). The anime fallback below
+    // handles its own bracketed shape; this covers the SE/year/quality-
+    // bounded parses that never reach it.
+    let mut title = humanise(strip_leading_groups(&stem[..title_end_byte]));
 
     // Anime fallback (absolute numbering): only when this is neither a
     // SXXEXX TV release nor a year-tagged movie, and only for the
@@ -540,6 +545,21 @@ pub fn parse(filename: &str) -> Option<Parsed> {
         group,
         absolute_episode,
     })
+}
+
+/// Strip leading `[…]` bracket groups (and the separators around them)
+/// from a title region. `"[H4KIG] Ted 2"` → `"Ted 2"`. Falls back to
+/// the input when stripping would leave nothing (a stem that is ONLY
+/// bracket groups is better kept verbatim than emptied).
+fn strip_leading_groups(s: &str) -> &str {
+    let mut rest = s.trim_start();
+    while let Some(tail) = rest.strip_prefix('[') {
+        match tail.find(']') {
+            Some(close) => rest = tail[close + 1..].trim_start_matches(['.', '_', ' ', '-']),
+            None => break,
+        }
+    }
+    if rest.trim().is_empty() { s } else { rest }
 }
 
 struct AnimeMatch {
@@ -1342,6 +1362,32 @@ mod tests {
         let name = "Some.Daily.Show.S01E812.1080p.WEB.x264-GRP.mkv";
         let p = parse(name).unwrap();
         assert!(!looks_like_anime_release(name, p.season, p.episode));
+    }
+
+    #[test]
+    fn leading_bracket_group_is_stripped_from_titles() {
+        // Regression (prod "[H4KIG] Ted 2 (2015)" collection): a leading
+        // "[GROUP]" survives the year/SE boundary because only the anime
+        // fallback (gated on no-year, no-SE) knew how to strip brackets.
+        // It must never reach `display_title` — it poisons the collection
+        // key and the TMDB lookup, which breaks the poster.
+        let movie = parse("[H4KIG] Ted 2 (2015) MULTI VFF 1080p BluRay x265-H4KIG.mkv").unwrap();
+        assert_eq!(movie.title, "Ted 2");
+        assert_eq!(movie.year, Some(2015));
+        assert_eq!(movie.display_with_year(false), "Ted 2 (2015)");
+
+        let episode = parse("[H4KIG] The Rig S02E03 MULTI 1080p WEB x265.mkv").unwrap();
+        assert_eq!(episode.title, "The Rig");
+        assert_eq!((episode.season, episode.episode), (Some(2), Some(3)));
+
+        // The anime shape keeps working through its dedicated path.
+        let anime = parse("[SubsPlease] Sousou no Frieren - 05 (1080p).mkv").unwrap();
+        assert_eq!(anime.title, "Sousou no Frieren");
+        assert_eq!(anime.absolute_episode, Some(5));
+
+        // A stem that is ONLY a bracket group keeps its verbatim shape
+        // rather than parsing to an empty title.
+        assert!(parse("[weird-name].mkv").is_some());
     }
 
     #[test]

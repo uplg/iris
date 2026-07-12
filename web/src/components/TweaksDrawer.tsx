@@ -77,7 +77,7 @@ export function TweaksDrawer({ open, onClose }: { open: boolean; onClose: () => 
         </Field>
 
         <p className="text-[11.5px] leading-relaxed text-fg-dim">
-          Persisted preferences — applied across every page of Iris.
+          Persisted preferences, applied across every page of Iris.
         </p>
       </div>
     </div>

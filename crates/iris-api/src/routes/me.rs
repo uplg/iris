@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(dismiss_continue_watching),
         )
         .route("/history", get(history))
+        .route("/gone/dismiss", axum::routing::post(dismiss_gone))
         .route("/watchlist", get(watchlist))
         .route("/password", axum::routing::post(change_password))
         .route("/display-name", axum::routing::post(change_display_name))
@@ -387,6 +388,61 @@ pub(crate) async fn dismiss_continue_watching(
     } else {
         return Err(ApiError::BadRequest(
             "need collection_id or (infohash, file_idx)".into(),
+        ));
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, serde::Deserialize, ToSchema)]
+pub(crate) struct DismissGoneRequest {
+    /// Whole ghost collection to hide from the caller's Library grid
+    /// (the greyed-out "GONE" card). When set, `infohash` is ignored.
+    collection_id: Option<uuid::Uuid>,
+    /// One reclaimed release to hide from the caller's gone rows on the
+    /// collection page (both the per-episode ghost rows and the raw
+    /// release row).
+    infohash: Option<String>,
+}
+
+/// Per-user, timestamped, never destructive: `playback_progress` (and
+/// therefore the History page) is untouched, and newer activity makes
+/// the dismissal stale so the entry returns — a release re-reclaimed
+/// after a fresh download reappears, and a ghost collection the user
+/// re-watches comes back to their Library.
+#[utoipa::path(
+    post,
+    path = "/api/me/gone/dismiss",
+    request_body = DismissGoneRequest,
+    responses(
+        (status = 204, description = "Hidden from the caller's Gone surfaces"),
+        (status = 400, description = "Neither collection_id nor infohash provided"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    tag = "me",
+)]
+pub(crate) async fn dismiss_gone(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<DismissGoneRequest>,
+) -> ApiResult<axum::http::StatusCode> {
+    if let Some(cid) = body.collection_id {
+        // Existence guard: a stale id has nothing to hide, and inserting
+        // it would trip the `ghost_dismissed` → `collections` foreign key.
+        if iris_db::collections::get(state.db(), cid).await?.is_some() {
+            iris_db::collections::dismiss_ghost(state.db(), user.id, cid).await?;
+        }
+    } else if let Some(infohash) = body.infohash {
+        let infohash = infohash.to_ascii_lowercase();
+        // Same guard for the `gone_release_dismissed` → `torrents` FK.
+        if iris_db::torrents::find_by_infohash(state.db(), &infohash)
+            .await?
+            .is_some()
+        {
+            iris_db::torrents::dismiss_gone_release(state.db(), user.id, &infohash).await?;
+        }
+    } else {
+        return Err(ApiError::BadRequest(
+            "need collection_id or infohash".into(),
         ));
     }
     Ok(axum::http::StatusCode::NO_CONTENT)

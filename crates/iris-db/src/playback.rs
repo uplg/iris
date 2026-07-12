@@ -553,6 +553,44 @@ pub async fn user_history(
     .await
 }
 
+/// One playback row of the caller on a RECLAIMED (soft-deleted) torrent
+/// of a collection. Enriches the collection page's gone-release rows
+/// (movies / packs without `episode_files`) with "already watched"
+/// state — the per-episode gone rows get theirs from
+/// [`crate::episode_files::list_gone_for_collection`] instead.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GoneWatchRow {
+    pub infohash: String,
+    pub file_idx: i64,
+    pub position_seconds: f64,
+    pub duration_seconds: Option<f64>,
+    pub completed: bool,
+    pub last_watched_at: DateTime<Utc>,
+}
+
+/// The caller's playback rows on the collection's reclaimed torrents,
+/// newest first (so `find`-by-infohash yields the most recent file's
+/// state — the meaningful one for a single-file movie).
+pub async fn watch_state_for_deleted_in_collection(
+    pool: &SqlitePool,
+    user_id: UserId,
+    collection_id: Uuid,
+) -> Result<Vec<GoneWatchRow>, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query_as::<_, GoneWatchRow>(
+        "SELECT p.infohash, p.file_idx, p.position_seconds, p.duration_seconds, \
+            p.completed, p.last_watched_at \
+         FROM playback_progress p \
+         JOIN torrents t ON t.infohash = p.infohash \
+         WHERE p.user_id = ?1 AND t.collection_id = ?2 AND t.deleted_at IS NOT NULL \
+         ORDER BY p.last_watched_at DESC",
+    )
+    .bind(user)
+    .bind(collection_id)
+    .fetch_all(pool)
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,6 +768,185 @@ mod tests {
         assert_eq!((row.season, row.episode), (Some(1), Some(3)));
         assert_eq!(row.source_provider.as_deref(), Some("c411"));
         assert_eq!(row.source_external_id.as_deref(), Some("12345"));
+    }
+
+    /// Release-level Gone dismissal: hides the row for the dismissing
+    /// user only, and goes stale when the release is re-ingested then
+    /// reclaimed AGAIN (newer `deleted_at` → the row returns).
+    #[tokio::test]
+    async fn gone_release_dismissal_is_per_user_and_stale_on_redelete() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let stranger = make_user(&pool).await;
+        let t = crate::torrents::upsert(
+            &pool,
+            crate::torrents::NewTorrent {
+                infohash: Uuid::new_v4().to_string(),
+                name: "Movie.2024.MULTi.1080p".to_string(),
+                total_size_bytes: 1_000,
+                source_provider: Some("c411".to_string()),
+                source_external_id: Some("777".to_string()),
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        let col = crate::collections::find_or_create(
+            &pool,
+            "movie",
+            "Movie",
+            crate::collections::Kind::Movie,
+            false,
+        )
+        .await
+        .unwrap();
+        crate::torrents::set_collection(&pool, &t.infohash, Some(col.id))
+            .await
+            .unwrap();
+        crate::torrents::soft_delete(&pool, iris_core::ids::TorrentId::from(t.id))
+            .await
+            .unwrap();
+
+        let gone = crate::torrents::list_deleted_in_collection(&pool, col.id, user)
+            .await
+            .unwrap();
+        assert_eq!(gone.len(), 1);
+
+        crate::torrents::dismiss_gone_release(&pool, user, &t.infohash)
+            .await
+            .unwrap();
+        assert!(
+            crate::torrents::list_deleted_in_collection(&pool, col.id, user)
+                .await
+                .unwrap()
+                .is_empty(),
+            "dismissed release is hidden for the dismissing user",
+        );
+        assert_eq!(
+            crate::torrents::list_deleted_in_collection(&pool, col.id, stranger)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "dismissals never leak to other users",
+        );
+
+        // Re-download (upsert clears deleted_at) then reclaim again:
+        // the fresh deleted_at outdates the dismissal → row returns.
+        crate::torrents::upsert(
+            &pool,
+            crate::torrents::NewTorrent {
+                infohash: t.infohash.clone(),
+                name: "Movie.2024.MULTi.1080p".to_string(),
+                total_size_bytes: 1_000,
+                source_provider: Some("c411".to_string()),
+                source_external_id: Some("777".to_string()),
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        crate::torrents::soft_delete(&pool, iris_core::ids::TorrentId::from(t.id))
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::torrents::list_deleted_in_collection(&pool, col.id, user)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "a newer reclaim makes the dismissal stale",
+        );
+    }
+
+    /// Gone episode rows reconstruct the pre-GC episode list with the
+    /// caller's watch state attached, and honour release dismissals.
+    #[tokio::test]
+    async fn gone_episode_rows_carry_watch_state_and_respect_dismissal() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let t = crate::torrents::upsert(
+            &pool,
+            crate::torrents::NewTorrent {
+                infohash: Uuid::new_v4().to_string(),
+                name: "Show.S01E03.VOSTFR.1080p".to_string(),
+                total_size_bytes: 1_000,
+                source_provider: Some("c411".to_string()),
+                source_external_id: Some("42".to_string()),
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        let col =
+            crate::collections::find_or_create(&pool, "show", "Show", crate::collections::Kind::Tv, false)
+                .await
+                .unwrap();
+        crate::torrents::set_collection(&pool, &t.infohash, Some(col.id))
+            .await
+            .unwrap();
+        // Season-pack shape: several episode files on ONE infohash. The
+        // user watched only the first — the gone view must keep the
+        // per-episode watched split, not collapse the release.
+        for (episode, file_idx) in [(3_i64, 0_i64), (4, 1)] {
+            crate::episode_files::upsert(
+                &pool,
+                crate::episode_files::UpsertEpisodeFile {
+                    collection_id: col.id,
+                    season: 1,
+                    episode,
+                    infohash: t.infohash.clone(),
+                    file_idx,
+                    derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                    absolute_episode: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        upsert(&pool, progress(user, t.infohash.clone(), true))
+            .await
+            .unwrap();
+
+        // Torrent still live → nothing is "gone".
+        assert!(
+            crate::episode_files::list_gone_for_collection(&pool, col.id, user)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        crate::torrents::soft_delete(&pool, iris_core::ids::TorrentId::from(t.id))
+            .await
+            .unwrap();
+
+        let rows = crate::episode_files::list_gone_for_collection(&pool, col.id, user)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2, "one gone row per pack leaf");
+        let e3 = &rows[0];
+        assert_eq!((e3.season, e3.episode), (1, 3));
+        assert_eq!(e3.torrent_name, "Show.S01E03.VOSTFR.1080p");
+        assert_eq!(e3.source_provider.as_deref(), Some("c411"));
+        assert!(e3.completed, "the caller's watched state is attached");
+        assert!(e3.last_watched_at.is_some());
+        let e4 = &rows[1];
+        assert_eq!((e4.season, e4.episode), (1, 4));
+        assert!(
+            !e4.completed && e4.last_watched_at.is_none(),
+            "the unwatched pack leaf stays unwatched",
+        );
+
+        crate::torrents::dismiss_gone_release(&pool, user, &t.infohash)
+            .await
+            .unwrap();
+        assert!(
+            crate::episode_files::list_gone_for_collection(&pool, col.id, user)
+                .await
+                .unwrap()
+                .is_empty(),
+            "dismissing the release hides its gone episode rows too",
+        );
     }
 
     #[tokio::test]

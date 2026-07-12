@@ -965,6 +965,71 @@ async fn heal_anime_batch_metadata(
 /// the anime *One Piece* vs the live-action *One Piece*, which carry
 /// DIFFERENT tmdb ids — is never collapsed. Idempotent: once merged the
 /// group has one member and the sweep is a no-op. Runs from
+/// Sweep collections whose `display_title` still carries a leading
+/// "[GROUP]" prefix — output of the pre-fix parser ("[H4KIG] Ted 2
+/// (2015)"). The junk poisons the collection key and the TMDB lookup
+/// (no poster), so re-derive the identity from the cleaned title.
+/// Rename-in-place only: when another collection already owns the
+/// canonical key we still fix the visible title but leave the key —
+/// the same-tmdb sweep folds true duplicates. Runs from
+/// [`run_backfill`] (boot + every 5 min); a no-op once prod is clean.
+async fn heal_bracketed_display_titles(pool: &SqlitePool, deps: EnrichDeps<'_>) {
+    let cols = match collections::list_all(pool).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "bracket heal: list_all collections failed");
+            return;
+        }
+    };
+    for c in cols {
+        if !c.display_title.starts_with('[') {
+            continue;
+        }
+        // The display title itself carries the full "[GROUP] Title
+        // (YYYY)" shape — re-parse it (works even for ghosts whose
+        // torrents are all reclaimed).
+        let Some(parsed) = filename::parse(&c.display_title) else {
+            continue;
+        };
+        let is_tv = c.kind == "tv";
+        let kind = if is_tv { Kind::Tv } else { Kind::Movie };
+        let new_display = parsed.display_with_year(is_tv);
+        if new_display.is_empty() || new_display == c.display_title {
+            continue;
+        }
+        let new_key = parsed.collection_key_kind(is_tv, c.is_anime);
+        let current_key = c.parsed_title_normalized.as_deref().unwrap_or("");
+        if !new_key.is_empty() && new_key != current_key {
+            let owned_elsewhere = matches!(
+                collections::find_by_parsed_title(pool, &new_key, kind).await,
+                Ok(Some(other)) if other.id != c.id
+            );
+            if !owned_elsewhere
+                && let Err(e) =
+                    collections::set_parsed_title_normalized(pool, c.id, &new_key).await
+            {
+                tracing::warn!(error = %e, collection_id = %c.id, "bracket heal: set key failed");
+                continue;
+            }
+        }
+        if let Err(e) = collections::set_display_title(pool, c.id, &new_display).await {
+            tracing::warn!(error = %e, collection_id = %c.id, "bracket heal: set display failed");
+            continue;
+        }
+        tracing::info!(
+            collection_id = %c.id,
+            old = %c.display_title,
+            new = %new_display,
+            "bracketed display title self-healed",
+        );
+        // The junk title usually failed TMDB resolution → no poster.
+        // Re-resolve off the clean identity (no-op when already set).
+        if let Ok(Some(fresh)) = collections::get(pool, c.id).await {
+            resolve_collection_tmdb(pool, deps, &fresh, kind).await;
+        }
+    }
+}
+
 /// [`run_backfill`] (boot + every 5 min), so a re-created split self-heals.
 async fn merge_same_tmdb_splits(
     pool: &SqlitePool,
@@ -1092,6 +1157,11 @@ async fn merge_collection_into(
 }
 
 pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris_torrent::Engine) {
+    // Clean leftover "[GROUP] …" display titles BEFORE the merge sweep:
+    // the rename can re-key a junk collection onto its clean twin's
+    // identity space, which the same-tmdb merge below then folds.
+    heal_bracketed_display_titles(pool, deps).await;
+
     // Collapse any same-entity split FIRST, so the per-torrent heals below
     // evaluate every torrent against its surviving (merged) collection
     // identity rather than re-splitting it.

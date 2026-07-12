@@ -214,7 +214,7 @@ export function PreviewDialog({
           {preview && (
             <div className="rounded-md border border-border">
               <div className="border-b border-border bg-muted/30 px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground">
-                Files — pick what to play
+                Files · pick what to play
               </div>
               <ul className="divide-y divide-border">
                 {sortedFiles.map((f) => {
@@ -283,7 +283,7 @@ export function PreviewDialog({
             // accidentally ingesting the same episode twice via a
             // different release.
             <div className="mt-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-              You already have this episode in your library. Playing the existing file — use{" "}
+              You already have this episode in your library. Playing the existing file; use{" "}
               <span className="font-medium">Download anyway</span> below only if you want a
               different release.
             </div>
@@ -294,7 +294,7 @@ export function PreviewDialog({
           // grab is disabled. We never warn on a merely-low count (1 seeder is
           // often plenty) — only a confirmed 0 blocks.
           <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            Dead torrent — no seeders. This release can't be downloaded; try another.
+            Dead torrent: no seeders. This release can't be downloaded; try another.
           </div>
         )}
 

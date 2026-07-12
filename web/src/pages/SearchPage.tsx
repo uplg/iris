@@ -303,7 +303,7 @@ export function SearchPage() {
           <EmptyState
             icon={<SearchIcon className="size-7" />}
             title="Type at least 2 characters"
-            body="Tip: pick a TMDB suggestion to use a canonical title — better results from the tracker."
+            body="Tip: pick a TMDB suggestion to use a canonical title for better results from the tracker."
           />
         ) : isFetching && rows.length === 0 && libMatches.length === 0 ? (
           <LoadingState label="Searching…" />

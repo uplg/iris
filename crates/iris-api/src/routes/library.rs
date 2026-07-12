@@ -232,10 +232,22 @@ pub(crate) struct CollectionDetail {
     /// `available_episodes` — but is populated for both kinds:
     /// re-resolving the same release yields the same infohash, so any
     /// saved playback position resumes untouched. Only releases whose
-    /// source provenance survived are listed (the actionable ones).
-    /// Additive — older clients ignore it.
+    /// source provenance survived are listed (the actionable ones),
+    /// minus the ones the CALLER dismissed. Additive — older clients
+    /// ignore it.
     #[serde(default)]
     gone_releases: Vec<GoneReleaseEntry>,
+    /// The ghost twin of `episodes`: every (season, episode) row whose
+    /// source release was reclaimed, with the CALLER's watch state
+    /// attached. New clients merge these into the episode list so a
+    /// ghost collection renders exactly as it did before the GC — same
+    /// rows, same "already watched" badges — with "Download again"
+    /// instead of Play. Kept OUT of `episodes` on purpose: an old
+    /// client must never offer Play on a deleted torrent. Rows the
+    /// caller dismissed are excluded. Additive — older clients ignore
+    /// it and keep the flat `gone_releases` list.
+    #[serde(default)]
+    gone_episodes: Vec<GoneEpisodeEntry>,
 }
 
 /// One reclaimed release the user can re-download from the collection
@@ -248,6 +260,60 @@ pub(crate) struct GoneReleaseEntry {
     source_provider: String,
     source_external_id: String,
     total_size_bytes: i64,
+    /// When the GC / cleanup reclaimed it. Additive — `None` only on
+    /// legacy rows that predate `deleted_at` stamping (shouldn't happen).
+    #[serde(default)]
+    deleted_at: Option<DateTime<Utc>>,
+    /// CALLER's watch state on this release (most recent file — the
+    /// meaningful one for a single-file movie): `watched` mirrors
+    /// `playback_progress.completed`, the rest carries the mid-way
+    /// resume position like a History row. All additive.
+    #[serde(default)]
+    watched: bool,
+    #[serde(default)]
+    position_seconds: Option<f64>,
+    #[serde(default)]
+    duration_seconds: Option<f64>,
+    #[serde(default)]
+    last_watched_at: Option<DateTime<Utc>>,
+}
+
+/// One episode whose source release was reclaimed — the ghost twin of
+/// [`EpisodeEntry`], plus the caller's watch state and the re-grab
+/// provenance. `(infohash, file_idx)` stays the identity key, exactly
+/// like `episodes` (a mis-parsed pack's colliding (S, E) rows must all
+/// survive — see the identity contract on [`build_tv_episode_view`]).
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct GoneEpisodeEntry {
+    season: i64,
+    episode: i64,
+    /// Absolute episode number for fleuve anime (render "Episode N").
+    #[serde(default)]
+    absolute_episode: Option<i64>,
+    infohash: String,
+    file_idx: i64,
+    /// `true` when the requesting user's `playback_progress.completed`
+    /// is set for this exact file — the "already watched" badge.
+    watched: bool,
+    /// Mid-way resume state (same semantics as a History row); all
+    /// `None` when the caller never started this file.
+    #[serde(default)]
+    position_seconds: Option<f64>,
+    #[serde(default)]
+    duration_seconds: Option<f64>,
+    #[serde(default)]
+    last_watched_at: Option<DateTime<Utc>>,
+    /// Same string form as `EpisodeEntry.language` (`"french"` /
+    /// `"english"` / `"multi"` / `"unknown"`), derived from the
+    /// reclaimed torrent's SCENE name.
+    language: Option<String>,
+    /// Raw SCENE name of the reclaimed release — secondary display line.
+    release_name: String,
+    /// Provenance feeding the existing ingest endpoint
+    /// (`POST /api/torrents`) — always present: rows without it are not
+    /// actionable and are filtered out server-side.
+    source_provider: String,
+    source_external_id: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -323,31 +389,43 @@ fn default_numbering() -> String {
 /// Decide the client episode layout from the evidence, NOT from
 /// `is_anime`: `"absolute"` when the absolute-numbered (fleuve) episodes
 /// dominate, else `"seasonal"`. On-disk episodes (what's actually in the
-/// library) drive the call; cached offers only break a tie when nothing
-/// is downloaded yet. A season-cut anime — whose episodes carry no
-/// absolute number — correctly stays `"seasonal"`.
-fn derive_numbering(episodes: &[EpisodeEntry], available: &[AvailableEpisodeEntry]) -> String {
-    let (mut total, mut absolute) = (0usize, 0usize);
-    for e in episodes {
-        if e.episode == 0 {
-            continue; // season-pack sentinel
-        }
-        total += 1;
-        if e.absolute_episode.is_some() {
-            absolute += 1;
-        }
-    }
-    if total == 0 {
-        for a in available {
-            if a.episode == 0 {
+/// library) drive the call; a fully-reclaimed (ghost) collection falls
+/// back to its GONE episodes so the layout survives the GC; cached
+/// offers only break the tie when neither exists. A season-cut anime —
+/// whose episodes carry no absolute number — correctly stays
+/// `"seasonal"`.
+fn derive_numbering(
+    episodes: &[EpisodeEntry],
+    gone_episodes: &[GoneEpisodeEntry],
+    available: &[AvailableEpisodeEntry],
+) -> String {
+    // (episode, has-absolute) pairs, skipping the season-pack sentinel
+    // (`episode == 0`).
+    fn tally(pairs: impl Iterator<Item = (i64, bool)>) -> (usize, usize) {
+        let (mut total, mut absolute) = (0usize, 0usize);
+        for (episode, has_absolute) in pairs {
+            if episode == 0 {
                 continue;
             }
             total += 1;
-            if a.absolute_episode.is_some() {
+            if has_absolute {
                 absolute += 1;
             }
         }
+        (total, absolute)
     }
+    let mut counts = tally(episodes.iter().map(|e| (e.episode, e.absolute_episode.is_some())));
+    if counts.0 == 0 {
+        counts = tally(
+            gone_episodes
+                .iter()
+                .map(|e| (e.episode, e.absolute_episode.is_some())),
+        );
+    }
+    if counts.0 == 0 {
+        counts = tally(available.iter().map(|a| (a.episode, a.absolute_episode.is_some())));
+    }
+    let (total, absolute) = counts;
     if total > 0 && absolute * 2 >= total {
         "absolute".to_string()
     } else {
@@ -455,26 +533,9 @@ pub(crate) async fn collection_detail(
         _ => (None, None),
     };
 
-    // Reclaimed releases with surviving provenance — the "Download
-    // again" list. Movies especially: without this a ghost movie
-    // collection is a dead end (no available_episodes to re-grab).
-    let gone_releases = iris_db::torrents::list_deleted_in_collection(state.db(), id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|t| match (t.source_provider, t.source_external_id) {
-            (Some(provider), Some(external_id)) => Some(GoneReleaseEntry {
-                infohash: t.infohash,
-                name: t.name,
-                source_provider: provider,
-                source_external_id: external_id,
-                total_size_bytes: t.total_size_bytes,
-            }),
-            _ => None,
-        })
-        .collect();
+    let (gone_releases, gone_episodes) = build_gone_view(&state, id, user.id).await;
 
-    let numbering = derive_numbering(&episodes, &available_episodes);
+    let numbering = derive_numbering(&episodes, &gone_episodes, &available_episodes);
     Ok(Json(CollectionDetail {
         id: collection.id,
         tmdb_id: collection.tmdb_id,
@@ -491,7 +552,100 @@ pub(crate) async fn collection_detail(
         season_packs,
         has_new_since_last_visit,
         gone_releases,
+        gone_episodes,
     }))
+}
+
+/// The per-caller "gone" view of a collection: reclaimed releases with
+/// surviving provenance (the "Download again" list — movies especially:
+/// without it a ghost movie collection is a dead end, having no
+/// `available_episodes` to re-grab) and the ghost twin of `episodes`
+/// (reclaimed (S, E) rows), both enriched with the CALLER's watch state
+/// so the page renders exactly as it did before the GC. Releases the
+/// caller dismissed are already filtered out at the query level.
+async fn build_gone_view(
+    state: &AppState,
+    collection_id: Uuid,
+    user_id: iris_core::ids::UserId,
+) -> (Vec<GoneReleaseEntry>, Vec<GoneEpisodeEntry>) {
+    let deleted_rows =
+        iris_db::torrents::list_deleted_in_collection(state.db(), collection_id, user_id)
+            .await
+            .unwrap_or_default();
+    // Caller's playback rows on the reclaimed torrents, newest first —
+    // `find` therefore picks the most recent file's state per release
+    // (the meaningful one for a single-file movie).
+    let gone_watch =
+        iris_db::playback::watch_state_for_deleted_in_collection(state.db(), user_id, collection_id)
+            .await
+            .unwrap_or_default();
+    let gone_releases: Vec<GoneReleaseEntry> = deleted_rows
+        .iter()
+        .filter_map(|t| match (&t.source_provider, &t.source_external_id) {
+            (Some(provider), Some(external_id)) => {
+                let w = gone_watch.iter().find(|w| w.infohash == t.infohash);
+                Some(GoneReleaseEntry {
+                    infohash: t.infohash.clone(),
+                    name: t.name.clone(),
+                    source_provider: provider.clone(),
+                    source_external_id: external_id.clone(),
+                    total_size_bytes: t.total_size_bytes,
+                    deleted_at: t.deleted_at,
+                    watched: w.is_some_and(|w| w.completed),
+                    position_seconds: w.map(|w| w.position_seconds),
+                    duration_seconds: w.and_then(|w| w.duration_seconds),
+                    last_watched_at: w.map(|w| w.last_watched_at),
+                })
+            }
+            _ => None,
+        })
+        .collect();
+
+    // Language detection reuses the SCENE-name resolver with maps built
+    // from the DELETED torrent rows (the live-torrent maps in
+    // `build_tv_episode_view` don't know these infohashes).
+    let gone_names: std::collections::HashMap<String, String> = deleted_rows
+        .iter()
+        .map(|t| (t.infohash.clone(), t.name.clone()))
+        .collect();
+    let gone_providers: std::collections::HashMap<String, String> = deleted_rows
+        .iter()
+        .filter_map(|t| t.source_provider.clone().map(|p| (t.infohash.clone(), p)))
+        .collect();
+    let gone_episodes: Vec<GoneEpisodeEntry> =
+        iris_db::episode_files::list_gone_for_collection(state.db(), collection_id, user_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|r| {
+                let (Some(provider), Some(external_id)) =
+                    (r.source_provider, r.source_external_id)
+                else {
+                    return None; // no provenance → not re-grabbable
+                };
+                let language = Some(
+                    resolve_torrent_language(state, &r.infohash, &gone_names, &gone_providers)
+                        .as_str()
+                        .to_string(),
+                );
+                Some(GoneEpisodeEntry {
+                    season: r.season,
+                    episode: r.episode,
+                    absolute_episode: r.absolute_episode,
+                    infohash: r.infohash,
+                    file_idx: r.file_idx,
+                    watched: r.completed,
+                    position_seconds: r.position_seconds,
+                    duration_seconds: r.duration_seconds,
+                    last_watched_at: r.last_watched_at,
+                    language,
+                    release_name: r.torrent_name,
+                    source_provider: provider,
+                    source_external_id: external_id,
+                })
+            })
+            .collect();
+    (gone_releases, gone_episodes)
 }
 
 /// Resolve the language tag of an on-disk torrent. SCENE names are

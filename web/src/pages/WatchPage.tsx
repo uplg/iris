@@ -984,7 +984,7 @@ export function WatchPage() {
         {outage && (
           <div className="flex items-center gap-2 rounded-xl border border-warn/50 bg-warn/10 p-3 text-sm text-warn">
             <Loader2 className="size-4 animate-spin" />
-            Server unavailable — reconnecting…
+            Server unavailable, reconnecting…
           </div>
         )}
 

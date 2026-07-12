@@ -167,6 +167,13 @@ interface IrisApi {
     @POST("api/me/continue-watching/dismiss")
     suspend fun dismissContinueWatching(@Body body: DismissCwRequest)
 
+    /** Hide a Gone entry for the caller only (never touches history):
+     *  a whole ghost collection from the Library grid (`collectionId`)
+     *  or one reclaimed release from the collection page (`infohash`).
+     *  Newer activity (re-reclaim / newer watch) resurfaces it. */
+    @POST("api/me/gone/dismiss")
+    suspend fun dismissGone(@Body body: DismissGoneRequest)
+
     /** Single-file progress with `audio_track_idx` + `subtitle_track_idx`.
      *  Returns `null` when no entry exists yet (first watch). */
     @GET("api/torrents/{infohash}/files/{idx}/progress")

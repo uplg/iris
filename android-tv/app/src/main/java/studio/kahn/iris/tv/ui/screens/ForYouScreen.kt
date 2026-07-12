@@ -89,7 +89,7 @@ fun ForYouScreen(
             } else if (shelves.isEmpty()) {
                 item(key = "empty") {
                     Text(
-                        "Nothing to recommend yet — set your preferences and check back once the catalogue has refreshed.",
+                        "Nothing to recommend yet. Set your preferences and check back once the catalogue has refreshed.",
                         style = MaterialTheme.typography.bodyLarge,
                         color = IrisColors.FgDim,
                         modifier = Modifier.padding(horizontal = Spacing.gutter),

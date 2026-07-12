@@ -81,6 +81,7 @@ use utoipa::OpenApi;
         crate::routes::me::continue_watching,
         crate::routes::me::dismiss_continue_watching,
         crate::routes::me::history,
+        crate::routes::me::dismiss_gone,
         crate::routes::me::watchlist,
         crate::routes::me::change_password,
         crate::routes::me::change_display_name,

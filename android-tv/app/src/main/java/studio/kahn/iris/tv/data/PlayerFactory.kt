@@ -139,7 +139,7 @@ fun humanizePlaybackError(e: PlaybackException): Pair<String, Boolean> {
         -> "Connection to the Iris server was lost. Retrying…"
         PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
         PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
-        -> "The server refused this stream — you may need to sign in again."
+        -> "The server refused this stream. You may need to sign in again."
         PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "Source file not found."
         PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Server returned an error response."
         PlaybackException.ERROR_CODE_IO_UNSPECIFIED -> "Network read failed."
@@ -154,10 +154,10 @@ fun humanizePlaybackError(e: PlaybackException): Pair<String, Boolean> {
         -> "This device doesn't have a decoder for this video / audio codec."
         PlaybackException.ERROR_CODE_DECODING_FAILED,
         PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
-        -> "Playback stalled — the decoder couldn't keep up."
+        -> "Playback stalled: the decoder couldn't keep up."
         PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
         PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED,
-        -> "Audio output failed — check your HDMI / speaker connection."
+        -> "Audio output failed. Check your HDMI / speaker connection."
         else -> "Playback error (${e.errorCodeName})."
     }
     // Conservative: only re-prepare on genuinely network-shaped

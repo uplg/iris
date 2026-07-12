@@ -413,6 +413,13 @@ function VirtualCollectionsGrid({
   onPick: (c: CollectionListItem) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const qc = useQueryClient();
+  // Hide a ghost card for THIS user only. Non-destructive (History and
+  // playback rows stay); watching the show again resurfaces it.
+  const dismissGhost = useMutation({
+    mutationFn: (c: CollectionListItem) => me.dismissGone({ collection_id: c.id }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["library"] }),
+  });
   // Lane count + row height are derived from container width via the
   // CSS variable trick: the wrapper sets `--lanes` based on its width,
   // and we read it back through ResizeObserver. Avoids the breakpoint-
@@ -469,26 +476,45 @@ function VirtualCollectionsGrid({
                 }}
               >
                 {slice.map((c) => (
-                  <MediaCard
-                    key={c.id}
-                    title={c.display_title}
-                    subtitle={collectionSubtitle(c)}
-                    // tmdb_id on the collection is now derived server-
-                    // side from the SCENE-cleaned name (see
-                    // `tmdb_resolve` + the ingestion override).
-                    // Trustworthy enough to drive poster lookups —
-                    // when missing we fall back to the kind-aware
-                    // placeholder.
-                    tmdbId={c.tmdb_id}
-                    kind={c.kind}
-                    onClick={() => onPick(c)}
-                    badge={collectionBadge(c)}
-                    // Ghost = every torrent reclaimed, but the caller
-                    // watched this — kept in place, greyed. Clicking
-                    // only NAVIGATES to the collection page; any
-                    // re-download stays a deliberate user action there.
-                    className={cn(c.ghost && "opacity-55 grayscale")}
-                  />
+                  <div key={c.id} className="group relative">
+                    <MediaCard
+                      title={c.display_title}
+                      subtitle={collectionSubtitle(c)}
+                      // tmdb_id on the collection is now derived server-
+                      // side from the SCENE-cleaned name (see
+                      // `tmdb_resolve` + the ingestion override).
+                      // Trustworthy enough to drive poster lookups —
+                      // when missing we fall back to the kind-aware
+                      // placeholder.
+                      tmdbId={c.tmdb_id}
+                      kind={c.kind}
+                      onClick={() => onPick(c)}
+                      badge={collectionBadge(c)}
+                      // Ghost = every torrent reclaimed, but the caller
+                      // watched this — kept in place, greyed. Clicking
+                      // only NAVIGATES to the collection page; any
+                      // re-download stays a deliberate user action there.
+                      className={cn(c.ghost && "opacity-55 grayscale")}
+                    />
+                    {/* Ghost cards get a hover X: hide from MY library
+                        (per-user, non-destructive — same pattern as the
+                        Continue Watching manage button). */}
+                    {c.ghost && (
+                      <button
+                        type="button"
+                        aria-label="Hide from my library"
+                        title="Hide from my library (your history is kept)"
+                        disabled={dismissGhost.isPending}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          dismissGhost.mutate(c);
+                        }}
+                        className="focus-ring absolute top-2 left-2 grid size-8 place-items-center rounded-full bg-black/60 text-white opacity-0 backdrop-blur transition-opacity group-hover:opacity-100 focus-visible:opacity-100 disabled:opacity-60"
+                      >
+                        <X className="size-4" />
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>

@@ -83,8 +83,10 @@ export function HomePage() {
 
       <Container>
         <div className="lanes pt-2">
+          {/* Shelf eyebrows ("For you", "On disk", …) said nothing the
+              titles don't — dropped across the home page (TV did the
+              same). */}
           <Shelf
-            eyebrow="For you"
             title="Continue Watching"
             isEmpty={!continueQ.data || continueQ.data.length === 0}
             emptyState={
@@ -97,7 +99,6 @@ export function HomePage() {
           </Shelf>
 
           <Shelf
-            eyebrow="Following"
             title="My Watchlist"
             isEmpty={!watchlistQ.data || watchlistQ.data.length === 0}
             emptyState={
@@ -121,7 +122,6 @@ export function HomePage() {
           {forYouQ.data?.shelves.map((shelf) => (
             <Shelf
               key={shelf.key}
-              eyebrow="Recommended"
               title={shelf.title}
               link={linkOptions({ to: "/for-you" })}
               isEmpty={shelf.items.length === 0}
@@ -133,7 +133,6 @@ export function HomePage() {
           ))}
 
           <Shelf
-            eyebrow="On disk"
             title="My Library"
             link={linkOptions({ to: "/library" })}
             isEmpty={recentLibrary.length === 0}
@@ -268,15 +267,10 @@ function ResumeHero({ item }: { item: ContinueWatchingItem }) {
 
   return (
     <HeroLayout
-      eyebrow={
-        <>
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-primary">
-            <Sparkles className="size-3.5" />
-            Continue tonight
-          </span>
-          <span className="eyebrow">· Resume</span>
-        </>
-      }
+      // The "Continue tonight · Resume" eyebrow said nothing the Resume
+      // CTA doesn't — dropped (same call as the TV hero), but its slot
+      // height is kept so the bottom-anchored hero lockup doesn't shift.
+      eyebrow={<span aria-hidden className="block h-4" />}
       backdropUrl={tmdbImage(md?.backdrop_path, "original")}
       title={title}
       meta={meta}

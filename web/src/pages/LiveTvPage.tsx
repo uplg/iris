@@ -139,7 +139,7 @@ export function LiveTvPage() {
           <p className="text-sm text-muted-foreground">Loading channels…</p>
         ) : channelsQ.isError ? (
           <p className="text-sm text-muted-foreground">
-            Couldn't load channels for this country — the upstream playlist may be unavailable.
+            Couldn't load channels for this country. The upstream playlist may be unavailable.
           </p>
         ) : (
           <>

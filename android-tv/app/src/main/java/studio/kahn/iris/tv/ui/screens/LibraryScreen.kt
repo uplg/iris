@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -51,9 +52,11 @@ import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.CollectionListItem
+import studio.kahn.iris.tv.data.DismissGoneRequest
 import studio.kahn.iris.tv.data.LibraryResponse
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.tmdbPosterUrl
@@ -100,6 +103,7 @@ fun LibraryScreen(
     onBack: () -> Unit,
 ) {
     val layout = LocalTvLayout.current
+    val scope = rememberCoroutineScope()
     var all by remember { mutableStateOf<List<CollectionListItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -252,7 +256,7 @@ fun LibraryScreen(
                 )
                 error != null -> Text(error!!, color = MaterialTheme.colorScheme.error)
                 visible.isEmpty() -> Text(
-                    if (all.isEmpty()) "Nothing in the library yet." else "No matches — adjust the search or filters.",
+                    if (all.isEmpty()) "Nothing in the library yet." else "No matches. Adjust the search or filters.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = IrisColors.MutedForeground,
                 )
@@ -275,6 +279,22 @@ fun LibraryScreen(
                             onClick = {
                                 lastOpenedId = c.id.toString()
                                 onOpenCollection(c.id.toString())
+                            },
+                            // Long-press a GONE card to hide it from MY
+                            // library (per-user; history stays — watching
+                            // the show again resurfaces it). Optimistic
+                            // local removal: no refetch, no focus churn.
+                            onDismissGhost = {
+                                scope.launch {
+                                    val url = container.sessionStore.serverUrl.first()
+                                        ?: return@launch
+                                    runCatching {
+                                        container.apiFor(url)
+                                            .dismissGone(DismissGoneRequest(collectionId = c.id))
+                                    }.onSuccess {
+                                        all = all.filter { it.id != c.id }
+                                    }
+                                }
                             },
                             modifier = if (index == targetIndex) {
                                 Modifier.focusRequester(restoreFocus)
@@ -322,6 +342,7 @@ private fun LibraryGridCard(
     container: AppContainer,
     collection: CollectionListItem,
     onClick: () -> Unit,
+    onDismissGhost: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var meta by remember(collection.tmdbId) { mutableStateOf<MediaMetadata?>(null) }
@@ -340,7 +361,8 @@ private fun LibraryGridCard(
     // older payloads) — absent means "not a ghost".
     val isGhost = collection.ghost == true
     val subtitle = if (isGhost) {
-        "No longer on disk"
+        // The "hold to hide" tail doubles as the long-press hint.
+        "No longer on disk · hold to hide"
     } else {
         buildString {
             if (collection.kind == MediaKind.tv && collection.episodeCount > 0) {
@@ -355,6 +377,9 @@ private fun LibraryGridCard(
 
     Card(
         onClick = onClick,
+        // Long-press only means something on a ghost — hide it for this
+        // user. On a live card it stays a no-op (no accidental hides).
+        onLongClick = { if (isGhost) onDismissGhost() },
         modifier = modifier.fillMaxWidth(),
         shape = CardDefaults.shape(shape = shape),
         // Gentle pop only — the grid is dense, a big scale clips at the edges.

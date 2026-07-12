@@ -267,7 +267,7 @@ private fun UpdaterStatus(state: AppUpdater.Progress?) {
         }
         is AppUpdater.Progress.Ready ->
             Text(
-                "Downloaded — opening installer.",
+                "Downloaded. Opening installer…",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
             )

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Download, Film, Loader2, Play, Sparkles, Tv } from "lucide-react";
+import { CheckCircle2, Download, Film, Loader2, Play, RotateCcw, Sparkles, Tv, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Container } from "@/components/Container";
@@ -15,9 +15,10 @@ import {
   type AvailableEpisodeEntry,
   type CollectionDetail,
   type CollectionEpisodeEntry,
+  type GoneEpisodeEntry,
   type GoneReleaseEntry,
 } from "@/lib/api";
-import { formatSize } from "@/lib/format";
+import { formatRecentTime, formatSize, formatTimecode } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
@@ -98,9 +99,24 @@ export function CollectionPage() {
   // `episode_files` rows. Don't show "no episodes" and orphan the
   // user — fall back to the raw file picker so they can still
   // play whatever is on disk. The parser improvement is tracked
-  // separately; this is the cheap UX guard until then.
+  // separately; this is the cheap UX guard until then. Gone episodes
+  // count too: a fully-reclaimed (ghost) TV collection must render its
+  // pre-GC episode list, not the (empty) raw file picker.
   const tvHasEpisodes =
-    data.kind === "tv" && (data.episodes.length > 0 || (data.available_episodes?.length ?? 0) > 0);
+    data.kind === "tv" &&
+    (data.episodes.length > 0 ||
+      (data.available_episodes?.length ?? 0) > 0 ||
+      (data.gone_episodes?.length ?? 0) > 0);
+
+  // Releases whose reclaimed episodes render inline in the episode list
+  // (as "gone" chips) don't need a second row in "Previously on disk" —
+  // that section keeps only the remainder: movies and packs the SCENE
+  // parser never split. episode === 0 is the season-pack sentinel, which
+  // the merge skips — those releases must keep their raw row here.
+  const goneInline = new Set(
+    (data.gone_episodes ?? []).filter((g) => g.episode > 0).map((g) => g.infohash),
+  );
+  const rawGoneReleases = (data.gone_releases ?? []).filter((r) => !goneInline.has(r.infohash));
 
   return (
     <div>
@@ -124,23 +140,45 @@ export function CollectionPage() {
             }
           />
         )}
-        {(data.gone_releases?.length ?? 0) > 0 && (
-          <GoneReleases collectionId={id} releases={data.gone_releases ?? []} />
+        {rawGoneReleases.length > 0 && (
+          <GoneReleases collectionId={id} releases={rawGoneReleases} />
         )}
       </Container>
     </div>
   );
 }
 
+/** "Watched · 2d ago" / "43% · 0:12:34 · 2d ago" — the caller's watch
+ *  state on a gone release, mirroring the History page's status line. */
+function goneWatchLine(r: GoneReleaseEntry): string | null {
+  if (r.watched) {
+    return r.last_watched_at ? `Watched · ${formatRecentTime(r.last_watched_at)}` : "Watched";
+  }
+  if (r.position_seconds == null || r.position_seconds <= 0) return null;
+  const pct =
+    r.duration_seconds && r.duration_seconds > 0
+      ? Math.min(100, (r.position_seconds / r.duration_seconds) * 100)
+      : null;
+  const parts = [
+    pct != null ? `${pct.toFixed(0)}%` : null,
+    formatTimecode(r.position_seconds),
+    r.last_watched_at ? formatRecentTime(r.last_watched_at) : null,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
 /**
- * "Previously on disk" — the ghost-resume surface. Every release the GC
- * (or a cleanup) reclaimed but whose indexer provenance survived gets a
- * "Download again" row. This is what makes a ghost MOVIE recoverable
- * from its collection page (TV also re-grabs via the episode offers):
- * re-ingesting the same release yields the same infohash, so saved
- * positions resume untouched. For a single-file movie the page's
- * auto-redirect to /watch kicks in as soon as the refetch sees the
- * resurrected torrent — straight back into playback.
+ * "Previously on disk" — the ghost-resume surface, rendered like the
+ * release was still there: the caller's "already watched" state leads,
+ * the raw SCENE name is the secondary line, and "Download again"
+ * replaces Play. TV releases whose episodes render inline as gone chips
+ * are filtered out by the caller — this section keeps movies and
+ * unsplit packs. Re-ingesting the same release yields the same
+ * infohash, so saved positions resume untouched; for a single-file
+ * movie the page's auto-redirect to /watch kicks in as soon as the
+ * refetch sees the resurrected torrent — straight back into playback.
+ * The X hides the row for THIS user only (per-release dismissal;
+ * History is never affected).
  */
 function GoneReleases({
   collectionId,
@@ -151,14 +189,19 @@ function GoneReleases({
 }) {
   const qc = useQueryClient();
   const [busyInfohash, setBusyInfohash] = useState<string | null>(null);
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+    void qc.invalidateQueries({ queryKey: ["library"] });
+    void qc.invalidateQueries({ queryKey: ["history"] });
+  };
   const regrab = useMutation({
     mutationFn: (r: GoneReleaseEntry) => torrents.ingest(r.source_provider, r.source_external_id),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
-      void qc.invalidateQueries({ queryKey: ["library"] });
-      void qc.invalidateQueries({ queryKey: ["history"] });
-    },
+    onSuccess: refresh,
     onSettled: () => setBusyInfohash(null),
+  });
+  const dismiss = useMutation({
+    mutationFn: (r: GoneReleaseEntry) => me.dismissGone({ infohash: r.infohash }),
+    onSuccess: refresh,
   });
 
   return (
@@ -167,14 +210,31 @@ function GoneReleases({
       <ul className="grid gap-1">
         {releases.map((r) => {
           const busy = busyInfohash === r.infohash;
+          const watchLine = goneWatchLine(r);
           return (
             <li key={r.infohash} className="flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm">
               <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  {r.watched && (
+                    <Tag variant="plain" upper>
+                      <CheckCircle2 className="size-2.5" /> Watched
+                    </Tag>
+                  )}
+                  {watchLine && !r.watched && (
+                    <span className="text-xs text-muted-foreground">{watchLine}</span>
+                  )}
+                  {r.watched && r.last_watched_at && (
+                    <span className="text-xs text-muted-foreground">
+                      {formatRecentTime(r.last_watched_at)}
+                    </span>
+                  )}
+                </div>
                 <div className="truncate font-mono text-xs" title={r.name}>
                   {r.name}
                 </div>
                 <div className="text-xs text-muted-foreground">
                   {formatSize(r.total_size_bytes)} · via {r.source_provider}
+                  {r.deleted_at ? ` · removed ${formatRecentTime(r.deleted_at)}` : ""}
                 </div>
               </div>
               <Button
@@ -185,7 +245,7 @@ function GoneReleases({
                   setBusyInfohash(r.infohash);
                   regrab.mutate(r);
                 }}
-                title="Re-download this exact release — your watch position is kept"
+                title="Re-download this exact release. Your watch position is kept"
               >
                 {busy ? (
                   <Loader2 className="size-4 animate-spin" />
@@ -193,6 +253,17 @@ function GoneReleases({
                   <Download className="size-4" />
                 )}
                 {busy ? "Restoring…" : "Download again"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+                disabled={dismiss.isPending}
+                onClick={() => dismiss.mutate(r)}
+                title="Hide this entry for you only. Your history is kept"
+                aria-label="Hide this entry"
+              >
+                <X className="size-4" />
               </Button>
             </li>
           );
@@ -365,11 +436,51 @@ type EpisodeVariant =
       quality: string | null;
       seeders: number | null;
       size_bytes: number | null;
+    }
+  | {
+      // Reclaimed by the GC but still known: renders in place like it
+      // was on disk (watched badge included) with "Download again"
+      // instead of Play — re-ingesting the same release keeps the
+      // saved position. Dismissable per-release.
+      status: "gone";
+      language: string | null;
+      infohash: string;
+      file_idx: number;
+      watched: boolean;
+      release_name: string;
+      source_provider: string;
+      source_external_id: string;
     };
+
+/** Stable variant order per row: downloaded first (Play stays the
+ *  natural primary), then gone (it WAS on disk), then available —
+ *  each block sorted by language for predictable adjacency. */
+const VARIANT_RANK = { downloaded: 0, gone: 1, available: 2 } as const;
+
+function sortVariants(variants: EpisodeVariant[]) {
+  variants.sort((a, b) => {
+    if (a.status !== b.status) return VARIANT_RANK[a.status] - VARIANT_RANK[b.status];
+    return (a.language ?? "").localeCompare(b.language ?? "");
+  });
+}
+
+function goneVariant(g: GoneEpisodeEntry): EpisodeVariant {
+  return {
+    status: "gone",
+    language: g.language ?? null,
+    infohash: g.infohash,
+    file_idx: g.file_idx,
+    watched: g.watched,
+    release_name: g.release_name,
+    source_provider: g.source_provider,
+    source_external_id: g.source_external_id,
+  };
+}
 
 function mergeEpisodes(
   on_disk: CollectionEpisodeEntry[],
   available: AvailableEpisodeEntry[] | undefined,
+  gone: GoneEpisodeEntry[] | undefined,
 ): MergedEpisode[] {
   // Server already filters owned (season, episode, language) out of
   // `available` — variants we get here are genuinely additive. We
@@ -396,6 +507,12 @@ function mergeEpisodes(
       watched: d.watched,
     });
   }
+  // Gone episodes keep their (S, E) slot so the page reads exactly like
+  // it did before the GC — same rows, same watched badges.
+  for (const g of gone ?? []) {
+    if (g.episode === 0) continue;
+    ensure(g.season, g.episode).variants.push(goneVariant(g));
+  }
   for (const a of available ?? []) {
     if (a.episode === 0) continue;
     ensure(a.season, a.episode).variants.push({
@@ -408,15 +525,7 @@ function mergeEpisodes(
       size_bytes: a.size_bytes ?? null,
     });
   }
-  // Stable variant order per row: downloaded first (so the Play
-  // action sits to the left as the natural primary), then available
-  // sorted by language for predictable adjacency.
-  for (const row of byKey.values()) {
-    row.variants.sort((a, b) => {
-      if (a.status !== b.status) return a.status === "downloaded" ? -1 : 1;
-      return (a.language ?? "").localeCompare(b.language ?? "");
-    });
-  }
+  for (const row of byKey.values()) sortVariants(row.variants);
   return Array.from(byKey.values()).sort((a, b) => a.season - b.season || a.episode - b.episode);
 }
 
@@ -439,6 +548,7 @@ function mergeEpisodes(
 function mergeEpisodesAbsolute(
   on_disk: CollectionEpisodeEntry[],
   available: AvailableEpisodeEntry[] | undefined,
+  gone: GoneEpisodeEntry[] | undefined,
 ): MergedEpisode[] {
   const byKey = new Map<string, MergedEpisode>();
   const ensure = (abs: number | null, season: number, episode: number): MergedEpisode => {
@@ -460,6 +570,12 @@ function mergeEpisodesAbsolute(
       watched: d.watched,
     });
   }
+  // Gone episodes follow the on-disk rule (they WERE on disk): always
+  // shown — by absolute when known, else by their SxxExx coordinate.
+  for (const g of gone ?? []) {
+    if (g.episode === 0) continue;
+    ensure(g.absolute_episode ?? null, g.season, g.episode).variants.push(goneVariant(g));
+  }
   for (const a of available ?? []) {
     if (a.episode === 0) continue;
     // Skip season-cut offers with no absolute — they can't be placed on
@@ -475,12 +591,7 @@ function mergeEpisodesAbsolute(
       size_bytes: a.size_bytes ?? null,
     });
   }
-  for (const row of byKey.values()) {
-    row.variants.sort((a, b) => {
-      if (a.status !== b.status) return a.status === "downloaded" ? -1 : 1;
-      return (a.language ?? "").localeCompare(b.language ?? "");
-    });
-  }
+  for (const row of byKey.values()) sortVariants(row.variants);
   // Absolute-numbered rows first (ascending); any owned-without-absolute
   // rows trail, ordered by their (season, episode).
   return Array.from(byKey.values()).sort((a, b) => {
@@ -499,8 +610,8 @@ function EpisodeList({
   onPlay: (infohash: string, fileIdx: number) => void;
 }) {
   const episodes = useMemo(
-    () => mergeEpisodes(collection.episodes, collection.available_episodes),
-    [collection.episodes, collection.available_episodes],
+    () => mergeEpisodes(collection.episodes, collection.available_episodes, collection.gone_episodes),
+    [collection.episodes, collection.available_episodes, collection.gone_episodes],
   );
 
   // Fleuve anime (One Piece): one flat absolute-numbered list, no
@@ -508,8 +619,13 @@ function EpisodeList({
   // season-cut anime still renders the seasonal layout below.
   const isAbsolute = collection.numbering === "absolute";
   const absoluteEpisodes = useMemo(
-    () => mergeEpisodesAbsolute(collection.episodes, collection.available_episodes),
-    [collection.episodes, collection.available_episodes],
+    () =>
+      mergeEpisodesAbsolute(
+        collection.episodes,
+        collection.available_episodes,
+        collection.gone_episodes,
+      ),
+    [collection.episodes, collection.available_episodes, collection.gone_episodes],
   );
 
   // Pack offers cover whole seasons — surfaced separately because
@@ -754,7 +870,9 @@ function EpisodeRow({
   ep: MergedEpisode;
   onPlay: (infohash: string, fileIdx: number) => void;
 }) {
-  const anyWatched = ep.variants.some((v) => v.status === "downloaded" && v.watched);
+  const anyWatched = ep.variants.some(
+    (v) => (v.status === "downloaded" || v.status === "gone") && v.watched,
+  );
   // Absolute (fleuve anime) rows show "Episode 1156"; seasonal rows
   // keep the SxxExx label. The big badge mirrors whichever number leads.
   const badgeNumber = ep.absolute ?? ep.episode;
@@ -825,6 +943,65 @@ function VariantChip({
       onPlay(res.infohash, res.file_idx);
     },
   });
+  const refreshGone = () => {
+    void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+    void qc.invalidateQueries({ queryKey: ["library"] });
+    void qc.invalidateQueries({ queryKey: ["history"] });
+  };
+  // Gone chip: re-ingest the exact same release (same infohash → saved
+  // position resumes untouched) then play right away — the stream path
+  // serves while the torrent downloads.
+  const regrab = useMutation({
+    mutationFn: () => {
+      if (variant.status !== "gone") throw new Error("not a gone variant");
+      return torrents.ingest(variant.source_provider, variant.source_external_id);
+    },
+    onSuccess: () => {
+      refreshGone();
+      if (variant.status === "gone") onPlay(variant.infohash, variant.file_idx);
+    },
+  });
+  const dismissRelease = useMutation({
+    mutationFn: () => {
+      if (variant.status !== "gone") throw new Error("not a gone variant");
+      return me.dismissGone({ infohash: variant.infohash });
+    },
+    onSuccess: refreshGone,
+  });
+
+  if (variant.status === "gone") {
+    return (
+      <span
+        className="inline-flex items-center gap-2 rounded-full border border-dashed border-border bg-elev px-2.5 py-1"
+        title={variant.release_name}
+      >
+        <LanguageBadge language={variant.language} />
+        <button
+          type="button"
+          onClick={() => regrab.mutate()}
+          disabled={regrab.isPending}
+          className="inline-flex items-center gap-1.5 text-muted-foreground transition hover:text-foreground disabled:opacity-60"
+        >
+          {regrab.isPending ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <RotateCcw className="size-3.5" />
+          )}
+          <span className="text-xs">{regrab.isPending ? "Restoring…" : "Download again"}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => dismissRelease.mutate()}
+          disabled={dismissRelease.isPending}
+          className="text-fg-dim transition hover:text-foreground disabled:opacity-60"
+          title="Hide this release for you only. Your history is kept"
+          aria-label="Hide this release"
+        >
+          <X className="size-3" />
+        </button>
+      </span>
+    );
+  }
 
   if (variant.status === "downloaded") {
     return (

@@ -20,7 +20,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.items as lazyListItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -50,8 +51,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -221,6 +228,10 @@ fun SearchScreen(
     // the delay only elapses once typing pauses). Best-effort — a flaky
     // network just means no suggestion row.
     var suggestions by remember { mutableStateOf<List<TmdbSuggestion>>(emptyList()) }
+    // Explicit D-pad target: the first suggestion chip. Focus can't
+    // reach the row through spatial search alone (see the text field's
+    // onPreviewKeyEvent below), so the input row routes Down here.
+    val firstSuggestionFocus = remember { FocusRequester() }
     LaunchedEffect(query, submittedQuery) {
         val q = query.trim()
         if (q.length < 2 || q == submittedQuery) {
@@ -472,19 +483,57 @@ fun SearchScreen(
                 // needs ~56 dp internally (label + content + bottom
                 // padding) and a smaller forced height clipped the
                 // typed text.
-                modifier = Modifier.width(420.dp),
+                //
+                // D-pad Down → suggestions: the M3 text field consumes
+                // DPAD_DOWN internally (cursor handling), so ordinary
+                // focus search never fires from here. Intercept the key
+                // BEFORE the field sees it and jump to the first
+                // suggestion chip explicitly. Only consumed when a chip
+                // is actually attached — else the default behaviour
+                // (whatever it is on this box) is left alone.
+                modifier = Modifier
+                    .width(420.dp)
+                    .onPreviewKeyEvent { e ->
+                        if (
+                            e.type == KeyEventType.KeyDown &&
+                            e.key == Key.DirectionDown &&
+                            suggestions.isNotEmpty()
+                        ) {
+                            runCatching { firstSuggestionFocus.requestFocus() }.isSuccess
+                        } else {
+                            false
+                        }
+                    },
             )
             TvIconButton(
                 icon = Icons.Filled.Search,
                 contentDescription = if (pending) "Searching" else "Search",
                 enabled = !pending && query.trim().length >= 2,
                 onClick = { submit() },
-                modifier = Modifier.focusRequester(searchBtnFocus),
+                // Down from the action buttons also lands on the first
+                // suggestion while the row is visible (spatial search
+                // would otherwise skip to the Sort chips).
+                modifier = Modifier
+                    .focusRequester(searchBtnFocus)
+                    .focusProperties {
+                        down = if (suggestions.isNotEmpty()) {
+                            firstSuggestionFocus
+                        } else {
+                            FocusRequester.Default
+                        }
+                    },
             )
             TvIconButton(
                 icon = Icons.Filled.Mic,
                 contentDescription = "Voice search",
                 onClick = { launchVoice() },
+                modifier = Modifier.focusProperties {
+                    down = if (suggestions.isNotEmpty()) {
+                        firstSuggestionFocus
+                    } else {
+                        FocusRequester.Default
+                    }
+                },
             )
             Box(Modifier.width(Spacing.lg))
             // Type chips share the input row to save a vertical line.
@@ -501,7 +550,11 @@ fun SearchScreen(
         // --- TMDB typeahead suggestions (only while the typed text
         //     differs from the submitted search) ---
         if (suggestions.isNotEmpty()) {
-            SuggestionsRow(suggestions = suggestions, onPick = pickSuggestion)
+            SuggestionsRow(
+                suggestions = suggestions,
+                firstChipFocus = firstSuggestionFocus,
+                onPick = pickSuggestion,
+            )
         }
 
         // --- Sort chips + view-mode toggle on a thin row ---
@@ -1401,11 +1454,19 @@ private fun SkeletonGrid(minSize: androidx.compose.ui.unit.Dp) {
  * canonical "Title (year)" + kind pill. Picking one submits the indexer
  * search with the CANONICAL title — the fastest path from a half-typed
  * (or misspelled) query to real results on a remote.
+ *
+ * Plain `Row` + `horizontalScroll`, NOT a LazyRow: this is the exact
+ * pattern of the Type/Sort chip rows, whose D-pad focus behaviour is
+ * proven on this screen (lazy items were not reliably focusable here),
+ * and 8 chips never need laziness. Focus scrolls off-screen chips into
+ * view automatically.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun SuggestionsRow(
     suggestions: List<TmdbSuggestion>,
+    /** Attached to the FIRST chip — the input row's explicit Down target. */
+    firstChipFocus: FocusRequester,
     onPick: (TmdbSuggestion) -> Unit,
 ) {
     Row(
@@ -1413,12 +1474,16 @@ private fun SuggestionsRow(
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         Eyebrow("TMDB")
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            lazyListItems(
-                suggestions,
-                key = { "${it.kind}:${it.tmdbId}" },
-            ) { s ->
-                SuggestionChip(suggestion = s, onClick = { onPick(s) })
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            suggestions.forEachIndexed { i, s ->
+                SuggestionChip(
+                    suggestion = s,
+                    onClick = { onPick(s) },
+                    modifier = if (i == 0) Modifier.focusRequester(firstChipFocus) else Modifier,
+                )
             }
         }
     }
@@ -1426,11 +1491,16 @@ private fun SuggestionsRow(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun SuggestionChip(suggestion: TmdbSuggestion, onClick: () -> Unit) {
+private fun SuggestionChip(
+    suggestion: TmdbSuggestion,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val pill = RoundedCornerShape(Radius.pill)
     val poster = tmdbPosterUrl(suggestion.posterPath, "w92")
     Surface(
         onClick = onClick,
+        modifier = modifier,
         shape = ClickableSurfaceDefaults.shape(shape = pill),
         scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
         colors = ClickableSurfaceDefaults.colors(
@@ -1515,7 +1585,7 @@ private fun EmptySearchState(
         }
         EmptyHint(
             title = "Type a title, then press Search",
-            body = "Or hit the 🎤 button — voice search is the fastest path on a remote.",
+            body = "Or hit the 🎤 button: voice search is the fastest path on a remote.",
         )
     }
 }

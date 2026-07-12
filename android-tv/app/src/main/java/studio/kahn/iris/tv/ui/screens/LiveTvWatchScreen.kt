@@ -283,7 +283,7 @@ fun LiveTvWatchScreen(
                 DecodeStage.Software -> stage = DecodeStage.Server
                 DecodeStage.Server ->
                     errorMessage = "This feed defeats this device's decoders and the " +
-                        "server transcoder — it may be down or badly corrupted."
+                        "server transcoder. It may be down or badly corrupted."
             }
         }
     }
@@ -442,7 +442,7 @@ fun LiveTvWatchScreen(
                     Text(
                         when (stage) {
                             DecodeStage.Hardware -> "Connecting…"
-                            DecodeStage.Software -> "Slow start — retrying with the software decoder…"
+                            DecodeStage.Software -> "Slow start, retrying with the software decoder…"
                             DecodeStage.Server -> "Preparing a compatible stream on the server…"
                         },
                         style = MaterialTheme.typography.bodyMedium,

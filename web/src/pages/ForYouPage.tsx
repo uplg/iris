@@ -33,7 +33,7 @@ export function ForYouPage() {
           <p className="px-0.5 text-sm text-muted-foreground">Loading…</p>
         ) : shelves.length === 0 ? (
           <p className="px-0.5 text-sm text-muted-foreground">
-            Nothing to recommend yet — set your preferences in your account and check back once the
+            Nothing to recommend yet. Set your preferences in your account and check back once the
             catalogue has refreshed.
           </p>
         ) : (

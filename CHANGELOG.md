@@ -5,6 +5,40 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-07-12
+
+### Added
+
+- **Ghost collections now look like they did before the cleanup.** A show
+  or movie whose files were reclaimed keeps its full collection page: the
+  same episode list, your "watched" badges and progress intact, with a
+  "Download again" chip in place of Play (web + Android TV). Re-grabbing
+  restores the exact same release, so playback resumes right where you
+  left off. Works for season packs too: every episode of the pack keeps
+  its own watched state.
+- **Hide a Gone entry.** Each user can now dismiss what they don't want to
+  see anymore, without touching anyone's watch history:
+  - a single reclaimed release, from the collection page (web: the ×
+    button; TV: long-press the chip, or the Hide button);
+  - a whole "Gone" card, from the Library (web: hover ×; TV: long-press).
+  A hidden entry comes back on new activity (you re-watch the show, or the
+  release is downloaded and reclaimed again).
+
+### Fixed
+
+- **Collections no longer carry a leading "[GROUP]" in their title.** A
+  release like `[H4KIG] Ted 2 (2015)` now titles its collection
+  "Ted 2 (2015)" — the bracketed tag also broke the TMDB poster lookup.
+  Existing collections self-heal at boot: title cleaned, poster
+  re-resolved.
+
+### Changed
+
+- **Quieter home pages.** Shelf eyebrows that just restated the title
+  ("For you", "On disk", "Following", "Recommended") are gone on web and
+  TV; the useful counts stay. The web hero also drops the "Continue
+  tonight · Resume" eyebrow, matching the TV.
+
 ## [1.3.0] - 2026-07-12
 
 ### Added

@@ -349,10 +349,17 @@ pub async fn list_in_collection(
 /// "Download again" list — the ghost-resume path for movies, which
 /// have no `available_episodes` offers to re-grab from. Callers keep
 /// only rows with source provenance (the actionable ones).
+///
+/// Per-caller: releases the user dismissed (`gone_release_dismissed`
+/// at-or-after the deletion) are hidden. A re-download + re-reclaim
+/// stamps a newer `deleted_at`, making the dismissal stale so the row
+/// returns — same staleness model as `cw_dismissed`.
 pub async fn list_deleted_in_collection(
     pool: &SqlitePool,
     collection_id: Uuid,
+    user_id: UserId,
 ) -> Result<Vec<TorrentRow>, sqlx::Error> {
+    let user: Uuid = user_id.into();
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
@@ -362,9 +369,37 @@ pub async fn list_deleted_in_collection(
          JOIN users u ON u.id = t.added_by \
          LEFT JOIN collections c ON c.id = t.collection_id \
          WHERE t.collection_id = ?1 AND t.deleted_at IS NOT NULL \
+           AND NOT EXISTS (SELECT 1 FROM gone_release_dismissed gd \
+                           WHERE gd.user_id = ?2 AND gd.infohash = t.infohash \
+                             AND gd.dismissed_at >= t.deleted_at) \
          ORDER BY t.deleted_at DESC",
     )
     .bind(collection_id)
+    .bind(user)
     .fetch_all(pool)
     .await
+}
+
+/// Hide one reclaimed release from the CALLER's gone surfaces (the
+/// collection page's per-episode gone rows + raw release rows). Upsert
+/// refreshes `dismissed_at`, so re-dismissing after a re-reclaim works.
+/// History is deliberately untouched — dismissing never erases
+/// `playback_progress`.
+pub async fn dismiss_gone_release(
+    pool: &SqlitePool,
+    user_id: UserId,
+    infohash: &str,
+) -> Result<(), sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query(
+        "INSERT INTO gone_release_dismissed (user_id, infohash, dismissed_at) \
+         VALUES (?1, ?2, ?3) \
+         ON CONFLICT(user_id, infohash) DO UPDATE SET dismissed_at = excluded.dismissed_at",
+    )
+    .bind(user)
+    .bind(infohash)
+    .bind(Utc::now())
+    .execute(pool)
+    .await?;
+    Ok(())
 }

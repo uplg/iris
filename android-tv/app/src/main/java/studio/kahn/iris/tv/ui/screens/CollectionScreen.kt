@@ -61,8 +61,10 @@ import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.AvailableEpisodeEntry
 import studio.kahn.iris.tv.data.CollectionDetail
+import studio.kahn.iris.tv.data.DismissGoneRequest
 import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.FileEntry
+import studio.kahn.iris.tv.data.GoneEpisodeEntry
 import studio.kahn.iris.tv.data.GoneReleaseEntry
 import studio.kahn.iris.tv.data.ResolveBody
 import studio.kahn.iris.tv.data.SeasonPackEntry
@@ -135,15 +137,20 @@ fun CollectionScreen(
         return
     }
 
-    // Merge on-disk + indexer-cached episodes for TV. Available
-    // entries carry a language tag so the same (S, E) can render as
-    // FR + EN side by side; downloaded entries get one row regardless.
-    val merged = remember(d) { mergeEpisodes(d.episodes, d.availableEpisodes.orEmpty()) }
+    // Merge on-disk + indexer-cached + GONE (reclaimed) episodes for
+    // TV. Available entries carry a language tag so the same (S, E)
+    // can render as FR + EN side by side; gone entries keep their slot
+    // so a ghost collection reads exactly like it did before the GC.
+    val merged = remember(d) {
+        mergeEpisodes(d.episodes, d.availableEpisodes.orEmpty(), d.goneEpisodes.orEmpty())
+    }
     // Fleuve anime (One Piece): one flat absolute-numbered list, no
     // season tabs. Derived server-side, so a season-cut anime keeps the
     // seasonal layout below.
     val isAbsolute = d.numbering == "absolute"
-    val absoluteRows = remember(d) { mergeEpisodesAbsolute(d.episodes, d.availableEpisodes.orEmpty()) }
+    val absoluteRows = remember(d) {
+        mergeEpisodesAbsolute(d.episodes, d.availableEpisodes.orEmpty(), d.goneEpisodes.orEmpty())
+    }
     // Seasons that have either episodes OR a pack offer — a brand
     // new follow whose only signal is a pack still gets its season
     // tab so the user has a "Grab full Season N" affordance.
@@ -246,6 +253,18 @@ fun CollectionScreen(
                                 reload()
                             }
                         },
+                        onRestoreVariant = { variant ->
+                            scope.launch {
+                                doRestoreVariant(container, d.tmdbId, variant, onPickFile)
+                                reload()
+                            }
+                        },
+                        onDismissVariant = { variant ->
+                            scope.launch {
+                                doDismissGoneRelease(container, variant.infohash)
+                                reload()
+                            }
+                        },
                     )
                 }
             }
@@ -338,6 +357,18 @@ fun CollectionScreen(
                                 reload()
                             }
                         },
+                        onRestoreVariant = { variant ->
+                            scope.launch {
+                                doRestoreVariant(container, d.tmdbId, variant, onPickFile)
+                                reload()
+                            }
+                        },
+                        onDismissVariant = { variant ->
+                            scope.launch {
+                                doDismissGoneRelease(container, variant.infohash)
+                                reload()
+                            }
+                        },
                     )
                 }
             }
@@ -372,11 +403,17 @@ fun CollectionScreen(
         }
 
         // "Previously on disk" — the ghost-resume surface, movies
-        // especially (TV also re-grabs via the episode offers above).
-        // Re-ingesting the same release yields the same infohash, so the
-        // saved playback position resumes untouched. Nothing automatic:
-        // the download only starts on the button press.
-        val goneReleases = d.goneReleases.orEmpty()
+        // especially (TV gone releases render inline as episode chips
+        // above; this section keeps the remainder: movies and packs the
+        // SCENE parser never split). Re-ingesting the same release
+        // yields the same infohash, so the saved playback position
+        // resumes untouched. Nothing automatic: the download only
+        // starts on the button press.
+        val goneInline = d.goneEpisodes.orEmpty()
+            .filter { it.episode > 0L }
+            .map { it.infohash }
+            .toSet()
+        val goneReleases = d.goneReleases.orEmpty().filter { it.infohash !in goneInline }
         if (goneReleases.isNotEmpty()) {
             item(key = "gone-header") {
                 Eyebrow(
@@ -398,6 +435,12 @@ fun CollectionScreen(
                         release = r,
                         busy = restoringInfohash == r.infohash,
                         enabled = restoringInfohash == null,
+                        onHide = {
+                            scope.launch {
+                                doDismissGoneRelease(container, r.infohash)
+                                reload()
+                            }
+                        },
                         onDownloadAgain = {
                             scope.launch {
                                 restoringInfohash = r.infohash
@@ -430,8 +473,11 @@ fun CollectionScreen(
     }
 }
 
-/** One reclaimed release: SCENE name + size + provider, and the
- *  "Download again" action. Mirrors the web's `GoneReleases` rows. */
+/** One reclaimed release, rendered like it was still on disk: the
+ *  caller's watch state leads ("Watched · 2d ago" / "43% watched"),
+ *  the SCENE name is the secondary line, and "Download again" replaces
+ *  Play. "Hide" dismisses the row for THIS user only (history stays).
+ *  Mirrors the web's `GoneReleases` rows. */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun GoneReleaseRow(
@@ -439,7 +485,17 @@ private fun GoneReleaseRow(
     busy: Boolean,
     enabled: Boolean,
     onDownloadAgain: () -> Unit,
+    onHide: () -> Unit,
 ) {
+    val watchLine = when {
+        release.watched == true -> "Watched"
+        (release.positionSeconds ?: 0.0) > 0.0 -> {
+            val pct = release.durationSeconds?.takeIf { it > 0 }
+                ?.let { ((release.positionSeconds ?: 0.0) / it * 100).toInt().coerceIn(0, 100) }
+            if (pct != null) "$pct% watched" else "Started"
+        }
+        else -> null
+    }
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -449,10 +505,21 @@ private fun GoneReleaseRow(
             Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            if (watchLine != null) {
+                Text(
+                    watchLine,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
             Text(
                 release.name,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = if (watchLine != null) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -465,6 +532,12 @@ private fun GoneReleaseRow(
         IrisButton(
             if (busy) "Restoring…" else "Download again",
             onDownloadAgain,
+            variant = IrisButtonVariant.Ghost,
+            enabled = enabled && !busy,
+        )
+        IrisButton(
+            "Hide",
+            onHide,
             variant = IrisButtonVariant.Ghost,
             enabled = enabled && !busy,
         )
@@ -506,18 +579,53 @@ private sealed class EpisodeVariant {
         val sizeBytes: Long?,
         override val language: String?,
     ) : EpisodeVariant()
+
+    /** A release the GC reclaimed — the row renders in place like it
+     *  was still on disk (watched badge included). Click = re-ingest
+     *  the exact same release (same infohash → saved position resumes)
+     *  and play; long-press = hide it for THIS user (per-release
+     *  dismissal, history untouched). */
+    data class Gone(
+        val infohash: String,
+        val fileIdx: Int,
+        val watched: Boolean,
+        val releaseName: String,
+        val sourceProvider: String,
+        val sourceExternalId: String,
+        override val language: String?,
+    ) : EpisodeVariant()
 }
+
+/** Chip order inside a row: downloaded first (the natural Play
+ *  primary), then gone (it WAS on disk), then available offers. */
+private fun variantRank(v: EpisodeVariant): Int = when (v) {
+    is EpisodeVariant.Downloaded -> 0
+    is EpisodeVariant.Gone -> 1
+    is EpisodeVariant.Available -> 2
+}
+
+private fun goneVariant(g: GoneEpisodeEntry): EpisodeVariant.Gone = EpisodeVariant.Gone(
+    infohash = g.infohash,
+    fileIdx = g.fileIdx.toInt(),
+    watched = g.watched,
+    releaseName = g.releaseName,
+    sourceProvider = g.sourceProvider,
+    sourceExternalId = g.sourceExternalId,
+    language = g.language,
+)
 
 private fun mergeEpisodes(
     onDisk: List<EpisodeEntry>,
     available: List<AvailableEpisodeEntry>,
+    gone: List<GoneEpisodeEntry>,
 ): List<MergedEpisode> {
-    // Group both downloaded and available entries under the same
+    // Group downloaded, gone and available entries under the same
     // (season, episode) key. Server already filters available rows
     // whose language is covered by an owned release — anything that
     // arrives here is a genuine additional variant the user might
-    // want to grab. episode == 0 is the season-pack sentinel and
-    // stays out of the per-episode grid.
+    // want to grab. Gone rows keep their slot so a ghost collection
+    // reads exactly like it did before the GC. episode == 0 is the
+    // season-pack sentinel and stays out of the per-episode grid.
     val buckets = linkedMapOf<Pair<Long, Long>, MutableList<EpisodeVariant>>()
     val ensure = { season: Long, episode: Long ->
         buckets.getOrPut(season to episode) { mutableListOf() }
@@ -533,6 +641,10 @@ private fun mergeEpisodes(
             ),
         )
     }
+    for (g in gone) {
+        if (g.episode == 0L) continue
+        ensure(g.season, g.episode).add(goneVariant(g))
+    }
     for (a in available) {
         if (a.episode == 0L) continue
         ensure(a.season, a.episode).add(
@@ -545,15 +657,12 @@ private fun mergeEpisodes(
         )
     }
     // Variant order inside a row: downloaded first (the natural
-    // "Play" primary), then available sorted by language for
-    // predictable adjacency.
+    // "Play" primary), then gone, then available — each sorted by
+    // language for predictable adjacency.
     return buckets
         .map { (key, variants) ->
             val sorted = variants.sortedWith(
-                compareBy(
-                    { if (it is EpisodeVariant.Downloaded) 0 else 1 },
-                    { it.language ?: "" },
-                ),
+                compareBy({ variantRank(it) }, { it.language ?: "" }),
             )
             MergedEpisode(season = key.first, episode = key.second, variants = sorted)
         }
@@ -569,6 +678,7 @@ private fun mergeEpisodes(
 private fun mergeEpisodesAbsolute(
     onDisk: List<EpisodeEntry>,
     available: List<AvailableEpisodeEntry>,
+    gone: List<GoneEpisodeEntry>,
 ): List<MergedEpisode> {
     // A long-running anime ships fleuve fansubs (`S01E1156`, absolute
     // known) AND season-cut releases (`S23E07`, no derivable absolute)
@@ -576,8 +686,9 @@ private fun mergeEpisodesAbsolute(
     // axis, so they must NOT be folded in under their raw `episode` (that
     // aliased unrelated cuts onto a bogus "Episode 1..7"). Owned episodes
     // always appear (never hide what's on disk) — by absolute when known,
-    // else by their (season, episode); available offers appear only when
-    // they carry an absolute number. Mirrors web `mergeEpisodesAbsolute`.
+    // else by their (season, episode); GONE episodes follow the same rule
+    // (they were on disk); available offers appear only when they carry
+    // an absolute number. Mirrors web `mergeEpisodesAbsolute`.
     data class Row(val season: Long, val episode: Long, val absolute: Long?, val variants: MutableList<EpisodeVariant>)
     val buckets = linkedMapOf<String, Row>()
     val ensure = { abs: Long?, season: Long, episode: Long ->
@@ -595,6 +706,10 @@ private fun mergeEpisodesAbsolute(
             ),
         )
     }
+    for (g in gone) {
+        if (g.episode == 0L) continue
+        ensure(g.absoluteEpisode, g.season, g.episode).variants.add(goneVariant(g))
+    }
     for (a in available) {
         if (a.episode == 0L) continue
         // Skip season-cut offers with no absolute — unplaceable here.
@@ -611,10 +726,7 @@ private fun mergeEpisodesAbsolute(
     return buckets.values
         .map { row ->
             val sorted = row.variants.sortedWith(
-                compareBy(
-                    { if (it is EpisodeVariant.Downloaded) 0 else 1 },
-                    { it.language ?: "" },
-                ),
+                compareBy({ variantRank(it) }, { it.language ?: "" }),
             )
             MergedEpisode(season = row.season, episode = row.episode, absolute = row.absolute, variants = sorted)
         }
@@ -648,6 +760,40 @@ private suspend fun doGrabVariant(
     // "Prepare" web button doesn't have a clean D-pad equivalent
     // and the user typically opens an episode to watch it.
     onPlay(res.infohash, res.fileIdx.toInt())
+}
+
+/** Re-ingest a reclaimed release (same infohash → the saved playback
+ *  position resumes untouched) and go straight back into playback —
+ *  the stream path serves while the torrent downloads. */
+private suspend fun doRestoreVariant(
+    container: AppContainer,
+    tmdbId: Long?,
+    variant: EpisodeVariant.Gone,
+    onPlay: (infohash: String, fileIdx: Int) -> Unit,
+) {
+    val url = container.sessionStore.serverUrl.first() ?: return
+    val api = container.apiFor(url)
+    val ok = withContext(Dispatchers.IO) {
+        runCatching {
+            api.ingest(
+                ResolveBody(
+                    providerId = variant.sourceProvider,
+                    externalId = variant.sourceExternalId,
+                    tmdbId = tmdbId,
+                ),
+            )
+        }.isSuccess
+    }
+    if (ok) onPlay(variant.infohash, variant.fileIdx)
+}
+
+/** Hide one reclaimed release for the CALLER (per-user; history and
+ *  playback rows stay). A later re-download + re-reclaim resurfaces it. */
+private suspend fun doDismissGoneRelease(container: AppContainer, infohash: String) {
+    val url = container.sessionStore.serverUrl.first() ?: return
+    withContext(Dispatchers.IO) {
+        runCatching { container.apiFor(url).dismissGone(DismissGoneRequest(infohash = infohash)) }
+    }
 }
 
 /// Grab a full season pack. Calls the same per-episode endpoint
@@ -849,8 +995,12 @@ private fun EpisodeRow(
     ep: MergedEpisode,
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
     onGrabVariant: (EpisodeVariant.Available) -> Unit,
+    onRestoreVariant: (EpisodeVariant.Gone) -> Unit,
+    onDismissVariant: (EpisodeVariant.Gone) -> Unit,
 ) {
-    val anyWatched = ep.variants.any { it is EpisodeVariant.Downloaded && it.watched }
+    val anyWatched = ep.variants.any {
+        (it is EpisodeVariant.Downloaded && it.watched) || (it is EpisodeVariant.Gone && it.watched)
+    }
     // Layout mirrors `SeasonPackBanner` exactly (info column on the
     // left with weight=1f, action buttons on the right inside a Row
     // — fixed height container). The previous Column-of-Rows shape
@@ -902,7 +1052,13 @@ private fun EpisodeRow(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 ep.variants.forEach { v ->
-                    VariantChip(variant = v, onPlay = onPlay, onGrab = onGrabVariant)
+                    VariantChip(
+                        variant = v,
+                        onPlay = onPlay,
+                        onGrab = onGrabVariant,
+                        onRestore = onRestoreVariant,
+                        onDismiss = onDismissVariant,
+                    )
                 }
             }
         }
@@ -915,6 +1071,8 @@ private fun VariantChip(
     variant: EpisodeVariant,
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
     onGrab: (EpisodeVariant.Available) -> Unit,
+    onRestore: (EpisodeVariant.Gone) -> Unit,
+    onDismiss: (EpisodeVariant.Gone) -> Unit,
 ) {
     when (variant) {
         is EpisodeVariant.Downloaded -> {
@@ -981,6 +1139,41 @@ private fun VariantChip(
                     LanguageBadge(language = variant.language)
                     Text(
                         if (meta.isEmpty()) "Grab" else "Grab · $meta",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+        }
+        is EpisodeVariant.Gone -> {
+            // Muted "it used to be here" chip — same Button focus
+            // mechanics as its siblings so D-pad traversal stays
+            // uniform. Click re-downloads the exact release and jumps
+            // back into playback; LONG-PRESS hides it for this user
+            // (same gesture as the Continue Watching tile menu).
+            val goneShape = RoundedCornerShape(Radius.button)
+            Button(
+                onClick = { onRestore(variant) },
+                onLongClick = { onDismiss(variant) },
+                shape = ButtonDefaults.shape(shape = goneShape),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                scale = ButtonDefaults.scale(focusedScale = 1f),
+                colors = ButtonDefaults.colors(
+                    containerColor = IrisColors.Overlay12,
+                    focusedContainerColor = IrisColors.Overlay12,
+                    contentColor = IrisColors.MutedForeground,
+                    focusedContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+                border = ButtonDefaults.border(
+                    focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = goneShape),
+                ),
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LanguageBadge(language = variant.language)
+                    Text(
+                        "Download again",
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }

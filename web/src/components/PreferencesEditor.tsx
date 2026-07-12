@@ -61,7 +61,7 @@ export function PreferencesEditor({
 
       <Section
         title="Genres"
-        hint="Pick a few you enjoy. Anime is its own category — distinct from Animation. Leave empty for a bit of everything."
+        hint="Pick a few you enjoy. Anime is its own category, distinct from Animation. Leave empty for a bit of everything."
       >
         <div className="flex flex-wrap gap-2">
           {/* Anime is a distinct category — NOT TMDB's "Animation" genre.

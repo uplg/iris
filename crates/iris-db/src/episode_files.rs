@@ -56,6 +56,66 @@ pub async fn list_for_collection(
     .await
 }
 
+/// One episode file whose source torrent was RECLAIMED (soft-deleted),
+/// joined with the CALLER's playback state. Powers the collection page's
+/// "as if it were still on disk" ghost rendering: the episode list keeps
+/// every gone (S, E) row — watched state included — with a re-grab
+/// action instead of Play. `episode_files` rows survive the GC (only a
+/// manual per-torrent remove hard-deletes them), so the pre-reclaim
+/// episode layout is fully reconstructible.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct GoneEpisodeFileRow {
+    pub season: i64,
+    pub episode: i64,
+    pub absolute_episode: Option<i64>,
+    pub infohash: String,
+    pub file_idx: i64,
+    /// Raw SCENE name of the reclaimed torrent — language detection +
+    /// secondary display line.
+    pub torrent_name: String,
+    /// Provenance for "Download again". Callers keep only rows with both
+    /// set (re-resolving the same release yields the same infohash, so
+    /// the saved position resumes untouched).
+    pub source_provider: Option<String>,
+    pub source_external_id: Option<String>,
+    /// Caller's playback state; all `NULL`/false when never watched.
+    pub completed: bool,
+    pub position_seconds: Option<f64>,
+    pub duration_seconds: Option<f64>,
+    pub last_watched_at: Option<DateTime<Utc>>,
+}
+
+/// Gone episode rows for a collection, per-caller. Releases the user
+/// dismissed (`gone_release_dismissed` at-or-after the deletion) are
+/// hidden — a re-download + re-reclaim stamps a newer `deleted_at`,
+/// making the dismissal stale so the rows return.
+pub async fn list_gone_for_collection(
+    pool: &SqlitePool,
+    collection_id: Uuid,
+    user_id: iris_core::ids::UserId,
+) -> Result<Vec<GoneEpisodeFileRow>, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query_as::<_, GoneEpisodeFileRow>(
+        "SELECT ef.season, ef.episode, ef.absolute_episode, ef.infohash, ef.file_idx, \
+            t.name AS torrent_name, t.source_provider, t.source_external_id, \
+            COALESCE(p.completed, 0) AS completed, \
+            p.position_seconds, p.duration_seconds, p.last_watched_at \
+         FROM episode_files ef \
+         JOIN torrents t ON t.infohash = ef.infohash \
+         LEFT JOIN playback_progress p \
+            ON p.infohash = ef.infohash AND p.file_idx = ef.file_idx AND p.user_id = ?2 \
+         WHERE ef.collection_id = ?1 AND t.deleted_at IS NOT NULL \
+           AND NOT EXISTS (SELECT 1 FROM gone_release_dismissed gd \
+                           WHERE gd.user_id = ?2 AND gd.infohash = t.infohash \
+                             AND gd.dismissed_at >= t.deleted_at) \
+         ORDER BY ef.season, ef.episode, ef.file_idx",
+    )
+    .bind(collection_id)
+    .bind(user)
+    .fetch_all(pool)
+    .await
+}
+
 /// Single-season variant — saves a sort+filter when the caller knows
 /// they only need one season's worth of rows.
 pub async fn list_for_collection_season(
