@@ -418,6 +418,11 @@ export const me = {
       }).toString()}`,
     ),
   watchlist: () => api.get<WatchlistItem[]>("/me/watchlist"),
+  /** Remove a series from MY Watchlist (keyed on the item's
+   *  `normalized_name`). Reversible by nature: grabbing or playing an
+   *  episode auto-recreates the follow. */
+  removeFromWatchlist: (normalized_name: string) =>
+    api.post<void>("/me/watchlist/remove", { normalized_name }),
   preferences: () => api.get<Preferences>("/me/preferences"),
   savePreferences: (body: Preferences) => api.put<Preferences>("/me/preferences", body),
   /** The home blended "For You" shelf. */

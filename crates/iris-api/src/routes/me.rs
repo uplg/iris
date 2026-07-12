@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/history", get(history))
         .route("/gone/dismiss", axum::routing::post(dismiss_gone))
         .route("/watchlist", get(watchlist))
+        .route("/watchlist/remove", axum::routing::post(remove_watchlist))
         .route("/password", axum::routing::post(change_password))
         .route("/display-name", axum::routing::post(change_display_name))
 }
@@ -285,6 +286,43 @@ pub(crate) async fn watchlist(
         });
     }
     Ok(Json(out))
+}
+
+#[derive(Debug, serde::Deserialize, ToSchema)]
+pub(crate) struct RemoveWatchlistRequest {
+    /// The series' SCENE-normalised name — the stable identity a
+    /// `WatchlistItem` carries (`id` is the collection's, not the
+    /// follow's).
+    normalized_name: String,
+}
+
+/// Remove a series from the CALLER's Watchlist. Per-user (follows are
+/// per-user rows) and naturally reversible: grabbing or playing an
+/// episode auto-recreates the follow — auto-tracking is the whole
+/// Watchlist model, so removal means "until I engage with it again".
+#[utoipa::path(
+    post,
+    path = "/api/me/watchlist/remove",
+    request_body = RemoveWatchlistRequest,
+    responses(
+        (status = 204, description = "Removed from the caller's Watchlist"),
+        (status = 404, description = "Not on the caller's Watchlist"),
+        (status = 401, description = "Not authenticated"),
+    ),
+    tag = "me",
+)]
+pub(crate) async fn remove_watchlist(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<RemoveWatchlistRequest>,
+) -> ApiResult<axum::http::StatusCode> {
+    let removed =
+        iris_db::follows::delete_by_normalized(state.db(), user.id, &body.normalized_name).await?;
+    if removed {
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound)
+    }
 }
 
 #[utoipa::path(

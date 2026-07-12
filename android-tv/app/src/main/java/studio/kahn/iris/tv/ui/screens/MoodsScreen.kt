@@ -41,7 +41,6 @@ import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.theme.irisAmbient
 
 /**
  * The mood board ("Tonight"): a grid of curated mood tiles (taste-ordered, each
@@ -91,90 +90,90 @@ fun MoodsScreen(
         loadingResults = false
     }
 
-    Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
-        Box(Modifier.fillMaxSize().background(irisAmbient()))
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = Spacing.xxl),
-            verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
-        ) {
-            item(key = "header") {
-                Column(
-                    modifier = Modifier.padding(horizontal = Spacing.gutter),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
-                ) {
-                    // No "Tonight" eyebrow: this renders as the Tonight
-                    // TAB inside DiscoverScreen, whose tab row names it.
-                    SectionTitle(selected?.label ?: "What are you in the mood for?")
-                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+    // No background here — DiscoverScreen paints the Background +
+    // ambient once for the whole page (an opaque repaint under the
+    // tab strip rendered as a flat black band).
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(vertical = Spacing.xxl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
+    ) {
+        item(key = "header") {
+            Column(
+                modifier = Modifier.padding(horizontal = Spacing.gutter),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                // No "Tonight" eyebrow: this renders as the Tonight
+                // TAB inside DiscoverScreen, whose tab row names it.
+                SectionTitle(selected?.label ?: "What are you in the mood for?")
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    IrisButton(
+                        text = "Films",
+                        onClick = { kind = "movie" },
+                        variant =
+                            if (kind == "movie") IrisButtonVariant.Primary else IrisButtonVariant.Ghost,
+                    )
+                    IrisButton(
+                        text = "Series",
+                        onClick = { kind = "tv" },
+                        variant =
+                            if (kind == "tv") IrisButtonVariant.Primary else IrisButtonVariant.Ghost,
+                    )
+                    if (selected != null) {
                         IrisButton(
-                            text = "Films",
-                            onClick = { kind = "movie" },
-                            variant =
-                                if (kind == "movie") IrisButtonVariant.Primary else IrisButtonVariant.Ghost,
+                            text = "← Back",
+                            onClick = { selected = null },
+                            variant = IrisButtonVariant.Ghost,
                         )
-                        IrisButton(
-                            text = "Series",
-                            onClick = { kind = "tv" },
-                            variant =
-                                if (kind == "tv") IrisButtonVariant.Primary else IrisButtonVariant.Ghost,
-                        )
-                        if (selected != null) {
-                            IrisButton(
-                                text = "← Back",
-                                onClick = { selected = null },
-                                variant = IrisButtonVariant.Ghost,
-                            )
+                    }
+                }
+            }
+        }
+
+        if (selected == null) {
+            board.chunked(3).forEachIndexed { rowIdx, rowTiles ->
+                item(key = "mood-row-$rowIdx") {
+                    Row(
+                        modifier = Modifier.padding(horizontal = Spacing.gutter),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+                    ) {
+                        rowTiles.forEach { tile ->
+                            MoodTileCard(tile = tile, onClick = { selected = tile })
                         }
                     }
                 }
             }
-
-            if (selected == null) {
-                board.chunked(3).forEachIndexed { rowIdx, rowTiles ->
-                    item(key = "mood-row-$rowIdx") {
-                        Row(
-                            modifier = Modifier.padding(horizontal = Spacing.gutter),
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-                        ) {
-                            rowTiles.forEach { tile ->
-                                MoodTileCard(tile = tile, onClick = { selected = tile })
-                            }
-                        }
-                    }
-                }
-            } else if (loadingResults) {
-                item(key = "loading") {
+        } else if (loadingResults) {
+            item(key = "loading") {
+                Text(
+                    "Finding something good…",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = IrisColors.FgDim,
+                    modifier = Modifier.padding(horizontal = Spacing.gutter),
+                )
+            }
+        } else {
+            val items = results?.items.orEmpty()
+            if (items.isEmpty()) {
+                item(key = "empty") {
                     Text(
-                        "Finding something good…",
+                        "Nothing grabbable for this mood right now.",
                         style = MaterialTheme.typography.bodyLarge,
                         color = IrisColors.FgDim,
                         modifier = Modifier.padding(horizontal = Spacing.gutter),
                     )
                 }
             } else {
-                val items = results?.items.orEmpty()
-                if (items.isEmpty()) {
-                    item(key = "empty") {
-                        Text(
-                            "Nothing grabbable for this mood right now.",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = IrisColors.FgDim,
-                            modifier = Modifier.padding(horizontal = Spacing.gutter),
-                        )
-                    }
-                } else {
-                    item(key = "results") {
-                        Shelf(title = selected?.label ?: "Mood") {
-                            items(items, key = { it.catalogId }) { card ->
-                                CatalogCardTv(
-                                    container = container,
-                                    card = card,
-                                    onClick = {
-                                        routeCatalogClick(card, onOpenCollection, onPickResult, onOpenSearch)
-                                    },
-                                )
-                            }
+                item(key = "results") {
+                    Shelf(title = selected?.label ?: "Mood") {
+                        items(items, key = { it.catalogId }) { card ->
+                            CatalogCardTv(
+                                container = container,
+                                card = card,
+                                onClick = {
+                                    routeCatalogClick(card, onOpenCollection, onPickResult, onOpenSearch)
+                                },
+                            )
                         }
                     }
                 }

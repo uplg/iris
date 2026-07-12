@@ -128,6 +128,26 @@ pub async fn delete(pool: &SqlitePool, user_id: UserId, id: Uuid) -> Result<bool
     Ok(res.rows_affected() > 0)
 }
 
+/// Same as [`delete`] but keyed on the follow's normalised SCENE name —
+/// the identity `WatchlistItem` actually carries (its `id` is the
+/// COLLECTION id, useless against `series_follows`). Powers the
+/// per-user "remove from Watchlist" action. The follow auto-recreates
+/// on the next grab/play in the series (auto-tracking is the whole
+/// Watchlist model), so removal is naturally "until I engage again".
+pub async fn delete_by_normalized(
+    pool: &SqlitePool,
+    user_id: UserId,
+    normalized_name: &str,
+) -> Result<bool, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    let res = sqlx::query("DELETE FROM series_follows WHERE user_id = ?1 AND normalized_name = ?2")
+        .bind(user)
+        .bind(normalized_name)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
 /// Re-key every follow from normalized name `from` onto `to` during an
 /// anime noise-split collection merge. A user who already follows `to`
 /// keeps that row — the `UPDATE OR IGNORE` skips the collision against the

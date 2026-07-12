@@ -1,7 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useMemo, useState } from "react";
 import { Link, linkOptions } from "@tanstack/react-router";
-import { ArrowUpRight, Bookmark, Play, Sparkles } from "lucide-react";
+import { ArrowUpRight, Bookmark, Play, Sparkles, X } from "lucide-react";
 
 import { CatalogCardView } from "@/components/CatalogCardView";
 import { Container } from "@/components/Container";
@@ -455,23 +455,48 @@ function ContinueCard({ item }: { item: ContinueWatchingItem }) {
 }
 
 function WatchlistCard({ item }: { item: WatchlistItem }) {
+  const qc = useQueryClient();
+  // Per-user and reversible by nature: grabbing or playing an episode
+  // auto-recreates the follow (auto-tracking IS the Watchlist model).
+  const remove = useMutation({
+    mutationFn: () => meApi.removeFromWatchlist(item.normalized_name),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["watchlist"] }),
+  });
   // Watchlist items carry the collection id directly — route to the
   // unified Series view. Per-user state (new_count, last_visited_at)
   // is computed server-side off the calling user's series_follows row.
   return (
-    <MediaCard
-      link={linkOptions({ to: "/collection/$id", params: { id: String(item.id) } })}
-      title={item.name}
-      posterUrl={tmdbImage(item.poster_path, "w342")}
-      kind="tv"
-      badge={
-        item.new_count > 0 ? (
-          <Tag variant="accent">{item.new_count} new</Tag>
-        ) : (
-          <Bookmark className="size-3.5 text-white/85 drop-shadow" />
-        )
-      }
-    />
+    <div className="group relative">
+      <MediaCard
+        link={linkOptions({ to: "/collection/$id", params: { id: String(item.id) } })}
+        title={item.name}
+        posterUrl={tmdbImage(item.poster_path, "w342")}
+        kind="tv"
+        badge={
+          item.new_count > 0 ? (
+            <Tag variant="accent">{item.new_count} new</Tag>
+          ) : (
+            <Bookmark className="size-3.5 text-white/85 drop-shadow" />
+          )
+        }
+      />
+      {/* Hover ×: remove from MY Watchlist (same pattern as the
+          Continue Watching manage button / Library ghost hide). */}
+      <button
+        type="button"
+        aria-label="Remove from my Watchlist"
+        title="Remove from my Watchlist. It comes back if you grab or play an episode"
+        disabled={remove.isPending}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          remove.mutate();
+        }}
+        className="focus-ring absolute top-2 left-2 grid size-8 place-items-center rounded-full bg-black/60 text-white opacity-0 backdrop-blur transition-opacity group-hover:opacity-100 focus-visible:opacity-100 disabled:opacity-60"
+      >
+        <X className="size-4" />
+      </button>
+    </div>
   );
 }
 

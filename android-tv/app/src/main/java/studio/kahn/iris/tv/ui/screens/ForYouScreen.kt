@@ -2,7 +2,6 @@ package studio.kahn.iris.tv.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,7 +25,6 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.ForYou
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.theme.irisAmbient
 
 /**
  * The organized "For You" page — the blended top picks plus per-genre /
@@ -58,46 +56,46 @@ fun ForYouScreen(
 
     val shelves = data?.shelves.orEmpty()
 
-    Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
-        Box(Modifier.fillMaxSize().background(irisAmbient()))
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = Spacing.xxl),
-            verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
-        ) {
-            // No header block: this renders as the "For You" TAB inside
-            // DiscoverScreen, whose tab row already names the page.
-            if (loading) {
-                item(key = "loading") {
-                    Text(
-                        "Loading…",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = IrisColors.FgDim,
-                        modifier = Modifier.padding(horizontal = Spacing.gutter),
-                    )
-                }
-            } else if (shelves.isEmpty()) {
-                item(key = "empty") {
-                    Text(
-                        "Nothing to recommend yet. Set your preferences and check back once the catalogue has refreshed.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = IrisColors.FgDim,
-                        modifier = Modifier.padding(horizontal = Spacing.gutter),
-                    )
-                }
-            } else {
-                shelves.forEach { shelf ->
-                    item(key = "shelf-${shelf.key}") {
-                        Shelf(title = shelf.title) {
-                            items(shelf.items, key = { it.catalogId }) { card ->
-                                CatalogCardTv(
-                                    container = container,
-                                    card = card,
-                                    onClick = {
-                                        routeCatalogClick(card, onOpenCollection, onPickResult, onOpenSearch)
-                                    },
-                                )
-                            }
+    // No background here — DiscoverScreen paints the Background +
+    // ambient once for the whole page (an opaque repaint under the tab
+    // strip rendered as a flat black band).
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(vertical = Spacing.xl),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
+    ) {
+        // No header block: this renders as the "For You" TAB inside
+        // DiscoverScreen, whose tab row already names the page.
+        if (loading) {
+            item(key = "loading") {
+                Text(
+                    "Loading…",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = IrisColors.FgDim,
+                    modifier = Modifier.padding(horizontal = Spacing.gutter),
+                )
+            }
+        } else if (shelves.isEmpty()) {
+            item(key = "empty") {
+                Text(
+                    "Nothing to recommend yet. Set your preferences and check back once the catalogue has refreshed.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = IrisColors.FgDim,
+                    modifier = Modifier.padding(horizontal = Spacing.gutter),
+                )
+            }
+        } else {
+            shelves.forEach { shelf ->
+                item(key = "shelf-${shelf.key}") {
+                    Shelf(title = shelf.title) {
+                        items(shelf.items, key = { it.catalogId }) { card ->
+                            CatalogCardTv(
+                                container = container,
+                                card = card,
+                                onClick = {
+                                    routeCatalogClick(card, onOpenCollection, onPickResult, onOpenSearch)
+                                },
+                            )
                         }
                     }
                 }

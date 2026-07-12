@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -68,9 +70,14 @@ fun SettingsScreen(
 
     val layout = LocalTvLayout.current
     val cardShape = RoundedCornerShape(studio.kahn.iris.tv.ui.theme.Radius.poster)
+    // Scrollable: the page outgrew a fixed-height Column (the update
+    // card alone is tall) — overflow silently squashed whatever card
+    // came after it into empty-looking pill borders. D-pad focus
+    // brings the focused control into view.
     Column(
         Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(
                 horizontal = layout.gutterHorizontal,
                 vertical = layout.gutterVertical,
@@ -116,9 +123,8 @@ fun SettingsScreen(
             }
         }
 
-        // Push the actions to the bottom of the screen so they stay visible.
-        Box(Modifier.weight(1f))
-
+        // (No weight-spacer: it's incompatible with the scroll container —
+        // the actions simply follow the content.)
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),

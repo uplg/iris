@@ -69,6 +69,7 @@ import studio.kahn.iris.tv.data.ForYou
 import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.LibraryResponse
 import studio.kahn.iris.tv.data.PreferencesResponse
+import studio.kahn.iris.tv.data.RemoveWatchlistRequest
 import studio.kahn.iris.tv.data.WatchlistItem
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.TorrentView
@@ -84,6 +85,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
+import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
@@ -150,6 +152,8 @@ fun HomeScreen(
     // The Continue Watching tile whose manage sheet (remove / mark-watched)
     // is open, if any.
     var cwManageItem by remember { mutableStateOf<ContinueWatchingItem?>(null) }
+    // The Watchlist tile the user long-pressed to remove, pending confirm.
+    var watchlistRemoveItem by remember { mutableStateOf<WatchlistItem?>(null) }
     // "Update available" badge on the Settings icon — reads the same version
     // sidecar as the Settings card, throttled process-wide (see the cache
     // vars above the composable).
@@ -313,7 +317,39 @@ fun HomeScreen(
                 onOpenLiveTv = onOpenLiveTv,
                 onRetry = { loadVersion++ },
                 onManageCw = { cwManageItem = it },
+                onManageWatchlist = { watchlistRemoveItem = it },
                 updateAvailable = updateAvailable,
+            )
+        }
+
+        // Held-select on a Watchlist tile: confirm-and-remove. Per-user,
+        // and reversible by nature — grabbing or playing an episode
+        // auto-recreates the follow (auto-tracking IS the Watchlist).
+        watchlistRemoveItem?.let { item ->
+            ConfirmDialog(
+                eyebrow = "My Watchlist",
+                title = item.name,
+                body = "Removed from your Watchlist only. It comes back " +
+                    "automatically the next time you grab or play an episode.",
+                confirmLabel = "Remove",
+                onConfirm = {
+                    watchlistRemoveItem = null
+                    scope.launch {
+                        val url = container.sessionStore.serverUrl.first()
+                            ?: return@launch
+                        runCatching {
+                            container.apiFor(url).removeFromWatchlist(
+                                RemoveWatchlistRequest(normalizedName = item.normalizedName),
+                            )
+                        }.onSuccess {
+                            // Optimistic removal — no full home refetch.
+                            watchlist = watchlist.filter {
+                                it.normalizedName != item.normalizedName
+                            }
+                        }
+                    }
+                },
+                onCancel = { watchlistRemoveItem = null },
             )
         }
 
@@ -389,6 +425,7 @@ private fun HomeContent(
     onOpenLiveTv: () -> Unit,
     onRetry: () -> Unit,
     onManageCw: (ContinueWatchingItem) -> Unit,
+    onManageWatchlist: (WatchlistItem) -> Unit,
     updateAvailable: Boolean,
 ) {
     LazyColumn(
@@ -503,6 +540,7 @@ private fun HomeContent(
                             container = container,
                             item = w,
                             onClick = { onOpenCollection(w.id.toString()) },
+                            onLongClick = { onManageWatchlist(w) },
                         )
                     }
                 }
@@ -1049,6 +1087,8 @@ private fun WatchlistCard(
     container: AppContainer,
     item: WatchlistItem,
     onClick: () -> Unit,
+    /** Held-select: confirm-and-remove from the caller's Watchlist. */
+    onLongClick: () -> Unit,
 ) {
     // Post-0.4 Watchlist tile — server-provided poster (tmdb_verified
     // gating handled server-side), `new_count` shows episodes the
@@ -1063,6 +1103,7 @@ private fun WatchlistCard(
         progress = null,
         progressColor = null,
         onClick = onClick,
+        onLongClick = onLongClick,
         posterUrlOverride = tmdbPosterUrl(item.posterPath, "w342"),
         topBadge = if (item.newCount > 0) {
             {

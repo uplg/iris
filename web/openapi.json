@@ -2065,6 +2065,36 @@
         }
       }
     },
+    "/api/me/watchlist/remove": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Remove a series from the CALLER's Watchlist. Per-user (follows are\nper-user rows) and naturally reversible: grabbing or playing an\nepisode auto-recreates the follow — auto-tracking is the whole\nWatchlist model, so removal means \"until I engage with it again\".",
+        "operationId": "remove_watchlist",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveWatchlistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Removed from the caller's Watchlist"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "404": {
+            "description": "Not on the caller's Watchlist"
+          }
+        }
+      }
+    },
     "/api/metadata/tmdb/resolve": {
       "get": {
         "tags": [
@@ -6376,6 +6406,18 @@
           },
           "password": {
             "type": "string"
+          }
+        }
+      },
+      "RemoveWatchlistRequest": {
+        "type": "object",
+        "required": [
+          "normalized_name"
+        ],
+        "properties": {
+          "normalized_name": {
+            "type": "string",
+            "description": "The series' SCENE-normalised name — the stable identity a\n`WatchlistItem` carries (`id` is the collection's, not the\nfollow's)."
           }
         }
       },
