@@ -36,7 +36,6 @@ import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.MoodResults
 import studio.kahn.iris.tv.data.MoodTile
-import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 import studio.kahn.iris.tv.ui.components.SectionTitle
@@ -104,7 +103,8 @@ fun MoodsScreen(
                     modifier = Modifier.padding(horizontal = Spacing.gutter),
                     verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
-                    Eyebrow("Tonight")
+                    // No "Tonight" eyebrow: this renders as the Tonight
+                    // TAB inside DiscoverScreen, whose tab row names it.
                     SectionTitle(selected?.label ?: "What are you in the mood for?")
                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                         IrisButton(

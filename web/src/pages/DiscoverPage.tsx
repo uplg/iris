@@ -4,29 +4,117 @@ import { ArrowLeft } from "lucide-react";
 
 import { CatalogCardView } from "@/components/CatalogCardView";
 import { Container } from "@/components/Container";
+import { Shelf } from "@/components/Shelf";
 import { me as meApi, type MediaKind, type MoodTile } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-const moodsApi = getRouteApi("/auth/shell/moods");
+const discoverApi = getRouteApi("/auth/shell/discover");
 
 type Kind = MediaKind;
 
 /**
- * The mood board: "What are you in the mood for?" — a grid of curated mood
- * tiles (taste-ordered, each backed by a representative backdrop) plus a
- * Film/Series toggle. Picking a mood swaps to its results (catalogue ∪ broad
- * TMDB, recency-filtered to grabbable, ranked by taste). State lives in the
- * URL (`?mood=&kind=`) so it's shareable + back-button friendly.
+ * The single "Discover" destination: both halves of the recommendation
+ * system as TABS — "For You" (organized taste shelves) and "Tonight"
+ * (mood board). They always were one system fed by the same engine;
+ * two separate nav items read as two products and nobody knew which
+ * door to take. Mirrors the TV's DiscoverScreen. All state lives in
+ * the URL (`?view=&mood=&kind=`) so tabs, boards and mood results stay
+ * shareable + back-button friendly; the legacy `/for-you` and `/moods`
+ * routes redirect here.
  */
-export function MoodsPage() {
-  const { mood, kind } = moodsApi.useSearch();
+export function DiscoverPage() {
+  const { view, mood, kind } = discoverApi.useSearch();
+  const navigate = discoverApi.useNavigate();
   const k: Kind = kind ?? "movie";
+  const tonight = view === "tonight";
+
   return (
     <Container>
-      {mood ? <MoodResultsView moodId={mood} kind={k} /> : <MoodBoardView kind={k} />}
+      <div className="grid gap-5 py-2">
+        <header className="flex flex-wrap items-center gap-4 px-0.5">
+          <span className="eyebrow">Discover</span>
+          <div className="inline-flex rounded-full border border-border bg-elev p-0.5 text-sm">
+            <button
+              type="button"
+              onClick={() => navigate({ search: {}, replace: true })}
+              className={cn(
+                "rounded-full px-3.5 py-1 transition",
+                !tonight ? "bg-primary text-white" : "text-fg-dim hover:opacity-80",
+              )}
+            >
+              For You
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate({ search: { view: "tonight", kind: k }, replace: true })}
+              className={cn(
+                "rounded-full px-3.5 py-1 transition",
+                tonight ? "bg-primary text-white" : "text-fg-dim hover:opacity-80",
+              )}
+            >
+              Tonight
+            </button>
+          </div>
+        </header>
+
+        {!tonight ? (
+          <ForYouSection />
+        ) : mood ? (
+          <MoodResultsView moodId={mood} kind={k} />
+        ) : (
+          <MoodBoardView kind={k} />
+        )}
+      </div>
     </Container>
   );
 }
+
+// ---------------------------------------------------------------------------
+// "For You" tab — the blended top picks plus organized sections
+// (per-genre, "because you watched X", new anime): the expanded view of
+// the home shelf.
+// ---------------------------------------------------------------------------
+
+function ForYouSection() {
+  const q = useQuery({
+    queryKey: ["for-you-page"],
+    queryFn: meApi.forYouPage,
+    staleTime: 60_000,
+  });
+
+  const shelves = q.data?.shelves ?? [];
+
+  if (q.isLoading) {
+    return <p className="px-0.5 text-sm text-muted-foreground">Loading…</p>;
+  }
+  if (shelves.length === 0) {
+    return (
+      <p className="px-0.5 text-sm text-muted-foreground">
+        Nothing to recommend yet. Set your preferences in your account and check back once the
+        catalogue has refreshed.
+      </p>
+    );
+  }
+  return (
+    <div className="lanes">
+      {shelves.map((shelf) => (
+        <Shelf key={shelf.key} title={shelf.title}>
+          {shelf.items.map((card) => (
+            <CatalogCardView key={card.catalog_id} card={card} />
+          ))}
+        </Shelf>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "Tonight" tab — the mood board: "What are you in the mood for?", a grid
+// of curated mood tiles (taste-ordered, each backed by a representative
+// backdrop) plus a Film/Series toggle. Picking a mood swaps to its
+// results (catalogue ∪ broad TMDB, recency-filtered to grabbable,
+// ranked by taste).
+// ---------------------------------------------------------------------------
 
 function KindToggle({ kind, onChange }: { kind: Kind; onChange: (k: Kind) => void }) {
   return (
@@ -75,12 +163,12 @@ function MoodTileButton({ tile, onClick }: { tile: MoodTile; onClick: () => void
 }
 
 function MoodBoardView({ kind }: { kind: Kind }) {
-  const navigate = moodsApi.useNavigate();
+  const navigate = discoverApi.useNavigate();
   const q = useQuery({ queryKey: ["mood-board", kind], queryFn: () => meApi.moodBoard(kind) });
   const moods = q.data?.moods ?? [];
 
   return (
-    <div className="grid gap-5 py-2">
+    <div className="grid gap-5">
       <header className="flex flex-wrap items-end justify-between gap-3 px-0.5">
         <div className="grid gap-1">
           <h1 className="text-2xl font-semibold tracking-tight">What are you in the mood for?</h1>
@@ -88,7 +176,9 @@ function MoodBoardView({ kind }: { kind: Kind }) {
         </div>
         <KindToggle
           kind={kind}
-          onChange={(next) => navigate({ search: { kind: next }, replace: true })}
+          onChange={(next) =>
+            navigate({ search: { view: "tonight", kind: next }, replace: true })
+          }
         />
       </header>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
@@ -96,7 +186,7 @@ function MoodBoardView({ kind }: { kind: Kind }) {
           <MoodTileButton
             key={tile.id}
             tile={tile}
-            onClick={() => navigate({ search: { mood: tile.id, kind } })}
+            onClick={() => navigate({ search: { view: "tonight", mood: tile.id, kind } })}
           />
         ))}
       </div>
@@ -105,7 +195,7 @@ function MoodBoardView({ kind }: { kind: Kind }) {
 }
 
 function MoodResultsView({ moodId, kind }: { moodId: string; kind: Kind }) {
-  const navigate = moodsApi.useNavigate();
+  const navigate = discoverApi.useNavigate();
   // The board query is cached from the grid; reuse it to label the header
   // without an extra round-trip (or fetch it on a deep link).
   const board = useQuery({ queryKey: ["mood-board", kind], queryFn: () => meApi.moodBoard(kind) });
@@ -117,12 +207,12 @@ function MoodResultsView({ moodId, kind }: { moodId: string; kind: Kind }) {
   const items = q.data?.items ?? [];
 
   return (
-    <div className="grid gap-4 py-2">
+    <div className="grid gap-4">
       <header className="flex flex-wrap items-center justify-between gap-3 px-0.5">
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => navigate({ search: { kind } })}
+            onClick={() => navigate({ search: { view: "tonight", kind } })}
             aria-label="Back to moods"
             className="grid size-9 place-items-center rounded-full border border-border text-fg-dim transition hover:opacity-80"
           >
@@ -135,7 +225,7 @@ function MoodResultsView({ moodId, kind }: { moodId: string; kind: Kind }) {
         </div>
         <KindToggle
           kind={kind}
-          onChange={(next) => navigate({ search: { mood: moodId, kind: next } })}
+          onChange={(next) => navigate({ search: { view: "tonight", mood: moodId, kind: next } })}
         />
       </header>
       {q.isPending ? (

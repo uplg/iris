@@ -249,10 +249,26 @@ pub(crate) async fn watchlist(
             }
             _ => (None, None),
         };
+        // "New" = found since the user's last ENGAGEMENT — the max of
+        // their last collection-page visit and their last watch in the
+        // series. Visit-only was wrong twice over: a user who watched
+        // E04 without opening the page kept seeing E05/E06 (already out
+        // back then) as "new", and a user who never opened the page got
+        // the entire offer cache as the count. (When no collection is
+        // resolved yet, `collection_id` is the follow's own id — the
+        // watch lookup simply returns None.)
+        let last_watched =
+            iris_db::playback::last_watched_in_collection(state.db(), user.id, collection_id)
+                .await
+                .unwrap_or(None);
+        let engaged_at = match (f.last_visited_at, last_watched) {
+            (Some(v), Some(w)) => Some(v.max(w)),
+            (v, w) => v.or(w),
+        };
         let new_count = iris_db::available_episodes::count_new_for_series(
             state.db(),
             &f.normalized_name,
-            f.last_visited_at,
+            engaged_at,
         )
         .await
         .unwrap_or(0);

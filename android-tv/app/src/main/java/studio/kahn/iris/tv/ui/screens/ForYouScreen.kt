@@ -24,8 +24,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.ForYou
-import studio.kahn.iris.tv.ui.components.Eyebrow
-import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Spacing
 import studio.kahn.iris.tv.ui.theme.irisAmbient
@@ -67,16 +65,8 @@ fun ForYouScreen(
             contentPadding = PaddingValues(vertical = Spacing.xxl),
             verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
         ) {
-            item(key = "header") {
-                Column(
-                    modifier = Modifier.padding(horizontal = Spacing.gutter),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-                ) {
-                    Eyebrow("Discover")
-                    SectionTitle("For You")
-                }
-            }
-
+            // No header block: this renders as the "For You" TAB inside
+            // DiscoverScreen, whose tab row already names the page.
             if (loading) {
                 item(key = "loading") {
                     Text(

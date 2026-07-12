@@ -51,6 +51,11 @@ import studio.kahn.iris.tv.ui.theme.Spacing
 @Composable
 fun SettingsScreen(
     container: AppContainer,
+    /** Open the full watch-history list (lives here, not in the home
+     *  nav — a look-back surface, not a daily door). */
+    onOpenHistory: () -> Unit,
+    /** Open the seedbox / raw-torrents view (power surface, same move). */
+    onOpenTorrents: () -> Unit,
     onSignOut: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -91,7 +96,25 @@ fun SettingsScreen(
             }
         }
 
+        // The update card keeps the top spot (right under the server
+        // line) — it's the reason most people open Settings.
         UpdaterCard(container = container)
+
+        // Tucked-away destinations: power/look-back surfaces that used
+        // to crowd the home nav.
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = cardShape,
+            colors = SurfaceDefaults.colors(containerColor = IrisColors.Card),
+        ) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Eyebrow("More")
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    IrisButton("Watch history", onOpenHistory, variant = IrisButtonVariant.Ghost)
+                    IrisButton("Torrents", onOpenTorrents, variant = IrisButtonVariant.Ghost)
+                }
+            }
+        }
 
         // Push the actions to the bottom of the screen so they stay visible.
         Box(Modifier.weight(1f))

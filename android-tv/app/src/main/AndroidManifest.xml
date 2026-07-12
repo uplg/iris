@@ -14,8 +14,7 @@
 
     <!-- Declare we're a Leanback (TV) app but don't *require* the leanback
          hardware feature — that lets the same APK install on phone for quick
-         emulator iteration if you want, without showing up in the phone
-         launcher (no LAUNCHER intent below, only LEANBACK_LAUNCHER). -->
+         emulator iteration if you want. -->
     <uses-feature
         android:name="android.software.leanback"
         android:required="false" />
@@ -50,6 +49,18 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
 
+            <!-- Plain LAUNCHER too, in a separate filter: the system
+                 package installer's "Open" button (end of the in-app
+                 update flow) resolves getLaunchIntentForPackage(), which
+                 only looks at CATEGORY_LAUNCHER / CATEGORY_INFO — with
+                 LEANBACK_LAUNCHER alone the button renders greyed out.
+                 Side effect (accepted): the app also appears in
+                 phone-style launchers. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
             <!-- Voice search hand-off. When the user long-presses the mic and
                  says "play <X> on Iris", Google Assistant delivers a
                  MEDIA_PLAY_FROM_SEARCH intent here; MainActivity reads the
@@ -78,6 +89,20 @@
                 <data android:host="home" />
             </intent-filter>
         </activity>
+
+        <!-- Best-effort auto-relaunch after an in-app update: the system
+             broadcasts MY_PACKAGE_REPLACED to the freshly-installed
+             version. Background-activity-launch restrictions may swallow
+             the startActivity on recent Android — in that case the user
+             falls back to the installer's "Open" button (unlocked by the
+             LAUNCHER category above) or the home screen icon. -->
+        <receiver
+            android:name=".UpdateRelaunchReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Searchable metadata for android.intent.action.SEARCH. Required
              for the global search hooks even though we use a single-screen

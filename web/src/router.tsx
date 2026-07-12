@@ -99,22 +99,47 @@ const indexRoute = createRoute({
   component: lazyRouteComponent(() => import("@/pages/HomePage"), "HomePage"),
 });
 
-const forYouRoute = createRoute({
+// One "Discover" destination for the whole reco system: For You and
+// Tonight are TABS (`?view=`), not separate nav items — mirrors the TV.
+// `mood` selects a tile's results inside the Tonight tab; `kind`
+// toggles Film/Series. Everything stays in the URL, so tabs, boards
+// and mood results are shareable + back-button friendly.
+const discoverRoute = createRoute({
   getParentRoute: () => shellRoute,
-  path: "/for-you",
-  component: lazyRouteComponent(() => import("@/pages/ForYouPage"), "ForYouPage"),
+  path: "/discover",
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { view?: "tonight"; mood?: string; kind?: "movie" | "tv" } => ({
+    view: search.view === "tonight" ? "tonight" : undefined,
+    mood: str(search.mood),
+    kind: search.kind === "tv" ? "tv" : search.kind === "movie" ? "movie" : undefined,
+  }),
+  component: lazyRouteComponent(() => import("@/pages/DiscoverPage"), "DiscoverPage"),
 });
 
-const moodsRoute = createRoute({
+// Legacy reco routes → /discover redirects (bookmarks, muscle memory).
+const forYouAliasRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/for-you",
+  beforeLoad: () => {
+    throw redirect({ to: "/discover", replace: true });
+  },
+});
+
+const moodsAliasRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/moods",
-  // `mood` selects a tile's results; `kind` toggles Film/Series. Empty `mood`
-  // shows the board grid.
   validateSearch: (search: Record<string, unknown>): { mood?: string; kind?: "movie" | "tv" } => ({
     mood: str(search.mood),
     kind: search.kind === "tv" ? "tv" : search.kind === "movie" ? "movie" : undefined,
   }),
-  component: lazyRouteComponent(() => import("@/pages/MoodsPage"), "MoodsPage"),
+  beforeLoad: ({ search }) => {
+    throw redirect({
+      to: "/discover",
+      search: { view: "tonight", mood: search.mood, kind: search.kind },
+      replace: true,
+    });
+  },
 });
 
 const searchRoute = createRoute({
@@ -230,8 +255,9 @@ const routeTree = rootRoute.addChildren([
   authRoute.addChildren([
     shellRoute.addChildren([
       indexRoute,
-      forYouRoute,
-      moodsRoute,
+      discoverRoute,
+      forYouAliasRoute,
+      moodsAliasRoute,
       searchRoute,
       seriesAliasRoute,
       collectionRoute,

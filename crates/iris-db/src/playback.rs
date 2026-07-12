@@ -553,6 +553,28 @@ pub async fn user_history(
     .await
 }
 
+/// The caller's most recent watch activity anywhere in a collection —
+/// deleted torrents included (watching something that later got GC'd
+/// still counts as engagement). Feeds the "X new" badge cutoff: an
+/// episode offer only counts as new when it was found AFTER the user
+/// last visited the page or watched something in the series.
+pub async fn last_watched_in_collection(
+    pool: &SqlitePool,
+    user_id: UserId,
+    collection_id: Uuid,
+) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
+        "SELECT MAX(p.last_watched_at) FROM playback_progress p \
+         JOIN torrents t ON t.infohash = p.infohash \
+         WHERE p.user_id = ?1 AND t.collection_id = ?2",
+    )
+    .bind(user)
+    .bind(collection_id)
+    .fetch_one(pool)
+    .await
+}
+
 /// One playback row of the caller on a RECLAIMED (soft-deleted) torrent
 /// of a collection. Enriches the collection page's gone-release rows
 /// (movies / packs without `episode_files`) with "already watched"

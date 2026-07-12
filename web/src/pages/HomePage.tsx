@@ -42,6 +42,11 @@ export function HomePage() {
     queryKey: ["watchlist"],
     queryFn: meApi.watchlist,
     staleTime: 60_000,
+    // Fresh-episodes-first (same as the TV shelf): the shows with
+    // something NEW to watch lead the row, so "what came out since
+    // last time?" is answered at a glance. Stable sort keeps the
+    // server's recency order within each group.
+    select: (items) => [...items].sort((a, b) => b.new_count - a.new_count),
   });
   const featuredQ = useQuery({
     queryKey: ["discover-featured"],
@@ -123,7 +128,7 @@ export function HomePage() {
             <Shelf
               key={shelf.key}
               title={shelf.title}
-              link={linkOptions({ to: "/for-you" })}
+              link={linkOptions({ to: "/discover" })}
               isEmpty={shelf.items.length === 0}
             >
               {shelf.items.map((card) => (

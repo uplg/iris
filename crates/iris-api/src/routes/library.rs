@@ -493,11 +493,13 @@ pub(crate) async fn collection_detail(
         }
     }
 
-    // Per-user "X new since I last opened this" timestamp. Pulled
-    // from this user's series_follows row (auto-created by the
-    // grab path); falls back to None when the user has never
-    // touched this series — in which case every available episode
-    // counts as new.
+    // Per-user "X new since I last engaged" timestamp: the max of the
+    // user's last collection-page visit (series_follows, auto-created
+    // by the grab path) and their last watch anywhere in the
+    // collection. Watching an episode consumes the offers that were
+    // already out at that point — only genuinely NEWER finds badge.
+    // Never engaged → None → the badge counts nothing (not the whole
+    // offer cache).
     let user_last_visited: Option<DateTime<Utc>> =
         match collection.parsed_title_normalized.as_deref() {
             Some(norm) => iris_db::follows::get_by_normalized(state.db(), user.id, norm)
@@ -507,6 +509,13 @@ pub(crate) async fn collection_detail(
                 .and_then(|f| f.last_visited_at),
             None => None,
         };
+    let user_last_watched = iris_db::playback::last_watched_in_collection(state.db(), user.id, id)
+        .await
+        .unwrap_or(None);
+    let user_engaged_at = match (user_last_visited, user_last_watched) {
+        (Some(v), Some(w)) => Some(v.max(w)),
+        (v, w) => v.or(w),
+    };
 
     // Gone view first: the gone episodes' languages count as "owned"
     // coverage below, so a ghost page doesn't drown in indexer offers
@@ -519,7 +528,7 @@ pub(crate) async fn collection_detail(
                 &state,
                 &collection,
                 user.id,
-                user_last_visited,
+                user_engaged_at,
                 &gone_episodes,
             )
             .await?
@@ -721,7 +730,7 @@ async fn build_available_singletons(
     normalized: &str,
     owned_languages: &std::collections::HashMap<(i64, i64), Vec<iris_media::filename::Language>>,
     owned_torrent_ids: &std::collections::HashSet<(String, String)>,
-    user_last_visited: Option<DateTime<Utc>>,
+    user_engaged_at: Option<DateTime<Utc>>,
 ) -> (Vec<AvailableEpisodeEntry>, u32) {
     let offers = iris_db::available_episodes::list_best_for_series(state.db(), normalized)
         .await
@@ -760,7 +769,9 @@ async fn build_available_singletons(
         if o.seeders.unwrap_or(0) <= 0 {
             continue;
         }
-        if user_last_visited.is_none_or(|t| o.found_at > t) {
+        // `is_some_and`, not `is_none_or`: with no engagement at all
+        // there is nothing to compare against and nothing should badge.
+        if user_engaged_at.is_some_and(|t| o.found_at > t) {
             new_count = new_count.saturating_add(1);
         }
         out.push(AvailableEpisodeEntry {
@@ -799,7 +810,7 @@ async fn build_tv_episode_view(
     state: &AppState,
     collection: &iris_db::collections::CollectionRow,
     user_id: iris_core::ids::UserId,
-    user_last_visited: Option<DateTime<Utc>>,
+    user_engaged_at: Option<DateTime<Utc>>,
     gone_episodes: &[GoneEpisodeEntry],
 ) -> ApiResult<(
     Vec<EpisodeEntry>,
@@ -924,7 +935,7 @@ async fn build_tv_episode_view(
             normalized,
             &owned_languages,
             &owned_torrent_ids,
-            user_last_visited,
+            user_engaged_at,
         )
         .await;
 

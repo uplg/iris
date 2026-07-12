@@ -4,11 +4,10 @@ import {
   History as HistoryIcon,
   Home as HomeIcon,
   Library as LibraryIcon,
-  Popcorn as MoodIcon,
   Settings as SettingsIcon,
   Search as SearchIcon,
   ShieldCheck,
-  Sparkles as ForYouIcon,
+  Sparkles as DiscoverIcon,
   Tv as LiveTvIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,8 +48,9 @@ export function AppShell() {
   const nav: NavEntry[] = [
     { to: "/", label: "Home", icon: HomeIcon, end: true },
     { to: "/search", label: "Search", icon: SearchIcon },
-    { to: "/moods", label: "Tonight", icon: MoodIcon },
-    { to: "/for-you", label: "For You", icon: ForYouIcon },
+    // One reco entry — For You + Tonight live as tabs inside Discover
+    // (mirrors the TV nav).
+    { to: "/discover", label: "Discover", icon: DiscoverIcon },
     { to: "/library", label: "Library", icon: LibraryIcon },
     { to: "/live", label: "Live TV", icon: LiveTvIcon },
     { to: "/history", label: "History", icon: HistoryIcon },

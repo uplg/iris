@@ -29,8 +29,7 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.screens.CollectionScreen
 import studio.kahn.iris.tv.ui.screens.DetailScreen
-import studio.kahn.iris.tv.ui.screens.ForYouScreen
-import studio.kahn.iris.tv.ui.screens.MoodsScreen
+import studio.kahn.iris.tv.ui.screens.DiscoverScreen
 import studio.kahn.iris.tv.ui.screens.HistoryScreen
 import studio.kahn.iris.tv.ui.screens.HomeScreen
 import studio.kahn.iris.tv.ui.screens.LibraryScreen
@@ -58,8 +57,7 @@ object Routes {
     const val SERIES = "series/{followId}"
     const val COLLECTION = "collection/{collectionId}"
     const val WATCH = "watch/{infohash}/{fileIdx}"
-    const val FOR_YOU = "for-you"
-    const val MOODS = "moods"
+    const val DISCOVER = "discover"
     const val HISTORY = "history"
     const val LIVE_TV = "livetv"
     const val LIVE_TV_WATCH = "livetv/{country}/{channelId}"
@@ -178,9 +176,6 @@ fun IrisRoot(
                     onOpenSettings = {
                         navController.navigate(Routes.SETTINGS)
                     },
-                    onOpenTorrents = {
-                        navController.navigate(Routes.TORRENTS)
-                    },
                     onOpenSearch = { query ->
                         navController.navigate(Routes.search(query))
                     },
@@ -198,14 +193,8 @@ fun IrisRoot(
                     onOpenCollection = { collectionId ->
                         navController.navigate(Routes.collection(collectionId))
                     },
-                    onOpenForYou = {
-                        navController.navigate(Routes.FOR_YOU)
-                    },
-                    onOpenMoods = {
-                        navController.navigate(Routes.MOODS)
-                    },
-                    onOpenHistory = {
-                        navController.navigate(Routes.HISTORY)
+                    onOpenDiscover = {
+                        navController.navigate(Routes.DISCOVER)
                     },
                     onOpenLiveTv = {
                         navController.navigate(Routes.LIVE_TV)
@@ -239,24 +228,8 @@ fun IrisRoot(
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(Routes.MOODS) {
-                MoodsScreen(
-                    container = container,
-                    onOpenCollection = { collectionId ->
-                        navController.navigate(Routes.collection(collectionId))
-                    },
-                    onPickResult = { providerId, externalId, tmdbId, kind ->
-                        navController.navigate(
-                            Routes.searchDetail(providerId, externalId, tmdbId, kind),
-                        )
-                    },
-                    onOpenSearch = { query ->
-                        navController.navigate(Routes.search(query))
-                    },
-                )
-            }
-            composable(Routes.FOR_YOU) {
-                ForYouScreen(
+            composable(Routes.DISCOVER) {
+                DiscoverScreen(
                     container = container,
                     onOpenCollection = { collectionId ->
                         navController.navigate(Routes.collection(collectionId))
@@ -321,6 +294,12 @@ fun IrisRoot(
             composable(Routes.SETTINGS) {
                 SettingsScreen(
                     container = container,
+                    onOpenHistory = {
+                        navController.navigate(Routes.HISTORY)
+                    },
+                    onOpenTorrents = {
+                        navController.navigate(Routes.TORRENTS)
+                    },
                     onSignOut = {
                         navController.navigate(Routes.PAIRING) {
                             popUpTo(Routes.HOME) { inclusive = true }

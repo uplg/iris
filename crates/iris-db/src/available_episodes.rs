@@ -248,16 +248,20 @@ pub async fn find_pack_for_season(
 
 /// Count of distinct episodes whose `found_at` is newer than
 /// `since`. Drives the "X nouveaux" badge on Watchlist cards.
+///
+/// `since` is the user's last ENGAGEMENT with the series (collection
+/// page visit or watch activity — callers pass the max of both). No
+/// engagement at all → 0, not "everything is new": counting the whole
+/// offer cache produced absurd badges ("48 new") that mixed the entire
+/// back-catalogue with actual releases.
 pub async fn count_new_for_series(
     pool: &SqlitePool,
     normalized_name: &str,
     since: Option<DateTime<Utc>>,
 ) -> Result<i64, sqlx::Error> {
-    let cutoff = since.unwrap_or_else(|| {
-        // No prior visit means "everything currently available is
-        // new". Old enough timestamp to catch the lot.
-        DateTime::<Utc>::from_timestamp(0, 0).unwrap()
-    });
+    let Some(cutoff) = since else {
+        return Ok(0);
+    };
     let row: (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT season || '-' || episode) FROM available_episodes \
          WHERE normalized_name = ?1 AND found_at > ?2",

@@ -75,13 +75,10 @@ import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LiveTv
-import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -126,9 +123,6 @@ fun HomeScreen(
     onPickTorrent: (infohash: String) -> Unit,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onOpenSettings: () -> Unit,
-    /** Open the seedbox / raw-torrents management view. The Library
-     *  shelf below stays as-is; this is the "it's a seedbox" surface. */
-    onOpenTorrents: () -> Unit,
     /** Open the search screen. When `query` is non-null the search runs
      *  immediately with that string pre-filled. */
     onOpenSearch: (query: String?) -> Unit,
@@ -146,12 +140,8 @@ fun HomeScreen(
     /** Open the CollectionScreen for a Library collection. Lists all
      *  torrents + episodes belonging to that collection. */
     onOpenCollection: (collectionId: String) -> Unit,
-    /** Open the organized "For You" page. */
-    onOpenForYou: () -> Unit,
-    /** Open the mood board ("Tonight"). */
-    onOpenMoods: () -> Unit,
-    /** Open the full watch-history list. */
-    onOpenHistory: () -> Unit,
+    /** Open the Discover page — For You + Tonight as tabs. */
+    onOpenDiscover: () -> Unit,
     /** Open the Live TV channel grid. */
     onOpenLiveTv: () -> Unit,
 ) {
@@ -240,7 +230,11 @@ fun HomeScreen(
             val (newDl, newLib) = splitTorrents(fresh)
             downloading = newDl
             library = newLib
-            watchlist = wl.getOrDefault(emptyList())
+            // Fresh-episodes-first: the Watchlist shelf leads with the
+            // shows that have something NEW to watch, so "what came out
+            // since last time?" is answered at the head of the row
+            // (stable sort keeps the server's order within each group).
+            watchlist = wl.getOrDefault(emptyList()).sortedByDescending { it.newCount }
             forYou = fy.getOrNull()
             collections = (coll.getOrNull() as? LibraryResponse.CollectionsWrapper)?.value?.items.orEmpty()
             preferences = fetch.prefs.getOrNull()
@@ -312,13 +306,10 @@ fun HomeScreen(
                 onPickTorrent = onPickTorrent,
                 onPickResult = onPickResult,
                 onOpenSettings = onOpenSettings,
-                onOpenTorrents = onOpenTorrents,
                 onOpenSearch = onOpenSearch,
                 onOpenLibrary = onOpenLibrary,
                 onOpenCollection = onOpenCollection,
-                onOpenForYou = onOpenForYou,
-                onOpenMoods = onOpenMoods,
-                onOpenHistory = onOpenHistory,
+                onOpenDiscover = onOpenDiscover,
                 onOpenLiveTv = onOpenLiveTv,
                 onRetry = { loadVersion++ },
                 onManageCw = { cwManageItem = it },
@@ -391,13 +382,10 @@ private fun HomeContent(
     onPickTorrent: (String) -> Unit,
     onPickResult: (String, String, Long?, String?) -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenTorrents: () -> Unit,
     onOpenSearch: (String?) -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenCollection: (String) -> Unit,
-    onOpenForYou: () -> Unit,
-    onOpenMoods: () -> Unit,
-    onOpenHistory: () -> Unit,
+    onOpenDiscover: () -> Unit,
     onOpenLiveTv: () -> Unit,
     onRetry: () -> Unit,
     onManageCw: (ContinueWatchingItem) -> Unit,
@@ -420,12 +408,9 @@ private fun HomeContent(
         val resumePick = continueWatching.firstOrNull()
         val topBar: @Composable () -> Unit = {
             HomeTopBar(
-                onOpenForYou = onOpenForYou,
-                onOpenMoods = onOpenMoods,
+                onOpenDiscover = onOpenDiscover,
                 onOpenSearch = onOpenSearch,
                 onOpenLibrary = onOpenLibrary,
-                onOpenTorrents = onOpenTorrents,
-                onOpenHistory = onOpenHistory,
                 onOpenLiveTv = onOpenLiveTv,
                 onOpenSettings = onOpenSettings,
                 updateAvailable = updateAvailable,
@@ -498,10 +483,32 @@ private fun HomeContent(
             }
         }
 
-        // Library lives right after Continue Watching — it's the
-        // user's actual content and the most-visited shelf, so it
-        // needs to be in easy D-pad reach instead of buried below
-        // discovery shelves.
+        // Watchlist ABOVE Library: following the shows you track — and
+        // spotting their fresh episodes (the shelf is sorted new-first,
+        // each card badging its "N new") — is the home page's primary
+        // "let the app carry me" flow; the Library preview is the archive.
+        if (watchlist.isNotEmpty()) {
+            item(key = "shelf-watchlist") {
+                Shelf(title = "My Watchlist", eyebrow = "${watchlist.size} series") {
+                    items(watchlist, key = { it.id }) { w ->
+                        // Post-0.4: the Watchlist item's `id` IS
+                        // the collection id (sourced from
+                        // `/api/me/watchlist` which joins
+                        // series_follows → collections). Route
+                        // straight to the unified
+                        // CollectionScreen — SeriesScreen is the
+                        // retired surface kept only for legacy
+                        // navigation flows.
+                        WatchlistCard(
+                            container = container,
+                            item = w,
+                            onClick = { onOpenCollection(w.id.toString()) },
+                        )
+                    }
+                }
+            }
+        }
+
         if (collections.isNotEmpty()) {
             item(key = "shelf-library") {
                 // Recent-N preview only — the full, searchable/sortable grid
@@ -531,34 +538,12 @@ private fun HomeContent(
             }
         }
 
-        if (watchlist.isNotEmpty()) {
-            item(key = "shelf-watchlist") {
-                Shelf(title = "My Watchlist", eyebrow = "${watchlist.size} series") {
-                    items(watchlist, key = { it.id }) { w ->
-                        // Post-0.4: the Watchlist item's `id` IS
-                        // the collection id (sourced from
-                        // `/api/me/watchlist` which joins
-                        // series_follows → collections). Route
-                        // straight to the unified
-                        // CollectionScreen — SeriesScreen is the
-                        // retired surface kept only for legacy
-                        // navigation flows.
-                        WatchlistCard(
-                            container = container,
-                            item = w,
-                            onClick = { onOpenCollection(w.id.toString()) },
-                        )
-                    }
-                }
-            }
-        }
-
         forYou?.shelves?.forEach { shelf ->
             if (shelf.items.isNotEmpty()) {
                 item(key = "shelf-${shelf.key}") {
                     Shelf(
                         title = shelf.title,
-                        onSeeAll = onOpenForYou,
+                        onSeeAll = onOpenDiscover,
                     ) {
                         items(shelf.items, key = { it.catalogId }) { card ->
                             CatalogCardTv(
@@ -741,12 +726,9 @@ internal fun Shelf(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun HomeTopBar(
-    onOpenForYou: () -> Unit,
-    onOpenMoods: () -> Unit,
+    onOpenDiscover: () -> Unit,
     onOpenSearch: (String?) -> Unit,
     onOpenLibrary: () -> Unit,
-    onOpenTorrents: () -> Unit,
-    onOpenHistory: () -> Unit,
     onOpenLiveTv: () -> Unit,
     onOpenSettings: () -> Unit,
     updateAvailable: Boolean,
@@ -763,15 +745,13 @@ private fun HomeTopBar(
                 contentDescription = "Search",
                 onClick = { onOpenSearch(null) },
             )
-            TvIconButton(
-                icon = Icons.Filled.Movie,
-                contentDescription = "Tonight",
-                onClick = onOpenMoods,
-            )
+            // One reco entry ("Discover": For You + Tonight tabs) — the
+            // power surfaces (Torrents, Watch history) moved to Settings
+            // to keep this row to the doors people actually take.
             TvIconButton(
                 icon = Icons.Filled.Star,
-                contentDescription = "For You",
-                onClick = onOpenForYou,
+                contentDescription = "Discover",
+                onClick = onOpenDiscover,
             )
             TvIconButton(
                 icon = Icons.Filled.VideoLibrary,
@@ -779,19 +759,9 @@ private fun HomeTopBar(
                 onClick = onOpenLibrary,
             )
             TvIconButton(
-                icon = Icons.Filled.Storage,
-                contentDescription = "Seedbox / Torrents",
-                onClick = onOpenTorrents,
-            )
-            TvIconButton(
                 icon = Icons.Filled.LiveTv,
                 contentDescription = "Live TV",
                 onClick = onOpenLiveTv,
-            )
-            TvIconButton(
-                icon = Icons.Filled.History,
-                contentDescription = "Watch history",
-                onClick = onOpenHistory,
             )
             TvIconButton(
                 icon = Icons.Filled.Settings,
