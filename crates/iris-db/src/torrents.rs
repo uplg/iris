@@ -350,10 +350,17 @@ pub async fn list_in_collection(
 /// have no `available_episodes` offers to re-grab from. Callers keep
 /// only rows with source provenance (the actionable ones).
 ///
-/// Per-caller: releases the user dismissed (`gone_release_dismissed`
-/// at-or-after the deletion) are hidden. A re-download + re-reclaim
-/// stamps a newer `deleted_at`, making the dismissal stale so the row
-/// returns — same staleness model as `cw_dismissed`.
+/// Per-caller, twice over (same rules as
+/// [`crate::episode_files::list_gone_for_collection`]):
+///
+/// * only releases the caller ENGAGED with (≥ 1 playback row on the
+///   release) surface — a mis-grab someone removed, or a release only
+///   another household member watched, never sprouts a "Download
+///   again" row in your view;
+/// * releases the user dismissed (`gone_release_dismissed`
+///   at-or-after the deletion) are hidden. A re-download + re-reclaim
+///   stamps a newer `deleted_at`, making the dismissal stale so the
+///   row returns — same staleness model as `cw_dismissed`.
 pub async fn list_deleted_in_collection(
     pool: &SqlitePool,
     collection_id: Uuid,
@@ -369,6 +376,8 @@ pub async fn list_deleted_in_collection(
          JOIN users u ON u.id = t.added_by \
          LEFT JOIN collections c ON c.id = t.collection_id \
          WHERE t.collection_id = ?1 AND t.deleted_at IS NOT NULL \
+           AND EXISTS (SELECT 1 FROM playback_progress pe \
+                       WHERE pe.user_id = ?2 AND pe.infohash = t.infohash) \
            AND NOT EXISTS (SELECT 1 FROM gone_release_dismissed gd \
                            WHERE gd.user_id = ?2 AND gd.infohash = t.infohash \
                              AND gd.dismissed_at >= t.deleted_at) \

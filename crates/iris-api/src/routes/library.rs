@@ -309,6 +309,14 @@ pub(crate) struct GoneEpisodeEntry {
     language: Option<String>,
     /// Raw SCENE name of the reclaimed release — secondary display line.
     release_name: String,
+    /// Quality tag parsed from the release name (`"1080p"`, …) — chip
+    /// metadata, same as offers. Additive.
+    #[serde(default)]
+    quality: Option<String>,
+    /// Whole-release size: what "Re-grab" would download (a pack leaf
+    /// reports the pack's size — re-ingest is release-level). Additive.
+    #[serde(default)]
+    total_size_bytes: i64,
     /// Provenance feeding the existing ingest endpoint
     /// (`POST /api/torrents`) — always present: rows without it are not
     /// actionable and are filtered out server-side.
@@ -648,6 +656,10 @@ async fn build_gone_view(
                         .as_str()
                         .to_string(),
                 );
+                // Chip metadata mirrors the offer chips: quality comes
+                // from the SCENE name (the release row carries no
+                // structured quality of its own).
+                let quality = iris_media::filename::parse(&r.torrent_name).and_then(|p| p.quality);
                 Some(GoneEpisodeEntry {
                     season: r.season,
                     episode: r.episode,
@@ -659,6 +671,8 @@ async fn build_gone_view(
                     duration_seconds: r.duration_seconds,
                     last_watched_at: r.last_watched_at,
                     language,
+                    quality,
+                    total_size_bytes: r.total_size_bytes,
                     release_name: r.torrent_name,
                     source_provider: provider,
                     source_external_id: external_id,

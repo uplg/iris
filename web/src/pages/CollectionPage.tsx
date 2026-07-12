@@ -458,9 +458,25 @@ type EpisodeVariant =
       file_idx: number;
       watched: boolean;
       release_name: string;
+      quality: string | null;
+      total_size_bytes: number;
       source_provider: string;
       source_external_id: string;
     };
+
+/** Drop gone variants covered by an on-disk release: with the same
+ *  language already downloaded (or an on-disk MULTi), "Re-grab" is
+ *  pure noise — Play sits right next to it. */
+function pruneShadowedGone(variants: EpisodeVariant[]): EpisodeVariant[] {
+  const downloadedLangs = new Set(
+    variants.filter((v) => v.status === "downloaded").map((v) => v.language ?? ""),
+  );
+  if (downloadedLangs.size === 0) return variants;
+  const hasMulti = downloadedLangs.has("multi");
+  return variants.filter(
+    (v) => v.status !== "gone" || (!hasMulti && !downloadedLangs.has(v.language ?? "")),
+  );
+}
 
 /** Stable variant order per row: downloaded first (Play stays the
  *  natural primary), then gone (it WAS on disk), then available —
@@ -482,6 +498,8 @@ function goneVariant(g: GoneEpisodeEntry): EpisodeVariant {
     file_idx: g.file_idx,
     watched: g.watched,
     release_name: g.release_name,
+    quality: g.quality ?? null,
+    total_size_bytes: g.total_size_bytes ?? 0,
     source_provider: g.source_provider,
     source_external_id: g.source_external_id,
   };
@@ -535,7 +553,10 @@ function mergeEpisodes(
       size_bytes: a.size_bytes ?? null,
     });
   }
-  for (const row of byKey.values()) sortVariants(row.variants);
+  for (const row of byKey.values()) {
+    row.variants = pruneShadowedGone(row.variants);
+    sortVariants(row.variants);
+  }
   return Array.from(byKey.values()).sort((a, b) => a.season - b.season || a.episode - b.episode);
 }
 
@@ -601,7 +622,10 @@ function mergeEpisodesAbsolute(
       size_bytes: a.size_bytes ?? null,
     });
   }
-  for (const row of byKey.values()) sortVariants(row.variants);
+  for (const row of byKey.values()) {
+    row.variants = pruneShadowedGone(row.variants);
+    sortVariants(row.variants);
+  }
   // Absolute-numbered rows first (ascending); any owned-without-absolute
   // rows trail, ordered by their (season, episode).
   return Array.from(byKey.values()).sort((a, b) => {
@@ -998,7 +1022,17 @@ function VariantChip({
           ) : (
             <RotateCcw className="size-3.5" />
           )}
-          <span className="text-xs">{regrab.isPending ? "Restoring…" : "Re-grab"}</span>
+          <span className="text-xs">
+            {regrab.isPending
+              ? "Restoring…"
+              : [
+                  "Re-grab",
+                  variant.quality,
+                  variant.total_size_bytes > 0 ? formatSize(variant.total_size_bytes) : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+          </span>
         </button>
         <button
           type="button"

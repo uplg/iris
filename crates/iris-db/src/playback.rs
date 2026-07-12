@@ -770,8 +770,10 @@ mod tests {
         assert_eq!(row.source_external_id.as_deref(), Some("12345"));
     }
 
-    /// Release-level Gone dismissal: hides the row for the dismissing
-    /// user only, and goes stale when the release is re-ingested then
+    /// Gone rows are engagement-gated AND dismissal is per-user: a
+    /// release only surfaces for users with playback history on it, a
+    /// dismissal hides it for the dismissing user only, and the
+    /// dismissal goes stale when the release is re-ingested then
     /// reclaimed AGAIN (newer `deleted_at` → the row returns).
     #[tokio::test]
     async fn gone_release_dismissal_is_per_user_and_stale_on_redelete() {
@@ -803,6 +805,14 @@ mod tests {
         crate::torrents::set_collection(&pool, &t.infohash, Some(col.id))
             .await
             .unwrap();
+        // Both viewers engaged with the release — gone rows are gated
+        // on the caller's own playback history.
+        upsert(&pool, progress(user, t.infohash.clone(), false))
+            .await
+            .unwrap();
+        upsert(&pool, progress(stranger, t.infohash.clone(), false))
+            .await
+            .unwrap();
         crate::torrents::soft_delete(&pool, iris_core::ids::TorrentId::from(t.id))
             .await
             .unwrap();
@@ -811,6 +821,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(gone.len(), 1);
+        // A user with NO playback on the release never sees its gone
+        // row — "Re-grab" on something you never had is noise.
+        let never_watched = make_user(&pool).await;
+        assert!(
+            crate::torrents::list_deleted_in_collection(&pool, col.id, never_watched)
+                .await
+                .unwrap()
+                .is_empty(),
+            "gone rows are engagement-gated per caller",
+        );
 
         crate::torrents::dismiss_gone_release(&pool, user, &t.infohash)
             .await

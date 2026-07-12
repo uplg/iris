@@ -73,6 +73,10 @@ pub struct GoneEpisodeFileRow {
     /// Raw SCENE name of the reclaimed torrent — language detection +
     /// secondary display line.
     pub torrent_name: String,
+    /// Whole-release size — what a "Re-grab" would download (a pack
+    /// leaf reports the pack's size, deliberately: re-ingest is
+    /// release-level).
+    pub total_size_bytes: i64,
     /// Provenance for "Download again". Callers keep only rows with both
     /// set (re-resolving the same release yields the same infohash, so
     /// the saved position resumes untouched).
@@ -85,10 +89,21 @@ pub struct GoneEpisodeFileRow {
     pub last_watched_at: Option<DateTime<Utc>>,
 }
 
-/// Gone episode rows for a collection, per-caller. Releases the user
-/// dismissed (`gone_release_dismissed` at-or-after the deletion) are
-/// hidden — a re-download + re-reclaim stamps a newer `deleted_at`,
-/// making the dismissal stale so the rows return.
+/// Gone episode rows for a collection, per-caller — in BOTH senses:
+///
+/// * only releases the CALLER actually engaged with (≥ 1 playback row
+///   on the release, any file) surface. `episode_files` is library-wide
+///   and survives the GC, so without this gate every deleted release in
+///   the household — someone else's watch, a mis-grab removed minutes
+///   after ingest, a pack evicted before it finished — would sprout
+///   "Re-grab" rows for everyone on episodes they never had. Ghosts
+///   derive from your own history; so do gone rows. The gate is
+///   release-level, not file-level, on purpose: watching E01..E05 of a
+///   reclaimed season pack keeps ALL its leaves visible (the pre-GC
+///   layout), E06+ simply unwatched.
+/// * releases the caller dismissed (`gone_release_dismissed` at-or-after
+///   the deletion) are hidden — a re-download + re-reclaim stamps a
+///   newer `deleted_at`, making the dismissal stale so the rows return.
 pub async fn list_gone_for_collection(
     pool: &SqlitePool,
     collection_id: Uuid,
@@ -97,7 +112,7 @@ pub async fn list_gone_for_collection(
     let user: Uuid = user_id.into();
     sqlx::query_as::<_, GoneEpisodeFileRow>(
         "SELECT ef.season, ef.episode, ef.absolute_episode, ef.infohash, ef.file_idx, \
-            t.name AS torrent_name, t.source_provider, t.source_external_id, \
+            t.name AS torrent_name, t.total_size_bytes, t.source_provider, t.source_external_id, \
             COALESCE(p.completed, 0) AS completed, \
             p.position_seconds, p.duration_seconds, p.last_watched_at \
          FROM episode_files ef \
@@ -105,6 +120,8 @@ pub async fn list_gone_for_collection(
          LEFT JOIN playback_progress p \
             ON p.infohash = ef.infohash AND p.file_idx = ef.file_idx AND p.user_id = ?2 \
          WHERE ef.collection_id = ?1 AND t.deleted_at IS NOT NULL \
+           AND EXISTS (SELECT 1 FROM playback_progress pe \
+                       WHERE pe.user_id = ?2 AND pe.infohash = t.infohash) \
            AND NOT EXISTS (SELECT 1 FROM gone_release_dismissed gd \
                            WHERE gd.user_id = ?2 AND gd.infohash = t.infohash \
                              AND gd.dismissed_at >= t.deleted_at) \

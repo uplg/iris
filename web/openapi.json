@@ -4766,6 +4766,13 @@
             "format": "double",
             "description": "Mid-way resume state (same semantics as a History row); all\n`None` when the caller never started this file."
           },
+          "quality": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Quality tag parsed from the release name (`\"1080p\"`, …) — chip\nmetadata, same as offers. Additive."
+          },
           "release_name": {
             "type": "string",
             "description": "Raw SCENE name of the reclaimed release — secondary display line."
@@ -4780,6 +4787,11 @@
           "source_provider": {
             "type": "string",
             "description": "Provenance feeding the existing ingest endpoint\n(`POST /api/torrents`) — always present: rows without it are not\nactionable and are filtered out server-side."
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Whole-release size: what \"Re-grab\" would download (a pack leaf\nreports the pack's size — re-ingest is release-level). Additive."
           },
           "watched": {
             "type": "boolean",

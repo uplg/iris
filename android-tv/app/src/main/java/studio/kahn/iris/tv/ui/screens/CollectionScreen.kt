@@ -598,10 +598,27 @@ private sealed class EpisodeVariant {
         val fileIdx: Int,
         val watched: Boolean,
         val releaseName: String,
+        val quality: String?,
+        val totalSizeBytes: Long,
         val sourceProvider: String,
         val sourceExternalId: String,
         override val language: String?,
     ) : EpisodeVariant()
+}
+
+/** Drop Gone variants covered by an on-disk release: with the same
+ *  language already downloaded (or an on-disk Multi), "Re-grab" is
+ *  pure noise — Play sits right next to it. */
+private fun pruneShadowedGone(variants: List<EpisodeVariant>): List<EpisodeVariant> {
+    val downloadedLangs = variants
+        .filterIsInstance<EpisodeVariant.Downloaded>()
+        .map { it.language ?: "" }
+        .toSet()
+    if (downloadedLangs.isEmpty()) return variants
+    val hasMulti = "multi" in downloadedLangs
+    return variants.filter {
+        it !is EpisodeVariant.Gone || (!hasMulti && (it.language ?: "") !in downloadedLangs)
+    }
 }
 
 /** Chip order inside a row: downloaded first (the natural Play
@@ -617,6 +634,8 @@ private fun goneVariant(g: GoneEpisodeEntry): EpisodeVariant.Gone = EpisodeVaria
     fileIdx = g.fileIdx.toInt(),
     watched = g.watched,
     releaseName = g.releaseName,
+    quality = g.quality,
+    totalSizeBytes = g.totalSizeBytes ?: 0L,
     sourceProvider = g.sourceProvider,
     sourceExternalId = g.sourceExternalId,
     language = g.language,
@@ -669,7 +688,7 @@ private fun mergeEpisodes(
     // language for predictable adjacency.
     return buckets
         .map { (key, variants) ->
-            val sorted = variants.sortedWith(
+            val sorted = pruneShadowedGone(variants).sortedWith(
                 compareBy({ variantRank(it) }, { it.language ?: "" }),
             )
             MergedEpisode(season = key.first, episode = key.second, variants = sorted)
@@ -733,7 +752,7 @@ private fun mergeEpisodesAbsolute(
     }
     return buckets.values
         .map { row ->
-            val sorted = row.variants.sortedWith(
+            val sorted = pruneShadowedGone(row.variants).sortedWith(
                 compareBy({ variantRank(it) }, { it.language ?: "" }),
             )
             MergedEpisode(season = row.season, episode = row.episode, absolute = row.absolute, variants = sorted)
@@ -1180,13 +1199,19 @@ private fun VariantChip(
             // uniform. Click re-downloads the exact release and jumps
             // back into playback; LONG-PRESS hides it for this user
             // (same gesture as the Continue Watching tile menu).
-            // "Re-grab" — action-first (the row is about getting it
-            // back, not about its absence) and short enough to keep
-            // the chip compact without a focused variant.
+            // Compact-until-focused like the Grab chip: "Re-grab" at
+            // rest, quality + release size (what a re-grab would pull)
+            // on the focused chip.
+            var focused by remember { mutableStateOf(false) }
+            val meta = listOfNotNull(
+                variant.quality?.takeIf { it.isNotBlank() },
+                variant.totalSizeBytes.takeIf { it > 0 }?.let { formatFileSize(it) },
+            ).joinToString(" · ")
             val goneShape = RoundedCornerShape(Radius.button)
             Button(
                 onClick = { onRestore(variant) },
                 onLongClick = { onDismiss(variant) },
+                modifier = Modifier.onFocusChanged { focused = it.isFocused },
                 shape = ButtonDefaults.shape(shape = goneShape),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 scale = ButtonDefaults.scale(focusedScale = 1f),
@@ -1206,7 +1231,7 @@ private fun VariantChip(
                 ) {
                     LanguageBadge(language = variant.language)
                     Text(
-                        "Re-grab",
+                        if (focused && meta.isNotEmpty()) "Re-grab · $meta" else "Re-grab",
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
