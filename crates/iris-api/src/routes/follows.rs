@@ -45,9 +45,7 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/episodes/{season}/{episode}/grab", post(grab_episode))
 }
 
-// ---------------------------------------------------------------------------
 // POST /api/me/follows
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct CreateFollowRequest {
@@ -139,9 +137,7 @@ pub(crate) async fn create(
     Ok(Json(summarize(&state, &row).await))
 }
 
-// ---------------------------------------------------------------------------
 // GET /api/me/follows
-// ---------------------------------------------------------------------------
 //
 // C1 façade for APK 0.3.1: per-user Watchlist. With ~10 viewers from
 // different families sharing one library, the Watchlist HAS to be
@@ -247,9 +243,7 @@ async fn trusted_tmdb_id(pool: &iris_db::SqlitePool, normalized_name: &str) -> O
     row.map(|(t,)| t)
 }
 
-// ---------------------------------------------------------------------------
 // DELETE /api/me/follows/:id
-// ---------------------------------------------------------------------------
 
 #[utoipa::path(
     delete,
@@ -275,9 +269,7 @@ pub(crate) async fn remove(
     }
 }
 
-// ---------------------------------------------------------------------------
 // GET /api/me/follows/:id/episodes
-// ---------------------------------------------------------------------------
 //
 // SCENE-only: the canonical episode list is the union of
 //   * episode_files (on disk)  — keyed on collection_id, join via
@@ -430,9 +422,7 @@ pub(crate) enum EpisodeStatus {
     Available,
 }
 
-// ---------------------------------------------------------------------------
 // GET /api/me/follows/episode-context?infohash=X&file_idx=N
-// ---------------------------------------------------------------------------
 //
 // "Préparer le suivant ?" plumbing for the player. Returns the
 // follow id (if any) plus the `(season, episode + 1)` if we know
@@ -664,9 +654,7 @@ async fn same_torrent_next(
     }))
 }
 
-// ---------------------------------------------------------------------------
 // POST /api/me/follows/:id/episodes/:season/:episode/grab
-// ---------------------------------------------------------------------------
 //
 // Routed by follow id (UUID). Idempotent — if the episode is
 // already on disk we short-circuit through the existing

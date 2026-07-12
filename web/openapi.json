@@ -1768,7 +1768,7 @@
         "tags": [
           "me"
         ],
-        "summary": "Per-user, timestamped, never destructive: `playback_progress` (and\ntherefore the History page) is untouched, and newer activity makes\nthe dismissal stale so the entry returns — a release re-reclaimed\nafter a fresh download reappears, and a ghost collection the user\nre-watches comes back to their Library.",
+        "summary": "Per-user, timestamped, never destructive: History is untouched and\nnewer activity makes the dismissal stale (the entry returns).",
         "operationId": "dismiss_gone",
         "requestBody": {
           "content": {
@@ -2070,7 +2070,7 @@
         "tags": [
           "me"
         ],
-        "summary": "Remove a series from the CALLER's Watchlist. Per-user (follows are\nper-user rows) and naturally reversible: grabbing or playing an\nepisode auto-recreates the follow — auto-tracking is the whole\nWatchlist model, so removal means \"until I engage with it again\".",
+        "summary": "Remove a series from the CALLER's Watchlist. Reversible by nature:\ngrabbing or playing an episode auto-recreates the follow.",
         "operationId": "remove_watchlist",
         "requestBody": {
           "content": {
@@ -3847,14 +3847,14 @@
             "items": {
               "$ref": "#/components/schemas/GoneEpisodeEntry"
             },
-            "description": "The ghost twin of `episodes`: every (season, episode) row whose\nsource release was reclaimed, with the CALLER's watch state\nattached. New clients merge these into the episode list so a\nghost collection renders exactly as it did before the GC — same\nrows, same \"already watched\" badges — with \"Download again\"\ninstead of Play. Kept OUT of `episodes` on purpose: an old\nclient must never offer Play on a deleted torrent. Rows the\ncaller dismissed are excluded. Additive — older clients ignore\nit and keep the flat `gone_releases` list."
+            "description": "The ghost twin of `episodes`: reclaimed (S, E) rows with the\nCALLER's watch state, merged into the episode list by new\nclients so a ghost renders as it did before the GC. Kept OUT of\n`episodes` on purpose: an old client must never offer Play on a\ndeleted torrent. Additive."
           },
           "gone_releases": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/GoneReleaseEntry"
             },
-            "description": "Releases that used to be on disk (reclaimed by the GC / a\ncleanup) and can be re-grabbed from their source indexer.\nThis is the ghost-resume path for MOVIES — TV additionally has\n`available_episodes` — but is populated for both kinds:\nre-resolving the same release yields the same infohash, so any\nsaved playback position resumes untouched. Only releases whose\nsource provenance survived are listed (the actionable ones),\nminus the ones the CALLER dismissed. Additive — older clients\nignore it."
+            "description": "Reclaimed releases re-grabbable from their source indexer — the\nghost-resume path (same release → same infohash → saved position\nresumes). Per-caller (engagement-gated, minus dismissals).\nAdditive — older clients ignore it."
           },
           "has_new_since_last_visit": {
             "type": "integer",
@@ -4736,7 +4736,7 @@
       },
       "GoneEpisodeEntry": {
         "type": "object",
-        "description": "One episode whose source release was reclaimed — the ghost twin of\n[`EpisodeEntry`], plus the caller's watch state and the re-grab\nprovenance. `(infohash, file_idx)` stays the identity key, exactly\nlike `episodes` (a mis-parsed pack's colliding (S, E) rows must all\nsurvive — see the identity contract on [`build_tv_episode_view`]).",
+        "description": "The ghost twin of [`EpisodeEntry`] plus the caller's watch state\nand re-grab provenance. `(infohash, file_idx)` stays the identity\nkey (see the identity contract on [`build_tv_episode_view`]).",
         "required": [
           "season",
           "episode",
@@ -4753,8 +4753,7 @@
               "integer",
               "null"
             ],
-            "format": "int64",
-            "description": "Absolute episode number for fleuve anime (render \"Episode N\")."
+            "format": "int64"
           },
           "duration_seconds": {
             "type": [
@@ -4779,7 +4778,7 @@
               "string",
               "null"
             ],
-            "description": "Same string form as `EpisodeEntry.language` (`\"french\"` /\n`\"english\"` / `\"multi\"` / `\"unknown\"`), derived from the\nreclaimed torrent's SCENE name."
+            "description": "Same string form as `EpisodeEntry.language`."
           },
           "last_watched_at": {
             "type": [
@@ -4793,19 +4792,16 @@
               "number",
               "null"
             ],
-            "format": "double",
-            "description": "Mid-way resume state (same semantics as a History row); all\n`None` when the caller never started this file."
+            "format": "double"
           },
           "quality": {
             "type": [
               "string",
               "null"
-            ],
-            "description": "Quality tag parsed from the release name (`\"1080p\"`, …) — chip\nmetadata, same as offers. Additive."
+            ]
           },
           "release_name": {
-            "type": "string",
-            "description": "Raw SCENE name of the reclaimed release — secondary display line."
+            "type": "string"
           },
           "season": {
             "type": "integer",
@@ -4816,16 +4812,15 @@
           },
           "source_provider": {
             "type": "string",
-            "description": "Provenance feeding the existing ingest endpoint\n(`POST /api/torrents`) — always present: rows without it are not\nactionable and are filtered out server-side."
+            "description": "Feeds `POST /api/torrents`; rows without provenance are\nfiltered out server-side."
           },
           "total_size_bytes": {
             "type": "integer",
             "format": "int64",
-            "description": "Whole-release size: what \"Re-grab\" would download (a pack leaf\nreports the pack's size — re-ingest is release-level). Additive."
+            "description": "Whole-release size: what \"Re-grab\" would download."
           },
           "watched": {
-            "type": "boolean",
-            "description": "`true` when the requesting user's `playback_progress.completed`\nis set for this exact file — the \"already watched\" badge."
+            "type": "boolean"
           }
         }
       },
@@ -4846,7 +4841,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "When the GC / cleanup reclaimed it. Additive — `None` only on\nlegacy rows that predate `deleted_at` stamping (shouldn't happen)."
+            "description": "When the GC / cleanup reclaimed it. Additive."
           },
           "duration_seconds": {
             "type": [
@@ -4887,7 +4882,7 @@
           },
           "watched": {
             "type": "boolean",
-            "description": "CALLER's watch state on this release (most recent file — the\nmeaningful one for a single-file movie): `watched` mirrors\n`playback_progress.completed`, the rest carries the mid-way\nresume position like a History row. All additive."
+            "description": "CALLER's watch state on the release's most recent file (the\nmeaningful one for a single-file movie). All additive."
           }
         }
       },
@@ -6417,7 +6412,7 @@
         "properties": {
           "normalized_name": {
             "type": "string",
-            "description": "The series' SCENE-normalised name — the stable identity a\n`WatchlistItem` carries (`id` is the collection's, not the\nfollow's)."
+            "description": "The stable identity a `WatchlistItem` carries (`id` is the\ncollection's, not the follow's)."
           }
         }
       },

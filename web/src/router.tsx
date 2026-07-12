@@ -99,11 +99,8 @@ const indexRoute = createRoute({
   component: lazyRouteComponent(() => import("@/pages/HomePage"), "HomePage"),
 });
 
-// One "Discover" destination for the whole reco system: For You and
-// Tonight are TABS (`?view=`), not separate nav items — mirrors the TV.
-// `mood` selects a tile's results inside the Tonight tab; `kind`
-// toggles Film/Series. Everything stays in the URL, so tabs, boards
-// and mood results are shareable + back-button friendly.
+// One "Discover" destination: For You + Tonight as tabs (`?view=`),
+// mirroring the TV. All state in the URL — shareable, Back-friendly.
 const discoverRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/discover",
@@ -117,7 +114,7 @@ const discoverRoute = createRoute({
   component: lazyRouteComponent(() => import("@/pages/DiscoverPage"), "DiscoverPage"),
 });
 
-// Legacy reco routes → /discover redirects (bookmarks, muscle memory).
+// Legacy reco routes → /discover redirects.
 const forYouAliasRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/for-you",

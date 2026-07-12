@@ -113,14 +113,11 @@ fun LibraryScreen(
     var search by rememberSaveable { mutableStateOf("") }
     var kind by rememberSaveable { mutableStateOf(LibKind.All) }
     var sort by rememberSaveable { mutableStateOf(LibrarySort.Recent) }
-    // Ghost card the user long-pressed to hide — confirmed via dialog,
-    // a long-press alone must never make anything disappear.
+    // Ghost card pending hide (confirmed via dialog).
     var confirmGhost by remember { mutableStateOf<CollectionListItem?>(null) }
-    // While the hide dialog is up (and until focus is handed back to a
-    // card) the search field must NOT be focusable: the dialog teardown
-    // would drop focus on it and pop the leanback keyboard — which read
-    // as "Back lags, then I need a second Back" (the second one closed
-    // the IME).
+    // Search must NOT be focusable while the hide dialog is up /
+    // refocusing: the dialog teardown would drop focus on it and
+    // pop the leanback keyboard.
     var suppressSearchFocus by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -292,10 +289,7 @@ fun LibraryScreen(
                                 lastOpenedId = c.id.toString()
                                 onOpenCollection(c.id.toString())
                             },
-                            // Long-press a GONE card to hide it from MY
-                            // library (per-user; history stays — watching
-                            // the show again resurfaces it). Confirmed
-                            // via dialog before anything happens.
+                            // Long-press a GONE card → confirm → per-user hide.
                             onDismissGhost = {
                                 suppressSearchFocus = true
                                 confirmGhost = c
@@ -311,14 +305,10 @@ fun LibraryScreen(
             }
         }
 
-        // Confirm before hiding a ghost card — per-user, non-destructive
-        // (history stays; watching the show again resurfaces it).
         confirmGhost?.let { c ->
-            // Hand focus back to a card once the dialog goes away — the
-            // long-pressed one on cancel, its neighbour after a hide.
-            // `restoreFocus` re-attaches to the target card on
-            // recomposition; retry across a few frames until its node
-            // exists, then let the search field become focusable again.
+            // Hand focus back to a card once the dialog goes away (the
+            // long-pressed one on cancel, its neighbour after a hide),
+            // retrying a few frames until its node exists.
             fun refocusCard(id: java.util.UUID?) {
                 lastOpenedId = id?.toString()
                 scope.launch {
@@ -342,17 +332,13 @@ fun LibraryScreen(
                     confirmGhost = null
                     scope.launch {
                         val url = container.sessionStore.serverUrl.first()
-                        // Fall back to refocusing the untouched card when
-                        // the dismissal can't run (signed out, API error).
                         var focusTarget: java.util.UUID? = c.id
                         if (url != null) {
                             runCatching {
                                 container.apiFor(url)
                                     .dismissGone(DismissGoneRequest(collectionId = c.id))
                             }.onSuccess {
-                                // Optimistic local removal, then focus the
-                                // previous card (or the next when hiding
-                                // the first one).
+                                // Optimistic removal; focus the previous (or next) card.
                                 val removedIdx = visible.indexOfFirst { it.id == c.id }
                                 val neighbor = visible.getOrNull(removedIdx - 1)
                                     ?: visible.getOrNull(removedIdx + 1)
@@ -424,7 +410,6 @@ private fun LibraryGridCard(
     // older payloads) — absent means "not a ghost".
     val isGhost = collection.ghost == true
     val subtitle = if (isGhost) {
-        // The "hold to hide" tail doubles as the long-press hint.
         "No longer on disk · hold to hide"
     } else {
         buildString {
@@ -440,8 +425,7 @@ private fun LibraryGridCard(
 
     Card(
         onClick = onClick,
-        // Long-press only means something on a ghost — hide it for this
-        // user. On a live card it stays a no-op (no accidental hides).
+        // Long-press only means something on a ghost.
         onLongClick = { if (isGhost) onDismissGhost() },
         modifier = modifier.fillMaxWidth(),
         shape = CardDefaults.shape(shape = shape),

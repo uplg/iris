@@ -506,11 +506,9 @@ pub fn parse(filename: &str) -> Option<Parsed> {
     // Find the structural boundary that separates the title from the
     // metadata tail. Priority: SXXEXX > year > quality > end-of-stem.
     let (title_end_byte, season, episode, year) = find_title_boundary(stem);
-    // Leading "[GROUP]" prefixes ("[H4KIG] Ted 2 (2015)…") are release
-    // metadata, not title — left in place they poison the collection
-    // key AND the TMDB lookup (no poster). The anime fallback below
-    // handles its own bracketed shape; this covers the SE/year/quality-
-    // bounded parses that never reach it.
+    // Leading "[GROUP]" is metadata, not title — it poisons the
+    // collection key and the TMDB lookup. (The anime fallback below
+    // strips its own bracketed shape.)
     let mut title = humanise(strip_leading_groups(&stem[..title_end_byte]));
 
     // Anime fallback (absolute numbering): only when this is neither a
@@ -547,10 +545,8 @@ pub fn parse(filename: &str) -> Option<Parsed> {
     })
 }
 
-/// Strip leading `[…]` bracket groups (and the separators around them)
-/// from a title region. `"[H4KIG] Ted 2"` → `"Ted 2"`. Falls back to
-/// the input when stripping would leave nothing (a stem that is ONLY
-/// bracket groups is better kept verbatim than emptied).
+/// `"[H4KIG] Ted 2"` → `"Ted 2"`. Falls back to the input when
+/// stripping would leave nothing.
 fn strip_leading_groups(s: &str) -> &str {
     let mut rest = s.trim_start();
     while let Some(tail) = rest.strip_prefix('[') {

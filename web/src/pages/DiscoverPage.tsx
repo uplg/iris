@@ -13,14 +13,11 @@ const discoverApi = getRouteApi("/auth/shell/discover");
 type Kind = MediaKind;
 
 /**
- * The single "Discover" destination: both halves of the recommendation
- * system as TABS — "For You" (organized taste shelves) and "Tonight"
- * (mood board). They always were one system fed by the same engine;
- * two separate nav items read as two products and nobody knew which
- * door to take. Mirrors the TV's DiscoverScreen. All state lives in
- * the URL (`?view=&mood=&kind=`) so tabs, boards and mood results stay
- * shareable + back-button friendly; the legacy `/for-you` and `/moods`
- * routes redirect here.
+ * The single "Discover" destination — both halves of the reco system
+ * as tabs ("For You" + "Tonight"), mirroring the TV. All state lives
+ * in the URL (`?view=&mood=&kind=`) so tabs, boards and mood results
+ * stay shareable and Back-friendly; `/for-you` and `/moods` redirect
+ * here.
  */
 export function DiscoverPage() {
   const { view, mood, kind } = discoverApi.useSearch();
@@ -69,11 +66,7 @@ export function DiscoverPage() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// "For You" tab — the blended top picks plus organized sections
-// (per-genre, "because you watched X", new anime): the expanded view of
-// the home shelf.
-// ---------------------------------------------------------------------------
+// "For You" tab — the expanded view of the home shelf.
 
 function ForYouSection() {
   const q = useQuery({
@@ -108,13 +101,7 @@ function ForYouSection() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// "Tonight" tab — the mood board: "What are you in the mood for?", a grid
-// of curated mood tiles (taste-ordered, each backed by a representative
-// backdrop) plus a Film/Series toggle. Picking a mood swaps to its
-// results (catalogue ∪ broad TMDB, recency-filtered to grabbable,
-// ranked by taste).
-// ---------------------------------------------------------------------------
+// "Tonight" tab — the mood board + per-mood results.
 
 function KindToggle({ kind, onChange }: { kind: Kind; onChange: (k: Kind) => void }) {
   return (
@@ -176,9 +163,7 @@ function MoodBoardView({ kind }: { kind: Kind }) {
         </div>
         <KindToggle
           kind={kind}
-          onChange={(next) =>
-            navigate({ search: { view: "tonight", kind: next }, replace: true })
-          }
+          onChange={(next) => navigate({ search: { view: "tonight", kind: next }, replace: true })}
         />
       </header>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">

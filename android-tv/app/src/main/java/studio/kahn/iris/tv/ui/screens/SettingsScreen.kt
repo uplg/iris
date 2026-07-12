@@ -55,10 +55,9 @@ import studio.kahn.iris.tv.ui.theme.Spacing
 @Composable
 fun SettingsScreen(
     container: AppContainer,
-    /** Open the full watch-history list (lives here, not in the home
-     *  nav — a look-back surface, not a daily door). */
+    /** Watch history — lives here, not in the home nav. */
     onOpenHistory: () -> Unit,
-    /** Open the seedbox / raw-torrents view (power surface, same move). */
+    /** Seedbox / raw-torrents view. */
     onOpenTorrents: () -> Unit,
     onSignOut: () -> Unit,
     onBack: () -> Unit,
@@ -72,10 +71,8 @@ fun SettingsScreen(
 
     val layout = LocalTvLayout.current
     val cardShape = RoundedCornerShape(studio.kahn.iris.tv.ui.theme.Radius.poster)
-    // Scrollable: the page outgrew a fixed-height Column (the update
-    // card alone is tall) — overflow silently squashed whatever card
-    // came after it into empty-looking pill borders. D-pad focus
-    // brings the focused control into view.
+    // Scrollable: a fixed-height Column silently squashed whatever
+    // card came after the (tall) update card.
     Column(
         Modifier
             .fillMaxSize()
@@ -105,12 +102,9 @@ fun SettingsScreen(
             }
         }
 
-        // The update card keeps the top spot (right under the server
-        // line) — it's the reason most people open Settings.
         UpdaterCard(container = container)
 
-        // Tucked-away destinations: power/look-back surfaces that used
-        // to crowd the home nav.
+        // Power/look-back surfaces that used to crowd the home nav.
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = cardShape,
@@ -125,8 +119,6 @@ fun SettingsScreen(
             }
         }
 
-        // (No weight-spacer: it's incompatible with the scroll container —
-        // the actions simply follow the content.)
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -163,20 +155,16 @@ private fun UpdaterCard(container: AppContainer) {
     var versionStatus by remember {
         mutableStateOf<AppUpdater.VersionStatus>(AppUpdater.VersionStatus.Unknown)
     }
-    // APK ready while the app was NOT foreground (screensaver kicked in
-    // during a long download, or the user pressed Home): Android
-    // silently drops background startActivity calls, so firing the
-    // installer intent right then goes nowhere — the exact "stuck on
-    // Opening installer…" symptom. Park it here; the ON_RESUME observer
-    // below fires it the moment we're back in front.
+    // APK ready while backgrounded (screensaver / Home): Android
+    // silently drops background startActivity — park the file and
+    // fire it from the ON_RESUME observer below.
     var pendingInstall by remember { mutableStateOf<java.io.File?>(null) }
 
     DisposableEffect(Unit) {
         onDispose { job?.cancel() }
     }
 
-    // The screensaver is what usually steals the foreground mid-download
-    // — keep the screen awake for the whole update flow.
+    // Keep the screen awake for the whole update flow.
     val updateActive = state != null && state !is AppUpdater.Progress.Failed
     DisposableEffect(updateActive) {
         view.keepScreenOn = updateActive
@@ -262,27 +250,16 @@ private fun UpdaterCard(container: AppContainer) {
                                         val resumed = lifecycleOwner.lifecycle.currentState
                                             .isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
                                         if (!resumed) {
-                                            // Backgrounded (screensaver /
-                                            // Home): a startActivity now is
-                                            // silently dropped by Android.
-                                            // Park it — the ON_RESUME
-                                            // observer fires it when we're
-                                            // back in front.
+                                            // Backgrounded: startActivity would be silently dropped —
+                                            // park it for the ON_RESUME observer.
                                             pendingInstall = p.file
                                             return@collect
                                         }
                                         AppUpdater.requestInstall(context, p.file)
-                                        // Self-heal for a launch dropped
-                                        // even while foreground: when the
-                                        // installer actually comes up it
-                                        // COVERS this activity (ON_PAUSE).
-                                        // No ON_PAUSE after a beat → fire
-                                        // again, same as the manual
-                                        // "Reopen installer". One ON_PAUSE
-                                        // ends the retries for good — the
-                                        // user may have already cancelled
-                                        // the installer, never reopen it
-                                        // on them.
+                                        // Foreground launch self-heal: the installer coming up COVERS
+                                        // us (ON_PAUSE). No ON_PAUSE after a beat → the intent was
+                                        // dropped, fire again. One ON_PAUSE ends the retries for good
+                                        // (never reopen over a user's cancel).
                                         var covered = false
                                         val observer =
                                             androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -309,11 +286,8 @@ private fun UpdaterCard(container: AppContainer) {
                 )
                 if (state is AppUpdater.Progress.Ready) {
                     val ready = state as AppUpdater.Progress.Ready
-                    // Land the D-pad on this button as soon as Ready
-                    // renders: when the system swallows the installer
-                    // launch (it happens), the manual relaunch is a
-                    // single OK press. When the installer DID open, the
-                    // app is covered and the focus grab is invisible.
+                    // Focus lands here on Ready: if the installer launch was
+                    // swallowed, the manual relaunch is a single OK press.
                     val reopenFocus = remember { FocusRequester() }
                     LaunchedEffect(Unit) { runCatching { reopenFocus.requestFocus() } }
                     IrisButton(

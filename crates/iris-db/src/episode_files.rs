@@ -56,13 +56,10 @@ pub async fn list_for_collection(
     .await
 }
 
-/// One episode file whose source torrent was RECLAIMED (soft-deleted),
-/// joined with the CALLER's playback state. Powers the collection page's
-/// "as if it were still on disk" ghost rendering: the episode list keeps
-/// every gone (S, E) row — watched state included — with a re-grab
-/// action instead of Play. `episode_files` rows survive the GC (only a
-/// manual per-torrent remove hard-deletes them), so the pre-reclaim
-/// episode layout is fully reconstructible.
+/// One episode file whose source torrent was RECLAIMED, joined with
+/// the CALLER's playback state — the "as if it were still on disk"
+/// rendering. `episode_files` rows survive the GC, so the pre-reclaim
+/// layout is fully reconstructible.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct GoneEpisodeFileRow {
     pub season: i64,
@@ -70,40 +67,24 @@ pub struct GoneEpisodeFileRow {
     pub absolute_episode: Option<i64>,
     pub infohash: String,
     pub file_idx: i64,
-    /// Raw SCENE name of the reclaimed torrent — language detection +
-    /// secondary display line.
     pub torrent_name: String,
-    /// Whole-release size — what a "Re-grab" would download (a pack
-    /// leaf reports the pack's size, deliberately: re-ingest is
-    /// release-level).
+    /// Whole-release size — re-ingest is release-level, so a pack leaf
+    /// reports the pack's size.
     pub total_size_bytes: i64,
-    /// Provenance for "Download again". Callers keep only rows with both
-    /// set (re-resolving the same release yields the same infohash, so
-    /// the saved position resumes untouched).
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
-    /// Caller's playback state; all `NULL`/false when never watched.
     pub completed: bool,
     pub position_seconds: Option<f64>,
     pub duration_seconds: Option<f64>,
     pub last_watched_at: Option<DateTime<Utc>>,
 }
 
-/// Gone episode rows for a collection, per-caller — in BOTH senses:
-///
-/// * only releases the CALLER actually engaged with (≥ 1 playback row
-///   on the release, any file) surface. `episode_files` is library-wide
-///   and survives the GC, so without this gate every deleted release in
-///   the household — someone else's watch, a mis-grab removed minutes
-///   after ingest, a pack evicted before it finished — would sprout
-///   "Re-grab" rows for everyone on episodes they never had. Ghosts
-///   derive from your own history; so do gone rows. The gate is
-///   release-level, not file-level, on purpose: watching E01..E05 of a
-///   reclaimed season pack keeps ALL its leaves visible (the pre-GC
-///   layout), E06+ simply unwatched.
-/// * releases the caller dismissed (`gone_release_dismissed` at-or-after
-///   the deletion) are hidden — a re-download + re-reclaim stamps a
-///   newer `deleted_at`, making the dismissal stale so the rows return.
+/// Gone episode rows for a collection, per-caller in BOTH senses:
+/// only releases the caller has playback on surface (`episode_files`
+/// is library-wide — without the gate everyone would see "Re-grab" on
+/// releases they never touched; release-level on purpose, so a
+/// half-watched pack keeps ALL its leaves), minus dismissed releases
+/// (stale once a re-reclaim stamps a newer `deleted_at`).
 pub async fn list_gone_for_collection(
     pool: &SqlitePool,
     collection_id: Uuid,

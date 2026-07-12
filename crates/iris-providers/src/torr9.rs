@@ -824,7 +824,6 @@ fn derive_kind(parent: Option<&str>, leaf: Option<&str>) -> Option<MediaKind> {
     parent.and_then(test).or_else(|| leaf.and_then(test))
 }
 
-// ===========================================================================
 // RSS rolling-window feed parsing (`/api/v1/rss/{Films,Séries}`).
 //
 // Plain RSS 2.0 — one `<item>` per release. Sample:
@@ -839,7 +838,6 @@ fn derive_kind(parent: Option<&str>, leaf: Option<&str>) -> Option<MediaKind> {
 //
 // Seeders are NOT in the feed — the freshness scheduler backfills them via
 // details() for the release it actually keeps, then drops dead (0-seeder) ones.
-// ===========================================================================
 
 #[derive(Default)]
 struct RssItem {

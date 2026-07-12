@@ -104,25 +104,16 @@ export function CollectionPage() {
   }
   if (!data) return null;
 
-  // SCENE parser misses (Plex-style `NxNN` file names, exotic
-  // numbering schemes, etc.) leave a TV collection with zero
-  // `episode_files` rows. Don't show "no episodes" and orphan the
-  // user — fall back to the raw file picker so they can still
-  // play whatever is on disk. The parser improvement is tracked
-  // separately; this is the cheap UX guard until then. Gone episodes
-  // count too: a fully-reclaimed (ghost) TV collection must render its
-  // pre-GC episode list, not the (empty) raw file picker.
+  // play whatever is on disk. Gone episodes count too: a ghost TV
+  // collection must render its episode list, not the raw picker.
   const tvHasEpisodes =
     data.kind === "tv" &&
     (data.episodes.length > 0 ||
       (data.available_episodes?.length ?? 0) > 0 ||
       (data.gone_episodes?.length ?? 0) > 0);
 
-  // Releases whose reclaimed episodes render inline in the episode list
-  // (as "gone" chips) don't need a second row in "Previously on disk" —
-  // that section keeps only the remainder: movies and packs the SCENE
-  // parser never split. episode === 0 is the season-pack sentinel, which
-  // the merge skips — those releases must keep their raw row here.
+  // Releases whose gone episodes render inline don't need a second
+  // row below; episode === 0 (pack sentinel) rows keep theirs.
   const goneInline = new Set(
     (data.gone_episodes ?? []).filter((g) => g.episode > 0).map((g) => g.infohash),
   );
@@ -158,8 +149,7 @@ export function CollectionPage() {
   );
 }
 
-/** "Watched · 2d ago" / "43% · 0:12:34 · 2d ago" — the caller's watch
- *  state on a gone release, mirroring the History page's status line. */
+/** History-style status line for a gone release. */
 function goneWatchLine(r: GoneReleaseEntry): string | null {
   if (r.watched) {
     return r.last_watched_at ? `Watched · ${formatRecentTime(r.last_watched_at)}` : "Watched";
@@ -178,17 +168,10 @@ function goneWatchLine(r: GoneReleaseEntry): string | null {
 }
 
 /**
- * "Previously on disk" — the ghost-resume surface, rendered like the
- * release was still there: the caller's "already watched" state leads,
- * the raw SCENE name is the secondary line, and "Download again"
- * replaces Play. TV releases whose episodes render inline as gone chips
- * are filtered out by the caller — this section keeps movies and
- * unsplit packs. Re-ingesting the same release yields the same
- * infohash, so saved positions resume untouched; for a single-file
- * movie the page's auto-redirect to /watch kicks in as soon as the
- * refetch sees the resurrected torrent — straight back into playback.
- * The X hides the row for THIS user only (per-release dismissal;
- * History is never affected).
+ * "Previously on disk" — what the episode list can't show inline:
+ * movies and packs the parser never split. Watch state first, SCENE
+ * name second; Download again re-ingests (same infohash, saved
+ * position resumes) and the × is a per-user hide.
  */
 function GoneReleases({
   collectionId,
@@ -283,9 +266,7 @@ function GoneReleases({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Hero
-// ---------------------------------------------------------------------------
 
 function Hero({ collection }: { collection: CollectionDetail }) {
   // Server-resolved poster + backdrop. Both `null` when the
@@ -409,9 +390,7 @@ function Hero({ collection }: { collection: CollectionDetail }) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Episode list — merged on-disk + indexer offers
-// ---------------------------------------------------------------------------
 
 /** A single episode row aggregates every variant we have for that
  *  (S, E) — owned releases + grabbable indexer offers — so a user
@@ -448,10 +427,8 @@ type EpisodeVariant =
       size_bytes: number | null;
     }
   | {
-      // Reclaimed by the GC but still known: renders in place like it
-      // was on disk (watched badge included) with "Download again"
-      // instead of Play — re-ingesting the same release keeps the
-      // saved position. Dismissable per-release.
+      // Reclaimed: renders in place with "Re-grab" instead of Play
+      // (same infohash, saved position resumes). Per-user dismissable.
       status: "gone";
       language: string | null;
       infohash: string;
@@ -464,8 +441,7 @@ type EpisodeVariant =
       source_external_id: string;
     };
 
-/** Drop gone variants covered by an on-disk release: with the same
- *  language already downloaded (or an on-disk MULTi), "Re-grab" is
+/** A same-language (or MULTi) release on disk makes "Re-grab"
  *  pure noise — Play sits right next to it. */
 function pruneShadowedGone(variants: EpisodeVariant[]): EpisodeVariant[] {
   const downloadedLangs = new Set(
@@ -478,9 +454,7 @@ function pruneShadowedGone(variants: EpisodeVariant[]): EpisodeVariant[] {
   );
 }
 
-/** Stable variant order per row: downloaded first (Play stays the
- *  natural primary), then gone (it WAS on disk), then available —
- *  each block sorted by language for predictable adjacency. */
+/** Downloaded, then gone (it WAS on disk), then available. */
 const VARIANT_RANK = { downloaded: 0, gone: 1, available: 2 } as const;
 
 function sortVariants(variants: EpisodeVariant[]) {
@@ -535,8 +509,7 @@ function mergeEpisodes(
       watched: d.watched,
     });
   }
-  // Gone episodes keep their (S, E) slot so the page reads exactly like
-  // it did before the GC — same rows, same watched badges.
+  // Gone episodes keep their (S, E) slot.
   for (const g of gone ?? []) {
     if (g.episode === 0) continue;
     ensure(g.season, g.episode).variants.push(goneVariant(g));
@@ -601,8 +574,8 @@ function mergeEpisodesAbsolute(
       watched: d.watched,
     });
   }
-  // Gone episodes follow the on-disk rule (they WERE on disk): always
-  // shown — by absolute when known, else by their SxxExx coordinate.
+  // Gone episodes follow the on-disk rule: always shown — by
+  // absolute when known, else by their SxxExx coordinate.
   for (const g of gone ?? []) {
     if (g.episode === 0) continue;
     ensure(g.absolute_episode ?? null, g.season, g.episode).variants.push(goneVariant(g));
@@ -983,9 +956,7 @@ function VariantChip({
     void qc.invalidateQueries({ queryKey: ["library"] });
     void qc.invalidateQueries({ queryKey: ["history"] });
   };
-  // Gone chip: re-ingest the exact same release (same infohash → saved
-  // position resumes untouched) then play right away — the stream path
-  // serves while the torrent downloads.
+  // Gone chip: re-ingest the exact release, then play right away.
   const regrab = useMutation({
     mutationFn: () => {
       if (variant.status !== "gone") throw new Error("not a gone variant");
@@ -1088,10 +1059,8 @@ function VariantChip({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Raw file fallback — for movies with no SCENE-parseable video, and
 // any other long-tail edge case the merged episode list can't render.
-// ---------------------------------------------------------------------------
 
 function RawFileList({
   collection,

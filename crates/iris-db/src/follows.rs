@@ -128,12 +128,9 @@ pub async fn delete(pool: &SqlitePool, user_id: UserId, id: Uuid) -> Result<bool
     Ok(res.rows_affected() > 0)
 }
 
-/// Same as [`delete`] but keyed on the follow's normalised SCENE name —
-/// the identity `WatchlistItem` actually carries (its `id` is the
-/// COLLECTION id, useless against `series_follows`). Powers the
-/// per-user "remove from Watchlist" action. The follow auto-recreates
-/// on the next grab/play in the series (auto-tracking is the whole
-/// Watchlist model), so removal is naturally "until I engage again".
+/// [`delete`] keyed on the normalised SCENE name — the identity
+/// `WatchlistItem` carries (its `id` is the collection's). The follow
+/// auto-recreates on the next grab/play in the series.
 pub async fn delete_by_normalized(
     pool: &SqlitePool,
     user_id: UserId,

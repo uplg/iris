@@ -103,11 +103,8 @@ object AppUpdater {
                 tmp.outputStream().use { out ->
                     val buf = ByteArray(64 * 1024)
                     var copied = 0L
-                    // Throttled progress: one emission per 64 KiB chunk
-                    // meant thousands of recompositions on the Main
-                    // collector — enough to make slow boxes janky right
-                    // when the installer intent fires. Every 512 KiB is
-                    // still a smooth bar.
+                    // Throttled: per-64KiB emissions meant thousands of Main-thread
+                    // recompositions; every 512 KiB is still a smooth bar.
                     var lastEmitted = 0L
                     while (true) {
                         val n = source.read(buf)

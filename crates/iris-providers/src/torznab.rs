@@ -430,11 +430,9 @@ impl SearchProvider for TorznabProvider {
     }
 }
 
-// ===========================================================================
 // XML parsing (event-driven — quick-xml's serde mode struggles with the
 // `<torznab:attr name=... value=.../>` repeated pattern, and the format
 // is small enough that hand-rolling stays compact).
-// ===========================================================================
 
 #[derive(Debug, Default)]
 struct ParsedTorznab {

@@ -317,6 +317,11 @@ Kotlin sealed class side. See memory `project_serde_kotlinx_discriminator`.
 
 ## Things to avoid
 
+- **No divider / banner comments, ever.** Lines like `// ----------`,
+  `// ==========` or boxed section headers are noise — delete them on
+  sight, never add new ones. A short plain comment line names a section
+  when one is genuinely needed. More broadly: comments only for
+  non-obvious constraints/gotchas, never narration of what the code does.
 - Don't `cd <project>` to run cargo — already operates on the workspace.
 - Don't use `cargo test ...` raw if rtk's hook hides output; use
   `rtk proxy cargo test ...` for unfiltered stdout when debugging.

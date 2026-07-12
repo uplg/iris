@@ -507,10 +507,7 @@ pub async fn list_summaries(pool: &SqlitePool) -> Result<Vec<CollectionSummary>,
 /// without leaking other users' history (each user only ever sees the
 /// ghosts they themselves watched; the shared live listing stays
 /// [`list_summaries`]). Ordered by the user's most recent watch.
-///
-/// Ghosts the caller dismissed ([`dismiss_ghost`]) are hidden while the
-/// dismissal is at-or-after their latest watch in the collection —
-/// watching anything newer makes it stale and the card returns.
+/// Dismissed ghosts stay hidden until newer watch activity.
 pub async fn list_ghost_summaries_for_user(
     pool: &SqlitePool,
     user_id: iris_core::ids::UserId,
@@ -549,11 +546,9 @@ pub async fn list_ghost_summaries_for_user(
     .await
 }
 
-/// Hide a whole ghost collection from the CALLER's Library grid.
-/// Timestamped like `cw_dismissed`: watching anything newer in the
-/// collection makes the dismissal stale and the ghost card returns.
-/// The collection page itself stays reachable (History still lists it),
-/// and `playback_progress` is never touched.
+/// Hide a ghost collection from the CALLER's Library grid.
+/// Timestamped like `cw_dismissed` — newer watch activity makes it
+/// stale and the card returns. Never touches `playback_progress`.
 pub async fn dismiss_ghost(
     pool: &SqlitePool,
     user_id: iris_core::ids::UserId,

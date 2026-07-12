@@ -122,9 +122,8 @@ fun CollectionScreen(
     // Infohash of the reclaimed release currently being re-ingested via
     // "Download again" — drives the row's busy state, one at a time.
     var restoringInfohash by remember { mutableStateOf<String?>(null) }
-    // (infohash, display label) of the gone release the user asked to
-    // hide — long-press is too easy to trigger by holding OK a beat too
-    // long, so nothing disappears without the ConfirmDialog.
+    // (infohash, label) pending hide — nothing disappears without
+    // the ConfirmDialog.
     var confirmHide by remember(collectionId) { mutableStateOf<Pair<String, String>?>(null) }
 
     suspend fun reload() {
@@ -145,10 +144,7 @@ fun CollectionScreen(
         return
     }
 
-    // Merge on-disk + indexer-cached + GONE (reclaimed) episodes for
-    // TV. Available entries carry a language tag so the same (S, E)
-    // can render as FR + EN side by side; gone entries keep their slot
-    // so a ghost collection reads exactly like it did before the GC.
+    // On-disk + offers + gone merged — a ghost reads like before the GC.
     val merged = remember(d) {
         mergeEpisodes(d.episodes, d.availableEpisodes.orEmpty(), d.goneEpisodes.orEmpty())
     }
@@ -196,9 +192,8 @@ fun CollectionScreen(
     val focusRowIdx = remember(absoluteRows) {
         absoluteRows
             .indexOfLast { row ->
-                // Gone rows count as "owned" for the landing point: on a
-                // ghost fleuve anime the user's frontier is where they
-                // stopped watching, not the bottom of a 1000-row list.
+                // Gone counts as owned: a ghost's frontier is where the user
+                // stopped, not the bottom of a 1000-row list.
                 row.variants.any { it is EpisodeVariant.Downloaded || it is EpisodeVariant.Gone }
             }
             .let { if (it >= 0) it else absoluteRows.lastIndex }
@@ -339,9 +334,8 @@ fun CollectionScreen(
 
                 val currentRows = seasons[activeSeason].orEmpty()
                 itemsIndexed(currentRows, key = { _, it -> "${it.season}:${it.episode}" }) { index, ep ->
-                    // Up-from-first-row → season tabs. Wired through
-                    // `chipsModifier` (inside the chip strip's scroll
-                    // group), NOT on this wrapper — see EpisodeRow.
+                    // Up-from-first-row → season tabs; must ride inside the chip
+                    // strip's focus group (see EpisodeRow.chipsModifier).
                     val firstRowUp = index == 0 && currentPacks.isEmpty() && firstRowGetsUpFocus
                     Box(
                         Modifier.padding(
@@ -412,13 +406,8 @@ fun CollectionScreen(
                 }
             }
 
-            // "Previously on disk" — the ghost-resume surface, movies
-            // especially (TV gone releases render inline as episode chips
-            // above; this section keeps the remainder: movies and packs the
-            // SCENE parser never split). Re-ingesting the same release
-            // yields the same infohash, so the saved playback position
-            // resumes untouched. Nothing automatic: the download only
-            // starts on the button press.
+            // "Previously on disk" keeps what the episode list can't show
+            // inline: movies and packs the parser never split.
             val goneInline = d.goneEpisodes.orEmpty()
                 .filter { it.episode > 0L }
                 .map { it.infohash }
@@ -477,8 +466,6 @@ fun CollectionScreen(
             }
         }
 
-    // Long-press "Hide" safety net: nothing disappears without an
-    // explicit confirm (holding OK a beat too long must cost nothing).
     confirmHide?.let { (infohash, name) ->
         ConfirmDialog(
             eyebrow = "Hide from this page",
@@ -499,11 +486,8 @@ fun CollectionScreen(
     }
 }
 
-/** One reclaimed release, rendered like it was still on disk: the
- *  caller's watch state leads ("Watched · 2d ago" / "43% watched"),
- *  the SCENE name is the secondary line, and "Download again" replaces
- *  Play. "Hide" dismisses the row for THIS user only (history stays).
- *  Mirrors the web's `GoneReleases` rows. */
+/** One reclaimed release: watch state first, SCENE name second,
+ *  Download again + per-user Hide. */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun GoneReleaseRow(
@@ -570,10 +554,8 @@ private fun GoneReleaseRow(
     }
 }
 
-// ============================================================================
 // Episode merge model — one row per (season, episode), variants inside
 // (mirrors web's MergedEpisode shape)
-// ============================================================================
 
 private data class MergedEpisode(
     val season: Long,
@@ -606,11 +588,8 @@ private sealed class EpisodeVariant {
         override val language: String?,
     ) : EpisodeVariant()
 
-    /** A release the GC reclaimed — the row renders in place like it
-     *  was still on disk (watched badge included). Click = re-ingest
-     *  the exact same release (same infohash → saved position resumes)
-     *  and play; long-press = hide it for THIS user (per-release
-     *  dismissal, history untouched). */
+    /** A reclaimed release. Click = re-ingest (same infohash, saved
+     *  position resumes) and play; long-press = per-user hide. */
     data class Gone(
         val infohash: String,
         val fileIdx: Int,
@@ -624,9 +603,8 @@ private sealed class EpisodeVariant {
     ) : EpisodeVariant()
 }
 
-/** Drop Gone variants covered by an on-disk release: with the same
- *  language already downloaded (or an on-disk Multi), "Re-grab" is
- *  pure noise — Play sits right next to it. */
+/** A same-language (or Multi) release on disk makes "Re-grab" pure
+ *  noise — Play sits right next to it. */
 private fun pruneShadowedGone(variants: List<EpisodeVariant>): List<EpisodeVariant> {
     val downloadedLangs = variants
         .filterIsInstance<EpisodeVariant.Downloaded>()
@@ -664,13 +642,8 @@ private fun mergeEpisodes(
     available: List<AvailableEpisodeEntry>,
     gone: List<GoneEpisodeEntry>,
 ): List<MergedEpisode> {
-    // Group downloaded, gone and available entries under the same
-    // (season, episode) key. Server already filters available rows
-    // whose language is covered by an owned release — anything that
-    // arrives here is a genuine additional variant the user might
-    // want to grab. Gone rows keep their slot so a ghost collection
-    // reads exactly like it did before the GC. episode == 0 is the
-    // season-pack sentinel and stays out of the per-episode grid.
+    // One row per (season, episode); gone rows keep their slot so a
+    // ghost reads like before the GC. episode == 0 is the pack sentinel.
     val buckets = linkedMapOf<Pair<Long, Long>, MutableList<EpisodeVariant>>()
     val ensure = { season: Long, episode: Long ->
         buckets.getOrPut(season to episode) { mutableListOf() }
@@ -701,9 +674,6 @@ private fun mergeEpisodes(
             ),
         )
     }
-    // Variant order inside a row: downloaded first (the natural
-    // "Play" primary), then gone, then available — each sorted by
-    // language for predictable adjacency.
     return buckets
         .map { (key, variants) ->
             val sorted = pruneShadowedGone(variants).sortedWith(
@@ -725,15 +695,10 @@ private fun mergeEpisodesAbsolute(
     available: List<AvailableEpisodeEntry>,
     gone: List<GoneEpisodeEntry>,
 ): List<MergedEpisode> {
-    // A long-running anime ships fleuve fansubs (`S01E1156`, absolute
-    // known) AND season-cut releases (`S23E07`, no derivable absolute)
-    // at once. Season-cut entries have no valid position on the absolute
-    // axis, so they must NOT be folded in under their raw `episode` (that
-    // aliased unrelated cuts onto a bogus "Episode 1..7"). Owned episodes
-    // always appear (never hide what's on disk) — by absolute when known,
-    // else by their (season, episode); GONE episodes follow the same rule
-    // (they were on disk); available offers appear only when they carry
-    // an absolute number. Mirrors web `mergeEpisodesAbsolute`.
+    // Season-cut releases (no derivable absolute) must NOT fold under
+    // their raw `episode` — that aliased unrelated cuts onto a bogus
+    // "Episode 1..7". Owned + gone rows always appear; offers only
+    // with an absolute. Mirrors web `mergeEpisodesAbsolute`.
     data class Row(val season: Long, val episode: Long, val absolute: Long?, val variants: MutableList<EpisodeVariant>)
     val buckets = linkedMapOf<String, Row>()
     val ensure = { abs: Long?, season: Long, episode: Long ->
@@ -807,9 +772,8 @@ private suspend fun doGrabVariant(
     onPlay(res.infohash, res.fileIdx.toInt())
 }
 
-/** Re-ingest a reclaimed release (same infohash → the saved playback
- *  position resumes untouched) and go straight back into playback —
- *  the stream path serves while the torrent downloads. */
+/** Re-ingest a reclaimed release and jump back into playback
+ *  (same infohash, saved position resumes). */
 private suspend fun doRestoreVariant(
     container: AppContainer,
     tmdbId: Long?,
@@ -832,8 +796,7 @@ private suspend fun doRestoreVariant(
     if (ok) onPlay(variant.infohash, variant.fileIdx)
 }
 
-/** Hide one reclaimed release for the CALLER (per-user; history and
- *  playback rows stay). A later re-download + re-reclaim resurfaces it. */
+/** Per-user hide of one reclaimed release (history stays). */
 private suspend fun doDismissGoneRelease(container: AppContainer, infohash: String) {
     val url = container.sessionStore.serverUrl.first() ?: return
     withContext(Dispatchers.IO) {
@@ -871,9 +834,7 @@ private suspend fun doGrabPack(
     }
 }
 
-// ============================================================================
 // Hero
-// ============================================================================
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -977,9 +938,7 @@ private fun CollectionHero(
     }
 }
 
-// ============================================================================
 // Season tabs + Episode rows
-// ============================================================================
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -1042,13 +1001,9 @@ private fun EpisodeRow(
     onGrabVariant: (EpisodeVariant.Available) -> Unit,
     onRestoreVariant: (EpisodeVariant.Gone) -> Unit,
     onDismissVariant: (EpisodeVariant.Gone) -> Unit,
-    /// Applied INSIDE the scrollable chip strip, wrapping the chips.
-    /// Custom focus destinations (`focusProperties { up = … }`) must
-    /// ride here: `horizontalScroll` installs its own focus group, and
-    /// property aggregation stops at the nearest ancestor focus target
-    /// — anything set on the row's outer wrapper never reaches the
-    /// chips. This is how the first row under the season tabs sends
-    /// D-pad Up back to the tabs instead of the hero's Back button.
+    /// `horizontalScroll` installs a focus group and focus-property
+    /// aggregation stops at the nearest ancestor target — custom
+    /// destinations must ride here, inside it.
     chipsModifier: Modifier = Modifier,
 ) {
     val anyWatched = ep.variants.any {
@@ -1074,11 +1029,8 @@ private fun EpisodeRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
         ) {
-            // Label + watched pill keep their INTRINSIC width — the chip
-            // strip gets the weight, not the label. With the weight on
-            // the label side (the old shape), a many-chip row (a ghost
-            // episode with several language offers) measured the chips
-            // first and crushed the label + pill to nothing.
+            // Weight on the chip strip, not the label — the other way
+            // around, a many-chip row crushed the label.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
@@ -1107,13 +1059,9 @@ private fun EpisodeRow(
                     }
                 }
             }
-            // Chips right-aligned in the leftover space; when they
-            // overflow it, the strip scrolls horizontally (D-pad focus
-            // brings the focused chip into view automatically).
+            // Overflowing chips scroll; focus brings them into view.
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                 Row(Modifier.horizontalScroll(rememberScrollState())) {
-                    // Inner wrapper BELOW the scroll container's focus
-                    // group — see `chipsModifier`.
                     Row(
                         chipsModifier,
                         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
@@ -1172,19 +1120,8 @@ private fun VariantChip(
             }
         }
         is EpisodeVariant.Available -> {
-            // Same `Button` shape as the Downloaded chip so D-pad
-            // traversal is uniform across the row. Mixing a
-            // `Surface(onClick=…)` with a `Button` in the same
-            // Row used to block focus from descending onto either
-            // chip — Compose-TV's focus engine treats the two as
-            // separate focus contexts.
-            //
-            // Compact-until-focused: at rest the chip is just
-            // [badge] Grab; the quality/seeders/size detail only
-            // appears on the FOCUSED chip. On a D-pad, focus always
-            // precedes the click, so the user still sees the full
-            // metadata before committing — without every chip in the
-            // row paying its width.
+            // Compact until focused — on a D-pad, focus precedes the
+            // click, so the metadata is always seen before committing.
             var focused by remember { mutableStateOf(false) }
             val meta = listOfNotNull(
                 variant.quality?.takeIf { it.isNotBlank() },
@@ -1224,14 +1161,8 @@ private fun VariantChip(
             }
         }
         is EpisodeVariant.Gone -> {
-            // Muted "it used to be here" chip — same Button focus
-            // mechanics as its siblings so D-pad traversal stays
-            // uniform. Click re-downloads the exact release and jumps
-            // back into playback; LONG-PRESS hides it for this user
-            // (same gesture as the Continue Watching tile menu).
-            // Compact-until-focused like the Grab chip: "Re-grab" at
-            // rest, quality + release size (what a re-grab would pull)
-            // on the focused chip.
+            // Click re-grabs, long-press hides (confirmed). Compact until
+            // focused, like the Grab chip.
             var focused by remember { mutableStateOf(false) }
             val meta = listOfNotNull(
                 variant.quality?.takeIf { it.isNotBlank() },
@@ -1276,23 +1207,12 @@ private fun SeasonPackBanner(
     pack: SeasonPackEntry,
     onGrab: () -> Unit,
     onPrepare: () -> Unit,
-    /// Applied to the buttons Row INSIDE the banner's focus group —
-    /// custom focus destinations must ride here, the Surface-level
-    /// `focusGroup()` (compact-until-focused meta) stops property
-    /// aggregation from any outer wrapper.
+    /// Must ride inside the banner's focus group (same aggregation
+    /// rule as EpisodeRow.chipsModifier).
     buttonsModifier: Modifier = Modifier,
 ) {
-    // Non-clickable container — the Prepare / Grab & play buttons
-    // inside need to be reachable by the D-pad. A clickable Card
-    // would grab focus first and the user could never land on the
-    // inner buttons.
-    //
-    // Compact-until-focused, same trick as the episode chips: the
-    // quality/seeders/size/provider line only renders while the
-    // D-pad sits INSIDE the banner (`hasFocus` covers descendants
-    // via the focusGroup node). Focus precedes the click, so the
-    // details are always visible before committing. Fixed height —
-    // the meta line appearing never shifts the list.
+    // Meta line only while the D-pad is inside the banner (the
+    // focusGroup's hasFocus covers descendants). Fixed height.
     var hasFocus by remember { mutableStateOf(false) }
     Surface(
         modifier = Modifier
@@ -1358,10 +1278,7 @@ private fun SeasonPackBanner(
     }
 }
 
-
-// ============================================================================
 // File fallback (movies / SCENE-unparseable TV)
-// ============================================================================
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -1409,9 +1326,7 @@ private fun FileRow(file: FileEntry, onClick: () -> Unit) {
     }
 }
 
-// ============================================================================
 // Loading / error shell
-// ============================================================================
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable

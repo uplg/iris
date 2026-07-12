@@ -48,8 +48,6 @@ export function AppShell() {
   const nav: NavEntry[] = [
     { to: "/", label: "Home", icon: HomeIcon, end: true },
     { to: "/search", label: "Search", icon: SearchIcon },
-    // One reco entry — For You + Tonight live as tabs inside Discover
-    // (mirrors the TV nav).
     { to: "/discover", label: "Discover", icon: DiscoverIcon },
     { to: "/library", label: "Library", icon: LibraryIcon },
     { to: "/live", label: "Live TV", icon: LiveTvIcon },

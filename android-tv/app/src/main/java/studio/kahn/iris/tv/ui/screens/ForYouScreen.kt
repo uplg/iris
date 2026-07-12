@@ -56,16 +56,12 @@ fun ForYouScreen(
 
     val shelves = data?.shelves.orEmpty()
 
-    // No background here — DiscoverScreen paints the Background +
-    // ambient once for the whole page (an opaque repaint under the tab
-    // strip rendered as a flat black band).
+    // No background: DiscoverScreen paints it once for the page.
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(vertical = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
     ) {
-        // No header block: this renders as the "For You" TAB inside
-        // DiscoverScreen, whose tab row already names the page.
         if (loading) {
             item(key = "loading") {
                 Text(

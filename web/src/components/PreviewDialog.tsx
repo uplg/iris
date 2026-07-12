@@ -374,9 +374,7 @@ function pickAutoFile(files: FilePreview[]): number | null {
   return pool.reduce((best, f) => (f.size_bytes > best.size_bytes ? f : best), pool[0])!.index;
 }
 
-// ---------------------------------------------------------------------------
 // FactsGrid — structured MediaInfo summary.
-// ---------------------------------------------------------------------------
 
 function FactsGrid({ mi }: { mi: MediaInfoSummary }) {
   // `audio`/`subtitles` are `#[serde(default)]` server-side (always sent, but
@@ -485,9 +483,7 @@ function formatRuntime(secs: number): string {
   return `${m}min`;
 }
 
-// ---------------------------------------------------------------------------
 // Description dispatcher — pick the right renderer per provider format.
-// ---------------------------------------------------------------------------
 //
 // torr9 ships BBCode, c411 ships HTML. The backend declares which via
 // `description_format` on `TorrentDetails`; we dispatch here so the
@@ -511,9 +507,7 @@ function Description({
   return <BBCode source={source} />;
 }
 
-// ---------------------------------------------------------------------------
 // Sanitised HTML renderer (c411 + any future HTML indexers)
-// ---------------------------------------------------------------------------
 //
 // Indexer descriptions are untrusted markup — sanitise with DOMPurify
 // before injection. The configured allow-list keeps c411's rich layout
@@ -611,9 +605,7 @@ function SanitizedHtml({ source }: { source: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // BBCode renderer
-// ---------------------------------------------------------------------------
 //
 // Targeted at the tags torr9 emits: [b], [i], [center], [size=N],
 // [color=#xxx], [url=X]Y[/url], [img]X[/img]. We do a small recursive-

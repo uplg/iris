@@ -246,14 +246,10 @@ pub async fn find_pack_for_season(
         .await
 }
 
-/// Count of distinct episodes whose `found_at` is newer than
-/// `since`. Drives the "X nouveaux" badge on Watchlist cards.
-///
-/// `since` is the user's last ENGAGEMENT with the series (collection
-/// page visit or watch activity — callers pass the max of both). No
-/// engagement at all → 0, not "everything is new": counting the whole
-/// offer cache produced absurd badges ("48 new") that mixed the entire
-/// back-catalogue with actual releases.
+/// Distinct episodes found after `since` — the "X new" Watchlist
+/// badge. `since` = the user's last engagement (max of page visit and
+/// watch). No engagement → 0, NOT "everything": counting the whole
+/// offer cache produced "48 new" badges.
 pub async fn count_new_for_series(
     pool: &SqlitePool,
     normalized_name: &str,

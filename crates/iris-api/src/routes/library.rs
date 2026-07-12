@@ -226,26 +226,17 @@ pub(crate) struct CollectionDetail {
     /// `0` for movies / no-SCENE collections.
     #[serde(default)]
     has_new_since_last_visit: u32,
-    /// Releases that used to be on disk (reclaimed by the GC / a
-    /// cleanup) and can be re-grabbed from their source indexer.
-    /// This is the ghost-resume path for MOVIES — TV additionally has
-    /// `available_episodes` — but is populated for both kinds:
-    /// re-resolving the same release yields the same infohash, so any
-    /// saved playback position resumes untouched. Only releases whose
-    /// source provenance survived are listed (the actionable ones),
-    /// minus the ones the CALLER dismissed. Additive — older clients
-    /// ignore it.
+    /// Reclaimed releases re-grabbable from their source indexer — the
+    /// ghost-resume path (same release → same infohash → saved position
+    /// resumes). Per-caller (engagement-gated, minus dismissals).
+    /// Additive — older clients ignore it.
     #[serde(default)]
     gone_releases: Vec<GoneReleaseEntry>,
-    /// The ghost twin of `episodes`: every (season, episode) row whose
-    /// source release was reclaimed, with the CALLER's watch state
-    /// attached. New clients merge these into the episode list so a
-    /// ghost collection renders exactly as it did before the GC — same
-    /// rows, same "already watched" badges — with "Download again"
-    /// instead of Play. Kept OUT of `episodes` on purpose: an old
-    /// client must never offer Play on a deleted torrent. Rows the
-    /// caller dismissed are excluded. Additive — older clients ignore
-    /// it and keep the flat `gone_releases` list.
+    /// The ghost twin of `episodes`: reclaimed (S, E) rows with the
+    /// CALLER's watch state, merged into the episode list by new
+    /// clients so a ghost renders as it did before the GC. Kept OUT of
+    /// `episodes` on purpose: an old client must never offer Play on a
+    /// deleted torrent. Additive.
     #[serde(default)]
     gone_episodes: Vec<GoneEpisodeEntry>,
 }
@@ -260,14 +251,11 @@ pub(crate) struct GoneReleaseEntry {
     source_provider: String,
     source_external_id: String,
     total_size_bytes: i64,
-    /// When the GC / cleanup reclaimed it. Additive — `None` only on
-    /// legacy rows that predate `deleted_at` stamping (shouldn't happen).
+    /// When the GC / cleanup reclaimed it. Additive.
     #[serde(default)]
     deleted_at: Option<DateTime<Utc>>,
-    /// CALLER's watch state on this release (most recent file — the
-    /// meaningful one for a single-file movie): `watched` mirrors
-    /// `playback_progress.completed`, the rest carries the mid-way
-    /// resume position like a History row. All additive.
+    /// CALLER's watch state on the release's most recent file (the
+    /// meaningful one for a single-file movie). All additive.
     #[serde(default)]
     watched: bool,
     #[serde(default)]
@@ -278,48 +266,34 @@ pub(crate) struct GoneReleaseEntry {
     last_watched_at: Option<DateTime<Utc>>,
 }
 
-/// One episode whose source release was reclaimed — the ghost twin of
-/// [`EpisodeEntry`], plus the caller's watch state and the re-grab
-/// provenance. `(infohash, file_idx)` stays the identity key, exactly
-/// like `episodes` (a mis-parsed pack's colliding (S, E) rows must all
-/// survive — see the identity contract on [`build_tv_episode_view`]).
+/// The ghost twin of [`EpisodeEntry`] plus the caller's watch state
+/// and re-grab provenance. `(infohash, file_idx)` stays the identity
+/// key (see the identity contract on [`build_tv_episode_view`]).
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct GoneEpisodeEntry {
     season: i64,
     episode: i64,
-    /// Absolute episode number for fleuve anime (render "Episode N").
     #[serde(default)]
     absolute_episode: Option<i64>,
     infohash: String,
     file_idx: i64,
-    /// `true` when the requesting user's `playback_progress.completed`
-    /// is set for this exact file — the "already watched" badge.
     watched: bool,
-    /// Mid-way resume state (same semantics as a History row); all
-    /// `None` when the caller never started this file.
     #[serde(default)]
     position_seconds: Option<f64>,
     #[serde(default)]
     duration_seconds: Option<f64>,
     #[serde(default)]
     last_watched_at: Option<DateTime<Utc>>,
-    /// Same string form as `EpisodeEntry.language` (`"french"` /
-    /// `"english"` / `"multi"` / `"unknown"`), derived from the
-    /// reclaimed torrent's SCENE name.
+    /// Same string form as `EpisodeEntry.language`.
     language: Option<String>,
-    /// Raw SCENE name of the reclaimed release — secondary display line.
     release_name: String,
-    /// Quality tag parsed from the release name (`"1080p"`, …) — chip
-    /// metadata, same as offers. Additive.
     #[serde(default)]
     quality: Option<String>,
-    /// Whole-release size: what "Re-grab" would download (a pack leaf
-    /// reports the pack's size — re-ingest is release-level). Additive.
+    /// Whole-release size: what "Re-grab" would download.
     #[serde(default)]
     total_size_bytes: i64,
-    /// Provenance feeding the existing ingest endpoint
-    /// (`POST /api/torrents`) — always present: rows without it are not
-    /// actionable and are filtered out server-side.
+    /// Feeds `POST /api/torrents`; rows without provenance are
+    /// filtered out server-side.
     source_provider: String,
     source_external_id: String,
 }
@@ -493,13 +467,9 @@ pub(crate) async fn collection_detail(
         }
     }
 
-    // Per-user "X new since I last engaged" timestamp: the max of the
-    // user's last collection-page visit (series_follows, auto-created
-    // by the grab path) and their last watch anywhere in the
-    // collection. Watching an episode consumes the offers that were
-    // already out at that point — only genuinely NEWER finds badge.
-    // Never engaged → None → the badge counts nothing (not the whole
-    // offer cache).
+    // "X new" cutoff = the user's last ENGAGEMENT: max(last page
+    // visit, last watch in the collection). Never engaged → None →
+    // the badge counts nothing.
     let user_last_visited: Option<DateTime<Utc>> =
         match collection.parsed_title_normalized.as_deref() {
             Some(norm) => iris_db::follows::get_by_normalized(state.db(), user.id, norm)
@@ -517,9 +487,7 @@ pub(crate) async fn collection_detail(
         (v, w) => v.or(w),
     };
 
-    // Gone view first: the gone episodes' languages count as "owned"
-    // coverage below, so a ghost page doesn't drown in indexer offers
-    // that duplicate its "Download again" rows.
+    // Gone view first — its languages count as "owned" coverage below.
     let (gone_releases, gone_episodes) = build_gone_view(&state, id, user.id).await;
 
     let (episodes, available_episodes, season_packs, has_new_since_last_visit) =
@@ -591,13 +559,9 @@ pub(crate) async fn collection_detail(
     }))
 }
 
-/// The per-caller "gone" view of a collection: reclaimed releases with
-/// surviving provenance (the "Download again" list — movies especially:
-/// without it a ghost movie collection is a dead end, having no
-/// `available_episodes` to re-grab) and the ghost twin of `episodes`
-/// (reclaimed (S, E) rows), both enriched with the CALLER's watch state
-/// so the page renders exactly as it did before the GC. Releases the
-/// caller dismissed are already filtered out at the query level.
+/// The per-caller "gone" view: reclaimed releases with surviving
+/// provenance + the ghost twin of `episodes`, both carrying the
+/// CALLER's watch state. Dismissals are filtered at the query level.
 async fn build_gone_view(
     state: &AppState,
     collection_id: Uuid,
@@ -607,9 +571,7 @@ async fn build_gone_view(
         iris_db::torrents::list_deleted_in_collection(state.db(), collection_id, user_id)
             .await
             .unwrap_or_default();
-    // Caller's playback rows on the reclaimed torrents, newest first —
-    // `find` therefore picks the most recent file's state per release
-    // (the meaningful one for a single-file movie).
+    // Newest first — `find` picks the most recent file's state.
     let gone_watch = iris_db::playback::watch_state_for_deleted_in_collection(
         state.db(),
         user_id,
@@ -639,9 +601,8 @@ async fn build_gone_view(
         })
         .collect();
 
-    // Language detection reuses the SCENE-name resolver with maps built
-    // from the DELETED torrent rows (the live-torrent maps in
-    // `build_tv_episode_view` don't know these infohashes).
+    // The live-torrent language maps don't know deleted infohashes —
+    // rebuild them from the deleted rows.
     let gone_names: std::collections::HashMap<String, String> = deleted_rows
         .iter()
         .map(|t| (t.infohash.clone(), t.name.clone()))
@@ -665,9 +626,6 @@ async fn build_gone_view(
                         .as_str()
                         .to_string(),
                 );
-                // Chip metadata mirrors the offer chips: quality comes
-                // from the SCENE name (the release row carries no
-                // structured quality of its own).
                 let quality = iris_media::filename::parse(&r.torrent_name).and_then(|p| p.quality);
                 Some(GoneEpisodeEntry {
                     season: r.season,
@@ -769,8 +727,7 @@ async fn build_available_singletons(
         if o.seeders.unwrap_or(0) <= 0 {
             continue;
         }
-        // `is_some_and`, not `is_none_or`: with no engagement at all
-        // there is nothing to compare against and nothing should badge.
+        // `is_some_and`: no engagement → nothing badges.
         if user_engaged_at.is_some_and(|t| o.found_at > t) {
             new_count = new_count.saturating_add(1);
         }
@@ -905,14 +862,9 @@ async fn build_tv_episode_view(
     }
     episodes_out.sort_by_key(|e| (e.season, e.episode, e.file_idx));
 
-    // GONE episodes count as language coverage too: their rows already
-    // carry a "Download again" action, so surfacing the same-language
-    // indexer offer next to them would just duplicate the chip (a ghost
-    // page has NOTHING on disk — without this every episode would grow
-    // a full set of Grab chips). Same shadow rule as on-disk releases
-    // (a gone Multi covers every language). Dismissing a gone release
-    // removes it from `gone_episodes`, so its offers resurface — the
-    // page never becomes a dead end.
+    // Gone episodes count as language coverage too — their rows carry
+    // "Re-grab", so a same-language offer would just duplicate the
+    // chip. Dismissing the release resurfaces its offers.
     for g in gone_episodes {
         if g.episode > 0 {
             let lang =

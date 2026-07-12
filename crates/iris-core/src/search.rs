@@ -256,9 +256,7 @@ pub enum TorrentSource {
     TorrentFile(Vec<u8>),
 }
 
-// ===========================================================================
 // Torrent details (provider-specific "look at this torrent before grabbing")
-// ===========================================================================
 
 /// Rich detail view for a single torrent — the kind of payload a tracker's
 /// torrent-detail page would normally show. Powers the search-result

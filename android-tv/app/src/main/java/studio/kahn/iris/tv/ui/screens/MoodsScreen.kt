@@ -61,10 +61,8 @@ fun MoodsScreen(
     var selected by remember { mutableStateOf<MoodTile?>(null) }
     var results by remember { mutableStateOf<MoodResults?>(null) }
     var loadingResults by remember { mutableStateOf(false) }
-    // Board ↔ results is internal state, invisible to the nav back
-    // stack — without this, Back from inside a mood's results pops the
-    // whole Discover route (straight to Home) instead of returning to
-    // the board.
+    // Board ↔ results is internal state — without this, Back from a
+    // mood's results pops the whole route instead of the board.
     androidx.activity.compose.BackHandler(enabled = selected != null) { selected = null }
 
     // The board's genres depend on the kind, so re-fetch when it toggles.
@@ -108,8 +106,6 @@ fun MoodsScreen(
                 modifier = Modifier.padding(horizontal = Spacing.gutter),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
-                // No "Tonight" eyebrow: this renders as the Tonight
-                // TAB inside DiscoverScreen, whose tab row names it.
                 SectionTitle(selected?.label ?: "What are you in the mood for?")
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                     IrisButton(

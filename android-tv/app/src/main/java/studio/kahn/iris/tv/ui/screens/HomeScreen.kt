@@ -234,10 +234,8 @@ fun HomeScreen(
             val (newDl, newLib) = splitTorrents(fresh)
             downloading = newDl
             library = newLib
-            // Fresh-episodes-first: the Watchlist shelf leads with the
-            // shows that have something NEW to watch, so "what came out
-            // since last time?" is answered at the head of the row
-            // (stable sort keeps the server's order within each group).
+            // Fresh-episodes-first: "what came out since last time?" is
+            // answered at the head of the row (stable sort).
             watchlist = wl.getOrDefault(emptyList()).sortedByDescending { it.newCount }
             forYou = fy.getOrNull()
             collections = (coll.getOrNull() as? LibraryResponse.CollectionsWrapper)?.value?.items.orEmpty()
@@ -322,9 +320,8 @@ fun HomeScreen(
             )
         }
 
-        // Held-select on a Watchlist tile: confirm-and-remove. Per-user,
-        // and reversible by nature — grabbing or playing an episode
-        // auto-recreates the follow (auto-tracking IS the Watchlist).
+        // Held-select on a Watchlist tile: confirm-and-remove. The
+        // follow auto-recreates on the next grab/play.
         watchlistRemoveItem?.let { item ->
             ConfirmDialog(
                 eyebrow = "My Watchlist",
@@ -342,7 +339,7 @@ fun HomeScreen(
                                 RemoveWatchlistRequest(normalizedName = item.normalizedName),
                             )
                         }.onSuccess {
-                            // Optimistic removal — no full home refetch.
+                            // Optimistic removal.
                             watchlist = watchlist.filter {
                                 it.normalizedName != item.normalizedName
                             }
@@ -503,10 +500,6 @@ private fun HomeContent(
 
         if (continueWatching.isNotEmpty()) {
             item(key = "shelf-cw") {
-                // Shelf eyebrows that only restated the title ("For
-                // you", "On disk", …) are dropped across the home
-                // page; the ones that carried a count keep just the
-                // count.
                 Shelf(title = "Continue Watching") {
                     items(continueWatching, key = { "${it.infohash}:${it.fileIdx}" }) { item ->
                         ContinueWatchingCard(
@@ -520,10 +513,8 @@ private fun HomeContent(
             }
         }
 
-        // Watchlist ABOVE Library: following the shows you track — and
-        // spotting their fresh episodes (the shelf is sorted new-first,
-        // each card badging its "N new") — is the home page's primary
-        // "let the app carry me" flow; the Library preview is the archive.
+        // Watchlist above Library: following tracked shows is the
+        // primary flow; the Library preview is the archive.
         if (watchlist.isNotEmpty()) {
             item(key = "shelf-watchlist") {
                 Shelf(title = "My Watchlist", eyebrow = "${watchlist.size} series") {
@@ -783,9 +774,6 @@ private fun HomeTopBar(
                 contentDescription = "Search",
                 onClick = { onOpenSearch(null) },
             )
-            // One reco entry ("Discover": For You + Tonight tabs) — the
-            // power surfaces (Torrents, Watch history) moved to Settings
-            // to keep this row to the doors people actually take.
             TvIconButton(
                 icon = Icons.Filled.Star,
                 contentDescription = "Discover",
@@ -1087,7 +1075,6 @@ private fun WatchlistCard(
     container: AppContainer,
     item: WatchlistItem,
     onClick: () -> Unit,
-    /** Held-select: confirm-and-remove from the caller's Watchlist. */
     onLongClick: () -> Unit,
 ) {
     // Post-0.4 Watchlist tile — server-provided poster (tmdb_verified

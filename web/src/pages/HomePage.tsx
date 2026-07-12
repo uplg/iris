@@ -42,10 +42,7 @@ export function HomePage() {
     queryKey: ["watchlist"],
     queryFn: meApi.watchlist,
     staleTime: 60_000,
-    // Fresh-episodes-first (same as the TV shelf): the shows with
-    // something NEW to watch lead the row, so "what came out since
-    // last time?" is answered at a glance. Stable sort keeps the
-    // server's recency order within each group.
+    // Fresh-episodes-first, like the TV shelf (stable sort).
     select: (items) => [...items].sort((a, b) => b.new_count - a.new_count),
   });
   const featuredQ = useQuery({
@@ -88,9 +85,6 @@ export function HomePage() {
 
       <Container>
         <div className="lanes pt-2">
-          {/* Shelf eyebrows ("For you", "On disk", …) said nothing the
-              titles don't — dropped across the home page (TV did the
-              same). */}
           <Shelf
             title="Continue Watching"
             isEmpty={!continueQ.data || continueQ.data.length === 0}
@@ -272,9 +266,8 @@ function ResumeHero({ item }: { item: ContinueWatchingItem }) {
 
   return (
     <HeroLayout
-      // The "Continue tonight · Resume" eyebrow said nothing the Resume
-      // CTA doesn't — dropped (same call as the TV hero), but its slot
-      // height is kept so the bottom-anchored hero lockup doesn't shift.
+      // Eyebrow dropped (redundant with the CTA); slot height kept so
+      // the bottom-anchored lockup doesn't shift.
       eyebrow={<span aria-hidden className="block h-4" />}
       backdropUrl={tmdbImage(md?.backdrop_path, "original")}
       title={title}
@@ -456,8 +449,7 @@ function ContinueCard({ item }: { item: ContinueWatchingItem }) {
 
 function WatchlistCard({ item }: { item: WatchlistItem }) {
   const qc = useQueryClient();
-  // Per-user and reversible by nature: grabbing or playing an episode
-  // auto-recreates the follow (auto-tracking IS the Watchlist model).
+  // Per-user; the follow auto-recreates on the next grab/play.
   const remove = useMutation({
     mutationFn: () => meApi.removeFromWatchlist(item.normalized_name),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["watchlist"] }),
@@ -480,8 +472,7 @@ function WatchlistCard({ item }: { item: WatchlistItem }) {
           )
         }
       />
-      {/* Hover ×: remove from MY Watchlist (same pattern as the
-          Continue Watching manage button / Library ghost hide). */}
+      {/* Hover ×: remove from MY Watchlist. */}
       <button
         type="button"
         aria-label="Remove from my Watchlist"

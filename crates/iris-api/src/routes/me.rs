@@ -250,14 +250,11 @@ pub(crate) async fn watchlist(
             }
             _ => (None, None),
         };
-        // "New" = found since the user's last ENGAGEMENT — the max of
-        // their last collection-page visit and their last watch in the
-        // series. Visit-only was wrong twice over: a user who watched
-        // E04 without opening the page kept seeing E05/E06 (already out
-        // back then) as "new", and a user who never opened the page got
-        // the entire offer cache as the count. (When no collection is
-        // resolved yet, `collection_id` is the follow's own id — the
-        // watch lookup simply returns None.)
+        // "New" cutoff = last ENGAGEMENT (max of page visit and watch)
+        // — visit-only kept badging episodes that were already out when
+        // the user watched, and badged the whole cache when they had
+        // never opened the page. (With no collection resolved,
+        // `collection_id` is the follow's id → lookup returns None.)
         let last_watched =
             iris_db::playback::last_watched_in_collection(state.db(), user.id, collection_id)
                 .await
@@ -290,16 +287,13 @@ pub(crate) async fn watchlist(
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub(crate) struct RemoveWatchlistRequest {
-    /// The series' SCENE-normalised name — the stable identity a
-    /// `WatchlistItem` carries (`id` is the collection's, not the
-    /// follow's).
+    /// The stable identity a `WatchlistItem` carries (`id` is the
+    /// collection's, not the follow's).
     normalized_name: String,
 }
 
-/// Remove a series from the CALLER's Watchlist. Per-user (follows are
-/// per-user rows) and naturally reversible: grabbing or playing an
-/// episode auto-recreates the follow — auto-tracking is the whole
-/// Watchlist model, so removal means "until I engage with it again".
+/// Remove a series from the CALLER's Watchlist. Reversible by nature:
+/// grabbing or playing an episode auto-recreates the follow.
 #[utoipa::path(
     post,
     path = "/api/me/watchlist/remove",
@@ -458,11 +452,8 @@ pub(crate) struct DismissGoneRequest {
     infohash: Option<String>,
 }
 
-/// Per-user, timestamped, never destructive: `playback_progress` (and
-/// therefore the History page) is untouched, and newer activity makes
-/// the dismissal stale so the entry returns — a release re-reclaimed
-/// after a fresh download reappears, and a ghost collection the user
-/// re-watches comes back to their Library.
+/// Per-user, timestamped, never destructive: History is untouched and
+/// newer activity makes the dismissal stale (the entry returns).
 #[utoipa::path(
     post,
     path = "/api/me/gone/dismiss",

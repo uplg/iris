@@ -482,9 +482,7 @@ fn is_infohash(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-// ===========================================================================
 // /api/torrents/{infohash} response
-// ===========================================================================
 
 #[derive(Debug, Deserialize)]
 struct TorrentDetailRaw {

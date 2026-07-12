@@ -965,14 +965,11 @@ async fn heal_anime_batch_metadata(
 /// the anime *One Piece* vs the live-action *One Piece*, which carry
 /// DIFFERENT tmdb ids — is never collapsed. Idempotent: once merged the
 /// group has one member and the sweep is a no-op. Runs from
-/// Sweep collections whose `display_title` still carries a leading
-/// "[GROUP]" prefix — output of the pre-fix parser ("[H4KIG] Ted 2
-/// (2015)"). The junk poisons the collection key and the TMDB lookup
-/// (no poster), so re-derive the identity from the cleaned title.
-/// Rename-in-place only: when another collection already owns the
-/// canonical key we still fix the visible title but leave the key —
-/// the same-tmdb sweep folds true duplicates. Runs from
-/// [`run_backfill`] (boot + every 5 min); a no-op once prod is clean.
+/// Heal collections whose `display_title` still opens with a
+/// "[GROUP]" prefix (pre-fix parser output — poisons the key and the
+/// TMDB poster lookup). Rename-in-place only: an already-owned
+/// canonical key keeps its owner (the same-tmdb sweep folds true
+/// duplicates). No-op once prod is clean.
 async fn heal_bracketed_display_titles(pool: &SqlitePool, deps: EnrichDeps<'_>) {
     let cols = match collections::list_all(pool).await {
         Ok(c) => c,
@@ -985,9 +982,7 @@ async fn heal_bracketed_display_titles(pool: &SqlitePool, deps: EnrichDeps<'_>) 
         if !c.display_title.starts_with('[') {
             continue;
         }
-        // The display title itself carries the full "[GROUP] Title
-        // (YYYY)" shape — re-parse it (works even for ghosts whose
-        // torrents are all reclaimed).
+        // Re-parse the display title itself — works even for ghosts.
         let Some(parsed) = filename::parse(&c.display_title) else {
             continue;
         };
@@ -1021,8 +1016,7 @@ async fn heal_bracketed_display_titles(pool: &SqlitePool, deps: EnrichDeps<'_>) 
             new = %new_display,
             "bracketed display title self-healed",
         );
-        // The junk title usually failed TMDB resolution → no poster.
-        // Re-resolve off the clean identity (no-op when already set).
+        // Re-resolve TMDB off the clean identity (no-op when set).
         if let Ok(Some(fresh)) = collections::get(pool, c.id).await {
             resolve_collection_tmdb(pool, deps, &fresh, kind).await;
         }
@@ -1156,9 +1150,8 @@ async fn merge_collection_into(
 }
 
 pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris_torrent::Engine) {
-    // Clean leftover "[GROUP] …" display titles BEFORE the merge sweep:
-    // the rename can re-key a junk collection onto its clean twin's
-    // identity space, which the same-tmdb merge below then folds.
+    // Before the merge sweep: a heal re-key can land on a clean
+    // twin's identity, which the same-tmdb merge then folds.
     heal_bracketed_display_titles(pool, deps).await;
 
     // Collapse any same-entity split FIRST, so the per-torrent heals below

@@ -286,9 +286,7 @@ export const metadata = {
     ),
 };
 
-// ---------------------------------------------------------------------------
 // Torrent details (search result preview)
-// ---------------------------------------------------------------------------
 
 export type AudioInfo = components["schemas"]["AudioInfo"];
 export type SubInfo = components["schemas"]["SubInfo"];
@@ -401,11 +399,9 @@ export const me = {
     infohash?: string;
     file_idx?: number;
   }) => api.post<void>("/me/continue-watching/dismiss", body),
-  /** Hide a Gone entry, per-user and non-destructive (History keeps every
-   *  row). Pass `collection_id` to hide a whole ghost collection from the
-   *  Library grid, or `infohash` to hide one reclaimed release from the
-   *  collection page. Newer activity (re-reclaim / newer watch) makes the
-   *  dismissal stale and the entry returns. */
+  /** Per-user hide of a Gone entry (ghost collection via
+   *  `collection_id`, single release via `infohash`). History stays;
+   *  newer activity resurfaces it. */
   dismissGone: (body: { collection_id?: string | null; infohash?: string }) =>
     api.post<void>("/me/gone/dismiss", body),
   /** Full watch history — in-progress AND completed, survives deletion of
@@ -418,9 +414,7 @@ export const me = {
       }).toString()}`,
     ),
   watchlist: () => api.get<WatchlistItem[]>("/me/watchlist"),
-  /** Remove a series from MY Watchlist (keyed on the item's
-   *  `normalized_name`). Reversible by nature: grabbing or playing an
-   *  episode auto-recreates the follow. */
+  /** Remove from MY Watchlist (auto-recreated on next grab/play). */
   removeFromWatchlist: (normalized_name: string) =>
     api.post<void>("/me/watchlist/remove", { normalized_name }),
   preferences: () => api.get<Preferences>("/me/preferences"),
@@ -490,9 +484,7 @@ export type AudioStream = components["schemas"]["AudioStream"];
 export type PlayStatus = components["schemas"]["PlayStatus"];
 export type SubtitleStream = components["schemas"]["SubtitleStream"];
 
-// ---------------------------------------------------------------------------
 // Discovery: featured carousels (torr9 /featured/{movies,series}, etc.)
-// ---------------------------------------------------------------------------
 
 export type FeaturedResponse = components["schemas"]["FeaturedResponse"];
 
@@ -519,23 +511,18 @@ export const discover = {
   languages: () => api.get<LanguagesResponse>("/languages"),
 };
 
-// ---------------------------------------------------------------------------
 // Library — collections (default) or raw torrents (toggle)
-// ---------------------------------------------------------------------------
 
 export type CollectionListItem = components["schemas"]["CollectionListItem"];
 export type LibraryResponse = components["schemas"]["LibraryResponse"];
 export type CollectionEpisodeEntry = components["schemas"]["EpisodeEntry"];
 export type SeasonPackEntry = components["schemas"]["SeasonPackEntry"];
 export type AvailableEpisodeEntry = components["schemas"]["AvailableEpisodeEntry"];
-/** A reclaimed (GC'd) release with surviving indexer provenance —
- *  re-ingestable via {@link torrents.ingest} for the ghost-resume path.
- *  Carries the caller's watch state (`watched`, resume position). */
+/** A reclaimed release with indexer provenance — re-ingestable via
+ *  {@link torrents.ingest}; carries the caller's watch state. */
 export type GoneReleaseEntry = components["schemas"]["GoneReleaseEntry"];
-/** The ghost twin of {@link CollectionEpisodeEntry}: a reclaimed
- *  (S, E) row with the caller's watch state — merged into the episode
- *  list so a ghost collection renders as it did before the GC, with
- *  "Download again" instead of Play. */
+/** Ghost twin of {@link CollectionEpisodeEntry} — reclaimed (S, E)
+ *  rows with the caller's watch state. */
 export type GoneEpisodeEntry = components["schemas"]["GoneEpisodeEntry"];
 export type CollectionDetail = components["schemas"]["CollectionDetail"];
 
@@ -562,9 +549,7 @@ export const library = {
   },
 };
 
-// ---------------------------------------------------------------------------
 // Series follows (Watchlist + Series detail page)
-// ---------------------------------------------------------------------------
 
 /// Post-0.4 Watchlist tile — returned by `/api/me/watchlist`.
 /// Per-user: derived from the calling user's `series_follows`
@@ -607,10 +592,8 @@ export const follows = {
     ),
 };
 
-// ---------------------------------------------------------------------------
 // Live TV: per-country IPTV channels + now/next guide, played through the
 // backend's signed HLS proxy (see crates/iris-api/src/live_tv).
-// ---------------------------------------------------------------------------
 
 export type LiveCountry = components["schemas"]["LiveCountry"];
 export type LiveCountriesResponse = components["schemas"]["LiveCountriesResponse"];

@@ -553,11 +553,8 @@ pub async fn user_history(
     .await
 }
 
-/// The caller's most recent watch activity anywhere in a collection —
-/// deleted torrents included (watching something that later got GC'd
-/// still counts as engagement). Feeds the "X new" badge cutoff: an
-/// episode offer only counts as new when it was found AFTER the user
-/// last visited the page or watched something in the series.
+/// The caller's most recent watch anywhere in a collection (deleted
+/// torrents included) — the "X new" badge's engagement cutoff.
 pub async fn last_watched_in_collection(
     pool: &SqlitePool,
     user_id: UserId,
@@ -575,11 +572,8 @@ pub async fn last_watched_in_collection(
     .await
 }
 
-/// One playback row of the caller on a RECLAIMED (soft-deleted) torrent
-/// of a collection. Enriches the collection page's gone-release rows
-/// (movies / packs without `episode_files`) with "already watched"
-/// state — the per-episode gone rows get theirs from
-/// [`crate::episode_files::list_gone_for_collection`] instead.
+/// Caller playback on a RECLAIMED torrent — watch state for the
+/// gone-release rows (movies / packs without `episode_files`).
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct GoneWatchRow {
     pub infohash: String,

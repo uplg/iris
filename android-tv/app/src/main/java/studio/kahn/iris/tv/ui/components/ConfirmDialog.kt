@@ -37,13 +37,11 @@ import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
 
-/**
- * Scrim + centered card confirmation — tv-material has no built-in
- * dialog, so this mirrors the Continue Watching manage sheet's shape.
- * Back or clicking the scrim cancels; focus lands on the CONFIRM
- * button, so an intentional action stays a two-press flow while an
- * accidental long-press costs nothing.
- */
+ /**
+  * Scrim + centered card confirmation (same shape as the Continue
+  * Watching manage sheet). Back or the scrim cancels; focus lands on
+  * the CONFIRM button.
+  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun ConfirmDialog(
@@ -57,25 +55,19 @@ fun ConfirmDialog(
     BackHandler(enabled = true, onBack = onCancel)
     val confirmFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { confirmFocus.requestFocus() } }
-    // The dialog usually opens from a LONG-PRESS, i.e. while OK is still
-    // held down: focus lands on the confirm button and the RELEASE
-    // (KeyUp) — plus any auto-repeat KeyDowns — would be delivered to it
-    // and click it instantly, silently confirming what we're supposed to
-    // confirm. Swallow every Select event until the opening press has
-    // fully released; only a fresh press inside the dialog can activate
-    // a button.
+    // The dialog usually opens from a LONG-PRESS, with OK still held:
+    // its release (and auto-repeat downs) would land on the confirm
+    // button and click it instantly. Swallow every Select event until
+    // the opening press fully releases.
     var openingPressReleased by remember { mutableStateOf(false) }
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.7f))
             .onPreviewKeyEvent { event ->
-                // Back cancels, handled HERE at the key level: routing it
-                // through the OnBackPressedDispatcher proved unreliable
-                // with focus inside the dialog (the first press got eaten,
-                // Back had to be hit twice). Consume both edges, act on
-                // the release. The BackHandler below stays as a fallback
-                // for dispatch paths that never produce a key event.
+                // Back cancels, handled at the key level — the dispatcher route
+                // proved unreliable with focus inside the dialog (first press
+                // eaten). The BackHandler below stays as a fallback.
                 if (event.key == Key.Back) {
                     if (event.type == KeyEventType.KeyUp) onCancel()
                     return@onPreviewKeyEvent true

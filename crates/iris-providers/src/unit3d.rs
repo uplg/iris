@@ -392,9 +392,7 @@ impl SearchProvider for Unit3dProvider {
     }
 }
 
-// ===========================================================================
 // JSON shapes
-// ===========================================================================
 
 #[derive(Debug, Deserialize)]
 struct SearchResponse {

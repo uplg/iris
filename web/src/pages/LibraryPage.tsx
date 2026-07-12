@@ -178,9 +178,7 @@ function ViewToggleButton({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Collections view
-// ---------------------------------------------------------------------------
 
 type SortMode = "alpha" | "recent" | "size";
 
@@ -414,8 +412,7 @@ function VirtualCollectionsGrid({
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const qc = useQueryClient();
-  // Hide a ghost card for THIS user only. Non-destructive (History and
-  // playback rows stay); watching the show again resurfaces it.
+  // Per-user ghost hide — history stays, watching again resurfaces it.
   const dismissGhost = useMutation({
     mutationFn: (c: CollectionListItem) => me.dismissGone({ collection_id: c.id }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["library"] }),
@@ -496,9 +493,7 @@ function VirtualCollectionsGrid({
                       // re-download stays a deliberate user action there.
                       className={cn(c.ghost && "opacity-55 grayscale")}
                     />
-                    {/* Ghost cards get a hover X: hide from MY library
-                        (per-user, non-destructive — same pattern as the
-                        Continue Watching manage button). */}
+                    {/* Ghost cards: hover × = per-user hide. */}
                     {c.ghost && (
                       <button
                         type="button"
@@ -598,9 +593,7 @@ function routeCollection(
   navigate({ to: "/collection/$id", params: { id: String(c.id) } });
 }
 
-// ---------------------------------------------------------------------------
 // Torrents view — virtualized power-user list
-// ---------------------------------------------------------------------------
 
 function TorrentsView() {
   const qc = useQueryClient();

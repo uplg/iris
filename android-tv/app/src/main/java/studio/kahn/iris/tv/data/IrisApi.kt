@@ -167,16 +167,12 @@ interface IrisApi {
     @POST("api/me/continue-watching/dismiss")
     suspend fun dismissContinueWatching(@Body body: DismissCwRequest)
 
-    /** Remove a series from the caller's Watchlist (keyed on the
-     *  normalised SCENE name the WatchlistItem carries). Reversible by
-     *  nature: grabbing or playing an episode auto-recreates the follow. */
+    /** Remove from MY Watchlist (auto-recreated on next grab/play). */
     @POST("api/me/watchlist/remove")
     suspend fun removeFromWatchlist(@Body body: RemoveWatchlistRequest)
 
-    /** Hide a Gone entry for the caller only (never touches history):
-     *  a whole ghost collection from the Library grid (`collectionId`)
-     *  or one reclaimed release from the collection page (`infohash`).
-     *  Newer activity (re-reclaim / newer watch) resurfaces it. */
+    /** Per-user hide of a Gone entry (ghost collection or single
+     *  release). Newer activity resurfaces it. */
     @POST("api/me/gone/dismiss")
     suspend fun dismissGone(@Body body: DismissGoneRequest)
 

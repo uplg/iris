@@ -344,23 +344,12 @@ pub async fn list_in_collection(
     .await
 }
 
-/// The collection's RECLAIMED torrents (soft-deleted by the GC / a
-/// cleanup), newest deletion first. Powers the collection page's
-/// "Download again" list — the ghost-resume path for movies, which
-/// have no `available_episodes` offers to re-grab from. Callers keep
-/// only rows with source provenance (the actionable ones).
-///
-/// Per-caller, twice over (same rules as
-/// [`crate::episode_files::list_gone_for_collection`]):
-///
-/// * only releases the caller ENGAGED with (≥ 1 playback row on the
-///   release) surface — a mis-grab someone removed, or a release only
-///   another household member watched, never sprouts a "Download
-///   again" row in your view;
-/// * releases the user dismissed (`gone_release_dismissed`
-///   at-or-after the deletion) are hidden. A re-download + re-reclaim
-///   stamps a newer `deleted_at`, making the dismissal stale so the
-///   row returns — same staleness model as `cw_dismissed`.
+/// The collection's RECLAIMED torrents, newest deletion first — the
+/// ghost-resume path (movies have no `available_episodes` to re-grab
+/// from). Per-caller, same rules as
+/// [`crate::episode_files::list_gone_for_collection`]: only releases
+/// the caller has playback on, minus dismissed ones (stale once a
+/// re-reclaim stamps a newer `deleted_at`).
 pub async fn list_deleted_in_collection(
     pool: &SqlitePool,
     collection_id: Uuid,
@@ -389,11 +378,8 @@ pub async fn list_deleted_in_collection(
     .await
 }
 
-/// Hide one reclaimed release from the CALLER's gone surfaces (the
-/// collection page's per-episode gone rows + raw release rows). Upsert
-/// refreshes `dismissed_at`, so re-dismissing after a re-reclaim works.
-/// History is deliberately untouched — dismissing never erases
-/// `playback_progress`.
+/// Hide one reclaimed release from the CALLER's gone surfaces.
+/// Never touches `playback_progress` — History keeps every row.
 pub async fn dismiss_gone_release(
     pool: &SqlitePool,
     user_id: UserId,

@@ -33,15 +33,11 @@ import studio.kahn.iris.tv.ui.theme.Spacing
 import studio.kahn.iris.tv.ui.theme.irisAmbient
 
 /**
- * The single "Discover" destination: both halves of the recommendation
- * system as TABS — "For You" (organized taste shelves) and "Tonight"
- * (mood board). They always were one system fed by the same engine;
- * exposing them as two separate nav items read as two products, and
- * nobody knew which door to take. One icon, one page, two tabs.
- *
- * The Background + ambient gradient live HERE, once, for the whole
- * screen — the hosted tab contents must not repaint their own opaque
- * backgrounds or the tab strip sits on a flat black band above them.
+ * The single "Discover" destination — both halves of the reco system
+ * as tabs ("For You" + "Tonight"). One icon, one page, two tabs.
+ * Background + ambient are painted HERE, once: hosted tab contents
+ * must not repaint their own opaque background or the tab strip
+ * sits on a flat black band.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -51,8 +47,7 @@ fun DiscoverScreen(
     onPickResult: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
     onOpenSearch: (String) -> Unit,
 ) {
-    // Saveable so Back-from-detail lands on the tab the user was
-    // browsing, not back on For You.
+    // Saveable: Back-from-detail lands on the tab the user was on.
     var tab by rememberSaveable { mutableIntStateOf(0) }
     Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
         Box(Modifier.fillMaxSize().background(irisAmbient()))
@@ -90,9 +85,8 @@ fun DiscoverScreen(
     }
 }
 
-/** Season-tabs-style pill (no hairline border — a bordered Ghost button
- *  here read as a black box): selected = elevated fill, unselected =
- *  faint overlay, focus = the brand ring. */
+/** Season-tabs-style pill — a bordered Ghost button here read as
+ *  a black box. */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun DiscoverTab(label: String, selected: Boolean, onClick: () -> Unit) {
