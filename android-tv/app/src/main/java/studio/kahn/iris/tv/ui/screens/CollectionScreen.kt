@@ -2,6 +2,8 @@ package studio.kahn.iris.tv.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -187,7 +190,12 @@ fun CollectionScreen(
     val seasonTabsFocus = remember(collectionId) { FocusRequester() }
     val focusRowIdx = remember(absoluteRows) {
         absoluteRows
-            .indexOfLast { row -> row.variants.any { it is EpisodeVariant.Downloaded } }
+            .indexOfLast { row ->
+                // Gone rows count as "owned" for the landing point: on a
+                // ghost fleuve anime the user's frontier is where they
+                // stopped watching, not the bottom of a 1000-row list.
+                row.variants.any { it is EpisodeVariant.Downloaded || it is EpisodeVariant.Gone }
+            }
             .let { if (it >= 0) it else absoluteRows.lastIndex }
     }
     // Keyed on (collection, the target row) so it fires once per load and
@@ -1021,8 +1029,12 @@ private fun EpisodeRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
         ) {
+            // Label + watched pill keep their INTRINSIC width — the chip
+            // strip gets the weight, not the label. With the weight on
+            // the label side (the old shape), a many-chip row (a ghost
+            // episode with several language offers) measured the chips
+            // first and crushed the label + pill to nothing.
             Row(
-                modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
@@ -1050,15 +1062,24 @@ private fun EpisodeRow(
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                ep.variants.forEach { v ->
-                    VariantChip(
-                        variant = v,
-                        onPlay = onPlay,
-                        onGrab = onGrabVariant,
-                        onRestore = onRestoreVariant,
-                        onDismiss = onDismissVariant,
-                    )
+            // Chips right-aligned in the leftover space; when they
+            // overflow it, the strip scrolls horizontally (D-pad focus
+            // brings the focused chip into view automatically).
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ep.variants.forEach { v ->
+                        VariantChip(
+                            variant = v,
+                            onPlay = onPlay,
+                            onGrab = onGrabVariant,
+                            onRestore = onRestoreVariant,
+                            onDismiss = onDismissVariant,
+                        )
+                    }
                 }
             }
         }
@@ -1108,6 +1129,14 @@ private fun VariantChip(
             // Row used to block focus from descending onto either
             // chip — Compose-TV's focus engine treats the two as
             // separate focus contexts.
+            //
+            // Compact-until-focused: at rest the chip is just
+            // [badge] Grab; the quality/seeders/size detail only
+            // appears on the FOCUSED chip. On a D-pad, focus always
+            // precedes the click, so the user still sees the full
+            // metadata before committing — without every chip in the
+            // row paying its width.
+            var focused by remember { mutableStateOf(false) }
             val meta = listOfNotNull(
                 variant.quality?.takeIf { it.isNotBlank() },
                 variant.seeders?.let { "${it}↑" },
@@ -1116,6 +1145,7 @@ private fun VariantChip(
             val grabShape = RoundedCornerShape(Radius.button)
             Button(
                 onClick = { onGrab(variant) },
+                modifier = Modifier.onFocusChanged { focused = it.isFocused },
                 shape = ButtonDefaults.shape(shape = grabShape),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 scale = ButtonDefaults.scale(focusedScale = 1f),
@@ -1138,7 +1168,7 @@ private fun VariantChip(
                 ) {
                     LanguageBadge(language = variant.language)
                     Text(
-                        if (meta.isEmpty()) "Grab" else "Grab · $meta",
+                        if (focused && meta.isNotEmpty()) "Grab · $meta" else "Grab",
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
@@ -1150,6 +1180,9 @@ private fun VariantChip(
             // uniform. Click re-downloads the exact release and jumps
             // back into playback; LONG-PRESS hides it for this user
             // (same gesture as the Continue Watching tile menu).
+            // "Re-grab" — action-first (the row is about getting it
+            // back, not about its absence) and short enough to keep
+            // the chip compact without a focused variant.
             val goneShape = RoundedCornerShape(Radius.button)
             Button(
                 onClick = { onRestore(variant) },
@@ -1173,7 +1206,7 @@ private fun VariantChip(
                 ) {
                     LanguageBadge(language = variant.language)
                     Text(
-                        "Download again",
+                        "Re-grab",
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
@@ -1193,8 +1226,20 @@ private fun SeasonPackBanner(
     // inside need to be reachable by the D-pad. A clickable Card
     // would grab focus first and the user could never land on the
     // inner buttons.
+    //
+    // Compact-until-focused, same trick as the episode chips: the
+    // quality/seeders/size/provider line only renders while the
+    // D-pad sits INSIDE the banner (`hasFocus` covers descendants
+    // via the focusGroup node). Focus precedes the click, so the
+    // details are always visible before committing. Fixed height —
+    // the meta line appearing never shifts the list.
+    var hasFocus by remember { mutableStateOf(false) }
     Surface(
-        modifier = Modifier.fillMaxWidth().height(88.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(88.dp)
+            .onFocusChanged { hasFocus = it.hasFocus }
+            .focusGroup(),
         shape = RoundedCornerShape(12.dp),
         colors = SurfaceDefaults.colors(
             containerColor = Color(0xFF10B981).copy(alpha = 0.18f),
@@ -1237,7 +1282,7 @@ private fun SeasonPackBanner(
                     pack.sizeBytes?.let { formatFileSize(it) },
                     "via ${pack.indexerProvider}",
                 ).joinToString(" · ")
-                if (meta.isNotEmpty()) {
+                if (hasFocus && meta.isNotEmpty()) {
                     Text(
                         meta,
                         style = MaterialTheme.typography.bodySmall,

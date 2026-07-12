@@ -878,10 +878,15 @@ mod tests {
         )
         .await
         .unwrap();
-        let col =
-            crate::collections::find_or_create(&pool, "show", "Show", crate::collections::Kind::Tv, false)
-                .await
-                .unwrap();
+        let col = crate::collections::find_or_create(
+            &pool,
+            "show",
+            "Show",
+            crate::collections::Kind::Tv,
+            false,
+        )
+        .await
+        .unwrap();
         crate::torrents::set_collection(&pool, &t.infohash, Some(col.id))
             .await
             .unwrap();

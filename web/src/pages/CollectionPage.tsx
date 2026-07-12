@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Download, Film, Loader2, Play, RotateCcw, Sparkles, Tv, X } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  Film,
+  Loader2,
+  Play,
+  RotateCcw,
+  Sparkles,
+  Tv,
+  X,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Container } from "@/components/Container";
@@ -610,7 +620,8 @@ function EpisodeList({
   onPlay: (infohash: string, fileIdx: number) => void;
 }) {
   const episodes = useMemo(
-    () => mergeEpisodes(collection.episodes, collection.available_episodes, collection.gone_episodes),
+    () =>
+      mergeEpisodes(collection.episodes, collection.available_episodes, collection.gone_episodes),
     [collection.episodes, collection.available_episodes, collection.gone_episodes],
   );
 
@@ -987,7 +998,7 @@ function VariantChip({
           ) : (
             <RotateCcw className="size-3.5" />
           )}
-          <span className="text-xs">{regrab.isPending ? "Restoring…" : "Download again"}</span>
+          <span className="text-xs">{regrab.isPending ? "Restoring…" : "Re-grab"}</span>
         </button>
         <button
           type="button"

@@ -1005,8 +1005,7 @@ async fn heal_bracketed_display_titles(pool: &SqlitePool, deps: EnrichDeps<'_>) 
                 Ok(Some(other)) if other.id != c.id
             );
             if !owned_elsewhere
-                && let Err(e) =
-                    collections::set_parsed_title_normalized(pool, c.id, &new_key).await
+                && let Err(e) = collections::set_parsed_title_normalized(pool, c.id, &new_key).await
             {
                 tracing::warn!(error = %e, collection_id = %c.id, "bracket heal: set key failed");
                 continue;

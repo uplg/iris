@@ -414,7 +414,11 @@ fn derive_numbering(
         }
         (total, absolute)
     }
-    let mut counts = tally(episodes.iter().map(|e| (e.episode, e.absolute_episode.is_some())));
+    let mut counts = tally(
+        episodes
+            .iter()
+            .map(|e| (e.episode, e.absolute_episode.is_some())),
+    );
     if counts.0 == 0 {
         counts = tally(
             gone_episodes
@@ -423,7 +427,11 @@ fn derive_numbering(
         );
     }
     if counts.0 == 0 {
-        counts = tally(available.iter().map(|a| (a.episode, a.absolute_episode.is_some())));
+        counts = tally(
+            available
+                .iter()
+                .map(|a| (a.episode, a.absolute_episode.is_some())),
+        );
     }
     let (total, absolute) = counts;
     if total > 0 && absolute * 2 >= total {
@@ -492,9 +500,21 @@ pub(crate) async fn collection_detail(
             None => None,
         };
 
+    // Gone view first: the gone episodes' languages count as "owned"
+    // coverage below, so a ghost page doesn't drown in indexer offers
+    // that duplicate its "Download again" rows.
+    let (gone_releases, gone_episodes) = build_gone_view(&state, id, user.id).await;
+
     let (episodes, available_episodes, season_packs, has_new_since_last_visit) =
         if collection.kind == "tv" {
-            build_tv_episode_view(&state, &collection, user.id, user_last_visited).await?
+            build_tv_episode_view(
+                &state,
+                &collection,
+                user.id,
+                user_last_visited,
+                &gone_episodes,
+            )
+            .await?
         } else {
             (Vec::new(), Vec::new(), Vec::new(), 0)
         };
@@ -532,8 +552,6 @@ pub(crate) async fn collection_detail(
         }
         _ => (None, None),
     };
-
-    let (gone_releases, gone_episodes) = build_gone_view(&state, id, user.id).await;
 
     let numbering = derive_numbering(&episodes, &gone_episodes, &available_episodes);
     Ok(Json(CollectionDetail {
@@ -575,10 +593,13 @@ async fn build_gone_view(
     // Caller's playback rows on the reclaimed torrents, newest first —
     // `find` therefore picks the most recent file's state per release
     // (the meaningful one for a single-file movie).
-    let gone_watch =
-        iris_db::playback::watch_state_for_deleted_in_collection(state.db(), user_id, collection_id)
-            .await
-            .unwrap_or_default();
+    let gone_watch = iris_db::playback::watch_state_for_deleted_in_collection(
+        state.db(),
+        user_id,
+        collection_id,
+    )
+    .await
+    .unwrap_or_default();
     let gone_releases: Vec<GoneReleaseEntry> = deleted_rows
         .iter()
         .filter_map(|t| match (&t.source_provider, &t.source_external_id) {
@@ -618,8 +639,7 @@ async fn build_gone_view(
             .unwrap_or_default()
             .into_iter()
             .filter_map(|r| {
-                let (Some(provider), Some(external_id)) =
-                    (r.source_provider, r.source_external_id)
+                let (Some(provider), Some(external_id)) = (r.source_provider, r.source_external_id)
                 else {
                     return None; // no provenance → not re-grabbable
                 };
@@ -766,6 +786,7 @@ async fn build_tv_episode_view(
     collection: &iris_db::collections::CollectionRow,
     user_id: iris_core::ids::UserId,
     user_last_visited: Option<DateTime<Utc>>,
+    gone_episodes: &[GoneEpisodeEntry],
 ) -> ApiResult<(
     Vec<EpisodeEntry>,
     Vec<AvailableEpisodeEntry>,
@@ -858,6 +879,25 @@ async fn build_tv_episode_view(
         });
     }
     episodes_out.sort_by_key(|e| (e.season, e.episode, e.file_idx));
+
+    // GONE episodes count as language coverage too: their rows already
+    // carry a "Download again" action, so surfacing the same-language
+    // indexer offer next to them would just duplicate the chip (a ghost
+    // page has NOTHING on disk — without this every episode would grow
+    // a full set of Grab chips). Same shadow rule as on-disk releases
+    // (a gone Multi covers every language). Dismissing a gone release
+    // removes it from `gone_episodes`, so its offers resurface — the
+    // page never becomes a dead end.
+    for g in gone_episodes {
+        if g.episode > 0 {
+            let lang =
+                iris_media::filename::Language::parse_tag(g.language.as_deref().unwrap_or(""));
+            owned_languages
+                .entry((g.season, g.episode))
+                .or_default()
+                .push(lang);
+        }
+    }
 
     // Indexer offers for this collection's SCENE identity.
     // No identity → no offers (the long-tail standalone path).
