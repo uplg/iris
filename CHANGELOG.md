@@ -12,32 +12,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ghost collections now look like they did before the cleanup.** A show
   or movie whose files were reclaimed keeps its full collection page: the
   same episode list, your "watched" badges and progress intact, with a
-  "Download again" chip in place of Play (web + Android TV). Re-grabbing
+  compact "Re-grab" chip in place of Play (web + Android TV). Re-grabbing
   restores the exact same release, so playback resumes right where you
   left off. Works for season packs too: every episode of the pack keeps
-  its own watched state.
+  its own watched state. Gone rows are scoped to each user's own history
+  (a release you never watched never sprouts a "Re-grab" for you), and
+  same-language indexer offers are hidden while their gone twin is shown.
 - **Hide a Gone entry.** Each user can now dismiss what they don't want to
   see anymore, without touching anyone's watch history:
   - a single reclaimed release, from the collection page (web: the ×
     button; TV: long-press the chip, or the Hide button);
   - a whole "Gone" card, from the Library (web: hover ×; TV: long-press).
-  A hidden entry comes back on new activity (you re-watch the show, or the
-  release is downloaded and reclaimed again).
+  On TV a confirmation dialog guards the long-press. A hidden entry comes
+  back on new activity (you re-watch the show, or the release is
+  downloaded and reclaimed again), and never through search.
+- **Remove a series from the Watchlist** (long-press + confirm on TV,
+  hover × on web). Per-user, and reversible by nature: grabbing or
+  playing an episode auto-recreates the follow.
 
 ### Fixed
 
+- **The "N new" badge tells the truth.** It now counts episodes released
+  since your last engagement with the series (page visit OR watch) —
+  watching E04 consumes the already-out E05/E06, and a series you never
+  opened no longer badges its entire back-catalogue ("48 new").
 - **Collections no longer carry a leading "[GROUP]" in their title.** A
   release like `[H4KIG] Ted 2 (2015)` now titles its collection
   "Ted 2 (2015)" — the bracketed tag also broke the TMDB poster lookup.
   Existing collections self-heal at boot: title cleaned, poster
   re-resolved.
+- **TV updater reliability.** The system installer's "Open" button is no
+  longer greyed out, the app relaunches itself after an install when the
+  device allows it, and when the installer launch gets swallowed the
+  screen stays awake, the intent retries (or fires on return to
+  foreground), and the focus lands on "Reopen installer" so the manual
+  fallback is one press away.
+- **TV Settings page scrolls** — the "More" card's buttons no longer get
+  squashed into empty pills when the update card fills the screen.
 
 ### Changed
 
+- **One "Discover" entry for the whole reco system** (web + TV): "For
+  You" and "Tonight" are now tabs on a single page instead of two nav
+  items; the legacy `/for-you` and `/moods` URLs redirect. The TV top
+  bar slims down to Search · Discover · Library · Live TV · Settings —
+  the Torrents and Watch history views moved into Settings (the update
+  card keeps the top spot).
+- **Home reordered for the "carry me" flow** (web + TV): Continue
+  Watching → Watchlist → Library → recommendations, with the Watchlist
+  sorted fresh-episodes-first.
 - **Quieter home pages.** Shelf eyebrows that just restated the title
   ("For you", "On disk", "Following", "Recommended") are gone on web and
   TV; the useful counts stay. The web hero also drops the "Continue
   tonight · Resume" eyebrow, matching the TV.
+- **Compact TV action chips.** Grab/Re-grab chips show just the language
+  and the action at rest; quality, seeders and size appear on the focused
+  chip (focus always precedes the click on a D-pad). Season-pack banners
+  do the same with their metadata line.
 
 ## [1.3.0] - 2026-07-12
 
