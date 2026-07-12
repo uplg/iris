@@ -72,7 +72,9 @@ pub struct LiveTvConfig {
     /// Extra fallback playlists per country code. Entries matching a channel
     /// already found in the iptv-org playlist (by tvg-id / name) merge in as
     /// additional fallback sources — cross-provider redundancy, not dupes.
-    #[serde(default)]
+    /// Defaults ship curated FR / US / IE lists (official-CDN + FAST-provider
+    /// heavy); the source-tier election prefers those over iptv-org's feeds.
+    #[serde(default = "default_livetv_extra_playlists")]
     pub extra_playlists: HashMap<String, Vec<String>>,
     /// Gzipped XMLTV programme guide per country code, for the now/next
     /// overlay. Countries without an entry simply have no guide.
@@ -108,6 +110,38 @@ fn default_livetv_streams_url() -> String {
 fn default_livetv_channels_url() -> String {
     "https://iptv-org.github.io/api/channels.json".to_string()
 }
+fn default_livetv_extra_playlists() -> HashMap<String, Vec<String>> {
+    // Curated per-country lists merged (by tvg-id / name) as extra fallback
+    // sources on top of iptv-org's base list + stream database. Their feeds
+    // lean on official CDNs / FAST providers, which the source-tier election
+    // ranks above iptv-org's community feeds. Only for countries actually
+    // used here — adding a country means vetting its list is alive first.
+    let ftv = |slug: &str| {
+        format!(
+            "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_{slug}.m3u8"
+        )
+    };
+    HashMap::from([
+        (
+            // schumijo refreshes daily (full TNT, official CDNs + a Swiss-ISP
+            // restream); Free-TV is a smaller curated "officially free" set.
+            "fr".to_string(),
+            vec![
+                "https://raw.githubusercontent.com/schumijo/iptv/main/fr.m3u8".to_string(),
+                ftv("france"),
+            ],
+        ),
+        (
+            // US free TV is carried by licensed FAST providers (Pluto, Tubi,
+            // Amagi, Publica…) — Free-TV's US list surfaces the stable ones.
+            "us".to_string(),
+            vec![ftv("usa")],
+        ),
+        // Irish free-to-air is thin; Free-TV's curated IE list is the best
+        // stable supplement to iptv-org's aggregated feeds.
+        ("ie".to_string(), vec![ftv("ireland")]),
+    ])
+}
 fn default_livetv_epg_urls() -> HashMap<String, String> {
     HashMap::from([(
         "fr".to_string(),
@@ -132,7 +166,7 @@ impl Default for LiveTvConfig {
             countries_url: default_livetv_countries_url(),
             streams_url: default_livetv_streams_url(),
             channels_url: default_livetv_channels_url(),
-            extra_playlists: HashMap::new(),
+            extra_playlists: default_livetv_extra_playlists(),
             epg_urls: default_livetv_epg_urls(),
             playlist_refresh_hours: default_livetv_playlist_refresh_hours(),
             epg_refresh_hours: default_livetv_epg_refresh_hours(),
@@ -451,5 +485,34 @@ impl AppConfig {
         let parsed: ProvidersConfig = toml::from_str(&raw)
             .map_err(|e| ConfigError::Parse(Box::new(figment::Error::from(e.to_string()))))?;
         Ok(parsed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config with no `[live_tv]` section must still ship the curated FR
+    /// fallback playlists — that's what gives every French channel real
+    /// cross-provider redundancy out of the box. Locks the default against an
+    /// accidental empty-map regression.
+    #[test]
+    fn livetv_ships_curated_extra_playlists_by_default() {
+        let cfg = LiveTvConfig::default();
+        let fr = cfg.extra_playlists.get("fr").expect("fr defaults present");
+        assert_eq!(fr.len(), 2, "schumijo + Free-TV");
+        assert!(fr.iter().any(|u| u.contains("schumijo")));
+        assert!(cfg.extra_playlists.contains_key("us"));
+        assert!(cfg.extra_playlists.contains_key("ie"));
+        assert!(cfg.extra_playlists["us"].iter().any(|u| u.contains("usa")));
+        assert!(
+            cfg.extra_playlists["ie"]
+                .iter()
+                .any(|u| u.contains("ireland"))
+        );
+        // Deserializing an empty document (no [live_tv]) yields the same —
+        // serde field defaults fire, so a bare prod config.toml is covered.
+        let bare: LiveTvConfig = toml::from_str("").unwrap();
+        assert_eq!(bare.extra_playlists, cfg.extra_playlists);
     }
 }

@@ -36,6 +36,121 @@ pub struct StreamSource {
     pub quality: Option<u32>,
     pub user_agent: Option<String>,
     pub referrer: Option<String>,
+    /// Reliability prior derived from the host (see [`SourceTier`]). Seeds
+    /// the election order — the proxy prefers a stable origin and only rotates
+    /// to a community restream when the officials fail.
+    pub tier: SourceTier,
+}
+
+/// Stream-source reliability tiers, best first (lower sorts first). Derived
+/// from the URL host: an official broadcaster CDN is the most stable, a known
+/// ISP restream next, everything else (community aggregators, github-hosted
+/// redirects) last. Sources are ordered by `(tier, quality)` so a healthy
+/// official feed always outranks a community restream of the same channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SourceTier {
+    Official,
+    Isp,
+    Community,
+}
+
+/// Host substrings identifying a tier — the ONE place source-reliability
+/// priors live. First matching tier wins; order inside a tier is irrelevant.
+/// Extend as new stable origins appear. A mis-classification is safe: it only
+/// changes the try-order, never correctness (a wrongly-Community official is
+/// tried a bit later, that's all).
+const TIER_HOST_MARKERS: &[(SourceTier, &[&str])] = &[
+    (
+        SourceTier::Official,
+        &[
+            // FR broadcaster CDNs.
+            "tf1.fr",
+            "tf1.net",
+            "france.tv",
+            "francetv",
+            "ftvcdn",
+            "m6.fr",
+            "6play",
+            "6cloud",
+            "arte.tv",
+            "artecdn",
+            "canalplus",
+            "canal-plus",
+            "mycanal",
+            "bfmtv",
+            "cnews",
+            "lequipe.fr",
+            "rmc",
+            "lcp.fr",
+            "publicsenat",
+            "franceinfo",
+            "radiofrance",
+            "sfrpresse",
+            // US: official FAST providers (licensed, ad-supported — the
+            // stable backbone of free US TV) + their delivery partners.
+            "pluto.tv",
+            "tubi.video",
+            "tubi.io",
+            "amagi.tv",
+            "getpublica.com",
+            "samsungtvplus",
+            "samsung-",
+            "plex.tv",
+            "provider.plex.tv",
+            "roku.com",
+            "therokuchannel",
+            "telvue.com",
+            "xumo",
+            // IE/UK broadcaster + national-broadcast infra.
+            "rte.ie",
+            "rtecdn",
+            "tibus.net",
+            "sharp-stream",
+        ],
+    ),
+    (
+        SourceTier::Isp,
+        &[
+            // FR ISP TNT restreams.
+            "netplus.ch",
+            "free.fr",
+            "proxad",
+            "orange.fr",
+            "sfr.fr",
+            "bouyguestelecom",
+        ],
+    ),
+];
+
+/// Classify a stream URL into a reliability tier from its host. Unknown hosts
+/// fall to [`SourceTier::Community`] (tried last, after all officials/ISPs).
+pub fn classify_source(url: &str) -> SourceTier {
+    let host = url
+        .split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .rsplit('@')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    for (tier, markers) in TIER_HOST_MARKERS {
+        if markers.iter().any(|m| host.contains(m)) {
+            return *tier;
+        }
+    }
+    SourceTier::Community
+}
+
+/// Election sort key: best tier first, then best quality (unknown quality
+/// last). The single source-ordering rule, shared by every builder so the
+/// pre-election order can't drift between them.
+fn source_order_key(s: &StreamSource) -> (SourceTier, std::cmp::Reverse<u32>) {
+    (s.tier, std::cmp::Reverse(s.quality.unwrap_or(0)))
 }
 
 /// Official TNT numbering (Arcom, effective 2025-06-06). Keys are normalized
@@ -107,6 +222,7 @@ pub fn build_channels(
                 .unwrap_or_else(|| normalize(&name));
 
             let source = StreamSource {
+                tier: classify_source(&entry.url),
                 url: entry.url.clone(),
                 quality,
                 user_agent: entry.header("http-user-agent").map(str::to_string),
@@ -163,9 +279,7 @@ pub fn build_channels(
     }
 
     for ch in &mut channels {
-        // Best quality first; unknown quality last within a channel.
-        ch.sources
-            .sort_by_key(|s| std::cmp::Reverse(s.quality.unwrap_or(0)));
+        ch.sources.sort_by_key(source_order_key);
     }
 
     // TNT channels first in Arcom order, then everything else grouped by
@@ -233,10 +347,7 @@ pub fn merge_db_sources(channels: &mut [Channel], db: &HashMap<String, Vec<Strea
                 ch.sources.push(source.clone());
             }
         }
-        // Keep the pre-election order deterministic (best quality first);
-        // the health probe re-elects on liveness afterwards.
-        ch.sources
-            .sort_by_key(|s| std::cmp::Reverse(s.quality.unwrap_or(0)));
+        ch.sources.sort_by_key(source_order_key);
     }
 }
 
@@ -444,12 +555,14 @@ mod tests {
                     quality: Some(1080),
                     user_agent: None,
                     referrer: None,
+                    tier: SourceTier::Community,
                 },
                 StreamSource {
                     url: "http://alt/M6-HD/index.m3u8".to_string(),
                     quality: Some(720),
                     user_agent: None,
                     referrer: None,
+                    tier: SourceTier::Community,
                 },
             ],
         );
@@ -464,6 +577,77 @@ mod tests {
         let mut channels2 = build_channels(&playlists2, None);
         merge_db_sources(&mut channels2, &db);
         assert_eq!(channels2[0].sources.len(), 1);
+    }
+
+    #[test]
+    fn classify_source_by_host() {
+        use SourceTier::{Community, Isp, Official};
+        assert_eq!(
+            classify_source("https://live-tmc-hls.cdn-0.diff.tf1.fr/x.m3u8"),
+            Official
+        );
+        assert_eq!(
+            classify_source("https://mabusetv.francetv.fr/hls/y.m3u8"),
+            Official
+        );
+        assert_eq!(
+            classify_source("https://viamotionhsi.netplus.ch/live/z/index.m3u8"),
+            Isp
+        );
+        // US FAST providers + IE broadcaster infra rank as official/stable.
+        assert_eq!(
+            classify_source("https://service-stitcher.clusters.pluto.tv/v2/x.m3u8"),
+            Official
+        );
+        assert_eq!(
+            classify_source("https://cdn-uw2-prod.tsv2.amagi.tv/y/playlist.m3u8"),
+            Official
+        );
+        assert_eq!(
+            classify_source("https://aegis-cloudfront-1.tubi.video/z.m3u8"),
+            Official
+        );
+        assert_eq!(
+            classify_source("https://something.rte.ie/live/a.m3u8"),
+            Official
+        );
+        assert_eq!(
+            classify_source("http://user:pw@random-cdn.example.net:8080/a.m3u8"),
+            Community
+        );
+        assert_eq!(
+            classify_source("https://raw.githubusercontent.com/x/y/fr.m3u8"),
+            Community
+        );
+    }
+
+    #[test]
+    fn official_source_outranks_community_regardless_of_quality() {
+        // A community 1080p must NOT beat an official 720p: stability first.
+        let playlists = vec![
+            vec![entry(
+                "TF1.fr",
+                "TF1 (1080p)",
+                "http://randomcdn.example/tf1",
+                "General",
+            )],
+            vec![entry(
+                "TF1.fr",
+                "TF1 (720p)",
+                "https://live.tf1.fr/tf1/index.m3u8",
+                "General",
+            )],
+        ];
+        let ch = &build_channels(&playlists, Some(&HashMap::new()))[0];
+        let urls: Vec<&str> = ch.sources.iter().map(|s| s.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            vec![
+                "https://live.tf1.fr/tf1/index.m3u8",
+                "http://randomcdn.example/tf1"
+            ]
+        );
+        assert_eq!(ch.sources[0].tier, SourceTier::Official);
     }
 
     #[test]

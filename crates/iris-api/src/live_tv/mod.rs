@@ -157,6 +157,16 @@ pub struct SourceHealth {
     segment_failures: AtomicU64,
 }
 
+/// Index of the source to elect first: the best-ranked one not cooling down
+/// (sources arrive pre-ordered by tier+quality), else 0 so a fully-cooled
+/// channel still gets tried by the election's second pass.
+fn elect_seed(sources: &[Arc<SourceHealth>], now_ms: u64) -> usize {
+    sources
+        .iter()
+        .position(|h| !h.in_cooldown(now_ms))
+        .unwrap_or(0)
+}
+
 impl SourceHealth {
     fn in_cooldown(&self, now_ms: u64) -> bool {
         self.cooldown_until_ms.load(Ordering::Relaxed) > now_ms
@@ -418,7 +428,7 @@ impl LiveTvService {
     /// this is what carries liveness knowledge across playlist refreshes.
     fn build_snapshot(&self, built: Vec<Channel>) -> CountrySnapshot {
         let mut health_map = self.inner.health.write().expect("poisoned");
-        let health = built
+        let health: Vec<Vec<Arc<SourceHealth>>> = built
             .iter()
             .map(|c| {
                 c.sources
@@ -427,7 +437,16 @@ impl LiveTvService {
                     .collect()
             })
             .collect();
-        let active_source = built.iter().map(|_| AtomicUsize::new(0)).collect();
+        // Seed the elected index at the BEST source that isn't cooling down
+        // rather than a blind 0 — sources are already ordered (tier, quality),
+        // health survives refreshes, so a just-dead feed stays skipped instead
+        // of being re-elected every refresh and forcing the first viewer to
+        // pay a rotation.
+        let now_ms = epoch_ms();
+        let active_source = health
+            .iter()
+            .map(|sources| AtomicUsize::new(elect_seed(sources, now_ms)))
+            .collect();
         CountrySnapshot {
             channels: Arc::new(built),
             fetched_at: Instant::now(),
@@ -503,6 +522,7 @@ impl LiveTvService {
             map.entry(channel.to_lowercase())
                 .or_default()
                 .push(channels::StreamSource {
+                    tier: channels::classify_source(&s.url),
                     url: s.url,
                     quality: s.quality.as_deref().and_then(channels::parse_quality),
                     user_agent: s.user_agent.filter(|v| !v.is_empty()),
@@ -1334,5 +1354,32 @@ mod tests {
         assert!(validate_country("f").is_err());
         assert!(validate_country("..").is_err());
         assert!(validate_country("f/").is_err());
+    }
+
+    #[test]
+    fn elect_seed_skips_cooling_sources() {
+        let now = 10_000_u64;
+        let mk = || Arc::new(SourceHealth::default());
+        let sources = vec![mk(), mk(), mk()];
+
+        // All healthy → the best (index 0, already tier/quality-ordered) wins.
+        assert_eq!(elect_seed(&sources, now), 0);
+
+        // Best source just died → seed jumps to the next healthy one instead
+        // of re-electing the corpse (the audit-flagged reset-to-0 bug).
+        sources[0].mark_failure(now);
+        assert_eq!(elect_seed(&sources, now), 1);
+
+        sources[1].mark_failure(now);
+        assert_eq!(elect_seed(&sources, now), 2);
+
+        // Everything cooling down → fall back to 0 (election pass 1 retries).
+        sources[2].mark_failure(now);
+        assert_eq!(elect_seed(&sources, now), 0);
+
+        // Cooldown is time-bounded: far enough in the future, index 0 is
+        // electable again.
+        let far = now + u64::try_from(SOURCE_COOLDOWN_MAX.as_millis()).unwrap() + 1;
+        assert_eq!(elect_seed(&sources, far), 0);
     }
 }

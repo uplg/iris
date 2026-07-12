@@ -5,6 +5,24 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Live TV picks the most stable source, not just the first.** Channels
+  already aggregate every matching feed across playlists as ordered
+  fallbacks; now each feed carries a reliability tier derived from its host
+  (official broadcaster CDN > ISP restream > community aggregator), and the
+  election orders sources by `(tier, quality)` — a healthy official 720p
+  outranks a community 1080p. FR / US / IE ship extra curated playlists by
+  default (FR: schumijo + Free-TV, official CDNs + a Swiss-ISP TNT restream;
+  US: Free-TV, licensed FAST providers Pluto/Tubi/Amagi/Publica; IE:
+  Free-TV), so there's real cross-provider redundancy behind every channel.
+  Fixed the election reset that made the
+  first viewer after a 6 h playlist refresh pay a rotation onto a dead
+  feed: the elected source is now seeded from persisted per-URL health
+  (a just-dead feed stays skipped instead of being re-tried every refresh).
+
 ## [1.3.1] - 2026-07-12
 
 ### Added
