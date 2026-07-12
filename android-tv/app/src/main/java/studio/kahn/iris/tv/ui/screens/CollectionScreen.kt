@@ -74,6 +74,7 @@ import studio.kahn.iris.tv.data.SeasonPackEntry
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
@@ -121,6 +122,10 @@ fun CollectionScreen(
     // Infohash of the reclaimed release currently being re-ingested via
     // "Download again" — drives the row's busy state, one at a time.
     var restoringInfohash by remember { mutableStateOf<String?>(null) }
+    // (infohash, display label) of the gone release the user asked to
+    // hide — long-press is too easy to trigger by holding OK a beat too
+    // long, so nothing disappears without the ConfirmDialog.
+    var confirmHide by remember(collectionId) { mutableStateOf<Pair<String, String>?>(null) }
 
     suspend fun reload() {
         val url = container.sessionStore.serverUrl.first() ?: run {
@@ -213,119 +218,253 @@ fun CollectionScreen(
         }
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
-    ) {
-        item(key = "hero") {
-            CollectionHero(detail = d, onBack = onBack)
-        }
-
-        if (d.kind == MediaKind.tv && isAbsolute && absoluteRows.isNotEmpty()) {
-            // Flat absolute list — no season tabs, no packs (a fleuve
-            // anime numbers continuously; "Season N" packs don't apply).
-            itemsIndexed(
-                absoluteRows,
-                key = { _, it -> it.absolute?.let { a -> "abs:$a" } ?: "se:${it.season}:${it.episode}" },
-            ) { index, ep ->
-                Box(
-                    Modifier
-                        .padding(
-                            horizontal = layout.gutterHorizontal,
-                            vertical = Spacing.xs,
-                        )
-                        // Focus target for the "land on last owned episode"
-                        // effect — focusGroup forwards the request to the
-                        // row's first chip.
-                        .then(
-                            if (index == focusRowIdx) {
-                                Modifier.focusRequester(focusTarget).focusGroup()
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    EpisodeRow(
-                        ep = ep,
-                        onPlay = onPickFile,
-                        onGrabVariant = { variant ->
-                            scope.launch {
-                                doGrabVariant(
-                                    container,
-                                    collectionId,
-                                    ep.season,
-                                    ep.episode,
-                                    variant,
-                                    onPickFile,
-                                )
-                                reload()
-                            }
-                        },
-                        onRestoreVariant = { variant ->
-                            scope.launch {
-                                doRestoreVariant(container, d.tmdbId, variant, onPickFile)
-                                reload()
-                            }
-                        },
-                        onDismissVariant = { variant ->
-                            scope.launch {
-                                doDismissGoneRelease(container, variant.infohash)
-                                reload()
-                            }
-                        },
-                    )
-                }
-            }
-        } else if (d.kind == MediaKind.tv && (merged.isNotEmpty() || d.seasonPacks.orEmpty().isNotEmpty())) {
-            if (seasons.size > 1) {
-                item(key = "season-tabs") {
-                    Box(Modifier.padding(horizontal = layout.gutterHorizontal, vertical = Spacing.md)) {
-                        SeasonTabs(
-                            seasons = seasons.keys.toList(),
-                            value = activeSeason,
-                            onChange = { selectedSeason = it },
-                            focusRequester = seasonTabsFocus,
-                        )
-                    }
-                }
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+        ) {
+            item(key = "hero") {
+                CollectionHero(detail = d, onBack = onBack)
             }
 
-            val currentPacks = d.seasonPacks.orEmpty().filter { it.season.toInt() == activeSeason }
-            // Up-navigation from the first row below the tabs must land back
-            // on the season pill — only wire it on row index 0, and only
-            // when there's actually a tab row above to land on.
-            val firstRowGetsUpFocus = seasons.size > 1
-            if (currentPacks.isNotEmpty()) {
+            if (d.kind == MediaKind.tv && isAbsolute && absoluteRows.isNotEmpty()) {
+                // Flat absolute list — no season tabs, no packs (a fleuve
+                // anime numbers continuously; "Season N" packs don't apply).
                 itemsIndexed(
-                    currentPacks,
-                    key = { _, it -> "pack:${it.season}:${it.language ?: "_"}:${it.indexerTorrentId}" },
-                ) { index, pack ->
+                    absoluteRows,
+                    key = { _, it -> it.absolute?.let { a -> "abs:$a" } ?: "se:${it.season}:${it.episode}" },
+                ) { index, ep ->
                     Box(
                         Modifier
                             .padding(
                                 horizontal = layout.gutterHorizontal,
                                 vertical = Spacing.xs,
                             )
+                            // Focus target for the "land on last owned episode"
+                            // effect — focusGroup forwards the request to the
+                            // row's first chip.
                             .then(
-                                if (index == 0 && firstRowGetsUpFocus) {
-                                    Modifier.focusProperties { up = seasonTabsFocus }
+                                if (index == focusRowIdx) {
+                                    Modifier.focusRequester(focusTarget).focusGroup()
                                 } else {
                                     Modifier
                                 },
                             ),
                     ) {
-                        SeasonPackBanner(
-                            pack = pack,
-                            onGrab = {
+                        EpisodeRow(
+                            ep = ep,
+                            onPlay = onPickFile,
+                            onGrabVariant = { variant ->
                                 scope.launch {
-                                    doGrabPack(container, collectionId, pack, autoPlay = true, onPlay = onPickFile)
+                                    doGrabVariant(
+                                        container,
+                                        collectionId,
+                                        ep.season,
+                                        ep.episode,
+                                        variant,
+                                        onPickFile,
+                                    )
                                     reload()
                                 }
                             },
-                            onPrepare = {
+                            onRestoreVariant = { variant ->
                                 scope.launch {
-                                    doGrabPack(container, collectionId, pack, autoPlay = false, onPlay = onPickFile)
+                                    doRestoreVariant(container, d.tmdbId, variant, onPickFile)
                                     reload()
+                                }
+                            },
+                            onDismissVariant = { variant ->
+                                confirmHide = variant.infohash to variant.releaseName
+                            },
+                        )
+                    }
+                }
+            } else if (d.kind == MediaKind.tv && (merged.isNotEmpty() || d.seasonPacks.orEmpty().isNotEmpty())) {
+                if (seasons.size > 1) {
+                    item(key = "season-tabs") {
+                        Box(Modifier.padding(horizontal = layout.gutterHorizontal, vertical = Spacing.md)) {
+                            SeasonTabs(
+                                seasons = seasons.keys.toList(),
+                                value = activeSeason,
+                                onChange = { selectedSeason = it },
+                                focusRequester = seasonTabsFocus,
+                            )
+                        }
+                    }
+                }
+
+                val currentPacks = d.seasonPacks.orEmpty().filter { it.season.toInt() == activeSeason }
+                // Up-navigation from the first row below the tabs must land back
+                // on the season pill — only wire it on row index 0, and only
+                // when there's actually a tab row above to land on.
+                val firstRowGetsUpFocus = seasons.size > 1
+                if (currentPacks.isNotEmpty()) {
+                    itemsIndexed(
+                        currentPacks,
+                        key = { _, it -> "pack:${it.season}:${it.language ?: "_"}:${it.indexerTorrentId}" },
+                    ) { index, pack ->
+                        Box(
+                            Modifier.padding(
+                                horizontal = layout.gutterHorizontal,
+                                vertical = Spacing.xs,
+                            ),
+                        ) {
+                            SeasonPackBanner(
+                                pack = pack,
+                                // Up-from-first-banner → season tabs. Rides
+                                // INSIDE the banner's focus group (see
+                                // `buttonsModifier`), a wrapper-level
+                                // focusProperties never reaches the buttons.
+                                buttonsModifier = if (index == 0 && firstRowGetsUpFocus) {
+                                    Modifier.focusProperties { up = seasonTabsFocus }
+                                } else {
+                                    Modifier
+                                },
+                                onGrab = {
+                                    scope.launch {
+                                        doGrabPack(container, collectionId, pack, autoPlay = true, onPlay = onPickFile)
+                                        reload()
+                                    }
+                                },
+                                onPrepare = {
+                                    scope.launch {
+                                        doGrabPack(container, collectionId, pack, autoPlay = false, onPlay = onPickFile)
+                                        reload()
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+
+                val currentRows = seasons[activeSeason].orEmpty()
+                itemsIndexed(currentRows, key = { _, it -> "${it.season}:${it.episode}" }) { index, ep ->
+                    // Up-from-first-row → season tabs. Wired through
+                    // `chipsModifier` (inside the chip strip's scroll
+                    // group), NOT on this wrapper — see EpisodeRow.
+                    val firstRowUp = index == 0 && currentPacks.isEmpty() && firstRowGetsUpFocus
+                    Box(
+                        Modifier.padding(
+                            horizontal = layout.gutterHorizontal,
+                            vertical = Spacing.xs,
+                        ),
+                    ) {
+                        EpisodeRow(
+                            ep = ep,
+                            chipsModifier = if (firstRowUp) {
+                                Modifier.focusProperties { up = seasonTabsFocus }
+                            } else {
+                                Modifier
+                            },
+                            onPlay = onPickFile,
+                            onGrabVariant = { variant ->
+                                scope.launch {
+                                    doGrabVariant(
+                                        container,
+                                        collectionId,
+                                        ep.season,
+                                        ep.episode,
+                                        variant,
+                                        onPickFile,
+                                    )
+                                    reload()
+                                }
+                            },
+                            onRestoreVariant = { variant ->
+                                scope.launch {
+                                    doRestoreVariant(container, d.tmdbId, variant, onPickFile)
+                                    reload()
+                                }
+                            },
+                            onDismissVariant = { variant ->
+                                confirmHide = variant.infohash to variant.releaseName
+                            },
+                        )
+                    }
+                }
+            } else {
+                // Movie / unparsed-TV fallback. Server already sorts files
+                // SCENE-aware inside the snapshot, so no client-side reorder
+                // is needed.
+                item(key = "files-header") {
+                    Eyebrow(
+                        "Files",
+                        modifier = Modifier.padding(
+                            horizontal = layout.gutterHorizontal,
+                            vertical = Spacing.md,
+                        ),
+                    )
+                }
+                val files: List<Pair<TorrentView, FileEntry>> = d.torrents.flatMap { t ->
+                    t.files
+                        .filter { f -> VIDEO_EXTS_C.any { f.path.endsWith(it, ignoreCase = true) } }
+                        .map { f -> t to f }
+                }
+                items(files, key = { (t, f) -> "${t.infohash}:${f.index}" }) { (t, f) ->
+                    Box(
+                        Modifier.padding(
+                            horizontal = layout.gutterHorizontal,
+                            vertical = Spacing.xs,
+                        ),
+                    ) {
+                        FileRow(file = f, onClick = { onPickFile(t.infohash, f.index) })
+                    }
+                }
+            }
+
+            // "Previously on disk" — the ghost-resume surface, movies
+            // especially (TV gone releases render inline as episode chips
+            // above; this section keeps the remainder: movies and packs the
+            // SCENE parser never split). Re-ingesting the same release
+            // yields the same infohash, so the saved playback position
+            // resumes untouched. Nothing automatic: the download only
+            // starts on the button press.
+            val goneInline = d.goneEpisodes.orEmpty()
+                .filter { it.episode > 0L }
+                .map { it.infohash }
+                .toSet()
+            val goneReleases = d.goneReleases.orEmpty().filter { it.infohash !in goneInline }
+            if (goneReleases.isNotEmpty()) {
+                item(key = "gone-header") {
+                    Eyebrow(
+                        "Previously on disk",
+                        modifier = Modifier.padding(
+                            horizontal = layout.gutterHorizontal,
+                            vertical = Spacing.md,
+                        ),
+                    )
+                }
+                items(goneReleases, key = { "gone:${it.infohash}" }) { r ->
+                    Box(
+                        Modifier.padding(
+                            horizontal = layout.gutterHorizontal,
+                            vertical = Spacing.xs,
+                        ),
+                    ) {
+                        GoneReleaseRow(
+                            release = r,
+                            busy = restoringInfohash == r.infohash,
+                            enabled = restoringInfohash == null,
+                            onHide = { confirmHide = r.infohash to r.name },
+                            onDownloadAgain = {
+                                scope.launch {
+                                    restoringInfohash = r.infohash
+                                    try {
+                                        val url = container.sessionStore.serverUrl.first()
+                                            ?: run { error = "Not signed in"; return@launch }
+                                        container.apiFor(url).ingest(
+                                            ResolveBody(
+                                                providerId = r.sourceProvider,
+                                                externalId = r.sourceExternalId,
+                                                tmdbId = d.tmdbId,
+                                            ),
+                                        )
+                                        reload()
+                                    } catch (e: Exception) {
+                                        error = e.message ?: "Restore failed"
+                                    } finally {
+                                        restoringInfohash = null
+                                    }
                                 }
                             },
                         )
@@ -333,151 +472,30 @@ fun CollectionScreen(
                 }
             }
 
-            val currentRows = seasons[activeSeason].orEmpty()
-            itemsIndexed(currentRows, key = { _, it -> "${it.season}:${it.episode}" }) { index, ep ->
-                Box(
-                    Modifier
-                        .padding(
-                            horizontal = layout.gutterHorizontal,
-                            vertical = Spacing.xs,
-                        )
-                        .then(
-                            if (index == 0 && currentPacks.isEmpty() && firstRowGetsUpFocus) {
-                                Modifier.focusProperties { up = seasonTabsFocus }
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    EpisodeRow(
-                        ep = ep,
-                        onPlay = onPickFile,
-                        onGrabVariant = { variant ->
-                            scope.launch {
-                                doGrabVariant(
-                                    container,
-                                    collectionId,
-                                    ep.season,
-                                    ep.episode,
-                                    variant,
-                                    onPickFile,
-                                )
-                                reload()
-                            }
-                        },
-                        onRestoreVariant = { variant ->
-                            scope.launch {
-                                doRestoreVariant(container, d.tmdbId, variant, onPickFile)
-                                reload()
-                            }
-                        },
-                        onDismissVariant = { variant ->
-                            scope.launch {
-                                doDismissGoneRelease(container, variant.infohash)
-                                reload()
-                            }
-                        },
-                    )
-                }
-            }
-        } else {
-            // Movie / unparsed-TV fallback. Server already sorts files
-            // SCENE-aware inside the snapshot, so no client-side reorder
-            // is needed.
-            item(key = "files-header") {
-                Eyebrow(
-                    "Files",
-                    modifier = Modifier.padding(
-                        horizontal = layout.gutterHorizontal,
-                        vertical = Spacing.md,
-                    ),
-                )
-            }
-            val files: List<Pair<TorrentView, FileEntry>> = d.torrents.flatMap { t ->
-                t.files
-                    .filter { f -> VIDEO_EXTS_C.any { f.path.endsWith(it, ignoreCase = true) } }
-                    .map { f -> t to f }
-            }
-            items(files, key = { (t, f) -> "${t.infohash}:${f.index}" }) { (t, f) ->
-                Box(
-                    Modifier.padding(
-                        horizontal = layout.gutterHorizontal,
-                        vertical = Spacing.xs,
-                    ),
-                ) {
-                    FileRow(file = f, onClick = { onPickFile(t.infohash, f.index) })
-                }
+            item(key = "trailing") {
+                Box(Modifier.padding(vertical = Spacing.xl))
             }
         }
 
-        // "Previously on disk" — the ghost-resume surface, movies
-        // especially (TV gone releases render inline as episode chips
-        // above; this section keeps the remainder: movies and packs the
-        // SCENE parser never split). Re-ingesting the same release
-        // yields the same infohash, so the saved playback position
-        // resumes untouched. Nothing automatic: the download only
-        // starts on the button press.
-        val goneInline = d.goneEpisodes.orEmpty()
-            .filter { it.episode > 0L }
-            .map { it.infohash }
-            .toSet()
-        val goneReleases = d.goneReleases.orEmpty().filter { it.infohash !in goneInline }
-        if (goneReleases.isNotEmpty()) {
-            item(key = "gone-header") {
-                Eyebrow(
-                    "Previously on disk",
-                    modifier = Modifier.padding(
-                        horizontal = layout.gutterHorizontal,
-                        vertical = Spacing.md,
-                    ),
-                )
-            }
-            items(goneReleases, key = { "gone:${it.infohash}" }) { r ->
-                Box(
-                    Modifier.padding(
-                        horizontal = layout.gutterHorizontal,
-                        vertical = Spacing.xs,
-                    ),
-                ) {
-                    GoneReleaseRow(
-                        release = r,
-                        busy = restoringInfohash == r.infohash,
-                        enabled = restoringInfohash == null,
-                        onHide = {
-                            scope.launch {
-                                doDismissGoneRelease(container, r.infohash)
-                                reload()
-                            }
-                        },
-                        onDownloadAgain = {
-                            scope.launch {
-                                restoringInfohash = r.infohash
-                                try {
-                                    val url = container.sessionStore.serverUrl.first()
-                                        ?: run { error = "Not signed in"; return@launch }
-                                    container.apiFor(url).ingest(
-                                        ResolveBody(
-                                            providerId = r.sourceProvider,
-                                            externalId = r.sourceExternalId,
-                                            tmdbId = d.tmdbId,
-                                        ),
-                                    )
-                                    reload()
-                                } catch (e: Exception) {
-                                    error = e.message ?: "Restore failed"
-                                } finally {
-                                    restoringInfohash = null
-                                }
-                            }
-                        },
-                    )
+    // Long-press "Hide" safety net: nothing disappears without an
+    // explicit confirm (holding OK a beat too long must cost nothing).
+    confirmHide?.let { (infohash, name) ->
+        ConfirmDialog(
+            eyebrow = "Hide from this page",
+            title = name,
+            body = "Hidden for you only. Your watch history is kept, and " +
+                "the entry returns if the release is downloaded again.",
+            confirmLabel = "Hide",
+            onConfirm = {
+                confirmHide = null
+                scope.launch {
+                    doDismissGoneRelease(container, infohash)
+                    reload()
                 }
-            }
-        }
-
-        item(key = "trailing") {
-            Box(Modifier.padding(vertical = Spacing.xl))
-        }
+            },
+            onCancel = { confirmHide = null },
+        )
+    }
     }
 }
 
@@ -1024,6 +1042,14 @@ private fun EpisodeRow(
     onGrabVariant: (EpisodeVariant.Available) -> Unit,
     onRestoreVariant: (EpisodeVariant.Gone) -> Unit,
     onDismissVariant: (EpisodeVariant.Gone) -> Unit,
+    /// Applied INSIDE the scrollable chip strip, wrapping the chips.
+    /// Custom focus destinations (`focusProperties { up = … }`) must
+    /// ride here: `horizontalScroll` installs its own focus group, and
+    /// property aggregation stops at the nearest ancestor focus target
+    /// — anything set on the row's outer wrapper never reaches the
+    /// chips. This is how the first row under the season tabs sends
+    /// D-pad Up back to the tabs instead of the hero's Back button.
+    chipsModifier: Modifier = Modifier,
 ) {
     val anyWatched = ep.variants.any {
         (it is EpisodeVariant.Downloaded && it.watched) || (it is EpisodeVariant.Gone && it.watched)
@@ -1085,19 +1111,23 @@ private fun EpisodeRow(
             // overflow it, the strip scrolls horizontally (D-pad focus
             // brings the focused chip into view automatically).
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ep.variants.forEach { v ->
-                        VariantChip(
-                            variant = v,
-                            onPlay = onPlay,
-                            onGrab = onGrabVariant,
-                            onRestore = onRestoreVariant,
-                            onDismiss = onDismissVariant,
-                        )
+                Row(Modifier.horizontalScroll(rememberScrollState())) {
+                    // Inner wrapper BELOW the scroll container's focus
+                    // group — see `chipsModifier`.
+                    Row(
+                        chipsModifier,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ep.variants.forEach { v ->
+                            VariantChip(
+                                variant = v,
+                                onPlay = onPlay,
+                                onGrab = onGrabVariant,
+                                onRestore = onRestoreVariant,
+                                onDismiss = onDismissVariant,
+                            )
+                        }
                     }
                 }
             }
@@ -1246,6 +1276,11 @@ private fun SeasonPackBanner(
     pack: SeasonPackEntry,
     onGrab: () -> Unit,
     onPrepare: () -> Unit,
+    /// Applied to the buttons Row INSIDE the banner's focus group —
+    /// custom focus destinations must ride here, the Surface-level
+    /// `focusGroup()` (compact-until-focused meta) stops property
+    /// aggregation from any outer wrapper.
+    buttonsModifier: Modifier = Modifier,
 ) {
     // Non-clickable container — the Prepare / Grab & play buttons
     // inside need to be reachable by the D-pad. A clickable Card
@@ -1315,7 +1350,7 @@ private fun SeasonPackBanner(
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            Row(buttonsModifier, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 IrisButton("Prepare", onPrepare, variant = IrisButtonVariant.Ghost, focusedScale = 1f)
                 IrisButton("Grab & play", onGrab, focusedScale = 1f)
             }

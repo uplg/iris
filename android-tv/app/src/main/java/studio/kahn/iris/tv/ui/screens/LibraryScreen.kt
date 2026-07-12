@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +61,7 @@ import studio.kahn.iris.tv.data.DismissGoneRequest
 import studio.kahn.iris.tv.data.LibraryResponse
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 import studio.kahn.iris.tv.ui.components.SectionTitle
@@ -111,6 +113,15 @@ fun LibraryScreen(
     var search by rememberSaveable { mutableStateOf("") }
     var kind by rememberSaveable { mutableStateOf(LibKind.All) }
     var sort by rememberSaveable { mutableStateOf(LibrarySort.Recent) }
+    // Ghost card the user long-pressed to hide — confirmed via dialog,
+    // a long-press alone must never make anything disappear.
+    var confirmGhost by remember { mutableStateOf<CollectionListItem?>(null) }
+    // While the hide dialog is up (and until focus is handed back to a
+    // card) the search field must NOT be focusable: the dialog teardown
+    // would drop focus on it and pop the leanback keyboard — which read
+    // as "Back lags, then I need a second Back" (the second one closed
+    // the IME).
+    var suppressSearchFocus by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         loading = true
@@ -178,7 +189,8 @@ fun LibraryScreen(
     // is locked, but an empty library / zero search matches keeps it usable so
     // the user can edit the query. Device-independent: removes the timing race
     // (a fast TV just never noticed the IME flash).
-    val searchFocusable = !loading && (visible.isEmpty() || didInitialFocus)
+    val searchFocusable =
+        !loading && (visible.isEmpty() || didInitialFocus) && !suppressSearchFocus
 
     Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
         Column(
@@ -282,19 +294,11 @@ fun LibraryScreen(
                             },
                             // Long-press a GONE card to hide it from MY
                             // library (per-user; history stays — watching
-                            // the show again resurfaces it). Optimistic
-                            // local removal: no refetch, no focus churn.
+                            // the show again resurfaces it). Confirmed
+                            // via dialog before anything happens.
                             onDismissGhost = {
-                                scope.launch {
-                                    val url = container.sessionStore.serverUrl.first()
-                                        ?: return@launch
-                                    runCatching {
-                                        container.apiFor(url)
-                                            .dismissGone(DismissGoneRequest(collectionId = c.id))
-                                    }.onSuccess {
-                                        all = all.filter { it.id != c.id }
-                                    }
-                                }
+                                suppressSearchFocus = true
+                                confirmGhost = c
                             },
                             modifier = if (index == targetIndex) {
                                 Modifier.focusRequester(restoreFocus)
@@ -305,6 +309,65 @@ fun LibraryScreen(
                     }
                 }
             }
+        }
+
+        // Confirm before hiding a ghost card — per-user, non-destructive
+        // (history stays; watching the show again resurfaces it).
+        confirmGhost?.let { c ->
+            // Hand focus back to a card once the dialog goes away — the
+            // long-pressed one on cancel, its neighbour after a hide.
+            // `restoreFocus` re-attaches to the target card on
+            // recomposition; retry across a few frames until its node
+            // exists, then let the search field become focusable again.
+            fun refocusCard(id: java.util.UUID?) {
+                lastOpenedId = id?.toString()
+                scope.launch {
+                    repeat(6) {
+                        withFrameNanos { }
+                        if (runCatching { restoreFocus.requestFocus() }.isSuccess) {
+                            suppressSearchFocus = false
+                            return@launch
+                        }
+                    }
+                    suppressSearchFocus = false
+                }
+            }
+            ConfirmDialog(
+                eyebrow = "Hide from my library",
+                title = prettify(c.displayTitle),
+                body = "Hidden for you only. Your watch history is kept, and " +
+                    "the card returns if you watch this again.",
+                confirmLabel = "Hide",
+                onConfirm = {
+                    confirmGhost = null
+                    scope.launch {
+                        val url = container.sessionStore.serverUrl.first()
+                        // Fall back to refocusing the untouched card when
+                        // the dismissal can't run (signed out, API error).
+                        var focusTarget: java.util.UUID? = c.id
+                        if (url != null) {
+                            runCatching {
+                                container.apiFor(url)
+                                    .dismissGone(DismissGoneRequest(collectionId = c.id))
+                            }.onSuccess {
+                                // Optimistic local removal, then focus the
+                                // previous card (or the next when hiding
+                                // the first one).
+                                val removedIdx = visible.indexOfFirst { it.id == c.id }
+                                val neighbor = visible.getOrNull(removedIdx - 1)
+                                    ?: visible.getOrNull(removedIdx + 1)
+                                all = all.filter { it.id != c.id }
+                                focusTarget = neighbor?.id
+                            }
+                        }
+                        refocusCard(focusTarget)
+                    }
+                },
+                onCancel = {
+                    confirmGhost = null
+                    refocusCard(c.id)
+                },
+            )
         }
     }
 }

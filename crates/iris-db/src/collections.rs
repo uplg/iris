@@ -724,6 +724,18 @@ mod tests {
                 .is_empty()
         );
 
+        // Ghosts never surface as search "In library" matches — the
+        // dismissal story depends on it (a hidden entry must not come
+        // back through the search page; only new watch/download
+        // activity resurfaces it).
+        assert!(
+            search_summaries(&pool, "goblin", 8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "fully-reclaimed collections stay out of search matches",
+        );
+
         // Dismissal hides the ghost card for the watcher…
         dismiss_ghost(&pool, watcher, col.id).await.unwrap();
         assert!(
