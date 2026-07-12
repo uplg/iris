@@ -20,6 +20,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -153,15 +155,45 @@ fun SettingsScreen(
 @Composable
 private fun UpdaterCard(container: AppContainer) {
     val context = LocalContext.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val view = androidx.compose.ui.platform.LocalView.current
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<AppUpdater.Progress?>(null) }
     var job by remember { mutableStateOf<Job?>(null) }
     var versionStatus by remember {
         mutableStateOf<AppUpdater.VersionStatus>(AppUpdater.VersionStatus.Unknown)
     }
+    // APK ready while the app was NOT foreground (screensaver kicked in
+    // during a long download, or the user pressed Home): Android
+    // silently drops background startActivity calls, so firing the
+    // installer intent right then goes nowhere — the exact "stuck on
+    // Opening installer…" symptom. Park it here; the ON_RESUME observer
+    // below fires it the moment we're back in front.
+    var pendingInstall by remember { mutableStateOf<java.io.File?>(null) }
 
     DisposableEffect(Unit) {
         onDispose { job?.cancel() }
+    }
+
+    // The screensaver is what usually steals the foreground mid-download
+    // — keep the screen awake for the whole update flow.
+    val updateActive = state != null && state !is AppUpdater.Progress.Failed
+    DisposableEffect(updateActive) {
+        view.keepScreenOn = updateActive
+        onDispose { view.keepScreenOn = false }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                pendingInstall?.let {
+                    pendingInstall = null
+                    AppUpdater.requestInstall(context, it)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Best-effort version probe on screen entry. Failure leaves the
@@ -227,7 +259,49 @@ private fun UpdaterCard(container: AppContainer) {
                                 .collect { p ->
                                     state = p
                                     if (p is AppUpdater.Progress.Ready) {
+                                        val resumed = lifecycleOwner.lifecycle.currentState
+                                            .isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                                        if (!resumed) {
+                                            // Backgrounded (screensaver /
+                                            // Home): a startActivity now is
+                                            // silently dropped by Android.
+                                            // Park it — the ON_RESUME
+                                            // observer fires it when we're
+                                            // back in front.
+                                            pendingInstall = p.file
+                                            return@collect
+                                        }
                                         AppUpdater.requestInstall(context, p.file)
+                                        // Self-heal for a launch dropped
+                                        // even while foreground: when the
+                                        // installer actually comes up it
+                                        // COVERS this activity (ON_PAUSE).
+                                        // No ON_PAUSE after a beat → fire
+                                        // again, same as the manual
+                                        // "Reopen installer". One ON_PAUSE
+                                        // ends the retries for good — the
+                                        // user may have already cancelled
+                                        // the installer, never reopen it
+                                        // on them.
+                                        var covered = false
+                                        val observer =
+                                            androidx.lifecycle.LifecycleEventObserver { _, event ->
+                                                if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
+                                                    covered = true
+                                                }
+                                            }
+                                        lifecycleOwner.lifecycle.addObserver(observer)
+                                        try {
+                                            var attempts = 0
+                                            while (attempts < 2 && !covered) {
+                                                kotlinx.coroutines.delay(2_500)
+                                                if (covered) break
+                                                AppUpdater.requestInstall(context, p.file)
+                                                attempts++
+                                            }
+                                        } finally {
+                                            lifecycleOwner.lifecycle.removeObserver(observer)
+                                        }
                                     }
                                 }
                         }
@@ -235,10 +309,18 @@ private fun UpdaterCard(container: AppContainer) {
                 )
                 if (state is AppUpdater.Progress.Ready) {
                     val ready = state as AppUpdater.Progress.Ready
+                    // Land the D-pad on this button as soon as Ready
+                    // renders: when the system swallows the installer
+                    // launch (it happens), the manual relaunch is a
+                    // single OK press. When the installer DID open, the
+                    // app is covered and the focus grab is invisible.
+                    val reopenFocus = remember { FocusRequester() }
+                    LaunchedEffect(Unit) { runCatching { reopenFocus.requestFocus() } }
                     IrisButton(
                         "Reopen installer",
                         { AppUpdater.requestInstall(context, ready.file) },
                         variant = IrisButtonVariant.Ghost,
+                        modifier = Modifier.focusRequester(reopenFocus),
                     )
                 }
             }
@@ -296,7 +378,7 @@ private fun UpdaterStatus(state: AppUpdater.Progress?) {
         }
         is AppUpdater.Progress.Ready ->
             Text(
-                "Downloaded. Opening installer…",
+                "Downloaded. Opening the installer… If nothing happens in a few seconds, press Reopen installer.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
