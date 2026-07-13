@@ -93,6 +93,16 @@ pub struct LiveTvConfig {
     /// the playlist's tvg-id.
     #[serde(default)]
     pub epg_id_overrides: HashMap<String, String>,
+    /// Pull channels from Vavoo's aggregator (clear-HLS restreams of European
+    /// TNT, resolved on demand) as extra Community-tier sources. This is the
+    /// only live source still carrying the M6 group after its restreams were
+    /// pulled everywhere else.
+    #[serde(default = "default_true")]
+    pub vavoo_enabled: bool,
+    /// Country code → Vavoo "group" names to fold into that country's list.
+    /// A country absent here simply gets no Vavoo channels.
+    #[serde(default = "default_livetv_vavoo_countries")]
+    pub vavoo_countries: HashMap<String, Vec<String>>,
 }
 
 fn default_livetv_country() -> String {
@@ -123,10 +133,17 @@ fn default_livetv_extra_playlists() -> HashMap<String, Vec<String>> {
     };
     HashMap::from([
         (
-            // schumijo refreshes daily (full TNT, official CDNs + a Swiss-ISP
-            // restream); Free-TV is a smaller curated "officially free" set.
+            // ParaTV is CI-refreshed several times a day (full TNT via
+            // raw.github indirection playlists whose content is re-signed
+            // continuously — the URLs themselves are stable). schumijo's
+            // top-level fr.m3u8 is NOT refreshed (its inline tokens rot) but
+            // its static entries (RMC/FAST cloudfront feeds) stay valuable.
+            // Free-TV is a small curated "officially free" set. Many entries
+            // only answer from residential IPs — the variant-validating
+            // election skips those cleanly on a datacenter deployment.
             "fr".to_string(),
             vec![
+                "https://raw.githubusercontent.com/Paradise-91/ParaTV/main/playlists/paratv/group/france/france.m3u".to_string(),
                 "https://raw.githubusercontent.com/schumijo/iptv/main/fr.m3u8".to_string(),
                 ftv("france"),
             ],
@@ -140,6 +157,31 @@ fn default_livetv_extra_playlists() -> HashMap<String, Vec<String>> {
         // Irish free-to-air is thin; Free-TV's curated IE list is the best
         // stable supplement to iptv-org's aggregated feeds.
         ("ie".to_string(), vec![ftv("ireland")]),
+    ])
+}
+fn default_livetv_vavoo_countries() -> HashMap<String, Vec<String>> {
+    // Vavoo's "group" is a loose region label; map each to the ISO country
+    // whose channel list should absorb it. "France Sport" also feeds `fr`.
+    // Arabia / Balkans have no single ISO country — attached to a
+    // representative code so they stay reachable.
+    let one = |g: &str| vec![g.to_string()];
+    HashMap::from([
+        ("fr".to_string(), vec!["France".to_string(), "France Sport".to_string()]),
+        ("de".to_string(), one("Germany")),
+        ("it".to_string(), one("Italy")),
+        ("es".to_string(), one("Spain")),
+        ("gb".to_string(), one("United Kingdom")),
+        ("nl".to_string(), one("Netherlands")),
+        ("pl".to_string(), one("Poland")),
+        ("pt".to_string(), one("Portugal")),
+        ("ru".to_string(), one("Russia")),
+        ("tr".to_string(), one("Turkey")),
+        ("ro".to_string(), one("Romania")),
+        ("bg".to_string(), one("Bulgaria")),
+        ("hr".to_string(), one("Croatia")),
+        ("al".to_string(), one("Albania")),
+        ("sa".to_string(), one("Arabia")),
+        ("rs".to_string(), one("Balkans")),
     ])
 }
 fn default_livetv_epg_urls() -> HashMap<String, String> {
@@ -172,6 +214,8 @@ impl Default for LiveTvConfig {
             epg_refresh_hours: default_livetv_epg_refresh_hours(),
             tnt_overrides: HashMap::new(),
             epg_id_overrides: HashMap::new(),
+            vavoo_enabled: true,
+            vavoo_countries: default_livetv_vavoo_countries(),
         }
     }
 }
@@ -500,7 +544,8 @@ mod tests {
     fn livetv_ships_curated_extra_playlists_by_default() {
         let cfg = LiveTvConfig::default();
         let fr = cfg.extra_playlists.get("fr").expect("fr defaults present");
-        assert_eq!(fr.len(), 2, "schumijo + Free-TV");
+        assert_eq!(fr.len(), 3, "ParaTV + schumijo + Free-TV");
+        assert!(fr.iter().any(|u| u.contains("ParaTV")));
         assert!(fr.iter().any(|u| u.contains("schumijo")));
         assert!(cfg.extra_playlists.contains_key("us"));
         assert!(cfg.extra_playlists.contains_key("ie"));

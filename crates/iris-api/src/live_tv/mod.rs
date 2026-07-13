@@ -16,6 +16,7 @@ pub mod epg;
 pub mod m3u;
 pub mod proxy;
 pub mod transcode;
+pub mod vavoo;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -157,6 +158,19 @@ pub struct SourceHealth {
     segment_failures: AtomicU64,
 }
 
+/// URI of the first variant in a master playlist, `None` when the body is
+/// already a media playlist. Per RFC 8216 the URI is the first non-blank
+/// line after `#EXT-X-STREAM-INF`.
+fn first_variant_uri(master: &str) -> Option<&str> {
+    let mut lines = master.lines();
+    while let Some(line) = lines.next() {
+        if line.starts_with("#EXT-X-STREAM-INF") {
+            return lines.map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#'));
+        }
+    }
+    None
+}
+
 /// Index of the source to elect first: the best-ranked one not cooling down
 /// (sources arrive pre-ordered by tier+quality), else 0 so a fully-cooled
 /// channel still gets tried by the election's second pass.
@@ -254,6 +268,9 @@ struct ServiceInner {
     /// Last-resort per-channel deinterlace/transcode sessions (see
     /// [`transcode::TranscodeManager`]).
     transcode: transcode::TranscodeManager,
+    /// Vavoo aggregator: catalog fetch + on-demand `vavoo://` resolution
+    /// (see [`vavoo::Vavoo`]).
+    vavoo: vavoo::Vavoo,
 }
 
 /// A cached logo — the bytes + content-type on success, or just the forwarded
@@ -325,6 +342,7 @@ impl LiveTvService {
                 logo_sem: tokio::sync::Semaphore::new(LOGO_FETCH_CONCURRENCY),
                 logo_http,
                 transcode: transcode::TranscodeManager::default(),
+                vavoo: vavoo::Vavoo::default(),
             }),
         })
     }
@@ -407,6 +425,19 @@ impl LiveTvService {
                 Err(e) => {
                     tracing::warn!(url, error = %e, "live tv extra playlist fetch failed");
                 }
+            }
+        }
+
+        // Vavoo channels for this country (resolved lazily on zap), folded in
+        // as extra Community-tier sources. Best-effort — a Vavoo outage just
+        // means no Vavoo channels this round, never a failed country load.
+        if self.inner.cfg.vavoo_enabled
+            && let Some(groups) = self.inner.cfg.vavoo_countries.get(country)
+        {
+            let entries = self.inner.vavoo.entries_for_groups(&self.inner.http, groups).await;
+            if !entries.is_empty() {
+                tracing::info!(country, vavoo_channels = entries.len(), "live tv vavoo channels merged");
+                playlists.push(entries);
             }
         }
 
@@ -578,16 +609,20 @@ impl LiveTvService {
 
         let start = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
         let mut last_err = String::new();
-        // Two passes: first only healthy sources, then (if every source is
-        // cooling down) all of them — a fully-cooled channel must still get
-        // a chance rather than 502ing for the whole cooldown window.
+        // Two passes: healthy sources first, then the ones that were cooling
+        // down. Pass 1 must run whenever pass 0 didn't succeed — not only
+        // when it tried nothing — otherwise one transient failure on the
+        // only-live source makes the channel 502 for its whole cooldown
+        // while the request never even tries it.
+        let mut tried = vec![false; channel.sources.len()];
         for pass in 0..2 {
             for step in 0..channel.sources.len() {
                 let si = (start + step) % channel.sources.len();
                 let health = &snap.health[idx][si];
-                if pass == 0 && health.in_cooldown(now_ms) {
+                if tried[si] || (pass == 0 && health.in_cooldown(now_ms)) {
                     continue;
                 }
+                tried[si] = true;
                 let source = &channel.sources[si];
                 match self.fetch_source_playlist(source).await {
                     Ok((body, base)) => {
@@ -615,13 +650,6 @@ impl LiveTvService {
                         last_err = e.to_string();
                     }
                 }
-            }
-            if pass == 0 && last_err.is_empty() {
-                // Pass 0 skipped everything (all cooling down) — run pass 1.
-                continue;
-            }
-            if pass == 0 {
-                break; // real failures: every healthy source already tried
             }
         }
         Err(LiveTvError::Upstream(last_err))
@@ -772,12 +800,13 @@ impl LiveTvService {
         let channel = &snap.channels[idx];
         let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
         let source = &channel.sources[active];
+        let upstream_url = self.resolve_source_url(source).await?;
         let channel_key = format!("{country}:{id}");
         self.inner
             .transcode
             .master_playlist(
                 &channel_key,
-                &source.url,
+                &upstream_url,
                 source.user_agent.as_deref().unwrap_or(DEFAULT_UA),
                 source.referrer.as_deref(),
             )
@@ -963,6 +992,13 @@ impl LiveTvService {
             let mut join = tokio::task::JoinSet::new();
             for (ci, channel) in snap.channels.iter().enumerate() {
                 for (si, source) in channel.sources.iter().enumerate() {
+                    // Vavoo sources resolve to a rotating tokenised URL — never
+                    // probe them (it would burn a resolve per channel per
+                    // refresh); they're elected lazily and resolved on the
+                    // first real zap, self-healing via playback-failure demotion.
+                    if vavoo::stream_id(&source.url).is_some() {
+                        continue;
+                    }
                     let svc = self.clone();
                     let source = source.clone();
                     let health = snap.health[ci][si].clone();
@@ -998,11 +1034,30 @@ impl LiveTvService {
         });
     }
 
+    /// Concrete upstream URL for a source: a `vavoo://<id>` sentinel is
+    /// resolved to a fresh tokenised playlist (the token + edge host rotate,
+    /// hence resolve-on-use), every other URL passes through unchanged.
+    async fn resolve_source_url(
+        &self,
+        source: &channels::StreamSource,
+    ) -> Result<String, LiveTvError> {
+        match vavoo::stream_id(&source.url) {
+            Some(id) => self
+                .inner
+                .vavoo
+                .resolve(&self.inner.http, id)
+                .await
+                .ok_or_else(|| LiveTvError::Upstream("vavoo resolve failed".into())),
+            None => Ok(source.url.clone()),
+        }
+    }
+
     async fn fetch_source_playlist(
         &self,
         source: &channels::StreamSource,
     ) -> Result<(String, Url), LiveTvError> {
-        let mut req = self.inner.http.get(&source.url).timeout(PLAYLIST_TIMEOUT);
+        let effective_url = self.resolve_source_url(source).await?;
+        let mut req = self.inner.http.get(&effective_url).timeout(PLAYLIST_TIMEOUT);
         if let Some(ua) = &source.user_agent {
             req = req.header(reqwest::header::USER_AGENT, ua);
         }
@@ -1024,6 +1079,34 @@ impl LiveTvService {
         }
         if !body.trim_start().starts_with("#EXTM3U") {
             return Err(LiveTvError::Upstream("not an HLS playlist".into()));
+        }
+        // A 200 master proves nothing when it came from an indirection host
+        // (github-hosted relays always serve their checked-in master, even
+        // when the stream behind it is geo-blocked or token-expired). Elect
+        // the source only if one variant actually answers — otherwise a dead
+        // feed wins the election and the player hangs instead of rotating.
+        if let Some(variant) = first_variant_uri(&body) {
+            let vurl = final_url
+                .join(variant)
+                .map_err(|e| LiveTvError::Upstream(format!("bad variant uri: {e}")))?;
+            let mut vreq = self.inner.http.get(vurl).timeout(PLAYLIST_TIMEOUT);
+            if let Some(ua) = &source.user_agent {
+                vreq = vreq.header(reqwest::header::USER_AGENT, ua);
+            }
+            if let Some(referrer) = &source.referrer {
+                vreq = vreq.header(reqwest::header::REFERER, referrer);
+            }
+            let vbody = vreq
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+                .map_err(|e| LiveTvError::Upstream(format!("variant: {e}")))?
+                .text()
+                .await
+                .map_err(|e| LiveTvError::Upstream(format!("variant: {e}")))?;
+            if !vbody.trim_start().starts_with("#EXTM3U") {
+                return Err(LiveTvError::Upstream("variant is not HLS".into()));
+            }
         }
         Ok((body, final_url))
     }
@@ -1354,6 +1437,16 @@ mod tests {
         assert!(validate_country("f").is_err());
         assert!(validate_country("..").is_err());
         assert!(validate_country("f/").is_err());
+    }
+
+    #[test]
+    fn first_variant_uri_finds_master_variants_only() {
+        let master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=1280x720\n\nvariant/720.m3u8\n";
+        assert_eq!(first_variant_uri(master), Some("variant/720.m3u8"));
+        let media = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.0,\nseg1.ts\n";
+        assert_eq!(first_variant_uri(media), None);
+        let truncated = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\n";
+        assert_eq!(first_variant_uri(truncated), None);
     }
 
     #[test]

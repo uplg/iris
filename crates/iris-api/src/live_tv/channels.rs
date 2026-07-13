@@ -205,6 +205,10 @@ pub fn build_channels(
     let mut channels: Vec<Channel> = Vec::new();
     // identity key → index into `channels`
     let mut by_identity: HashMap<String, usize> = HashMap::new();
+    // TNT number → index: playlists disagree on tvg-ids for the same network
+    // (`LEquipe.fr` vs `LEquipe21.fr`), which would otherwise yield two
+    // channels both numbered N — one of them typically dead.
+    let mut by_tnt: HashMap<u16, usize> = HashMap::new();
 
     for playlist in playlists {
         for entry in playlist {
@@ -229,7 +233,13 @@ pub fn build_channels(
                 referrer: entry.header("http-referrer").map(str::to_string),
             };
 
-            if let Some(&idx) = by_identity.get(&identity) {
+            let tnt_number = tnt_number_for(&identity, &normalize(&name), tnt_overrides);
+            let merge_idx = by_identity
+                .get(&identity)
+                .or_else(|| tnt_number.and_then(|n| by_tnt.get(&n)))
+                .copied();
+            if let Some(idx) = merge_idx {
+                by_identity.entry(identity).or_insert(idx);
                 let ch = &mut channels[idx];
                 if ch.sources.iter().all(|s| s.url != source.url) {
                     ch.sources.push(source);
@@ -248,7 +258,9 @@ pub fn build_channels(
                 continue;
             }
 
-            let tnt_number = tnt_number_for(&identity, &normalize(&name), tnt_overrides);
+            if let Some(n) = tnt_number {
+                by_tnt.insert(n, channels.len());
+            }
             by_identity.insert(identity.clone(), channels.len());
             channels.push(Channel {
                 id: identity,
@@ -419,6 +431,15 @@ fn clean_name(raw: &str) -> (String, Option<u32>, bool, bool) {
         name = trimmed;
         break;
     }
+    // Channel-number prefixes ("10. TMC") are display artifacts of curated
+    // lists; strip them so the identity folds to the bare network name.
+    let name = name.trim();
+    let name = name
+        .split_once(". ")
+        .filter(|(n, rest)| {
+            !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && !rest.trim().is_empty()
+        })
+        .map_or(name, |(_, rest)| rest);
     (name.trim().to_string(), quality, geo_blocked, not_24_7)
 }
 
@@ -454,6 +475,40 @@ mod tests {
         );
         // Parenthesised text that is not a quality stays part of the name.
         assert_eq!(clean_name("Canal 32 (Troyes)").0, "Canal 32 (Troyes)");
+        // Curated-list channel-number prefixes and provenance brackets
+        // (ParaTV style) fold away; a name that merely contains digits+dot
+        // mid-word does not.
+        assert_eq!(clean_name("10. TMC [720p-tf1.fr]").0, "TMC");
+        assert_eq!(clean_name("46. ARTE [1080p-tf1.fr]").0, "ARTE");
+        assert_eq!(clean_name("Ciné 2. Le retour").0, "Ciné 2. Le retour");
+    }
+
+    #[test]
+    fn tnt_number_unifies_divergent_tvg_ids() {
+        // Playlists disagree on the network's tvg-id ("LEquipe.fr" vs
+        // "LEquipe21.fr") — both map to TNT 21 and must land in ONE channel,
+        // not two rows both numbered 21 with one of them dead.
+        let playlists = vec![
+            vec![entry(
+                "LEquipe.fr",
+                "L'Équipe (720p)",
+                "http://a/equipe.m3u8",
+                "General",
+            )],
+            vec![entry(
+                "LEquipe21.fr",
+                "L'ÉQUIPE",
+                "http://b/lequipe.m3u8",
+                "General",
+            )],
+        ];
+        let channels = build_channels(&playlists, Some(&HashMap::new()));
+        let equipe: Vec<_> = channels.iter().filter(|c| c.tnt_number == Some(21)).collect();
+        assert_eq!(equipe.len(), 1);
+        assert_eq!(equipe[0].sources.len(), 2);
+        // Without TNT overrides (non-FR countries) the ids stay distinct.
+        let separate = build_channels(&playlists, None);
+        assert_eq!(separate.len(), 2);
     }
 
     #[test]
