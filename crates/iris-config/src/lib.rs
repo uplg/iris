@@ -166,7 +166,10 @@ fn default_livetv_vavoo_countries() -> HashMap<String, Vec<String>> {
     // representative code so they stay reachable.
     let one = |g: &str| vec![g.to_string()];
     HashMap::from([
-        ("fr".to_string(), vec!["France".to_string(), "France Sport".to_string()]),
+        (
+            "fr".to_string(),
+            vec!["France".to_string(), "France Sport".to_string()],
+        ),
         ("de".to_string(), one("Germany")),
         ("it".to_string(), one("Italy")),
         ("es".to_string(), one("Spain")),

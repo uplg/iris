@@ -167,7 +167,11 @@ impl Vavoo {
     /// ready for [`build_channels`](super::channels::build_channels). Best
     /// effort: a failed signing or page fetch yields whatever was collected so
     /// far (possibly empty).
-    pub async fn entries_for_groups(&self, http: &reqwest::Client, groups: &[String]) -> Vec<M3uEntry> {
+    pub async fn entries_for_groups(
+        &self,
+        http: &reqwest::Client,
+        groups: &[String],
+    ) -> Vec<M3uEntry> {
         let Some(sig) = self.signature(http).await else {
             return Vec::new();
         };
@@ -280,11 +284,12 @@ mod tests {
     async fn vavoo_live_catalog_and_resolve() {
         let http = reqwest::Client::builder().build().unwrap();
         let v = Vavoo::default();
-        let entries = v
-            .entries_for_groups(&http, &["France".to_string()])
-            .await;
+        let entries = v.entries_for_groups(&http, &["France".to_string()]).await;
         assert!(!entries.is_empty(), "France catalog should not be empty");
-        assert!(entries.iter().any(|e| e.name.eq_ignore_ascii_case("M6")), "M6 expected in France catalog");
+        assert!(
+            entries.iter().any(|e| e.name.eq_ignore_ascii_case("M6")),
+            "M6 expected in France catalog"
+        );
         let id = stream_id(&entries[0].url).expect("vavoo:// url");
         let resolved = v.resolve(&http, id).await.expect("resolve should succeed");
         assert!(resolved.starts_with("http"), "resolved to {resolved}");

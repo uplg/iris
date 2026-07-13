@@ -165,7 +165,9 @@ fn first_variant_uri(master: &str) -> Option<&str> {
     let mut lines = master.lines();
     while let Some(line) = lines.next() {
         if line.starts_with("#EXT-X-STREAM-INF") {
-            return lines.map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#'));
+            return lines
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with('#'));
         }
     }
     None
@@ -434,9 +436,17 @@ impl LiveTvService {
         if self.inner.cfg.vavoo_enabled
             && let Some(groups) = self.inner.cfg.vavoo_countries.get(country)
         {
-            let entries = self.inner.vavoo.entries_for_groups(&self.inner.http, groups).await;
+            let entries = self
+                .inner
+                .vavoo
+                .entries_for_groups(&self.inner.http, groups)
+                .await;
             if !entries.is_empty() {
-                tracing::info!(country, vavoo_channels = entries.len(), "live tv vavoo channels merged");
+                tracing::info!(
+                    country,
+                    vavoo_channels = entries.len(),
+                    "live tv vavoo channels merged"
+                );
                 playlists.push(entries);
             }
         }
@@ -1057,7 +1067,11 @@ impl LiveTvService {
         source: &channels::StreamSource,
     ) -> Result<(String, Url), LiveTvError> {
         let effective_url = self.resolve_source_url(source).await?;
-        let mut req = self.inner.http.get(&effective_url).timeout(PLAYLIST_TIMEOUT);
+        let mut req = self
+            .inner
+            .http
+            .get(&effective_url)
+            .timeout(PLAYLIST_TIMEOUT);
         if let Some(ua) = &source.user_agent {
             req = req.header(reqwest::header::USER_AGENT, ua);
         }
@@ -1441,7 +1455,8 @@ mod tests {
 
     #[test]
     fn first_variant_uri_finds_master_variants_only() {
-        let master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=1280x720\n\nvariant/720.m3u8\n";
+        let master =
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=1280x720\n\nvariant/720.m3u8\n";
         assert_eq!(first_variant_uri(master), Some("variant/720.m3u8"));
         let media = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.0,\nseg1.ts\n";
         assert_eq!(first_variant_uri(media), None);

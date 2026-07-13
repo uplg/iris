@@ -503,7 +503,10 @@ mod tests {
             )],
         ];
         let channels = build_channels(&playlists, Some(&HashMap::new()));
-        let equipe: Vec<_> = channels.iter().filter(|c| c.tnt_number == Some(21)).collect();
+        let equipe: Vec<_> = channels
+            .iter()
+            .filter(|c| c.tnt_number == Some(21))
+            .collect();
         assert_eq!(equipe.len(), 1);
         assert_eq!(equipe[0].sources.len(), 2);
         // Without TNT overrides (non-FR countries) the ids stay distinct.
