@@ -378,6 +378,22 @@ pub(crate) fn tvg_id_base(tvg_id: &str) -> &str {
     }
 }
 
+/// Display name + folded channel id for a playlist entry, computed the SAME
+/// way [`build_channels`] derives a channel's `id` (tvg-id base if present,
+/// else the cleaned display name) — so a cross-country search hit built from
+/// any source is openable as `(country, id)` against the country snapshot.
+pub(crate) fn entry_display_and_id(entry: &M3uEntry) -> (String, String) {
+    let display = clean_name(&entry.name).0;
+    let id = entry
+        .attrs
+        .get("tvg-id")
+        .filter(|s| !s.is_empty())
+        .map(|id| normalize(tvg_id_base(id)))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| normalize(&display));
+    (display, id)
+}
+
 /// Lowercase alphanumeric fold: `"L'Équipe TV"` → `"lequipetv"`.
 pub(crate) fn normalize(s: &str) -> String {
     s.chars()

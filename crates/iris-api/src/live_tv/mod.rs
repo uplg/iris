@@ -18,7 +18,7 @@ pub mod proxy;
 pub mod transcode;
 pub mod vavoo;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -184,6 +184,45 @@ fn elect_seed(sources: &[Arc<SourceHealth>], now_ms: u64) -> usize {
         .iter()
         .position(|h| !h.in_cooldown(now_ms))
         .unwrap_or(0)
+}
+
+/// Fold a source's playlist entries into the cross-country search list: one
+/// [`SearchEntry`] per entry with the id [`channels::build_channels`] would
+/// assign (so a hit opens against the snapshot), deduped by (country, id). A
+/// playlist's own `tvg-logo` wins; otherwise the iptv-org name→logo map fills
+/// it (Vavoo carries none).
+fn index_source_entries(
+    country: &str,
+    entries: &[m3u::M3uEntry],
+    name_logo: &HashMap<String, String>,
+    seen: &mut HashSet<(String, String)>,
+    index: &mut Vec<SearchEntry>,
+) {
+    for entry in entries {
+        if entry.url.is_empty() {
+            continue;
+        }
+        let (display, channel_id) = channels::entry_display_and_id(entry);
+        if display.is_empty()
+            || channel_id.is_empty()
+            || !seen.insert((country.to_string(), channel_id.clone()))
+        {
+            continue;
+        }
+        let logo = entry
+            .attrs
+            .get("tvg-logo")
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .or_else(|| name_logo.get(&channel_id).cloned());
+        index.push(SearchEntry {
+            country: country.to_string(),
+            keys: channels::normalize(&display),
+            logo_url: logo,
+            channel_id,
+            name: display,
+        });
+    }
 }
 
 impl SourceHealth {
@@ -783,7 +822,18 @@ impl LiveTvService {
             }
         };
 
-        let index: Vec<SearchEntry> = fetched
+        // Folded channel-name → logo, built from the same DB, to give Vavoo
+        // search cards a logo (they carry none of their own).
+        let name_logo: HashMap<String, String> = fetched
+            .iter()
+            .filter_map(|c| {
+                let logo = logo_by_channel.get(&c.id)?;
+                let key = channels::normalize(&c.name);
+                (!key.is_empty()).then(|| (key, logo.clone()))
+            })
+            .collect();
+
+        let mut index: Vec<SearchEntry> = fetched
             .into_iter()
             .filter(|c| c.closed.is_none() && !c.is_nsfw)
             .filter(|c| streams.contains_key(&c.id.to_lowercase()))
@@ -806,10 +856,55 @@ impl LiveTvService {
                 })
             })
             .collect();
+
+        // The iptv-org channels∩streams DB above misses everything that only
+        // lives in an extra playlist (ParaTV, schumijo, Free-TV…) or in Vavoo —
+        // yet those channels ARE playable (they land in the country snapshot),
+        // so a real search must surface them too.
+        self.augment_search_index(&name_logo, &mut index).await;
         tracing::info!(channels = index.len(), "live tv search index built");
         let index = Arc::new(index);
         *self.inner.search_index.write().expect("poisoned") = Some((index.clone(), Instant::now()));
         Some(index)
+    }
+
+    /// Add the extra-playlist and Vavoo channels to a freshly built iptv-org
+    /// search index (each with the id `build_channels` assigns), deduped by
+    /// (country, id). Fetches are best-effort: a failed playlist/catalog just
+    /// contributes nothing.
+    async fn augment_search_index(&self, name_logo: &NameLogos, index: &mut Vec<SearchEntry>) {
+        let mut seen: HashSet<(String, String)> = index
+            .iter()
+            .map(|e| (e.country.clone(), e.channel_id.clone()))
+            .collect();
+        for (country, urls) in &self.inner.cfg.extra_playlists {
+            for url in urls {
+                match self.fetch_text(url, PLAYLIST_TIMEOUT).await {
+                    Ok((body, _)) => {
+                        index_source_entries(
+                            country,
+                            &m3u::parse(&body),
+                            name_logo,
+                            &mut seen,
+                            index,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(url, error = %e, "live tv search: extra playlist fetch failed");
+                    }
+                }
+            }
+        }
+        if self.inner.cfg.vavoo_enabled {
+            for (country, groups) in &self.inner.cfg.vavoo_countries {
+                let entries = self
+                    .inner
+                    .vavoo
+                    .entries_for_groups(&self.inner.http, groups)
+                    .await;
+                index_source_entries(country, &entries, name_logo, &mut seen, index);
+            }
+        }
     }
 
     fn cached_search_index(&self) -> Option<Arc<Vec<SearchEntry>>> {
@@ -1453,6 +1548,15 @@ impl LiveTvService {
                 }
             });
         }
+        // Warm the cross-country search index at boot so the first user search
+        // is instant — building it cold fetches iptv-org + every extra playlist
+        // + all Vavoo catalogs (~10 s). The refresh loop below keeps it fresh.
+        {
+            let svc = self.clone();
+            tokio::spawn(async move {
+                svc.search_index().await;
+            });
+        }
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_mins(15));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1522,6 +1626,11 @@ impl LiveTvService {
                 }
             }
         }
+
+        // Keep the cross-country search index fresh in the background: this is
+        // a no-op while it's within its TTL and rebuilds it once past it, so a
+        // search never pays the cold cost after the boot warm.
+        self.search_index().await;
     }
 }
 
@@ -1542,6 +1651,26 @@ fn epoch_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// End-to-end: search must surface channels that only exist via Vavoo or an
+    /// extra playlist (not in iptv-org's streams DB). Live — run with
+    /// `cargo test -p iris-api search_surfaces -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "hits live iptv-org + Vavoo APIs"]
+    async fn search_surfaces_vavoo_and_extra_playlist_channels() {
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let hits = svc.search("disney channel", 40).await;
+        let fr: Vec<_> = hits
+            .iter()
+            .filter(|e| e.country == "fr")
+            .map(|e| (e.name.as_str(), e.channel_id.as_str()))
+            .collect();
+        eprintln!("'disney channel' FR hits: {fr:?}");
+        assert!(
+            fr.iter().any(|(_, id)| *id == "disneychannel"),
+            "Disney Channel FR (Vavoo-only) must be searchable"
+        );
+    }
 
     #[test]
     fn validate_country_accepts_alpha2_only() {
