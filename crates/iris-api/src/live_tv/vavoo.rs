@@ -83,8 +83,6 @@ struct CatalogItem {
     #[serde(default)]
     name: String,
     #[serde(default)]
-    logo: Option<String>,
-    #[serde(default)]
     ids: CatalogIds,
 }
 #[derive(Deserialize, Default)]
@@ -226,15 +224,23 @@ impl Vavoo {
                 let Some(id) = item.ids.id.filter(|s| !s.is_empty()) else {
                     continue;
                 };
-                let name = clean_name(&item.name);
-                if name.is_empty() {
+                let (base, quality) = clean_name(&item.name);
+                if base.is_empty() {
                     continue;
                 }
+                // Encode the inferred quality the way iptv-org names do
+                // (`"M6 (1080p)"`) so `build_channels` folds every quality
+                // variant into one channel and ranks the sources by it.
+                let name = match quality {
+                    Some(q) => format!("{base} ({q}p)"),
+                    None => base,
+                };
                 let mut attrs = HashMap::new();
                 attrs.insert("group-title".to_string(), group.to_string());
-                if let Some(logo) = item.logo.filter(|s| !s.is_empty()) {
-                    attrs.insert("tvg-logo".to_string(), logo);
-                }
+                // No tvg-logo: Vavoo's own logo field is unusable (empty for
+                // most feeds, a dead `logo.huhu.to` 404 for the rest), and
+                // setting it would block the iptv-org name back-fill in
+                // `fetch_country`. Logos come from iptv-org or the letter tile.
                 attrs.insert("http-user-agent".to_string(), STREAM_UA.to_string());
                 attrs.insert("http-referrer".to_string(), STREAM_REFERER.to_string());
                 out.push(M3uEntry {
@@ -252,19 +258,57 @@ impl Vavoo {
     }
 }
 
-/// Drop Vavoo's trailing ` .<tag>` provider marker (`"M6 .c"` → `"M6"`,
-/// `"M6 FHD .b"` → `"M6 FHD"`) so plain-named feeds fold onto the matching
-/// iptv-org channel (and, for FR, pick up their TNT number) while quality
-/// variants stay distinct.
-fn clean_name(raw: &str) -> String {
-    let n = raw.trim();
+/// Fold a Vavoo channel name to a base name + inferred vertical resolution.
+///
+/// Vavoo ships a channel under several near-identical names — a provider tag
+/// (`"M6 .c"`, `"M6 .s"`), a quality word (`"M6 HD"`, `"M6 FHD"`), a codec tag
+/// (`"M6 H265"`) or a `(BACKUP)` marker — which would otherwise become that
+/// many separate, poorly-tagged channels. Stripping all of them to the bare
+/// name lets [`build_channels`](super::channels::build_channels) fold every
+/// variant into ONE channel (ranked by quality) that also merges with the
+/// matching iptv-org entry — inheriting its logo, EPG id and TNT number.
+/// `"M6 FHD .b"` → `("M6", Some(1080))`, `"M6 MUSIC (BACKUP) .s"` →
+/// `("M6 MUSIC", None)`.
+fn clean_name(raw: &str) -> (String, Option<u32>) {
+    let mut n = raw.trim();
+    // Trailing ` .<tag>` provider marker.
     if let Some(pos) = n.rfind(" .") {
         let tag = &n[pos + 2..];
         if !tag.is_empty() && tag.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return n[..pos].trim().to_string();
+            n = n[..pos].trim();
         }
     }
-    n.to_string()
+    let mut quality = None;
+    let mut kept = Vec::new();
+    for tok in n.split_whitespace() {
+        // Compare on the token's alphanumeric core so `(BACKUP)`, `[HD]` etc.
+        // still match.
+        let core = tok
+            .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+            .to_ascii_uppercase();
+        let as_quality = match core.as_str() {
+            "UHD" | "4K" | "UHD4K" | "2160" | "2160P" => Some(2160),
+            "FHD" | "1080" | "1080P" => Some(1080),
+            "HD" | "720" | "720P" => Some(720),
+            "SD" | "480" | "480P" | "360" | "360P" => Some(480),
+            _ => None,
+        };
+        if let Some(q) = as_quality {
+            quality = quality.max(Some(q));
+            continue;
+        }
+        // Codec / backup noise: drop from the name, doesn't imply a quality.
+        if matches!(core.as_str(), "H265" | "HEVC" | "H264" | "BACKUP" | "RAW") {
+            continue;
+        }
+        kept.push(tok);
+    }
+    let base = kept.join(" ");
+    // Everything was a marker (e.g. name was literally "HD") → keep the raw.
+    if base.is_empty() {
+        return (n.to_string(), quality);
+    }
+    (base, quality)
 }
 
 #[cfg(test)]
@@ -293,17 +337,42 @@ mod tests {
         let id = stream_id(&entries[0].url).expect("vavoo:// url");
         let resolved = v.resolve(&http, id).await.expect("resolve should succeed");
         assert!(resolved.starts_with("http"), "resolved to {resolved}");
+
+        // Folding check: the raw catalog lists M6 several times (.c/.s/HD/FHD);
+        // after build_channels they must collapse into ONE M6 channel with
+        // multiple ranked sources, not several near-dup rows.
+        let built = super::super::channels::build_channels(std::slice::from_ref(&entries), None);
+        let m6: Vec<_> = built
+            .iter()
+            .filter(|c| c.name.eq_ignore_ascii_case("M6"))
+            .collect();
+        eprintln!(
+            "vavoo FR: {} catalog entries → {} channels; M6 rows={} sources={:?}",
+            entries.len(),
+            built.len(),
+            m6.len(),
+            m6.first().map(|c| c.sources.len()),
+        );
+        assert_eq!(m6.len(), 1, "M6 quality variants should fold into one row");
+        assert!(m6[0].sources.len() >= 2, "folded M6 should keep every feed");
     }
 
     #[test]
-    fn clean_name_strips_provider_tag_only() {
-        assert_eq!(clean_name("M6 .c"), "M6");
-        assert_eq!(clean_name("M6 HD .s"), "M6 HD");
-        assert_eq!(clean_name("M6 FHD .b"), "M6 FHD");
-        assert_eq!(clean_name("M6 MUSIC (BACKUP) .s"), "M6 MUSIC (BACKUP)");
-        // no provider tag → unchanged
-        assert_eq!(clean_name("France 2"), "France 2");
-        // a genuine trailing token that isn't a ' .x' marker stays put
-        assert_eq!(clean_name("Canal 32"), "Canal 32");
+    fn clean_name_folds_provider_and_quality_tags() {
+        // provider tag + quality word → base name + inferred resolution, so
+        // every variant folds onto one channel.
+        assert_eq!(clean_name("M6 .c"), ("M6".to_string(), None));
+        assert_eq!(clean_name("M6 HD .s"), ("M6".to_string(), Some(720)));
+        assert_eq!(clean_name("M6 FHD .b"), ("M6".to_string(), Some(1080)));
+        assert_eq!(clean_name("TF1 UHD"), ("TF1".to_string(), Some(2160)));
+        // backup / codec markers are dropped without implying a quality.
+        assert_eq!(
+            clean_name("M6 MUSIC (BACKUP) .s"),
+            ("M6 MUSIC".to_string(), None)
+        );
+        assert_eq!(clean_name("W9 H265"), ("W9".to_string(), None));
+        // real names with digits or multi-word titles stay intact.
+        assert_eq!(clean_name("France 2"), ("France 2".to_string(), None));
+        assert_eq!(clean_name("Canal 32"), ("Canal 32".to_string(), None));
     }
 }

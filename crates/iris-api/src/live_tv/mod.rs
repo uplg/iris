@@ -113,6 +113,9 @@ fn lowercase<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error>
 /// stream database.
 type StreamsDb = HashMap<String, Vec<channels::StreamSource>>;
 
+/// Folded channel name → logo URL, from iptv-org's channels + logos DBs.
+type NameLogos = HashMap<String, String>;
+
 /// One row of the cross-country search index. `channel_id` uses the SAME
 /// slug derivation as `build_channels` (`normalize(tvg_id_base(id))`), so a
 /// hit is directly openable as `(country, channel_id)` by every client.
@@ -243,6 +246,10 @@ struct ServiceInner {
     /// intersected with the streams DB so every hit is playable), cached
     /// like the playlists.
     search_index: RwLock<Option<(Arc<Vec<SearchEntry>>, Instant)>>,
+    /// Folded channel name → logo URL (from iptv-org's channels + logos DBs,
+    /// no playability filter), for back-filling channels whose feed carries
+    /// no logo — chiefly Vavoo entries. Cached like the playlists.
+    name_logos: RwLock<Option<(Arc<NameLogos>, Instant)>>,
     /// Per-URL liveness, shared across snapshots (see [`SourceHealth`]).
     health: RwLock<HashMap<String, Arc<SourceHealth>>>,
     /// Serializes cold loads so N concurrent first-requests for a country
@@ -338,6 +345,7 @@ impl LiveTvService {
                 epg: RwLock::new(HashMap::new()),
                 streams_db: RwLock::new(None),
                 search_index: RwLock::new(None),
+                name_logos: RwLock::new(None),
                 health: RwLock::new(HashMap::new()),
                 load_lock: tokio::sync::Mutex::new(()),
                 logo_cache: RwLock::new(HashMap::new()),
@@ -460,6 +468,20 @@ impl LiveTvService {
         // carries a single feed per channel; the database has them all.
         if let Some(db) = self.streams_db().await {
             channels::merge_db_sources(&mut built, &db);
+        }
+        // Back-fill logos for channels whose feed carries none (chiefly Vavoo,
+        // which ships no usable logo) by matching the channel name against
+        // iptv-org's logo DB. Best-effort; a miss falls back to the letter tile.
+        if built.iter().any(|c| c.logo_url.is_none())
+            && let Some(logos) = self.name_logo_index().await
+        {
+            for ch in &mut built {
+                if ch.logo_url.is_none()
+                    && let Some(url) = logos.get(&channels::normalize(&ch.name))
+                {
+                    ch.logo_url = Some(url.clone());
+                }
+            }
         }
         tracing::info!(country, channels = built.len(), "live tv playlist loaded");
         Ok(self.build_snapshot(built))
@@ -797,6 +819,81 @@ impl LiveTvService {
             .expect("poisoned")
             .clone()
             .map(|(idx, _)| idx)
+    }
+
+    /// Folded channel-name → logo URL, from iptv-org's channels + logos DBs
+    /// (no playability filter, unlike the search index), for back-filling
+    /// feeds that carry no logo — chiefly Vavoo. Cached; best-effort (`None`
+    /// on any fetch/parse failure just skips the back-fill).
+    async fn name_logo_index(&self) -> Option<Arc<NameLogos>> {
+        #[derive(serde::Deserialize)]
+        struct ApiChannel {
+            id: String,
+            name: String,
+            #[serde(default)]
+            alt_names: Vec<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ApiLogo {
+            channel: String,
+            url: String,
+        }
+
+        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
+        if let Some((idx, at)) = self.inner.name_logos.read().expect("poisoned").clone()
+            && at.elapsed() < ttl
+        {
+            return Some(idx);
+        }
+
+        let logos_url = self
+            .inner
+            .cfg
+            .channels_url
+            .replace("channels.json", "logos.json");
+        let logos: Vec<ApiLogo> = self
+            .inner
+            .http
+            .get(&logos_url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        let mut logo_by_id: HashMap<String, String> = HashMap::new();
+        for l in logos {
+            logo_by_id.entry(l.channel).or_insert(l.url);
+        }
+
+        let channels: Vec<ApiChannel> = self
+            .inner
+            .http
+            .get(&self.inner.cfg.channels_url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        let mut map: HashMap<String, String> = HashMap::new();
+        for c in channels {
+            let Some(logo) = logo_by_id.get(&c.id) else {
+                continue;
+            };
+            for name in std::iter::once(&c.name).chain(c.alt_names.iter()) {
+                let key = channels::normalize(name);
+                if !key.is_empty() {
+                    map.entry(key).or_insert_with(|| logo.clone());
+                }
+            }
+        }
+        tracing::info!(names = map.len(), "live tv name→logo index built");
+        let map = Arc::new(map);
+        *self.inner.name_logos.write().expect("poisoned") = Some((map.clone(), Instant::now()));
+        Some(map)
     }
 
     /// Last-resort transcoded playlist for a channel (see [`transcode`]).
@@ -1323,16 +1420,19 @@ impl LiveTvService {
         if let Some(id) = self.inner.cfg.epg_id_overrides.get(&channel.id) {
             return Some(id.clone());
         }
-        let tvg_id = channel.tvg_id.as_ref()?;
-        // The guide may key on the full id ("TF1.fr") or the base without
-        // the variant qualifier ("TF1.fr@HD" → "TF1.fr").
-        let base = tvg_id.split('@').next().unwrap_or(tvg_id);
-        for candidate in [tvg_id.as_str(), base] {
-            if index.contains(candidate) {
-                return Some(candidate.to_string());
+        if let Some(tvg_id) = channel.tvg_id.as_ref() {
+            // The guide may key on the full id ("TF1.fr") or the base without
+            // the variant qualifier ("TF1.fr@HD" → "TF1.fr").
+            let base = tvg_id.split('@').next().unwrap_or(tvg_id);
+            for candidate in [tvg_id.as_str(), base] {
+                if index.contains(candidate) {
+                    return Some(candidate.to_string());
+                }
             }
         }
-        None
+        // Fallback: match the channel's display name against the guide's
+        // <display-name> entries — covers feeds with no usable tvg-id (Vavoo).
+        index.id_for_name(&channel.name).map(str::to_string)
     }
 
     /// Background refresh: re-fetch loaded playlists / guides past their

@@ -26,6 +26,9 @@ pub struct Programme {
 #[derive(Debug, Default)]
 pub struct EpgIndex {
     by_channel: HashMap<String, Vec<Programme>>,
+    /// Folded `<display-name>` → xmltv id, so a channel with no matching
+    /// tvg-id (e.g. a Vavoo feed) can still resolve its guide by name.
+    id_by_name: HashMap<String, String>,
 }
 
 impl EpgIndex {
@@ -39,6 +42,16 @@ impl EpgIndex {
 
     pub fn contains(&self, xmltv_id: &str) -> bool {
         self.by_channel.contains_key(&xmltv_id.to_lowercase())
+    }
+
+    /// XMLTV id for a channel display name (folded via `channels::normalize`),
+    /// if the guide lists a `<channel>` under that name. Only ids that carry
+    /// programmes are returned — a name mapping to an empty schedule is useless.
+    pub fn id_for_name(&self, display_name: &str) -> Option<&str> {
+        let id = self
+            .id_by_name
+            .get(&super::channels::normalize(display_name))?;
+        self.by_channel.contains_key(id).then_some(id.as_str())
     }
 
     /// Current + following programme on a channel. `next` is the first
@@ -84,52 +97,47 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
 
     // State for the <programme> element being parsed.
     let mut current: Option<(String, Programme)> = None;
-    // Which child element's text we're inside (title/desc/category).
+    // Which child element's text we're inside (title/desc/category/display-name).
     let mut field: Option<&'static str> = None;
+    // Lowercased id of the <channel> element being parsed (for display-name).
+    let mut current_channel_id: Option<String> = None;
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"programme" => {
-                    let mut channel = None;
-                    let mut start = None;
-                    let mut stop = None;
-                    for attr in e.attributes().flatten() {
-                        let value = String::from_utf8_lossy(&attr.value);
-                        match attr.key.as_ref() {
-                            b"channel" => channel = Some(value.to_lowercase()),
-                            b"start" => start = parse_xmltv_time(&value),
-                            b"stop" => stop = parse_xmltv_time(&value),
-                            _ => {}
-                        }
-                    }
-                    if let (Some(channel), Some(start), Some(stop)) = (channel, start, stop)
-                        && stop > window_start
-                        && start < window_end
-                    {
-                        current = Some((
-                            channel,
-                            Programme {
-                                start,
-                                stop,
-                                title: String::new(),
-                                category: None,
-                                description: None,
-                            },
-                        ));
-                    }
+                b"channel" => {
+                    current_channel_id = e
+                        .attributes()
+                        .flatten()
+                        .find(|a| a.key.as_ref() == b"id")
+                        .map(|a| String::from_utf8_lossy(&a.value).to_lowercase());
                 }
+                b"display-name" if current_channel_id.is_some() => field = Some("display-name"),
+                b"programme" => current = programme_open(&e, window_start, window_end),
                 b"title" if current.is_some() => field = Some("title"),
                 b"desc" if current.is_some() => field = Some("desc"),
                 b"category" if current.is_some() => field = Some("category"),
                 _ => {}
             },
             Ok(Event::Text(t)) => {
-                if let (Some(field), Some((_, prog))) = (field, current.as_mut()) {
-                    let text = t
-                        .decode()
+                let text = || {
+                    t.decode()
                         .map(std::borrow::Cow::into_owned)
-                        .unwrap_or_default();
+                        .unwrap_or_default()
+                };
+                // <display-name> inside a <channel>: fold name → id (first wins).
+                if field == Some("display-name")
+                    && let Some(id) = &current_channel_id
+                {
+                    let name = text();
+                    if !name.is_empty() {
+                        index
+                            .id_by_name
+                            .entry(super::channels::normalize(&name))
+                            .or_insert_with(|| id.clone());
+                    }
+                } else if let (Some(field), Some((_, prog))) = (field, current.as_mut()) {
+                    let text = text();
                     if !text.is_empty() {
                         match field {
                             "title" => prog.title = text,
@@ -150,7 +158,8 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
                     }
                     field = None;
                 }
-                b"title" | b"desc" | b"category" => field = None,
+                b"channel" => current_channel_id = None,
+                b"title" | b"desc" | b"category" | b"display-name" => field = None,
                 _ => {}
             },
             // EOF ends the parse; a mid-document error salvages what parsed
@@ -165,6 +174,38 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
         programmes.sort_by_key(|p| p.start);
     }
     index
+}
+
+/// Open a `<programme>` element into `(lowercase channel id, empty Programme)`
+/// when its start/stop overlap the retained window, else `None`.
+fn programme_open(
+    e: &quick_xml::events::BytesStart,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+) -> Option<(String, Programme)> {
+    let (mut channel, mut start, mut stop) = (None, None, None);
+    for attr in e.attributes().flatten() {
+        let value = String::from_utf8_lossy(&attr.value);
+        match attr.key.as_ref() {
+            b"channel" => channel = Some(value.to_lowercase()),
+            b"start" => start = parse_xmltv_time(&value),
+            b"stop" => stop = parse_xmltv_time(&value),
+            _ => {}
+        }
+    }
+    let (channel, start, stop) = (channel?, start?, stop?);
+    (stop > window_start && start < window_end).then(|| {
+        (
+            channel,
+            Programme {
+                start,
+                stop,
+                title: String::new(),
+                category: None,
+                description: None,
+            },
+        )
+    })
 }
 
 /// XMLTV timestamps: `20260705203000 +0200` (offset optional; naive times
@@ -192,6 +233,7 @@ mod tests {
     const GUIDE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <tv generator-info-name="XML TV Fr">
   <channel id="TF1.fr"><display-name>TF1</display-name></channel>
+  <channel id="Empty.fr"><display-name>Empty Chan</display-name></channel>
   <programme start="20260705200000 +0200" stop="20260705213000 +0200" channel="TF1.fr">
     <title lang="fr">Journal de 20h</title>
     <desc lang="fr">L'actualité du jour.</desc>
@@ -245,6 +287,18 @@ mod tests {
         // unknown channel
         let (cur, next) = index.now_next("nope.fr", ts("2026-07-05T19:00:00Z"));
         assert!(cur.is_none() && next.is_none());
+    }
+
+    #[test]
+    fn id_for_name_resolves_display_names_with_schedule() {
+        let index = parse_xmltv(GUIDE, ts("2026-07-05T19:00:00Z"));
+        // display-name folds (case-insensitive) → xmltv id
+        assert_eq!(index.id_for_name("TF1"), Some("tf1.fr"));
+        assert_eq!(index.id_for_name("tf1"), Some("tf1.fr"));
+        // a <channel> with no in-window programmes gives no useful guide
+        assert_eq!(index.id_for_name("Empty Chan"), None);
+        // unknown name
+        assert_eq!(index.id_for_name("Nope"), None);
     }
 
     #[test]
