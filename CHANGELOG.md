@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-07-14
+
+### Added
+
+- **The next episode is one click away — even before it's downloaded.**
+  When you finish an episode and the next one has aired but isn't on disk
+  (never grabbed, or reclaimed by the disk cleaner), Continue Watching
+  now offers it anyway: "Up next · S08E08 · Not downloaded". One click
+  grabs it — in the language the series is already in — and playback
+  starts while the download completes (web + Android TV; on the TV the
+  hero button becomes "Grab & play"). If no release can be found, you
+  land on the series page with every option laid out.
+- Continue Watching tiles are labelled with their real "S08E08" from the
+  library's episode mapping — no more squinting at release names.
+
+### Fixed
+
+- **Continue Watching follows YOUR watch order.** "Up next" only ever
+  suggests the episode right after the one you finished (or the next
+  season's opener once you've actually watched the finale — confirmed
+  against TMDB). It used to suggest the closest episode *on disk*, so
+  finishing S08E07 while someone had downloaded S09E01 skipped you a
+  whole season ahead. A mid-season gap now shows nothing rather than
+  the wrong episode.
+- **AV1 finally uses the TV's hardware decoder.** Decoder choice is now
+  per-stream: 8-bit AV1 plays on any AV1 silicon, 10-bit only on
+  decoders that declare 10-bit support, and the bundled software
+  decoder (dav1d) drops back to being the fallback it was meant to be.
+  Boxes with real AV1 hardware but weak CPUs — the Chromecast HD —
+  no longer drop frames in action scenes or flicker on restart from
+  being forced through software decode. 8-bit-only decoders keep the
+  server's 10-bit catch-up transcode (the `Iris-Caps` header only
+  advertises `av1-hw` when 10-bit is genuinely supported).
+
 ### Changed
 
 - **Live TV picks the most stable source, not just the first.** Channels
@@ -624,7 +658,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.2.1...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.3.2...HEAD
+[1.3.2]: https://github.com/uplg/iris/compare/1.3.1...1.3.2
+[1.3.1]: https://github.com/uplg/iris/compare/1.3.0...1.3.1
 [1.3.0]: https://github.com/uplg/iris/compare/1.2.1...1.3.0
 [1.2.1]: https://github.com/uplg/iris/compare/1.2.0...1.2.1
 [1.2.0]: https://github.com/uplg/iris/compare/1.1.0...1.2.0
