@@ -463,9 +463,7 @@ fn next_up_follows_watch_order(
     if next_s == prev_s {
         return next_e == prev_e + 1;
     }
-    next_s == prev_s + 1
-        && next_e == 1
-        && prev_season_finale.is_some_and(|finale| prev_e >= finale)
+    next_s == prev_s + 1 && next_e == 1 && prev_season_finale.is_some_and(|finale| prev_e >= finale)
 }
 
 /// Synthesised "grab the next episode" tiles (opt-in): for series whose
@@ -546,11 +544,7 @@ async fn next_aired_episode(
 /// Highest episode number TMDB lists for `season`, or `None` when it can't
 /// be determined (no TMDB client, no id, TMDB down / unknown season — the
 /// cases `tv_season_episodes` collapses into an empty list).
-async fn season_finale_episode(
-    state: &AppState,
-    tmdb_id: Option<i64>,
-    season: i64,
-) -> Option<i64> {
+async fn season_finale_episode(state: &AppState, tmdb_id: Option<i64>, season: i64) -> Option<i64> {
     let tmdb = state.tmdb()?;
     let id = u64::try_from(tmdb_id?).ok()?;
     let season = u32::try_from(season).ok()?;
