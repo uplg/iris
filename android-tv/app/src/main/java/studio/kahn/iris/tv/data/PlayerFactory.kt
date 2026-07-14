@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.data
 
 import android.content.Context
+import android.os.Handler
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -10,7 +11,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.video.VideoRendererEventListener
 import okhttp3.OkHttpClient
 import studio.kahn.iris.tv.BuildConfig
 
@@ -34,6 +38,15 @@ fun buildPlayer(
      *  software decoders power through like browsers do. Costs CPU, so only
      *  the live player flips it, and only after a hardware attempt stalled. */
     preferSoftwareVideo: Boolean = false,
+    /** Rank the PLATFORM video decoders above the bundled dav1d extension
+     *  for this playback. Set by `WatchScreen` when the probed stream is
+     *  AV1 the device's silicon can genuinely decode (8-bit on any AV1
+     *  hardware, 10-bit only when `IrisCaps.hardwareAv1Main10`) — a weak
+     *  CPU box like the Chromecast HD (S805X2, 4×A35) drops frames
+     *  dav1d-decoding 1080p AV1 its hardware chews through. Defaults to
+     *  false: non-AV1 formats are hardware-decoded either way (dav1d only
+     *  claims AV1), so callers without a probe (live TV) lose nothing. */
+    preferPlatformAv1: Boolean = false,
 ): ExoPlayer {
     val dataSourceFactory = OkHttpDataSource.Factory(mediaOkHttp).setUserAgent(userAgent)
     val mediaSourceFactory = DefaultMediaSourceFactory(context)
@@ -52,25 +65,31 @@ fun buildPlayer(
     // `scripts/build-{ffmpeg,av1}-ext.sh`). We need PREFER, not the
     // lighter `ON`, for two distinct reasons:
     //
-    //   - Audio: some Android TV builds (AVD emulator, some AFTV
-    //     firmwares) register a MediaCodec that claims DTS support but
-    //     outputs silence; with ON, ExoPlayer trusts the claim and never
-    //     falls through to FFmpeg. PREFER lets FFmpeg handle everything
-    //     it supports; the platform renderer only sees the rest.
+    //   - Audio (always PREFER): some Android TV builds (AVD emulator,
+    //     some AFTV firmwares) register a MediaCodec that claims DTS
+    //     support but outputs silence; with ON, ExoPlayer trusts the
+    //     claim and never falls through to FFmpeg. PREFER lets FFmpeg
+    //     handle everything it supports; the platform renderer only sees
+    //     the rest.
     //
-    //   - Video (AV1): many TV boxes have an AV1 hardware decoder that is
-    //     8-bit-only (their HEVC path does 10-bit, AV1 does not). With ON
-    //     the platform renderer is tried first for a 10-bit AV1 stream,
-    //     reports support, then fails at runtime with
-    //     DECODING_FORMAT_EXCEEDS_CAPABILITIES / DECODER_INIT_FAILED —
-    //     and `isRemuxableError` treats that as a cue to bounce onto the
-    //     server HLS remux (`/play/master.m3u8`) instead of decoding.
-    //     PREFER routes ALL AV1 straight to dav1d (fast software, handles
-    //     8- and 10-bit), so AV1 just plays. dav1d only ever claims AV1,
-    //     so HEVC / H.264 / VP9 still hardware-decode via the platform.
-    //     (PREFER costs the hardware AV1 path for 8-bit AV1, but dav1d is
-    //     fast and the box is mains-powered — a fair trade for never
-    //     stuttering or bouncing to remux.)
+    //   - Video (PREFER unless `preferPlatformAv1`): some TV boxes have
+    //     an AV1 hardware decoder that is 8-bit-only (their HEVC path
+    //     does 10-bit, AV1 does not). With ON the platform renderer is
+    //     tried first for a 10-bit AV1 stream, reports support, then
+    //     fails at runtime with DECODING_FORMAT_EXCEEDS_CAPABILITIES /
+    //     DECODER_INIT_FAILED — and `isRemuxableError` treats that as a
+    //     cue to bounce onto the server HLS remux (`/play/master.m3u8`)
+    //     instead of decoding. PREFER routes those streams straight to
+    //     dav1d (handles 8- and 10-bit). But a blanket PREFER starves
+    //     capable silicon too: a weak-CPU box with a real AV1 decoder
+    //     (Chromecast HD, S805X2: 4×A35) was dav1d-decoding 1080p AV1
+    //     its hardware chews through, and dropped frames in high-motion
+    //     scenes. So the VIDEO renderer order is per-PLAYBACK (see the
+    //     `buildVideoRenderers` override below): when the caller probed
+    //     the stream and vouched for the silicon (`preferPlatformAv1`) →
+    //     ON (hardware first, dav1d as capability fallback), otherwise →
+    //     PREFER (dav1d first). dav1d only ever claims AV1, so HEVC /
+    //     H.264 / VP9 hardware-decode via the platform either way.
     //
     // NOTE: the AV1 AAR MUST contain native `libdav1dJNI.so` — a
     // classes-only AAR (the dav1d build was skipped) leaves the renderer
@@ -82,7 +101,34 @@ fun buildPlayer(
     // missing symbol on an exotic ABI, …), ExoPlayer transparently
     // retries with the next renderer instead of bubbling an error to
     // the user.
-    val renderersFactory = DefaultRenderersFactory(context)
+    val renderersFactory = object : DefaultRenderersFactory(context) {
+        override fun buildVideoRenderers(
+            context: Context,
+            extensionRendererMode: Int,
+            mediaCodecSelector: MediaCodecSelector,
+            enableDecoderFallback: Boolean,
+            eventHandler: Handler,
+            eventListener: VideoRendererEventListener,
+            allowedVideoJoiningTimeMs: Long,
+            out: ArrayList<Renderer>,
+        ) {
+            val videoMode = if (preferPlatformAv1) {
+                EXTENSION_RENDERER_MODE_ON
+            } else {
+                extensionRendererMode
+            }
+            super.buildVideoRenderers(
+                context,
+                videoMode,
+                mediaCodecSelector,
+                enableDecoderFallback,
+                eventHandler,
+                eventListener,
+                allowedVideoJoiningTimeMs,
+                out,
+            )
+        }
+    }
         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
         .setEnableDecoderFallback(true)
         .apply {

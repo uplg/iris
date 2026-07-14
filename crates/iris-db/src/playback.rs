@@ -232,6 +232,9 @@ pub async fn upsert(pool: &SqlitePool, p: UpsertProgress) -> Result<(), sqlx::Er
     Ok(())
 }
 
+// Wire-shaped row: the bools are independent per-tile flags, not a state
+// machine to encode.
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct ContinueWatchingRow {
     pub infohash: String,
@@ -258,6 +261,17 @@ pub struct ContinueWatchingRow {
     /// because the previous one is finished — vs a mid-way resume tile.
     /// Clients label it "Up next" and manage it accordingly.
     pub next_up: bool,
+    /// `(season, episode)` of the tile when known (`episode_files` mapping
+    /// for resume tiles, the candidate itself for next-up tiles). Lets
+    /// clients render "S08E08" without SCENE-parsing file names.
+    pub season: Option<i64>,
+    pub episode: Option<i64>,
+    /// True for a synthesised "next episode isn't on disk yet — grab it"
+    /// tile (`infohash`/`file_idx` are meaningless placeholders there).
+    /// Never produced by the SQL queries (hence the sqlx default); the
+    /// API layer builds those rows from [`FrontierRow`]s.
+    #[sqlx(default)]
+    pub grabbable: bool,
 }
 
 /// Recent in-progress items for the user (excluding completed). Joined with
@@ -278,10 +292,12 @@ pub async fn continue_watching(
             t.tmdb_verified, p.file_idx, \
             p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
             p.audio_track_idx, p.subtitle_track_idx, c.kind as kind, \
-            t.collection_id as collection_id, 0 AS next_up \
+            t.collection_id as collection_id, 0 AS next_up, \
+            ef.season AS season, ef.episode AS episode \
          FROM playback_progress p \
          JOIN torrents t ON t.infohash = p.infohash AND t.deleted_at IS NULL \
          LEFT JOIN collections c ON c.id = t.collection_id \
+         LEFT JOIN episode_files ef ON ef.infohash = p.infohash AND ef.file_idx = p.file_idx \
          WHERE p.user_id = ?1 AND p.completed = FALSE \
            AND NOT EXISTS ( \
              SELECT 1 FROM cw_dismissed d \
@@ -319,6 +335,22 @@ pub async fn dismiss_collection(
     Ok(())
 }
 
+/// A "next up" candidate: the shelf row plus the watch-order context the
+/// API layer needs to decide whether surfacing it respects the user's
+/// progression (`prev_*` = the episode whose completion produced the
+/// candidate, `next_*` = the candidate itself). Cross-season candidates
+/// need a TMDB "was that really the season finale?" check that only the
+/// API layer can perform.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct NextUpRow {
+    #[sqlx(flatten)]
+    pub row: ContinueWatchingRow,
+    pub prev_season: i64,
+    pub prev_episode: i64,
+    pub next_season: i64,
+    pub next_episode: i64,
+}
+
 /// "Next up" episodes for the Continue Watching shelf: for every collection
 /// whose MOST-RECENT playback is a COMPLETED episode, the next owned episode
 /// the user hasn't started yet — surfaced at position 0. This is what makes
@@ -327,21 +359,30 @@ pub async fn dismiss_collection(
 ///
 /// Each row inherits the completed episode's `last_watched_at` so it sorts
 /// among the resume tiles by recency (and naturally ages out of the shelf).
-/// "Next" = the smallest `(season, episode)` strictly greater than the
-/// completed one that exists on disk — robust to episode/season gaps.
+///
+/// "Next" follows the WATCH ORDER, not disk contents: the only candidates
+/// are `(s, e+1)` and `(s+1, 1)`. An on-disk episode further away (a
+/// mid-season gap, or a fresh download from a later season while earlier
+/// episodes are missing) must never be offered — that's how finishing
+/// S08E07 once suggested S09E01 because S08E08 wasn't on disk yet. The
+/// `(s+1, 1)` shape is only a *candidate*: the caller must confirm via
+/// TMDB that `(s, e)` was the season finale before surfacing it.
 pub async fn continue_watching_next_up(
     pool: &SqlitePool,
     user_id: UserId,
     limit: i64,
-) -> Result<Vec<ContinueWatchingRow>, sqlx::Error> {
+) -> Result<Vec<NextUpRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
-    sqlx::query_as::<_, ContinueWatchingRow>(
+    sqlx::query_as::<_, NextUpRow>(
         "SELECT nf.infohash AS infohash, nt.name AS torrent_name, \
             c.tmdb_id AS tmdb_id, nt.tmdb_verified AS tmdb_verified, \
             nf.file_idx AS file_idx, 0.0 AS position_seconds, \
             NULL AS duration_seconds, latest.last_watched_at AS last_watched_at, \
             0 AS completed, NULL AS audio_track_idx, NULL AS subtitle_track_idx, \
-            c.kind AS kind, c.id AS collection_id, 1 AS next_up \
+            c.kind AS kind, c.id AS collection_id, 1 AS next_up, \
+            nf.season AS season, nf.episode AS episode, \
+            latest.s AS prev_season, latest.e AS prev_episode, \
+            nf.season AS next_season, nf.episode AS next_episode \
          FROM ( \
             SELECT ef.collection_id AS cid, ef.season AS s, ef.episode AS e, \
                    p.last_watched_at AS last_watched_at \
@@ -356,7 +397,8 @@ pub async fn continue_watching_next_up(
          ) latest \
          JOIN collections c ON c.id = latest.cid \
          JOIN episode_files nf ON nf.collection_id = latest.cid \
-              AND (nf.season > latest.s OR (nf.season = latest.s AND nf.episode > latest.e)) \
+              AND ((nf.season = latest.s AND nf.episode = latest.e + 1) \
+                   OR (nf.season = latest.s + 1 AND nf.episode = 1)) \
          JOIN torrents nt ON nt.infohash = nf.infohash AND nt.deleted_at IS NULL \
          WHERE NOT EXISTS ( \
                 SELECT 1 FROM playback_progress pp \
@@ -368,6 +410,61 @@ pub async fn continue_watching_next_up(
                   AND (nf2.season > latest.s OR (nf2.season = latest.s AND nf2.episode > latest.e)) \
                   AND (nf2.season < nf.season OR (nf2.season = nf.season AND nf2.episode < nf.episode))) \
            AND NOT EXISTS ( \
+                SELECT 1 FROM cw_dismissed d \
+                WHERE d.user_id = ?1 AND d.collection_id = latest.cid \
+                  AND d.dismissed_at >= latest.last_watched_at) \
+         ORDER BY latest.last_watched_at DESC \
+         LIMIT ?2",
+    )
+    .bind(user)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// The user's per-series watch frontier: for every TV collection whose
+/// most-recent playback is a COMPLETED episode, that episode's
+/// `(season, episode)` — regardless of what's on disk. Feeds the
+/// "next episode isn't downloaded yet — grab it" Continue Watching
+/// tiles: the API layer asks TMDB what the true next episode is and
+/// synthesises a grabbable row when it exists, has aired, and no owned
+/// tile already covers the collection. Unlike [`continue_watching_next_up`]
+/// there is deliberately no `torrents` join — a frontier whose next
+/// episode was GC'd (or never downloaded) is exactly the point.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct FrontierRow {
+    pub collection_id: Uuid,
+    pub display_title: String,
+    pub tmdb_id: Option<i64>,
+    pub prev_season: i64,
+    pub prev_episode: i64,
+    pub last_watched_at: DateTime<Utc>,
+}
+
+pub async fn continue_watching_frontiers(
+    pool: &SqlitePool,
+    user_id: UserId,
+    limit: i64,
+) -> Result<Vec<FrontierRow>, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query_as::<_, FrontierRow>(
+        "SELECT latest.cid AS collection_id, c.display_title AS display_title, \
+            c.tmdb_id AS tmdb_id, latest.s AS prev_season, latest.e AS prev_episode, \
+            latest.last_watched_at AS last_watched_at \
+         FROM ( \
+            SELECT ef.collection_id AS cid, ef.season AS s, ef.episode AS e, \
+                   p.last_watched_at AS last_watched_at \
+            FROM playback_progress p \
+            JOIN episode_files ef ON ef.infohash = p.infohash AND ef.file_idx = p.file_idx \
+            WHERE p.user_id = ?1 AND p.completed = 1 \
+              AND NOT EXISTS ( \
+                SELECT 1 FROM playback_progress p2 \
+                JOIN episode_files ef2 ON ef2.infohash = p2.infohash AND ef2.file_idx = p2.file_idx \
+                WHERE p2.user_id = ?1 AND ef2.collection_id = ef.collection_id \
+                  AND p2.last_watched_at > p.last_watched_at) \
+         ) latest \
+         JOIN collections c ON c.id = latest.cid AND c.kind = 'tv' \
+         WHERE NOT EXISTS ( \
                 SELECT 1 FROM cw_dismissed d \
                 WHERE d.user_id = ?1 AND d.collection_id = latest.cid \
                   AND d.dismissed_at >= latest.last_watched_at) \
@@ -668,6 +765,84 @@ mod tests {
             subtitle_track_idx: None,
             completed,
         }
+    }
+
+    /// Watch-order shapes at the SQL level: only `(s, e+1)` and `(s+1, 1)`
+    /// are candidates, the closer one wins, and a mid-season gap on disk
+    /// yields nothing (the API layer additionally gates `(s+1, 1)` on a
+    /// TMDB finale check — not this crate's concern).
+    #[tokio::test]
+    async fn next_up_candidates_follow_watch_order_shapes() {
+        async fn add_episode(
+            pool: &SqlitePool,
+            user: UserId,
+            collection_id: Uuid,
+            season: i64,
+            episode: i64,
+        ) -> String {
+            let t = make_torrent(pool, user, &format!("Show.S{season:02}E{episode:02}")).await;
+            crate::torrents::set_collection(pool, &t.infohash, Some(collection_id))
+                .await
+                .unwrap();
+            crate::episode_files::upsert(
+                pool,
+                crate::episode_files::UpsertEpisodeFile {
+                    collection_id,
+                    season,
+                    episode,
+                    infohash: t.infohash.clone(),
+                    file_idx: 0,
+                    derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                    absolute_episode: None,
+                },
+            )
+            .await
+            .unwrap();
+            t.infohash
+        }
+
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let col = crate::collections::find_or_create(
+            &pool,
+            "show",
+            "Show",
+            crate::collections::Kind::Tv,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let s8e7 = add_episode(&pool, user, col.id, 8, 7).await;
+        add_episode(&pool, user, col.id, 9, 1).await;
+        upsert(&pool, progress(user, s8e7, true)).await.unwrap();
+
+        // Only S09E01 on disk after S08E07: it IS a candidate (the
+        // season-hop shape) — the API layer decides via TMDB whether
+        // E07 was the finale.
+        let rows = continue_watching_next_up(&pool, user, 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].prev_season, rows[0].prev_episode), (8, 7));
+        assert_eq!((rows[0].next_season, rows[0].next_episode), (9, 1));
+        assert!(rows[0].row.next_up);
+
+        // S08E09 lands (still no E08): the gap kills BOTH shapes — E09
+        // isn't the immediate successor, and its presence proves the
+        // season isn't finished so the S09E01 hop is off the table too.
+        add_episode(&pool, user, col.id, 8, 9).await;
+        assert!(
+            continue_watching_next_up(&pool, user, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a mid-season gap must never surface a next-up tile",
+        );
+
+        // S08E08 lands: the immediate successor wins.
+        add_episode(&pool, user, col.id, 8, 8).await;
+        let rows = continue_watching_next_up(&pool, user, 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].next_season, rows[0].next_episode), (8, 8));
     }
 
     #[tokio::test]

@@ -152,6 +152,9 @@ fun HomeScreen(
     // The Continue Watching tile whose manage sheet (remove / mark-watched)
     // is open, if any.
     var cwManageItem by remember { mutableStateOf<ContinueWatchingItem?>(null) }
+    // The grabbable Continue Watching tile whose grab-then-play round trip
+    // is in flight (drives the "Grabbing…" tile state and re-entry guard).
+    var grabbingCw by remember { mutableStateOf<ContinueWatchingItem?>(null) }
     // The Watchlist tile the user long-pressed to remove, pending confirm.
     var watchlistRemoveItem by remember { mutableStateOf<WatchlistItem?>(null) }
     // "Update available" badge on the Settings icon — reads the same version
@@ -210,7 +213,7 @@ fun HomeScreen(
                 // break the rest of the home — surface as empty
                 // shelves, not as the global error banner.
                 HomeFetch(
-                    cw = runCatching { api.continueWatching() },
+                    cw = runCatching { api.continueWatching(includeGrabbable = true) },
                     tor = runCatching { api.listTorrents() },
                     // Post-0.4: per-user Watchlist sourced from the
                     // user's series_follows rows (auto-created on
@@ -293,11 +296,50 @@ fun HomeScreen(
                 onDone = { onboardingDismissed = true },
             )
         } else {
+            // One launch path for every Continue Watching tile: owned tiles
+            // play directly; grabbable ones ("next episode isn't on disk")
+            // grab first — server picks the series' dominant owned language
+            // via `language=auto` — then play the returned file (librqbit
+            // streams while the download completes). On failure, fall back
+            // to the collection screen where every release is exposed.
+            val launchCw: (ContinueWatchingItem) -> Unit = { item ->
+                val cid = item.collectionId
+                val season = item.season
+                val episode = item.episode
+                if (!item.grabbable) {
+                    onPickFile(item.infohash, item.fileIdx.toInt())
+                } else if (grabbingCw == null && cid != null && season != null && episode != null) {
+                    scope.launch {
+                        grabbingCw = item
+                        try {
+                            val url = container.sessionStore.serverUrl.first() ?: return@launch
+                            runCatching {
+                                withContext(Dispatchers.IO) {
+                                    container.apiFor(url).grabCollectionEpisode(
+                                        id = cid.toString(),
+                                        season = season.toInt(),
+                                        episode = episode.toInt(),
+                                        language = "auto",
+                                    )
+                                }
+                            }.onSuccess { res ->
+                                onPickFile(res.infohash, res.fileIdx.toInt())
+                            }.onFailure {
+                                onOpenCollection(cid.toString())
+                            }
+                        } finally {
+                            grabbingCw = null
+                        }
+                    }
+                }
+            }
             HomeContent(
                 layout = layout,
                 error = error,
                 loading = loading,
                 continueWatching = continueWatching,
+                grabbingCw = grabbingCw,
+                onLaunchCw = launchCw,
                 downloading = downloading,
                 library = library,
                 watchlist = watchlist,
@@ -405,6 +447,10 @@ private fun HomeContent(
     error: String?,
     loading: Boolean,
     continueWatching: List<ContinueWatchingItem>,
+    /** The grabbable tile whose grab round trip is in flight, if any. */
+    grabbingCw: ContinueWatchingItem?,
+    /** Play an owned tile / grab-then-play a grabbable one. */
+    onLaunchCw: (ContinueWatchingItem) -> Unit,
     downloading: List<TorrentView>,
     library: List<TorrentView>,
     watchlist: List<WatchlistItem>,
@@ -455,7 +501,8 @@ private fun HomeContent(
                 ResumeHero(
                     container = container,
                     item = resumePick,
-                    onResume = { onPickFile(resumePick.infohash, resumePick.fileIdx.toInt()) },
+                    grabbing = grabbingCw === resumePick,
+                    onResume = { onLaunchCw(resumePick) },
                     topBar = topBar,
                     modifier = Modifier.fillParentMaxHeight(0.78f),
                 )
@@ -501,11 +548,19 @@ private fun HomeContent(
         if (continueWatching.isNotEmpty()) {
             item(key = "shelf-cw") {
                 Shelf(title = "Continue Watching") {
-                    items(continueWatching, key = { "${it.infohash}:${it.fileIdx}" }) { item ->
+                    // Key on the collection when there is one: grabbable
+                    // tiles share an empty infohash, and Compose crashes on
+                    // duplicate LazyRow keys. One tile per collection is the
+                    // shelf's own invariant, so the collection id is stable.
+                    items(
+                        continueWatching,
+                        key = { it.collectionId?.let { c -> "c:$c" } ?: "${it.infohash}:${it.fileIdx}" },
+                    ) { item ->
                         ContinueWatchingCard(
                             container = container,
                             item = item,
-                            onClick = { onPickFile(item.infohash, item.fileIdx.toInt()) },
+                            grabbing = grabbingCw === item,
+                            onClick = { onLaunchCw(item) },
                             onLongClick = { onManageCw(item) },
                         )
                     }
@@ -815,6 +870,7 @@ private fun HomeTopBar(
 private fun ResumeHero(
     container: AppContainer,
     item: ContinueWatchingItem,
+    grabbing: Boolean,
     onResume: () -> Unit,
     topBar: @Composable () -> Unit,
     modifier: Modifier = Modifier,
@@ -839,6 +895,7 @@ private fun ResumeHero(
     val remaining = item.durationSeconds?.takeIf { it > 0 }
         ?.let { (it - item.positionSeconds).coerceAtLeast(0.0) } ?: 0.0
     val metaParts = listOfNotNull(
+        episodeTag(item)?.let { if (item.nextUp) "Up next · $it" else it },
         meta?.year?.toString(),
         if (item.kind == MediaKind.tv) "Series" else "Movie",
         meta?.numberOfSeasons?.let { "$it seasons" },
@@ -923,7 +980,15 @@ private fun ResumeHero(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                IrisButton("Resume", onResume, icon = Icons.Filled.PlayArrow)
+                IrisButton(
+                    when {
+                        grabbing -> "Grabbing…"
+                        item.grabbable -> "Grab & play"
+                        else -> "Resume"
+                    },
+                    onResume,
+                    icon = Icons.Filled.PlayArrow,
+                )
                 if (progress > 0f) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -973,12 +1038,14 @@ private fun fmtLeft(seconds: Double): String {
 private fun ContinueWatchingCard(
     container: AppContainer,
     item: ContinueWatchingItem,
+    grabbing: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
     val rawTitle = item.filePath?.substringAfterLast('/') ?: item.torrentName
     val pct = item.durationSeconds?.takeIf { it > 0 }
         ?.let { ((item.positionSeconds / it).toFloat()).coerceIn(0f, 1f) }
+    val tag = episodeTag(item)
     PosterCard(
         onLongClick = onLongClick,
         container = container,
@@ -996,7 +1063,9 @@ private fun ContinueWatchingCard(
         title = rawTitle,
         marqueeTitle = true,
         subtitle = when {
-            item.nextUp -> "Up next"
+            grabbing -> "Grabbing…"
+            item.grabbable -> "Up next · ${tag ?: "next episode"} · Not downloaded"
+            item.nextUp -> tag?.let { "Up next · $it" } ?: "Up next"
             pct != null -> "${(pct * 100).toInt()}% watched"
             else -> "Just started"
         },
@@ -1004,6 +1073,13 @@ private fun ContinueWatchingCard(
         progressColor = null, // primary = watch progress
         onClick = onClick,
     )
+}
+
+/** "S08E08" when the tile carries both parts, null otherwise. */
+private fun episodeTag(item: ContinueWatchingItem): String? {
+    val s = item.season ?: return null
+    val e = item.episode ?: return null
+    return "S%02dE%02d".format(s, e)
 }
 
 /** Manage sheet for a Continue Watching tile — focusable overlay with
@@ -1048,16 +1124,22 @@ private fun ContinueWatchingManageDialog(
                 maxLines = 2,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
-            IrisButton(
-                if (item.nextUp) "Mark watched & skip" else "Mark as watched",
-                onMarkWatched,
-                modifier = Modifier.fillMaxWidth().focusRequester(firstFocus),
-            )
+            // A grabbable tile has no file on disk to mark watched — its
+            // only managing action is removal.
+            if (!item.grabbable) {
+                IrisButton(
+                    if (item.nextUp) "Mark watched & skip" else "Mark as watched",
+                    onMarkWatched,
+                    modifier = Modifier.fillMaxWidth().focusRequester(firstFocus),
+                )
+            }
             IrisButton(
                 "Remove from Continue Watching",
                 onRemove,
                 variant = IrisButtonVariant.Ghost,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().let {
+                    if (item.grabbable) it.focusRequester(firstFocus) else it
+                },
             )
             IrisButton(
                 "Cancel",

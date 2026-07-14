@@ -348,17 +348,31 @@ private fun ReadyPlayer(
     // `startPositionSec`) when no fallback has happened yet.
     var fallbackResumeMs by remember(infohash, fileIdx) { mutableLongStateOf(0L) }
 
-    // Proactive route to the server transcode. A 10-bit AV1 file on a box with
-    // no AV1 silicon (e.g. Amlogic S905X2) can't be hardware-decoded and
-    // stutters in software, so play the server's HEVC re-encode from the start
-    // instead of direct-playing /stream and bouncing on the stutter. Mirrors
-    // the server's `decide_video_mode`; every other case direct-plays.
-    val needsServerTranscode = remember(probe) {
-        val v = probe.video.firstOrNull()
-        v != null &&
-            v.codec.equals("av1", ignoreCase = true) &&
-            (v.bitDepth ?: 8) >= 10 &&
-            !studio.kahn.iris.tv.data.IrisCaps.hasHardwareDecoder("av1")
+    // Per-stream AV1 decode routing, from the probed codec + bit depth.
+    // 8-bit AV1 hardware-decodes on ANY AV1 silicon; 10-bit additionally
+    // needs the decoder to declare Main10 (`hardwareAv1Main10`). Must stay
+    // in lockstep with the `Iris-Caps` header and `buildPlayer`'s renderer
+    // ordering — see `IrisCaps`.
+    val probedAv1 = remember(probe) {
+        probe.video.firstOrNull()?.takeIf { it.codec.equals("av1", ignoreCase = true) }
+    }
+    val av1HardwareFits = remember(probedAv1) {
+        when {
+            probedAv1 == null -> false
+            (probedAv1.bitDepth ?: 8) >= 10 -> studio.kahn.iris.tv.data.IrisCaps.hardwareAv1Main10
+            else -> studio.kahn.iris.tv.data.IrisCaps.hasHardwareDecoder("av1")
+        }
+    }
+
+    // Proactive route to the server transcode. A 10-bit AV1 file on a box
+    // whose silicon can't take it — none at all (Amlogic S905X2), or
+    // 8-bit-only — stutters in dav1d software, so play the server's HEVC
+    // re-encode from the start instead of direct-playing /stream and
+    // bouncing on the stutter. Mirrors the server's `decide_video_mode`;
+    // every other case direct-plays (8-bit AV1 without silicon stays on
+    // dav1d, which sustains 8-bit fine).
+    val needsServerTranscode = remember(probedAv1, av1HardwareFits) {
+        probedAv1 != null && (probedAv1.bitDepth ?: 8) >= 10 && !av1HardwareFits
     }
 
     val playUrl =
@@ -492,7 +506,16 @@ private fun ReadyPlayer(
         mutableStateOf(buildPlaybackTitle(torrent?.name, currentEpisode))
     }
 
-    val player = remember(playUrl) { buildPlayer(context, container.mediaOkHttpClient) }
+    // `preferPlatformAv1` only matters on the direct-play path — the
+    // transcode/remux URLs carry H.264/HEVC, which hardware-decodes under
+    // either renderer order (dav1d only claims AV1).
+    val player = remember(playUrl, av1HardwareFits) {
+        buildPlayer(
+            context,
+            container.mediaOkHttpClient,
+            preferPlatformAv1 = av1HardwareFits,
+        )
+    }
     // Start playback once the resume portion is ready (`portionReady`) — in one
     // shot, directly at the resume position. For non-transcode and fresh
     // (resume == 0) paths `portionReady` is already true, so this fires

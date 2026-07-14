@@ -869,7 +869,7 @@ async fn resolve_owned_language(state: &AppState, infohash: &str) -> Language {
 /// series keeps going in French instead of defaulting to English.
 /// Priority on a tie / no data follows the household rule "majority FR,
 /// else EN, else MULTI".
-async fn dominant_owned_language(state: &AppState, normalized_name: &str) -> Language {
+pub(crate) async fn dominant_owned_language(state: &AppState, normalized_name: &str) -> Language {
     let files = iris_db::episode_files::list_for_normalized(state.db(), normalized_name)
         .await
         .unwrap_or_default();
@@ -897,7 +897,7 @@ async fn dominant_owned_language(state: &AppState, normalized_name: &str) -> Lan
 /// Build the ordered language preference for an auto-continuation grab:
 /// the series' established language first, then EN, MULTI, FR as
 /// graceful fallbacks (deduped, first occurrence wins).
-fn continuation_pref(dominant: Language) -> LangSel {
+pub(crate) fn continuation_pref(dominant: Language) -> LangSel {
     let mut order = vec![dominant];
     for l in [Language::English, Language::Multi, Language::French] {
         if !order.contains(&l) {

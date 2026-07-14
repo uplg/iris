@@ -390,7 +390,11 @@ export type MoodTile = components["schemas"]["MoodTile"];
 export type MoodBoard = components["schemas"]["MoodBoard"];
 export type MoodResults = components["schemas"]["MoodResults"];
 export const me = {
-  continueWatching: () => api.get<ContinueWatchingItem[]>("/me/continue-watching"),
+  /** `include_grabbable` opts into synthesised "next episode isn't on
+   *  disk yet" tiles (`grabbable: true`, empty infohash) — the web bundle
+   *  ships with the backend so it always opts in. */
+  continueWatching: () =>
+    api.get<ContinueWatchingItem[]>("/me/continue-watching?include_grabbable=true"),
   /** Remove a tile from Continue Watching. For a TV series pass its
    *  `collection_id` (hides the whole show until a newer episode plays);
    *  for a movie / standalone pass `infohash` + `file_idx`. */

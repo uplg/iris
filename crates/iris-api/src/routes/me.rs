@@ -139,6 +139,9 @@ pub(crate) async fn change_display_name(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
+// Wire shape: the bools are independent per-tile flags, not a state
+// machine to encode.
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, serde::Serialize, ToSchema)]
 pub(crate) struct ContinueWatchingItem {
     infohash: String,
@@ -163,6 +166,28 @@ pub(crate) struct ContinueWatchingItem {
     /// True when this is the NEXT unstarted episode (the previous one is
     /// finished) rather than a mid-way resume. Clients label it "Up next".
     next_up: bool,
+    /// `(season, episode)` of the tile when known — the `episode_files`
+    /// mapping for resume tiles, the candidate itself for next-up tiles.
+    /// Render "S08E08" from these instead of SCENE-parsing file names.
+    season: Option<i64>,
+    episode: Option<i64>,
+    /// True when the next episode exists (per TMDB, aired) but is NOT on
+    /// disk: `infohash` is empty and `file_idx` meaningless. Clients show
+    /// a grab affordance and call
+    /// `POST /api/library/collections/{collection_id}/grab/{season}/{episode}?language=auto`,
+    /// then play the returned `(infohash, file_idx)`. Only ever true when
+    /// the request opted in via `include_grabbable`.
+    grabbable: bool,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct ContinueWatchingQuery {
+    /// Opt-in to synthesised "grab the next episode" tiles. Off by
+    /// default so clients shipped before the field existed never receive
+    /// rows they'd try (and fail) to play directly.
+    #[serde(default)]
+    include_grabbable: bool,
 }
 
 /// Post-0.4 "My Watchlist" payload. Derived from TV collections
@@ -323,6 +348,7 @@ pub(crate) async fn remove_watchlist(
     get,
     path = "/api/me/continue-watching",
     operation_id = "continue_watching",
+    params(ContinueWatchingQuery),
     responses(
         (status = 200, description = "Recently-watched, not-yet-finished items for resume", body = [ContinueWatchingItem]),
         (status = 401, description = "Not authenticated"),
@@ -332,6 +358,7 @@ pub(crate) async fn remove_watchlist(
 pub(crate) async fn continue_watching(
     State(state): State<AppState>,
     user: AuthUser,
+    axum::extract::Query(q): axum::extract::Query<ContinueWatchingQuery>,
 ) -> ApiResult<Json<Vec<ContinueWatchingItem>>> {
     // Two sources: episodes/movies the user paused mid-way (resume), and the
     // NEXT owned episode for any series whose most-recent episode is finished
@@ -339,7 +366,25 @@ pub(crate) async fn continue_watching(
     // tile wins over a next-up tile, and within a series the most-recently
     // active wins — then trim to the shelf size.
     let resume = iris_db::playback::continue_watching(state.db(), user.id, 24).await?;
-    let next_up = iris_db::playback::continue_watching_next_up(state.db(), user.id, 24).await?;
+    let candidates = iris_db::playback::continue_watching_next_up(state.db(), user.id, 24).await?;
+    let mut next_up = Vec::with_capacity(candidates.len());
+    for c in candidates {
+        // Cross-season candidates need TMDB to confirm the completed episode
+        // really was the season finale; a same-season (e+1) never does, so
+        // don't spend the lookup on it (cached, but still a cold fetch once).
+        let finale = if c.next_season == c.prev_season {
+            None
+        } else {
+            season_finale_episode(&state, c.row.tmdb_id, c.prev_season).await
+        };
+        if next_up_follows_watch_order(
+            (c.prev_season, c.prev_episode),
+            (c.next_season, c.next_episode),
+            finale,
+        ) {
+            next_up.push(c.row);
+        }
+    }
 
     let mut merged: Vec<iris_db::playback::ContinueWatchingRow> = Vec::new();
     // collection_id → index into `merged`, so a series appears once.
@@ -360,6 +405,11 @@ pub(crate) async fn continue_watching(
         }
         merged.push(r);
     }
+
+    if q.include_grabbable {
+        append_grabbable_next_up(&state, user.id, &mut merged, &mut by_collection).await?;
+    }
+
     merged.sort_by_key(|r| std::cmp::Reverse(r.last_watched_at));
     merged.truncate(12);
 
@@ -387,10 +437,125 @@ pub(crate) async fn continue_watching(
                 completed: r.completed,
                 collection_id: r.collection_id,
                 next_up: r.next_up,
+                season: r.season,
+                episode: r.episode,
+                grabbable: r.grabbable,
             }
         })
         .collect();
     Ok(Json(out))
+}
+
+/// Watch-order gate for a next-up candidate. `prev` is the episode the user
+/// just finished, `next` the candidate; both are `(season, episode)`.
+/// Within a season only the immediate successor qualifies. Hopping to the
+/// next season's opener additionally requires `prev` to be that season's
+/// finale (`prev_season_finale`, from TMDB) — without confirmation the
+/// candidate is dropped: a missing tile costs one manual navigation, a
+/// wrong tile skips the user past unwatched episodes.
+fn next_up_follows_watch_order(
+    prev: (i64, i64),
+    next: (i64, i64),
+    prev_season_finale: Option<i64>,
+) -> bool {
+    let (prev_s, prev_e) = prev;
+    let (next_s, next_e) = next;
+    if next_s == prev_s {
+        return next_e == prev_e + 1;
+    }
+    next_s == prev_s + 1
+        && next_e == 1
+        && prev_season_finale.is_some_and(|finale| prev_e >= finale)
+}
+
+/// Synthesised "grab the next episode" tiles (opt-in): for series whose
+/// watch frontier got no owned tile from the resume/next-up merge (next
+/// episode missing from disk — never downloaded, or GC'd), ask TMDB what
+/// comes next and offer it if it has aired. Runs after the merge so an
+/// owned tile always wins its collection's slot.
+async fn append_grabbable_next_up(
+    state: &AppState,
+    user_id: iris_core::ids::UserId,
+    merged: &mut Vec<iris_db::playback::ContinueWatchingRow>,
+    by_collection: &mut std::collections::HashMap<uuid::Uuid, usize>,
+) -> ApiResult<()> {
+    let frontiers = iris_db::playback::continue_watching_frontiers(state.db(), user_id, 24).await?;
+    for f in frontiers {
+        if by_collection.contains_key(&f.collection_id) {
+            continue;
+        }
+        let Some((season, episode)) =
+            next_aired_episode(state, f.tmdb_id, f.prev_season, f.prev_episode).await
+        else {
+            continue;
+        };
+        by_collection.insert(f.collection_id, merged.len());
+        merged.push(iris_db::playback::ContinueWatchingRow {
+            infohash: String::new(),
+            torrent_name: f.display_title,
+            tmdb_id: f.tmdb_id,
+            tmdb_verified: f.tmdb_id.is_some(),
+            file_idx: 0,
+            position_seconds: 0.0,
+            duration_seconds: None,
+            last_watched_at: f.last_watched_at,
+            completed: false,
+            audio_track_idx: None,
+            subtitle_track_idx: None,
+            kind: Some("tv".to_string()),
+            collection_id: Some(f.collection_id),
+            next_up: true,
+            season: Some(season),
+            episode: Some(episode),
+            grabbable: true,
+        });
+    }
+    Ok(())
+}
+
+/// The next episode after `(prev_season, prev_episode)` in TMDB's listing,
+/// provided it has AIRED: `(s, e+1)` while the season lists more episodes,
+/// else `(s+1, 1)` when a next season exists. `None` when TMDB can't
+/// confirm (no client/id, unknown season, unaired or undated episode, or
+/// the series is simply over) — no tile beats a dead one.
+async fn next_aired_episode(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    prev_season: i64,
+    prev_episode: i64,
+) -> Option<(i64, i64)> {
+    let tmdb = state.tmdb()?;
+    let id = u64::try_from(tmdb_id?).ok()?;
+    let season = u32::try_from(prev_season).ok()?;
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let has_aired = |e: &crate::tmdb::EpisodeMetadata| {
+        e.air_date.as_deref().is_some_and(|d| d <= today.as_str())
+    };
+    let eps = tmdb.tv_season_episodes(id, season).await;
+    let finale = eps.iter().map(|e| i64::from(e.episode)).max()?;
+    if prev_episode < finale {
+        let target = prev_episode + 1;
+        let ep = eps.iter().find(|e| i64::from(e.episode) == target)?;
+        return has_aired(ep).then_some((prev_season, target));
+    }
+    let next = tmdb.tv_season_episodes(id, season + 1).await;
+    let opener = next.iter().find(|e| e.episode == 1)?;
+    has_aired(opener).then_some((prev_season + 1, 1))
+}
+
+/// Highest episode number TMDB lists for `season`, or `None` when it can't
+/// be determined (no TMDB client, no id, TMDB down / unknown season — the
+/// cases `tv_season_episodes` collapses into an empty list).
+async fn season_finale_episode(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    season: i64,
+) -> Option<i64> {
+    let tmdb = state.tmdb()?;
+    let id = u64::try_from(tmdb_id?).ok()?;
+    let season = u32::try_from(season).ok()?;
+    let episodes = tmdb.tv_season_episodes(id, season).await;
+    episodes.iter().map(|e| i64::from(e.episode)).max()
 }
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
@@ -603,4 +768,38 @@ pub(crate) async fn history(
         })
         .collect();
     Ok(Json(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_up_follows_watch_order;
+
+    #[test]
+    fn same_season_only_immediate_successor() {
+        assert!(next_up_follows_watch_order((8, 7), (8, 8), None));
+        assert!(!next_up_follows_watch_order((8, 7), (8, 9), None));
+        assert!(!next_up_follows_watch_order((8, 7), (8, 7), None));
+    }
+
+    #[test]
+    fn season_hop_requires_confirmed_finale() {
+        // The Rick and Morty bug: S08E07 done, S09E01 freshly on disk while
+        // S08E08–E10 aren't. TMDB says S8 runs to E10 → not the finale.
+        assert!(!next_up_follows_watch_order((8, 7), (9, 1), Some(10)));
+        assert!(next_up_follows_watch_order((8, 10), (9, 1), Some(10)));
+        // Odd numbering (specials folded in, TMDB shorter than disk):
+        // anything at-or-past the listed finale counts as "season done".
+        assert!(next_up_follows_watch_order((8, 12), (9, 1), Some(10)));
+    }
+
+    #[test]
+    fn season_hop_without_tmdb_confirmation_is_dropped() {
+        assert!(!next_up_follows_watch_order((8, 10), (9, 1), None));
+    }
+
+    #[test]
+    fn only_the_immediate_next_season_opener_qualifies() {
+        assert!(!next_up_follows_watch_order((8, 10), (10, 1), Some(10)));
+        assert!(!next_up_follows_watch_order((8, 10), (9, 2), Some(10)));
+    }
 }

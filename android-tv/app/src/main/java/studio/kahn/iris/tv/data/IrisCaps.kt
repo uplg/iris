@@ -15,10 +15,19 @@ import android.os.Build
  * `av1-sw`, which lets the server re-encode a heavy 10-bit AV1 to HEVC the
  * box decodes in hardware instead of stuttering in software.
  *
- * AV1 is special-cased: the app bundles a software AV1 decoder (the dav1d
- * `Libdav1dVideoRenderer` extension), so AV1 is *always* at least
- * software-decodable — we advertise `av1-hw` only when the device also has
- * AV1 silicon, otherwise `av1-sw`.
+ * AV1 is special-cased twice:
+ *   - the app bundles a software AV1 decoder (the dav1d
+ *     `Libdav1dVideoRenderer` extension), so AV1 is *always* at least
+ *     software-decodable;
+ *   - `av1-hw` is advertised only when the silicon declares Main10
+ *     ([hardwareAv1Main10]). The header is per-DEVICE so it must cover
+ *     the worst case (10-bit): an 8-bit-only AV1 decoder (some TV SoCs)
+ *     would runtime-fail on 10-bit streams, so that box advertises
+ *     `av1-sw` and the server keeps its 10-bit catch-up transcode
+ *     available for it. Per-STREAM the player is finer-grained: 8-bit
+ *     AV1 happily hardware-decodes on that same box (`WatchScreen`
+ *     checks the probed bit depth against [hasHardwareDecoder] /
+ *     [hardwareAv1Main10] and orders the renderers accordingly).
  */
 object IrisCaps {
     /** Codec label (as the server expects) → MediaCodec MIME type. */
@@ -47,14 +56,38 @@ object IrisCaps {
 
     /**
      * Whether the device has a HARDWARE decoder for `codec` (label form,
-     * e.g. `"av1"`). The TV player uses this to decide whether to direct-play
-     * a file or fall onto the server's transcode — it MUST agree with what
-     * `headerValue()` advertises so the two stay in lockstep.
+     * e.g. `"av1"`). For AV1 this answers "is there silicon at all" —
+     * enough for 8-bit streams; a 10-bit stream additionally needs
+     * [hardwareAv1Main10].
      */
     fun hasHardwareDecoder(codec: String): Boolean {
         val mime = VIDEO_MIME[codec.lowercase()] ?: return false
         return decoders.any { info ->
             info.supportedTypes.any { it.equals(mime, ignoreCase = true) } && isHardware(info)
+        }
+    }
+
+    /**
+     * Whether the hardware `video/av01` decoder declares the Main10
+     * profile, i.e. can be trusted with 10-bit streams. The AV1 spec makes
+     * 10-bit mandatory in Main profile, but some TV SoCs ship 8-bit-only
+     * decoders that omit Main10 here (or runtime-fail on 10-bit) — for
+     * those, 10-bit AV1 stays on the dav1d-software / server-transcode
+     * route while 8-bit still hardware-decodes. Everything keyed on this
+     * MUST stay in lockstep: the `Iris-Caps` header ([headerValue]), the
+     * renderer ordering (`buildPlayer`), and the proactive transcode gate
+     * (`WatchScreen`).
+     */
+    val hardwareAv1Main10: Boolean by lazy {
+        val mime = VIDEO_MIME.getValue("av1")
+        decoders.any { info ->
+            isHardware(info) &&
+                info.supportedTypes.any { it.equals(mime, ignoreCase = true) } &&
+                runCatching {
+                    info.getCapabilitiesForType(mime).profileLevels.any {
+                        it.profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10
+                    }
+                }.getOrDefault(false)
         }
     }
 
@@ -64,8 +97,10 @@ object IrisCaps {
                 decoders.any { info -> info.supportedTypes.any { it.equals(mime, ignoreCase = true) } }
             val hw = hasHardwareDecoder(label)
             when {
-                // App bundles dav1d → AV1 is always software-decodable.
-                label == "av1" -> if (hw) "av1-hw" else "av1-sw"
+                // App bundles dav1d → AV1 is always software-decodable, and
+                // only Main10-declaring silicon counts as hardware (the
+                // header must cover the 10-bit worst case — see above).
+                label == "av1" -> if (hardwareAv1Main10) "av1-hw" else "av1-sw"
                 // No platform decoder for this codec → don't advertise it.
                 !canDecode -> null
                 hw -> "$label-hw"

@@ -963,6 +963,9 @@ fn season_language_coverage(
 /// one cached language slot — what the UI sends when the user
 /// clicked a specific FR / EN badge. Without it the core falls
 /// back to the historical "first available, any language" pick.
+/// `?language=auto` instead applies the auto-continuation rule
+/// (series' dominant owned language first, graceful fallbacks) —
+/// what the grabbable Continue Watching "Up next" tiles send.
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct GrabQuery {
@@ -1006,6 +1009,12 @@ pub(crate) async fn grab_collection_episode(
             "collection has no SCENE identity — cannot resolve episode".into(),
         ));
     };
+    let language = if q.language.as_deref() == Some("auto") {
+        let dominant = crate::routes::follows::dominant_owned_language(&state, normalized).await;
+        crate::routes::follows::continuation_pref(dominant)
+    } else {
+        crate::routes::follows::LangSel::from_badge(q.language.as_deref())
+    };
     let resp = crate::routes::follows::grab_episode_core(
         &state,
         crate::routes::follows::GrabEpisodeRequest {
@@ -1015,7 +1024,7 @@ pub(crate) async fn grab_collection_episode(
             tmdb_id: collection.tmdb_id,
             season,
             episode,
-            language: crate::routes::follows::LangSel::from_badge(q.language.as_deref()),
+            language,
         },
     )
     .await?;

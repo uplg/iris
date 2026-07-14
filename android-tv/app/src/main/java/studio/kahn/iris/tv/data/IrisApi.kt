@@ -39,8 +39,15 @@ interface IrisApi {
     @GET("api/me")
     suspend fun me(): UserResponse
 
+    /** `includeGrabbable` opts into synthesised "next episode isn't on
+     *  disk yet" tiles (`grabbable = true`, empty infohash — grab via
+     *  [grabCollectionEpisode] with `language=auto`, then play the
+     *  response). Leave false for surfaces that can only deep-link to an
+     *  existing file (Android TV home channels). */
     @GET("api/me/continue-watching")
-    suspend fun continueWatching(): List<ContinueWatchingItem>
+    suspend fun continueWatching(
+        @Query("include_grabbable") includeGrabbable: Boolean = false,
+    ): List<ContinueWatchingItem>
 
     /** Full watch history — in-progress AND completed, including items whose
      *  source torrent has since been deleted (see [HistoryItem.deleted]). */
