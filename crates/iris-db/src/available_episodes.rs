@@ -309,6 +309,20 @@ pub async fn list_pack_offers_for_season(
     .await
 }
 
+/// Overwrite a cached offer's seeder count with a fresh number from a
+/// live indexer sweep. Recording a confirmed 0 is the point: every
+/// reader filters `seeders IS NOT 0`, so the dead offer vanishes from
+/// grabs and availability badges alike until a future scan sees it
+/// alive again.
+pub async fn set_seeders(pool: &SqlitePool, id: Uuid, seeders: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE available_episodes SET seeders = ?2 WHERE id = ?1")
+        .bind(id)
+        .bind(seeders)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Distinct episodes found after `since` — the "X new" Watchlist
 /// badge. `since` = the user's last engagement (max of page visit and
 /// watch). No engagement → 0, NOT "everything": counting the whole

@@ -887,21 +887,42 @@ async fn resolve_owned_language(state: &AppState, infohash: &str) -> Language {
 /// Priority on a tie / no data follows the household rule "majority FR,
 /// else EN, else MULTI".
 pub(crate) async fn dominant_owned_language(state: &AppState, normalized_name: &str) -> Language {
+    fn tally(counts: &mut (u32, u32, u32), lang: Language) {
+        match lang {
+            Language::French => counts.0 += 1,
+            Language::English => counts.1 += 1,
+            Language::Multi => counts.2 += 1,
+            Language::Unknown => {}
+        }
+    }
     let files = iris_db::episode_files::list_for_normalized(state.db(), normalized_name)
         .await
         .unwrap_or_default();
-    let (mut fr, mut en, mut multi) = (0u32, 0u32, 0u32);
+    let mut counts = (0u32, 0u32, 0u32);
     for f in &files {
-        match resolve_owned_language(state, &f.infohash).await {
-            Language::French => fr += 1,
-            Language::English => en += 1,
-            Language::Multi => multi += 1,
-            Language::Unknown => {}
+        tally(
+            &mut counts,
+            resolve_owned_language(state, &f.infohash).await,
+        );
+    }
+    if counts == (0, 0, 0) {
+        // Nothing on disk (typically a garbage-collected series) — fall
+        // back to what the household actually *watched*. Playback rows
+        // survive reclaim (torrents are only soft-deleted), so a series
+        // watched in MULTi keeps continuing in MULTi even after its
+        // files are gone.
+        let watched =
+            iris_db::playback::watched_infohashes_for_normalized(state.db(), normalized_name)
+                .await
+                .unwrap_or_default();
+        for ih in &watched {
+            tally(&mut counts, resolve_owned_language(state, ih).await);
         }
     }
     // "Majority FR ⇒ FR, else EN, else MULTI": French only on a strict
     // plurality; otherwise English wins (including ties and the
     // nothing-owned default), with Multi as the last resort.
+    let (fr, en, multi) = counts;
     if fr > en && fr > multi {
         Language::French
     } else if en >= multi {
@@ -912,11 +933,14 @@ pub(crate) async fn dominant_owned_language(state: &AppState, normalized_name: &
 }
 
 /// Build the ordered language preference for an auto-continuation grab:
-/// the series' established language first, then EN, MULTI, FR as
-/// graceful fallbacks (deduped, first occurrence wins).
+/// the series' established language first, then MULTI, FR, EN as
+/// graceful fallbacks (deduped, first occurrence wins). MULTI leads the
+/// fallbacks because it carries both audio tracks — it substitutes for
+/// any dominant language; French outranks English per the household
+/// rule (a Multi watcher falls back to FR before EN).
 pub(crate) fn continuation_pref(dominant: Language) -> LangSel {
     let mut order = vec![dominant];
-    for l in [Language::English, Language::Multi, Language::French] {
+    for l in [Language::Multi, Language::French, Language::English] {
         if !order.contains(&l) {
             order.push(l);
         }
@@ -1045,18 +1069,24 @@ enum GrabSource {
     Singleton(PickedAvailability),
 }
 
-/// Decide where the requested episode comes from. Resolution order
-/// (every path excludes confirmed-dead 0-seeder offers, honours
-/// `language` and the series' established format/codec profile):
+/// Decide where the requested episode comes from. A live indexer sweep
+/// for the (S, E) runs FIRST: cached seeder counts are scan-time
+/// snapshots and a release can die between scheduler passes, while the
+/// rule is absolute — a confirmed 0-seeder release is never grabbed.
+/// Fresh counts are written back onto the cached rows (a confirmed 0
+/// poisons the row for every surface — grabs, badges, packs), then
+/// resolution order (every path honours `language` and the series'
+/// established format/codec profile):
 ///   1. Season-boundary pack-first: entering a season the household
 ///      owns nothing of (just finished S3 → wants S4) takes the full
-///      season pack when a *sane* one is cached — the user wants the
-///      season, not ten sequential singleton grabs.
-///   2. Cached singleton for the requested (S, E).
-///   3. Cached season pack covering the requested season — fallback
-///      when no singleton offer exists, sane or not.
-///   4. Live indexer query (singleton-only — pack discovery lives on
-///      the periodic scheduler, not on the grab path).
+///      season pack when a *sane*, liveness-verified one is cached —
+///      the user wants the season, not ten sequential singleton grabs.
+///   2. Live singleton for the requested (S, E) — fresh seeders decide.
+///   3. Cached singleton — fallback when the sweep came back empty
+///      (indexer down / release not surfaced by tvsearch); rows the
+///      sweep confirmed dead are already excluded by the write-back.
+///   4. Cached season pack covering the requested season, liveness-
+///      verified — last resort when no singleton offer exists.
 async fn resolve_grab_source(
     state: &AppState,
     normalized_name: &str,
@@ -1072,12 +1102,42 @@ async fn resolve_grab_source(
         .unwrap_or_default();
     let profile = dominant_owned_profile(state, &owned_files).await;
 
+    let live = live_results(state, display_title, season, Some(episode)).await;
+    let cached = iris_db::available_episodes::list_offers_for_episode(
+        state.db(),
+        normalized_name,
+        season,
+        episode,
+    )
+    .await?;
+    refresh_offer_liveness(state.db(), &cached, &live).await;
+
     let owns_any_in_season = owned_files.iter().any(|f| f.season == season);
     if !owns_any_in_season
-        && let Some((pack, true)) =
-            find_pack_offer(state.db(), normalized_name, season, language, &profile).await?
+        && let Some((pack, true)) = verified_pack_offer(
+            state,
+            normalized_name,
+            display_title,
+            season,
+            language,
+            &profile,
+        )
+        .await?
     {
         return Ok(GrabSource::Pack(pack));
+    }
+    if let Some(pick) = pick_live_singleton(
+        state,
+        normalized_name,
+        language,
+        &profile,
+        season,
+        episode,
+        live,
+    )
+    .await
+    {
+        return Ok(GrabSource::Singleton(pick));
     }
     if let Some(pick) = best_available(
         state.db(),
@@ -1091,23 +1151,19 @@ async fn resolve_grab_source(
     {
         return Ok(GrabSource::Singleton(pick));
     }
-    if let Some((pack, _)) =
-        find_pack_offer(state.db(), normalized_name, season, language, &profile).await?
-    {
-        return Ok(GrabSource::Pack(pack));
-    }
-    let pick = find_via_indexer_for_identity(
+    if let Some((pack, _)) = verified_pack_offer(
         state,
         normalized_name,
         display_title,
+        season,
         language,
         &profile,
-        season,
-        episode,
     )
     .await?
-    .ok_or(ApiError::NotFound)?;
-    Ok(GrabSource::Singleton(pick))
+    {
+        return Ok(GrabSource::Pack(pack));
+    }
+    Err(ApiError::NotFound)
 }
 
 pub(crate) async fn grab_episode_core(
@@ -1645,38 +1701,103 @@ fn result_candidate(r: &iris_core::search::SearchResult) -> iris_core::ranking::
     }
 }
 
-async fn find_via_indexer_for_identity(
+/// One live indexer sweep for a `(season, episode)` — or the season's
+/// pack shape when `episode` is `None`. The grab path runs this before
+/// trusting the offer cache: cached seeder counts are scan-time
+/// snapshots, and fresh counts are the only signal that can honour
+/// "never grab a dead torrent". Provider failures degrade to a partial
+/// or empty result set, never an error.
+async fn live_results(
+    state: &AppState,
+    display_title: &str,
+    season: i64,
+    episode: Option<i64>,
+) -> Vec<iris_core::search::SearchResult> {
+    let query = build_reprime_query(&ReprimeHint {
+        display_title,
+        season,
+        episode,
+    });
+    state.providers().search_all(&query).await.results
+}
+
+/// Fresh seeder count for a cached offer, when the live sweep surfaced
+/// the same release (same provider + external id). `None` = not seen by
+/// the sweep — absence is not proof of death, the cached count stands.
+fn matching_live_seeders(
+    row: &iris_db::available_episodes::AvailableEpisodeRow,
+    live: &[iris_core::search::SearchResult],
+) -> Option<i64> {
+    live.iter()
+        .find(|r| r.provider_id == row.indexer_provider && r.external_id == row.indexer_torrent_id)
+        .and_then(|r| r.seeders.map(i64::from))
+}
+
+/// Write live seeder counts back onto cached offer rows. A release the
+/// sweep confirms at 0 seeders gets its row poisoned — every reader
+/// filters `seeders IS NOT 0`, so the dead offer disappears from grab
+/// candidates and availability badges alike, not just from this grab.
+async fn refresh_offer_liveness(
+    pool: &iris_db::SqlitePool,
+    rows: &[iris_db::available_episodes::AvailableEpisodeRow],
+    live: &[iris_core::search::SearchResult],
+) {
+    for row in rows {
+        if let Some(s) = matching_live_seeders(row, live)
+            && row.seeders != Some(s)
+            && let Err(e) = iris_db::available_episodes::set_seeders(pool, row.id, s).await
+        {
+            tracing::warn!(error = %e, offer = %row.id, "failed to refresh offer seeders");
+        }
+    }
+}
+
+/// [`find_pack_offer`] with a liveness re-check: when the cache holds a
+/// candidate pack, run one live season sweep, write the fresh seeder
+/// counts back, and re-pick. A pack that died since the scheduler last
+/// saw it (offers for garbage-collected series linger in the cache for
+/// months) stops being offered the moment the sweep confirms 0 seeders.
+async fn verified_pack_offer(
     state: &AppState,
     normalized_name: &str,
     display_title: &str,
+    season: i64,
+    sel: &LangSel,
+    profile: &GrabProfile,
+) -> Result<Option<(PickedAvailability, bool)>, sqlx::Error> {
+    // Cheap cache pre-check before paying for a provider fan-out.
+    if find_pack_offer(state.db(), normalized_name, season, sel, profile)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let live = live_results(state, display_title, season, None).await;
+    let rows = iris_db::available_episodes::list_pack_offers_for_season(
+        state.db(),
+        normalized_name,
+        season,
+    )
+    .await?;
+    refresh_offer_liveness(state.db(), &rows, &live).await;
+    find_pack_offer(state.db(), normalized_name, season, sel, profile).await
+}
+
+/// Pick the best singleton release from a live sweep's results and
+/// record it in the offer cache. Same language selection and
+/// profile-aware ordering as the cached paths, so "first match per
+/// language" is the best one; `Exact` keeps only the requested language
+/// (404 if none — a clicked FR badge mustn't pull EN), `Prefer` walks
+/// the continuation order sane-first.
+async fn pick_live_singleton(
+    state: &AppState,
+    normalized_name: &str,
     sel: &LangSel,
     profile: &GrabProfile,
     season: i64,
     episode: i64,
-) -> Result<Option<PickedAvailability>, ApiError> {
-    use iris_core::search::{SearchQuery, SortField, SortOrder};
-    let query = SearchQuery {
-        q: format!("{display_title} S{season:02}E{episode:02}"),
-        page: Some(1),
-        limit: Some(20),
-        sort_by: Some(SortField::Seeders),
-        order: Some(SortOrder::Desc),
-        kind: None,
-        // Targeted single-episode grab — hand providers the structured
-        // hint so Torznab can dispatch as `t=tvsearch&season=&ep=`
-        // instead of relying on substring matching alone.
-        parsed_title: Some(iris_media::filename::series_key(display_title)),
-        season: Some(season as u32),
-        episode: Some(episode as u32),
-        year: None,
-    };
-    let agg = state.providers().search_all(&query).await;
-    // Apply the same language selection and profile-aware ordering as
-    // the cached paths, so "first match per language" is the best one;
-    // `Exact` keeps only the requested language (404 if none — a
-    // clicked FR badge mustn't pull EN), `Prefer` walks the
-    // continuation order sane-first.
-    let mut results = agg.results;
+    mut results: Vec<iris_core::search::SearchResult>,
+) -> Option<PickedAvailability> {
     // Dead-torrent guard: never offer a confirmed 0-seeder release (its pieces
     // would never fully assemble). Unknown / ≥1 seeders pass through.
     results.retain(|r| r.seeders != Some(0));
@@ -1714,9 +1835,7 @@ async fn find_via_indexer_for_identity(
         .into_iter()
         .map(|(cand, _, _, r)| (detect_language(&r.title), cand.sane(), r))
         .collect();
-    let Some(best) = select_by_lang(&tagged, sel) else {
-        return Ok(None);
-    };
+    let best = select_by_lang(&tagged, sel)?;
     let lang = detect_language(&best.title);
     let absolute_episode = iris_media::filename::parse(&best.title)
         .as_ref()
@@ -1741,12 +1860,12 @@ async fn find_via_indexer_for_identity(
         },
     )
     .await;
-    Ok(Some(PickedAvailability {
+    Some(PickedAvailability {
         magnet: String::new(),
         indexer_provider: best.provider_id,
         indexer_torrent_id: best.external_id,
         download_url: best.download_url,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -1794,6 +1913,28 @@ mod tests {
             (Language::English, true, "en"),
         ];
         assert_eq!(select_by_lang(&items, &LangSel::Any), Some("en"));
+    }
+
+    #[test]
+    fn continuation_ladder_falls_back_multi_then_fr_then_en() {
+        let ladder = |dominant| {
+            let LangSel::Prefer(order) = continuation_pref(dominant) else {
+                panic!("continuation_pref must build a Prefer");
+            };
+            order
+        };
+        assert_eq!(
+            ladder(Language::Multi),
+            vec![Language::Multi, Language::French, Language::English],
+        );
+        assert_eq!(
+            ladder(Language::French),
+            vec![Language::French, Language::Multi, Language::English],
+        );
+        assert_eq!(
+            ladder(Language::English),
+            vec![Language::English, Language::Multi, Language::French],
+        );
     }
 
     #[test]

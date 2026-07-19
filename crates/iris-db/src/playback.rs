@@ -232,6 +232,27 @@ pub async fn upsert(pool: &SqlitePool, p: UpsertProgress) -> Result<(), sqlx::Er
     Ok(())
 }
 
+/// Distinct torrents any household member has playback history on for a
+/// series, matched by SCENE-normalised collection identity. Soft-deleted
+/// torrents are included on purpose: this feeds the dominant-language
+/// fallback for garbage-collected series, where "what did the household
+/// watch" is exactly the question and the files are already gone.
+pub async fn watched_infohashes_for_normalized(
+    pool: &SqlitePool,
+    normalized_name: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT p.infohash FROM playback_progress p \
+         JOIN torrents t ON t.infohash = p.infohash \
+         JOIN collections c ON c.id = t.collection_id \
+         WHERE c.parsed_title_normalized = ?1",
+    )
+    .bind(normalized_name)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(ih,)| ih).collect())
+}
+
 // Wire-shaped row: the bools are independent per-tile flags, not a state
 // machine to encode.
 #[expect(clippy::struct_excessive_bools)]
