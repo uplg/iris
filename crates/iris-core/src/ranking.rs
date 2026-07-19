@@ -50,19 +50,31 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    fn alive(self) -> bool {
+    /// Looks alive: `>= `[`SEED_FLOOR`] seeders, or unknown (we can't
+    /// confirm those are dead). Public so grab-path comparators can
+    /// demote low-seeded candidates *after* their own leading criteria
+    /// (format / codec preference) instead of before.
+    #[must_use]
+    pub fn alive(self) -> bool {
         // Unknown seeder count is kept (we can't confirm it's dead) —
         // same contract as the `available_episodes` cache.
         self.seeders.is_none_or(|s| s >= SEED_FLOOR)
     }
 
-    fn big_enough(self) -> bool {
+    /// Not junk-sized (`>= `[`MIN_SANE_BYTES`], or unknown). Public for
+    /// the same reason as [`Self::alive`] — this guard stays absolute in
+    /// grab comparators while aliveness is allowed to rank lower.
+    #[must_use]
+    pub fn big_enough(self) -> bool {
         self.size_bytes.is_none_or(|b| b >= MIN_SANE_BYTES)
     }
 
     /// Alive *and* not junk-sized: only sane candidates compete on the
     /// smallest-size rule. Dodgy ones sort beneath every sane one.
-    fn sane(self) -> bool {
+    /// Public so grab-path comparators that add extra criteria (format /
+    /// codec preference) can keep sanity as their leading key.
+    #[must_use]
+    pub fn sane(self) -> bool {
         self.alive() && self.big_enough()
     }
 

@@ -337,6 +337,7 @@ async fn record_availability(
         // here — its resolve() fetches per-id anyway.
         download_url: best.download_url.clone(),
         absolute_episode,
+        codec: Some(filename::detect_codec(&best.title).as_str().to_string()),
     };
     if let Err(e) = iris_db::available_episodes::upsert(pool, upsert).await {
         tracing::warn!(error = %e, "scheduler: upsert availability failed");

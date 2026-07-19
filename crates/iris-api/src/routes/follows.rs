@@ -19,7 +19,8 @@
 //!   * `episode_files` (via collection join) — what's on disk
 //!   * `available_episodes` — what the indexer cached for "Préparer"
 
-use std::collections::BTreeMap;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashSet};
 
 use axum::Json;
 use axum::Router;
@@ -27,7 +28,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use chrono::{DateTime, Utc};
-use iris_media::filename::{Language, detect_language, series_key};
+use iris_media::filename::{Codec, Language, detect_codec, detect_language, series_key};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -819,21 +820,37 @@ impl LangSel {
     }
 }
 
-/// Pick one item from `items` (each tagged with its language) per the
-/// selection strategy. `items` should already be in preference order
-/// for ties (e.g. seeders-desc) so "first match" is also "best match".
-fn select_by_lang<T: Clone>(items: &[(Language, T)], sel: &LangSel) -> Option<T> {
+/// Pick one item per the selection strategy from `items`, each tagged
+/// `(language, sane, value)` and pre-sorted best-first so "first match"
+/// is also "best match". `sane` is the shared ranking's
+/// alive-and-not-junk flag (always `true` for on-disk files). A sane
+/// candidate in a lower-preference language beats a dodgy one in the
+/// preferred language — "prepare next episode" must not pick a near-dead
+/// FR release over a healthy EN one — but `Exact` never crosses
+/// languages, dodgy or not.
+fn select_by_lang<T: Clone>(items: &[(Language, bool, T)], sel: &LangSel) -> Option<T> {
     match sel {
-        LangSel::Any => items.first().map(|(_, t)| t.clone()),
+        LangSel::Any => items
+            .iter()
+            .find(|(_, sane, _)| *sane)
+            .or_else(|| items.first())
+            .map(|(_, _, t)| t.clone()),
         LangSel::Exact(l) => items
             .iter()
-            .find(|(lang, _)| lang == l)
-            .map(|(_, t)| t.clone()),
+            .find(|(lang, sane, _)| lang == l && *sane)
+            .or_else(|| items.iter().find(|(lang, _, _)| lang == l))
+            .map(|(_, _, t)| t.clone()),
         LangSel::Prefer(order) => order
             .iter()
-            .find_map(|w| items.iter().find(|(lang, _)| lang == w))
+            .find_map(|w| items.iter().find(|(lang, sane, _)| *sane && lang == w))
+            .or_else(|| items.iter().find(|(_, sane, _)| *sane))
+            .or_else(|| {
+                order
+                    .iter()
+                    .find_map(|w| items.iter().find(|(lang, _, _)| lang == w))
+            })
             .or_else(|| items.first())
-            .map(|(_, t)| t.clone()),
+            .map(|(_, _, t)| t.clone()),
     }
 }
 
@@ -907,6 +924,120 @@ pub(crate) fn continuation_pref(dominant: Language) -> LangSel {
     LangSel::Prefer(order)
 }
 
+/// The series' established release profile — the resolution and codec
+/// the household already owns it in. Grabs *prefer* (never require) a
+/// matching release, and the preference dominates: a 2160p must never
+/// beat a 1080p when the series is established in 1080p, even if the
+/// 2160p is better seeded — a slow 1080p download still beats a 4K
+/// monster the boxes may not even decode. Only the anti-junk size
+/// guard outranks the profile (a 10 MB "1080p" sample never wins);
+/// confirmed-dead 0-seeder offers are excluded upstream.
+struct GrabProfile {
+    /// Preferred resolution tag (`"1080p"`…). `Some("1080p")` by
+    /// default when the series has no usable history — the household
+    /// standard, and it stops a fresh series from starting on a 4K
+    /// monster.
+    quality: Option<String>,
+    /// Preferred codec (`Codec::as_str` form). `None` when no owned
+    /// file carries a codec tag — codec stays free.
+    codec: Option<String>,
+}
+
+/// First key with the highest count — `BTreeMap` iteration is
+/// key-ordered, so ties break deterministically on the smaller tag.
+fn majority_tag(counts: BTreeMap<String, u32>) -> Option<String> {
+    let best = counts.values().copied().max()?;
+    counts.into_iter().find(|(_, c)| *c == best).map(|(k, _)| k)
+}
+
+/// Derive the series' [`GrabProfile`] from the distinct owned torrents
+/// backing its episode files (a season pack counts once, not once per
+/// episode). Mirrors [`dominant_owned_language`]'s "follow what's
+/// established" idea for resolution + codec.
+async fn dominant_owned_profile(
+    state: &AppState,
+    owned_files: &[iris_db::episode_files::EpisodeFileRow],
+) -> GrabProfile {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut quality_counts: BTreeMap<String, u32> = BTreeMap::new();
+    let mut codec_counts: BTreeMap<String, u32> = BTreeMap::new();
+    for f in owned_files {
+        if !seen.insert(f.infohash.as_str()) {
+            continue;
+        }
+        let Some(t) = iris_db::torrents::find_by_infohash(state.db(), &f.infohash)
+            .await
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        if let Some(q) = iris_media::filename::parse(&t.name).and_then(|p| p.quality) {
+            *quality_counts.entry(q).or_default() += 1;
+        }
+        let codec = detect_codec(&t.name);
+        if codec != Codec::Unknown {
+            *codec_counts.entry(codec.as_str().to_string()).or_default() += 1;
+        }
+    }
+    GrabProfile {
+        quality: majority_tag(quality_counts).or_else(|| Some("1080p".to_string())),
+        codec: majority_tag(codec_counts),
+    }
+}
+
+/// Preference rank of an offer's tag against the profile's: 0 = match,
+/// 1 = untagged (tolerated — absence of evidence), 2 = known mismatch.
+/// No preference → everything ranks 0.
+fn tag_rank(offer: Option<&str>, preferred: Option<&str>) -> u8 {
+    let Some(p) = preferred else { return 0 };
+    match offer {
+        Some(o) if o.eq_ignore_ascii_case(p) => 0,
+        None => 1,
+        Some(_) => 2,
+    }
+}
+
+/// An offer's codec tag with the `"unknown"` sentinel collapsed to
+/// `None` so [`tag_rank`] treats both spellings as untagged.
+fn offer_codec(r: &iris_db::available_episodes::AvailableEpisodeRow) -> Option<&str> {
+    r.codec.as_deref().filter(|c| *c != "unknown")
+}
+
+/// View a cached offer through the shared ranking lens.
+fn offer_candidate(
+    r: &iris_db::available_episodes::AvailableEpisodeRow,
+) -> iris_core::ranking::Candidate {
+    iris_core::ranking::Candidate {
+        seeders: r.seeders,
+        size_bytes: r.size_bytes,
+        is_multi: offer_language(r) == Language::Multi,
+    }
+}
+
+/// Profile-aware grab ordering over cached offers: anti-junk guard
+/// first (a sample-sized "1080p" never wins), then format match, then
+/// codec match, then aliveness (the [`iris_core::ranking::SEED_FLOOR`]
+/// garde-fou — demoted *below* the profile so a low-seeded 1080p still
+/// beats a healthy 2160p when the series is established in 1080p),
+/// then the shared recommended policy (smallest size, seeders as
+/// tie-break).
+fn offer_cmp(
+    a: &iris_db::available_episodes::AvailableEpisodeRow,
+    b: &iris_db::available_episodes::AvailableEpisodeRow,
+    profile: &GrabProfile,
+) -> Ordering {
+    let (ca, cb) = (offer_candidate(a), offer_candidate(b));
+    let q = profile.quality.as_deref();
+    let c = profile.codec.as_deref();
+    cb.big_enough()
+        .cmp(&ca.big_enough())
+        .then_with(|| tag_rank(a.quality.as_deref(), q).cmp(&tag_rank(b.quality.as_deref(), q)))
+        .then_with(|| tag_rank(offer_codec(a), c).cmp(&tag_rank(offer_codec(b), c)))
+        .then_with(|| cb.alive().cmp(&ca.alive()))
+        .then_with(|| iris_core::ranking::recommended_cmp(&ca, &cb))
+}
+
 pub(crate) async fn grab_episode_core(
     state: &AppState,
     req: GrabEpisodeRequest<'_>,
@@ -945,39 +1076,73 @@ pub(crate) async fn grab_episode_core(
         });
     }
 
-    // Resolution order:
-    //   1. Cached singleton for the requested (S, E) honouring `language`.
-    //   2. Cached season pack covering the requested season. The
-    //      pack ingest path runs to completion, then we SCENE-parse
-    //      the resulting file list to extract the leaf matching
-    //      (S, E) and return its (infohash, file_idx).
-    //   3. Live indexer query (singleton-only — pack discovery
+    // Established profile: follow the resolution / codec the household
+    // already owns this series in.
+    let owned_files = iris_db::episode_files::list_for_normalized(state.db(), normalized_name)
+        .await
+        .unwrap_or_default();
+    let profile = dominant_owned_profile(state, &owned_files).await;
+
+    // Resolution order (every path excludes confirmed-dead 0-seeder
+    // offers):
+    //   1. Season-boundary pack-first: entering a season the household
+    //      owns nothing of (just finished S3 → wants S4) ingests the
+    //      full season pack when a *sane* one is cached — the user
+    //      wants the season, not ten sequential singleton grabs.
+    //   2. Cached singleton for the requested (S, E) honouring
+    //      `language` and the series' format/codec profile.
+    //   3. Cached season pack covering the requested season — fallback
+    //      when no singleton offer exists, sane or not. The pack
+    //      ingest path runs to completion, then we SCENE-parse the
+    //      resulting file list to extract the leaf matching (S, E)
+    //      and return its (infohash, file_idx).
+    //   4. Live indexer query (singleton-only — pack discovery
     //      lives on the periodic scheduler, not on the grab path).
-    let pack_pick = if best_available(state.db(), normalized_name, season, episode, &language)
-        .await?
-        .is_none()
+    let owns_any_in_season = owned_files.iter().any(|f| f.season == season);
+    if !owns_any_in_season
+        && let Some((pack, true)) =
+            find_pack_offer(state.db(), normalized_name, season, &language, &profile).await?
     {
-        find_pack_offer(state.db(), normalized_name, season, &language).await?
-    } else {
-        None
-    };
-    if let Some(pack) = pack_pick {
         return ingest_pack_and_pick_episode(state, user_id, display_title, pack, season, episode)
             .await;
     }
-    let pick = match best_available(state.db(), normalized_name, season, episode, &language).await?
+    let pick = match best_available(
+        state.db(),
+        normalized_name,
+        season,
+        episode,
+        &language,
+        &profile,
+    )
+    .await?
     {
         Some(p) => p,
-        None => find_via_indexer_for_identity(
-            state,
-            normalized_name,
-            display_title,
-            &language,
-            season,
-            episode,
-        )
-        .await?
-        .ok_or(ApiError::NotFound)?,
+        None => {
+            if let Some((pack, _)) =
+                find_pack_offer(state.db(), normalized_name, season, &language, &profile).await?
+            {
+                return ingest_pack_and_pick_episode(
+                    state,
+                    user_id,
+                    display_title,
+                    pack,
+                    season,
+                    episode,
+                )
+                .await;
+            }
+            find_via_indexer_for_identity(
+                state,
+                normalized_name,
+                display_title,
+                &language,
+                &profile,
+                season,
+                episode,
+            )
+            .await?
+            .ok_or(ApiError::NotFound)?
+        }
     };
 
     let result = ingest_picked(
@@ -1113,7 +1278,8 @@ async fn find_episode_file(
     let mut tagged = Vec::with_capacity(candidates.len());
     for c in candidates {
         let lang = resolve_owned_language(state, &c.infohash).await;
-        tagged.push((lang, c));
+        // On-disk files are always "sane" — the download already completed.
+        tagged.push((lang, true, c));
     }
     Ok(select_by_lang(&tagged, sel))
 }
@@ -1150,17 +1316,29 @@ async fn best_available(
     season: i64,
     episode: i64,
     sel: &LangSel,
+    profile: &GrabProfile,
 ) -> Result<Option<PickedAvailability>, sqlx::Error> {
-    let rows = iris_db::available_episodes::list_best_for_series(pool, normalized_name).await?;
-    // `list_best_for_series` is best-by-seeders per (S, E, language) and
-    // already ordered, so "first match" is also "best match". `Exact`
-    // never substitutes another language (a clicked FR badge that has
-    // no FR offer 404s rather than grabbing EN); `Prefer` walks the
-    // continuation order and finally accepts anything available.
-    let tagged: Vec<(Language, iris_db::available_episodes::AvailableEpisodeRow)> = rows
+    let mut rows = iris_db::available_episodes::list_offers_for_episode(
+        pool,
+        normalized_name,
+        season,
+        episode,
+    )
+    .await?;
+    // Rank the full candidate set profile-aware (sane → format match →
+    // codec match → smallest size / seeders). Best-first order means the
+    // language walk's "first match per language" is also best-in-language.
+    // `Exact` never substitutes another language (a clicked FR badge that
+    // has no FR offer 404s rather than grabbing EN); `Prefer` walks the
+    // continuation order sane-first, then accepts anything available.
+    rows.sort_by(|a, b| offer_cmp(a, b, profile));
+    let tagged: Vec<(
+        Language,
+        bool,
+        iris_db::available_episodes::AvailableEpisodeRow,
+    )> = rows
         .into_iter()
-        .filter(|r| r.season == season && r.episode == episode)
-        .map(|r| (offer_language(&r), r))
+        .map(|r| (offer_language(&r), offer_candidate(&r).sane(), r))
         .collect();
     Ok(select_by_lang(&tagged, sel).map(|r| PickedAvailability {
         magnet: r.magnet,
@@ -1303,37 +1481,48 @@ fn build_reprime_query(reprime: &ReprimeHint<'_>) -> iris_core::search::SearchQu
 }
 
 /// Look up a cached season pack that can satisfy a (season, episode)
-/// request when no singleton offer exists. Applies the same language
-/// selection as the singleton path: `Exact` won't drop an "FR" click
-/// into an English pack; `Prefer` walks the continuation order.
+/// request — the season-boundary pack-first rule and the no-singleton
+/// fallback both come through here. Applies the same language selection
+/// as the singleton path (`Exact` won't drop an "FR" click into an
+/// English pack; `Prefer` walks the continuation order) and the same
+/// format/codec profile preference. Returns the pick together with its
+/// sanity flag so the pack-first caller can insist on a *sane* pack
+/// while the last-resort fallback accepts anything still alive.
+///
+/// No redundancy filtering here: unlike the display list, a pack that
+/// `list_season_packs_for_series`'s display-side caller would hide as
+/// "redundant" (e.g. an FR pack when Multi is owned) must still be
+/// grabbable if that's genuinely the only way to cover this leaf.
 async fn find_pack_offer(
     pool: &iris_db::SqlitePool,
     normalized_name: &str,
     season: i64,
     sel: &LangSel,
-) -> Result<Option<PickedAvailability>, sqlx::Error> {
-    // No redundancy filtering here: this is the GRAB fallback for a
-    // specific (season, episode) with no singleton offer, not the display
-    // list — a pack that `list_season_packs_for_series`'s display-side
-    // caller would hide as "redundant" (e.g. an FR pack when Multi is
-    // owned) must still be grabbable if that's genuinely the only way to
-    // cover this leaf.
-    let packs = iris_db::available_episodes::list_season_packs_for_series(
-        pool,
-        normalized_name,
-        &std::collections::HashMap::new(),
-    )
-    .await?;
-    let tagged: Vec<(Language, iris_db::available_episodes::AvailableEpisodeRow)> = packs
+    profile: &GrabProfile,
+) -> Result<Option<(PickedAvailability, bool)>, sqlx::Error> {
+    let mut packs =
+        iris_db::available_episodes::list_pack_offers_for_season(pool, normalized_name, season)
+            .await?;
+    packs.sort_by(|a, b| offer_cmp(a, b, profile));
+    let tagged: Vec<(
+        Language,
+        bool,
+        iris_db::available_episodes::AvailableEpisodeRow,
+    )> = packs
         .into_iter()
-        .filter(|p| p.season == season)
-        .map(|p| (offer_language(&p), p))
+        .map(|p| (offer_language(&p), offer_candidate(&p).sane(), p))
         .collect();
-    Ok(select_by_lang(&tagged, sel).map(|p| PickedAvailability {
-        magnet: p.magnet,
-        indexer_provider: p.indexer_provider,
-        indexer_torrent_id: p.indexer_torrent_id,
-        download_url: p.download_url,
+    Ok(select_by_lang(&tagged, sel).map(|p| {
+        let sane = offer_candidate(&p).sane();
+        (
+            PickedAvailability {
+                magnet: p.magnet,
+                indexer_provider: p.indexer_provider,
+                indexer_torrent_id: p.indexer_torrent_id,
+                download_url: p.download_url,
+            },
+            sane,
+        )
     }))
 }
 
@@ -1420,11 +1609,21 @@ async fn ingest_pack_and_pick_episode(
     })
 }
 
+/// View a live search result through the shared ranking lens.
+fn result_candidate(r: &iris_core::search::SearchResult) -> iris_core::ranking::Candidate {
+    iris_core::ranking::Candidate {
+        seeders: r.seeders.map(i64::from),
+        size_bytes: r.size_bytes.and_then(|s| i64::try_from(s).ok()),
+        is_multi: detect_language(&r.title) == Language::Multi,
+    }
+}
+
 async fn find_via_indexer_for_identity(
     state: &AppState,
     normalized_name: &str,
     display_title: &str,
     sel: &LangSel,
+    profile: &GrabProfile,
     season: i64,
     episode: i64,
 ) -> Result<Option<PickedAvailability>, ApiError> {
@@ -1445,20 +1644,48 @@ async fn find_via_indexer_for_identity(
         year: None,
     };
     let agg = state.providers().search_all(&query).await;
-    // Apply the same language selection as the cached paths. Sort by
-    // seeders first so "first match per language" is the best one;
+    // Apply the same language selection and profile-aware ordering as
+    // the cached paths, so "first match per language" is the best one;
     // `Exact` keeps only the requested language (404 if none — a
     // clicked FR badge mustn't pull EN), `Prefer` walks the
-    // continuation order then accepts the top result, `Any` takes the
-    // most-seeded.
+    // continuation order sane-first.
     let mut results = agg.results;
     // Dead-torrent guard: never offer a confirmed 0-seeder release (its pieces
     // would never fully assemble). Unknown / ≥1 seeders pass through.
     results.retain(|r| r.seeders != Some(0));
-    results.sort_by_key(|r| std::cmp::Reverse(r.seeders.unwrap_or(0)));
-    let tagged: Vec<(Language, iris_core::search::SearchResult)> = results
+    // Decorate before sorting — parsing the title in the comparator
+    // would re-run the SCENE parser O(n log n) times.
+    let q_pref = profile.quality.as_deref();
+    let c_pref = profile.codec.as_deref();
+    let mut decorated: Vec<(
+        iris_core::ranking::Candidate,
+        u8,
+        u8,
+        iris_core::search::SearchResult,
+    )> = results
         .into_iter()
-        .map(|r| (detect_language(&r.title), r))
+        .map(|r| {
+            let cand = result_candidate(&r);
+            let quality = iris_media::filename::parse(&r.title).and_then(|p| p.quality);
+            let codec = detect_codec(&r.title);
+            let qr = tag_rank(quality.as_deref(), q_pref);
+            let cr = tag_rank((codec != Codec::Unknown).then(|| codec.as_str()), c_pref);
+            (cand, qr, cr, r)
+        })
+        .collect();
+    // Same order as `offer_cmp`: junk guard → format → codec →
+    // aliveness → recommended policy.
+    decorated.sort_by(|a, b| {
+        b.0.big_enough()
+            .cmp(&a.0.big_enough())
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| b.0.alive().cmp(&a.0.alive()))
+            .then_with(|| iris_core::ranking::recommended_cmp(&a.0, &b.0))
+    });
+    let tagged: Vec<(Language, bool, iris_core::search::SearchResult)> = decorated
+        .into_iter()
+        .map(|(cand, _, _, r)| (detect_language(&r.title), cand.sane(), r))
         .collect();
     let Some(best) = select_by_lang(&tagged, sel) else {
         return Ok(None);
@@ -1483,6 +1710,7 @@ async fn find_via_indexer_for_identity(
             language: Some(lang.as_str().to_string()),
             download_url: best.download_url.clone(),
             absolute_episode,
+            codec: Some(detect_codec(&best.title).as_str().to_string()),
         },
     )
     .await;
@@ -1492,4 +1720,163 @@ async fn find_via_indexer_for_identity(
         indexer_torrent_id: best.external_id,
         download_url: best.download_url,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefer_walk_skips_dodgy_preferred_language() {
+        // Near-dead FR (preferred) must lose to a healthy EN.
+        let items = vec![
+            (Language::French, false, "fr"),
+            (Language::English, true, "en"),
+        ];
+        let sel = LangSel::Prefer(vec![Language::French, Language::English]);
+        assert_eq!(select_by_lang(&items, &sel), Some("en"));
+    }
+
+    #[test]
+    fn prefer_accepts_dodgy_when_nothing_sane_exists() {
+        let items = vec![(Language::French, false, "fr")];
+        let sel = LangSel::Prefer(vec![Language::English, Language::French]);
+        assert_eq!(select_by_lang(&items, &sel), Some("fr"));
+    }
+
+    #[test]
+    fn exact_never_crosses_language_even_for_sanity() {
+        let items = vec![
+            (Language::English, true, "en"),
+            (Language::French, false, "fr"),
+        ];
+        assert_eq!(
+            select_by_lang(&items, &LangSel::Exact(Language::French)),
+            Some("fr"),
+        );
+        assert_eq!(
+            select_by_lang(&items, &LangSel::Exact(Language::Multi)),
+            None,
+        );
+    }
+
+    #[test]
+    fn any_prefers_sane_over_first() {
+        let items = vec![
+            (Language::French, false, "fr"),
+            (Language::English, true, "en"),
+        ];
+        assert_eq!(select_by_lang(&items, &LangSel::Any), Some("en"));
+    }
+
+    #[test]
+    fn tag_rank_orders_match_untagged_mismatch() {
+        assert_eq!(tag_rank(Some("1080p"), Some("1080p")), 0);
+        assert_eq!(tag_rank(Some("1080P"), Some("1080p")), 0);
+        assert_eq!(tag_rank(None, Some("1080p")), 1);
+        assert_eq!(tag_rank(Some("2160p"), Some("1080p")), 2);
+        // No preference: everything is equally fine.
+        assert_eq!(tag_rank(Some("2160p"), None), 0);
+        assert_eq!(tag_rank(None, None), 0);
+    }
+
+    const GIB: i64 = 1_073_741_824;
+
+    fn offer(
+        seeders: i64,
+        size_gib: i64,
+        quality: &str,
+        codec: &str,
+    ) -> iris_db::available_episodes::AvailableEpisodeRow {
+        iris_db::available_episodes::AvailableEpisodeRow {
+            id: Uuid::new_v4(),
+            normalized_name: "test".into(),
+            season: 4,
+            episode: 1,
+            indexer_provider: "test".into(),
+            indexer_torrent_id: quality.into(),
+            magnet: String::new(),
+            quality: Some(quality.into()),
+            seeders: Some(seeders),
+            size_bytes: Some(size_gib * GIB),
+            found_at: Utc::now(),
+            language: Some("french".into()),
+            download_url: None,
+            absolute_episode: None,
+            codec: Some(codec.into()),
+        }
+    }
+
+    fn profile_1080_hevc() -> GrabProfile {
+        GrabProfile {
+            quality: Some("1080p".into()),
+            codec: Some("hevc".into()),
+        }
+    }
+
+    #[test]
+    fn quality_match_beats_smaller_mismatch() {
+        // 8 GiB 1080p (profile match) must rank ahead of a lighter 720p.
+        let matching = offer(50, 8, "1080p", "hevc");
+        let lighter_mismatch = offer(50, 4, "720p", "hevc");
+        let p = profile_1080_hevc();
+        assert_eq!(offer_cmp(&matching, &lighter_mismatch, &p), Ordering::Less,);
+    }
+
+    #[test]
+    fn quality_match_beats_healthy_2160p_even_when_low_seeded() {
+        // The user's rule: 2160p has no business beating 1080p when the
+        // series is established in 1080p — a slow (1 seeder, still
+        // alive) 1080p download beats a well-seeded 4K monster.
+        let slow_match = offer(1, 8, "1080p", "hevc");
+        let healthy_mismatch = offer(200, 40, "2160p", "hevc");
+        let p = profile_1080_hevc();
+        assert_eq!(
+            offer_cmp(&slow_match, &healthy_mismatch, &p),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn junk_size_guard_outranks_quality_match() {
+        // A sample-sized file tagged "1080p" must never win, even
+        // against a format mismatch.
+        let junk = iris_db::available_episodes::AvailableEpisodeRow {
+            size_bytes: Some(10 * 1024 * 1024),
+            ..offer(500, 0, "1080p", "hevc")
+        };
+        let real_mismatch = offer(50, 8, "720p", "h264");
+        let p = profile_1080_hevc();
+        assert_eq!(offer_cmp(&real_mismatch, &junk, &p), Ordering::Less);
+    }
+
+    #[test]
+    fn codec_match_breaks_quality_tie() {
+        // Both 1080p: the hevc release (profile codec) wins even a bit heavier.
+        let hevc = offer(50, 9, "1080p", "hevc");
+        let h264 = offer(50, 8, "1080p", "h264");
+        let p = profile_1080_hevc();
+        assert_eq!(offer_cmp(&hevc, &h264, &p), Ordering::Less);
+    }
+
+    #[test]
+    fn no_profile_falls_back_to_recommended_policy() {
+        // Without preferences the smallest sane release wins.
+        let small = offer(50, 4, "720p", "h264");
+        let big = offer(200, 8, "1080p", "hevc");
+        let p = GrabProfile {
+            quality: None,
+            codec: None,
+        };
+        assert_eq!(offer_cmp(&small, &big, &p), Ordering::Less);
+    }
+
+    #[test]
+    fn majority_tag_breaks_ties_deterministically() {
+        let mut counts = BTreeMap::new();
+        counts.insert("1080p".to_string(), 2);
+        counts.insert("2160p".to_string(), 2);
+        assert_eq!(majority_tag(counts), Some("1080p".to_string()));
+        assert_eq!(majority_tag(BTreeMap::new()), None);
+    }
 }

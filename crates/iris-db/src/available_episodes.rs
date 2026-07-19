@@ -48,6 +48,12 @@ pub struct AvailableEpisodeRow {
     /// releases and for packs. Powers the flat anime list.
     #[serde(default)]
     pub absolute_episode: Option<i64>,
+    /// Coarse video codec parsed from the release title at scan time
+    /// (`"h264"` / `"hevc"` / `"av1"` / `"vp9"` / `"unknown"`). `None`
+    /// on legacy rows pre-migration 0035 — treated as unknown by the
+    /// grab path's codec preference.
+    #[serde(default)]
+    pub codec: Option<String>,
 }
 
 /// SQL `ORDER BY` fragment mirroring `iris_core::ranking::recommended_cmp`,
@@ -86,6 +92,11 @@ fn recommended_order_sql() -> String {
 /// captured before migration 0017; the UI badge will show
 /// "unknown" until they age out of the scheduler's cache and get
 /// re-stored with a real language.
+///
+/// Confirmed-dead offers (**exactly 0 seeders**) are excluded, same
+/// contract as the pack listing: they're un-grabbable, so surfacing
+/// them as "available" badges would only produce grab failures.
+/// Unknown (NULL) seeder counts are kept.
 pub async fn list_best_for_series(
     pool: &SqlitePool,
     normalized_name: &str,
@@ -97,7 +108,8 @@ pub async fn list_best_for_series(
     // `AssertSqlSafe` audit hatch to rot if this query is edited later.
     let mut qb = sqlx::QueryBuilder::new(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url, \
+                absolute_episode, codec \
          FROM (SELECT *, ROW_NUMBER() OVER ( \
                    PARTITION BY season, episode, COALESCE(language, '') \
                    ORDER BY ",
@@ -110,7 +122,7 @@ pub async fn list_best_for_series(
     );
     qb.push_bind(normalized_name);
     qb.push(
-        " AND episode > 0) \
+        " AND episode > 0 AND seeders IS NOT 0) \
          WHERE _rn = 1 \
          ORDER BY season, episode, language",
     );
@@ -166,7 +178,8 @@ pub async fn list_season_packs_for_series(
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
     let mut qb = sqlx::QueryBuilder::new(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url, \
+                absolute_episode, codec \
          FROM (SELECT *, ROW_NUMBER() OVER ( \
                    PARTITION BY season, COALESCE(language, '') \
                    ORDER BY ",
@@ -227,7 +240,8 @@ pub async fn find_pack_for_season(
     // positional, so each `push_bind` emits its own `?`.
     let mut qb = sqlx::QueryBuilder::new(
         "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url, \
+                absolute_episode, codec \
          FROM available_episodes \
          WHERE normalized_name = ",
     );
@@ -244,6 +258,55 @@ pub async fn find_pack_for_season(
     qb.build_query_as::<AvailableEpisodeRow>()
         .fetch_optional(pool)
         .await
+}
+
+/// Every live cached offer for one exact `(season, episode)` — raw rows,
+/// no per-language dedup. The grab path re-ranks them in Rust with the
+/// series' established format / codec profile (which SQL can't know), so
+/// it needs the full candidate set, not the display-side winner.
+/// Confirmed-dead offers (exactly 0 seeders) are excluded — a grab must
+/// never ingest a torrent whose pieces can't assemble; NULL seeder
+/// counts pass (can't confirm those are dead).
+pub async fn list_offers_for_episode(
+    pool: &SqlitePool,
+    normalized_name: &str,
+    season: i64,
+    episode: i64,
+) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url, \
+                absolute_episode, codec \
+         FROM available_episodes \
+         WHERE normalized_name = ?1 AND season = ?2 AND episode = ?3 \
+           AND episode > 0 AND seeders IS NOT 0",
+    )
+    .bind(normalized_name)
+    .bind(season)
+    .bind(episode)
+    .fetch_all(pool)
+    .await
+}
+
+/// Every live cached season-pack offer (`episode == 0` sentinel) for one
+/// season — raw rows for the same Rust-side profile-aware ranking as
+/// [`list_offers_for_episode`]. Same 0-seeder exclusion.
+pub async fn list_pack_offers_for_season(
+    pool: &SqlitePool,
+    normalized_name: &str,
+    season: i64,
+) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
+                magnet, quality, seeders, size_bytes, found_at, language, download_url, \
+                absolute_episode, codec \
+         FROM available_episodes \
+         WHERE normalized_name = ?1 AND season = ?2 AND episode = 0 AND seeders IS NOT 0",
+    )
+    .bind(normalized_name)
+    .bind(season)
+    .fetch_all(pool)
+    .await
 }
 
 /// Distinct episodes found after `since` — the "X new" Watchlist
@@ -289,6 +352,7 @@ mod tests {
             language: language.map(str::to_string),
             download_url: None,
             absolute_episode: None,
+            codec: None,
         }
     }
 
@@ -360,14 +424,19 @@ pub struct UpsertAvailableEpisode {
     /// Absolute episode number for fleuve anime offers (`None` for
     /// seasonal releases and packs).
     pub absolute_episode: Option<i64>,
+    /// Coarse video codec parsed from the release title —
+    /// `iris_media::filename::Codec::as_str` form. `None` only from
+    /// legacy code paths pre-dating the format-follow work.
+    pub codec: Option<String>,
 }
 
 pub async fn upsert(pool: &SqlitePool, a: UpsertAvailableEpisode) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO available_episodes \
             (id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-             magnet, quality, seeders, size_bytes, found_at, language, download_url, absolute_episode) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
+             magnet, quality, seeders, size_bytes, found_at, language, download_url, \
+             absolute_episode, codec) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) \
          ON CONFLICT(normalized_name, season, episode, indexer_provider, indexer_torrent_id) \
          DO UPDATE SET \
             magnet           = excluded.magnet, \
@@ -376,7 +445,8 @@ pub async fn upsert(pool: &SqlitePool, a: UpsertAvailableEpisode) -> Result<(), 
             size_bytes       = excluded.size_bytes, \
             language         = excluded.language, \
             download_url     = excluded.download_url, \
-            absolute_episode = excluded.absolute_episode",
+            absolute_episode = excluded.absolute_episode, \
+            codec            = excluded.codec",
     )
     .bind(Uuid::new_v4())
     .bind(&a.normalized_name)
@@ -392,6 +462,7 @@ pub async fn upsert(pool: &SqlitePool, a: UpsertAvailableEpisode) -> Result<(), 
     .bind(a.language)
     .bind(a.download_url)
     .bind(a.absolute_episode)
+    .bind(a.codec)
     .execute(pool)
     .await?;
     Ok(())
