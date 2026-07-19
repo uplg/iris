@@ -1038,6 +1038,78 @@ fn offer_cmp(
         .then_with(|| iris_core::ranking::recommended_cmp(&ca, &cb))
 }
 
+/// What the grab resolution settled on: a season pack to ingest whole,
+/// or a singleton release for the requested episode.
+enum GrabSource {
+    Pack(PickedAvailability),
+    Singleton(PickedAvailability),
+}
+
+/// Decide where the requested episode comes from. Resolution order
+/// (every path excludes confirmed-dead 0-seeder offers, honours
+/// `language` and the series' established format/codec profile):
+///   1. Season-boundary pack-first: entering a season the household
+///      owns nothing of (just finished S3 → wants S4) takes the full
+///      season pack when a *sane* one is cached — the user wants the
+///      season, not ten sequential singleton grabs.
+///   2. Cached singleton for the requested (S, E).
+///   3. Cached season pack covering the requested season — fallback
+///      when no singleton offer exists, sane or not.
+///   4. Live indexer query (singleton-only — pack discovery lives on
+///      the periodic scheduler, not on the grab path).
+async fn resolve_grab_source(
+    state: &AppState,
+    normalized_name: &str,
+    display_title: &str,
+    season: i64,
+    episode: i64,
+    language: &LangSel,
+) -> ApiResult<GrabSource> {
+    // Established profile: follow the resolution / codec the household
+    // already owns this series in.
+    let owned_files = iris_db::episode_files::list_for_normalized(state.db(), normalized_name)
+        .await
+        .unwrap_or_default();
+    let profile = dominant_owned_profile(state, &owned_files).await;
+
+    let owns_any_in_season = owned_files.iter().any(|f| f.season == season);
+    if !owns_any_in_season
+        && let Some((pack, true)) =
+            find_pack_offer(state.db(), normalized_name, season, language, &profile).await?
+    {
+        return Ok(GrabSource::Pack(pack));
+    }
+    if let Some(pick) = best_available(
+        state.db(),
+        normalized_name,
+        season,
+        episode,
+        language,
+        &profile,
+    )
+    .await?
+    {
+        return Ok(GrabSource::Singleton(pick));
+    }
+    if let Some((pack, _)) =
+        find_pack_offer(state.db(), normalized_name, season, language, &profile).await?
+    {
+        return Ok(GrabSource::Pack(pack));
+    }
+    let pick = find_via_indexer_for_identity(
+        state,
+        normalized_name,
+        display_title,
+        language,
+        &profile,
+        season,
+        episode,
+    )
+    .await?
+    .ok_or(ApiError::NotFound)?;
+    Ok(GrabSource::Singleton(pick))
+}
+
 pub(crate) async fn grab_episode_core(
     state: &AppState,
     req: GrabEpisodeRequest<'_>,
@@ -1076,73 +1148,28 @@ pub(crate) async fn grab_episode_core(
         });
     }
 
-    // Established profile: follow the resolution / codec the household
-    // already owns this series in.
-    let owned_files = iris_db::episode_files::list_for_normalized(state.db(), normalized_name)
-        .await
-        .unwrap_or_default();
-    let profile = dominant_owned_profile(state, &owned_files).await;
-
-    // Resolution order (every path excludes confirmed-dead 0-seeder
-    // offers):
-    //   1. Season-boundary pack-first: entering a season the household
-    //      owns nothing of (just finished S3 → wants S4) ingests the
-    //      full season pack when a *sane* one is cached — the user
-    //      wants the season, not ten sequential singleton grabs.
-    //   2. Cached singleton for the requested (S, E) honouring
-    //      `language` and the series' format/codec profile.
-    //   3. Cached season pack covering the requested season — fallback
-    //      when no singleton offer exists, sane or not. The pack
-    //      ingest path runs to completion, then we SCENE-parse the
-    //      resulting file list to extract the leaf matching (S, E)
-    //      and return its (infohash, file_idx).
-    //   4. Live indexer query (singleton-only — pack discovery
-    //      lives on the periodic scheduler, not on the grab path).
-    let owns_any_in_season = owned_files.iter().any(|f| f.season == season);
-    if !owns_any_in_season
-        && let Some((pack, true)) =
-            find_pack_offer(state.db(), normalized_name, season, &language, &profile).await?
-    {
-        return ingest_pack_and_pick_episode(state, user_id, display_title, pack, season, episode)
-            .await;
-    }
-    let pick = match best_available(
-        state.db(),
+    let pick = match resolve_grab_source(
+        state,
         normalized_name,
+        display_title,
         season,
         episode,
         &language,
-        &profile,
     )
     .await?
     {
-        Some(p) => p,
-        None => {
-            if let Some((pack, _)) =
-                find_pack_offer(state.db(), normalized_name, season, &language, &profile).await?
-            {
-                return ingest_pack_and_pick_episode(
-                    state,
-                    user_id,
-                    display_title,
-                    pack,
-                    season,
-                    episode,
-                )
-                .await;
-            }
-            find_via_indexer_for_identity(
+        GrabSource::Pack(pack) => {
+            return ingest_pack_and_pick_episode(
                 state,
-                normalized_name,
+                user_id,
                 display_title,
-                &language,
-                &profile,
+                pack,
                 season,
                 episode,
             )
-            .await?
-            .ok_or(ApiError::NotFound)?
+            .await;
         }
+        GrabSource::Singleton(pick) => pick,
     };
 
     let result = ingest_picked(
