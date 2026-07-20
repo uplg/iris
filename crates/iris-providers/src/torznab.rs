@@ -19,6 +19,11 @@
 //! base_url = "https://indexer.example"   # without /api — appended via `api_path`
 //! api_path = "/api"                       # optional, default "/api"
 //! api_key_env = "MYINDEXER_API_KEY"
+//! # ALSO send the key as this HTTP header on every request (tr4ker's
+//! # REST-era keys authenticate via header; the spec `apikey=` query
+//! # param is still sent alongside, so either scheme satisfies the
+//! # indexer).
+//! # api_key_header = "X-Api-Key"
 //! # optional category overrides — comma-separated Torznab category IDs.
 //! # Defaults follow the spec's coarse buckets (2000=movies, 5000=tv).
 //! # movie_categories = "2000,2030,2040,2045,2050,2060"
@@ -42,7 +47,9 @@ use quick_xml::Reader;
 use quick_xml::escape::unescape as xml_unescape;
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesRef, BytesText, Event};
-use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, REFERER, USER_AGENT};
+use reqwest::header::{
+    ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderName, HeaderValue, REFERER, USER_AGENT,
+};
 use reqwest::{Client, StatusCode};
 use tokio::sync::Mutex;
 use url::Url;
@@ -149,6 +156,14 @@ impl TorznabProvider {
                 HeaderValue::from_str(r)
                     .map_err(|e| Error::Provider(format!("torznab referer invalid: {e}")))?,
             );
+        }
+        if let Some(name) = entry.fields.get("api_key_header").and_then(|v| v.as_str()) {
+            let header_name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|e| Error::Provider(format!("torznab api_key_header invalid: {e}")))?;
+            let mut value = HeaderValue::from_str(&api_key)
+                .map_err(|e| Error::Provider(format!("torznab api_key not header-safe: {e}")))?;
+            value.set_sensitive(true);
+            headers.insert(header_name, value);
         }
 
         let http = crate::tls::client_builder()

@@ -41,6 +41,11 @@ default_language = "english"
 # TR4KER — francophone tracker exposing a clean generic Torznab 1.3 API
 # (caps, search/movie/tvsearch with season/ep, torznab:attr metadata,
 # apikey-signed download links returning real bencoded .torrent files).
+# `kind = "tr4ker"` composes the generic Torznab provider with a custom
+# `details()` on the SPA's JSON `/api/torrents/{slug}` endpoint (rich HTML
+# release page). Auth is the same key sent both as the spec `apikey=`
+# query param and as the `X-Api-Key` header (the REST detail route only
+# honors the header).
 # `api_path = "/api/"` (trailing slash) skips the nginx 301 `/api` → `/api/`
 # round-trip on every request. Parent categories include their subcats
 # (cat=2000 returns 2040 items), so the provider's default 2000/5000
@@ -48,8 +53,9 @@ default_language = "english"
 # so no `default_language` hint is needed.
 [[providers]]
 id = "tr4ker"
-kind = "torznab"
+kind = "tr4ker"
 enabled = true
 base_url = "https://tr4ker.net"
 api_path = "/api/"
 api_key_env = "TR4KER_API_KEY"
+api_key_header = "X-Api-Key"
