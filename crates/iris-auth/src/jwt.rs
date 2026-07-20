@@ -75,13 +75,20 @@ impl Issuer {
         Ok(encode(&Header::default(), &claims, &self.encoding)?)
     }
 
+    /// `ttl_override` replaces the configured refresh TTL for this token
+    /// (device-paired sessions get a much longer window). It MUST be encoded
+    /// into the JWT's own `exp`, not just tracked DB-side: `verify_refresh`
+    /// validates `exp` before any DB lookup, so a JWT carrying the short
+    /// default would 401 an otherwise-valid device session once the default
+    /// window elapsed — the "rarely-used TV logs out after a week" bug.
     pub fn issue_refresh(
         &self,
         user_id: UserId,
+        ttl_override: Option<Duration>,
     ) -> Result<(String, Uuid, chrono::DateTime<Utc>), JwtError> {
         let now = Utc::now();
         let jti = Uuid::new_v4();
-        let exp = now + self.refresh_ttl;
+        let exp = now + ttl_override.unwrap_or(self.refresh_ttl);
         let claims = RefreshClaims {
             sub: user_id.into(),
             kind: TokenKind::Refresh,
@@ -118,5 +125,53 @@ impl Issuer {
             });
         }
         Ok(data.claims)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn issuer() -> Issuer {
+        Issuer::new("secret", "iris-test".into(), 3600, 7 * 24 * 3600)
+    }
+
+    /// Device sessions pass a TTL override; the JWT's own `exp` must carry
+    /// it. If only the DB row got the long TTL (the old behavior), the token
+    /// would fail `verify_refresh`'s exp validation after the short default
+    /// window even though the session was still valid DB-side — logging out
+    /// any device idle longer than the browser TTL.
+    #[test]
+    fn refresh_ttl_override_reaches_jwt_exp() {
+        let iss = issuer();
+        let year = Duration::days(365);
+        let before = Utc::now();
+        let (token, _jti, exp) = iss
+            .issue_refresh(UserId::from(Uuid::new_v4()), Some(year))
+            .expect("issue");
+        assert!(
+            exp >= before + year,
+            "returned exp must honour the override"
+        );
+        let claims = iss.verify_refresh(&token).expect("verify");
+        assert!(
+            claims.exp >= (before + year - Duration::minutes(1)).timestamp(),
+            "JWT-encoded exp must honour the override, got {} (≈{} days out)",
+            claims.exp,
+            (claims.exp - before.timestamp()) / 86_400,
+        );
+    }
+
+    #[test]
+    fn refresh_without_override_uses_configured_ttl() {
+        let iss = issuer();
+        let before = Utc::now();
+        let (token, _jti, exp) = iss
+            .issue_refresh(UserId::from(Uuid::new_v4()), None)
+            .expect("issue");
+        let claims = iss.verify_refresh(&token).expect("verify");
+        let ceiling = (before + Duration::days(8)).timestamp();
+        assert!(claims.exp <= ceiling, "default TTL must stay ~7 days");
+        assert_eq!(claims.exp, exp.timestamp());
     }
 }

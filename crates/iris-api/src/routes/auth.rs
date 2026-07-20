@@ -345,21 +345,13 @@ pub async fn issue_session_for_kind(
         .issue_access(user_id, is_admin)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("issue access: {e}")))?;
     let refresh_ttl = refresh_ttl_override_secs.unwrap_or(state.cfg().auth.refresh_ttl_secs);
+    // The override TTL must reach the JWT encoder itself: `verify_refresh`
+    // checks the token's `exp` before any DB lookup, so the JWT, the DB
+    // `expires_at` and the cookie Max-Age have to agree on the horizon.
     let (refresh, jti, exp) = state
         .jwt()
-        .issue_refresh(user_id)
+        .issue_refresh(user_id, refresh_ttl_override_secs.map(Duration::seconds))
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("issue refresh: {e}")))?;
-    // exp from issue_refresh uses the configured refresh TTL — recompute when
-    // the caller wanted a longer one (devices). Token contents already
-    // include exp, so we pass override_exp via the DB row only; the JWT
-    // encoder used the default. For our purposes that's acceptable: we use
-    // DB-side `expires_at` to invalidate, and we store the device-scoped
-    // longer expiration there.
-    let exp = if let Some(secs) = refresh_ttl_override_secs {
-        chrono::Utc::now() + Duration::seconds(secs)
-    } else {
-        exp
-    };
 
     iris_db::refresh_tokens::insert_with_device(
         state.db(),
