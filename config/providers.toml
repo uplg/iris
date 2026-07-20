@@ -38,6 +38,22 @@ api_key_env = "SEEDPOOL_API_KEY"
 # explicitly (VOSTFR / VFF / MULTI) so they don't need a default.
 default_language = "english"
 
+# TR4KER — francophone tracker exposing a clean generic Torznab 1.3 API
+# (caps, search/movie/tvsearch with season/ep, torznab:attr metadata,
+# apikey-signed download links returning real bencoded .torrent files).
+# `api_path = "/api/"` (trailing slash) skips the nginx 301 `/api` → `/api/`
+# round-trip on every request. Parent categories include their subcats
+# (cat=2000 returns 2040 items), so the provider's default 2000/5000
+# buckets are correct. Releases are explicitly tagged (MULTi/VFF/VOSTFR)
+# so no `default_language` hint is needed.
+[[providers]]
+id = "tr4ker"
+kind = "torznab"
+enabled = true
+base_url = "https://tr4ker.net"
+api_path = "/api/"
+api_key_env = "TR4KER_API_KEY"
+
 # Nexum — consumed via its NATIVE REST API (`kind = "nexum"`), NOT Torznab.
 # Nexum's Torznab bridge dumps every non-video category (games, software,
 # audio, ebooks) into 2000 (Movies), so search returned Windows game
