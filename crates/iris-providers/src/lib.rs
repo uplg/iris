@@ -11,7 +11,6 @@
 //! reimplementing the wire format (see [`c411`] for an example).
 
 pub mod c411;
-pub mod nexum;
 pub mod registry;
 pub mod tls;
 pub mod torr9;

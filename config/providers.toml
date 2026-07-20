@@ -53,20 +53,3 @@ enabled = true
 base_url = "https://tr4ker.net"
 api_path = "/api/"
 api_key_env = "TR4KER_API_KEY"
-
-# Nexum — consumed via its NATIVE REST API (`kind = "nexum"`), NOT Torznab.
-# Nexum's Torznab bridge dumps every non-video category (games, software,
-# audio, ebooks) into 2000 (Movies), so search returned Windows game
-# repacks labelled as films with no way to filter them. The native
-# `/api/v1/torrents` endpoint exposes the real category name per torrent
-# ("Windows", "Films", …), which the provider classifies to drop anything
-# Iris can't play. It also gives stable numeric ids, BBCode descriptions
-# and tmdb_id. Key goes in `.env` as NEXUM_API_KEY — a "simple" key (all
-# rights) or one carrying the `api` right. Until it's set the registry logs
-# one line and skips this provider (never crashes boot).
-[[providers]]
-id = "nexum"
-kind = "nexum"
-enabled = true
-base_url = "https://nexum-core.com"
-api_key_env = "NEXUM_API_KEY"
