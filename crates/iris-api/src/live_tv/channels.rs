@@ -49,6 +49,11 @@ pub struct StreamSource {
 /// official feed always outranks a community restream of the same channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SourceTier {
+    /// The household's own DVB-T tuner (`[live_tv.tuner]`): a broadcast
+    /// received off-air locally beats any internet restream, so this tier
+    /// is elected first — the tiers below stay untouched as automatic
+    /// fallback when the tuner box is down.
+    Tuner,
     Official,
     Isp,
     Community,
@@ -363,6 +368,84 @@ pub fn merge_db_sources(channels: &mut [Channel], db: &HashMap<String, Vec<Strea
     }
 }
 
+/// One entry of the box's self-described channel grid (`GET /channels` on
+/// tunerd) — the mux survey lives ON the box, Iris only discovers it.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TunerChannelInfo {
+    /// SDT service name ("M6", "F3 Côte d'Azur", …).
+    pub name: String,
+    /// Extra normalized match keys for names that differ from the iptv-org
+    /// identity (regional variants: "F3 Côte d'Azur" → "france3").
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    /// Tuner index on the box (0 = master, 1 = slave).
+    #[serde(default)]
+    pub adapter: u8,
+    /// Mux centre frequency in Hz.
+    pub freq_hz: u32,
+    /// PIDs to hardware-filter: PAT, SDT, PMT, video/PCR, audio(s).
+    pub pids: Vec<u16>,
+}
+
+/// Merge the tuner's discovered channels as top-tier sources. A grid entry
+/// matches a channel when any of its normalized name/aliases equals the
+/// channel's normalized tvg-id base or display name. Additive only — every
+/// existing source keeps its place in the fallback order below
+/// [`SourceTier::Tuner`].
+pub fn merge_tuner_sources(channels: &mut [Channel], base_url: &str, grid: &[TunerChannelInfo]) {
+    if base_url.is_empty() || grid.is_empty() {
+        return;
+    }
+    let mut by_alias: HashMap<String, &TunerChannelInfo> = HashMap::new();
+    for tc in grid {
+        by_alias.insert(normalize(&tc.name), tc);
+        for a in &tc.aliases {
+            by_alias.insert(normalize(a), tc);
+        }
+    }
+    for ch in channels.iter_mut() {
+        let id_alias = ch
+            .tvg_id
+            .as_deref()
+            .map(|id| normalize(tvg_id_base(id)))
+            .unwrap_or_default();
+        let name_alias = normalize(&ch.name);
+        let Some(tc) = by_alias
+            .get(&id_alias)
+            .or_else(|| by_alias.get(&name_alias))
+        else {
+            continue;
+        };
+        let url = tuner_url(base_url, tc);
+        if ch.sources.iter().all(|s| s.url != url) {
+            ch.sources.push(StreamSource {
+                url,
+                quality: Some(1080),
+                user_agent: None,
+                referrer: None,
+                tier: SourceTier::Tuner,
+            });
+            ch.sources.sort_by_key(source_order_key);
+        }
+    }
+}
+
+/// `http://box:8554/tune?a=0&f=506000000&pids=0x0,0x11,0x64,…` — tunerd's
+/// raw-TS endpoint for one service (PAT/SDT/PMT + the service's PIDs).
+fn tuner_url(base: &str, tc: &TunerChannelInfo) -> String {
+    use std::fmt::Write as _;
+    let mut pids = String::new();
+    for (i, p) in tc.pids.iter().enumerate() {
+        let _ = write!(pids, "{}{p:#x}", if i == 0 { "" } else { "," });
+    }
+    format!(
+        "{}/tune?a={}&f={}&pids={pids}",
+        base.trim_end_matches('/'),
+        tc.adapter,
+        tc.freq_hz
+    )
+}
+
 /// `"1080p"` → `Some(1080)` (iptv-org database `quality` field).
 pub fn parse_quality(q: &str) -> Option<u32> {
     q.trim().strip_suffix('p').and_then(|n| n.parse().ok())
@@ -556,6 +639,73 @@ mod tests {
         assert_eq!(channels[0].tnt_number, Some(1));
         assert_eq!(channels[1].tnt_number, Some(6));
         assert_eq!(channels[4].tnt_number, None);
+    }
+
+    #[test]
+    fn tuner_matches_by_name_when_tvg_id_is_absent() {
+        // vavoo-style entry: no tvg-id at all, display name only
+        let playlists = vec![vec![entry("", "M6", "http://vavoo.example/m6", "")]];
+        let mut channels = build_channels(&playlists, None);
+        let grid = vec![TunerChannelInfo {
+            name: "M6".to_string(),
+            aliases: vec![],
+            adapter: 0,
+            freq_hz: 506_000_000,
+            pids: vec![0x0, 0x11, 0x64],
+        }];
+        merge_tuner_sources(&mut channels, "http://box:8554", &grid);
+        let m6 = channels.iter().find(|c| c.name == "M6").unwrap();
+        assert_eq!(
+            m6.sources[0].tier,
+            SourceTier::Tuner,
+            "name-only match must work: sources = {:?}",
+            m6.sources.iter().map(|s| &s.url).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn tuner_sources_outrank_everything_and_stay_additive() {
+        let playlists = vec![vec![
+            entry("M6.fr", "M6 (1080p)", "http://official.m6.fr/live.m3u8", ""),
+            entry("TF1.fr", "TF1", "http://mirror.example/tf1.m3u8", ""),
+        ]];
+        let mut channels = build_channels(&playlists, None);
+
+        let grid = vec![TunerChannelInfo {
+            // discovered names match normalized: "M-6" ≡ tvg-id base "M6"
+            name: "M-6".to_string(),
+            aliases: vec![],
+            adapter: 0,
+            freq_hz: 506_000_000,
+            pids: vec![0x0, 0x11, 0x64, 0x78, 0x82],
+        }];
+        merge_tuner_sources(&mut channels, "http://100.64.0.9:8554/", &grid);
+
+        let m6 = channels.iter().find(|c| c.name.starts_with("M6")).unwrap();
+        assert_eq!(m6.sources.len(), 2, "additive: the official feed stays");
+        assert_eq!(m6.sources[0].tier, SourceTier::Tuner, "tuner elected first");
+        assert_eq!(
+            m6.sources[0].url,
+            "http://100.64.0.9:8554/tune?a=0&f=506000000&pids=0x0,0x11,0x64,0x78,0x82"
+        );
+        assert_eq!(m6.sources[1].tier, SourceTier::Official);
+
+        let tf1 = channels.iter().find(|c| c.name == "TF1").unwrap();
+        assert!(
+            tf1.sources.iter().all(|s| s.tier != SourceTier::Tuner),
+            "unlisted channels are untouched"
+        );
+
+        // Empty grid / base URL are no-ops.
+        let mut untouched = build_channels(&playlists, None);
+        merge_tuner_sources(&mut untouched, "", &grid);
+        merge_tuner_sources(&mut untouched, "http://x", &[]);
+        assert!(
+            untouched
+                .iter()
+                .flat_map(|c| &c.sources)
+                .all(|s| s.tier != SourceTier::Tuner)
+        );
     }
 
     #[test]

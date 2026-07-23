@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use url::Url;
 
-use channels::Channel;
+use channels::{Channel, SourceTier};
+use transcode::Mode;
 
 /// Browser UA presented to upstreams that don't pin one via the playlist
 /// (several French networks 403 non-browser agents).
@@ -93,6 +94,12 @@ pub enum LiveTvError {
     BadProxyRequest,
     #[error("upstream unavailable: {0}")]
     Upstream(String),
+}
+
+/// Envelope of tunerd's `/channels` response.
+#[derive(Debug, Deserialize)]
+struct TunerGrid {
+    channels: Vec<channels::TunerChannelInfo>,
 }
 
 /// One entry of the country picker, from iptv-org's `countries.json`.
@@ -508,6 +515,16 @@ impl LiveTvService {
         if let Some(db) = self.streams_db().await {
             channels::merge_db_sources(&mut built, &db);
         }
+        // The household DVB-T tuner: absolute-priority sources for the
+        // channels it carries (fr only — it receives French TNT). The box
+        // describes its own grid; a dead/absent box merges nothing and the
+        // internet tiers serve alone.
+        if country == "fr"
+            && let Some(grid) = self.tuner_grid().await
+        {
+            channels::merge_tuner_sources(&mut built, &self.inner.cfg.tuner.base_url, &grid);
+            tracing::info!(tuner_channels = grid.len(), "tuner grid merged");
+        }
         // Back-fill logos for channels whose feed carries none (chiefly Vavoo,
         // which ships no usable logo) by matching the channel name against
         // iptv-org's logo DB. Best-effort; a miss falls back to the letter tile.
@@ -524,6 +541,40 @@ impl LiveTvService {
         }
         tracing::info!(country, channels = built.len(), "live tv playlist loaded");
         Ok(self.build_snapshot(built))
+    }
+
+    /// Fetch the tuner box's self-described channel grid (`/channels`).
+    /// Best-effort with a short timeout: the tuner being unreachable must
+    /// never delay or fail a playlist load.
+    async fn tuner_grid(&self) -> Option<Vec<channels::TunerChannelInfo>> {
+        let cfg = &self.inner.cfg.tuner;
+        if !cfg.enabled || cfg.base_url.is_empty() {
+            return None;
+        }
+        let url = format!("{}/channels", cfg.base_url.trim_end_matches('/'));
+        let resp = self
+            .inner
+            .http
+            .get(&url)
+            .timeout(Duration::from_secs(4))
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status);
+        let body = match resp {
+            Ok(r) => r.json::<TunerGrid>().await,
+            Err(e) => {
+                tracing::debug!(error = %e, "tuner grid unreachable");
+                return None;
+            }
+        };
+        match body {
+            Ok(grid) if !grid.channels.is_empty() => Some(grid.channels),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::debug!(error = %e, "tuner grid unparsable");
+                None
+            }
+        }
     }
 
     /// Resolve the shared per-URL health records for a fresh channel list —
@@ -678,7 +729,17 @@ impl LiveTvService {
         let channel_key = format!("{country}:{id}");
         let now_ms = epoch_ms();
 
-        let start = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
+        // The tuner tier has absolute priority: always reconsider it first,
+        // even after a capacity- or failure-driven fallback elected an
+        // internet source (cooldown still shields a genuinely failing box
+        // in pass 0). Election stays sticky for internet-only channels.
+        let start = channel
+            .sources
+            .iter()
+            .position(|s| s.tier == SourceTier::Tuner)
+            .unwrap_or_else(|| {
+                snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len()
+            });
         let mut last_err = String::new();
         // Two passes: healthy sources first, then the ones that were cooling
         // down. Pass 1 must run whenever pass 0 didn't succeed — not only
@@ -695,10 +756,88 @@ impl LiveTvService {
                 }
                 tried[si] = true;
                 let source = &channel.sources[si];
+                if source.tier == SourceTier::Tuner {
+                    // Mux admission first: two RF frontends = two concurrent
+                    // frequencies. A third-mux request reclaims a mux nobody
+                    // is watching; when BOTH tuned muxes have live viewers,
+                    // THIS viewer falls through to the internet tiers instead
+                    // of cutting someone else's antenna stream. No failure is
+                    // marked — capacity is not a source defect, and the next
+                    // election re-checks (the tuner is always tried first).
+                    if let Some(freq) = transcode::tuner_freq(&source.url) {
+                        if !self.inner.transcode.admit_mux(&freq).await {
+                            tracing::info!(
+                                channel = %channel_key,
+                                freq = %freq,
+                                "tuner at mux capacity — using internet source"
+                            );
+                            last_err = "tuner at mux capacity".into();
+                            continue;
+                        }
+                    }
+                    // Prewarm mux members stay pinned (warm for hours) even
+                    // when a viewer, not the prewarm loop, spawned them.
+                    let pinned = self
+                        .mux_siblings(&country, &self.inner.cfg.tuner.prewarm)
+                        .await
+                        .iter()
+                        .any(|warm_id| warm_id == id);
+                    // The household tuner serves raw MPEG-TS, not HLS: feed
+                    // it through the shared ffmpeg manager in remux mode
+                    // (-c copy) and point the master at the tuner segment
+                    // route. Any failure (box off, no lock) marks the source
+                    // and falls through to the internet tiers.
+                    match self
+                        .inner
+                        .transcode
+                        .master_playlist(
+                            Mode::Remux,
+                            &channel_key,
+                            &source.url,
+                            DEFAULT_UA,
+                            None,
+                            pinned,
+                        )
+                        .await
+                    {
+                        Ok(body) => {
+                            snap.active_source[idx].store(si, Ordering::Relaxed);
+                            snap.health[idx][si].mark_success();
+                            tracing::info!(
+                                channel = %channel_key,
+                                source = si,
+                                tier = "tuner",
+                                "live tv source elected"
+                            );
+                            return Ok(MasterPlaylist {
+                                body: prefix_segment_uris(&body, "transcode/"),
+                                source_index: si,
+                                upstream_host: "tuner".to_string(),
+                            });
+                        }
+                        Err(e) => {
+                            snap.health[idx][si].mark_failure(now_ms);
+                            tracing::debug!(
+                                channel = %channel_key,
+                                error = %e,
+                                "tuner source failed, rotating to internet tiers"
+                            );
+                            last_err = e.to_string();
+                            continue;
+                        }
+                    }
+                }
                 match self.fetch_source_playlist(source).await {
                     Ok((body, base)) => {
                         snap.active_source[idx].store(si, Ordering::Relaxed);
                         health.mark_success();
+                        tracing::info!(
+                            channel = %channel_key,
+                            source = si,
+                            tier = ?source.tier,
+                            host = %base.host_str().unwrap_or("unknown"),
+                            "live tv source elected"
+                        );
                         return Ok(MasterPlaylist {
                             body: proxy::rewrite_playlist(
                                 &body,
@@ -1007,10 +1146,12 @@ impl LiveTvService {
         self.inner
             .transcode
             .master_playlist(
+                Mode::Reencode,
                 &channel_key,
                 &upstream_url,
                 source.user_agent.as_deref().unwrap_or(DEFAULT_UA),
                 source.referrer.as_deref(),
+                false,
             )
             .await
     }
@@ -1024,7 +1165,10 @@ impl LiveTvService {
     ) -> Result<Vec<u8>, LiveTvError> {
         let country = validate_country(country)?;
         let channel_key = format!("{country}:{id}");
-        self.inner.transcode.segment(&channel_key, name).await
+        self.inner
+            .transcode
+            .segment(Mode::from_segment_name(name), &channel_key, name)
+            .await
     }
 
     /// Fetch a channel logo through the backend (signed URL minted by the
@@ -1199,6 +1343,15 @@ impl LiveTvService {
                     // refresh); they're elected lazily and resolved on the
                     // first real zap, self-healing via playback-failure demotion.
                     if vavoo::stream_id(&source.url).is_some() {
+                        continue;
+                    }
+                    // Tuner sources are raw-TS /tune endpoints: probing one
+                    // would START A TUNE on the box (evicting a real viewer)
+                    // and then fail playlist parsing, cooling the tuner down
+                    // before any election. Like Vavoo they are elected
+                    // lazily; the election's tuner branch marks its own
+                    // failures.
+                    if source.tier == SourceTier::Tuner {
                         continue;
                     }
                     let svc = self.clone();
@@ -1530,6 +1683,30 @@ impl LiveTvService {
         index.id_for_name(&channel.name).map(str::to_string)
     }
 
+    /// Expand channel ids to every channel sharing their tuner MUX (same
+    /// `f=` in the tuner source URL): one tuned adapter serves the whole
+    /// frequency, so its siblings are warm-able for the cost of a `-c copy`
+    /// ffmpeg each. Unknown ids pass through so a config typo still
+    /// surfaces as a logged prewarm failure.
+    async fn mux_siblings(&self, country: &str, seeds: &[String]) -> Vec<String> {
+        let Ok(snap) = self.channels(country).await else {
+            return seeds.to_vec();
+        };
+        let freqs: HashSet<String> = snap
+            .channels
+            .iter()
+            .filter(|c| seeds.iter().any(|s| s == &c.id))
+            .filter_map(channel_tuner_freq)
+            .collect();
+        let mut out: Vec<String> = seeds.to_vec();
+        for ch in snap.channels.iter() {
+            if channel_tuner_freq(ch).is_some_and(|f| freqs.contains(&f)) && !out.contains(&ch.id) {
+                out.push(ch.id.clone());
+            }
+        }
+        out
+    }
+
     /// Background refresh: re-fetch loaded playlists / guides past their
     /// TTL. Runs forever; spawn once at boot.
     pub fn spawn_refresh_loop(self) {
@@ -1555,6 +1732,73 @@ impl LiveTvService {
             let svc = self.clone();
             tokio::spawn(async move {
                 svc.search_index().await;
+            });
+        }
+        // Hydrate the configured tuner channels at boot and keep their remux
+        // sessions warm forever (a 30 min re-touch beats the reaper). Viewers
+        // then always join a session with a deep playlist window — the
+        // cold-join stutter happens once per boot, with nobody watching.
+        if self.inner.cfg.tuner.enabled && !self.inner.cfg.tuner.prewarm.is_empty() {
+            let svc = self.clone();
+            tokio::spawn(async move {
+                let country = svc.default_country().to_string();
+                // 5 min cadence: warm sessions answer instantly (no-op), and
+                // a mux temporarily borrowed by a viewer for a third
+                // frequency gets re-pinned quickly once they leave.
+                let mut ticker = tokio::time::interval(Duration::from_mins(5));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    ticker.tick().await; // first tick fires immediately = boot hydration
+                    // Expand each configured id to its WHOLE MUX: a tuned
+                    // adapter serves every channel of its frequency anyway
+                    // (tunerd unions the PID filters), so warming the
+                    // siblings costs one `-c copy` ffmpeg each — and the
+                    // entire mux zaps instantly.
+                    for id in svc
+                        .mux_siblings(&country, &svc.inner.cfg.tuner.prewarm)
+                        .await
+                    {
+                        let key = format!("{country}:{id}");
+                        // Already running → leave it alone. Deliberately no
+                        // touch: session heat must mean "a viewer is here",
+                        // it's what shields watched muxes from reclaim.
+                        if svc.inner.transcode.is_warm(Mode::Remux, &key).await {
+                            continue;
+                        }
+                        // Viewers outrank warmth — never steal an adapter
+                        // from watched muxes to re-pin a cold channel. The
+                        // next tick retries once a mux cools down.
+                        let freq = {
+                            let snap = svc.channels(&country).await.ok();
+                            snap.as_ref().and_then(|s| {
+                                s.channel_index(&id)
+                                    .and_then(|i| channel_tuner_freq(&s.channels[i]))
+                            })
+                        };
+                        if let Some(freq) = &freq {
+                            if !svc.inner.transcode.mux_available(freq).await {
+                                tracing::debug!(
+                                    channel = %id,
+                                    freq = %freq,
+                                    "tuner adapters busy with watched muxes — left cold"
+                                );
+                                continue;
+                            }
+                        }
+                        match svc.master_playlist(&country, &id).await {
+                            Ok(mp) if mp.upstream_host == "tuner" => {
+                                tracing::info!(channel = %id, "tuner session warm");
+                            }
+                            Ok(_) => tracing::debug!(
+                                channel = %id,
+                                "prewarm lost the adapter race — left cold"
+                            ),
+                            Err(e) => {
+                                tracing::warn!(channel = %id, error = %e, "tuner prewarm failed");
+                            }
+                        }
+                    }
+                }
             });
         }
         tokio::spawn(async move {
@@ -1634,6 +1878,36 @@ impl LiveTvService {
     }
 }
 
+/// Prefix every URI of an HLS media playlist — ffmpeg's on-disk playlist
+/// references bare `mux000001.m4s` names, but the master is served from
+/// `.../channels/{id}/master.m3u8` while tuner segments live under the
+/// sibling `.../channels/{id}/transcode/{segment}` route. Besides the plain
+/// URI lines, the fMP4 init segment is referenced from an `#EXT-X-MAP` tag
+/// (a comment-shaped line) and must be rewritten too.
+/// Mux frequency of a channel's tuner source, when it has one.
+fn channel_tuner_freq(ch: &Channel) -> Option<String> {
+    ch.sources
+        .iter()
+        .find(|s| s.tier == SourceTier::Tuner)
+        .and_then(|s| transcode::tuner_freq(&s.url))
+}
+
+fn prefix_segment_uris(body: &str, prefix: &str) -> String {
+    body.lines()
+        .map(|line| {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("#EXT-X-MAP:URI=\"") {
+                format!("#EXT-X-MAP:URI=\"{prefix}{rest}")
+            } else if t.is_empty() || t.starts_with('#') {
+                line.to_string()
+            } else {
+                format!("{prefix}{t}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Country codes are interpolated into the playlist URL — keep them to
 /// exactly two ASCII letters (ISO 3166-1 alpha-2), lowercased.
 fn validate_country(code: &str) -> Result<String, LiveTvError> {
@@ -1670,6 +1944,16 @@ mod tests {
             fr.iter().any(|(_, id)| *id == "disneychannel"),
             "Disney Channel FR (Vavoo-only) must be searchable"
         );
+    }
+
+    #[test]
+    fn prefix_segment_uris_touches_only_uri_lines() {
+        let body = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MAP:URI=\"muxinit.mp4\"\n#EXTINF:4.0,\nmux000001.m4s\n\n#EXT-X-ENDLIST";
+        let out = prefix_segment_uris(body, "transcode/");
+        assert!(out.contains("transcode/mux000001.m4s"));
+        assert!(out.contains("#EXT-X-MAP:URI=\"transcode/muxinit.mp4\""));
+        assert!(out.contains("#EXT-X-TARGETDURATION:4"));
+        assert!(!out.contains("transcode/#"));
     }
 
     #[test]

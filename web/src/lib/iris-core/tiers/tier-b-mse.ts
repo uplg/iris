@@ -155,7 +155,7 @@ export type AudioEncoderChoice =
 
 const encoderProbeCache = new Map<string, AudioEncoderChoice | null>();
 
-async function pickAudioEncoder(
+export async function pickAudioEncoder(
   srcChannels: number,
   sampleRate: number,
 ): Promise<AudioEncoderChoice | null> {
@@ -237,7 +237,7 @@ async function pickAudioEncoder(
  *  fine, so the only fix needed is to swallow the "previous GOP" error
  *  thrown by the validator. We patch the validator on each Output we
  *  build (the muxer is on `output._muxer`). */
-function relaxMediabunnyGopCheck(output: Output): void {
+export function relaxMediabunnyGopCheck(output: Output): void {
   const m = (
     output as unknown as {
       _muxer?: { validateTimestamp?: (track: unknown, ts: number, isKey: boolean) => void };

@@ -119,3 +119,16 @@ default_country = "fr"
 # Map a channel id to its XMLTV guide id when they don't match.
 # [live_tv.epg_id_overrides]
 # france4hd = "France4.fr"
+# The household's own DVB-T tuner (tunerd). Channels it carries stream
+# straight off the antenna with absolute priority; every internet source
+# stays as automatic fallback. The box serves its own channel grid at
+# {base_url}/channels — nothing else to configure here.
+# [live_tv.tuner]
+# enabled = true
+# base_url = "http://100.101.102.103:8554"
+# # Channel ids hydrated at boot and kept warm (instant joins with a full
+# # buffer). Each id pins its whole mux (all channels on that frequency).
+# # Two adapters = two warm muxes; viewers outrank warmth (a third-mux zap
+# # reclaims an unwatched mux, or falls back to internet if both muxes have
+# # active viewers).
+# prewarm = ["m6", "rmcdecouverte"]

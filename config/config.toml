@@ -13,9 +13,9 @@ cleanup_target_pct = 75
 torrent_port = 45100
 
 [discovery]
-poll_window_weeks = 8        # how far back (upload time) a release may be and still enter the window
-retain_weeks = 4             # how long a windowed release is kept before the GC slides it out
-slice_interval_minutes = 10  # minutes between slices (full cycle ≈ this × providers × 2)
+poll_window_weeks = 8 # how far back (upload time) a release may be and still enter the window
+retain_weeks = 4 # how long a windowed release is kept before the GC slides it out
+slice_interval_minutes = 10 # minutes between slices (full cycle ≈ this × providers × 2)
 # Max age (years) of a MOVIE's *content* allowed in the discovery shelves. A
 # 1972 film freshly re-uploaded is a fresh upload but not a fresh release, so
 # it's kept out of discovery (still reachable via recommendations / search).
@@ -32,3 +32,24 @@ invitation_ttl_secs = 604800
 [auth.bootstrap_admin]
 email = "admin@iris.local"
 password = "admin12345"
+
+[live_tv.tuner]
+# AIR 7310T (tunerd) direct tuner access
+enabled = true
+base_url = "http://192.168.2.1:8554"
+# Channel ids hydrated at boot and kept warm (instant joins with a full
+# playlist window). Each id pins its WHOLE MUX: every sibling channel on
+# the same frequency is warmed too (a tuned adapter serves the entire mux).
+# Two adapters = two muxes at a time, but viewers always outrank warmth:
+# a viewer zapping to a THIRD mux reclaims whichever warm mux nobody is
+# watching, and the prewarm re-pins it once that viewer leaves. Only when
+# BOTH muxes have active viewers does a third-mux viewer fall back to the
+# channel's internet source (nobody's antenna stream is ever cut).
+# Current grid muxes:
+#   506 MHz  m6
+#   666 MHz  tf1seriesfilms, lequipe, rmcstory, rmcdecouverte, rmclife
+#   690 MHz  tf1, lcp, tmc, tfx, lci
+#   482 MHz  bfmtv, cnews, cstar, gulli, t18, novo19
+#   618 MHz  france2, france3, france4, franceinfo
+# ["tf1", "m6"] → 6 warm channels (690 + 506): TF1, LCP, TMC, TFX, LCI, M6.
+prewarm = ["tf1", "m6"]

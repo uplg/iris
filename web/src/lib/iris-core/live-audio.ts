@@ -118,10 +118,15 @@ export async function mountLiveAudio(
     return { dispose };
   }
 
-  // We're providing the audio — mute the video element so any codec the
-  // browser CAN decode natively (a mixed / fallback source) doesn't play on
-  // top of the sidecar and double it.
-  video.muted = true;
+  // The sidecar only mounts when MSE created no audio buffer at all, so the
+  // `<video>` element is silent — no doubling possible. Mirror its
+  // volume/mute into our gain node instead, so the player's volume controls
+  // (which write to the element) drive the sidecar transparently.
+  const applyVolume = () => {
+    gain.gain.value = video.muted ? 0 : video.volume;
+  };
+  applyVolume();
+  video.addEventListener("volumechange", applyVolume);
 
   // `playHead` is the context-clock time where the next buffer is booked. It
   // only ever moves FORWARD (contiguous, dropped, or padded) — never
@@ -256,9 +261,7 @@ export async function mountLiveAudio(
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("pause", onStall);
       video.removeEventListener("waiting", onStall);
-      // Restore native audio for whatever plays next on this element (e.g.
-      // a source switch to an AAC feed that needs no sidecar).
-      video.muted = false;
+      video.removeEventListener("volumechange", applyVolume);
       dispose();
     },
   };

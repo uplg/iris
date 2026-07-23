@@ -29,6 +29,9 @@ export type RingBuffer = {
   /** Whether the buffer is more than 75% full — back-pressure signal
    *  for the decode pipeline. */
   near_full: () => boolean;
+  /** The worklet's read pointer (interleaved samples, ring-indexed).
+   *  The scheduler derives its media clock from consumption deltas. */
+  readIndex: () => number;
 };
 
 export function createRingBuffer(channels: number, capacityFrames: number): RingBuffer {
@@ -87,5 +90,6 @@ export function createRingBuffer(channels: number, capacityFrames: number): Ring
     reset,
     free,
     near_full: () => free() < capacity * 0.25,
+    readIndex: () => Atomics.load(header, READ_IDX),
   };
 }

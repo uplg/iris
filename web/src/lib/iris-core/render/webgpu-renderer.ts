@@ -74,6 +74,7 @@ export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<V
 
   let intrinsic: { width: number; height: number } | null = null;
   const queue: VideoFrame[] = [];
+  let lastDrawn = 0;
   let disposed = false;
 
   device.lost.then((info) => {
@@ -174,7 +175,10 @@ export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<V
         continue;
       }
       const drawn = queue.shift();
-      if (drawn) draw(drawn);
+      if (drawn) {
+        lastDrawn = drawn.timestamp / 1_000_000;
+        draw(drawn);
+      }
       break;
     }
     if (!disposed) requestAnimationFrame(tick);
@@ -184,6 +188,7 @@ export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<V
   return {
     enqueue,
     queueDepth: () => queue.length,
+    lastDrawnTs: () => lastDrawn,
     intrinsicSize: () => intrinsic,
     canvas,
     isHardwareAccelerated: () => true,

@@ -103,6 +103,34 @@ pub struct LiveTvConfig {
     /// A country absent here simply gets no Vavoo channels.
     #[serde(default = "default_livetv_vavoo_countries")]
     pub vavoo_countries: HashMap<String, Vec<String>>,
+    /// The household's own DVB-T tuner (tunerd on the AIR 7310T box).
+    /// Channels listed here are served from the antenna with ABSOLUTE
+    /// priority (`SourceTier::Tuner`); every internet source stays in place
+    /// as automatic fallback when the box is unreachable.
+    #[serde(default)]
+    pub tuner: TunerConfig,
+}
+
+/// `[live_tv.tuner]` — the tunerd network-tuner appliance. That's the whole
+/// config: the box knows its own channel grid and serves it at
+/// `{base_url}/channels` (names, frequencies, hardware-filter PIDs from its
+/// mux survey); Iris discovers it on every playlist load.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TunerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// tunerd base URL, reachable from the Iris host (tailnet address),
+    /// e.g. `"http://100.101.102.103:8554"`.
+    #[serde(default)]
+    pub base_url: String,
+    /// Channel ids (Iris slugs, e.g. `"m6"`) whose tuner sessions are
+    /// hydrated at boot and kept warm forever. A viewer joining a warm
+    /// session starts in seconds with a full buffer; a cold one stutters
+    /// through its first minute — so the server pays that cost once, with
+    /// nobody watching. Keep the list within TWO muxes: tunerd has two
+    /// adapters, and a third mux evicts a warm one.
+    #[serde(default)]
+    pub prewarm: Vec<String>,
 }
 
 fn default_livetv_country() -> String {
@@ -213,6 +241,7 @@ impl Default for LiveTvConfig {
             channels_url: default_livetv_channels_url(),
             extra_playlists: default_livetv_extra_playlists(),
             epg_urls: default_livetv_epg_urls(),
+            tuner: TunerConfig::default(),
             playlist_refresh_hours: default_livetv_playlist_refresh_hours(),
             epg_refresh_hours: default_livetv_epg_refresh_hours(),
             tnt_overrides: HashMap::new(),

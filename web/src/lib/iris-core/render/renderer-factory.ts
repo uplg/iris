@@ -29,6 +29,9 @@ export type VideoRenderer = {
   enqueue: (frame: VideoFrame) => void;
   /** Frames queued waiting to render. */
   queueDepth: () => number;
+  /** Timestamp (seconds) of the last frame actually drawn — ground
+   *  truth for what the viewer's eye is seeing right now. */
+  lastDrawnTs: () => number;
   /** First frame's intrinsic size or null. */
   intrinsicSize: () => { width: number; height: number } | null;
   /** The output canvas (Document PiP wires `captureStream()`). */
@@ -67,6 +70,7 @@ async function mountCanvas2d(opts: VideoRendererOptions): Promise<VideoRenderer>
   return {
     enqueue: inner.enqueue,
     queueDepth: inner.queueDepth,
+    lastDrawnTs: inner.lastDrawnTs,
     intrinsicSize: inner.intrinsicSize,
     canvas,
     isHardwareAccelerated: () => false,

@@ -1258,7 +1258,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Transcoded MPEG-TS segment",
+            "description": "Transcoded media segment (MPEG-TS for both the re-encode and the tuner remux)",
             "content": {
               "video/mp2t": {
                 "schema": {

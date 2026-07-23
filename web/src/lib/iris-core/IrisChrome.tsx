@@ -42,6 +42,9 @@ export type ChromePipControl = {
 export type IrisChromeProps = {
   handle: EngineHandle | null;
   manifest: Manifest;
+  /** Live-TV mode: LIVE badge instead of the scrub bar, no ±10 s skips,
+   *  no time display, seek keyboard shortcuts disabled. */
+  live?: boolean;
   /** Active subtitle track (for both native and overlay paths). null = off. */
   activeSubtitle: SubtitleTrack | null;
   onSubtitleChange: (track: SubtitleTrack | null) => void;
@@ -68,6 +71,7 @@ export type IrisChromeProps = {
 
 export function IrisChrome(props: IrisChromeProps) {
   const { handle, manifest } = props;
+  const live = props.live === true;
 
   // Polled state. We deliberately don't trust engine events for the
   // chrome's display state because engines emit at different cadences;
@@ -161,12 +165,12 @@ export function IrisChrome(props: IrisChromeProps) {
         case "ArrowLeft":
         case "j":
           e.preventDefault();
-          handle.seek(Math.max(0, handle.currentTime() - 10));
+          if (!live) handle.seek(Math.max(0, handle.currentTime() - 10));
           break;
         case "ArrowRight":
         case "l":
           e.preventDefault();
-          handle.seek(handle.currentTime() + 10);
+          if (!live) handle.seek(handle.currentTime() + 10);
           break;
         case "f":
           e.preventDefault();
@@ -192,7 +196,7 @@ export function IrisChrome(props: IrisChromeProps) {
     if (el.tabIndex < 0) el.tabIndex = 0;
     el.addEventListener("keydown", onKey);
     return () => el.removeEventListener("keydown", onKey);
-  }, [handle, props.fullscreenTarget]);
+  }, [handle, props.fullscreenTarget, live]);
 
   // Click-to-toggle is handled at the wrapper level in `IrisPlayer`
   // — see `onSurfaceClick` there. We used to also register a
@@ -233,22 +237,24 @@ export function IrisChrome(props: IrisChromeProps) {
         {/* Title sits above the controls bar but only while hovered. */}
         <div className="line-clamp-1 text-xs opacity-80">{props.title}</div>
 
-        {/* Scrub bar */}
-        <ScrubBar
-          durationSeconds={duration}
-          currentSeconds={scrubbing ? (scrubTargetRef.current ?? currentTime) : currentTime}
-          bufferedRanges={buffered}
-          onScrub={(s) => {
-            setScrubbing(true);
-            scrubTargetRef.current = s;
-            setCurrentTime(s);
-          }}
-          onScrubEnd={(s) => {
-            handle.seek(s);
-            scrubTargetRef.current = null;
-            setScrubbing(false);
-          }}
-        />
+        {/* Scrub bar — a live stream has no timeline to scrub. */}
+        {!live && (
+          <ScrubBar
+            durationSeconds={duration}
+            currentSeconds={scrubbing ? (scrubTargetRef.current ?? currentTime) : currentTime}
+            bufferedRanges={buffered}
+            onScrub={(s) => {
+              setScrubbing(true);
+              scrubTargetRef.current = s;
+              setCurrentTime(s);
+            }}
+            onScrubEnd={(s) => {
+              handle.seek(s);
+              scrubTargetRef.current = null;
+              setScrubbing(false);
+            }}
+          />
+        )}
 
         <div className="flex items-center gap-0.5 text-[12px] sm:gap-1">
           <Button
@@ -256,17 +262,26 @@ export function IrisChrome(props: IrisChromeProps) {
             icon={paused ? <Play className="size-5" /> : <Pause className="size-5" />}
             onClick={() => (paused ? void handle.play() : handle.pause())}
           />
-          <Button
-            label="-10s"
-            icon={<Rewind className="size-4" />}
-            onClick={() => handle.seek(Math.max(0, handle.currentTime() - 10))}
-          />
-          <Button
-            label="+10s"
-            icon={<FastForward className="size-4" />}
-            onClick={() => handle.seek(handle.currentTime() + 10)}
-          />
-          <TimeDisplay current={currentTime} total={duration} />
+          {live ? (
+            <span className="ml-1 flex select-none items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider opacity-90">
+              <span className="size-2 animate-pulse rounded-full bg-red-500" />
+              Live
+            </span>
+          ) : (
+            <>
+              <Button
+                label="-10s"
+                icon={<Rewind className="size-4" />}
+                onClick={() => handle.seek(Math.max(0, handle.currentTime() - 10))}
+              />
+              <Button
+                label="+10s"
+                icon={<FastForward className="size-4" />}
+                onClick={() => handle.seek(handle.currentTime() + 10)}
+              />
+              <TimeDisplay current={currentTime} total={duration} />
+            </>
+          )}
 
           <div className="flex-1" />
 

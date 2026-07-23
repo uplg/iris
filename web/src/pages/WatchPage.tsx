@@ -45,6 +45,7 @@ import {
   type DecodeTier,
 } from "@/lib/iris-core/manifest-client";
 import { IrisPlayer } from "@/lib/iris-core/IrisPlayer";
+import { readStoredVolume, writeStoredVolume } from "@/lib/player-volume";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
@@ -83,24 +84,6 @@ function watchedPctOf(p?: FileProgressEntry): number | null {
   return p && p.duration_seconds && p.duration_seconds > 0
     ? Math.min(100, (p.position_seconds / p.duration_seconds) * 100)
     : null;
-}
-
-// Volume is device-specific, so it's persisted locally (not per-user on the
-// server like the audio/subtitle language preference). Survives episodes +
-// sessions on this device.
-const VOLUME_KEY = "iris:volume";
-
-function readStoredVolume(): number | undefined {
-  if (typeof localStorage === "undefined") return undefined;
-  const raw = localStorage.getItem(VOLUME_KEY);
-  if (raw == null) return undefined;
-  const v = Number(raw);
-  return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : undefined;
-}
-
-function writeStoredVolume(v: number): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(VOLUME_KEY, String(Math.max(0, Math.min(1, v))));
 }
 
 // Theater mode (YouTube-style): full-width player, the episodes/files

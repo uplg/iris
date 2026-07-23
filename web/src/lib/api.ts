@@ -63,6 +63,15 @@ type RefreshOutcome = { ok: true; user: User } | { ok: false; status: number };
  *  in-flight promise collapses the stampede into a single rotation. */
 let inFlightRefresh: Promise<RefreshOutcome> | null = null;
 
+/** Refresh the session for callers OUTSIDE the api client's own request
+ *  path (e.g. the live engines' raw mediabunny fetches, which can't ride
+ *  `request()`'s 401-retry). Single-flight with everything else; returns
+ *  whether the session is alive again. */
+export async function refreshSessionForFetch(): Promise<boolean> {
+  const outcome = await refreshSession();
+  return outcome.ok;
+}
+
 function refreshSession(): Promise<RefreshOutcome> {
   if (inFlightRefresh) return inFlightRefresh;
   const run = (async (): Promise<RefreshOutcome> => {

@@ -18,6 +18,9 @@ export type Canvas2dRenderer = {
   enqueue: (frame: VideoFrame) => void;
   /** How many frames are sitting in the wait-to-render queue. */
   queueDepth: () => number;
+  /** Timestamp (seconds) of the last frame actually drawn — ground
+   *  truth for "what the viewer's eye is seeing right now". */
+  lastDrawnTs: () => number;
   /** Resize the canvas to the frame's intrinsic size when the first
    *  frame arrives. Returns the resolved size or `null` if no frame
    *  has been rendered yet. */
@@ -44,6 +47,7 @@ export function createCanvas2dRenderer(opts: Canvas2dRendererOptions): Canvas2dR
   const queue: VideoFrame[] = [];
   let intrinsic: { width: number; height: number } | null = null;
   let disposed = false;
+  let lastDrawn = 0;
   const lateMs = opts.lateMs ?? 80;
 
   const enqueue = (frame: VideoFrame): void => {
@@ -90,6 +94,7 @@ export function createCanvas2dRenderer(opts: Canvas2dRendererOptions): Canvas2dR
       if (!drawn) break;
       try {
         ctx.drawImage(drawn, 0, 0, opts.canvas.width, opts.canvas.height);
+        lastDrawn = drawn.timestamp / 1_000_000;
       } catch (e) {
         opts.onError?.(e instanceof Error ? e : new Error(String(e)));
       } finally {
@@ -112,6 +117,7 @@ export function createCanvas2dRenderer(opts: Canvas2dRendererOptions): Canvas2dR
   return {
     enqueue,
     queueDepth: () => queue.length,
+    lastDrawnTs: () => lastDrawn,
     intrinsicSize: () => intrinsic,
     dispose,
   };

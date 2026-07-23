@@ -383,7 +383,7 @@ pub(crate) async fn live_transcode_master(
         ("segment" = String, Path, description = "Segment filename from the transcoded playlist"),
     ),
     responses(
-        (status = 200, description = "Transcoded MPEG-TS segment", body = String, content_type = "video/mp2t"),
+        (status = 200, description = "Transcoded media segment (MPEG-TS for both the re-encode and the tuner remux)", body = String, content_type = "video/mp2t"),
         (status = 400, description = "Invalid segment name"),
         (status = 404, description = "No active transcode session"),
     ),
@@ -396,8 +396,15 @@ pub(crate) async fn live_transcode_segment(
 ) -> ApiResult<Response> {
     let svc = service(&state)?;
     let bytes = svc.transcode_segment(&country, &id, &segment).await?;
+    // (segment names are minted lowercase by ffmpeg and validated as such.)
+    #[allow(clippy::case_sensitive_file_extension_comparisons)]
+    let content_type = if segment.ends_with(".m4s") || segment.ends_with(".mp4") {
+        "video/mp4"
+    } else {
+        "video/mp2t"
+    };
     Response::builder()
-        .header(header::CONTENT_TYPE, "video/mp2t")
+        .header(header::CONTENT_TYPE, content_type)
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(bytes))
         .map_err(|e| ApiError::Internal(e.into()))

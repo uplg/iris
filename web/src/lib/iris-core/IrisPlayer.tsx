@@ -40,6 +40,13 @@ export type IrisPlayerProps = {
   src: string;
   /** Reserved for future tier-specific MIME handling; ignored today. */
   srcType: string;
+  /** Live-TV mode: endless stream, no scrubbing/progress, autoplay.
+   *  Tier F runs hls.js's live config (+ the E-AC-3 WebAudio sidecar
+   *  for feeds whose audio MSE can't decode); tier B swaps in the
+   *  mediabunny live engine (client demux of the tuner's fMP4 HLS,
+   *  libav E-AC-3 → AAC re-encode). The chrome shows a LIVE badge
+   *  instead of the scrub bar. */
+  live?: boolean;
   title: string;
   manifest: Manifest;
   startPosition: number;
@@ -272,7 +279,16 @@ export function IrisPlayer(props: IrisPlayerProps) {
   useEffect(() => {
     const container = videoHostRef.current;
     if (!container) return;
-    const loader = ENGINE_LOADERS[props.tier];
+    // Live engines are dedicated modules (HLS-following input, no seek
+    // machinery): Tier C live = WebCodecs + canvas with client-side
+    // broadcast concealment (the tuner path); Tier B live = the MSE
+    // variant, kept for A/B debugging via ?tier=B.
+    const loader =
+      props.live && props.tier === "C"
+        ? () => import("./tiers/tier-c-live").then((m) => ({ mount: m.mountTierCLive }))
+        : props.live && props.tier === "B"
+          ? () => import("./tiers/tier-b-live").then((m) => ({ mount: m.mountTierBLive }))
+          : ENGINE_LOADERS[props.tier];
     if (!loader) {
       props.onError(`No engine wired for tier ${props.tier}`);
       return;
@@ -295,9 +311,16 @@ export function IrisPlayer(props: IrisPlayerProps) {
           // heartbeats would clobber the user's real position server-side.
           // `currentTimeRef` seeds from `props.startPosition`, so the
           // fallback only matters before the first `timeupdate`.
-          startPosition: currentTimeRef.current > 0 ? currentTimeRef.current : mountStartPosition,
+          // Live: always 0 — engines join at the live edge and a remount
+          // (source rotation) must not re-seek to the previous element time.
+          startPosition: props.live
+            ? 0
+            : currentTimeRef.current > 0
+              ? currentTimeRef.current
+              : mountStartPosition,
           nativeSubs,
           audioTrackIndex,
+          live: props.live,
           onTimeUpdate: (t) => {
             // Engines can emit a final `timeupdate` at 0 while tearing
             // down; latching it would poison the resume position above.
@@ -505,6 +528,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
       <IrisChrome
         handle={handle}
         manifest={props.manifest}
+        live={props.live}
         activeSubtitle={activeSubtitle}
         onSubtitleChange={onSubtitlePick}
         activeAudioIndex={audioTrackIndex}

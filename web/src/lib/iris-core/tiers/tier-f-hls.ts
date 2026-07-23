@@ -19,9 +19,11 @@ import {
   type EngineHandle,
   type EngineMount,
 } from "../engine";
+import { mountLiveAudio, type LiveAudioHandle } from "../live-audio";
 
 export const mountTierF: EngineMount = async (opts) => {
   const { container, streamUrl, nativeSubs, audioTrackIndex } = opts;
+  const live = opts.live === true;
   container.innerHTML = "";
   const video = document.createElement("video");
   video.className = "h-full w-full object-contain";
@@ -83,6 +85,13 @@ export const mountTierF: EngineMount = async (opts) => {
   console.log(`[iris-core] Tier F mount: useHlsJs=${useHlsJs} nativeHls=${nativeHls}`);
   if (nativeHls) {
     video.src = streamUrl;
+    if (live) {
+      // Live channels autoplay (the channel click IS the intent). Safari
+      // decodes E-AC-3 natively on Apple hardware, so no sidecar here.
+      void video.play().catch(() => {
+        /* autoplay may need a tap; the chrome's play button is visible */
+      });
+    }
     return videoBackedHandle(video, {
       nativeTrackMap,
       fallbackDuration: opts.manifest.duration_s ?? null,
@@ -144,13 +153,58 @@ export const mountTierF: EngineMount = async (opts) => {
     renderTextTracksNatively: false,
     // Evict played-out media; 30 s of scrub-back is plenty.
     backBufferLength: 30,
-    // Forward buffer caps. Mobile gets a tighter ceiling (both the
-    // duration and the absolute byte size) to keep the renderer alive
-    // across a full feature-length playback.
-    maxBufferLength: mobile ? 20 : 30,
-    maxMaxBufferLength: mobile ? 60 : 600,
-    maxBufferSize: mobile ? 20 * 1000 * 1000 : 60 * 1000 * 1000,
+    // Forward buffer caps. Live keeps both buffers tight — there is no
+    // scrubbing and the stream runs for hours (an unbounded buffer would
+    // OOM the tab). VOD: mobile gets a tighter ceiling (both the duration
+    // and the absolute byte size) to keep the renderer alive across a
+    // full feature-length playback.
+    ...(live
+      ? {
+          liveDurationInfinity: true,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 120,
+          lowLatencyMode: false,
+        }
+      : {
+          maxBufferLength: mobile ? 20 : 30,
+          maxMaxBufferLength: mobile ? 60 : 600,
+          maxBufferSize: mobile ? 20 * 1000 * 1000 : 60 * 1000 * 1000,
+        }),
   });
+
+  // Live-only state: the E-AC-3 WebAudio sidecar and the bounded
+  // master-reload budget for fatal network errors (a dying upstream 502s
+  // for a beat while the backend cools it down and elects the next feed).
+  let disposed = false;
+  let liveAudio: LiveAudioHandle | null = null;
+  let liveAudioStarted = false;
+  let liveMasterReloads = 0;
+  if (live) {
+    // The E-AC-3 detector: hls.js only creates buffers for codecs MSE
+    // supports. A live stream that reaches BUFFER_CODECS with no audio in
+    // ANY buffer (neither a dedicated `audio` buffer nor a muxed
+    // `audiovideo` one) almost certainly carries audio the browser can't
+    // decode (E-AC-3/AC-3 in a TS feed) — decode it ourselves via the
+    // WebAudio sidecar, synced through EXT-X-PROGRAM-DATE-TIME. When a
+    // muxed `audiovideo` buffer exists the element plays its own audio,
+    // so starting the sidecar would double it.
+    hls.on(Hls.Events.BUFFER_CODECS, (_evt, data) => {
+      const d = data as { audio?: unknown; audiovideo?: unknown };
+      if (d.audio || d.audiovideo || liveAudioStarted || disposed) return;
+      liveAudioStarted = true;
+      console.info("[iris-core] Tier F live: no MSE-decodable audio — starting WebAudio sidecar");
+      mountLiveAudio(video, hls, streamUrl)
+        .then((h) => {
+          if (disposed) h.dispose();
+          else liveAudio = h;
+        })
+        .catch((e: unknown) => {
+          // Audio is best-effort — a failure leaves silent video, not a
+          // dead channel.
+          console.warn("[iris-core] Tier F live: audio sidecar failed — video stays silent", e);
+        });
+    });
+  }
 
   // Match Vidstack's HLSController.setup ordering exactly:
   //   1. Register every event listener BEFORE attachMedia.
@@ -169,6 +223,11 @@ export const mountTierF: EngineMount = async (opts) => {
   // strongest chance the next test crosses the threshold.
   hls.on(Hls.Events.MANIFEST_PARSED, () => {
     opts.onReady?.();
+    if (live) {
+      void video.play().catch(() => {
+        /* autoplay may need a tap; the chrome's play button is visible */
+      });
+    }
     const tracks = collectHlsAudioTracks(hls);
     console.log(
       `[iris-core] Tier F: HLS manifest parsed. ${tracks.length} audio track(s):`,
@@ -298,6 +357,14 @@ export const mountTierF: EngineMount = async (opts) => {
       }
       return;
     }
+    if (live && data.type === Hls.ErrorTypes.NETWORK_ERROR && liveMasterReloads < 3) {
+      liveMasterReloads += 1;
+      console.warn(
+        `[iris-core] Tier F live: fatal network error — reloading master (${liveMasterReloads}/3)`,
+      );
+      hls.loadSource(streamUrl);
+      return;
+    }
     surfaced = true;
     try {
       hls.stopLoad();
@@ -327,6 +394,9 @@ export const mountTierF: EngineMount = async (opts) => {
     nativeTrackMap,
     fallbackDuration: opts.manifest.duration_s ?? null,
     dispose: async () => {
+      disposed = true;
+      liveAudio?.dispose();
+      liveAudio = null;
       unbind();
       video.removeEventListener("error", onErr);
       try {

@@ -43,6 +43,13 @@ export type EngineMountOptions = {
    *  (no remount needed); Tier A is single-audio. Changing this value
    *  triggers a remount in `IrisPlayer`. */
   audioTrackIndex?: number;
+  /** Live-TV mode (Tier F only): endless stream played at the live
+   *  edge. The engine switches hls.js to its live config, autoplays
+   *  once the manifest parses, retries master reloads on network
+   *  errors (a dead source 502s until the backend elects the next
+   *  feed), and starts the E-AC-3 WebAudio sidecar when the feed's
+   *  audio can't be decoded by MSE. */
+  live?: boolean;
 
   onReady?: () => void;
   /** Fires on `timeupdate` (native) or on the master-clock tick (C/D). */
