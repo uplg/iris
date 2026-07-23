@@ -729,17 +729,7 @@ impl LiveTvService {
         let channel_key = format!("{country}:{id}");
         let now_ms = epoch_ms();
 
-        // The tuner tier has absolute priority: always reconsider it first,
-        // even after a capacity- or failure-driven fallback elected an
-        // internet source (cooldown still shields a genuinely failing box
-        // in pass 0). Election stays sticky for internet-only channels.
-        let start = channel
-            .sources
-            .iter()
-            .position(|s| s.tier == SourceTier::Tuner)
-            .unwrap_or_else(|| {
-                snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len()
-            });
+        let start = election_start(channel, snap.active_source[idx].load(Ordering::Relaxed));
         let mut last_err = String::new();
         // Two passes: healthy sources first, then the ones that were cooling
         // down. Pass 1 must run whenever pass 0 didn't succeed — not only
@@ -784,19 +774,7 @@ impl LiveTvService {
                         .await
                     {
                         Ok(body) => {
-                            snap.active_source[idx].store(si, Ordering::Relaxed);
-                            snap.health[idx][si].mark_success();
-                            tracing::info!(
-                                channel = %channel_key,
-                                source = si,
-                                tier = "tuner",
-                                "live tv source elected"
-                            );
-                            return Ok(MasterPlaylist {
-                                body: prefix_segment_uris(&body, "transcode/"),
-                                source_index: si,
-                                upstream_host: "tuner".to_string(),
-                            });
+                            return Ok(tuner_elected(&snap, idx, si, &channel_key, &body));
                         }
                         Err(e) => {
                             snap.health[idx][si].mark_failure(now_ms);
@@ -858,15 +836,15 @@ impl LiveTvService {
     /// marks prewarm mux members (kept warm for hours) even when a
     /// viewer, not the prewarm loop, spawned the session.
     async fn tuner_admission(&self, country: &str, id: &str, url: &str) -> Option<bool> {
-        if let Some(freq) = transcode::tuner_freq(url) {
-            if !self.inner.transcode.admit_mux(&freq).await {
-                tracing::info!(
-                    channel = %format!("{country}:{id}"),
-                    freq = %freq,
-                    "tuner at mux capacity — using internet source"
-                );
-                return None;
-            }
+        if let Some(freq) = transcode::tuner_freq(url)
+            && !self.inner.transcode.admit_mux(&freq).await
+        {
+            tracing::info!(
+                channel = %format!("{country}:{id}"),
+                freq = %freq,
+                "tuner at mux capacity — using internet source"
+            );
+            return None;
         }
         let pinned = self
             .mux_siblings(country, &self.inner.cfg.tuner.prewarm)
@@ -1786,15 +1764,15 @@ impl LiveTvService {
                                     .and_then(|i| channel_tuner_freq(&s.channels[i]))
                             })
                         };
-                        if let Some(freq) = &freq {
-                            if !svc.inner.transcode.mux_available(freq).await {
-                                tracing::debug!(
-                                    channel = %id,
-                                    freq = %freq,
-                                    "tuner adapters busy with watched muxes — left cold"
-                                );
-                                continue;
-                            }
+                        if let Some(freq) = &freq
+                            && !svc.inner.transcode.mux_available(freq).await
+                        {
+                            tracing::debug!(
+                                channel = %id,
+                                freq = %freq,
+                                "tuner adapters busy with watched muxes — left cold"
+                            );
+                            continue;
                         }
                         match svc.master_playlist(&country, &id).await {
                             Ok(mp) if mp.upstream_host == "tuner" => {
@@ -1895,6 +1873,43 @@ impl LiveTvService {
 /// sibling `.../channels/{id}/transcode/{segment}` route. Besides the plain
 /// URI lines, the fMP4 init segment is referenced from an `#EXT-X-MAP` tag
 /// (a comment-shaped line) and must be rewritten too.
+/// Finalize a successful tuner election: record stickiness + health and
+/// point the returned playlist at the tuner segment route.
+fn tuner_elected(
+    snap: &CountrySnapshot,
+    idx: usize,
+    si: usize,
+    channel_key: &str,
+    body: &str,
+) -> MasterPlaylist {
+    snap.active_source[idx].store(si, Ordering::Relaxed);
+    snap.health[idx][si].mark_success();
+    tracing::info!(
+        channel = %channel_key,
+        source = si,
+        tier = "tuner",
+        "live tv source elected"
+    );
+    MasterPlaylist {
+        body: prefix_segment_uris(body, "transcode/"),
+        source_index: si,
+        upstream_host: "tuner".to_string(),
+    }
+}
+
+/// Election starting index. The tuner tier has absolute priority:
+/// always reconsider it first, even after a capacity- or failure-driven
+/// fallback elected an internet source (cooldown still shields a
+/// genuinely failing box in pass 0). Election stays sticky (the stored
+/// active source) for internet-only channels.
+fn election_start(channel: &Channel, stored: usize) -> usize {
+    channel
+        .sources
+        .iter()
+        .position(|s| s.tier == SourceTier::Tuner)
+        .unwrap_or(stored % channel.sources.len())
+}
+
 /// Mux frequency of a channel's tuner source, when it has one.
 fn channel_tuner_freq(ch: &Channel) -> Option<String> {
     ch.sources
