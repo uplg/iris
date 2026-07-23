@@ -757,31 +757,14 @@ impl LiveTvService {
                 tried[si] = true;
                 let source = &channel.sources[si];
                 if source.tier == SourceTier::Tuner {
-                    // Mux admission first: two RF frontends = two concurrent
-                    // frequencies. A third-mux request reclaims a mux nobody
-                    // is watching; when BOTH tuned muxes have live viewers,
-                    // THIS viewer falls through to the internet tiers instead
-                    // of cutting someone else's antenna stream. No failure is
-                    // marked — capacity is not a source defect, and the next
-                    // election re-checks (the tuner is always tried first).
-                    if let Some(freq) = transcode::tuner_freq(&source.url) {
-                        if !self.inner.transcode.admit_mux(&freq).await {
-                            tracing::info!(
-                                channel = %channel_key,
-                                freq = %freq,
-                                "tuner at mux capacity — using internet source"
-                            );
-                            last_err = "tuner at mux capacity".into();
-                            continue;
-                        }
-                    }
-                    // Prewarm mux members stay pinned (warm for hours) even
-                    // when a viewer, not the prewarm loop, spawned them.
-                    let pinned = self
-                        .mux_siblings(&country, &self.inner.cfg.tuner.prewarm)
-                        .await
-                        .iter()
-                        .any(|warm_id| warm_id == id);
+                    let Some(pinned) = self.tuner_admission(&country, id, &source.url).await else {
+                        // At mux capacity: skip WITHOUT marking failure —
+                        // capacity is not a source defect, and the next
+                        // election re-checks (the tuner is always tried
+                        // first).
+                        last_err = "tuner at mux capacity".into();
+                        continue;
+                    };
                     // The household tuner serves raw MPEG-TS, not HLS: feed
                     // it through the shared ffmpeg manager in remux mode
                     // (-c copy) and point the master at the tuner segment
@@ -863,6 +846,34 @@ impl LiveTvService {
             }
         }
         Err(LiveTvError::Upstream(last_err))
+    }
+
+    /// Tuner-branch election prelude: mux admission + pinned flag.
+    ///
+    /// Mux admission first: two RF frontends = two concurrent frequencies.
+    /// A third-mux request reclaims a mux nobody is watching; when BOTH
+    /// tuned muxes have live viewers, `None` is returned and THIS viewer
+    /// falls through to the internet tiers instead of cutting someone
+    /// else's antenna stream. `Some(pinned)` grants admission; the flag
+    /// marks prewarm mux members (kept warm for hours) even when a
+    /// viewer, not the prewarm loop, spawned the session.
+    async fn tuner_admission(&self, country: &str, id: &str, url: &str) -> Option<bool> {
+        if let Some(freq) = transcode::tuner_freq(url) {
+            if !self.inner.transcode.admit_mux(&freq).await {
+                tracing::info!(
+                    channel = %format!("{country}:{id}"),
+                    freq = %freq,
+                    "tuner at mux capacity — using internet source"
+                );
+                return None;
+            }
+        }
+        let pinned = self
+            .mux_siblings(country, &self.inner.cfg.tuner.prewarm)
+            .await
+            .iter()
+            .any(|warm_id| warm_id == id);
+        Some(pinned)
     }
 
     /// Cross-country channel search. Matches folded channel names (and alt
