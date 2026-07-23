@@ -51,5 +51,8 @@ base_url = "http://192.168.2.1:8554"
 #   690 MHz  tf1, lcp, tmc, tfx, lci
 #   482 MHz  bfmtv, cnews, cstar, gulli, t18, novo19
 #   618 MHz  france2, france3, france4, franceinfo
-# ["tf1", "m6"] → 6 warm channels (690 + 506): TF1, LCP, TMC, TFX, LCI, M6.
-prewarm = ["tf1", "m6"]
+# ["m6"] → 1 warm channel (mux 506). Kept to a single mux/service on
+# purpose: sustained multi-service streaming is what wedged the box's
+# XPT engine (and then its NIC) on 2026-07-23 — the second adapter
+# stays free and cold-joins take the ~15 s hit instead.
+prewarm = ["m6"]
