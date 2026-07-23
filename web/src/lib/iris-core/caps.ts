@@ -165,6 +165,19 @@ export function isMobileLike(): boolean {
   return touch && coarse;
 }
 
+/**
+ * Windows + Chromium (Edge/Chrome): the combination where the OS may
+ * promote an unobstructed `<video>` to a hardware overlay plane (MPO),
+ * whose buggy driver paths are known to swallow content composited
+ * over the video — including the browser's own native VTT cue boxes.
+ * Used to decide when the cue-guard layer is needed (see IrisPlayer).
+ */
+export function isWindowsChromium(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return ua.includes("Windows") && /Chrome|Chromium|Edg\//.test(ua) && !/Firefox/.test(ua);
+}
+
 /** Test-only hook to reset the memoised result. */
 export function __resetCapsCacheForTests(): void {
   cached = null;

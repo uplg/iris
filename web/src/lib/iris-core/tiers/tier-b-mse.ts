@@ -405,9 +405,10 @@ export const mountTierB: EngineMount = async (opts) => {
   // media-error diagnostic tell "errored right after mount/seek" from
   // "errored deep into steady playback".
   let lastConversionStartWall = 0;
-  // Wall-clock when the tab was last hidden — used to re-init the decode
-  // pipeline on return (Firefox/macOS drops the VideoToolbox HW decoder when
-  // backgrounded; see the `visibilitychange` handler).
+  // Wall-clock when the tab was last hidden — diagnostic for the media-error
+  // log (a decode error right after a tab return points at Firefox/macOS
+  // having released the VideoToolbox decoder while backgrounded; the reactive
+  // recovery for that lives in IrisPlayer, see the `visibilitychange` handler).
   let hiddenAtWall = 0;
   // Diagnostics for the Firefox "appendBuffer wedges in updating=true with no
   // updateend/error" failure (FF bug 1120084). Records which op is in flight; a
@@ -465,6 +466,7 @@ export const mountTierB: EngineMount = async (opts) => {
       `[iris-core] Tier B media error: code=${err?.code} t=${video.currentTime.toFixed(1)}s ` +
         `fedMax=${videoFedMax.toFixed(1)}s gen=${conversionGeneration} ` +
         `sinceConvMs=${(performance.now() - lastConversionStartWall).toFixed(0)} ` +
+        `hiddenAgoMs=${hiddenAtWall > 0 ? (performance.now() - hiddenAtWall).toFixed(0) : "never"} ` +
         `readyState=${video.readyState} ranges=[${bufferedRangesStr()}] msg=${err?.message ?? ""}`,
     );
     fail(new Error(err ? `media error ${err.code}: ${err.message}` : "video element error"));
@@ -1299,32 +1301,17 @@ export const mountTierB: EngineMount = async (opts) => {
     });
   }
 
-  // Firefox/macOS releases the VideoToolbox HW HEVC decoder when the tab is
-  // backgrounded for a while; on return it throws `media error 3` on the next
-  // frame (the decoder session is gone — confirmed: `readyState=4`, deep into
-  // steady playback, right after a tab switch). Pre-empt it: when the tab
-  // becomes visible again after being hidden a moment, re-init the decode
-  // pipeline from the current position (clears the SourceBuffer + re-feeds from
-  // a keyframe → a fresh decoder session) BEFORE Firefox decodes a frame with
-  // the dead one. Reuses the seek-restart path — no MediaSource teardown, and
-  // the orphan-RASL drop in `videoP` keeps the restart keyframe clean. Chrome
-  // doesn't drop the decoder, so this is Firefox-only.
+  // Track when the tab was last hidden — pure diagnostics for `onErr`.
+  // Firefox/macOS can release the VideoToolbox HW decoder while the tab
+  // is backgrounded; the OLD approach pre-emptively re-initialised the
+  // whole decode pipeline on EVERY return >2 s hidden, which restarted
+  // playback on every tab switch for everyone (the decoder almost
+  // always survives). Recovery is now REACTIVE and lives in IrisPlayer:
+  // a decode error arriving shortly after a hidden→visible transition
+  // gets one silent same-tier remount at the playhead — zero cost when
+  // the decoder survived, one brief re-init in the rare case it died.
   const onVisibility = () => {
-    if (disposed) return;
-    if (document.hidden) {
-      hiddenAtWall = performance.now();
-      return;
-    }
-    if (!firefox) return;
-    const hiddenMs = performance.now() - hiddenAtWall;
-    if (hiddenMs < 2000) return; // a quick glance — the decoder almost surely survived
-    const t = video.currentTime;
-    if (!Number.isFinite(t)) return;
-    console.warn(
-      `[iris-core] Tier B: tab visible after ${(hiddenMs / 1000).toFixed(0)}s hidden — ` +
-        `re-init decode pipeline at ${t.toFixed(1)}s (Firefox VideoToolbox decoder may be gone)`,
-    );
-    void restartConversionFromSeek(t);
+    if (document.hidden) hiddenAtWall = performance.now();
   };
   document.addEventListener("visibilitychange", onVisibility);
 

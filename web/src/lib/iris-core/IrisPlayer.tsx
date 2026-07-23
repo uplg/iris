@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
+import { isWindowsChromium } from "./caps";
 import { IrisChrome, toggleFullscreen } from "./IrisChrome";
 import type { EngineHandle, EngineMount, NativeSubtitleTrack } from "./engine";
 import type { DecodeTier, Manifest, SubtitleTrack } from "./manifest-client";
@@ -201,8 +202,30 @@ export function IrisPlayer(props: IrisPlayerProps) {
   // which would wipe out the live `hls.audioTrack` switch and snap
   // back to hls.js's default audio. Instead we bump this version
   // ONLY for tiers that need a remount (A/B/C/E), and pass the
-  // current `audioTrackIndex` to the engine through closure.
-  const [audioRemountVersion, bumpAudioRemount] = useReducer((x: number) => x + 1, 0);
+  // current `audioTrackIndex` to the engine through closure. Also
+  // bumped by the decode-error-after-tab-return recovery below.
+  const [engineRemountVersion, bumpEngineRemount] = useReducer((x: number) => x + 1, 0);
+
+  // Reactive recovery for background-killed decoders. Firefox/macOS can
+  // release the platform (VideoToolbox) decoder session while the tab is
+  // hidden; the first frame decoded after return then fails with
+  // `media error 3` even though the stream is fine. Rather than
+  // pre-emptively restarting the pipeline on every tab switch (the old
+  // Tier B behaviour — a visible restart for everyone, decoder death or
+  // not), catch the SIGNATURE — a decode error shortly after a
+  // hidden→visible transition — and give it ONE silent same-tier
+  // remount at the current playhead. A genuine can't-decode-this-file
+  // error either fires outside the window or fires again on the retry
+  // mount, and both fall through to the normal demote path.
+  const lastVisibleReturnRef = useRef<number>(Number.NEGATIVE_INFINITY);
+  const decodeRetryAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    const onVisibility = () => {
+      if (!document.hidden) lastVisibleReturnRef.current = performance.now();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
 
   const { native: nativeSubs, overlay: overlaySubs } = useMemo(
     () => classifySubtitles(props.manifest),
@@ -325,13 +348,45 @@ export function IrisPlayer(props: IrisPlayerProps) {
             // Engines can emit a final `timeupdate` at 0 while tearing
             // down; latching it would poison the resume position above.
             if (t > 0) currentTimeRef.current = t;
+            // 30 s of healthy playback after a decode-error retry
+            // re-arms the recovery — the next background-killed
+            // decoder (hours later) gets its own silent remount.
+            if (
+              decodeRetryAtRef.current != null &&
+              performance.now() - decodeRetryAtRef.current > 30_000
+            ) {
+              decodeRetryAtRef.current = null;
+            }
             props.onTimeUpdate(t);
           },
           onDurationChange: props.onDurationChange,
           onSeeking: props.onSeeking,
           onPause: props.onPause,
           onEnded: props.onEnded,
-          onError: (err) => props.onError(err.message),
+          onError: (err) => {
+            // Decode error right after a tab return = the signature of a
+            // background-released platform decoder (Firefox/macOS drops
+            // VideoToolbox sessions on hidden tabs). One same-tier
+            // remount at the playhead; anything else demotes as usual.
+            const sinceReturnMs = performance.now() - lastVisibleReturnRef.current;
+            if (
+              /media error 3\b/.test(err.message) &&
+              sinceReturnMs < 10_000 &&
+              decodeRetryAtRef.current == null
+            ) {
+              decodeRetryAtRef.current = performance.now();
+              console.warn(
+                `[iris-core] decode error ${(sinceReturnMs / 1000).toFixed(1)}s after tab ` +
+                  `return — decoder likely released while hidden; remounting same tier at ` +
+                  `${currentTimeRef.current.toFixed(1)}s`,
+              );
+              playingBeforeRemountRef.current = true;
+              setMountStartPosition(currentTimeRef.current);
+              bumpEngineRemount();
+              return;
+            }
+            props.onError(err.message);
+          },
         });
         if (cancelled) {
           void h.dispose();
@@ -366,10 +421,14 @@ export function IrisPlayer(props: IrisPlayerProps) {
       cancelled = true;
       const old = handleRef.current;
       if (old) {
+        // OR, don't overwrite: the decode-error recovery pre-sets the
+        // flag before remounting — an errored element may misreport
+        // `paused`, and losing the flag would leave the user staring
+        // at a frozen frame after the silent recovery.
         try {
-          playingBeforeRemountRef.current = !old.paused();
+          playingBeforeRemountRef.current = playingBeforeRemountRef.current || !old.paused();
         } catch {
-          playingBeforeRemountRef.current = false;
+          /* keep the pre-set value */
         }
       }
       handleRef.current = null;
@@ -378,11 +437,11 @@ export function IrisPlayer(props: IrisPlayerProps) {
     };
     // The mount effect re-fires when the *triggering* identity
     // changes — tier, src, resume position, or our explicit
-    // `audioRemountVersion` counter. `audioTrackIndex` deliberately
+    // `engineRemountVersion` counter. `audioTrackIndex` deliberately
     // isn't a dep: it gets captured by closure and reflects the
     // user's latest pick at the moment the effect actually runs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.tier, props.src, mountStartPosition, audioRemountVersion]);
+  }, [props.tier, props.src, mountStartPosition, engineRemountVersion]);
 
   const onAudioPick = (id: string) => {
     const idx = Number(id);
@@ -398,10 +457,10 @@ export function IrisPlayer(props: IrisPlayerProps) {
       // disposed, so reading from our forwarded `currentTimeRef`
       // (updated on every `timeupdate`) gives the true position.
       setMountStartPosition(currentTimeRef.current);
-      bumpAudioRemount();
+      bumpEngineRemount();
     } else if (handle) {
       // Tier F: hls.js switches the rendition live. No remount
-      // needed — and crucially we mustn't bump `audioRemountVersion`
+      // needed — and crucially we mustn't bump `engineRemountVersion`
       // here, otherwise the mount effect would re-fire and spin up a
       // fresh hls.js instance that snaps back to its default audio.
       handle.setAudioTrack(id);
@@ -520,6 +579,25 @@ export function IrisPlayer(props: IrisPlayerProps) {
           lives inside `videoHostRef` and is carried along
           automatically — playback state survives the move. */}
       <div ref={mountSlotRef} className="absolute inset-0" />
+      {/* Cue guard — Windows/Chromium only, while a NATIVE subtitle is
+          showing. When nothing painted overlaps the video, Windows may
+          promote it to a hardware overlay plane (MPO) a few seconds
+          after the chrome fades out; buggy driver paths then swallow
+          everything composited over the video INCLUDING the browser's
+          own VTT cue boxes ("subs vanish once the control bar hides",
+          Edge + HDR/DV HEVC). A 1%-alpha layer is imperceptible but
+          keeps the video compositor-composed, so cues stay visible.
+          ASS/PGS need no guard: their canvases already paint on top. */}
+      {!props.live &&
+        activeSubtitle != null &&
+        subtitleOverlayKind(activeSubtitle) === "native" &&
+        isWindowsChromium() && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            style={{ background: "rgba(0, 0, 0, 0.01)" }}
+          />
+        )}
       <SubtitleOverlay
         host={wrapper}
         track={activeOverlay}
