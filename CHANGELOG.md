@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no episode identity to grab by (movies, unparsed files) are dropped rather
   than served dead. Behaviour is identical on web and TV by construction: the
   conversion happens in the one shared `/api/me/continue-watching` route.
+- **Web home actually runs the grab & play flow now.** The discovery-first
+  home redesign rebuilt the Continue Watching shelf (and the resume hero)
+  with its own cards and never ported the grabbable-tile handling — clicking
+  an "Up next" tile with no file on disk navigated to the dead `/watch//0`
+  URL. The hero and the shelf cards now grab-then-play like the TV does
+  (falling back to the series page when no release is found), grabbable
+  tiles are labelled "Up next · SxxExx · Not downloaded", and the orphaned
+  pre-redesign `ContinueWatching` component is gone. Also fixes duplicate
+  React keys when several grabbable tiles (all sharing an empty infohash)
+  were on the shelf.
 
 ### Added
 
