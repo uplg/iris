@@ -171,9 +171,11 @@ pub(crate) struct ContinueWatchingItem {
     /// Render "S08E08" from these instead of SCENE-parsing file names.
     season: Option<i64>,
     episode: Option<i64>,
-    /// True when the next episode exists (per TMDB, aired) but is NOT on
-    /// disk: `infohash` is empty and `file_idx` meaningless. Clients show
-    /// a grab affordance and call
+    /// True when the tile's target is NOT playable from disk: the next
+    /// episode exists (per TMDB, aired) but was never downloaded, or the
+    /// previously-owned file is gone (GC-reclaimed, or lost by the
+    /// engine). `infohash` is empty and `file_idx` meaningless. Clients
+    /// show a grab affordance and call
     /// `POST /api/library/collections/{collection_id}/grab/{season}/{episode}?language=auto`,
     /// then play the returned `(infohash, file_idx)`. Only ever true when
     /// the request opted in via `include_grabbable`.
@@ -406,6 +408,30 @@ pub(crate) async fn continue_watching(
         merged.push(r);
     }
 
+    // Owned tiles must point at a target the engine can actually serve.
+    // The DB and the engine drift: the shelf may have been built moments
+    // before a GC pass, a session restore can lose a torrent, and a grab
+    // can die between the DB upsert and the engine add. A row whose
+    // infohash the engine no longer knows navigates straight to a 404
+    // player page. Convert those to grabbable tiles — same series, same
+    // (S, E); the grab short-circuits to an alive copy when one exists
+    // and re-fetches the release otherwise — or drop them when conversion
+    // isn't possible: a missing tile beats a dead one. Dropping also
+    // frees the collection slot so the TMDB frontier below can synthesise
+    // its own tile for the series.
+    merged.retain_mut(|r| {
+        if state.engine().get_by_infohash(&r.infohash).is_some() {
+            return true;
+        }
+        if revive_dead_row(r, q.include_grabbable) {
+            return true;
+        }
+        if let Some(cid) = r.collection_id {
+            by_collection.remove(&cid);
+        }
+        false
+    });
+
     if q.include_grabbable {
         append_grabbable_next_up(&state, user.id, &mut merged, &mut by_collection).await?;
     }
@@ -444,6 +470,32 @@ pub(crate) async fn continue_watching(
         })
         .collect();
     Ok(Json(out))
+}
+
+/// Turn an owned shelf row whose file is no longer servable (GC'd, or
+/// lost by the engine) into a grabbable tile in place. Returns `false`
+/// when conversion isn't possible — the client didn't opt into grabbable
+/// tiles, or the row has no `(collection, season, episode)` identity to
+/// grab by (movies, unparsed files) — in which case the caller drops the
+/// row.
+fn revive_dead_row(
+    r: &mut iris_db::playback::ContinueWatchingRow,
+    include_grabbable: bool,
+) -> bool {
+    if !include_grabbable || r.collection_id.is_none() || r.season.is_none() || r.episode.is_none()
+    {
+        return false;
+    }
+    r.infohash = String::new();
+    r.file_idx = 0;
+    r.position_seconds = 0.0;
+    r.duration_seconds = None;
+    r.completed = false;
+    r.audio_track_idx = None;
+    r.subtitle_track_idx = None;
+    r.next_up = true;
+    r.grabbable = true;
+    true
 }
 
 /// Watch-order gate for a next-up candidate. `prev` is the episode the user
@@ -766,7 +818,61 @@ pub(crate) async fn history(
 
 #[cfg(test)]
 mod tests {
-    use super::next_up_follows_watch_order;
+    use super::{next_up_follows_watch_order, revive_dead_row};
+
+    fn dead_row(
+        collection: bool,
+        season: Option<i64>,
+        episode: Option<i64>,
+    ) -> iris_db::playback::ContinueWatchingRow {
+        iris_db::playback::ContinueWatchingRow {
+            infohash: "abc123".into(),
+            torrent_name: "Show.S01E06.1080p".into(),
+            tmdb_id: Some(1396),
+            tmdb_verified: true,
+            file_idx: 3,
+            position_seconds: 812.0,
+            duration_seconds: Some(2760.0),
+            last_watched_at: chrono::Utc::now(),
+            completed: false,
+            audio_track_idx: Some(1),
+            subtitle_track_idx: Some(0),
+            kind: Some("tv".into()),
+            collection_id: collection.then(uuid::Uuid::new_v4),
+            next_up: false,
+            season,
+            episode,
+            grabbable: false,
+        }
+    }
+
+    #[test]
+    fn dead_row_with_episode_identity_becomes_grabbable() {
+        let mut r = dead_row(true, Some(1), Some(6));
+        assert!(revive_dead_row(&mut r, true));
+        assert!(r.grabbable);
+        assert!(r.next_up);
+        assert!(r.infohash.is_empty());
+        assert_eq!(r.file_idx, 0);
+        assert!(r.position_seconds.abs() < f64::EPSILON);
+        // Identity the grab endpoint needs survives the conversion.
+        assert!(r.collection_id.is_some());
+        assert_eq!((r.season, r.episode), (Some(1), Some(6)));
+    }
+
+    #[test]
+    fn dead_row_without_identity_or_opt_in_is_dropped() {
+        // Legacy client that never opted into grabbable tiles.
+        assert!(!revive_dead_row(
+            &mut dead_row(true, Some(1), Some(6)),
+            false
+        ));
+        // Movie / standalone: no collection to grab through.
+        assert!(!revive_dead_row(&mut dead_row(false, None, None), true));
+        // Unparsed file inside a collection: no (S, E) to grab.
+        assert!(!revive_dead_row(&mut dead_row(true, None, None), true));
+        assert!(!revive_dead_row(&mut dead_row(true, Some(1), None), true));
+    }
 
     #[test]
     fn same_season_only_immediate_successor() {

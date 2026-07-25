@@ -579,9 +579,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
             sampleRate: srcRate,
             numberOfChannels: srcChannels,
             bitrate: targetCodec === "opus" ? 128_000 : 192_000,
-            ...(targetCodec === "aac"
-              ? { aac: { format: "aac" } }
-              : { opus: { format: "opus" } }),
+            ...(targetCodec === "aac" ? { aac: { format: "aac" } } : { opus: { format: "opus" } }),
           } as AudioEncoderConfig);
 
           // Content-gap reconciliation. The arithmetic output timeline
@@ -625,8 +623,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
               const rel = Math.max(0, sample.timestamp - anchor);
               while (
                 !disposed &&
-                (rel - playheadRel() >
-                  (video.readyState > 0 ? FEED_AHEAD_S : PRESTART_AHEAD_S) ||
+                (rel - playheadRel() > (video.readyState > 0 ? FEED_AHEAD_S : PRESTART_AHEAD_S) ||
                   rel - videoFedRel > TRACK_LEAD_CAP)
               ) {
                 await sleep(PACE_MS);
@@ -861,7 +858,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
         if (fedMax - lastLogged >= 5) {
           lastLogged = fedMax;
           console.log(
-            `[iris-core] live-c: fed v=${(videoFedRel).toFixed(1)}s a=${audioFedRel === Number.POSITIVE_INFINITY ? "-" : audioFedRel.toFixed(1)}s ` +
+            `[iris-core] live-c: fed v=${videoFedRel.toFixed(1)}s a=${audioFedRel === Number.POSITIVE_INFINITY ? "-" : audioFedRel.toFixed(1)}s ` +
               `t=${video.currentTime.toFixed(1)}s dec=${decOut} encQ=${vEncoder.encodeQueueSize} ` +
               `resets=${resetStamps.length} aQ=${appendQueue.length} rs=${video.readyState} ` +
               `buf=${sourceBuffer && sourceBuffer.buffered.length > 0 ? (sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1) - video.currentTime).toFixed(1) : "-"}s`,

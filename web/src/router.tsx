@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import { ClientOutdatedOverlay } from "@/components/ClientOutdatedOverlay";
+import { NotFoundPage } from "@/components/NotFoundState";
 import { RequireAuth } from "@/components/RequireAuth";
 import { UpdateBanner } from "@/components/UpdateBanner";
 
@@ -275,6 +276,7 @@ export const router = createRouter({
   // covers the code-split chunks so navigations feel instant after intent.
   defaultPreload: "intent",
   defaultPendingComponent: RoutePending,
+  defaultNotFoundComponent: NotFoundPage,
 });
 
 declare module "@tanstack/react-router" {

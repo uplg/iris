@@ -254,6 +254,12 @@ interface IrisApi {
     @POST("api/torrents")
     suspend fun ingest(@Body body: ResolveBody): IngestResponse
 
+    /** Re-ingest a GC-reclaimed release from its recorded provenance —
+     *  same release, same infohash, saved positions apply again. Backs
+     *  the "Grab it again" action on the dead player screen. */
+    @POST("api/torrents/{infohash}/regrab")
+    suspend fun regrabTorrent(@Path("infohash") infohash: String): IngestResponse
+
     @GET("api/me/devices")
     suspend fun listDevices(): List<DeviceView>
 

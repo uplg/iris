@@ -7,7 +7,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "1.3.3"
+    "version": "1.3.4"
   },
   "paths": {
     "/api/admin/active-sessions": {
@@ -3207,6 +3207,43 @@
           }
         }
       }
+    },
+    "/api/torrents/{infohash}/regrab": {
+      "post": {
+        "tags": [
+          "torrents"
+        ],
+        "summary": "Re-ingest a release the engine no longer serves, from the provenance\nrecorded at first grab (`source_provider` + `source_external_id`).\nSame release → same infohash, so saved playback positions apply\nagain untouched. Deliberately reads the torrent row WITHOUT a\n`deleted_at` filter — resurrecting a GC-reclaimed release is the\nwhole point, and `torrents::upsert` inside the ingest clears the\nsoft-delete. The dead player page (\"no longer on disk\") calls this\nso the user can grab & play in place instead of hunting the release\ndown through the library.",
+        "operationId": "regrab_torrent",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Re-ingested (or already-managed) release",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No provenance recorded — re-grab via search instead"
+          },
+          "404": {
+            "description": "Unknown infohash"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4028,7 +4065,7 @@
           },
           "grabbable": {
             "type": "boolean",
-            "description": "True when the next episode exists (per TMDB, aired) but is NOT on\ndisk: `infohash` is empty and `file_idx` meaningless. Clients show\na grab affordance and call\n`POST /api/library/collections/{collection_id}/grab/{season}/{episode}?language=auto`,\nthen play the returned `(infohash, file_idx)`. Only ever true when\nthe request opted in via `include_grabbable`."
+            "description": "True when the tile's target is NOT playable from disk: the next\nepisode exists (per TMDB, aired) but was never downloaded, or the\npreviously-owned file is gone (GC-reclaimed, or lost by the\nengine). `infohash` is empty and `file_idx` meaningless. Clients\nshow a grab affordance and call\n`POST /api/library/collections/{collection_id}/grab/{season}/{episode}?language=auto`,\nthen play the returned `(infohash, file_idx)`. Only ever true when\nthe request opted in via `include_grabbable`."
           },
           "infohash": {
             "type": "string"

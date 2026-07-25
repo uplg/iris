@@ -13,8 +13,10 @@ import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Container } from "@/components/Container";
+import { NotFoundState } from "@/components/NotFoundState";
 import { cn } from "@/lib/utils";
 import {
+  ApiError,
   follows,
   library,
   me as meApi,
@@ -175,6 +177,19 @@ export function WatchPage() {
     queryFn: () => torrents.get(infohash),
     enabled: !!infohash,
     refetchInterval: 3000,
+  });
+
+  // Resurrect a GC-reclaimed release in place (dead-page "Grab it again"
+  // button). Same provenance → same infohash → the URL stays valid and
+  // saved positions apply; no navigation needed, the 3s `torrentQ` poll
+  // picks the revived torrent up and the page comes alive on its own.
+  const regrab = useMutation({
+    mutationFn: () => torrents.regrab(infohash),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["torrent", infohash] });
+      void qc.invalidateQueries({ queryKey: ["play-status", infohash, fileIdx] });
+      void qc.invalidateQueries({ queryKey: ["probe", infohash, fileIdx] });
+    },
   });
 
   const data = torrentQ.data;
@@ -873,19 +888,56 @@ export function WatchPage() {
         <p className="py-10 text-muted-foreground">Loading…</p>
       </Container>
     );
-  if (torrentQ.error)
-    return (
-      <Container>
-        <p className="py-10 text-destructive">
-          {torrentQ.error instanceof Error ? torrentQ.error.message : "failed"}
-        </p>
-      </Container>
+  if (torrentQ.error) {
+    // 404 = the engine no longer serves this infohash (GC-reclaimed, or a
+    // stale link). Anything else is transient server trouble — show the
+    // message, the 3s refetch keeps retrying behind it.
+    const gone = torrentQ.error instanceof ApiError && torrentQ.error.status === 404;
+    return gone ? (
+      <NotFoundState
+        eyebrow="Not available"
+        title="This file is no longer on disk"
+        description={
+          regrab.isError
+            ? "Automatic re-grab isn't possible for this release — find it again from the library or search."
+            : "It was probably reclaimed to free up space. Grab it again and playback picks up right where it left off."
+        }
+        actions={
+          <>
+            {!regrab.isError && (
+              <Button
+                onClick={() => regrab.mutate()}
+                disabled={regrab.isPending || regrab.isSuccess}
+              >
+                {regrab.isPending || regrab.isSuccess ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+                {regrab.isPending ? "Grabbing…" : regrab.isSuccess ? "Starting…" : "Grab it again"}
+              </Button>
+            )}
+            <Button asChild variant="secondary">
+              <Link to="/library">Open library</Link>
+            </Button>
+          </>
+        }
+      />
+    ) : (
+      <NotFoundState
+        eyebrow="Playback"
+        title="Couldn't load this stream"
+        description={torrentQ.error instanceof Error ? torrentQ.error.message : undefined}
+      />
     );
+  }
   if (!data)
     return (
-      <Container>
-        <p className="py-10 text-muted-foreground">Not found.</p>
-      </Container>
+      <NotFoundState
+        eyebrow="Not available"
+        title="This file is no longer on disk"
+        description="It may have been reclaimed to free up space. You can grab it again from the library."
+      />
     );
 
   const fileName = file?.path.split("/").pop() ?? data.name ?? "Iris";

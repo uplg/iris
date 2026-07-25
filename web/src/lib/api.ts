@@ -467,6 +467,9 @@ export const torrents = {
     api.post<IngestResponse>("/torrents", { provider_id, external_id, tmdb_id }),
   list: () => api.get<TorrentView[]>("/torrents"),
   get: (infohash: string) => api.get<TorrentView>(`/torrents/${infohash}`),
+  /** Re-ingest a GC-reclaimed release from its recorded provenance —
+   *  same release, same infohash, saved positions apply again. */
+  regrab: (infohash: string) => api.post<IngestResponse>(`/torrents/${infohash}/regrab`),
   remove: (infohash: string) => api.delete<void>(`/torrents/${infohash}`),
   /** Raw source download (range-supported). Browser saves to disk. */
   downloadUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,

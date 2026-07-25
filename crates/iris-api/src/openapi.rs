@@ -52,6 +52,7 @@ use utoipa::OpenApi;
         crate::routes::torrents::get_one,
         crate::routes::torrents::preview,
         crate::routes::torrents::ingest,
+        crate::routes::torrents::regrab,
         crate::routes::torrents::remove,
         crate::routes::torrents::probe_file,
         crate::routes::torrents::manifest_json,

@@ -34,6 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/preview", post(preview))
         .route("/", post(ingest).get(list))
         .route("/{infohash}", get(get_one).delete(remove))
+        .route("/{infohash}/regrab", post(regrab))
         // `/stream` serves the *raw* source file (range-supported). Used by
         // the download button and as the URL for native MKV players.
         .route(
@@ -416,6 +417,46 @@ pub(crate) async fn ingest(
 ) -> ApiResult<Json<IngestResponse>> {
     Ok(Json(
         ingest_core(&state, user.id, body.provider_id, body.external_id).await?,
+    ))
+}
+
+/// Re-ingest a release the engine no longer serves, from the provenance
+/// recorded at first grab (`source_provider` + `source_external_id`).
+/// Same release → same infohash, so saved playback positions apply
+/// again untouched. Deliberately reads the torrent row WITHOUT a
+/// `deleted_at` filter — resurrecting a GC-reclaimed release is the
+/// whole point, and `torrents::upsert` inside the ingest clears the
+/// soft-delete. The dead player page ("no longer on disk") calls this
+/// so the user can grab & play in place instead of hunting the release
+/// down through the library.
+#[utoipa::path(
+    post,
+    path = "/api/torrents/{infohash}/regrab",
+    operation_id = "regrab_torrent",
+    params(("infohash" = String, Path)),
+    responses(
+        (status = 200, description = "Re-ingested (or already-managed) release", body = IngestResponse),
+        (status = 400, description = "No provenance recorded — re-grab via search instead"),
+        (status = 404, description = "Unknown infohash"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn regrab(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(infohash): Path<String>,
+) -> ApiResult<Json<IngestResponse>> {
+    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let (Some(provider_id), Some(external_id)) = (row.source_provider, row.source_external_id)
+    else {
+        return Err(ApiError::BadRequest(
+            "release has no recorded provenance — re-grab it from search".into(),
+        ));
+    };
+    Ok(Json(
+        ingest_core(&state, user.id, provider_id, external_id).await?,
     ))
 }
 

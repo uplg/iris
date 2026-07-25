@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-07-26
+
+### Fixed
+
+- **Continue Watching can no longer send you to a dead player page.** Tiles
+  whose file the engine can't serve anymore (GC-reclaimed, lost by a session
+  restore, or a grab that died half-way) used to navigate straight to a 404.
+  The server now converts them into "grab" tiles — same series, same episode —
+  so both web and TV run their existing grab & play flow instead; tiles with
+  no episode identity to grab by (movies, unparsed files) are dropped rather
+  than served dead. Behaviour is identical on web and TV by construction: the
+  conversion happens in the one shared `/api/me/continue-watching` route.
+
+### Added
+
+- **"Grab it again" on the dead player page (web + TV).** Opening a watch
+  link whose release was reclaimed now offers a one-click re-grab via the new
+  `POST /api/torrents/{infohash}/regrab` route, which re-ingests the release
+  from its recorded provenance — same infohash, so playback resumes where it
+  left off. Web also gets a branded Not Found page (router-level 404 and the
+  watch page's error states) instead of the bare-bones fallbacks.
+
 ## [1.3.3] - 2026-07-25
 
 ### Fixed

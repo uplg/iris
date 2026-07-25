@@ -189,8 +189,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
 
   const waitTrackBalance = (gen: number, ts: number, otherFedMax: () => number): Promise<void> =>
     new Promise<void>((resolve) => {
-      const ready = () =>
-        disposed || gen !== generation || ts <= otherFedMax() + TRACK_LEAD_CAP;
+      const ready = () => disposed || gen !== generation || ts <= otherFedMax() + TRACK_LEAD_CAP;
       if (ready()) {
         resolve();
         return;
@@ -305,7 +304,11 @@ export const mountTierBLive: EngineMount = async (opts) => {
       restartStamps.shift();
     }
     if (restartStamps.length >= RESTART_BUDGET) {
-      fail(new Error(`live: pipeline restarted ${RESTART_BUDGET}x in ${RESTART_WINDOW_MS / 1000}s — giving up (${reason})`));
+      fail(
+        new Error(
+          `live: pipeline restarted ${RESTART_BUDGET}x in ${RESTART_WINDOW_MS / 1000}s — giving up (${reason})`,
+        ),
+      );
       return;
     }
     restartStamps.push(now);
@@ -437,7 +440,9 @@ export const mountTierBLive: EngineMount = async (opts) => {
     // Phase timing — tells us exactly where a slow start went.
     const t0 = performance.now();
     const phase = (label: string) =>
-      console.log(`[iris-core] live cycle #${gen} phase: ${label} +${(performance.now() - t0).toFixed(0)}ms`);
+      console.log(
+        `[iris-core] live cycle #${gen} phase: ${label} +${(performance.now() - t0).toFixed(0)}ms`,
+      );
 
     // Fresh MediaSource on the same element — also clears a fatal element
     // error state (`video.error`) from a previous cycle.
@@ -751,10 +756,10 @@ export const mountTierBLive: EngineMount = async (opts) => {
               if (!start) {
                 try {
                   try {
-                await feed.source.close();
-              } catch {
-                /* output cancelled mid-flush — teardown noise */
-              }
+                    await feed.source.close();
+                  } catch {
+                    /* output cancelled mid-flush — teardown noise */
+                  }
                 } catch {
                   /* output cancelled mid-flush — teardown noise */
                 }

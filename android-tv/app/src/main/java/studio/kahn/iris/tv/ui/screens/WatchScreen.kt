@@ -124,6 +124,14 @@ fun WatchScreen(
     var prefSubLang by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var probeVersion by remember { mutableStateOf(0) }
+    // Probe 404 = the engine no longer serves this infohash (GC-reclaimed,
+    // or a stale reference). Instead of a dead "Probe failed" wall, offer
+    // the same "Grab it again" the web shows: `/regrab` re-ingests the
+    // release from its recorded provenance — same infohash, so the saved
+    // position applies — then the normal probe retry loop takes over.
+    var gone by remember(infohash, fileIdx) { mutableStateOf(false) }
+    var regrabbing by remember(infohash, fileIdx) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     // Probe with retry. When the user clicks Play right after ingest, the
     // file isn't on disk yet — librqbit needs a few seconds to fetch the
@@ -181,7 +189,12 @@ fun WatchScreen(
                 probe = freshProbe
                 return@LaunchedEffect
             } catch (e: retrofit2.HttpException) {
-                if (e.code() == 401 || e.code() == 404) {
+                if (e.code() == 404) {
+                    gone = true
+                    error = "This file is no longer on disk"
+                    return@LaunchedEffect
+                }
+                if (e.code() == 401) {
                     error = "Probe failed (HTTP ${e.code()})"
                     return@LaunchedEffect
                 }
@@ -265,12 +278,37 @@ fun WatchScreen(
         } else {
             LoadingOverlay(
                 error = error,
+                gone = gone,
+                regrabbing = regrabbing,
                 probeReady = probe != null,
                 torrent = torrent,
                 onRetry = {
                     probe = null
                     error = null
                     probeVersion++
+                },
+                onRegrab = {
+                    if (!regrabbing) {
+                        scope.launch {
+                            regrabbing = true
+                            val url = container.sessionStore.serverUrl.first()
+                            val ok = url != null &&
+                                runCatching {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        container.apiFor(url).regrabTorrent(infohash)
+                                    }
+                                }.isSuccess
+                            regrabbing = false
+                            gone = false
+                            if (ok) {
+                                error = null
+                                probe = null
+                                probeVersion++
+                            } else {
+                                error = "Re-grab failed — find this release from its series page"
+                            }
+                        }
+                    }
                 },
                 onBack = onBack,
             )
@@ -1223,9 +1261,12 @@ private fun EndOfPlaybackPill(isMovie: Boolean) {
 @Composable
 private fun LoadingOverlay(
     error: String?,
+    gone: Boolean,
+    regrabbing: Boolean,
     probeReady: Boolean,
     torrent: TorrentView?,
     onRetry: () -> Unit,
+    onRegrab: () -> Unit,
     onBack: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1240,11 +1281,23 @@ private fun LoadingOverlay(
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.error,
                 )
+                if (gone) {
+                    Text(
+                        text = "It was probably reclaimed to free up space. " +
+                            "Grab it again and playback picks up right where it left off.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.padding(top = 12.dp),
                 ) {
-                    IrisButton("Retry", onRetry)
+                    if (gone) {
+                        IrisButton(if (regrabbing) "Grabbing…" else "Grab it again", onRegrab)
+                    } else {
+                        IrisButton("Retry", onRetry)
+                    }
                     IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost)
                 }
                 return@Column
