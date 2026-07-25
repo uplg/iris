@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useMemo, useState } from "react";
-import { Link, linkOptions } from "@tanstack/react-router";
-import { ArrowUpRight, Bookmark, Play, Sparkles, X } from "lucide-react";
+import { Link, linkOptions, useNavigate } from "@tanstack/react-router";
+import { ArrowUpRight, Bookmark, Loader2, Play, Sparkles, X } from "lucide-react";
 
 import { CatalogCardView } from "@/components/CatalogCardView";
 import { Container } from "@/components/Container";
@@ -13,6 +13,7 @@ import { Tag } from "@/components/Tag";
 import { Button } from "@/components/ui/button";
 import {
   discover,
+  library,
   me as meApi,
   metadata,
   tmdbImage,
@@ -25,6 +26,42 @@ import {
 import { formatSize, prettySceneName } from "@/lib/format";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
+
+/** "S08E08" when both parts are known, null otherwise. */
+function episodeTag(it: ContinueWatchingItem): string | null {
+  if (it.season == null || it.episode == null) return null;
+  const s = String(it.season).padStart(2, "0");
+  const e = String(it.episode).padStart(2, "0");
+  return `S${s}E${e}`;
+}
+
+/**
+ * Grab & play for `grabbable` Continue Watching tiles — the "next episode
+ * isn't on disk" (or "the file was reclaimed") case, where `infohash` is
+ * EMPTY and navigating would land on `/watch//0`. Mirrors the TV: grab
+ * (server picks the series' dominant owned language via `language=auto`)
+ * then play the returned file — librqbit streams while the download
+ * completes. One mutation instance is shared by the hero and every card;
+ * `grab.variables` identifies which tile is in flight.
+ */
+function useGrabAndPlay() {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (it: ContinueWatchingItem) =>
+      // Non-null by contract: grabbable tiles always carry the triple.
+      library.grabCollectionEpisode(it.collection_id!, it.season!, it.episode!, "auto"),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ["continue-watching"] });
+      void navigate({
+        to: "/watch/$infohash/$idx",
+        params: { infohash: res.infohash, idx: String(res.file_idx) },
+      });
+    },
+  });
+}
+
+type GrabAndPlay = ReturnType<typeof useGrabAndPlay>;
 
 /**
  * Discovery-first home. A full-bleed hero (resume the top Continue-Watching
@@ -64,6 +101,9 @@ export function HomePage() {
   // Library shelf only shows the recent N — full grid lives at /library.
   const recentLibrary = useMemo(() => (libraryQ.data ?? []).slice(0, 12), [libraryQ.data]);
 
+  // Shared by the hero + every Continue Watching card (see useGrabAndPlay).
+  const grab = useGrabAndPlay();
+
   const resumePick = continueQ.data?.[0];
   // Hero fallback: the freshest library title reads better than a raw
   // featured release (verified TMDB art/name, no overflow), so prefer it.
@@ -76,7 +116,7 @@ export function HomePage() {
       <OnboardingDialog />
 
       {resumePick ? (
-        <ResumeHero item={resumePick} />
+        <ResumeHero item={resumePick} grab={grab} />
       ) : libraryPick ? (
         <LibraryHero torrent={libraryPick} />
       ) : featuredPick ? (
@@ -93,7 +133,17 @@ export function HomePage() {
             }
           >
             {continueQ.data?.map((item) => (
-              <ContinueCard key={`${item.infohash}:${item.file_idx}`} item={item} />
+              <ContinueCard
+                // Grabbable tiles all share an EMPTY infohash — key those on
+                // the collection instead or React collapses them.
+                key={
+                  item.collection_id
+                    ? `c:${item.collection_id}`
+                    : `${item.infohash}:${item.file_idx}`
+                }
+                item={item}
+                grab={grab}
+              />
             ))}
           </Shelf>
 
@@ -154,8 +204,6 @@ export function HomePage() {
     </div>
   );
 }
-
-// ── HERO ───────────────────────────────────────────────────────────────────
 
 function HeroLayout({
   eyebrow,
@@ -239,7 +287,8 @@ function HeroLayout({
   );
 }
 
-function ResumeHero({ item }: { item: ContinueWatchingItem }) {
+function ResumeHero({ item, grab }: { item: ContinueWatchingItem; grab: GrabAndPlay }) {
+  const navigate = useNavigate();
   // Only pull TMDB art/overview once the server has verified the match —
   // a wrong backdrop/title on the giant hero is worse than the bare name.
   const metaQ = useQuery({
@@ -274,15 +323,44 @@ function ResumeHero({ item }: { item: ContinueWatchingItem }) {
       meta={meta}
       overview={md?.overview}
       actions={
-        <Button asChild size="lg" className="h-11">
-          <Link
-            to="/watch/$infohash/$idx"
-            params={{ infohash: item.infohash, idx: String(item.file_idx) }}
+        item.grabbable ? (
+          // No file on disk — grab & play instead of a dead /watch//0 link.
+          // After a failed grab, route to the series page where every
+          // release / language option is exposed.
+          <Button
+            size="lg"
+            className="h-11"
+            disabled={grab.isPending}
+            onClick={() => {
+              if (grab.isError && item.collection_id) {
+                void navigate({ to: "/collection/$id", params: { id: item.collection_id } });
+              } else if (!grab.isPending) {
+                grab.mutate(item);
+              }
+            }}
           >
-            <Play className="size-4.5" />
-            Resume
-          </Link>
-        </Button>
+            {grab.isPending && grab.variables === item ? (
+              <Loader2 className="size-4.5 animate-spin" />
+            ) : (
+              <Play className="size-4.5" />
+            )}
+            {grab.isPending && grab.variables === item
+              ? "Grabbing…"
+              : grab.isError
+                ? "Open series page"
+                : `Play ${episodeTag(item) ?? "next episode"}`}
+          </Button>
+        ) : (
+          <Button asChild size="lg" className="h-11">
+            <Link
+              to="/watch/$infohash/$idx"
+              params={{ infohash: item.infohash, idx: String(item.file_idx) }}
+            >
+              <Play className="size-4.5" />
+              Resume
+            </Link>
+          </Button>
+        )
       }
       footer={
         progress > 0 ? (
@@ -420,17 +498,46 @@ function fmtLeft(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")} left`;
 }
 
-// ── CARDS ────────────────────────────────────────────────────────────────────
-
-function ContinueCard({ item }: { item: ContinueWatchingItem }) {
+function ContinueCard({ item, grab }: { item: ContinueWatchingItem; grab: GrabAndPlay }) {
+  const navigate = useNavigate();
   const fileName = item.file_path?.split("/").pop();
   const primary = fileName ?? item.torrent_name;
-  const subtitle = fileName && fileName !== item.torrent_name ? item.torrent_name : undefined;
   const progress =
     item.duration_seconds && item.duration_seconds > 0
       ? Math.min(1, item.position_seconds / item.duration_seconds)
       : 0;
 
+  // Grabbable = no file on disk (never downloaded, or reclaimed):
+  // `infohash` is EMPTY, so the link form below would navigate to the
+  // dead `/watch//0`. Click grabs then plays instead — same flow as the
+  // TV shelf; a failed grab falls through to the series page.
+  if (item.grabbable) {
+    const grabPending = grab.isPending && grab.variables === item;
+    const grabFailed = grab.isError && grab.variables === item;
+    return (
+      <MediaCard
+        onClick={() => {
+          if (grabFailed && item.collection_id) {
+            void navigate({ to: "/collection/$id", params: { id: item.collection_id } });
+          } else if (!grab.isPending) {
+            grab.mutate(item);
+          }
+        }}
+        title={item.torrent_name}
+        subtitle={
+          grabFailed
+            ? "No release found — open the series page"
+            : grabPending
+              ? "Grabbing…"
+              : `Up next · ${episodeTag(item) ?? "next episode"} · Not downloaded`
+        }
+        tmdbId={item.tmdb_id}
+        kind={item.kind ?? null}
+      />
+    );
+  }
+
+  const subtitle = fileName && fileName !== item.torrent_name ? item.torrent_name : undefined;
   return (
     <MediaCard
       link={linkOptions({
