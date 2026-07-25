@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-07-25
+
+### Fixed
+
+- **Android TV: audio tracks wrongly flagged "forced" are now listed in the
+  selector.** Some multi-language MKVs (Breaking Bad S01/S02 notably) carry a
+  bogus `forced` disposition on the dub track — a mux error with no real
+  meaning for audio. Media3's native settings menu unconditionally hides
+  forced tracks, so the track could play via automatic language selection yet
+  never appeared in the audio list: once a user switched to another language
+  there was no way back. The TV player now strips the forced flag from audio
+  tracks at the extractor (subtitles keep theirs — there it drives the
+  "Forced" label and auto-show semantics), so every probed language is
+  selectable, matching the web player.
+
 ## [1.3.2] - 2026-07-14
 
 ### Added

@@ -8,6 +8,10 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
+import android.net.Uri
+import androidx.media3.common.DataReader
+import androidx.media3.common.Format
+import androidx.media3.common.util.ParsableByteArray
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -15,8 +19,109 @@ import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.video.VideoRendererEventListener
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.Extractor
+import androidx.media3.extractor.ExtractorInput
+import androidx.media3.extractor.ExtractorOutput
+import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.PositionHolder
+import androidx.media3.extractor.SeekMap
+import androidx.media3.extractor.TrackOutput
 import okhttp3.OkHttpClient
 import studio.kahn.iris.tv.BuildConfig
+
+/**
+ * [DefaultExtractorsFactory] that strips `C.SELECTION_FLAG_FORCED` from
+ * AUDIO track formats as the extractor emits them.
+ *
+ * Old French multi MKVs (Breaking Bad S01/S02 notably) carry a bogus
+ * `forced` disposition on the dub track — a mux error, "forced" has no
+ * real meaning for audio. `PlayerControlView.gatherSupportedTrackInfosOfType`
+ * unconditionally skips forced tracks when building the selection list,
+ * so the track PLAYS via automatic language selection (the audio
+ * selector's scoring ignores the flag) yet never appears in the settings
+ * menu: a user who switched to another language has no way back. The web
+ * client is immune (its menu is built from the ffprobe manifest), so the
+ * flag must die here, TV-side.
+ *
+ * Stripping at the extractor keeps `Format`/`TrackGroup` identity
+ * consistent everywhere (menu labels, `TrackSelectionOverride` keying,
+ * selector state all see the same instance) — unlike rewriting at a
+ * `ForwardingPlayer` facade, which would break override lookups.
+ * Subtitle tracks keep their forced flag: there it carries real
+ * semantics (auto-shown segments) and drives the "Forced" label in
+ * [IrisTrackNameProvider]. Progressive-only by construction — the HLS
+ * paths build their tracks from the server manifest, not from this
+ * factory.
+ */
+@UnstableApi
+private class ForcedAudioVisibleExtractorsFactory : ExtractorsFactory {
+    private val delegate = DefaultExtractorsFactory()
+
+    override fun createExtractors(): Array<Extractor> =
+        delegate.createExtractors().map { StrippingExtractor(it) }.toTypedArray()
+
+    override fun createExtractors(
+        uri: Uri,
+        responseHeaders: MutableMap<String, MutableList<String>>,
+    ): Array<Extractor> =
+        delegate.createExtractors(uri, responseHeaders).map { StrippingExtractor(it) }.toTypedArray()
+
+    private class StrippingExtractor(private val delegate: Extractor) : Extractor {
+        override fun sniff(input: ExtractorInput): Boolean = delegate.sniff(input)
+
+        override fun init(output: ExtractorOutput) = delegate.init(StrippingOutput(output))
+
+        override fun read(input: ExtractorInput, seekPosition: PositionHolder): Int =
+            delegate.read(input, seekPosition)
+
+        override fun seek(position: Long, timeUs: Long) = delegate.seek(position, timeUs)
+
+        override fun release() = delegate.release()
+    }
+
+    private class StrippingOutput(private val delegate: ExtractorOutput) : ExtractorOutput {
+        override fun track(id: Int, type: Int): TrackOutput {
+            val real = delegate.track(id, type)
+            return if (type == C.TRACK_TYPE_AUDIO) StrippingTrackOutput(real) else real
+        }
+
+        override fun endTracks() = delegate.endTracks()
+
+        override fun seekMap(seekMap: SeekMap) = delegate.seekMap(seekMap)
+    }
+
+    private class StrippingTrackOutput(private val delegate: TrackOutput) : TrackOutput {
+        override fun format(format: Format) {
+            val stripped = if (format.selectionFlags and C.SELECTION_FLAG_FORCED != 0) {
+                format.buildUpon()
+                    .setSelectionFlags(format.selectionFlags and C.SELECTION_FLAG_FORCED.inv())
+                    .build()
+            } else {
+                format
+            }
+            delegate.format(stripped)
+        }
+
+        override fun sampleData(
+            input: DataReader,
+            length: Int,
+            allowEndOfInput: Boolean,
+            sampleDataPart: Int,
+        ): Int = delegate.sampleData(input, length, allowEndOfInput, sampleDataPart)
+
+        override fun sampleData(data: ParsableByteArray, length: Int, sampleDataPart: Int) =
+            delegate.sampleData(data, length, sampleDataPart)
+
+        override fun sampleMetadata(
+            timeUs: Long,
+            flags: Int,
+            size: Int,
+            offset: Int,
+            cryptoData: TrackOutput.CryptoData?,
+        ) = delegate.sampleMetadata(timeUs, flags, size, offset, cryptoData)
+    }
+}
 
 /**
  * Build an `ExoPlayer` whose HTTP layer reuses our session cookies via a
@@ -49,7 +154,7 @@ fun buildPlayer(
     preferPlatformAv1: Boolean = false,
 ): ExoPlayer {
     val dataSourceFactory = OkHttpDataSource.Factory(mediaOkHttp).setUserAgent(userAgent)
-    val mediaSourceFactory = DefaultMediaSourceFactory(context)
+    val mediaSourceFactory = DefaultMediaSourceFactory(context, ForcedAudioVisibleExtractorsFactory())
         .setDataSourceFactory(dataSourceFactory)
 
     // Renderers factory. The FFmpeg decoder extension is built and

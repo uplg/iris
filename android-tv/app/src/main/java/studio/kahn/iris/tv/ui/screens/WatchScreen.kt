@@ -824,6 +824,30 @@ private fun ReadyPlayer(
                 val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                 val subGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
 
+                // Direct-play audio completeness telemetry. Silent loss
+                // modes: MatroskaExtractor DROPS tracks whose CodecID it
+                // doesn't recognise (group missing entirely), and the
+                // native gear menu HIDES tracks below FORMAT_HANDLED or
+                // flagged forced (the latter is neutralised for audio by
+                // `ForcedAudioVisibleExtractorsFactory`). Any hit here is a
+                // genuine extractor drop or decoder gap worth a bug
+                // report — log it; video + remaining audio play fine.
+                if (
+                    !useRemuxFallback && !needsServerTranscode &&
+                    tracks.groups.isNotEmpty() &&
+                    (
+                        audioGroups.size < probe.audio.size ||
+                            audioGroups.any { !it.isSupported }
+                        )
+                ) {
+                    android.util.Log.w(
+                        "iris-core",
+                        "direct-play audio deficit: ${audioGroups.size} surfaced " +
+                            "(${audioGroups.count { it.isSupported }} supported) " +
+                            "of ${probe.audio.size} probed",
+                    )
+                }
+
                 // First event with real tracks loaded: pin the saved
                 // pick via `TrackSelectionOverride` (the only way to
                 // address a specific track group from outside the
