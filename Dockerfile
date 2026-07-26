@@ -106,7 +106,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 # itself must be copied out *before* the RUN finishes — otherwise it
 # vanishes with the cache when the next build runs.
 ###############################################################################
-FROM rust:1.96-trixie AS rust-builder
+FROM rust:1.97-trixie AS rust-builder
 WORKDIR /app
 ENV CARGO_TERM_COLOR=never
 COPY rust-toolchain.toml Cargo.toml Cargo.lock* ./
@@ -122,7 +122,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # 3) Runtime — Chainguard Wolfi (glibc)
 #
 # glibc (2.43) just like Debian, so the prebuilt glibc shaka-packager binary
-# and the glibc Rust binary (built above on rust:1.96-trixie / glibc 2.41 —
+# and the glibc Rust binary (built above on rust:1.97-trixie / glibc 2.41 —
 # older, so it runs fine on Wolfi's newer 2.43) work UNCHANGED. NOT Alpine:
 # musl would break the prebuilt shaka binary and hurt librqbit's allocation-
 # heavy throughput. Verified codec parity — Wolfi's ffmpeg ships every

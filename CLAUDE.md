@@ -32,7 +32,7 @@ Three project-wide rules — never relax them without explicit user approval.
 
 | Layer       | Stack                                                                              |
 | ----------- | ---------------------------------------------------------------------------------- |
-| Backend     | Rust 2024 workspace (edition 2024, rust-version 1.85), Axum 0.8, sqlx 0.9 / SQLite |
+| Backend     | Rust 2024 workspace (edition 2024, rust-version 1.97), Axum 0.8, sqlx 0.9 / SQLite |
 | Torrent     | librqbit 9.0.0.rc-0                                                                |
 | Media       | ffmpeg-driven remuxer + HLS manifest builder + JS subtitle pipeline                |
 | Auth        | JWT in HttpOnly cookies, argon2id, invitation-only registration                    |

@@ -1,14 +1,14 @@
 //! HD-Torrents — English private HD tracker (hd-torrents.org / hdts.ru).
 //!
 //! The site exposes **no API at all** (no Torznab, no JSON): auth is a
-//! session cookie obtained by POSTing `uid`/`pwd` to `login.php`, and
+//! session cookie obtained by a `POST` of `uid`/`pwd` to `login.php`, and
 //! search results are scraped out of the `torrents.php` HTML table.
 //! Selectors and quirks mirror Prowlarr's `HDTorrents.cs` indexer
 //! definition, the de-facto reference for this site's markup.
 //!
 //! Quirks worth knowing before touching the parser:
 //! * The upload date lives in **unquoted attribute names** — the cell
-//!   renders as `<a 25 Jul 2026 18:32:10 href=…>`, so html5ever sees four
+//!   renders as `<a 25 Jul 2026 18:32:10 href=…>`, so `html5ever` sees four
 //!   value-less attributes whose *names* are the date parts. This is why
 //!   the workspace pins scraper's `deterministic` feature (ordered
 //!   attribute maps).
@@ -33,14 +33,15 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::Result;
 use iris_core::search::{
-    MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, TorrentSource,
+    DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
+    TorrentDetails, TorrentSource,
 };
 use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderValue, REFERER, USER_AGENT};
@@ -49,6 +50,7 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::nfo;
 use crate::util::{extract_year, field_or_env, field_str};
 
 const DEFAULT_USER_AGENT: &str =
@@ -67,6 +69,11 @@ const LOGIN_OK_MARKER: &str = "if your browser doesn't have javascript enabled";
 
 /// Same cap as the Torznab / UNIT3D link caches.
 const LINK_CACHE_CAP: usize = 4096;
+
+/// Same rationale as tr4ker/c411: the user shopping the preview dialog
+/// bounces between torrents; 60 s spares the tracker without letting
+/// the peer counts go meaningfully stale.
+const DETAILS_TTL: Duration = Duration::from_mins(1);
 
 /// Movie category ids (UHD Blu-ray, Blu-ray, UHD Remux, Remux, 1080p/i,
 /// 720p, 2160p). Deliberately excludes 63 "Movie/Audio Track".
@@ -160,6 +167,13 @@ pub struct HdTorrents {
     /// Torrent id -> absolute `download.php` URL captured from search
     /// rows (carries the `f=<name>.torrent` filename parameter).
     link_cache: Mutex<LinkCache>,
+    /// Infohash -> scraped `details.php` view.
+    details_cache: Mutex<HashMap<String, CachedDetails>>,
+}
+
+struct CachedDetails {
+    details: TorrentDetails,
+    fetched_at: Instant,
 }
 
 impl HdTorrents {
@@ -193,6 +207,7 @@ impl HdTorrents {
             http,
             logged_in: Mutex::new(false),
             link_cache: Mutex::new(LinkCache::new()),
+            details_cache: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -311,6 +326,47 @@ impl HdTorrents {
         }
     }
 
+    async fn fetch_details(&self, external_id: &str) -> Result<Option<TorrentDetails>> {
+        if external_id.is_empty() || !external_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Ok(None);
+        }
+        {
+            let cache = self.details_cache.lock().await;
+            if let Some(c) = cache.get(external_id)
+                && c.fetched_at.elapsed() < DETAILS_TTL
+            {
+                return Ok(Some(c.details.clone()));
+            }
+        }
+
+        let url = self
+            .base_url
+            .join(&format!("details.php?id={external_id}"))
+            .map_err(|e| Error::Provider(format!("hdtorrents join details url: {e}")))?;
+        let body = self.authed_get_text(url).await?;
+
+        let Some(parsed) = parse_details_page(&self.id, &self.base_url, external_id, &body) else {
+            return Ok(None);
+        };
+        // The details page carries the signed download link too — prime
+        // the cache so a grab straight from the preview dialog works
+        // even when the row never went through search().
+        if let Some(dl) = &parsed.download_url {
+            self.link_cache
+                .lock()
+                .await
+                .put(external_id.to_string(), dl.clone());
+        }
+        self.details_cache.lock().await.insert(
+            external_id.to_string(),
+            CachedDetails {
+                details: parsed.details.clone(),
+                fetched_at: Instant::now(),
+            },
+        );
+        Ok(Some(parsed.details))
+    }
+
     fn search_url(&self, q: &SearchQuery) -> Result<Url> {
         let mut url = self
             .base_url
@@ -417,6 +473,23 @@ impl SearchProvider for HdTorrents {
         Ok(TorrentSource::TorrentFile(bytes.to_vec()))
     }
 
+    async fn details(&self, external_id: &str) -> Result<Option<TorrentDetails>> {
+        // Failures degrade to "no details" (the preview dialog then shows
+        // the search-result fields only) rather than erroring the dialog.
+        match self.fetch_details(external_id).await {
+            Ok(d) => Ok(d),
+            Err(e) => {
+                tracing::warn!(
+                    provider = %self.id,
+                    external_id,
+                    error = %e,
+                    "hdtorrents details failed",
+                );
+                Ok(None)
+            }
+        }
+    }
+
     /// Downloads need the session cookie — the default plain-GET
     /// implementation would hit the login wall.
     async fn fetch_bytes(&self, url: &str) -> Result<bytes::Bytes> {
@@ -482,7 +555,7 @@ fn parse_count(text: &str) -> Option<u32> {
 
 /// The upload date is spread across the first four *attribute names* of
 /// the date cell's first element (unquoted-attribute artifact, see module
-/// docs). html5ever lowercases names; chrono's `%b` matches month names
+/// docs). `html5ever` lowercases names; chrono's `%b` matches month names
 /// case-insensitively.
 fn parse_date_cell(el: ElementRef<'_>) -> Option<chrono::DateTime<chrono::Utc>> {
     let joined = el
@@ -495,6 +568,223 @@ fn parse_date_cell(el: ElementRef<'_>) -> Option<chrono::DateTime<chrono::Utc>> 
     chrono::NaiveDateTime::parse_from_str(&joined, "%d %b %Y %H:%M:%S")
         .ok()
         .map(|n| n.and_utc())
+}
+
+/// `ElementRef::text()` drops `<br>`s, flattening the Technical Info
+/// blob into one unreadable line — walk the subtree keeping them as
+/// newlines instead.
+fn text_with_breaks(el: ElementRef<'_>) -> String {
+    let mut out = String::new();
+    for node in el.descendants() {
+        match node.value() {
+            scraper::Node::Text(t) => out.push_str(t),
+            scraper::Node::Element(e) if e.name() == "br" => out.push('\n'),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Per-line trim + collapse runs of blank lines, so scraped blocks look
+/// intentional in a `pre` rendering.
+fn clean_block(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blank_run = 0usize;
+    for line in text.lines() {
+        let line = line.trim().replace('\u{a0}', " ");
+        if line.is_empty() {
+            blank_run += 1;
+            if blank_run > 1 {
+                continue;
+            }
+        } else {
+            blank_run = 0;
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.trim().to_string()
+}
+
+/// First integer (commas tolerated) appearing after `marker` in `text`.
+fn number_after(text: &str, marker: &str) -> Option<u64> {
+    let rest = &text[text.find(marker)? + marker.len()..];
+    let digits: String = rest
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit() || *c == ',')
+        .filter(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
+struct ParsedDetails {
+    details: TorrentDetails,
+    download_url: Option<String>,
+}
+
+/// Accumulator for the label/value rows of a `details.php` page.
+#[derive(Default)]
+struct DetailFields {
+    title: Option<String>,
+    download_url: Option<String>,
+    nfo_text: Option<String>,
+    description: Option<String>,
+    category: Option<String>,
+    tags: Vec<String>,
+    size_bytes: Option<u64>,
+    uploaded_at: Option<chrono::DateTime<chrono::Utc>>,
+    uploader: Option<String>,
+    times_completed: Option<u64>,
+    seeders: Option<u32>,
+    leechers: Option<u32>,
+}
+
+impl DetailFields {
+    fn apply_row(&mut self, label: &str, value: ElementRef<'_>, base_url: &Url) {
+        let a_sel = Selector::parse("a").expect("static selector");
+        match label {
+            "Torrent:" => {
+                let t = value.text().collect::<String>();
+                let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !t.is_empty() {
+                    self.title = Some(t);
+                }
+                self.download_url = value
+                    .select(&a_sel)
+                    .filter_map(|a| a.value().attr("href"))
+                    .find(|h| h.contains("download.php"))
+                    .and_then(|h| base_url.join(h).ok())
+                    .map(String::from);
+            }
+            "Technical Info:" => {
+                let t = clean_block(&text_with_breaks(value));
+                if !t.is_empty() {
+                    self.nfo_text = Some(t);
+                }
+            }
+            "IMDb info:" => {
+                let t = clean_block(&text_with_breaks(value));
+                if !t.is_empty() {
+                    self.description = Some(t);
+                }
+            }
+            "Category:" => {
+                let t = value.text().collect::<String>().trim().to_string();
+                if !t.is_empty() {
+                    self.category = Some(t);
+                }
+            }
+            "Genre:" => {
+                self.tags = value
+                    .text()
+                    .collect::<String>()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect();
+            }
+            "Size:" => {
+                self.size_bytes = parse_size(&value.text().collect::<String>());
+            }
+            "Added:" => {
+                self.uploaded_at = chrono::NaiveDateTime::parse_from_str(
+                    value.text().collect::<String>().trim(),
+                    "%H:%M:%S (%d/%m/%Y)",
+                )
+                .ok()
+                .map(|n| n.and_utc());
+            }
+            "Uploader:" => {
+                let t = value.text().collect::<String>().trim().to_string();
+                if !t.is_empty() && !t.to_ascii_lowercase().contains("anonymous") {
+                    self.uploader = Some(t);
+                }
+            }
+            "Downloaded:" => {
+                self.times_completed = number_after(&value.text().collect::<String>(), "");
+            }
+            "peer(s):" => {
+                let t = value.text().collect::<String>();
+                self.seeders = number_after(&t, "seeder(s):").and_then(|n| u32::try_from(n).ok());
+                self.leechers = number_after(&t, "leecher(s):").and_then(|n| u32::try_from(n).ok());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Scrape one `details.php` page. The layout is a `table.listadetails`
+/// of label/value pairs (`td.detailsleft` / `td.detailsright|detailshash`);
+/// unknown rows (nested file table, comments) simply don't match any
+/// label. `None` when the page carries no recognisable torrent title —
+/// deleted torrent or layout change, both degrade to "no details".
+fn parse_details_page(
+    provider_id: &str,
+    base_url: &Url,
+    external_id: &str,
+    html: &str,
+) -> Option<ParsedDetails> {
+    let doc = Html::parse_document(html);
+    let row_sel = Selector::parse("table.listadetails tr").expect("static selector");
+    let img_sel = Selector::parse("img").expect("static selector");
+    let msgfile_sel = Selector::parse("div#msgfile").expect("static selector");
+
+    let mut fields = DetailFields::default();
+    for row in doc.select(&row_sel) {
+        let tds: Vec<ElementRef<'_>> = row.child_elements().collect();
+        if tds.len() < 2 {
+            continue;
+        }
+        let label = tds[0]
+            .text()
+            .collect::<String>()
+            .replace('\u{a0}', " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        fields.apply_row(&label, tds[1], base_url);
+    }
+
+    let title = fields.title?;
+    let freeleech = doc.select(&img_sel).any(|img| {
+        img.value()
+            .attr("src")
+            .is_some_and(|s| s.ends_with("free.png") || s.ends_with("no_ratio.png"))
+    });
+    let file_count = doc
+        .select(&msgfile_sel)
+        .next()
+        .and_then(|d| number_after(&d.text().collect::<String>(), ""))
+        .and_then(|n| u32::try_from(n).ok());
+    let media_info = fields.nfo_text.as_deref().and_then(nfo::parse);
+
+    Some(ParsedDetails {
+        details: TorrentDetails {
+            provider_id: provider_id.to_string(),
+            external_id: external_id.to_string(),
+            title,
+            description: fields.description,
+            description_format: DescriptionFormat::Plain,
+            nfo: fields.nfo_text,
+            media_info,
+            tags: fields.tags,
+            category: fields.category,
+            uploader: fields.uploader,
+            uploaded_at: fields.uploaded_at,
+            age: None,
+            seeders: fields.seeders,
+            leechers: fields.leechers,
+            times_completed: fields.times_completed,
+            views: None,
+            freeleech,
+            exclusive: false,
+            file_count,
+            file_size_bytes: fields.size_bytes,
+        },
+        download_url: fields.download_url,
+    })
 }
 
 fn query_param(url: &Url, key: &str) -> Option<String> {
@@ -841,6 +1131,138 @@ mod tests {
         for r in page.results.iter().take(5) {
             println!("s={:?} l={:?} title={}", r.seeders, r.leechers, r.title);
         }
+    }
+
+    /// Trimmed real `details.php` markup (captured 2026-07-26): label /
+    /// value rows in `table.listadetails`, Technical Info blob behind
+    /// `<br />`s, `IMDb` block, the stray `</a>` in the Downloaded cell
+    /// and the `msgfile` file-count div are all verbatim quirks.
+    const DETAILS_FIXTURE: &str = r##"<html><body>
+<table class="listadetails" border="0" cellspacing="0" cellpadding="5">
+ <tr><td align="right" class="detailsleft"> Torrent:</td><td class="detailsright" align="center"><a class "index" <a href="download.php?id=8ce5df07acc790f95093b3a45c377fbc7f888d4b&f=Dune+2020.torrent"><i class="fa fa-download"></i></a>&nbsp;Dune 2020 1080p FMIO WEB-DL AAC2.0 H.264-WUMBA</td></tr>
+ <tr><td valign=top align=left class="detailsleft"><img id="IMDBDetailsInfoHideShow" src="images/minus.gif" \>&nbsp;IMDb&nbsp;info:</td><td valign=top align=left class="detailshash"><div id="IMDBDetailsInfoHideShowTR"><strong>Dune</strong><br /><strong>Year:</strong> 2020<br /><strong>Plot:</strong> The sounds as witnesses.</div></td></tr>
+ <tr><td align="right" class="detailsleft"><img id="technicalInfoHideShow" src="images/minus.gif" \>&nbsp;Technical Info:</td><td align="left" class="detailshash"><div id="technicalInfoHideShowTR"><div align=left><font face="consolas">Dune.2020.1080p.FMIO.WEB-DL.AAC.2.0.H.264-WUMBA<br /><br />---GENERAL----<br />Size...........: 82.7 MiB<br />Container......: mkv</font></div></div></td></tr>
+ <tr><td align="right" class="detailsleft"> Category:</td><td class="detailsright" align="left">Movie/1080p/i</td></tr>
+ <tr><td align="right" class="detailsleft"> <b>Genre</b>:</td><td align=left class="detailsright" >Animation, Short</td></tr>
+ <tr><td align=right class="detailsleft"> Size:</td><td class="detailsright" align="left">82.68 MiB</td></tr>
+ <tr><td align="left" class="detailsleft" valign="top"><a name="#expand" href="#expand">Show Files: </td><td align="left" class="detailsright"><div name="files" style="display:none" id="files"><table class="detailsright"><tr><td align="left" class="detailsleft">File Name</td><td align="left" class="detailsleft">Size</td></tr></table></div><div style="display:block" id="msgfile" align="left">1 file</div></td></tr>
+ <tr><td align="right" class="detailsleft"> Added:</td><td align=left class="detailsright" >03:24:02 (25/01/2026)</td></tr>
+ <tr><td align="right" class="detailsleft"> Uploader:</td><td align=left class="detailsright" >Send as anonymous</td></tr>
+ <tr><td align="right" class="detailsleft"> Downloaded:</td><td class="detailsright" align="left">6</a> time(s)</td></tr>
+ <tr><td align="right" class="detailsleft"> peer(s):</td><td class="detailsright" align="left"> seeder(s): <a href=peers.php?id=8ce5df07acc790f95093b3a45c377fbc7f888d4b>14</a> , leecher(s): <a href=peers.php?id=8ce5df07acc790f95093b3a45c377fbc7f888d4b>0</a> = 14 peer(s)</td></tr>
+</table></body></html>"##;
+
+    #[test]
+    fn parses_details_page() {
+        let parsed = parse_details_page(
+            "hdt",
+            &base(),
+            "8ce5df07acc790f95093b3a45c377fbc7f888d4b",
+            DETAILS_FIXTURE,
+        )
+        .expect("details parsed");
+        let d = &parsed.details;
+        assert_eq!(d.title, "Dune 2020 1080p FMIO WEB-DL AAC2.0 H.264-WUMBA");
+        assert_eq!(d.category.as_deref(), Some("Movie/1080p/i"));
+        assert_eq!(d.tags, vec!["Animation".to_string(), "Short".to_string()]);
+        assert_eq!(d.file_size_bytes, Some(86_696_264));
+        assert_eq!(d.file_count, Some(1));
+        assert_eq!(d.seeders, Some(14));
+        assert_eq!(d.leechers, Some(0));
+        assert_eq!(d.times_completed, Some(6));
+        assert!(d.uploader.is_none(), "anonymous uploader must map to None");
+        assert_eq!(
+            d.uploaded_at.expect("added date").to_rfc3339(),
+            "2026-01-25T03:24:02+00:00",
+        );
+        let nfo = d.nfo.as_deref().expect("technical info blob");
+        assert!(nfo.starts_with("Dune.2020.1080p.FMIO.WEB-DL.AAC.2.0.H.264-WUMBA"));
+        assert!(nfo.contains("Size...........: 82.7 MiB"));
+        let desc = d.description.as_deref().expect("imdb block");
+        assert!(desc.contains("Plot: The sounds as witnesses."));
+        assert_eq!(d.description_format, DescriptionFormat::Plain);
+        assert!(!d.freeleech);
+        assert_eq!(
+            parsed.download_url.as_deref(),
+            Some(
+                "https://hd-torrents.org/download.php?id=8ce5df07acc790f95093b3a45c377fbc7f888d4b&f=Dune+2020.torrent"
+            ),
+        );
+    }
+
+    #[test]
+    fn details_page_without_title_is_none() {
+        assert!(
+            parse_details_page("hdt", &base(), "x", "<html><body>gone</body></html>").is_none()
+        );
+    }
+
+    #[test]
+    fn number_after_variants() {
+        assert_eq!(
+            number_after("seeder(s): 14 , leecher(s): 0", "seeder(s):"),
+            Some(14)
+        );
+        assert_eq!(
+            number_after("seeder(s): 14 , leecher(s): 0", "leecher(s):"),
+            Some(0)
+        );
+        assert_eq!(number_after("6 time(s)", ""), Some(6));
+        assert_eq!(number_after("1,234 grabs", ""), Some(1234));
+        assert_eq!(number_after("no digits", "missing:"), None);
+    }
+
+    /// Scratch harness: live details fetch through the full provider path.
+    /// `HDT_USERNAME=… HDT_PASSWORD=… HDT_ID=<infohash> cargo test -- --ignored debug_live_details --nocapture`
+    #[tokio::test]
+    #[ignore = "hits the live site; needs HDT_USERNAME/HDT_PASSWORD/HDT_ID"]
+    async fn debug_live_details() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert(
+            "base_url".to_string(),
+            toml::Value::String("https://hd-torrents.org".into()),
+        );
+        fields.insert(
+            "username_env".to_string(),
+            toml::Value::String("HDT_USERNAME".into()),
+        );
+        fields.insert(
+            "password_env".to_string(),
+            toml::Value::String("HDT_PASSWORD".into()),
+        );
+        let entry = ProviderEntry {
+            id: "hdt".into(),
+            kind: "hdtorrents".into(),
+            enabled: true,
+            fields,
+        };
+        let p = HdTorrents::from_config(&entry).expect("construct");
+        let id = std::env::var("HDT_ID").expect("set HDT_ID to a torrent infohash");
+        let d = p
+            .details(&id)
+            .await
+            .expect("details call")
+            .expect("some details");
+        println!(
+            "title={}\ncat={:?} tags={:?} size={:?} files={:?} s={:?} l={:?} dl={:?} up={:?} at={:?} fl={}",
+            d.title,
+            d.category,
+            d.tags,
+            d.file_size_bytes,
+            d.file_count,
+            d.seeders,
+            d.leechers,
+            d.times_completed,
+            d.uploader,
+            d.uploaded_at,
+            d.freeleech,
+        );
+        println!("--- nfo ---\n{}", d.nfo.as_deref().unwrap_or("(none)"));
+        println!(
+            "--- description ---\n{}",
+            d.description.as_deref().unwrap_or("(none)")
+        );
+        println!("media_info parsed: {}", d.media_info.is_some());
     }
 
     #[test]
