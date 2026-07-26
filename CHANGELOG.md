@@ -38,6 +38,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from its recorded provenance — same infohash, so playback resumes where it
   left off. Web also gets a branded Not Found page (router-level 404 and the
   watch page's error states) instead of the bare-bones fallbacks.
+- **HD-Torrents provider (`kind = "hdtorrents"`).** New English tracker,
+  and the first scraper-based provider: the site has no API at all, so the
+  provider logs in with the account credentials (cookie session, automatic
+  re-login when it expires) and parses the `torrents.php` HTML — selectors
+  validated against live pages, not just the Prowlarr definition the site
+  has since drifted from. Searches are scoped to the Movie/TV buckets
+  (music/XXX excluded), releases default to English like Seedpool, and the
+  site keys everything on the torrent's infohash, which the provider
+  surfaces so "In library" matching works. The preview dialog is fed by a
+  scraped `details.php` view (IMDb synopsis block, Technical Info blob as
+  NFO, genres, file count, live peer counts, 60 s cache) that also primes
+  the download-link cache, so grabbing straight from a preview works even
+  after a restart. Pulls in `scraper` 0.27 and reqwest's `cookies`/`form`
+  features.
+
+### Changed
+
+- **Aggregated search no longer waits for the slowest tracker.** Each
+  provider now gets a hard 8 s budget inside `search_all`; one sick indexer
+  sitting on the request (looking at you, nginx-that-502s-eventually) used
+  to hold the whole `/api/search` response hostage for its full 15–20 s
+  client timeout while the healthy providers had answered in milliseconds.
+  Stragglers degrade to the existing per-provider error entry.
+- **The Torznab layer retries transient 5xx once.** tr4ker's nginx 502s
+  briefly when a PHP worker recycles; a single immediate retry makes most
+  of those invisible. 4xx stays fatal — a retry can't fix a bad API key.
+- **Toolchain bumped to Rust 1.97** (Docker build image `rust:1.97-trixie`,
+  workspace `rust-version`).
 
 ## [1.3.3] - 2026-07-25
 
@@ -705,7 +733,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.3.2...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.3.4...HEAD
+[1.3.4]: https://github.com/uplg/iris/compare/1.3.3...1.3.4
+[1.3.3]: https://github.com/uplg/iris/compare/1.3.2...1.3.3
 [1.3.2]: https://github.com/uplg/iris/compare/1.3.1...1.3.2
 [1.3.1]: https://github.com/uplg/iris/compare/1.3.0...1.3.1
 [1.3.0]: https://github.com/uplg/iris/compare/1.2.1...1.3.0
