@@ -208,18 +208,35 @@ impl TorznabProvider {
         page: u32,
         limit: u32,
     ) -> Result<ProviderPage> {
-        let body = self
-            .http
-            .get(url)
-            .query(&qs)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("torznab request: {e}")))?
-            .error_for_status()
-            .map_err(|e| Error::Provider(format!("torznab status: {e}")))?
-            .text()
-            .await
-            .map_err(|e| Error::Provider(format!("torznab body: {e}")))?;
+        // One immediate retry on 5xx: tr4ker's nginx 502s transiently when
+        // a PHP worker recycles, and a single second attempt makes most of
+        // those invisible. 4xx (bad key, bad request) stays fatal — a
+        // retry can't fix it.
+        let mut attempt = 0u8;
+        let body = loop {
+            let res = self
+                .http
+                .get(url.clone())
+                .query(&qs)
+                .send()
+                .await
+                .map_err(|e| Error::Provider(format!("torznab request: {e}")))?;
+            if res.status().is_server_error() && attempt == 0 {
+                attempt += 1;
+                tracing::debug!(
+                    provider = %self.id,
+                    status = %res.status(),
+                    "torznab 5xx, retrying once",
+                );
+                continue;
+            }
+            break res
+                .error_for_status()
+                .map_err(|e| Error::Provider(format!("torznab status: {e}")))?
+                .text()
+                .await
+                .map_err(|e| Error::Provider(format!("torznab body: {e}")))?;
+        };
 
         let parsed = parse_torznab_xml(&body).map_err(|e| {
             tracing::warn!(

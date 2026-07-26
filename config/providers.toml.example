@@ -53,6 +53,19 @@ base_url = "https://seedpool.org"
 api_key_env = "SEEDPOOL_API_KEY"
 default_language = "english"
 
+# HD-Torrents — English private HD tracker with no API at all: the
+# provider logs in with your site credentials (cookie session) and
+# scrapes the torrents.php HTML. Like Seedpool, releases ship without
+# language markers → default_language gives them the EN badge.
+[[providers]]
+id = "hdt"
+kind = "hdtorrents"
+enabled = true
+base_url = "https://hd-torrents.org"
+username_env = "HDT_USERNAME"
+password_env = "HDT_PASSWORD"
+default_language = "english"
+
 # Generic Torznab indexer (Jackett-fed, Prowlarr-fed, NewzNab clones).
 # UNIT3D-based trackers should use `kind = "unit3d"` above instead.
 # [[providers]]

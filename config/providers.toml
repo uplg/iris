@@ -38,6 +38,19 @@ api_key_env = "SEEDPOOL_API_KEY"
 # explicitly (VOSTFR / VFF / MULTI) so they don't need a default.
 default_language = "english"
 
+# HD-Torrents — English private HD tracker, no API at all: cookie
+# session (login.php) + HTML scraping of torrents.php. Credentials are
+# the site login itself, not an API key. Releases carry no language
+# tag, same convention as Seedpool → default to English.
+[[providers]]
+id = "hdt"
+kind = "hdtorrents"
+enabled = true
+base_url = "https://hd-torrents.org"
+username_env = "HDT_USERNAME"
+password_env = "HDT_PASSWORD"
+default_language = "english"
+
 # TR4KER — francophone tracker exposing a clean generic Torznab 1.3 API
 # (caps, search/movie/tvsearch with season/ep, torznab:attr metadata,
 # apikey-signed download links returning real bencoded .torrent files).

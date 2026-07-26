@@ -10,6 +10,12 @@ use utoipa::ToSchema;
 
 use crate::SearchProvider;
 
+/// Hard per-provider budget for one aggregated search. Comfortably above
+/// a healthy indexer's worst case (sub-second to a few seconds) while
+/// keeping a hung upstream from dragging the whole response toward the
+/// 15–20 s client timeouts.
+const SEARCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProviderInfo {
     pub id: String,
@@ -124,6 +130,13 @@ impl ProviderRegistry {
     /// UI can render proper page controls. Failed providers are reported as a
     /// metadata entry with an `error` field instead of taking the whole
     /// search down.
+    ///
+    /// Each provider gets [`SEARCH_DEADLINE`] to answer. Without it the
+    /// aggregate blocks on the slowest client timeout (15–20 s): a sick
+    /// indexer whose nginx sits on the request before 502-ing held every
+    /// search hostage even when the healthy providers answered in
+    /// milliseconds. Stragglers degrade to the same per-provider error
+    /// entry as any other failure.
     pub async fn search_all(&self, q: &SearchQuery) -> AggregatedResults {
         use futures::stream::{FuturesUnordered, StreamExt};
 
@@ -133,7 +146,13 @@ impl ProviderRegistry {
             let id = id.clone();
             let q = q.clone();
             futs.push(async move {
-                let res = p.search(&q).await;
+                let res = match tokio::time::timeout(SEARCH_DEADLINE, p.search(&q)).await {
+                    Ok(res) => res,
+                    Err(_) => Err(Error::Provider(format!(
+                        "timed out after {}s",
+                        SEARCH_DEADLINE.as_secs()
+                    ))),
+                };
                 (id, res)
             });
         }
@@ -180,6 +199,7 @@ pub fn build_provider(entry: &ProviderEntry) -> Result<Arc<dyn SearchProvider>> 
         "tr4ker" => Ok(crate::tr4ker::Tr4ker::from_config(entry)?),
         "unit3d" => Ok(crate::unit3d::Unit3dProvider::from_config(entry)?),
         "c411" => Ok(crate::c411::C411::from_config(entry)?),
+        "hdtorrents" => Ok(crate::hdtorrents::HdTorrents::from_config(entry)?),
         other => Err(Error::Provider(format!(
             "unknown provider kind: {other} (provider id: {})",
             entry.id

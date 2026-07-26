@@ -69,6 +69,10 @@ reqwest = { version = "0.13.4", default-features = false, features = [
   "brotli",
   "stream",
   "http2",
+  # Cookie-session trackers (hdtorrents) — no API, auth lives in the jar
+  # and login is a classic urlencoded form POST.
+  "cookies",
+  "form",
 ] }
 bytes = "1.11.1"
 # Mozilla's CA root bundle, compiled into the binary — so outbound TLS trust
@@ -114,6 +118,14 @@ chrono = { version = "0.4.45", default-features = false, features = ["std", "ser
 uuid = { version = "1.23.3", features = ["v4", "serde"] }
 url = { version = "2.5.8", features = ["serde"] }
 quick-xml = "0.41.0"
+# HTML scraping for API-less trackers (hdtorrents). `deterministic` keeps
+# attribute order (IndexMap) — HD-Torrents hides the upload date in unquoted
+# attribute NAMES, so iteration order is load-bearing. Default features off:
+# they pull in the crate's CLI binary deps.
+scraper = { version = "0.27.0", default-features = false, features = [
+  "errors",
+  "deterministic",
+] }
 semver = "1.0.28"
 base64 = "0.22.1"
 hex = "0.4.3"

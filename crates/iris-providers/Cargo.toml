@@ -27,3 +27,4 @@ url = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
 quick-xml = { workspace = true }
+scraper = { workspace = true }
