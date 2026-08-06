@@ -51,6 +51,23 @@ username_env = "HDT_USERNAME"
 password_env = "HDT_PASSWORD"
 default_language = "english"
 
+# TorrentLeech — English private tracker (0DAY/GENERAL), no Torznab:
+# search rides the SPA's JSON browse endpoint behind a cookie session
+# (site username/password), downloads ride the per-user RSS key
+# (Profile → RSS) — signed, cookie-less, restart-safe. Releases carry
+# no language tag, same convention as Seedpool → default to English.
+# Set the account profile to timezone UTC and "Torrents per page: 100".
+[[providers]]
+id = "tl"
+kind = "torrentleech"
+enabled = true
+base_url = "https://www.torrentleech.org"
+username_env = "TL_USERNAME"
+password_env = "TL_PASSWORD"
+rss_key_env = "TL_RSS_KEY"
+# alt_2fa_token_env = "TL_2FA_TOKEN"  # only when the account has 2FA enabled
+default_language = "english"
+
 # TR4KER — francophone tracker exposing a clean generic Torznab 1.3 API
 # (caps, search/movie/tvsearch with season/ep, torznab:attr metadata,
 # apikey-signed download links returning real bencoded .torrent files).

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **TorrentLeech provider** (`kind = "torrentleech"`, id `tl`). Search rides
+  the site's JSON browse endpoint behind a cookie session (site
+  username/password, optional 2FA token), downloads ride the per-user RSS
+  key — signed, cookie-less URLs that survive process restarts and session
+  expiry. Coverage is every video category (movies Cam→4K, DVD, boxsets,
+  documentaries, foreign; TV episodes SD/HD, boxsets, anime, cartoons,
+  foreign); games/music/ebooks/apps are filtered out at query time. The
+  query-less "recent torrents" view feeds the discovery catalogue's
+  `latest()` poll. Needs `TL_USERNAME`, `TL_PASSWORD`, `TL_RSS_KEY`.
+
 ## [1.3.4] - 2026-07-26
 
 ### Fixed

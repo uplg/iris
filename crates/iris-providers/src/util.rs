@@ -23,6 +23,22 @@ pub(crate) fn field_or_env(entry: &ProviderEntry, key: &str) -> Result<String, E
     )))
 }
 
+/// Like [`field_or_env`] but for genuinely optional fields: `Ok(None)`
+/// when neither `<key>` nor `<key>_env` is declared, an error only when
+/// a declared env var is missing (a misconfiguration worth surfacing).
+pub(crate) fn optional_field_or_env(
+    entry: &ProviderEntry,
+    key: &str,
+) -> Result<Option<String>, Error> {
+    let declared =
+        entry.fields.contains_key(key) || entry.fields.contains_key(&format!("{key}_env"));
+    if declared {
+        field_or_env(entry, key).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 pub(crate) fn field_str<'a>(entry: &'a ProviderEntry, key: &str) -> Result<&'a str, Error> {
     entry
         .fields

@@ -200,6 +200,7 @@ pub fn build_provider(entry: &ProviderEntry) -> Result<Arc<dyn SearchProvider>> 
         "unit3d" => Ok(crate::unit3d::Unit3dProvider::from_config(entry)?),
         "c411" => Ok(crate::c411::C411::from_config(entry)?),
         "hdtorrents" => Ok(crate::hdtorrents::HdTorrents::from_config(entry)?),
+        "torrentleech" => Ok(crate::torrentleech::TorrentLeech::from_config(entry)?),
         other => Err(Error::Provider(format!(
             "unknown provider kind: {other} (provider id: {})",
             entry.id

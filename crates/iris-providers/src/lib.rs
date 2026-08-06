@@ -15,6 +15,7 @@ pub mod hdtorrents;
 pub mod registry;
 pub mod tls;
 pub mod torr9;
+pub mod torrentleech;
 pub mod torznab;
 pub mod tr4ker;
 pub mod unit3d;
