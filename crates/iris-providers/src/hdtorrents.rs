@@ -51,7 +51,7 @@ use url::Url;
 
 use crate::SearchProvider;
 use crate::nfo;
-use crate::util::{extract_year, field_or_env, field_str};
+use crate::util::{extract_year, field_or_env, field_str, parse_size};
 
 const DEFAULT_USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
@@ -526,27 +526,6 @@ fn extract_login_error(html: &str) -> Option<String> {
         })
         .map(|f| f.text().collect::<String>().trim().to_string())
         .filter(|s| !s.is_empty())
-}
-
-/// Prowlarr's `ParseUtil.GetBytes` equivalent: `9.14 GiB` / `700 MB` →
-/// bytes, binary multipliers for both `XiB` and `XB` spellings.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn parse_size(text: &str) -> Option<u64> {
-    let t = text.trim();
-    let split = t.find(|c: char| c.is_ascii_alphabetic())?;
-    let num: f64 = t[..split].trim().replace(',', "").parse().ok()?;
-    let mult: f64 = match t[split..].trim().to_ascii_lowercase().as_str() {
-        "b" => 1.0,
-        "kb" | "kib" => 1024.0,
-        "mb" | "mib" => 1024.0 * 1024.0,
-        "gb" | "gib" => 1024.0 * 1024.0 * 1024.0,
-        "tb" | "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
-        _ => return None,
-    };
-    if num < 0.0 {
-        return None;
-    }
-    Some((num * mult).round() as u64)
 }
 
 fn parse_count(text: &str) -> Option<u32> {

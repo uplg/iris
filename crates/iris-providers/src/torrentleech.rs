@@ -24,6 +24,9 @@
 //! * `fid` arrives as a number or a string depending on endpoint
 //!   vintage; `tags` as an array or a comma-joined string. Both shapes
 //!   are accepted.
+//! * There is no JSON detail endpoint: `details()` scrapes the
+//!   server-rendered `/torrent/{fid}` page (info table, IMDb/TVMaze
+//!   synopsis block, inline NFO, file list).
 //!
 //! Config:
 //! ```toml
@@ -45,14 +48,15 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::Result;
 use iris_core::search::{
-    MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, TorrentSource,
+    DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
+    TorrentDetails, TorrentSource,
 };
 use reqwest::Client;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue, REFERER, USER_AGENT};
@@ -62,7 +66,8 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
-use crate::util::{extract_year, field_or_env, field_str, optional_field_or_env};
+use crate::nfo;
+use crate::util::{extract_year, field_or_env, field_str, optional_field_or_env, parse_size};
 
 const DEFAULT_USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
@@ -76,6 +81,10 @@ const LOGIN_OK_MARKER: &str = "/user/account/logout";
 
 /// Same cap as the Torznab / UNIT3D / hdtorrents link caches.
 const LINK_CACHE_CAP: usize = 4096;
+
+/// Same TTL as hdtorrents: long enough to absorb the preview-dialog +
+/// pre-grab double fetch, short enough that seeder counts stay honest.
+const DETAILS_TTL: Duration = Duration::from_mins(1);
 
 /// Movie category ids: Cam, TS/TC, `DVDRip`/`DVDScreener`, `WEBRip`,
 /// `HDRip`, `BlurayRip`, DVD-R, Bluray, 4K, Boxsets, Documentaries,
@@ -172,6 +181,15 @@ pub struct TorrentLeech {
     /// Torrent fid -> signed RSS download URL captured from search rows
     /// (carries the real `{filename}` tail).
     link_cache: Mutex<LinkCache>,
+    /// Torrent fid -> scraped detail view, TTL-bounded. The pre-grab
+    /// dead-torrent check refetches details right after the preview
+    /// dialog did; this absorbs the double fetch.
+    details_cache: Mutex<HashMap<String, CachedDetails>>,
+}
+
+struct CachedDetails {
+    details: TorrentDetails,
+    fetched_at: Instant,
 }
 
 impl TorrentLeech {
@@ -208,6 +226,7 @@ impl TorrentLeech {
             http,
             logged_in: Mutex::new(false),
             link_cache: Mutex::new(LinkCache::new()),
+            details_cache: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -298,6 +317,74 @@ impl TorrentLeech {
             }
             return Ok(body);
         }
+    }
+
+    /// Authenticated GET expecting a logged-in HTML page (the torrent
+    /// detail view). A body without the logout link means we got
+    /// bounced to the login page — re-login and retry once.
+    async fn authed_get_html(&self, url: Url) -> Result<String> {
+        let mut attempt = 0u8;
+        loop {
+            self.ensure_login().await?;
+            let res = self
+                .http
+                .get(url.clone())
+                .send()
+                .await
+                .map_err(|e| Error::Provider(format!("torrentleech request: {e}")))?;
+            if !res.status().is_success() {
+                let status = res.status();
+                return Err(Error::Provider(format!(
+                    "torrentleech request failed: HTTP {status}"
+                )));
+            }
+            let body = res
+                .text()
+                .await
+                .map_err(|e| Error::Provider(format!("torrentleech body: {e}")))?;
+            let looks_logged_out = !body.contains(LOGIN_OK_MARKER);
+            if looks_logged_out && attempt == 0 {
+                attempt += 1;
+                self.invalidate_session().await;
+                continue;
+            }
+            if looks_logged_out {
+                return Err(Error::Provider(
+                    "torrentleech session rejected after re-login".into(),
+                ));
+            }
+            return Ok(body);
+        }
+    }
+
+    async fn fetch_details(&self, external_id: &str) -> Result<Option<TorrentDetails>> {
+        if external_id.is_empty() || !external_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Ok(None);
+        }
+        {
+            let cache = self.details_cache.lock().await;
+            if let Some(c) = cache.get(external_id)
+                && c.fetched_at.elapsed() < DETAILS_TTL
+            {
+                return Ok(Some(c.details.clone()));
+            }
+        }
+        let url = self
+            .base_url
+            .join(&format!("/torrent/{external_id}"))
+            .map_err(|e| Error::Provider(format!("torrentleech join details url: {e}")))?;
+        let body = self.authed_get_html(url).await?;
+        let Some(details) = parse_details_page(&self.id, external_id, &body) else {
+            return Ok(None);
+        };
+        self.details_cache.lock().await.insert(
+            external_id.to_string(),
+            CachedDetails {
+                details: details.clone(),
+                fetched_at: Instant::now(),
+            },
+        );
+        Ok(Some(details))
     }
 
     /// GET a signed RSS download URL. No session needed — the `rss_key` in
@@ -468,6 +555,24 @@ impl SearchProvider for TorrentLeech {
             .map_err(|e| Error::Provider(format!("torrentleech fetch_bytes: {e}")))?;
         self.download(url).await
     }
+
+    /// Scraped from the server-rendered `/torrent/{fid}` page (there is
+    /// no JSON detail endpoint). Failures degrade to "no details" — the
+    /// preview dialog then shows the search-result fields only.
+    async fn details(&self, external_id: &str) -> Result<Option<TorrentDetails>> {
+        match self.fetch_details(external_id).await {
+            Ok(d) => Ok(d),
+            Err(e) => {
+                tracing::warn!(
+                    provider = %self.id,
+                    external_id,
+                    error = %e,
+                    "torrentleech details failed",
+                );
+                Ok(None)
+            }
+        }
+    }
 }
 
 fn sort_field(f: Option<iris_core::search::SortField>) -> &'static str {
@@ -525,6 +630,252 @@ fn rss_download_url(base: &Url, fid: &str, rss_key: &str, filename: &str) -> Res
         segs.extend(["rss", "download", fid, rss_key, filename]);
     }
     Ok(url)
+}
+
+/// Scrape the server-rendered `/torrent/{fid}` page into a
+/// [`TorrentDetails`]. Returns `None` when the page isn't a detail view
+/// (unknown fid → the site answers with a generic page whose `<title>`
+/// lacks the "Torrent Details for" prefix).
+///
+/// Everything is best-effort per field: the page mixes hand-rendered
+/// blocks (info table, tags) with IMDb/TVMaze enrichment (synopsis,
+/// genres, rating) that only exists when the uploader linked an id, and
+/// an NFO `<pre>` that only exists for releases that shipped one.
+fn parse_details_page(provider_id: &str, external_id: &str, html: &str) -> Option<TorrentDetails> {
+    let doc = Html::parse_document(html);
+
+    let title = doc
+        .select(&sel("title"))
+        .next()
+        .map(|t| t.text().collect::<String>())?;
+    let title = title
+        .trim()
+        .strip_suffix(":: TorrentLeech.org")
+        .unwrap_or(title.trim())
+        .trim()
+        .strip_prefix("Torrent Details for ")?
+        .trim()
+        .to_string();
+    if title.is_empty() {
+        return None;
+    }
+
+    let info = parse_info_table(&doc);
+
+    let mut freeleech = false;
+    let mut tags = Vec::new();
+    for tag in doc.select(&sel("span.tag")) {
+        let t = clean_text(tag.text());
+        if t.is_empty() {
+            continue;
+        }
+        if t.eq_ignore_ascii_case("freeleech") {
+            freeleech = true;
+        } else {
+            tags.push(t);
+        }
+    }
+
+    // The NFO <pre> only exists for releases that shipped one (the
+    // template variant in the page source is commented out, so the
+    // parser never sees it). Raw text, NOT whitespace-collapsed —
+    // NFOs are ASCII art.
+    let nfo = doc
+        .select(&sel("pre.nfo"))
+        .next()
+        .map(|p| p.text().collect::<String>())
+        .map(|s| s.trim_matches('\n').trim_end().to_string())
+        .filter(|s| !s.trim().is_empty());
+    let media_info = nfo.as_deref().and_then(nfo::parse);
+
+    let file_count = u32::try_from(doc.select(&sel("#fileListTable tbody tr")).count())
+        .ok()
+        .filter(|&n| n > 0);
+
+    Some(TorrentDetails {
+        provider_id: provider_id.to_string(),
+        external_id: external_id.to_string(),
+        title,
+        description: build_description(&doc),
+        description_format: DescriptionFormat::Plain,
+        nfo,
+        media_info,
+        tags,
+        category: info.category,
+        uploader: info.uploader,
+        uploaded_at: info.uploaded_at,
+        age: info.age,
+        seeders: info.seeders,
+        leechers: info.leechers,
+        times_completed: info.times_completed,
+        views: None,
+        freeleech,
+        exclusive: false,
+        file_count,
+        file_size_bytes: info.file_size_bytes.filter(|&n| n > 0),
+    })
+}
+
+fn sel(s: &str) -> Selector {
+    Selector::parse(s).expect("static selector")
+}
+
+/// The hand-rendered facts table (`div.torrent_info_details`), keyed by
+/// its `td.description` labels.
+#[derive(Default)]
+struct InfoTable {
+    category: Option<String>,
+    uploaded_at: Option<chrono::DateTime<chrono::Utc>>,
+    age: Option<String>,
+    file_size_bytes: Option<u64>,
+    seeders: Option<u32>,
+    leechers: Option<u32>,
+    times_completed: Option<u64>,
+    uploader: Option<String>,
+}
+
+fn parse_info_table(doc: &Html) -> InfoTable {
+    let mut info = InfoTable::default();
+    for row in doc.select(&sel("div.torrent_info_details tr")) {
+        let tds: Vec<_> = row.select(&sel("td")).collect();
+        let (Some(label_td), Some(value_td)) = (tds.first(), tds.get(1)) else {
+            continue;
+        };
+        let label = clean_text(label_td.text());
+        let value = clean_text(value_td.text());
+        match label.as_str() {
+            "Category" => info.category = Some(value).filter(|v| !v.is_empty()),
+            "Added" => {
+                // "Friday 10th July 2026 07:53:49 PM <strong>(29 days
+                // ago)</strong>" — the <strong> is the human age, the
+                // rest is an absolute timestamp in the account
+                // profile's timezone (kept on UTC, see module docs).
+                let strong = value_td
+                    .select(&sel("strong"))
+                    .next()
+                    .map(|s| clean_text(s.text()));
+                if let Some(s) = &strong {
+                    info.age =
+                        Some(s.trim_matches(['(', ')']).to_string()).filter(|a| !a.is_empty());
+                }
+                let ts = match &strong {
+                    Some(s) => value.replace(s.as_str(), ""),
+                    None => value,
+                };
+                info.uploaded_at = parse_detail_datetime(&ts);
+            }
+            "Size" => info.file_size_bytes = parse_size(&value),
+            "Peers" => {
+                // "55 Peers (54 Seeders and 1 leechers)"
+                info.seeders = number_before(&value, "seeder");
+                info.leechers = number_before(&value, "leecher");
+            }
+            "Downloaded" => {
+                // "265 times"
+                info.times_completed = value
+                    .split_whitespace()
+                    .next()
+                    .and_then(|n| n.replace(',', "").parse().ok());
+            }
+            "Uploader" => {
+                info.uploader = value_td
+                    .select(&sel("span.details-uploader-name"))
+                    .next()
+                    .map(|s| clean_text(s.text()))
+                    .filter(|s| !s.is_empty());
+            }
+            _ => {}
+        }
+    }
+    info
+}
+
+/// IMDb/TVMaze synopsis + the facts the enrichment block renders (year,
+/// duration, release date, genre) + the rating line. Assembled as plain
+/// text — both clients wrap it cleanly and nothing here carries markup
+/// worth preserving.
+fn build_description(doc: &Html) -> Option<String> {
+    let mut lines = Vec::new();
+    if let Some(summary) = doc.select(&sel("div.torrent-summary")).next() {
+        let s = clean_text(summary.text());
+        if !s.is_empty() {
+            lines.push(s);
+            lines.push(String::new());
+        }
+    }
+    for p in doc.select(&sel("div.torrent-extra-info p")) {
+        let line = clean_text(p.text());
+        if !line.is_empty() {
+            lines.push(line);
+        }
+    }
+    let imdb_url = doc
+        .select(&sel("div.imdb-info a[href]"))
+        .filter_map(|a| a.value().attr("href"))
+        .find(|h| h.contains("imdb.com/title/"));
+    if let Some(url) = imdb_url {
+        let rating = doc
+            .select(&sel("#rating"))
+            .next()
+            .map(|r| clean_text(r.text()))
+            .filter(|r| !r.is_empty());
+        lines.push(match rating {
+            Some(r) => format!("IMDb rating: {r}/10 — {url}"),
+            None => format!("IMDb: {url}"),
+        });
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+/// Whitespace-collapse an element's text fragments into one line.
+fn clean_text<'a>(fragments: impl Iterator<Item = &'a str>) -> String {
+    fragments
+        .flat_map(str::split_whitespace)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `"Friday 10th July 2026 07:53:49 PM"` → UTC datetime. The weekday
+/// token is dropped rather than validated (chrono errors on any
+/// mismatch) and the day's ordinal suffix is stripped.
+fn parse_detail_datetime(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let mut toks: Vec<&str> = s.split_whitespace().collect();
+    if toks.len() == 6 {
+        toks.remove(0);
+    }
+    if toks.len() != 5 {
+        return None;
+    }
+    let day = toks[0].trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let joined = format!("{day} {} {} {} {}", toks[1], toks[2], toks[3], toks[4]);
+    chrono::NaiveDateTime::parse_from_str(&joined, "%d %B %Y %I:%M:%S %p")
+        .ok()
+        .map(|n| n.and_utc())
+}
+
+/// First integer token immediately preceding a word that starts with
+/// `marker` (case-insensitive): `"(54 Seeders and 1 leechers)"` with
+/// marker `"seeder"` → `54`.
+fn number_before(text: &str, marker: &str) -> Option<u32> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    words.windows(2).find_map(|w| {
+        let starts = w[1]
+            .trim_start_matches(['(', ')'])
+            .to_ascii_lowercase()
+            .starts_with(marker);
+        if starts {
+            w[0].trim_matches(['(', ')', ',']).parse().ok()
+        } else {
+            None
+        }
+    })
 }
 
 /// Login failures render as `<p class="text-danger">reason</p>`; an
@@ -1053,5 +1404,171 @@ mod tests {
             }
             TorrentSource::Magnet(m) => panic!("unexpected magnet: {m}"),
         }
+    }
+
+    /// Trimmed-down copy of a real `/torrent/{fid}` page (mirror,
+    /// 2026-08): every block `parse_details_page` reads, including the
+    /// commented-out NFO editor template that must NOT be picked up as
+    /// the NFO.
+    const DETAILS_FIXTURE: &str = r#"<!DOCTYPE html>
+<html><head><title>Torrent Details for The Dunes 2021 720p WEB H264-AFO :: TorrentLeech.org</title></head>
+<body>
+<a href="/user/account/logout">Log out</a>
+<div class="col-md-8 col-sm-6 torrent_info_details">
+  <table class="table borderless"><tbody>
+    <tr><td class="description">Category</td><td><a href="/torrents/browse/index/categories/37">WEBRip</a></td></tr>
+    <tr><td class="description">Added</td><td>Friday 10th July 2026 07:53:49 PM <strong>(29 days ago)</strong></td></tr>
+    <tr><td class="description">Size</td><td>2.61 GB</td></tr>
+    <tr><td class="description">Peers</td><td>55 Peers (54 Seeders and 1 leechers)</td></tr>
+    <tr><td class="description">Downloaded</td><td>265 times</td></tr>
+    <tr><td class="description">Uploader</td><td><span class="details-uploader-name">Anonymous</span>
+      <button class="thankYouButton">Thank You (<span class="thankYouNum">10</span>)</button></td></tr>
+    <tr><td class="description">Comments</td><td>None</td></tr>
+    <tr><td class="description">Tags</td><td>
+      <span class="tag label label-info">Thriller<span data-role="remove"></span></span>
+      <span class="tag label label-info">FREELEECH<span data-role="remove"></span></span>
+    </td></tr>
+  </tbody></table>
+</div>
+<div class="torrent-info-details">
+  <h3>The Dunes</h3>
+  <div class="torrent-summary mb-20"><p>A writer becomes the obsession of a stranger.</p></div>
+  <div class="torrent-extra-info">
+    <p><span class="description">Year: </span> 2021</p>
+    <p><span class="description">Genre: </span>Thriller</p>
+    <div class="imdb-info mt-20">
+      <span><a target="_blank" href="http://www.imdb.com/title/tt6910678"><img src="/images/imdb.png"></a>Rating</span>
+      <span id="tenBaseRating"><span id="rating">4</span>/10</span>
+    </div>
+  </div>
+</div>
+<div class="nfo-wrapper">
+  <div id="editor"> <!--
+     --><!--<pre class="nfo col-xs-12"><div class="editNFO" id="nfo_text" data-pk="--><!--" title="Edit NFO">--><!--</div></pre>--> <!--
+     -->
+    <pre class="nfo col-xs-12"><div class="editNFO" id="nfo_text">
+      AFO presents The Dunes
+      Video: x264 CRF 22 @ 3100 Kbps
+      Audio: English DD 5.1 @ 384 Kbps</div></pre>
+  </div>
+</div>
+<table id="fileListTable" class="table"><thead><tr><th>Filename</th><th>Size</th></tr></thead>
+  <tbody>
+    <tr id="130425343"><td>Sample/afo-thedunes-720-web-sample.mkv</td><td>18 MB</td></tr>
+    <tr id="130425344"><td>afo-thedunes-720-web.mkv</td><td>2.58 GB</td></tr>
+    <tr id="130425345"><td>afo-thedunes-720-web.srr</td><td>12 KB</td></tr>
+    <tr id="130425346"><td>the.dunes.2021.720p.web.h264-afo.nfo</td><td>7 KB</td></tr>
+  </tbody>
+</table>
+</body></html>"#;
+
+    #[test]
+    fn details_page_parsing() {
+        let d = parse_details_page("tl", "241798657", DETAILS_FIXTURE).expect("parses");
+        assert_eq!(d.provider_id, "tl");
+        assert_eq!(d.external_id, "241798657");
+        assert_eq!(d.title, "The Dunes 2021 720p WEB H264-AFO");
+        assert_eq!(d.category.as_deref(), Some("WEBRip"));
+        assert_eq!(
+            d.uploaded_at.map(|t| t.to_rfc3339()),
+            Some("2026-07-10T19:53:49+00:00".to_string()),
+        );
+        assert_eq!(d.age.as_deref(), Some("29 days ago"));
+        assert_eq!(d.file_size_bytes, Some(2_802_466_161));
+        assert_eq!(d.seeders, Some(54));
+        assert_eq!(d.leechers, Some(1));
+        assert_eq!(d.times_completed, Some(265));
+        assert_eq!(d.uploader.as_deref(), Some("Anonymous"));
+        assert_eq!(d.tags, vec!["Thriller".to_string()]);
+        assert!(d.freeleech);
+        assert_eq!(d.description_format, DescriptionFormat::Plain);
+        let desc = d.description.expect("description");
+        assert!(desc.starts_with("A writer becomes the obsession of a stranger."));
+        assert!(desc.contains("Year: 2021"));
+        assert!(desc.contains("IMDb rating: 4/10 — http://www.imdb.com/title/tt6910678"));
+        // Real NFO picked up (raw, multi-line), commented template ignored.
+        let nfo = d.nfo.expect("nfo");
+        assert!(nfo.contains("AFO presents The Dunes"));
+        assert!(!nfo.contains("Edit NFO"));
+        assert_eq!(d.file_count, Some(4));
+    }
+
+    #[test]
+    fn details_page_rejects_non_detail_pages() {
+        // Login page (no "Torrent Details for" title prefix).
+        assert!(
+            parse_details_page(
+                "tl",
+                "1",
+                r"<html><head><title>Login :: TorrentLeech.org</title></head><body></body></html>",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn detail_datetime_parsing() {
+        assert_eq!(
+            parse_detail_datetime("Friday 10th July 2026 07:53:49 PM").map(|t| t.to_rfc3339()),
+            Some("2026-07-10T19:53:49+00:00".to_string()),
+        );
+        // 1st/2nd/3rd ordinals and AM times.
+        assert_eq!(
+            parse_detail_datetime("Monday 1st September 2025 09:05:00 AM").map(|t| t.to_rfc3339()),
+            Some("2025-09-01T09:05:00+00:00".to_string()),
+        );
+        assert_eq!(parse_detail_datetime("29 days ago"), None);
+        assert_eq!(parse_detail_datetime(""), None);
+    }
+
+    /// Scratch harness: live details scrape.
+    /// `TL_USERNAME=… TL_PASSWORD=… TL_RSS_KEY=… TL_FID=… cargo test -p
+    /// iris-providers -- --ignored debug_live_details --nocapture`
+    #[tokio::test]
+    #[ignore = "hits the live site; needs TL_USERNAME/TL_PASSWORD/TL_RSS_KEY/TL_FID"]
+    async fn debug_live_details() {
+        let mut fields = HashMap::new();
+        let base =
+            std::env::var("TL_BASE_URL").unwrap_or_else(|_| "https://www.torrentleech.org".into());
+        fields.insert("base_url".to_string(), toml::Value::String(base));
+        fields.insert(
+            "username_env".to_string(),
+            toml::Value::String("TL_USERNAME".into()),
+        );
+        fields.insert(
+            "password_env".to_string(),
+            toml::Value::String("TL_PASSWORD".into()),
+        );
+        fields.insert(
+            "rss_key_env".to_string(),
+            toml::Value::String("TL_RSS_KEY".into()),
+        );
+        let entry = ProviderEntry {
+            id: "tl".into(),
+            kind: "torrentleech".into(),
+            enabled: true,
+            fields,
+        };
+        let p = TorrentLeech::from_config(&entry).expect("construct");
+        let fid = std::env::var("TL_FID").expect("set TL_FID to a torrent id");
+        let d = p.details(&fid).await.expect("details").expect("some");
+        println!(
+            "title={}\ncategory={:?} size={:?} seeders={:?} leechers={:?} dl={:?}\nuploader={:?} at={:?} age={:?}\ntags={:?} freeleech={} files={:?}\nnfo? {} media_info? {}\n--- description ---\n{}",
+            d.title,
+            d.category,
+            d.file_size_bytes,
+            d.seeders,
+            d.leechers,
+            d.times_completed,
+            d.uploader,
+            d.uploaded_at,
+            d.age,
+            d.tags,
+            d.freeleech,
+            d.file_count,
+            d.nfo.as_deref().map_or(0, str::len),
+            d.media_info.is_some(),
+            d.description.as_deref().unwrap_or("<none>"),
+        );
     }
 }

@@ -79,6 +79,27 @@ pub(crate) fn extract_year(title: &str) -> Option<u16> {
     None
 }
 
+/// Prowlarr's `ParseUtil.GetBytes` equivalent: `9.14 GiB` / `700 MB` →
+/// bytes, binary multipliers for both `XiB` and `XB` spellings.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(crate) fn parse_size(text: &str) -> Option<u64> {
+    let t = text.trim();
+    let split = t.find(|c: char| c.is_ascii_alphabetic())?;
+    let num: f64 = t[..split].trim().replace(',', "").parse().ok()?;
+    let mult: f64 = match t[split..].trim().to_ascii_lowercase().as_str() {
+        "b" => 1.0,
+        "kb" | "kib" => 1024.0,
+        "mb" | "mib" => 1024.0 * 1024.0,
+        "gb" | "gib" => 1024.0 * 1024.0 * 1024.0,
+        "tb" | "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    if num < 0.0 {
+        return None;
+    }
+    Some((num * mult).round() as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::extract_year;
