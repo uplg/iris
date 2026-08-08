@@ -2,7 +2,10 @@ use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::routing::get;
-use iris_core::search::{MediaKind, SearchQuery, SortField, SortOrder, TorrentDetails};
+use iris_core::search::{
+    DescriptionFormat, MediaKind, SearchQuery, SortField, SortOrder, TorrentDetails,
+};
+use iris_media::filename::{DubiousSource, detect_dubious_source};
 use iris_providers::registry::AggregatedResults;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -144,6 +147,13 @@ pub(crate) async fn search(
                 .as_str()
                 .to_string(),
         );
+        // CAM / TS / TC / screener warning. Rides the existing `tags`
+        // field (front position so the web card's 4-chip cap keeps it)
+        // — deliberately not a new response field, so already-shipped
+        // clients surface the warning without an update.
+        if let Some(src) = detect_dubious_source(&r.title) {
+            r.tags.insert(0, dubious_tag(src));
+        }
     }
     agg.parsed_query = ranking::parsed_query_summary(&q);
     let library_matches = library_matches_for(&state, &q).await;
@@ -278,7 +288,21 @@ pub(crate) async fn details(
         .get(&params.provider)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown provider `{}`", params.provider)))?;
     match provider.details(&params.id).await {
-        Ok(Some(d)) => Ok(Json(d)),
+        Ok(Some(mut d)) => {
+            // Same server-authored warning as the search cards, plus an
+            // explanation prepended to the description — both clients
+            // already render detail tags and the description, so shipped
+            // APKs get the full "why is this dubious" context for free.
+            if let Some(src) = detect_dubious_source(&d.title) {
+                d.tags.insert(0, dubious_tag(src));
+                d.description = Some(prepend_dubious_warning(
+                    d.description.as_deref(),
+                    d.description_format,
+                    src,
+                ));
+            }
+            Ok(Json(d))
+        }
         // Provider doesn't expose a details endpoint — surface as a 404
         // so the frontend can hide the preview button cleanly.
         Ok(None) => Err(ApiError::NotFound),
@@ -286,5 +310,37 @@ pub(crate) async fn details(
             tracing::warn!(provider = %params.provider, id = %params.id, error = %e, "details fetch failed");
             Err(ApiError::Internal(anyhow::anyhow!("details: {e}")))
         }
+    }
+}
+
+fn dubious_tag(src: DubiousSource) -> String {
+    format!("⚠️ Dubious: {}", src.label())
+}
+
+/// Prepend the dubious-source explanation to a detail description,
+/// speaking the description's own markup dialect so every renderer
+/// (web BBCode/HTML/plain, TV tag-stripper) shows it as styled text.
+fn prepend_dubious_warning(
+    desc: Option<&str>,
+    format: DescriptionFormat,
+    src: DubiousSource,
+) -> String {
+    let expl = src.explanation();
+    let warning = match format {
+        DescriptionFormat::Bbcode | DescriptionFormat::Plain => {
+            format!("⚠️ Dubious quality — {expl}.")
+        }
+        DescriptionFormat::Html => {
+            format!("<p><strong>⚠️ Dubious quality</strong> — {expl}.</p>")
+        }
+    };
+    match desc {
+        Some(body) if !body.trim().is_empty() => match format {
+            DescriptionFormat::Bbcode | DescriptionFormat::Plain => {
+                format!("{warning}\n\n{body}")
+            }
+            DescriptionFormat::Html => format!("{warning}{body}"),
+        },
+        _ => warning,
     }
 }

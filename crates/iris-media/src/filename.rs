@@ -420,6 +420,167 @@ impl Codec {
     }
 }
 
+/// Video-source classes that mean "filmed off a screen / pre-retail" —
+/// the releases household users grab by accident and regret (a CAM of a
+/// fresh theatrical movie looks like any other result on a card). Only
+/// dubious sources are modelled; clean sources (WEB-DL, `BluRay`…) stay
+/// out of scope because absence of a marker proves nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DubiousSource {
+    /// Camera pointed at a theater screen, camera audio.
+    Cam,
+    /// Theater camera video + direct audio feed (`TS` / `TELESYNC`).
+    Telesync,
+    /// Digitized from a film reel before retail (`TC` / `TELECINE`).
+    Telecine,
+    /// Pre-release screener copy (`SCR` / `DVDSCR` / `SCREENER`).
+    Screener,
+}
+
+impl DubiousSource {
+    /// Short badge form, matches the SCENE vocabulary users see in the
+    /// release name itself.
+    pub fn label(self) -> &'static str {
+        match self {
+            DubiousSource::Cam => "CAM",
+            DubiousSource::Telesync => "TS",
+            DubiousSource::Telecine => "TC",
+            DubiousSource::Screener => "SCREENER",
+        }
+    }
+
+    /// One-sentence English explanation for detail views. No trailing
+    /// period — callers punctuate.
+    pub fn explanation(self) -> &'static str {
+        match self {
+            DubiousSource::Cam => {
+                "this release was filmed with a camera pointed at a theater screen \
+                 — expect poor image and sound"
+            }
+            DubiousSource::Telesync => {
+                "this release is a telesync: a theater camera recording with a direct \
+                 audio feed — the sound is decent but the image is poor"
+            }
+            DubiousSource::Telecine => {
+                "this release is a telecine, digitized from a film reel before retail \
+                 — quality varies and is usually well below a proper rip"
+            }
+            DubiousSource::Screener => {
+                "this release is a pre-release screener copy — often watermarked and \
+                 quality-limited"
+            }
+        }
+    }
+}
+
+/// Detect a dubious video source from a SCENE-style release name.
+/// `None` means "no dubious marker found", not "verified clean".
+///
+/// Two tiers because the short tokens collide with real titles ("Cam"
+/// is a 2018 film, `TS`/`TC` can be initials): unambiguous markers
+/// (`HDCAM`, `TELESYNC`, …) match anywhere, while `CAM` / `TS` / `TC`
+/// only count in the attribute tail — after the first year / `SxxEyy` /
+/// language / resolution token, which is where SCENE names stop being
+/// title words. A no-marker name never triggers the ambiguous tier.
+pub fn detect_dubious_source(title: &str) -> Option<DubiousSource> {
+    use DubiousSource::{Cam, Screener, Telecine, Telesync};
+    let upper = title.to_ascii_uppercase();
+    for (marker, src) in [
+        ("HDCAM", Cam),
+        ("CAMRIP", Cam),
+        ("HQCAM", Cam),
+        ("TELESYNC", Telesync),
+        ("HDTS", Telesync),
+        ("TSRIP", Telesync),
+        ("TELECINE", Telecine),
+        ("HDTC", Telecine),
+        ("SCREENER", Screener),
+        ("DVDSCR", Screener),
+        ("BDSCR", Screener),
+        ("WEBSCR", Screener),
+    ] {
+        if has_token(&upper, marker) {
+            return Some(src);
+        }
+    }
+    let tail = attribute_tail(&upper)?;
+    for (marker, src) in [("CAM", Cam), ("TS", Telesync), ("TC", Telecine)] {
+        if has_token(tail, marker) {
+            return Some(src);
+        }
+    }
+    None
+}
+
+/// Slice of `upper` after the first token that unambiguously belongs to
+/// the release-attribute section (year, `SxxEyy`, language marker,
+/// resolution). `None` when no such boundary exists — the whole string
+/// might be title words, so ambiguous source tokens can't be trusted.
+fn attribute_tail(upper: &str) -> Option<&str> {
+    let bytes = upper.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() {
+        while start < bytes.len() && is_sep_byte(bytes[start]) {
+            start += 1;
+        }
+        let mut end = start;
+        while end < bytes.len() && !is_sep_byte(bytes[end]) {
+            end += 1;
+        }
+        if end > start && is_attribute_boundary(&upper[start..end]) {
+            return Some(&upper[end..]);
+        }
+        start = end;
+    }
+    None
+}
+
+fn is_attribute_boundary(token: &str) -> bool {
+    // 4-digit year.
+    if token.len() == 4
+        && let Ok(y) = token.parse::<u32>()
+        && (1900..=2099).contains(&y)
+    {
+        return true;
+    }
+    // SxxEyy / Sxx season-episode marker.
+    if let Some(rest) = token.strip_prefix('S')
+        && !rest.is_empty()
+        && rest
+            .split('E')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return true;
+    }
+    matches!(
+        token,
+        // Language markers (same vocabulary as `detect_language`).
+        "MULTI"
+            | "FRENCH"
+            | "TRUEFRENCH"
+            | "SUBFRENCH"
+            | "VOSTFR"
+            | "VFF"
+            | "VFQ"
+            | "VFI"
+            | "VF2"
+            | "FR2"
+            | "VOF"
+            | "VOQ"
+            | "VF"
+            | "VO"
+            | "ENGLISH"
+            // Resolutions.
+            | "2160P"
+            | "1080P"
+            | "720P"
+            | "576P"
+            | "480P"
+            | "4K"
+            | "UHD"
+    )
+}
+
 /// Token-boundary contains: only matches `needle` when it sits
 /// between separators (or at string ends). Without this `FRENCH`
 /// would match against `FRENCHTOAST` and similar; matters less in
@@ -1207,6 +1368,57 @@ mod tests {
         assert_eq!(
             detect_codec("Show.Name.S01E01.1080p.WEB-DL.AAC2.0-GROUP"),
             Codec::Unknown,
+        );
+    }
+
+    #[test]
+    fn dubious_source_real_world_titles() {
+        // Fresh theatrical FR releases — the exact shape users get
+        // fooled by (TS/CAM + MD micro-dub after the year marker).
+        assert_eq!(
+            detect_dubious_source("Vice.Versa.2.2024.FRENCH.TS.MD.720p.x264-GROUP"),
+            Some(DubiousSource::Telesync),
+        );
+        assert_eq!(
+            detect_dubious_source("Un.Film.2026.FRENCH.CAM.MD.1080p.H264"),
+            Some(DubiousSource::Cam),
+        );
+        // Unambiguous markers need no attribute boundary.
+        assert_eq!(
+            detect_dubious_source("Superman.2025.HDCAM.c1nem4.x264"),
+            Some(DubiousSource::Cam),
+        );
+        assert_eq!(
+            detect_dubious_source("Movie.Name.TELESYNC.VOSTFR"),
+            Some(DubiousSource::Telesync),
+        );
+        assert_eq!(
+            detect_dubious_source("Film.2025.HDTC.1080p.x265"),
+            Some(DubiousSource::Telecine),
+        );
+        assert_eq!(
+            detect_dubious_source("Oscar.Bait.2026.DVDScr.XviD"),
+            Some(DubiousSource::Screener),
+        );
+        // Language marker alone is a valid boundary (no year present).
+        assert_eq!(
+            detect_dubious_source("Deadpool.Wolverine.FRENCH.TS.LD"),
+            Some(DubiousSource::Telesync),
+        );
+        // "Cam" as a title word must NOT trigger — 2018 film.
+        assert_eq!(detect_dubious_source("Cam.2018.1080p.WEB-DL.x264"), None);
+        // Ambiguous tokens before any boundary stay inert.
+        assert_eq!(detect_dubious_source("Counter.Strike.TS.Documentary"), None);
+        // Clean releases.
+        assert_eq!(
+            detect_dubious_source("Dune.Part.Two.2024.2160p.WEB-DL.HEVC-FLUX"),
+            None,
+        );
+        assert_eq!(
+            detect_dubious_source(
+                "Classroom.of.the.Elite.S04E11.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG"
+            ),
+            None,
         );
     }
 

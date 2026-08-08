@@ -1,7 +1,7 @@
 [[providers]]
 id = "torr9"
 kind = "torr9"
-enabled = true
+enabled = false
 base_url = "https://api.torr9.net"
 username_env = "TORR9_USERNAME"
 password_env = "TORR9_PASSWORD"
