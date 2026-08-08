@@ -31,7 +31,11 @@
 //! id = "tl"
 //! kind = "torrentleech"
 //! enabled = true
-//! base_url = "https://www.torrentleech.org"
+//! # Reload mirror, NOT the primary www.torrentleech.org — the primary
+//! # zone sits behind a Cloudflare Managed Challenge a headless client
+//! # can't solve (see providers.toml for the full note). Mirrors front
+//! # the same backend, same account + RSS key, no challenge.
+//! base_url = "https://www.torrentleech.me"
 //! username_env = "TL_USERNAME"
 //! password_env = "TL_PASSWORD"
 //! rss_key_env = "TL_RSS_KEY"
@@ -709,10 +713,9 @@ mod tests {
 
     fn provider() -> Arc<TorrentLeech> {
         let mut fields = HashMap::new();
-        fields.insert(
-            "base_url".to_string(),
-            toml::Value::String("https://www.torrentleech.org".into()),
-        );
+        let base =
+            std::env::var("TL_BASE_URL").unwrap_or_else(|_| "https://www.torrentleech.org".into());
+        fields.insert("base_url".to_string(), toml::Value::String(base));
         fields.insert("username".to_string(), toml::Value::String("user".into()));
         fields.insert("password".to_string(), toml::Value::String("pass".into()));
         fields.insert("rss_key".to_string(), toml::Value::String("KEY123".into()));
@@ -963,10 +966,9 @@ mod tests {
     #[ignore = "hits the live site; needs TL_USERNAME/TL_PASSWORD/TL_RSS_KEY"]
     async fn debug_live_search() {
         let mut fields = HashMap::new();
-        fields.insert(
-            "base_url".to_string(),
-            toml::Value::String("https://www.torrentleech.org".into()),
-        );
+        let base =
+            std::env::var("TL_BASE_URL").unwrap_or_else(|_| "https://www.torrentleech.org".into());
+        fields.insert("base_url".to_string(), toml::Value::String(base));
         fields.insert(
             "username_env".to_string(),
             toml::Value::String("TL_USERNAME".into()),
@@ -1021,10 +1023,9 @@ mod tests {
     #[ignore = "hits the live site; needs TL_USERNAME/TL_PASSWORD/TL_RSS_KEY/TL_FID"]
     async fn debug_live_resolve() {
         let mut fields = HashMap::new();
-        fields.insert(
-            "base_url".to_string(),
-            toml::Value::String("https://www.torrentleech.org".into()),
-        );
+        let base =
+            std::env::var("TL_BASE_URL").unwrap_or_else(|_| "https://www.torrentleech.org".into());
+        fields.insert("base_url".to_string(), toml::Value::String(base));
         fields.insert(
             "username_env".to_string(),
             toml::Value::String("TL_USERNAME".into()),

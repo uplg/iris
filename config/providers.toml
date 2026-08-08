@@ -57,11 +57,22 @@ default_language = "english"
 # (Profile → RSS) — signed, cookie-less, restart-safe. Releases carry
 # no language tag, same convention as Seedpool → default to English.
 # Set the account profile to timezone UTC and "Torrents per page: 100".
+#
+# base_url points at a RELOAD MIRROR, not the primary www.torrentleech.org:
+# in 2026-08 the primary zone got a site-wide Cloudflare *Managed Challenge*
+# ("Just a moment…", cf-mitigated: challenge) that a headless HTTP client
+# can't solve, so login + search return 403. The official reload mirrors
+# (torrentleech.me / .cc / tleechreload.org) front the same backend with no
+# challenge — login, JSON browse search, and the /rss/download grab path all
+# work identically (verified end-to-end). Same account + RSS key. If a mirror
+# starts challenging too, swap to another from the list. (Old persisted
+# download_urls on the .org host still resolve — that path was never
+# challenged.)
 [[providers]]
 id = "tl"
 kind = "torrentleech"
 enabled = true
-base_url = "https://www.torrentleech.org"
+base_url = "https://www.torrentleech.me"
 username_env = "TL_USERNAME"
 password_env = "TL_PASSWORD"
 rss_key_env = "TL_RSS_KEY"
