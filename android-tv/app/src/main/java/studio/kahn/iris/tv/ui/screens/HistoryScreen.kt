@@ -175,10 +175,13 @@ fun HistoryScreen(
                 val url = container.sessionStore.serverUrl.first()
                     ?: run { error = "Not signed in"; return@launch }
                 container.apiFor(url).ingest(
+                    // Restoring a specific past release is explicit intent —
+                    // skip the duplicate-movie guard.
                     ResolveBody(
                         providerId = provider,
                         externalId = externalId,
                         tmdbId = item.tmdbId,
+                        allowDuplicate = true,
                     ),
                 )
                 // Straight back into playback: the stream path serves while

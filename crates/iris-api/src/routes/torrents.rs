@@ -360,6 +360,12 @@ pub struct ResolveBody {
     /// from the search hit when available.
     #[serde(default)]
     pub tmdb_id: Option<i64>,
+    /// Explicit consent to ingest a movie whose collection already holds a
+    /// live copy. Absent/false → the duplicate guard answers
+    /// `409 duplicate_in_library`; the client confirms with the user and
+    /// retries with `true`. Additive — old clients simply hit the guard.
+    #[serde(default)]
+    pub allow_duplicate: bool,
 }
 
 #[utoipa::path(
@@ -416,7 +422,14 @@ pub(crate) async fn ingest(
     Json(body): Json<ResolveBody>,
 ) -> ApiResult<Json<IngestResponse>> {
     Ok(Json(
-        ingest_core(&state, user.id, body.provider_id, body.external_id).await?,
+        ingest_core(
+            &state,
+            user.id,
+            body.provider_id,
+            body.external_id,
+            body.allow_duplicate,
+        )
+        .await?,
     ))
 }
 
@@ -455,8 +468,10 @@ pub(crate) async fn regrab(
             "release has no recorded provenance — re-grab it from search".into(),
         ));
     };
+    // Resurrecting a specific known release is explicit intent — the
+    // duplicate guard must not block a ghost-resume next to a live copy.
     Ok(Json(
-        ingest_core(&state, user.id, provider_id, external_id).await?,
+        ingest_core(&state, user.id, provider_id, external_id, true).await?,
     ))
 }
 
@@ -508,6 +523,60 @@ async fn resolve_release(
         .map_err(map_provider_err)
 }
 
+/// Pre-engine guards, on the parsed `.torrent` (magnets skip both —
+/// their file list only exists after metadata exchange, and every
+/// private-tracker provider hands us file bytes):
+///
+/// * RAR'd scene release — nothing Iris could ever stream. Refuse
+///   outright: it never enters the engine, so no download, no seed.
+/// * Same movie already in the library under another live release —
+///   `409 duplicate_in_library` unless the caller consented via
+///   `allow_duplicate`, so copies never stack silently.
+async fn pre_engine_guards(
+    state: &AppState,
+    source: &TorrentSource,
+    allow_duplicate: bool,
+) -> ApiResult<()> {
+    let TorrentSource::TorrentFile(bytes) = source else {
+        return Ok(());
+    };
+    let Ok(preview) = iris_torrent::parse_preview(bytes) else {
+        return Ok(());
+    };
+    if !preview.streamable {
+        return Err(ApiError::ArchiveOnly);
+    }
+    if allow_duplicate {
+        return Ok(());
+    }
+    let files: Vec<(usize, String)> = preview
+        .files
+        .iter()
+        .map(|f| (f.index, f.path.clone()))
+        .collect();
+    if let Some(col) =
+        crate::collection_assign::peek_movie_collection(state.db(), &preview.name, &files).await
+        // Re-adding a release the engine already manages is a no-op
+        // resume, not a new copy.
+        && state.engine().get_by_infohash(&preview.infohash).is_none()
+    {
+        let copies = iris_db::torrents::list_in_collection(state.db(), col.id)
+            .await?
+            .into_iter()
+            .filter(|t| t.infohash != preview.infohash)
+            .map(|t| t.name)
+            .collect::<Vec<_>>();
+        if !copies.is_empty() {
+            return Err(ApiError::DuplicateInLibrary(format!(
+                "\"{}\" is already in the library ({})",
+                col.display_title,
+                copies.join(", "),
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Core grab path shared by the search ingest endpoint and the For-You preview
 /// dialog (which ingests the catalogue card's recommended-best release through
 /// the same path): refuse a dead torrent, resolve the release, add it to the
@@ -517,6 +586,7 @@ pub(crate) async fn ingest_core(
     user_id: iris_core::ids::UserId,
     provider_id: String,
     external_id: String,
+    allow_duplicate: bool,
 ) -> ApiResult<IngestResponse> {
     let provider = state
         .providers()
@@ -530,6 +600,7 @@ pub(crate) async fn ingest_core(
     }
 
     let source = resolve_release(state, &provider, &provider_id, &external_id).await?;
+    pre_engine_guards(state, &source, allow_duplicate).await?;
     let result = match source {
         TorrentSource::TorrentFile(bytes) => state.engine().add_from_bytes(bytes).await,
         TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,

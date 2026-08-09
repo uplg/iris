@@ -65,6 +65,11 @@ export function PreviewDialog({
   const [pickedIdx, setPickedIdx] = useState<number | null>(null);
   const [ingesting, setIngesting] = useState(false);
   const [showNfo, setShowNfo] = useState(false);
+  /** Set when the server answered `409 duplicate_in_library`: the
+   *  message lists the copies already on disk. The dialog switches the
+   *  CTA to an explicit "Download another copy" that retries with
+   *  `allow_duplicate`. */
+  const [dupMessage, setDupMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open || !providerId || !externalId) return;
@@ -75,6 +80,7 @@ export function PreviewDialog({
     setDetails(null);
     setPickedIdx(null);
     setShowNfo(false);
+    setDupMessage(null);
     // Fire both requests in parallel — preview is required (drives the
     // file picker + ingest), details is best-effort (some providers
     // don't expose them and we want the dialog to still open).
@@ -122,19 +128,30 @@ export function PreviewDialog({
   // never fully assemble); unknown / ≥1 grabs normally.
   const dead = (details?.seeders ?? seeders) === 0;
 
-  const onPlay = async () => {
-    if (dead || !preview || pickedIdx == null || !providerId || !externalId) return;
+  // RAR'd scene release: the server refuses the grab (409 archive_only)
+  // because there is nothing Iris could stream. Block the CTA up front
+  // with an explanation instead of letting the user hit the wall.
+  const notStreamable = preview != null && !preview.streamable;
+
+  const onPlay = async (allowDuplicate = false) => {
+    if (dead || notStreamable || !preview || pickedIdx == null || !providerId || !externalId) {
+      return;
+    }
     setIngesting(true);
     setError(null);
     try {
-      const res = await torrents.ingest(providerId, externalId, tmdbId ?? null);
+      const res = await torrents.ingest(providerId, externalId, tmdbId ?? null, allowDuplicate);
       onOpenChange(false);
       navigate({
         to: "/watch/$infohash/$idx",
         params: { infohash: res.snapshot.infohash, idx: String(pickedIdx) },
       });
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      if (e instanceof ApiError && e.code === "duplicate_in_library") {
+        setDupMessage(e.message);
+      } else {
+        setError(e instanceof ApiError ? e.message : String(e));
+      }
     } finally {
       setIngesting(false);
     }
@@ -298,16 +315,33 @@ export function PreviewDialog({
           </div>
         )}
 
+        {notStreamable && (
+          <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            RAR-packed release: the video sits inside archives Iris can't stream. Pick an unrar'd
+            release (a plain .mkv / .mp4).
+          </div>
+        )}
+
+        {dupMessage && (
+          <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+            {dupMessage}. Download another copy anyway?
+          </div>
+        )}
+
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          {alreadyInLibrary && libraryInfohash != null && libraryFileIdx != null ? (
+          {dupMessage ? (
+            <Button variant="secondary" onClick={() => onPlay(true)} disabled={ingesting}>
+              {ingesting ? "Starting…" : "Download another copy"}
+            </Button>
+          ) : alreadyInLibrary && libraryInfohash != null && libraryFileIdx != null ? (
             <>
               <Button
                 variant="secondary"
-                onClick={onPlay}
-                disabled={pickedIdx == null || ingesting || !preview || dead}
+                onClick={() => onPlay()}
+                disabled={pickedIdx == null || ingesting || !preview || dead || notStreamable}
               >
                 {ingesting ? "Starting…" : "Download anyway"}
               </Button>
@@ -325,9 +359,18 @@ export function PreviewDialog({
               </Button>
             </>
           ) : (
-            <Button onClick={onPlay} disabled={pickedIdx == null || ingesting || !preview || dead}>
+            <Button
+              onClick={() => onPlay()}
+              disabled={pickedIdx == null || ingesting || !preview || dead || notStreamable}
+            >
               <Play className="size-4" />
-              {dead ? "Dead torrent" : ingesting ? "Starting…" : "Play"}
+              {dead
+                ? "Dead torrent"
+                : notStreamable
+                  ? "Not streamable"
+                  : ingesting
+                    ? "Starting…"
+                    : "Play"}
             </Button>
           )}
         </DialogFooter>

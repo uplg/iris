@@ -463,8 +463,23 @@ export type IngestResponse = components["schemas"]["IngestResponse"];
 export const torrents = {
   preview: (provider_id: string, external_id: string) =>
     api.post<TorrentPreview>("/torrents/preview", { provider_id, external_id }),
-  ingest: (provider_id: string, external_id: string, tmdb_id?: number | null) =>
-    api.post<IngestResponse>("/torrents", { provider_id, external_id, tmdb_id }),
+  /** `allow_duplicate` consents to ingesting a movie whose collection
+   *  already holds a live copy — without it the server answers
+   *  `409 duplicate_in_library` and the UI must confirm with the user.
+   *  Explicit re-grabs of a known release (history, ghost-resume,
+   *  language variants) pass `true` directly. */
+  ingest: (
+    provider_id: string,
+    external_id: string,
+    tmdb_id?: number | null,
+    allow_duplicate?: boolean,
+  ) =>
+    api.post<IngestResponse>("/torrents", {
+      provider_id,
+      external_id,
+      tmdb_id,
+      allow_duplicate: allow_duplicate ?? false,
+    }),
   list: () => api.get<TorrentView[]>("/torrents"),
   get: (infohash: string) => api.get<TorrentView>(`/torrents/${infohash}`),
   /** Re-ingest a GC-reclaimed release from its recorded provenance —

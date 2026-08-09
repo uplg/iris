@@ -20,6 +20,20 @@ pub enum ApiError {
     /// Distinct code so clients can show a "dead torrent" message.
     #[error("this release has no seeders and can't be downloaded")]
     DeadTorrent,
+    /// The release is a packed archive set (scene RAR volumes) with no
+    /// playable video — Iris streams straight from the container, so it
+    /// could be seeded but never watched. Distinct code so clients can
+    /// steer the user to an unrar'd release.
+    #[error(
+        "this release is packed in RAR archives and can't be streamed — pick an unrar'd release"
+    )]
+    ArchiveOnly,
+    /// The same movie is already in the library under another release.
+    /// Distinct code so clients can offer an explicit "download another
+    /// copy" confirmation (retry with `allow_duplicate`). The message
+    /// carries the existing copies for display.
+    #[error("{0}")]
+    DuplicateInLibrary(String),
     /// A remote origin we depend on (live TV playlist / stream / guide)
     /// failed. 502 so clients can distinguish "their side" from "our side".
     #[error("upstream unavailable: {0}")]
@@ -39,6 +53,12 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request", self.to_string()),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "conflict", self.to_string()),
             ApiError::DeadTorrent => (StatusCode::CONFLICT, "dead_torrent", self.to_string()),
+            ApiError::ArchiveOnly => (StatusCode::CONFLICT, "archive_only", self.to_string()),
+            ApiError::DuplicateInLibrary(_) => (
+                StatusCode::CONFLICT,
+                "duplicate_in_library",
+                self.to_string(),
+            ),
             ApiError::Upstream(_) => (StatusCode::BAD_GATEWAY, "upstream", self.to_string()),
             ApiError::Db(_) | ApiError::Internal(_) => {
                 tracing::error!(error = ?self, "internal error");

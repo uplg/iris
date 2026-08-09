@@ -394,6 +394,41 @@ fn pick_identity<'a>(
     parsed_files.first().map(|(_, p)| p)
 }
 
+/// Lookup-only twin of the assign path: parse the release name + files
+/// exactly like [`assign_after_ingest`] and return the existing MOVIE
+/// collection this release would land in. `None` for TV-shaped or
+/// unparseable releases, and when the collection doesn't exist yet.
+/// Never creates rows — this feeds the pre-ingest duplicate guard, so
+/// it must stay in lockstep with [`resolve_collection`]'s keying.
+pub async fn peek_movie_collection(
+    pool: &SqlitePool,
+    name: &str,
+    files: &[(usize, String)],
+) -> Option<CollectionRow> {
+    let parsed_name = filename::parse(name);
+    let parsed_files: Vec<(usize, filename::Parsed)> = files
+        .iter()
+        .filter(|(_, path)| is_main_video_file(path))
+        .filter_map(|(idx, path)| {
+            let leaf = path.rsplit('/').next().unwrap_or(path);
+            filename::parse(leaf).map(|p| (*idx, p))
+        })
+        .collect();
+    if guess_kind(parsed_name.as_ref(), &parsed_files) == Kind::Tv {
+        return None;
+    }
+    let identity = pick_identity(Kind::Movie, parsed_name.as_ref(), &parsed_files)?;
+    // `is_anime` is a TV-only refinement — movie keys never carry it.
+    let key = identity.collection_key_kind(false, false);
+    if key.is_empty() {
+        return None;
+    }
+    collections::find_by_parsed_title(pool, &key, Kind::Movie)
+        .await
+        .ok()
+        .flatten()
+}
+
 async fn resolve_collection(
     pool: &SqlitePool,
     kind: Kind,

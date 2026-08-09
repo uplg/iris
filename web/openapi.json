@@ -7,7 +7,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "1.3.4"
+    "version": "1.3.5"
   },
   "paths": {
     "/api/admin/active-sessions": {
@@ -6554,6 +6554,10 @@
           "external_id"
         ],
         "properties": {
+          "allow_duplicate": {
+            "type": "boolean",
+            "description": "Explicit consent to ingest a movie whose collection already holds a\nlive copy. Absent/false → the duplicate guard answers\n`409 duplicate_in_library`; the client confirms with the user and\nretries with `true`. Additive — old clients simply hit the guard."
+          },
           "external_id": {
             "type": "string"
           },
@@ -7411,7 +7415,8 @@
           "index",
           "path",
           "size_bytes",
-          "is_video"
+          "is_video",
+          "is_archive"
         ],
         "properties": {
           "extension": {
@@ -7424,6 +7429,10 @@
           "index": {
             "type": "integer",
             "minimum": 0
+          },
+          "is_archive": {
+            "type": "boolean",
+            "description": "Heuristic: `true` for packed-archive volumes (`.rar`, `.zip`,\n`.7z`, `.rXX` / `.NNN` split volumes)."
           },
           "is_video": {
             "type": "boolean",
@@ -7448,7 +7457,8 @@
           "piece_length",
           "piece_count",
           "announce_urls",
-          "files"
+          "files",
+          "streamable"
         ],
         "properties": {
           "announce_urls": {
@@ -7478,6 +7488,10 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "streamable": {
+            "type": "boolean",
+            "description": "`false` when the release is archive-dominant (scene RAR sets:\n`.rar`/`.rXX`/split volumes outweigh the video bytes — any video\npresent is just a sample) or carries no video file at all. Iris\nstreams straight from the video container, so such a release can\nbe seeded but never played."
           },
           "total_size_bytes": {
             "type": "integer",

@@ -125,6 +125,10 @@ fun CollectionScreen(
     // (infohash, label) pending hide — nothing disappears without
     // the ConfirmDialog.
     var confirmHide by remember(collectionId) { mutableStateOf<Pair<String, String>?>(null) }
+    // Multi-copy movies: (infohash, release name) pending deletion —
+    // confirmed through the same ConfirmDialog pattern as `confirmHide`,
+    // then `DELETE /api/torrents/{infohash}` + reload.
+    var confirmDeleteCopy by remember(collectionId) { mutableStateOf<Pair<String, String>?>(null) }
 
     suspend fun reload() {
         val url = container.sessionStore.serverUrl.first() ?: run {
@@ -376,6 +380,51 @@ fun CollectionScreen(
                         )
                     }
                 }
+            } else if (d.torrents.size > 1) {
+                // Several copies of the same movie: group the files under
+                // one header per release so duplicates stay visible and
+                // deletable — a flat list hid which file came from which
+                // copy (mirrors the web ReleaseVersions view).
+                item(key = "files-header") {
+                    Eyebrow(
+                        "${d.torrents.size} copies on disk",
+                        modifier = Modifier.padding(
+                            horizontal = layout.gutterHorizontal,
+                            vertical = Spacing.md,
+                        ),
+                    )
+                }
+                for (t in d.torrents) {
+                    item(key = "release:${t.infohash}") {
+                        Box(
+                            Modifier.padding(
+                                horizontal = layout.gutterHorizontal,
+                                vertical = Spacing.xs,
+                            ),
+                        ) {
+                            ReleaseCopyRow(
+                                torrent = t,
+                                onDelete = {
+                                    confirmDeleteCopy =
+                                        t.infohash to (t.name ?: t.infohash)
+                                },
+                            )
+                        }
+                    }
+                    val tFiles = t.files.filter { f ->
+                        VIDEO_EXTS_C.any { f.path.endsWith(it, ignoreCase = true) }
+                    }
+                    items(tFiles, key = { f -> "${t.infohash}:${f.index}" }) { f ->
+                        Box(
+                            Modifier.padding(
+                                horizontal = layout.gutterHorizontal,
+                                vertical = Spacing.xs,
+                            ),
+                        ) {
+                            FileRow(file = f, onClick = { onPickFile(t.infohash, f.index) })
+                        }
+                    }
+                }
             } else {
                 // Movie / unparsed-TV fallback. Server already sorts files
                 // SCENE-aware inside the snapshot, so no client-side reorder
@@ -442,10 +491,13 @@ fun CollectionScreen(
                                         val url = container.sessionStore.serverUrl.first()
                                             ?: run { error = "Not signed in"; return@launch }
                                         container.apiFor(url).ingest(
+                                            // Same-release resurrect — explicit
+                                            // intent, skip the duplicate guard.
                                             ResolveBody(
                                                 providerId = r.sourceProvider,
                                                 externalId = r.sourceExternalId,
                                                 tmdbId = d.tmdbId,
+                                                allowDuplicate = true,
                                             ),
                                         )
                                         reload()
@@ -481,6 +533,27 @@ fun CollectionScreen(
                 }
             },
             onCancel = { confirmHide = null },
+        )
+    }
+
+    confirmDeleteCopy?.let { (infohash, name) ->
+        ConfirmDialog(
+            eyebrow = "Delete this copy",
+            title = name,
+            body = "Removes the release and its files from the server. " +
+                "Other copies of this movie stay untouched.",
+            confirmLabel = "Delete",
+            onConfirm = {
+                confirmDeleteCopy = null
+                scope.launch {
+                    runCatching {
+                        val url = container.sessionStore.serverUrl.first()
+                        if (url != null) container.apiFor(url).deleteTorrent(infohash)
+                    }
+                    reload()
+                }
+            },
+            onCancel = { confirmDeleteCopy = null },
         )
     }
     }
@@ -785,10 +858,13 @@ private suspend fun doRestoreVariant(
     val ok = withContext(Dispatchers.IO) {
         runCatching {
             api.ingest(
+                // Same-release resurrect — explicit intent, skip the
+                // duplicate guard.
                 ResolveBody(
                     providerId = variant.sourceProvider,
                     externalId = variant.sourceExternalId,
                     tmdbId = tmdbId,
+                    allowDuplicate = true,
                 ),
             )
         }.isSuccess
@@ -1279,6 +1355,55 @@ private fun SeasonPackBanner(
 }
 
 // File fallback (movies / SCENE-unparseable TV)
+
+/** Header for one copy of a multi-copy movie: release name + size +
+ *  who grabbed it, with the row click opening the delete confirm. Its
+ *  files render right below as regular [FileRow]s (those play). */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun ReleaseCopyRow(torrent: TorrentView, onDelete: () -> Unit) {
+    val rowShape = RoundedCornerShape(Radius.button)
+    Card(
+        onClick = onDelete,
+        modifier = Modifier.fillMaxWidth().height(64.dp),
+        shape = CardDefaults.shape(shape = rowShape),
+        scale = CardDefaults.scale(focusedScale = 1f),
+        colors = CardDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            focusedContainerColor = IrisColors.Overlay06,
+            focusedContentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+        border = CardDefaults.border(
+            focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = rowShape),
+        ),
+    ) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    torrent.name ?: torrent.infohash,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
+                Text(
+                    "${formatFileSize(torrent.totalSizeBytes)} · added by ${torrent.addedByName}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                "✕ Delete",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable

@@ -39,7 +39,7 @@ use iris_core::search::{
     TorrentDetails, TorrentSource,
 };
 use reqwest::Client;
-use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, USER_AGENT};
+use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Deserializer};
 use tokio::sync::Mutex;
 use url::Url;
@@ -147,6 +147,14 @@ impl Unit3dProvider {
         );
         headers.insert(ACCEPT, HeaderValue::from_static("application/json, */*"));
         headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
+        // UNIT3D accepts the token as `?api_token=` or `Authorization:
+        // Bearer`; newer deployments reject the query-param form (it
+        // leaks tokens into server logs), so send the header on every
+        // request. Older instances ignore it — both transports coexist.
+        let mut bearer = HeaderValue::from_str(&format!("Bearer {api_token}"))
+            .map_err(|e| Error::Provider(format!("unit3d api token invalid in header: {e}")))?;
+        bearer.set_sensitive(true);
+        headers.insert(AUTHORIZATION, bearer);
 
         let http = crate::tls::client_builder()
             .default_headers(headers)

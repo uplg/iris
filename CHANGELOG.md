@@ -5,10 +5,36 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.5] - 2026-08-09
 
 ### Added
 
+- **RAR'd releases are refused at grab time (all providers).** Scene
+  releases packed in `.rar`/`.rXX`/split volumes can be seeded but never
+  streamed, so they no longer enter the engine at all: every grab path
+  (search ingest, For-You preview, follows auto-grab) parses the
+  `.torrent` first and answers `409 archive_only` when the archive bytes
+  outweigh the video bytes (a lone `sample.mkv` doesn't count as video).
+  The web preview dialog flags the release and disables Play up front;
+  `TorrentPreview` gains per-file `is_archive` + top-level `streamable`.
+  Byte-weighted on purpose: unrar'd season packs and movies with an
+  incidental extras archive still pass.
+- **Duplicate-movie guard on ingest.** Grabbing a movie whose collection
+  already holds a live copy now answers `409 duplicate_in_library`
+  (message lists the existing releases) unless the client passes the new
+  `allow_duplicate` consent flag. Web preview dialog and TV
+  search-detail/voice-pick flows surface a "Download another copy?"
+  confirmation; explicit re-grabs (history restore, ghost-resume,
+  language variants, `/regrab`) skip the guard by design. TV grabs also
+  parse the error envelope now, so guard messages read as intended
+  instead of `HTTP 409`.
+- **Multi-copy movies are visible and manageable.** The web collection
+  page no longer auto-plays `torrents[0]` when a movie has several
+  copies: it stops on a per-release list (name, size, who added it,
+  when) with Play on the release's main file and a two-step delete. The
+  TV collection screen groups the movie file fallback under one header
+  row per release with the same delete (ConfirmDialog +
+  `DELETE /api/torrents/{infohash}`).
 - **TorrentLeech provider** (`kind = "torrentleech"`, id `tl`). Search rides
   the site's JSON browse endpoint behind a cookie session (site
   username/password, optional 2FA token), downloads ride the per-user RSS
@@ -18,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   foreign); games/music/ebooks/apps are filtered out at query time. The
   query-less "recent torrents" view feeds the discovery catalogue's
   `latest()` poll. Needs `TL_USERNAME`, `TL_PASSWORD`, `TL_RSS_KEY`.
+
+### Fixed
+
+- **UNIT3D auth also rides `Authorization: Bearer`.** The token used to
+  travel only as the `?api_token=` query param; newer UNIT3D
+  deployments reject that form (it leaks tokens into server logs — the
+  suspected cause of TOS suddenly answering 401 with a valid key). The
+  header is now sent on every request alongside the query param, which
+  older instances (Seedpool) simply ignore.
 
 ## [1.3.4] - 2026-07-26
 

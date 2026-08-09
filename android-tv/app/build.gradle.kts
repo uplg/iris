@@ -29,8 +29,8 @@ android {
         applicationId = "studio.kahn.iris.tv"
         minSdk = 23           // Android TV reaches further back than phones
         targetSdk = 37
-        versionCode = 27
-        versionName = "1.3.4"
+        versionCode = 28
+        versionName = "1.3.5"
         // Build stamp surfaced in Settings: versionName/versionCode stay equal
         // across pre-release iterations, so without this there's no way to tell
         // WHICH build actually runs on the device. Via BuildStampSource — see

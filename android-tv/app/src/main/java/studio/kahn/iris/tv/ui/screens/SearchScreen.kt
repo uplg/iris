@@ -97,6 +97,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
+import studio.kahn.iris.tv.data.irisError
+import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
@@ -195,6 +197,10 @@ fun SearchScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var pending by remember { mutableStateOf(false) }
     var ingestingId by remember { mutableStateOf<String?>(null) }
+    // Voice auto-pick hit a movie already in the library (409
+    // duplicate_in_library): (hit, server message) → ConfirmDialog whose
+    // CONFIRM retries the grab with allowDuplicate.
+    var dupPrompt by remember { mutableStateOf<Pair<SearchResult, String>?>(null) }
     // Memoised TMDB lookup results keyed by extracted SCENE title. We
     // resolve the poster from the *release name* (after stripping year /
     // SxxExx / quality / language tokens) instead of trusting the
@@ -344,10 +350,20 @@ fun SearchScreen(
             if (autoPickTop && page == 1 && ranked.results.isNotEmpty() && ingestingId == null) {
                 val top = ranked.results.first()
                 ingestingId = "${top.providerId}:${top.externalId}"
-                ingestAndPlay(scope, container, top, onPickFile, onPickTorrent) { msg ->
-                    error = msg
-                    ingestingId = null
-                }
+                ingestAndPlay(
+                    scope, container, top,
+                    allowDuplicate = false,
+                    onPickFile = onPickFile,
+                    onPickTorrent = onPickTorrent,
+                    onDuplicate = { msg ->
+                        dupPrompt = top to msg
+                        ingestingId = null
+                    },
+                    onError = { msg ->
+                        error = msg
+                        ingestingId = null
+                    },
+                )
             }
         } catch (e: Exception) {
             error = e.message ?: "Search failed"
@@ -687,6 +703,34 @@ fun SearchScreen(
             }
         }
         }
+    }
+
+    dupPrompt?.let { (hit, msg) ->
+        ConfirmDialog(
+            eyebrow = "Already in library",
+            title = hit.title,
+            body = "$msg. Download another copy anyway?",
+            confirmLabel = "Download another copy",
+            onConfirm = {
+                dupPrompt = null
+                ingestingId = "${hit.providerId}:${hit.externalId}"
+                ingestAndPlay(
+                    scope, container, hit,
+                    allowDuplicate = true,
+                    onPickFile = onPickFile,
+                    onPickTorrent = onPickTorrent,
+                    onDuplicate = { m ->
+                        error = m
+                        ingestingId = null
+                    },
+                    onError = { m ->
+                        error = m
+                        ingestingId = null
+                    },
+                )
+            },
+            onCancel = { dupPrompt = null },
+        )
     }
 }
 
@@ -1753,8 +1797,12 @@ private fun ingestAndPlay(
     scope: kotlinx.coroutines.CoroutineScope,
     container: AppContainer,
     hit: SearchResult,
+    allowDuplicate: Boolean,
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onPickTorrent: (infohash: String) -> Unit,
+    /** 409 duplicate_in_library — the caller confirms with the user and
+     *  retries with `allowDuplicate = true`. */
+    onDuplicate: (String) -> Unit,
     onError: (String) -> Unit,
 ) {
     scope.launch {
@@ -1767,6 +1815,7 @@ private fun ingestAndPlay(
                     providerId = hit.providerId,
                     externalId = hit.externalId,
                     tmdbId = hit.tmdbId,
+                    allowDuplicate = allowDuplicate,
                 )
             )
             val videoExts = listOf(
@@ -1780,6 +1829,13 @@ private fun ingestAndPlay(
                 onPickFile(res.snapshot.infohash, idx)
             } else {
                 onPickTorrent(res.snapshot.infohash)
+            }
+        } catch (e: retrofit2.HttpException) {
+            val env = e.irisError()
+            if (env?.error == "duplicate_in_library") {
+                onDuplicate(env.message ?: "This movie is already in the library")
+            } else {
+                onError(env?.message ?: e.message ?: "Ingest failed")
             }
         } catch (e: Exception) {
             onError(e.message ?: "Ingest failed")

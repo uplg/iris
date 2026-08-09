@@ -1466,6 +1466,7 @@ async fn ingest_picked(
     {
         match provider.fetch_bytes(url).await {
             Ok(bytes) => {
+                reject_archive_only(&bytes)?;
                 return state
                     .engine()
                     .add_from_bytes(bytes.to_vec())
@@ -1524,9 +1525,22 @@ async fn ingest_picked(
     };
     match source {
         iris_core::search::TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,
-        iris_core::search::TorrentSource::TorrentFile(b) => state.engine().add_from_bytes(b).await,
+        iris_core::search::TorrentSource::TorrentFile(b) => {
+            reject_archive_only(&b)?;
+            state.engine().add_from_bytes(b).await
+        }
     }
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))
+}
+
+/// Hard gate shared by every grab that has `.torrent` bytes in hand:
+/// a RAR'd release would download + seed but never stream, so it never
+/// enters the engine at all.
+fn reject_archive_only(bytes: &[u8]) -> ApiResult<()> {
+    match iris_torrent::parse_preview(bytes) {
+        Ok(p) if !p.streamable => Err(ApiError::ArchiveOnly),
+        _ => Ok(()),
+    }
 }
 
 /// Build the targeted `SearchQuery` used to re-prime a provider's

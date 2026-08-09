@@ -9,6 +9,7 @@ import {
   Play,
   RotateCcw,
   Sparkles,
+  Trash2,
   Tv,
   X,
 } from "lucide-react";
@@ -66,9 +67,12 @@ export function CollectionPage() {
   // playable file. Saves a useless intermediate click. TV stays on
   // this page even when only one episode is on disk — the new
   // "grab next episode" surface is the point of stopping here.
+  // Multi-copy movies stay too: the page is the only surface where
+  // the user can see the copies, pick one, or delete the extras —
+  // auto-picking `torrents[0]` hid every other copy.
   useEffect(() => {
     if (!data) return;
-    if (data.kind === "movie") {
+    if (data.kind === "movie" && data.torrents.length === 1) {
       const t = data.torrents[0];
       const f = t?.files
         .filter((x) => VIDEO_RE.test(x.path))
@@ -130,10 +134,21 @@ export function CollectionPage() {
               navigate({ to: "/watch/$infohash/$idx", params: { infohash: ih, idx: String(idx) } })
             }
           />
+        ) : data.kind === "movie" && data.torrents.length > 1 ? (
+          // Several copies of the same movie: one card per release so
+          // the user can tell them apart, play any of them, and delete
+          // the surplus. The flat file list hid this entirely.
+          <ReleaseVersions
+            collection={data}
+            collectionId={id}
+            onPlay={(ih, idx) =>
+              navigate({ to: "/watch/$infohash/$idx", params: { infohash: ih, idx: String(idx) } })
+            }
+          />
         ) : (
-          // Movies, or a TV pack the SCENE parser couldn't break into
-          // episodes. Either way the raw file picker gets the user
-          // unblocked.
+          // Single-copy movies without a playable file, or a TV pack the
+          // SCENE parser couldn't break into episodes. Either way the
+          // raw file picker gets the user unblocked.
           <RawFileList
             collection={data}
             onPlay={(ih, idx) =>
@@ -188,7 +203,10 @@ function GoneReleases({
     void qc.invalidateQueries({ queryKey: ["history"] });
   };
   const regrab = useMutation({
-    mutationFn: (r: GoneReleaseEntry) => torrents.ingest(r.source_provider, r.source_external_id),
+    // Ghost-resume of a specific reclaimed release — explicit intent,
+    // skip the duplicate-movie guard.
+    mutationFn: (r: GoneReleaseEntry) =>
+      torrents.ingest(r.source_provider, r.source_external_id, null, true),
     onSuccess: refresh,
     onSettled: () => setBusyInfohash(null),
   });
@@ -960,7 +978,8 @@ function VariantChip({
   const regrab = useMutation({
     mutationFn: () => {
       if (variant.status !== "gone") throw new Error("not a gone variant");
-      return torrents.ingest(variant.source_provider, variant.source_external_id);
+      // Same-release resurrect — explicit intent, skip the duplicate guard.
+      return torrents.ingest(variant.source_provider, variant.source_external_id, null, true);
     },
     onSuccess: () => {
       refreshGone();
@@ -1056,6 +1075,97 @@ function VariantChip({
       )}
       {meta && <span className="text-xs text-muted-foreground">{meta}</span>}
     </button>
+  );
+}
+
+/**
+ * Multi-copy movie view — one card per release so duplicates stay
+ * visible and manageable. Play targets the release's main video file;
+ * delete is a two-step inline confirm (no dialog) wired to
+ * `DELETE /api/torrents/{infohash}`.
+ */
+function ReleaseVersions({
+  collection,
+  collectionId,
+  onPlay,
+}: {
+  collection: CollectionDetail;
+  collectionId: string;
+  onPlay: (infohash: string, fileIdx: number) => void;
+}) {
+  const qc = useQueryClient();
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const del = useMutation({
+    mutationFn: (infohash: string) => torrents.remove(infohash),
+    onSuccess: () => {
+      setConfirmDelete(null);
+      void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+      void qc.invalidateQueries({ queryKey: ["library"] });
+      void qc.invalidateQueries({ queryKey: ["history"] });
+    },
+  });
+  return (
+    <section className="grid gap-3">
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+        {collection.torrents.length} copies on disk
+      </div>
+      <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface">
+        {collection.torrents.map((t) => {
+          const main = t.files
+            .filter((f) => VIDEO_RE.test(f.path))
+            .sort((a, b) => b.size_bytes - a.size_bytes)[0];
+          const name = t.name ?? t.infohash;
+          return (
+            <li key={t.infohash} className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-mono text-xs" title={name}>
+                  {name}
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {formatSize(t.total_size_bytes)} · added by {t.added_by_name} ·{" "}
+                  {formatRecentTime(t.added_at)}
+                </div>
+              </div>
+              {confirmDelete === t.infohash ? (
+                <>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={del.isPending}
+                    onClick={() => del.mutate(t.infohash)}
+                  >
+                    {del.isPending ? "Deleting…" : "Confirm delete"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(null)}>
+                    Keep
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    title="Delete this copy"
+                    onClick={() => setConfirmDelete(t.infohash)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={!main}
+                    onClick={() => main && onPlay(t.infohash, main.index)}
+                  >
+                    <Play className="size-3.5" />
+                    Play
+                  </Button>
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

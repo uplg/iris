@@ -32,8 +32,10 @@ export function HistoryPage() {
   const [restoringKey, setRestoringKey] = useState<string | null>(null);
   const restore = useMutation({
     // `canRestore` in HistoryList guarantees both source fields are set.
+    // Restoring a specific past release is explicit intent — skip the
+    // duplicate-movie guard.
     mutationFn: (it: HistoryItem) =>
-      torrents.ingest(it.source_provider!, it.source_external_id!, it.tmdb_id),
+      torrents.ingest(it.source_provider!, it.source_external_id!, it.tmdb_id, true),
     onSuccess: (_res, it) => {
       void qc.invalidateQueries({ queryKey: ["history"] });
       void qc.invalidateQueries({ queryKey: ["library"] });

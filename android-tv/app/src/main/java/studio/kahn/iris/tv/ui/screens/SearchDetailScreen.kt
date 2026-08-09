@@ -48,8 +48,10 @@ import studio.kahn.iris.tv.data.SubInfo
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.TorrentDetails
 import studio.kahn.iris.tv.data.VideoInfo
+import studio.kahn.iris.tv.data.irisError
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 import studio.kahn.iris.tv.ui.components.TvIconButton
@@ -91,6 +93,58 @@ fun SearchDetailScreen(
     var loading by remember { mutableStateOf(true) }
     var ingesting by remember { mutableStateOf(false) }
     var following by remember { mutableStateOf(false) }
+    // 409 duplicate_in_library: the same movie already has a live copy.
+    // Holds the server message; renders a ConfirmDialog whose CONFIRM
+    // retries the grab with allowDuplicate.
+    var dupMessage by remember { mutableStateOf<String?>(null) }
+
+    fun grab(allowDuplicate: Boolean) {
+        if (ingesting) return
+        ingesting = true
+        error = null
+        dupMessage = null
+        scope.launch {
+            try {
+                val url = container.sessionStore.serverUrl.first()
+                    ?: return@launch run {
+                        error = "Not signed in"
+                        ingesting = false
+                    }
+                val api = container.apiFor(url)
+                val res = api.ingest(
+                    ResolveBody(
+                        providerId = providerId,
+                        externalId = externalId,
+                        tmdbId = tmdbId,
+                        allowDuplicate = allowDuplicate,
+                    )
+                )
+                val videoExts = listOf(
+                    ".mkv", ".mp4", ".webm", ".m4v", ".avi",
+                    ".mov", ".ts", ".mts", ".m2ts", ".wmv",
+                )
+                val videos = res.snapshot.files
+                    .filter { f -> videoExts.any { f.path.endsWith(it, ignoreCase = true) } }
+                if (videos.size <= 1) {
+                    val idx = videos.maxByOrNull { f -> f.sizeBytes }?.index ?: 0
+                    onPickFile(res.snapshot.infohash, idx)
+                } else {
+                    onPickTorrent(res.snapshot.infohash)
+                }
+            } catch (e: retrofit2.HttpException) {
+                val env = e.irisError()
+                if (env?.error == "duplicate_in_library") {
+                    dupMessage = env.message ?: "This movie is already in the library"
+                } else {
+                    error = env?.message ?: e.message ?: "Ingest failed"
+                }
+                ingesting = false
+            } catch (e: Exception) {
+                error = e.message ?: "Ingest failed"
+                ingesting = false
+            }
+        }
+    }
 
     LaunchedEffect(providerId, externalId, tmdbId) {
         loading = true
@@ -249,40 +303,7 @@ fun SearchDetailScreen(
                     if (dead) "Dead torrent" else if (ingesting) "Starting…" else "▶  Download & play",
                     {
                         if (ingesting || dead) return@IrisButton
-                        ingesting = true
-                        error = null
-                        scope.launch {
-                            try {
-                                val url = container.sessionStore.serverUrl.first()
-                                    ?: return@launch run {
-                                        error = "Not signed in"
-                                        ingesting = false
-                                    }
-                                val api = container.apiFor(url)
-                                val res = api.ingest(
-                                    ResolveBody(
-                                        providerId = providerId,
-                                        externalId = externalId,
-                                        tmdbId = tmdbId,
-                                    )
-                                )
-                                val videoExts = listOf(
-                                    ".mkv", ".mp4", ".webm", ".m4v", ".avi",
-                                    ".mov", ".ts", ".mts", ".m2ts", ".wmv",
-                                )
-                                val videos = res.snapshot.files
-                                    .filter { f -> videoExts.any { f.path.endsWith(it, ignoreCase = true) } }
-                                if (videos.size <= 1) {
-                                    val idx = videos.maxByOrNull { f -> f.sizeBytes }?.index ?: 0
-                                    onPickFile(res.snapshot.infohash, idx)
-                                } else {
-                                    onPickTorrent(res.snapshot.infohash)
-                                }
-                            } catch (e: Exception) {
-                                error = e.message ?: "Ingest failed"
-                                ingesting = false
-                            }
-                        }
+                        grab(allowDuplicate = false)
                     },
                     enabled = details != null && !ingesting && !dead,
                 )
@@ -323,6 +344,17 @@ fun SearchDetailScreen(
         }
 
         item(key = "trailing") { Box(Modifier.padding(vertical = Spacing.xl)) }
+    }
+
+    dupMessage?.let { msg ->
+        ConfirmDialog(
+            eyebrow = "Already in library",
+            title = details?.title ?: "This movie",
+            body = "$msg. Download another copy anyway?",
+            confirmLabel = "Download another copy",
+            onConfirm = { grab(allowDuplicate = true) },
+            onCancel = { dupMessage = null },
+        )
     }
 }
 
