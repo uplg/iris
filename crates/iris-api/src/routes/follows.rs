@@ -1206,13 +1206,17 @@ pub(crate) async fn grab_episode_core(
     // Short-circuit only when we already hold the episode in the
     // requested language. An explicit FR badge click must NOT return
     // the owned EN file — `find_episode_file` honours `language` so the
-    // grab proceeds and fetches the FR release instead.
+    // grab proceeds and fetches the FR release instead. The claim is
+    // verified against the actual file name first: rows written before
+    // the pack-as-singleton fix can point (S, E) at an arbitrary leaf.
     if let Some(existing) =
         find_episode_file(state, normalized_name, season, episode, &language).await?
+        && let Some((infohash, file_idx)) =
+            verify_owned_claim(state, existing, season, episode).await
     {
         return Ok(GrabResponse {
-            infohash: existing.infohash,
-            file_idx: existing.file_idx,
+            infohash,
+            file_idx,
             already_grabbed: true,
         });
     }
@@ -1269,13 +1273,46 @@ pub(crate) async fn grab_episode_core(
     )
     .await?;
 
-    let file_idx = pick_largest_video_file(&result.snapshot.files);
+    // Prefer the leaf whose name designates the requested episode —
+    // singleton releases usually repeat the SxxEyy marker in the video
+    // file, and a pack that slipped in via a stale cached offer still
+    // resolves to the RIGHT episode instead of its largest file.
+    let file_idx = find_leaf_for_episode(&result.snapshot.files, season, episode)
+        .unwrap_or_else(|| pick_largest_video_file(&result.snapshot.files));
     finalise_grabbed_episode(state.clone(), &result, season, episode, file_idx).await?;
 
     Ok(GrabResponse {
         infohash: result.snapshot.infohash,
         file_idx,
         already_grabbed: result.already_managed,
+    })
+}
+
+/// Does a parsed release / file name designate the requested (S, E)?
+/// Seasonal: episode must match, season must match (a missing season
+/// marker is tolerated only for season-1 requests). Fleuve/absolute
+/// numbering arrives as `season=1, episode=<absolute>` (see
+/// `finalise_grabbed_episode`), matched via `absolute_from_parsed`.
+fn parsed_matches_episode(p: &iris_media::filename::Parsed, season: i64, episode: i64) -> bool {
+    let seasonal = p.episode.map(i64::from) == Some(episode)
+        && (p.season.map(i64::from) == Some(season) || (p.season.is_none() && season == 1));
+    let absolute = season == 1
+        && iris_media::filename::absolute_from_parsed(p).map(i64::from) == Some(episode);
+    seasonal || absolute
+}
+
+/// Find the file inside a snapshot whose SCENE-parsed leaf name
+/// designates the requested (S, E). Multi-disc layouts mean position
+/// can't be trusted — only the parsed name counts.
+fn find_leaf_for_episode(
+    files: &[iris_torrent::FileEntry],
+    season: i64,
+    episode: i64,
+) -> Option<i64> {
+    files.iter().find_map(|f| {
+        let leaf = f.path.rsplit('/').next().unwrap_or(&f.path);
+        let parsed = iris_media::filename::parse(leaf)?;
+        parsed_matches_episode(&parsed, season, episode).then_some(f.index as i64)
     })
 }
 
@@ -1378,6 +1415,70 @@ async fn find_episode_file(
         tagged.push((lang, true, c));
     }
     Ok(select_by_lang(&tagged, sel))
+}
+
+/// Validate an on-disk claim before short-circuiting a grab on it, and
+/// self-heal rows poisoned by the historical pack-as-singleton bug (a
+/// season pack ingested as a singleton mapped the requested episode
+/// onto its largest file). Returns the `(infohash, file_idx)` to play,
+/// or `None` when the claim was bogus and a real grab must proceed.
+///
+/// Trust the row as-is whenever the file name can't testify against it:
+/// torrent gone from the engine, index out of range, or a leaf name the
+/// SCENE parser can't read.
+async fn verify_owned_claim(
+    state: &AppState,
+    row: iris_db::episode_files::EpisodeFileRow,
+    season: i64,
+    episode: i64,
+) -> Option<(String, i64)> {
+    let Some(snapshot) = state.engine().get_by_infohash(&row.infohash) else {
+        return Some((row.infohash, row.file_idx));
+    };
+    let Some(claimed) = snapshot
+        .files
+        .iter()
+        .find(|f| f.index as i64 == row.file_idx)
+    else {
+        return Some((row.infohash, row.file_idx));
+    };
+    let leaf = claimed.path.rsplit('/').next().unwrap_or(&claimed.path);
+    let Some(parsed) = iris_media::filename::parse(leaf) else {
+        return Some((row.infohash, row.file_idx));
+    };
+    if parsed_matches_episode(&parsed, season, episode) {
+        return Some((row.infohash, row.file_idx));
+    }
+    let healed = find_leaf_for_episode(&snapshot.files, season, episode);
+    tracing::warn!(
+        infohash = %row.infohash,
+        claimed_idx = row.file_idx,
+        leaf,
+        season,
+        episode,
+        healed_idx = ?healed,
+        "grab: episode_files row contradicts its file name — self-healing"
+    );
+    if let Err(e) = iris_db::episode_files::delete_by_id(state.db(), row.id).await {
+        tracing::warn!(error = %e, row = %row.id, "failed to delete poisoned episode_files row");
+    }
+    let idx = healed?;
+    let _ = iris_db::episode_files::upsert(
+        state.db(),
+        iris_db::episode_files::UpsertEpisodeFile {
+            collection_id: row.collection_id,
+            season,
+            episode,
+            infohash: row.infohash.clone(),
+            file_idx: idx,
+            derived_from: iris_db::episode_files::DerivedFrom::SceneParse,
+            absolute_episode: (season == 1
+                && episode > i64::from(iris_media::filename::ABSOLUTE_EPISODE_THRESHOLD))
+            .then_some(episode),
+        },
+    )
+    .await;
+    Some((row.infohash, idx))
 }
 
 struct PickedAvailability {
@@ -1671,22 +1772,8 @@ async fn ingest_pack_and_pick_episode(
     // can't trust position alone — a multi-disc pack might have
     // `Disc1/Show.S01E04.mkv` ahead of `Disc2/Show.S01E12.mkv`
     // alphabetically without that matching the requested episode.
-    let file_idx = result
-        .snapshot
-        .files
-        .iter()
-        .find_map(|f| {
-            let leaf = f.path.rsplit('/').next().unwrap_or(&f.path);
-            let parsed = iris_media::filename::parse(leaf)?;
-            let s = parsed.season?;
-            let e = parsed.episode?;
-            if i64::from(s) == season && i64::from(e) == episode {
-                Some(f.index as i64)
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| {
+    let file_idx =
+        find_leaf_for_episode(&result.snapshot.files, season, episode).ok_or_else(|| {
             // The pack is already in the engine at this point; surface
             // which leaf names defeated the SCENE parser so the 404 is
             // diagnosable (bad pack naming vs genuinely absent episode).
@@ -1847,6 +1934,27 @@ async fn pick_live_singleton(
     // Dead-torrent guard: never offer a confirmed 0-seeder release (its pieces
     // would never fully assemble). Unknown / ≥1 seeders pass through.
     results.retain(|r| r.seeders != Some(0));
+    // Singleton guard: the sweep queries one episode, but indexers happily
+    // return season packs or neighbouring episodes for it (fuzzy text search
+    // on scraped sites, sloppy tvsearch backends). A pack picked here gets
+    // ingested as a "singleton": the caller plays its largest file (arbitrary
+    // episode) and the wrong (S, E) → file mapping poisons `episode_files`
+    // and the offer cache. Titles that don't parse are dropped too — the
+    // cached-offer and pack rungs remain as fallbacks.
+    let before = results.len();
+    results.retain(|r| {
+        iris_media::filename::parse(&r.title)
+            .is_some_and(|p| parsed_matches_episode(&p, season, episode))
+    });
+    if results.len() < before {
+        tracing::debug!(
+            season,
+            episode,
+            kept = results.len(),
+            dropped = before - results.len(),
+            "grab: filtered live results not matching the requested episode"
+        );
+    }
     // Decorate before sorting — parsing the title in the comparator
     // would re-run the SCENE parser O(n log n) times.
     let q_pref = profile.quality.as_deref();
@@ -1917,6 +2025,35 @@ async fn pick_live_singleton(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parsed(title: &str) -> iris_media::filename::Parsed {
+        iris_media::filename::parse(title).expect("title must parse")
+    }
+
+    #[test]
+    fn singleton_matches_exact_episode_only() {
+        let p = parsed("Breaking.Bad.S05E05.1080p.BluRay.x264-GROUP");
+        assert!(parsed_matches_episode(&p, 5, 5));
+        assert!(!parsed_matches_episode(&p, 5, 6));
+        assert!(!parsed_matches_episode(&p, 4, 5));
+    }
+
+    #[test]
+    fn season_pack_never_matches_a_singleton_request() {
+        let p = parsed("Breaking.Bad.S05.COMPLETE.1080p.BluRay.x264-GROUP");
+        assert!(!parsed_matches_episode(&p, 5, 1));
+        assert!(!parsed_matches_episode(&p, 5, 5));
+    }
+
+    #[test]
+    fn fleuve_absolute_numbering_matches_season_one_request() {
+        // Fleuve grabs arrive as season=1, episode=<absolute>.
+        let p = parsed("One.Piece.S01E1156.VOSTFR.1080p.WEB.x264-Tsundere-Raws");
+        assert!(parsed_matches_episode(&p, 1, 1156));
+        let bracket = parsed("[Erai-raws] One Piece - 1156 [1080p]");
+        assert!(parsed_matches_episode(&bracket, 1, 1156));
+        assert!(!parsed_matches_episode(&bracket, 1, 1155));
+    }
 
     #[test]
     fn prefer_walk_skips_dodgy_preferred_language() {

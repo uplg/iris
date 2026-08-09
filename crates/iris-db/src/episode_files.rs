@@ -276,6 +276,18 @@ pub async fn delete_for_infohash(pool: &SqlitePool, infohash: &str) -> Result<u6
     Ok(res.rows_affected())
 }
 
+/// Remove one specific claim. Used by the grab-path self-heal when a row's
+/// `(season, episode)` provably contradicts the SCENE-parsed name of the
+/// file it points at (a season pack once mis-ingested as a singleton mapped
+/// the requested episode onto an arbitrary leaf).
+pub async fn delete_by_id(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM episode_files WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Re-home every episode-file row from collection `from` to `to`. Part of
 /// the anime noise-split merge: the surviving (anime) collection absorbs the
 /// plain twin's rows BEFORE the twin is deleted (its `collection_id` FK is
