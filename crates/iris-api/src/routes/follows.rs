@@ -1103,6 +1103,7 @@ async fn resolve_grab_source(
     let profile = dominant_owned_profile(state, &owned_files).await;
 
     let live = live_results(state, display_title, season, Some(episode)).await;
+    let live_count = live.len();
     let cached = iris_db::available_episodes::list_offers_for_episode(
         state.db(),
         normalized_name,
@@ -1110,6 +1111,7 @@ async fn resolve_grab_source(
         episode,
     )
     .await?;
+    let cached_count = cached.len();
     refresh_offer_liveness(state.db(), &cached, &live).await;
 
     let owns_any_in_season = owned_files.iter().any(|f| f.season == season);
@@ -1163,6 +1165,17 @@ async fn resolve_grab_source(
     {
         return Ok(GrabSource::Pack(pack));
     }
+    // 404s carry no body detail and never hit the error-level logs —
+    // without this line a failed grab is undiagnosable in prod.
+    tracing::warn!(
+        normalized_name,
+        season,
+        episode,
+        language = ?language,
+        live_count,
+        cached_count,
+        "grab: no source found (live sweep, offer cache and pack fallback all empty)"
+    );
     Err(ApiError::NotFound)
 }
 
@@ -1673,7 +1686,26 @@ async fn ingest_pack_and_pick_episode(
                 None
             }
         })
-        .ok_or_else(|| ApiError::NotFound)?;
+        .ok_or_else(|| {
+            // The pack is already in the engine at this point; surface
+            // which leaf names defeated the SCENE parser so the 404 is
+            // diagnosable (bad pack naming vs genuinely absent episode).
+            let leaves: Vec<&str> = result
+                .snapshot
+                .files
+                .iter()
+                .map(|f| f.path.rsplit('/').next().unwrap_or(&f.path))
+                .collect();
+            tracing::warn!(
+                season,
+                episode,
+                provider = %pack.indexer_provider,
+                torrent_id = %pack.indexer_torrent_id,
+                ?leaves,
+                "grab: requested episode not found inside ingested season pack"
+            );
+            ApiError::NotFound
+        })?;
 
     iris_db::torrents::upsert(
         state.db(),

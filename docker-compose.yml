@@ -30,7 +30,7 @@ services:
       IRIS_STORAGE__DATA_DIR: "/data"
       IRIS_STORAGE__DOWNLOAD_DIR: "/data/downloads"
       IRIS_AUTH__JWT_SECRET: ${IRIS_JWT_SECRET:?set IRIS_JWT_SECRET in .env}
-      RUST_LOG: ${RUST_LOG:-info,iris=debug,tower_http=info}
+      RUST_LOG: ${RUST_LOG:-info,iris=debug,tower_http=info,html5ever=error}
     volumes:
       - ./config:/srv/iris/config:ro
       - iris-data:/data
