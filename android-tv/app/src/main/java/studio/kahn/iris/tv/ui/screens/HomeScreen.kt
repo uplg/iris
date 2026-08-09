@@ -44,6 +44,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -103,6 +105,7 @@ import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
 import studio.kahn.iris.tv.ui.theme.irisAmbient
+import studio.kahn.iris.tv.ui.components.touchClick
 
 /**
  * Home screen with two horizontal shelves. Selecting a card jumps to
@@ -504,7 +507,17 @@ private fun HomeContent(
                     grabbing = grabbingCw === resumePick,
                     onResume = { onLaunchCw(resumePick) },
                     topBar = topBar,
-                    modifier = Modifier.fillParentMaxHeight(0.78f),
+                    // Explicit height, NOT fillParentMaxHeight: chaining a
+                    // heightIn floor onto fillParentMaxHeight doesn't coerce
+                    // (field-tested — the hero stayed at 78% and the Column
+                    // crushed the Resume button on a ~390dp-tall phone).
+                    // Landscape/TV: 78% of the viewport with a 380dp floor
+                    // so the bottom lockup (title + meta + overview + CTA +
+                    // progress) always fits — the hero scrolls instead of
+                    // compressing. Portrait phone: a billboard proportioned
+                    // like a poster row (45%, capped) — 78% of a tall
+                    // portrait viewport left absurd empty voids.
+                    modifier = Modifier.height(heroHeight()),
                 )
             }
         } else {
@@ -527,6 +540,7 @@ private fun HomeContent(
                     Text(error, color = MaterialTheme.colorScheme.error)
                     Button(
                         onClick = onRetry,
+                        modifier = Modifier.touchClick(onClick = onRetry),
                         shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     ) {
@@ -865,6 +879,16 @@ private fun HomeTopBar(
  * has *verified* the match — a wrong backdrop on the giant hero is worse
  * than the bare release name.
  */
+/** See the rationale at the [ResumeHero] call site. `LocalConfiguration`
+ *  recomposes on rotation, so the hero re-sizes live. */
+@Composable
+private fun heroHeight(): Dp {
+    val config = LocalConfiguration.current
+    val h = config.screenHeightDp.dp
+    val portrait = config.screenHeightDp > config.screenWidthDp
+    return if (portrait) (h * 0.45f).coerceAtMost(480.dp) else (h * 0.78f).coerceAtLeast(380.dp)
+}
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun ResumeHero(
@@ -945,8 +969,12 @@ private fun ResumeHero(
         ) {
             topBar()
             Spacer(Modifier.weight(1f))
+            // 62% keeps the lockup off the backdrop's focal area on a wide
+            // screen; portrait has no width to spare — go full width.
+            val portraitLockup =
+                LocalConfiguration.current.screenHeightDp > LocalConfiguration.current.screenWidthDp
             Column(
-                Modifier.fillMaxWidth(0.62f),
+                Modifier.fillMaxWidth(if (portraitLockup) 1f else 0.62f),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 // The "Continue tonight · Resume" eyebrow said nothing the
@@ -1506,7 +1534,10 @@ private fun PosterCard(
     }
     Card(
         onClick = onClick,
-        modifier = Modifier.width(layout.shelfPosterWidth).then(longPressMod),
+        modifier = Modifier
+            .width(layout.shelfPosterWidth)
+            .then(longPressMod)
+            .touchClick(onLongClick = onLongClick, onClick = onClick),
         shape = irisPosterShape(posterShape),
         scale = irisPosterScale(),
         border = irisPosterBorder(posterShape),

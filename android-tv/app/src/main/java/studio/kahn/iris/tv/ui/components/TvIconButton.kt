@@ -45,7 +45,9 @@ fun TvIconButton(
     Surface(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.size(size),
+        modifier = modifier
+            .size(size)
+            .touchClick(enabled = enabled, onClick = onClick),
         shape = ClickableSurfaceDefaults.shape(shape = CircleShape),
         scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
         colors = ClickableSurfaceDefaults.colors(

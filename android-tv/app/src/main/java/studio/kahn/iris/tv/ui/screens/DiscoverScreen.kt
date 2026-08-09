@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -26,11 +28,13 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.components.Eyebrow
+import studio.kahn.iris.tv.ui.components.TvIconButton
 import studio.kahn.iris.tv.ui.theme.Focus
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
 import studio.kahn.iris.tv.ui.theme.irisAmbient
+import studio.kahn.iris.tv.ui.components.touchClick
 
 /**
  * The single "Discover" destination — both halves of the reco system
@@ -46,6 +50,7 @@ fun DiscoverScreen(
     onOpenCollection: (String) -> Unit,
     onPickResult: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
     onOpenSearch: (String) -> Unit,
+    onBack: () -> Unit,
 ) {
     // Saveable: Back-from-detail lands on the tab the user was on.
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -60,6 +65,13 @@ fun DiscoverScreen(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Visible Back — on TV the remote covers it, but on a
+                // phone the only exit was a system gesture.
+                TvIconButton(
+                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    onClick = onBack,
+                )
                 Eyebrow("Discover")
                 DiscoverTab("For You", selected = tab == 0) { tab = 0 }
                 DiscoverTab("Tonight", selected = tab == 1) { tab = 1 }
@@ -93,6 +105,7 @@ private fun DiscoverTab(label: String, selected: Boolean, onClick: () -> Unit) {
     val pill = RoundedCornerShape(Radius.pill)
     Surface(
         onClick = onClick,
+        modifier = Modifier.touchClick(onClick = onClick),
         shape = ClickableSurfaceDefaults.shape(shape = pill),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(

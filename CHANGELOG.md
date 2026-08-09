@@ -5,6 +5,58 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.6] - 2026-08-09
+
+### Added
+
+- **The TV APK now works on regular Android phones.** It always installed
+  there (leanback/touchscreen deliberately not required), but every
+  control ignored taps: tv-material's internal clickable modifier is
+  focus + D-pad key events only, with no pointer handling at all
+  (verified against the tv-material 1.1.0 bytecode). A `touchClick`
+  modifier (tap + long-press via `pointerInput`) now rides alongside
+  every clickable Surface/Card/Button — centralised in the IrisButton /
+  TvIconButton / ConfirmDialog wrappers and swept across the screens'
+  direct call sites. D-pad behaviour and TV visuals are untouched; the
+  activity is pinned to `sensorLandscape` since every layout is
+  10-foot landscape. Playback was already touch-capable (Media3
+  `PlayerView` handles its own pointer input), and lazy lists scroll by
+  touch natively. Known limits, accepted: no ripple/focus highlight on
+  tap, and the UI stays TV-scaled on a 6-inch screen — the web app
+  remains the first-class phone experience.
+- **Phone-mode follow-ups from the field tests.** Window insets are now
+  handled explicitly (`enableEdgeToEdge` + one `safeDrawing` pad at the
+  app root — all-zero on TV): no more buttons under the status bar in
+  portrait, and the soft keyboard resizes the content instead of
+  covering the sign-in inputs (`adjustResize` is ignored under
+  edge-to-edge, which is enforced by targetSdk 35+ anyway). The sign-in
+  form also scrolls. Search and Discover grew a visible Back button
+  (every other screen already had one; on a phone the only exit was a
+  system gesture). The home hero is sized explicitly per orientation —
+  landscape/TV keeps the 78% billboard with a floor so the Resume
+  button can't be crushed (a `heightIn` floor chained onto
+  `fillParentMaxHeight` does NOT coerce — field-tested), portrait gets
+  a capped 45% billboard with a full-width lockup instead of the
+  stretched-void look. Browsing rotates freely; the two playback
+  screens pin sensor-landscape AND go immersive (system bars hidden,
+  swipe to peek, drawing into the display cutout à la Netflix), which
+  also collapses the root safe-zone padding so video is genuinely
+  full-bleed — the root pads `systemBars ∪ ime` rather than
+  `safeDrawing`, whose never-zero cutout inset kept a notch-sized dead
+  band on the watch screen. `keepScreenOn` was already set on both
+  player views, so playback never sleeps the phone.
+- **Search header redesigned — one layout for TV and phone.** The old
+  header (420dp field + Search + Mic buttons + three labelled chip
+  groups spread over two rows with a stretching spacer) overflowed
+  portrait phones, read as giant voids on landscape phones, and
+  truncated "Series" on TV. Now: `[back | full-width input with the mic
+inside]` over `[type icons (all/movie/series) | one cycling sort pill
+| one grid/list toggle]` — 17 interactive stops down to 7, no group
+  labels, no per-form-factor fork. The IME action is the single submit
+  path; initial D-pad focus lands on the input (the new Back button had
+  stolen it), and post-submit focus parks on the sort pill so the
+  leanback IME detaches.
+
 ## [1.3.5] - 2026-08-09
 
 ### Added
@@ -52,15 +104,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deployments reject that form (it leaks tokens into server logs). The
   header is now sent on every request alongside the query param, which
   older instances (Seedpool) simply ignore.
+
 - **UNIT3D `resolve()` recovers from stale download links.** The
   pre-signed `download_link` embeds the user's rsskey; when the indexer
-  rotates that key (the root cause of TOS grabs answering
-  `401 Unauthenticated` — UNIT3D 302s the dead link to the torrent's web
-  page), every cached and DB-persisted link dies at once. A failed
-  cached-link download now falls through to `/api/torrents/{id}`, which
-  ships a freshly-signed link, re-primes the cache, and retries once —
-  also fixing the long-standing "no download URL cached" cold-cache
-  error after a restart.
+  rejects it (UNIT3D 302s the dead link to the torrent's web page,
+  which our JSON `Accept` turns into `401 Unauthenticated` — the TOS
+  preview failure), every cached and DB-persisted link dies at once. A
+  failed cached-link download now falls through to
+  `/api/torrents/{id}`, which ships a freshly-signed link, re-primes
+  the cache, and retries once — also fixing the long-standing "no
+  download URL cached" cold-cache error after a restart.
 
 ## [1.3.4] - 2026-07-26
 
@@ -157,7 +210,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Continue Watching follows YOUR watch order.** "Up next" only ever
   suggests the episode right after the one you finished (or the next
   season's opener once you've actually watched the finale — confirmed
-  against TMDB). It used to suggest the closest episode *on disk*, so
+  against TMDB). It used to suggest the closest episode _on disk_, so
   finishing S08E07 while someone had downloaded S09E01 skipped you a
   whole season ahead. A mid-season gap now shows nothing rather than
   the wrong episode.
@@ -205,9 +258,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a single reclaimed release, from the collection page (web: the ×
     button; TV: long-press the chip, or the Hide button);
   - a whole "Gone" card, from the Library (web: hover ×; TV: long-press).
-  On TV a confirmation dialog guards the long-press. A hidden entry comes
-  back on new activity (you re-watch the show, or the release is
-  downloaded and reclaimed again), and never through search.
+    On TV a confirmation dialog guards the long-press. A hidden entry comes
+    back on new activity (you re-watch the show, or the release is
+    downloaded and reclaimed again), and never through search.
 - **Remove a series from the Watchlist** (long-press + confirm on TV,
   hover × on web). Per-user, and reversible by nature: grabbing or
   playing an episode auto-recreates the follow.
@@ -391,7 +444,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Android TV player — removed the top-right "‹ Prev / Next ›" episode
   chips.** They lived in a Compose overlay above the native player, outside
   its focus hierarchy, so the D-pad could never reach them. Next-episode
-  navigation is the native control-bar button (which *is* reachable);
+  navigation is the native control-bar button (which _is_ reachable);
   previous-episode selection lives on the series screen.
 
 ## [1.1.0] - 2026-06-30
@@ -468,7 +521,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   id) and any title / link containing `&`.
 - **Search relevance ("Recommended") now favours tighter title matches.** The
   old exact/substring buckets dropped every loose match into one tier, then
-  size + seeders decided order — so a release merely *containing* a query word
+  size + seeders decided order — so a release merely _containing_ a query word
   could outrank the real match. Scoring is now graded by query-token coverage
   with a padding penalty, so the closest title wins on relevance before
   popularity is consulted.
@@ -529,11 +582,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Anime shows splitting into two identical-looking collections (with episodes
   going missing).** A series that ships under both a fansub group (`-Tsundere-Raws`
   → flagged anime) and a scene/Seedpool group (`-MonoDiSC` → not) used to land in
-  two collections with the *same* display title, and a new episode only ever
+  two collections with the _same_ display title, and a new episode only ever
   attached to the half matching its release group — so it appeared "nowhere" on
   the half the user was watching. When an `anime:K` and a plain `K` collection
   resolve to the **same** TMDB id they now auto-merge into one (the legitimate
-  same-title split — anime vs live-action *One Piece*, which carry *different*
+  same-title split — anime vs live-action _One Piece_, which carry _different_
   ids — is preserved). The episode scheduler now collects **both** naming styles
   for a collection that's alone on its title, so cross-convention releases stop
   being dropped. Self-heals on boot and every 5 minutes; no manual fix needed.

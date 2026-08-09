@@ -41,6 +41,7 @@ import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.components.touchClick
 
 /**
  * The mood board ("Tonight"): a grid of curated mood tiles (taste-ordered, each
@@ -188,7 +189,10 @@ fun MoodsScreen(
 private fun MoodTileCard(tile: MoodTile, onClick: () -> Unit) {
     Card(
         onClick = onClick,
-        modifier = Modifier.width(300.dp).aspectRatio(16f / 10f),
+        modifier = Modifier
+            .width(300.dp)
+            .aspectRatio(16f / 10f)
+            .touchClick(onClick = onClick),
         colors = CardDefaults.colors(containerColor = IrisColors.Card),
     ) {
         Box(Modifier.fillMaxSize()) {

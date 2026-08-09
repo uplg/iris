@@ -72,6 +72,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.components.touchClick
 
 /** Refresh cadence for the now/next strip on the grid. */
 private const val EPG_REFRESH_MS = 60_000L
@@ -401,7 +402,7 @@ private fun ChannelCard(
     val shape = RoundedCornerShape(Radius.lg)
     Surface(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.touchClick(onClick = onClick),
         shape = ClickableSurfaceDefaults.shape(shape = shape),
         scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
         colors = ClickableSurfaceDefaults.colors(
@@ -651,6 +652,7 @@ private fun CountryPicker(
         items(countries, key = { it.code }) { c ->
             Surface(
                 onClick = { onPick(c.code) },
+                modifier = Modifier.touchClick { onPick(c.code) },
                 shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(Radius.md)),
                 scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
                 colors = ClickableSurfaceDefaults.colors(

@@ -40,6 +40,7 @@
             android:exported="true"
             android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.IrisTV">
 
             <!-- TV launcher entry point. Without this the app doesn't show up

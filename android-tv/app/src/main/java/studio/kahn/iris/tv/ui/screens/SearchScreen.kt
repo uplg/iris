@@ -51,7 +51,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
@@ -60,6 +59,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -94,8 +94,13 @@ import studio.kahn.iris.tv.data.SearchViewMode
 import studio.kahn.iris.tv.data.TmdbSuggestion
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Warning
 import studio.kahn.iris.tv.data.irisError
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
@@ -111,6 +116,7 @@ import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
 import studio.kahn.iris.tv.ui.theme.irisAmbient
+import studio.kahn.iris.tv.ui.components.touchClick
 import kotlin.math.sqrt
 
 private const val PAGE_SIZE = 30
@@ -119,6 +125,14 @@ private enum class KindFilter(val label: String, val apiKind: String?) {
     All("All", null),
     Movies("Movies", "movie"),
     Series("Series", "tv"),
+}
+
+/** Icon-only pills for the Type group — the text variant truncated
+ *  "Series" on the dense TV header row. `label` stays the a11y text. */
+private fun kindIcon(k: KindFilter): ImageVector = when (k) {
+    KindFilter.All -> Icons.Filled.Apps
+    KindFilter.Movies -> Icons.Filled.Movie
+    KindFilter.Series -> Icons.Filled.Tv
 }
 
 /**
@@ -421,17 +435,30 @@ fun SearchScreen(
             .padding(horizontal = layout.gutterHorizontal, vertical = Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
-        // No "Search" header and no Back button — the remote already
-        // has a Back button and the screen's purpose is obvious from
-        // the focused input. Every dp saved here is a poster row
-        // the user can see above the fold.
+        // Two thin rows, identical on TV and phone: [back | input(+mic)]
+        // then [type icons | cycling sort pill | view toggle]. No group
+        // labels, no dedicated Search button (IME action submits), no
+        // per-form-factor fork. Every dp saved here is a poster row the
+        // user can see above the fold.
 
-        // --- Input + chips on a single dense row ---
+        // Post-submit focus parks here (a non-text target detaches the
+        // leanback IME) — attached to the sort pill in the filter row.
+        val filtersFocus = remember { FocusRequester() }
+
+        // --- Input row ---
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Visible Back — on TV the remote's Back covers it, but on a
+            // phone the only exits were system gestures. Same affordance
+            // as the other screens' headers.
+            TvIconButton(
+                icon = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                onClick = onBack,
+            )
             // The leanback (Android TV) on-screen keyboard is a
             // separate system Activity — Compose's
             // `SoftwareKeyboardController.hide()` doesn't always
@@ -444,7 +471,13 @@ fun SearchScreen(
             //      legacy Android Views use, and the only one that
             //      reliably dismisses the leanback keyboard activity
             //      when the IME action button is the one tapped.
-            val searchBtnFocus = remember { FocusRequester() }
+            // (1) now parks on the sort pill in the filter row below —
+            // the dedicated Search button is gone, the IME action / Enter
+            // is the single submit path.
+            // Land initial focus on the INPUT, not the Back button that
+            // precedes it in the row.
+            val fieldFocus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { runCatching { fieldFocus.requestFocus() } }
             val dismissImeViaSystem = {
                 val activity = context as? android.app.Activity
                 val token = activity?.window?.decorView?.windowToken
@@ -458,7 +491,7 @@ fun SearchScreen(
                     submittedQuery = query.trim()
                     page = 1
                 }
-                runCatching { searchBtnFocus.requestFocus() }
+                runCatching { filtersFocus.requestFocus() }
                 keyboard?.hide()
                 dismissImeViaSystem()
             }
@@ -493,12 +526,25 @@ fun SearchScreen(
                     unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                     cursorColor = MaterialTheme.colorScheme.primary,
                 ),
-                // Input keeps its own column at a sensible width, NOT
-                // stretching to fill — leaves room for the Type chips
-                // on the same row. No fixed height: M3 OutlinedTextField
-                // needs ~56 dp internally (label + content + bottom
-                // padding) and a smaller forced height clipped the
-                // typed text.
+                // The mic rides INSIDE the field (m3 slot, natively
+                // touch + D-pad clickable) — no standalone buttons left
+                // on the row.
+                trailingIcon = {
+                    androidx.compose.material3.IconButton(onClick = { launchVoice() }) {
+                        Icon(
+                            Icons.Filled.Mic,
+                            contentDescription = "Voice search",
+                            // Explicit tint: inside the m3 slot the content
+                            // color falls back to the m3 default (light)
+                            // scheme — black on our dark surface — same trap
+                            // as the field's textStyle above.
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                // No fixed height: M3 OutlinedTextField needs ~56 dp
+                // internally (label + content + bottom padding) and a
+                // smaller forced height clipped the typed text.
                 //
                 // D-pad Down → suggestions: the M3 text field consumes
                 // DPAD_DOWN internally (cursor handling), so ordinary
@@ -508,7 +554,8 @@ fun SearchScreen(
                 // is actually attached — else the default behaviour
                 // (whatever it is on this box) is left alone.
                 modifier = Modifier
-                    .width(420.dp)
+                    .weight(1f)
+                    .focusRequester(fieldFocus)
                     .onPreviewKeyEvent { e ->
                         if (
                             e.type == KeyEventType.KeyDown &&
@@ -520,46 +567,6 @@ fun SearchScreen(
                             false
                         }
                     },
-            )
-            TvIconButton(
-                icon = Icons.Filled.Search,
-                contentDescription = if (pending) "Searching" else "Search",
-                enabled = !pending && query.trim().length >= 2,
-                onClick = { submit() },
-                // Down from the action buttons also lands on the first
-                // suggestion while the row is visible (spatial search
-                // would otherwise skip to the Sort chips).
-                modifier = Modifier
-                    .focusRequester(searchBtnFocus)
-                    .focusProperties {
-                        down = if (suggestions.isNotEmpty()) {
-                            firstSuggestionFocus
-                        } else {
-                            FocusRequester.Default
-                        }
-                    },
-            )
-            TvIconButton(
-                icon = Icons.Filled.Mic,
-                contentDescription = "Voice search",
-                onClick = { launchVoice() },
-                modifier = Modifier.focusProperties {
-                    down = if (suggestions.isNotEmpty()) {
-                        firstSuggestionFocus
-                    } else {
-                        FocusRequester.Default
-                    }
-                },
-            )
-            Box(Modifier.width(Spacing.lg))
-            // Type chips share the input row to save a vertical line.
-            // Sort gets its own thin row below.
-            ChipGroup(
-                label = "Type",
-                options = KindFilter.values().toList(),
-                value = kind,
-                labelOf = { it.label },
-                onChange = { kind = it; page = 1 },
             )
         }
 
@@ -573,26 +580,55 @@ fun SearchScreen(
             )
         }
 
-        // --- Sort chips + view-mode toggle on a thin row ---
+        // --- Filter row: type icons, ONE cycling sort pill, ONE view
+        //     toggle. Scrollable as a safety net on the narrowest
+        //     portrait widths; on TV everything fits with room over. ---
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ChipGroup(
-                label = "Sort",
-                options = SortMode.values().toList(),
-                value = sort,
+                options = KindFilter.values().toList(),
+                value = kind,
                 labelOf = { it.label },
-                onChange = { sort = it; page = 1 },
+                onChange = { kind = it; page = 1 },
+                iconOf = ::kindIcon,
             )
-            Box(Modifier.weight(1f))
-            ChipGroup(
-                label = "View",
-                options = listOf(SearchViewMode.GRID, SearchViewMode.LIST),
-                value = viewMode,
-                labelOf = { if (it == SearchViewMode.GRID) "Grid" else "List" },
-                onChange = { scope.launch { container.prefsStore.setSearchViewMode(it) } },
+            // Sort: one pill showing the current mode; press cycles
+            // Recommended → Seeders → Recent → Size. One D-pad stop
+            // instead of four labelled pills.
+            Chip(
+                label = "⇅ ${sort.label}",
+                selected = false,
+                onClick = {
+                    sort = SortMode.values()[(sort.ordinal + 1) % SortMode.values().size]
+                    page = 1
+                },
+                modifier = Modifier.focusRequester(filtersFocus),
+            )
+            // View: a single toggle showing the mode it switches TO.
+            TvIconButton(
+                icon = if (viewMode == SearchViewMode.GRID) {
+                    Icons.AutoMirrored.Filled.ViewList
+                } else {
+                    Icons.Filled.GridView
+                },
+                contentDescription = if (viewMode == SearchViewMode.GRID) {
+                    "Switch to list view"
+                } else {
+                    "Switch to grid view"
+                },
+                onClick = {
+                    val next = if (viewMode == SearchViewMode.GRID) {
+                        SearchViewMode.LIST
+                    } else {
+                        SearchViewMode.GRID
+                    }
+                    scope.launch { container.prefsStore.setSearchViewMode(next) }
+                },
             )
         }
 
@@ -785,19 +821,20 @@ private fun needsSoftwareDecode(r: SearchResult): Boolean {
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun <T> ChipGroup(
-    label: String,
     options: List<T>,
     value: T,
     labelOf: (T) -> String,
     onChange: (T) -> Unit,
+    /** When set, pills render icon-only (labelOf feeds the a11y text). */
+    iconOf: ((T) -> ImageVector)? = null,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        Eyebrow(label)
         options.forEach { opt ->
             Chip(
                 label = labelOf(opt),
                 selected = opt == value,
                 onClick = { onChange(opt) },
+                icon = iconOf?.invoke(opt),
             )
         }
     }
@@ -811,10 +848,19 @@ private fun <T> ChipGroup(
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun Chip(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun Chip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    /** Icon-only pill (the label becomes the a11y description) — used by
+     *  the Type group to fit tight rows without truncating "Series". */
+    icon: ImageVector? = null,
+    modifier: Modifier = Modifier,
+) {
     val pill = RoundedCornerShape(Radius.pill)
     Surface(
         onClick = onClick,
+        modifier = modifier.touchClick(onClick = onClick),
         shape = ClickableSurfaceDefaults.shape(shape = pill),
         scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
         colors = ClickableSurfaceDefaults.colors(
@@ -831,11 +877,21 @@ private fun Chip(label: String, selected: Boolean, onClick: () -> Unit) {
             ),
         ),
     ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                modifier = Modifier
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .size(20.dp),
+            )
+        } else {
+            Text(
+                label,
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
     }
 }
 
@@ -940,7 +996,8 @@ private fun LibraryMatchCard(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused || it.hasFocus },
+            .onFocusChanged { focused = it.isFocused || it.hasFocus }
+            .touchClick(onClick = onClick),
         shape = CardDefaults.shape(shape = cardShape),
         scale = CardDefaults.scale(focusedScale = 1f),
         colors = CardDefaults.colors(containerColor = IrisColors.Card),
@@ -1034,7 +1091,8 @@ private fun LibraryMatchRow(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused || it.hasFocus },
+            .onFocusChanged { focused = it.isFocused || it.hasFocus }
+            .touchClick(onClick = onClick),
         shape = CardDefaults.shape(shape = rowShape),
         scale = CardDefaults.scale(focusedScale = 1f),
         colors = CardDefaults.colors(
@@ -1116,7 +1174,8 @@ private fun ResultCard(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused || it.hasFocus },
+            .onFocusChanged { focused = it.isFocused || it.hasFocus }
+            .touchClick(onClick = onClick),
         shape = CardDefaults.shape(shape = cardShape),
         // No focus zoom in the dense results grid — even a small scale made
         // edge cards spill past the gutter. The brand ring is the cue.
@@ -1286,7 +1345,8 @@ private fun ResultRow(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused || it.hasFocus },
+            .onFocusChanged { focused = it.isFocused || it.hasFocus }
+            .touchClick(onClick = onClick),
         shape = CardDefaults.shape(shape = rowShape),
         // Full-width row: any focusedScale > 1 overflows horizontally
         // by definition. Disable the zoom; focus is shown via the
@@ -1544,7 +1604,7 @@ private fun SuggestionChip(
     val poster = tmdbPosterUrl(suggestion.posterPath, "w92")
     Surface(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.touchClick(onClick = onClick),
         shape = ClickableSurfaceDefaults.shape(shape = pill),
         scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
         colors = ClickableSurfaceDefaults.colors(

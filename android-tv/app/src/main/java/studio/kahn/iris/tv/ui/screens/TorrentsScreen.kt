@@ -51,6 +51,7 @@ import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.components.touchClick
 
 private val VIDEO_EXTS = listOf(
     ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
@@ -384,7 +385,7 @@ private fun TorrentCard(
                     Button(
                         onClick = onDelete,
                         enabled = !deleting,
-                        modifier = leadingMod,
+                        modifier = leadingMod.touchClick(enabled = !deleting, onClick = onDelete),
                         scale = ButtonDefaults.scale(focusedScale = 1f),
                         shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
                         colors = ButtonDefaults.colors(
@@ -396,6 +397,7 @@ private fun TorrentCard(
                     Button(
                         onClick = { confirming = false },
                         enabled = !deleting,
+                        modifier = Modifier.touchClick(enabled = !deleting) { confirming = false },
                         scale = ButtonDefaults.scale(focusedScale = 1f),
                         shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
                         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
@@ -404,7 +406,7 @@ private fun TorrentCard(
                     if (single) {
                         Button(
                             onClick = { onPlayFile(t.infohash, videos[0].index) },
-                            modifier = leadingMod,
+                            modifier = leadingMod.touchClick { onPlayFile(t.infohash, videos[0].index) },
                             scale = ButtonDefaults.scale(focusedScale = 1f),
                             shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
@@ -413,7 +415,7 @@ private fun TorrentCard(
                     if (multi) {
                         Button(
                             onClick = { showFiles = !showFiles },
-                            modifier = leadingMod,
+                            modifier = leadingMod.touchClick { showFiles = !showFiles },
                             scale = ButtonDefaults.scale(focusedScale = 1f),
                             shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
                             contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
@@ -422,7 +424,8 @@ private fun TorrentCard(
                     Button(
                         onClick = { armed = true; confirming = true },
                         enabled = !deleting,
-                        modifier = if (single || multi) Modifier else leadingMod,
+                        modifier = (if (single || multi) Modifier else leadingMod)
+                            .touchClick(enabled = !deleting) { armed = true; confirming = true },
                         scale = ButtonDefaults.scale(focusedScale = 1f),
                         shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
                         colors = ButtonDefaults.colors(
@@ -442,7 +445,9 @@ private fun TorrentCard(
                     for (f in videos) {
                         Button(
                             onClick = { onPlayFile(t.infohash, f.index) },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .touchClick { onPlayFile(t.infohash, f.index) },
                             scale = ButtonDefaults.scale(focusedScale = 1f),
                             shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                             colors = ButtonDefaults.colors(

@@ -5,9 +5,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -63,7 +66,15 @@ fun SetupScreen(
     Box(Modifier.fillMaxSize().background(IrisColors.Background), contentAlignment = Alignment.Center) {
         Box(Modifier.fillMaxSize().background(irisAmbient()))
         Column(
-            Modifier.width(540.dp).padding(32.dp),
+            // Scrollable + IME-aware: on a phone (landscape, soft keyboard
+            // up) the fixed column was taller than the viewport and the
+            // Sign in button sat unreachable below the fold. Inert on TV
+            // (fullscreen leanback IME, everything fits).
+            Modifier
+                .width(540.dp)
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .padding(32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {

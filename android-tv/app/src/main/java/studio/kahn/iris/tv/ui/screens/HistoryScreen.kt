@@ -53,6 +53,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.components.touchClick
 
 private const val PAGE_SIZE = 30
 
@@ -370,7 +371,10 @@ private fun GroupHeader(
     val interactive = group.collectionId != null
     Surface(
         onClick = { group.collectionId?.let(onOpenCollection) },
-        modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = Spacing.sm)
+            .touchClick(enabled = interactive) { group.collectionId?.let(onOpenCollection) },
         enabled = interactive,
         shape = ClickableSurfaceDefaults.shape(shape = rowShape),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
@@ -426,7 +430,7 @@ private fun EpisodeRow(
     ) {
         Surface(
             onClick = onPlay,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).touchClick(enabled = playable, onClick = onPlay),
             enabled = playable,
             shape = ClickableSurfaceDefaults.shape(shape = rowShape),
             scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
@@ -512,7 +516,14 @@ private fun SoloRow(
                     openable -> onOpenCollection(group.collectionId)
                 }
             },
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .touchClick(enabled = playable || openable) {
+                    when {
+                        playable -> onPlay()
+                        openable -> onOpenCollection(group.collectionId)
+                    }
+                },
             enabled = playable || openable,
             shape = ClickableSurfaceDefaults.shape(shape = rowShape),
             scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),

@@ -84,6 +84,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.components.touchClick
 
 private val VIDEO_EXTS_C = listOf(
     ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
@@ -1038,11 +1039,11 @@ private fun SeasonTabs(
             val pill = RoundedCornerShape(Radius.pill)
             Surface(
                 onClick = { onChange(s) },
-                modifier = if (selected && focusRequester != null) {
+                modifier = (if (selected && focusRequester != null) {
                     Modifier.focusRequester(focusRequester)
                 } else {
                     Modifier
-                },
+                }).touchClick { onChange(s) },
                 shape = ClickableSurfaceDefaults.shape(shape = pill),
                 // Disable the default focus scale — the tabs sit in a
                 // dense LazyRow and a 1.1× pop on focus shoves
@@ -1173,6 +1174,7 @@ private fun VariantChip(
             val chipShape = RoundedCornerShape(Radius.button)
             Button(
                 onClick = { onPlay(variant.infohash, variant.fileIdx) },
+                modifier = Modifier.touchClick { onPlay(variant.infohash, variant.fileIdx) },
                 shape = ButtonDefaults.shape(shape = chipShape),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 // Disable the default focused-scale pop — the chips
@@ -1207,7 +1209,9 @@ private fun VariantChip(
             val grabShape = RoundedCornerShape(Radius.button)
             Button(
                 onClick = { onGrab(variant) },
-                modifier = Modifier.onFocusChanged { focused = it.isFocused },
+                modifier = Modifier
+                    .onFocusChanged { focused = it.isFocused }
+                    .touchClick { onGrab(variant) },
                 shape = ButtonDefaults.shape(shape = grabShape),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 scale = ButtonDefaults.scale(focusedScale = 1f),
@@ -1248,7 +1252,9 @@ private fun VariantChip(
             Button(
                 onClick = { onRestore(variant) },
                 onLongClick = { onDismiss(variant) },
-                modifier = Modifier.onFocusChanged { focused = it.isFocused },
+                modifier = Modifier
+                    .onFocusChanged { focused = it.isFocused }
+                    .touchClick(onLongClick = { onDismiss(variant) }) { onRestore(variant) },
                 shape = ButtonDefaults.shape(shape = goneShape),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 scale = ButtonDefaults.scale(focusedScale = 1f),
@@ -1365,7 +1371,7 @@ private fun ReleaseCopyRow(torrent: TorrentView, onDelete: () -> Unit) {
     val rowShape = RoundedCornerShape(Radius.button)
     Card(
         onClick = onDelete,
-        modifier = Modifier.fillMaxWidth().height(64.dp),
+        modifier = Modifier.fillMaxWidth().height(64.dp).touchClick(onClick = onDelete),
         shape = CardDefaults.shape(shape = rowShape),
         scale = CardDefaults.scale(focusedScale = 1f),
         colors = CardDefaults.colors(
@@ -1411,7 +1417,7 @@ private fun FileRow(file: FileEntry, onClick: () -> Unit) {
     val rowShape = RoundedCornerShape(Radius.button)
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(64.dp),
+        modifier = Modifier.fillMaxWidth().height(64.dp).touchClick(onClick = onClick),
         shape = CardDefaults.shape(shape = rowShape),
         scale = CardDefaults.scale(focusedScale = 1f),
         colors = CardDefaults.colors(

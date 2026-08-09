@@ -59,6 +59,8 @@ See [deployment.md](./docs/DEPLOYMENT.md) for server setup.
 
 (New updates can be done after using Iris settings screen > Update app.)
 
+**Note**: The app now works on Android (mobile), but is a bit more experimental.
+
 ### Develop / build
 
 Open `android-tv/` in Android Studio (Hedgehog+). AGP 9 enables Kotlin

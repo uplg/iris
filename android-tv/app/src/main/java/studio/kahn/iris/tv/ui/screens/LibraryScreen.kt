@@ -72,6 +72,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.components.touchClick
 
 private enum class LibKind(val label: String, val kind: String?) {
     All("All", null),
@@ -364,6 +365,7 @@ private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
     val pill = RoundedCornerShape(Radius.pill)
     Surface(
         onClick = onClick,
+        modifier = Modifier.touchClick(onClick = onClick),
         shape = ClickableSurfaceDefaults.shape(shape = pill),
         scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
         colors = ClickableSurfaceDefaults.colors(
@@ -427,7 +429,9 @@ private fun LibraryGridCard(
         onClick = onClick,
         // Long-press only means something on a ghost.
         onLongClick = { if (isGhost) onDismissGhost() },
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .touchClick(onLongClick = { if (isGhost) onDismissGhost() }, onClick = onClick),
         shape = CardDefaults.shape(shape = shape),
         // Gentle pop only — the grid is dense, a big scale clips at the edges.
         scale = CardDefaults.scale(focusedScale = 1.03f),

@@ -55,6 +55,7 @@ import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
 import studio.kahn.iris.tv.ui.theme.irisAmbient
+import studio.kahn.iris.tv.ui.components.touchClick
 
 private val VIDEO_EXTS_DETAIL = listOf(
     ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
@@ -258,7 +259,7 @@ private fun FileRow(
     val rowShape = RoundedCornerShape(Radius.button)
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(72.dp),
+        modifier = Modifier.fillMaxWidth().height(72.dp).touchClick(onClick = onClick),
         shape = CardDefaults.shape(shape = rowShape),
         scale = CardDefaults.scale(focusedScale = 1f),
         colors = CardDefaults.colors(

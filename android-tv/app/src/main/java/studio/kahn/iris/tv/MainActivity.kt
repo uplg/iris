@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.lifecycleScope
@@ -19,6 +20,11 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalTvMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Explicit edge-to-edge on every OS version (targetSdk 35+ already
+        // enforces it on recent Android) so window insets flow into Compose
+        // deterministically — IrisRoot pads with `safeDrawing`, which is
+        // all-zero on TV and handles status bar / cutout / IME on phones.
+        enableEdgeToEdge()
         val container = (application as IrisApp).container
         // Voice search hand-off from Google Assistant: the system delivers a
         // MEDIA_PLAY_FROM_SEARCH intent with the spoken phrase as the

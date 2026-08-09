@@ -94,6 +94,9 @@ fun ConfirmDialog(
             Modifier
                 .widthIn(max = 460.dp)
                 .background(IrisColors.Elev2, RoundedCornerShape(Radius.lg))
+                // Swallow touch taps on the card body — without this they
+                // bubble to the scrim's clickable and dismiss the dialog.
+                .touchClick {}
                 .padding(Spacing.xl),
             verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {

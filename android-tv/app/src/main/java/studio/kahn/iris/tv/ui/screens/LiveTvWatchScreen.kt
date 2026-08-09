@@ -134,6 +134,8 @@ fun LiveTvWatchScreen(
     initialChannelId: String,
     onBack: () -> Unit,
 ) {
+    // Playback is landscape-only on phones; browsing rotates freely.
+    studio.kahn.iris.tv.ui.components.LockLandscape()
     val context = androidx.compose.ui.platform.LocalContext.current
 
     var serverUrl by remember { mutableStateOf<String?>(null) }

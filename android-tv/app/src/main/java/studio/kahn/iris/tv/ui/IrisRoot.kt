@@ -4,8 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -138,7 +143,17 @@ fun IrisRoot(
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(MaterialTheme.colorScheme.background)
+            // Phone safe zone: keep every screen clear of the system bars
+            // AND the soft keyboard (ime — text inputs resize above it; the
+            // manifest's adjustResize is ignored under edge-to-edge).
+            // Deliberately NOT safeDrawing: its displayCutout inset never
+            // zeroes, which kept a notch-sized dead band on the watch
+            // screen even in immersive mode. The status bar covers the
+            // cutout in portrait anyway, and the browsing gutters clear it
+            // in landscape. All-zero on TV. Playback hides the bars (see
+            // LockLandscape) → these insets collapse → true full-bleed.
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.ime)),
     ) {
         NavHost(navController = navController, startDestination = start) {
             composable(Routes.PAIRING) {
@@ -242,6 +257,7 @@ fun IrisRoot(
                     onOpenSearch = { query ->
                         navController.navigate(Routes.search(query))
                     },
+                    onBack = { navController.popBackStack() },
                 )
             }
             composable(Routes.LIBRARY) {

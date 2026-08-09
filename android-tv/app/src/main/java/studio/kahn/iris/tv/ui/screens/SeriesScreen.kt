@@ -59,6 +59,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.components.touchClick
 
 /**
  * SCENE-mode series detail. Routed by follow id; episodes come from
@@ -357,11 +358,11 @@ private fun SeasonTabs(
             val pill = RoundedCornerShape(Radius.pill)
             Surface(
                 onClick = { onChange(s) },
-                modifier = if (selected && focusRequester != null) {
+                modifier = (if (selected && focusRequester != null) {
                     Modifier.focusRequester(focusRequester)
                 } else {
                     Modifier
-                },
+                }).touchClick { onChange(s) },
                 shape = ClickableSurfaceDefaults.shape(shape = pill),
                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
                 colors = ClickableSurfaceDefaults.colors(

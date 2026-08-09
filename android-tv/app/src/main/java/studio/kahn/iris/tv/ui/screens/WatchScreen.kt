@@ -107,6 +107,8 @@ fun WatchScreen(
      *  one entirely. */
     onNavigateToFile: (String, Int) -> Unit,
 ) {
+    // Playback is landscape-only on phones; browsing rotates freely.
+    studio.kahn.iris.tv.ui.components.LockLandscape()
     var serverUrl by remember { mutableStateOf<String?>(null) }
     var probe by remember { mutableStateOf<MediaProbe?>(null) }
     var manifest by remember { mutableStateOf<studio.kahn.iris.tv.data.Manifest?>(null) }
