@@ -498,3 +498,24 @@ pub async fn delete_for_series(
         .await?;
     Ok(res.rows_affected())
 }
+
+/// Every provider id that still owns at least one cached offer. Feeds
+/// the boot purge of offers from providers no longer enabled in config.
+pub async fn distinct_providers(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT DISTINCT indexer_provider FROM available_episodes")
+        .fetch_all(pool)
+        .await
+}
+
+/// Drop every cached offer sourced from one provider. An offer whose
+/// provider left the registry is a dead-end: it still renders as a
+/// season-pack banner / grab candidate, but `resolve()` has nothing to
+/// route the grab through. Re-enabling the provider repopulates the
+/// cache via the notify scheduler's next sweep.
+pub async fn delete_for_provider(pool: &SqlitePool, provider: &str) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query("DELETE FROM available_episodes WHERE indexer_provider = ?1")
+        .bind(provider)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}

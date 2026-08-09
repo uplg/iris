@@ -131,6 +131,43 @@ fn setup_gc(
     )
 }
 
+/// One-shot at boot: purge cached offers whose provider is no longer
+/// enabled in `providers.toml`. Their rows would keep surfacing as
+/// season-pack banners and grab candidates, but the grab has no
+/// provider left to resolve through — a dead-end the UI can't explain.
+/// Scoped to config-disabled/removed providers only: an enabled
+/// provider that failed to build (missing env var) is a transient
+/// deployment problem, not an operator decision, and keeps its cache.
+fn spawn_disabled_provider_offer_purge(
+    pool: iris_db::SqlitePool,
+    entries: &[iris_config::ProviderEntry],
+) {
+    let enabled: std::collections::HashSet<String> = entries
+        .iter()
+        .filter(|e| e.enabled)
+        .map(|e| e.id.clone())
+        .collect();
+    tokio::spawn(async move {
+        let providers = match iris_db::available_episodes::distinct_providers(&pool).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "offer purge: listing cached providers failed");
+                return;
+            }
+        };
+        for p in providers.into_iter().filter(|p| !enabled.contains(p)) {
+            match iris_db::available_episodes::delete_for_provider(&pool, &p).await {
+                Ok(n) => {
+                    tracing::info!(provider = %p, removed = n, "purged cached offers from disabled provider");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, provider = %p, "offer purge failed for provider");
+                }
+            }
+        }
+    });
+}
+
 /// Background tasks that depend on the live `AppState`. Extracted from
 /// `run` to keep that function under the clippy line-count budget.
 fn spawn_background_jobs(
@@ -275,6 +312,8 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         tracing::warn!(error = %e, "no providers loaded; continuing with empty registry");
         iris_providers::ProviderRegistry::default()
     });
+
+    spawn_disabled_provider_offer_purge(pool.clone(), &providers_cfg.providers);
 
     let engine = iris_torrent::Engine::new(
         cfg.storage.download_dir.clone(),
