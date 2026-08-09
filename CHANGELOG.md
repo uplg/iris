@@ -49,10 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **UNIT3D auth also rides `Authorization: Bearer`.** The token used to
   travel only as the `?api_token=` query param; newer UNIT3D
-  deployments reject that form (it leaks tokens into server logs — the
-  suspected cause of TOS suddenly answering 401 with a valid key). The
+  deployments reject that form (it leaks tokens into server logs). The
   header is now sent on every request alongside the query param, which
   older instances (Seedpool) simply ignore.
+- **UNIT3D `resolve()` recovers from stale download links.** The
+  pre-signed `download_link` embeds the user's rsskey; when the indexer
+  rotates that key (the root cause of TOS grabs answering
+  `401 Unauthenticated` — UNIT3D 302s the dead link to the torrent's web
+  page), every cached and DB-persisted link dies at once. A failed
+  cached-link download now falls through to `/api/torrents/{id}`, which
+  ships a freshly-signed link, re-primes the cache, and retries once —
+  also fixing the long-standing "no download URL cached" cold-cache
+  error after a restart.
 
 ## [1.3.4] - 2026-07-26
 

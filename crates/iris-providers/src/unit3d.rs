@@ -191,6 +191,100 @@ impl Unit3dProvider {
             .join(&path)
             .map_err(|e| Error::Provider(format!("unit3d join search url: {e}")))
     }
+
+    /// `/api/torrents/{id}` — one torrent, same attribute shape as a
+    /// search item (returned BARE, no `data` wrapper — verified against
+    /// theoldschool). `None` on 404. Shared by `details()` and
+    /// `resolve()`'s stale-link recovery (the attributes carry a
+    /// freshly-signed `download_link`).
+    async fn fetch_envelope(&self, external_id: &str) -> Result<Option<TorrentEnvelope>> {
+        let path = format!(
+            "{}/torrents/{external_id}",
+            self.api_path.trim_end_matches('/')
+        );
+        let url = self
+            .base_url
+            .join(&path)
+            .map_err(|e| Error::Provider(format!("unit3d join details url: {e}")))?;
+        let res = self
+            .http
+            .get(url)
+            .query(&[("api_token", &self.api_token)])
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("unit3d details request: {e}")))?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !res.status().is_success() {
+            let status = res.status();
+            let body = res.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "unit3d details HTTP {status}: {}",
+                body.chars().take(200).collect::<String>(),
+            )));
+        }
+        let body = res
+            .text()
+            .await
+            .map_err(|e| Error::Provider(format!("unit3d details body: {e}")))?;
+        let envelope: TorrentEnvelope = serde_json::from_str(&body).map_err(|e| {
+            tracing::warn!(
+                provider = %self.id,
+                external_id,
+                error = %e,
+                body_preview = %body.chars().take(300).collect::<String>(),
+                "unit3d details decode failed",
+            );
+            Error::Provider(format!("unit3d details decode: {e}"))
+        })?;
+        Ok(Some(envelope))
+    }
+
+    /// GET a pre-signed `download_link` and validate the body is a
+    /// bencoded `.torrent`. A rejected rsskey link doesn't 4xx directly:
+    /// `UNIT3D` 302s to the torrent's web page, which our JSON `Accept`
+    /// turns into a Laravel 401 `Unauthenticated` — both shapes land in
+    /// the HTTP-status arm below and read clearly in the logs.
+    async fn download(&self, external_id: &str, url: &str) -> Result<TorrentSource> {
+        let res = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("unit3d download: {e}")))?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let body = res.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "unit3d `{}` download failed: HTTP {status} — {}",
+                self.id,
+                body.chars().take(200).collect::<String>(),
+            )));
+        }
+        let bytes = res
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("unit3d download body: {e}")))?;
+        if bytes.first().copied() != Some(BENCODE_DICT_MARKER) {
+            let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned();
+            tracing::warn!(
+                provider = %self.id,
+                external_id,
+                url = %url,
+                first_byte = ?bytes.first(),
+                body_preview = %preview,
+                "unit3d download returned non-bencoded body",
+            );
+            return Err(Error::Provider(format!(
+                "unit3d `{}` download for `{external_id}` returned non-bencoded body \
+                 (first byte: {:?})",
+                self.id,
+                bytes.first()
+            )));
+        }
+        Ok(TorrentSource::TorrentFile(bytes.to_vec()))
+    }
 }
 
 #[async_trait]
@@ -297,106 +391,46 @@ impl SearchProvider for Unit3dProvider {
     }
 
     async fn details(&self, external_id: &str) -> Result<Option<TorrentDetails>> {
-        // `/api/torrents/{id}` returns the same envelope shape as one
-        // entry of `/api/torrents` (single `data` object, no
-        // pagination). Hit it fresh on every call — `UNIT3D` doesn't
-        // include enough metadata in the list endpoint to skip this
-        // round trip, and a cached search row may be hours old by
-        // the time the user opens the preview.
-        let path = format!(
-            "{}/torrents/{external_id}",
-            self.api_path.trim_end_matches('/')
-        );
-        let url = self
-            .base_url
-            .join(&path)
-            .map_err(|e| Error::Provider(format!("unit3d join details url: {e}")))?;
-        let res = self
-            .http
-            .get(url)
-            .query(&[("api_token", &self.api_token)])
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("unit3d details request: {e}")))?;
-        if res.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if !res.status().is_success() {
-            let status = res.status();
-            let body = res.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "unit3d details HTTP {status}: {}",
-                body.chars().take(200).collect::<String>(),
-            )));
-        }
-        let body = res
-            .text()
-            .await
-            .map_err(|e| Error::Provider(format!("unit3d details body: {e}")))?;
-        let envelope: TorrentEnvelope = serde_json::from_str(&body).map_err(|e| {
-            tracing::warn!(
-                provider = %self.id,
-                external_id,
-                error = %e,
-                body_preview = %body.chars().take(300).collect::<String>(),
-                "unit3d details decode failed",
-            );
-            Error::Provider(format!("unit3d details decode: {e}"))
-        })?;
-        Ok(Some(envelope.into_torrent_details(&self.id, external_id)))
+        Ok(self
+            .fetch_envelope(external_id)
+            .await?
+            .map(|envelope| envelope.into_torrent_details(&self.id, external_id)))
     }
 
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource> {
-        let url = self
-            .link_cache
+        // Try the cached pre-signed link first (primed by search / the
+        // persisted-URL grab path). A cached link can go stale — the
+        // classic case is the indexer rotating the user's rsskey, which
+        // turns every previously-issued link into a 302 → login →
+        // 401 — so a failure here falls through to a fresh fetch
+        // instead of surfacing the stale link's error.
+        let cached = self.link_cache.lock().await.get(external_id);
+        if let Some(url) = cached {
+            match self.download(external_id, &url).await {
+                Ok(source) => return Ok(source),
+                Err(e) => tracing::warn!(
+                    provider = %self.id,
+                    external_id,
+                    error = %e,
+                    "unit3d cached download_link failed — re-fetching a fresh link",
+                ),
+            }
+        }
+        // Cache miss or stale link: `/api/torrents/{id}` ships the same
+        // attributes as a search item, including a freshly-signed
+        // `download_link`. Re-prime the cache and retry once.
+        let envelope = self.fetch_envelope(external_id).await?.ok_or_else(|| {
+            Error::Provider(format!(
+                "unit3d `{}`: torrent `{external_id}` no longer exists on the indexer",
+                self.id
+            ))
+        })?;
+        let url = envelope.attributes.download_link.clone();
+        self.link_cache
             .lock()
             .await
-            .get(external_id)
-            .ok_or_else(|| {
-                Error::Provider(format!(
-                    "unit3d `{}`: no download URL cached for `{external_id}` — \
-                     search this indexer again to refresh the link",
-                    self.id
-                ))
-            })?;
-
-        let res = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("unit3d download: {e}")))?;
-        if !res.status().is_success() {
-            let status = res.status();
-            let body = res.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "unit3d `{}` download failed: HTTP {status} — {}",
-                self.id,
-                body.chars().take(200).collect::<String>(),
-            )));
-        }
-        let bytes = res
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("unit3d download body: {e}")))?;
-        if bytes.first().copied() != Some(BENCODE_DICT_MARKER) {
-            let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned();
-            tracing::warn!(
-                provider = %self.id,
-                external_id,
-                url = %url,
-                first_byte = ?bytes.first(),
-                body_preview = %preview,
-                "unit3d download returned non-bencoded body",
-            );
-            return Err(Error::Provider(format!(
-                "unit3d `{}` download for `{external_id}` returned non-bencoded body \
-                 (first byte: {:?})",
-                self.id,
-                bytes.first()
-            )));
-        }
-        Ok(TorrentSource::TorrentFile(bytes.to_vec()))
+            .put(external_id.to_string(), url.clone());
+        self.download(external_id, &url).await
     }
 }
 
