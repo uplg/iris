@@ -20,15 +20,19 @@ export function Tag({
   variant = "plain",
   upper = false,
   className,
+  title,
   children,
 }: {
   variant?: TagVariant;
   upper?: boolean;
   className?: string;
+  /** Native tooltip — abbreviations like "FL" get their expansion here. */
+  title?: string;
   children: ReactNode;
 }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex h-[22px] items-center gap-1 rounded-full border px-2 text-[11px] font-medium",
         upper && "text-[10px] uppercase tracking-[0.08em]",

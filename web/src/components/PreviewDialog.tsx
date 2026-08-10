@@ -207,7 +207,10 @@ export function PreviewDialog({
             ((details.tags?.length ?? 0) > 0 || details.freeleech || details.exclusive) && (
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {details.freeleech && (
-                  <Badge className="bg-emerald-500/90 text-[10px] uppercase text-white">
+                  <Badge
+                    className="bg-emerald-500/90 text-[10px] uppercase text-white"
+                    title="Freeleech: this download doesn't count against our ratio on the tracker"
+                  >
                     Freeleech
                   </Badge>
                 )}

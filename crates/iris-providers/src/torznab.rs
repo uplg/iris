@@ -47,7 +47,8 @@ use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::Result;
 use iris_core::search::{
-    MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, TorrentSource,
+    DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
+    TorrentDetails, TorrentSource,
 };
 use quick_xml::Reader;
 use quick_xml::escape::unescape as xml_unescape;
@@ -88,24 +89,29 @@ pub struct TorznabProvider {
     tvsearch_q: bool,
     http: Client,
     /// `external_id` -> signed download URL captured from search responses.
-    link_cache: Mutex<LinkCache>,
+    link_cache: Mutex<FifoCache<String>>,
+    /// `external_id` -> feed-item detail snapshot for `details()`.
+    details_cache: Mutex<FifoCache<CachedDetails>>,
 }
 
-/// Tiny FIFO cache so `resolve()` can find the indexer-signed download URL
-/// for a torrent we previously surfaced via search.
-struct LinkCache {
-    map: HashMap<String, String>,
+/// Tiny FIFO cache keyed by `external_id`. Two instances: download URLs
+/// (so `resolve()` can find the indexer-signed link from a previous
+/// search) and per-item detail snapshots (so `details()` can answer
+/// without a second network scheme — most generic Torznab indexers have
+/// no detail endpoint we could hit anyway).
+struct FifoCache<V> {
+    map: HashMap<String, V>,
     order: std::collections::VecDeque<String>,
 }
 
-impl LinkCache {
+impl<V: Clone> FifoCache<V> {
     fn new() -> Self {
         Self {
             map: HashMap::new(),
             order: std::collections::VecDeque::new(),
         }
     }
-    fn put(&mut self, key: String, value: String) {
+    fn put(&mut self, key: String, value: V) {
         if self.map.insert(key.clone(), value).is_none() {
             self.order.push_back(key);
             while self.order.len() > LINK_CACHE_CAP {
@@ -115,8 +121,60 @@ impl LinkCache {
             }
         }
     }
-    fn get(&self, key: &str) -> Option<String> {
+    fn get(&self, key: &str) -> Option<V> {
         self.map.get(key).cloned()
+    }
+}
+
+/// Detail fields captured from a feed item at search/latest time —
+/// everything a Torznab item can tell us beyond the `SearchResult`
+/// (notably `<description>`, which some indexers fill with a real
+/// synopsis). Served back by `details()`.
+#[derive(Debug, Clone)]
+struct CachedDetails {
+    title: String,
+    description: Option<String>,
+    category: Option<String>,
+    seeders: Option<u32>,
+    leechers: Option<u32>,
+    uploaded_at: Option<chrono::DateTime<chrono::Utc>>,
+    size: Option<u64>,
+    freeleech: bool,
+    grabs: Option<u64>,
+}
+
+/// Shape a cached feed item into the wire [`TorrentDetails`]. Indexers
+/// with nothing better echo the release name into `<description>`
+/// (`YggReborn`) — an identical line under the title is noise, so it's
+/// dropped; a real synopsis (Memphis) passes through as plain text.
+fn cached_to_details(provider_id: &str, external_id: &str, d: CachedDetails) -> TorrentDetails {
+    let description = d
+        .description
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && *s != d.title);
+    TorrentDetails {
+        provider_id: provider_id.to_string(),
+        external_id: external_id.to_string(),
+        title: d.title,
+        description,
+        description_format: DescriptionFormat::Plain,
+        nfo: None,
+        media_info: None,
+        tags: Vec::new(),
+        category: d.category,
+        uploader: None,
+        uploaded_at: d.uploaded_at,
+        age: None,
+        seeders: d.seeders,
+        leechers: d.leechers,
+        times_completed: d.grabs,
+        views: None,
+        freeleech: d.freeleech,
+        exclusive: false,
+        file_count: None,
+        // Feeds the clients' size displays AND the TV's >50 GB
+        // grab confirmation, which reads the detail payload.
+        file_size_bytes: d.size,
     }
 }
 
@@ -235,7 +293,8 @@ impl TorznabProvider {
             tv_categories,
             tvsearch_q,
             http,
-            link_cache: Mutex::new(LinkCache::new()),
+            link_cache: Mutex::new(FifoCache::new()),
+            details_cache: Mutex::new(FifoCache::new()),
         }))
     }
 
@@ -305,14 +364,30 @@ impl TorznabProvider {
 
         let mut results = Vec::with_capacity(parsed.items.len());
         {
-            let mut cache = self.link_cache.lock().await;
-            for item in &parsed.items {
-                if let Some(link) = &item.download_url {
-                    cache.put(item.external_id.clone(), link.clone());
-                }
-            }
+            let mut links = self.link_cache.lock().await;
+            let mut details = self.details_cache.lock().await;
             for item in parsed.items {
-                results.push(item.into_search_result(&self.id));
+                if let Some(link) = &item.download_url {
+                    links.put(item.external_id.clone(), link.clone());
+                }
+                let description = item.description.clone();
+                let grabs = item.grabs;
+                let sr = item.into_search_result(&self.id);
+                details.put(
+                    sr.external_id.clone(),
+                    CachedDetails {
+                        title: sr.title.clone(),
+                        description,
+                        category: sr.category.clone(),
+                        seeders: sr.seeders,
+                        leechers: sr.leechers,
+                        uploaded_at: sr.uploaded_at,
+                        size: sr.size_bytes,
+                        freeleech: sr.freeleech,
+                        grabs,
+                    },
+                );
+                results.push(sr);
             }
         }
 
@@ -430,6 +505,22 @@ impl SearchProvider for TorznabProvider {
         self.fetch(url, qs, page, limit).await
     }
 
+    /// Served from the feed-item snapshot captured at search time — the
+    /// same session-locality contract as `resolve()`'s link cache. Most
+    /// generic Torznab indexers expose no separate detail endpoint
+    /// (`YggReborn`'s site hides behind a Cloudflare challenge, Memphis's
+    /// SPA API is session-cookie-gated), so the feed IS the detail
+    /// source: synopsis when the indexer fills `<description>`
+    /// (Memphis), plus category / date / seeders / size either way.
+    async fn details(&self, external_id: &str) -> Result<Option<TorrentDetails>> {
+        Ok(self
+            .details_cache
+            .lock()
+            .await
+            .get(external_id)
+            .map(|d| cached_to_details(&self.id, external_id, d)))
+    }
+
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource> {
         let url = self
             .link_cache
@@ -544,6 +635,17 @@ struct RawItem {
     freeleech: bool,
     description: Option<String>,
     pub_date: Option<String>,
+    /// Release-page URL from `<comments>`. Memphis encodes the media
+    /// identity in it (`…&media=tmdbmovie21028&…`) — its feed carries
+    /// no `tmdbid` attr at all.
+    comments: Option<String>,
+    /// `peers` = seeders + leechers per the Torznab spec. Kept raw so
+    /// leechers can be derived when the indexer (Memphis) emits no
+    /// dedicated `leechers` attr.
+    peers: Option<u32>,
+    grabs: Option<u64>,
+    /// `year` attr — fallback when the release name carries no year.
+    year_attr: Option<u16>,
 }
 
 impl RawItem {
@@ -559,12 +661,29 @@ impl RawItem {
                     self.seeders = Some(n);
                 }
             }
-            // Some indexers expose `peers` (= seeders+leechers) instead of
-            // a dedicated leechers attr. We only consume the unambiguous
-            // names so we never under- or double-count.
             "leechers" => {
                 if let Ok(n) = value.parse() {
                     self.leechers = Some(n);
+                }
+            }
+            // `peers` = seeders + leechers per spec. Kept separately;
+            // leechers are derived from it only when no dedicated attr
+            // came (see `into_search_result`) so we never double-count.
+            "peers" => {
+                if let Ok(n) = value.parse() {
+                    self.peers = Some(n);
+                }
+            }
+            "grabs" => {
+                if let Ok(n) = value.parse() {
+                    self.grabs = Some(n);
+                }
+            }
+            "year" => {
+                if let Ok(n) = value.parse::<u16>()
+                    && (1880..=2100).contains(&n)
+                {
+                    self.year_attr = Some(n);
                 }
             }
             "infohash" if !value.is_empty() => {
@@ -596,9 +715,16 @@ impl RawItem {
     }
 
     fn into_search_result(self, provider_id: &str) -> SearchResult {
-        let year = extract_year(&self.title);
+        let year = extract_year(&self.title).or(self.year_attr);
         let kind = derive_kind_from_categories(&self.categories);
         let uploaded_at = self.pub_date.as_deref().and_then(parse_rfc2822_lenient);
+        let leechers = self.leechers.or(match (self.seeders, self.peers) {
+            (Some(s), Some(p)) if p >= s => Some(p - s),
+            _ => None,
+        });
+        let tmdb_id = self
+            .tmdb_id
+            .or_else(|| self.comments.as_deref().and_then(tmdb_id_from_comments));
 
         SearchResult {
             provider_id: provider_id.to_string(),
@@ -607,7 +733,7 @@ impl RawItem {
             year,
             size_bytes: self.size,
             seeders: self.seeders,
-            leechers: self.leechers,
+            leechers,
             infohash: self.infohash,
             magnet: None,
             category: self.categories.first().map(ToString::to_string),
@@ -615,7 +741,7 @@ impl RawItem {
             freeleech: self.freeleech,
             uploader: None,
             uploaded_at,
-            tmdb_id: self.tmdb_id,
+            tmdb_id,
             kind,
             poster_url: None,
             already_in_library: false,
@@ -634,6 +760,21 @@ impl RawItem {
             parsed_episode: None,
         }
     }
+}
+
+/// TMDB id from a Memphis-style `<comments>` URL
+/// (`…?view=release&media=tmdbmovie21028&torrent=10163`). Only the
+/// `media=tmdb…` namespace maps to TMDB — the same field also carries
+/// `tvdb…` / `anilist…` / free-form slugs, all of which live in other
+/// id spaces and must never leak into `tmdb_id`.
+fn tmdb_id_from_comments(comments: &str) -> Option<u64> {
+    let rest = comments.split("media=tmdb").nth(1)?;
+    let digits: String = rest
+        .chars()
+        .skip_while(char::is_ascii_alphabetic)
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok().filter(|&n| n > 0)
 }
 
 /// Torznab categories: 2xxx = movies, 5xxx = TV. Other namespaces
@@ -656,6 +797,7 @@ enum TagKind {
     Category,
     Description,
     PubDate,
+    Comments,
 }
 
 fn parse_torznab_xml(body: &str) -> Result<ParsedTorznab> {
@@ -772,6 +914,7 @@ fn handle_start(
         b"category" => *last_tag = Some(TagKind::Category),
         b"description" => *last_tag = Some(TagKind::Description),
         b"pubDate" => *last_tag = Some(TagKind::PubDate),
+        b"comments" => *last_tag = Some(TagKind::Comments),
         _ => *last_tag = None,
     }
 }
@@ -862,6 +1005,7 @@ fn apply_text(item: &mut RawItem, kind: TagKind, text: String) {
         }
         TagKind::Description => item.description = Some(text),
         TagKind::PubDate => item.pub_date = Some(text),
+        TagKind::Comments => item.comments = Some(text),
     }
 }
 
@@ -1133,6 +1277,10 @@ mod tests {
                 freeleech: self.freeleech,
                 description: self.description.clone(),
                 pub_date: self.pub_date.clone(),
+                comments: self.comments.clone(),
+                peers: self.peers,
+                grabs: self.grabs,
+                year_attr: self.year_attr,
             }
         }
     }
@@ -1241,12 +1389,114 @@ mod tests {
 
     #[test]
     fn link_cache_evicts_fifo() {
-        let mut c = LinkCache::new();
+        let mut c = FifoCache::new();
         for i in 0..(LINK_CACHE_CAP + 10) {
             c.put(format!("k{i}"), format!("v{i}"));
         }
         assert!(c.get("k0").is_none(), "oldest should be evicted");
         assert!(c.get(&format!("k{}", LINK_CACHE_CAP + 9)).is_some());
         assert_eq!(c.map.len(), LINK_CACHE_CAP);
+    }
+
+    #[test]
+    fn tmdb_only_from_the_tmdb_comments_namespace() {
+        // Memphis-style comments URL: tmdb namespace yields the id…
+        assert_eq!(
+            tmdb_id_from_comments(
+                "https://memphis.fit/?view=release&media=tmdbmovie21028&torrent=10163"
+            ),
+            Some(21028)
+        );
+        // …every other namespace (different id spaces) must NOT.
+        assert_eq!(
+            tmdb_id_from_comments("https://memphis.fit/?view=release&media=tvdb473018&torrent=1"),
+            None
+        );
+        assert_eq!(
+            tmdb_id_from_comments(
+                "https://memphis.fit/?view=release&media=anilist202269&torrent=2"
+            ),
+            None
+        );
+        assert_eq!(
+            tmdb_id_from_comments(
+                "https://memphis.fit/?view=release&media=filmbringingdownthehouse2002&torrent=3"
+            ),
+            None
+        );
+    }
+
+    // Memphis-shaped item: no `leechers`/`tmdbid` attrs — leechers must
+    // come from `peers − seeders`, the TMDB id from `<comments>`, and
+    // the synopsis + grabs must round-trip into the details snapshot.
+    const MEMPHIS_LIKE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <title>Memphis</title>
+    <item>
+      <title>Some.Movie.1980.MULTi.1080p.BluRay.x264-GRP</title>
+      <guid isPermaLink="false">memphis-10163</guid>
+      <link>https://memphis.fit/api/torznab/download/10163?apikey=KEY</link>
+      <comments>https://memphis.fit/?view=release&amp;media=tmdbmovie21028&amp;torrent=10163</comments>
+      <description>Trois jeunes filles partent a la conquete des Moscovites.</description>
+      <pubDate>Mon, 10 Aug 2026 17:35:15 +0000</pubDate>
+      <torznab:attr name="category" value="2000" />
+      <torznab:attr name="seeders" value="5" />
+      <torznab:attr name="peers" value="8" />
+      <torznab:attr name="grabs" value="12" />
+      <torznab:attr name="size" value="17539709127" />
+    </item>
+  </channel>
+</rss>"#;
+
+    #[test]
+    fn memphis_like_item_derives_leechers_and_tmdb() {
+        let p = parse_torznab_xml(MEMPHIS_LIKE).expect("parse");
+        assert_eq!(p.items.len(), 1);
+        let item = p.items.into_iter().next().unwrap();
+        assert_eq!(item.grabs, Some(12));
+        let sr = item.into_search_result("memphis");
+        assert_eq!(sr.seeders, Some(5));
+        assert_eq!(sr.leechers, Some(3), "derived from peers - seeders");
+        assert_eq!(sr.tmdb_id, Some(21028), "extracted from <comments>");
+        assert_eq!(sr.year, Some(1980));
+    }
+
+    #[test]
+    fn details_snapshot_keeps_synopsis_and_drops_title_echo() {
+        let synopsis = CachedDetails {
+            title: "Some.Movie.1980.MULTi.1080p.BluRay.x264-GRP".into(),
+            description: Some("Trois jeunes filles partent a la conquete.".into()),
+            category: Some("2000".into()),
+            seeders: Some(5),
+            leechers: Some(3),
+            uploaded_at: None,
+            size: Some(17_539_709_127),
+            freeleech: false,
+            grabs: Some(12),
+        };
+        let d = cached_to_details("memphis", "memphis-10163", synopsis);
+        assert_eq!(
+            d.description.as_deref(),
+            Some("Trois jeunes filles partent a la conquete.")
+        );
+        assert!(matches!(d.description_format, DescriptionFormat::Plain));
+        assert_eq!(d.times_completed, Some(12));
+        assert_eq!(d.file_size_bytes, Some(17_539_709_127));
+
+        // YggReborn echoes the release name into <description> — noise.
+        let echo = CachedDetails {
+            title: "Same.Title.2020.1080p-GRP".into(),
+            description: Some("Same.Title.2020.1080p-GRP".into()),
+            category: None,
+            seeders: None,
+            leechers: None,
+            uploaded_at: None,
+            size: None,
+            freeleech: false,
+            grabs: None,
+        };
+        let d = cached_to_details("ygg", "abc", echo);
+        assert_eq!(d.description, None);
     }
 }

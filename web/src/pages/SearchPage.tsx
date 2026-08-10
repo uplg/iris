@@ -581,7 +581,14 @@ function ResultCard({
         <div className="absolute right-2 top-2 flex flex-col items-end gap-1">
           <LanguageBadge language={result.language} />
           {result.freeleech && (
-            <Tag variant="success" upper>
+            // Solid fill like the language badges above — the default
+            // translucent success pill is unreadable over posters.
+            <Tag
+              variant="success"
+              upper
+              className="bg-success/90 text-white shadow-md"
+              title="Freeleech: this download doesn't count against our ratio on the tracker"
+            >
               FL
             </Tag>
           )}
