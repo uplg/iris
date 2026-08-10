@@ -5,6 +5,45 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-08-10
+
+### Added
+
+- **Admins can delete an account.** `DELETE /api/admin/users/{id}` plus a
+  destructive confirm dialog on the admin Users card. Everything personal
+  (sessions, watch progress, follows, preferences, dismissals) cascades
+  away; the target's grabs are re-attributed to the acting admin instead
+  of cascading out of the shared library (`torrents.added_by` is
+  `ON DELETE CASCADE`). Deleting your own account is refused, which
+  doubles as the "at least one admin remains" guarantee. Migration 0036
+  rebuilds `audit_log` without its FK on `actor_id`: the 0031 comment
+  already promised the audit trail outlives the account, but the
+  constraint blocked deleting any user who had ever produced an audit
+  row — reads now LEFT JOIN users with a "deleted user" fallback, and
+  the deletion itself is audited (`user.delete`, target email in the
+  details).
+- **Grabbing a release over 50 GB now takes an explicit second
+  confirmation.** Born from a complete-series pack grabbed right after
+  the one wanted season: huge packs hog the shared disk and get
+  everyone's library GC-evicted sooner. Web: the first Play click in the
+  preview dialog arms a loud warning banner and swaps the CTA for a
+  destructive "Yes, download X"; chains cleanly with the
+  duplicate-in-library confirm. TV: same guard through the existing
+  ConfirmDialog on the search detail screen.
+- **YggReborn provider** (francophone) — pure config on the generic
+  Torznab provider: clean Torznab 1.3 (standard 2000/5000 buckets,
+  `guid` = bare infohash so external ids stay stable, token-signed
+  links returning real bencoded `.torrent` files). `base_url` points at
+  `api.yggreborn.org` directly — the advertised `www` host 302s there
+  on every request.
+- **Memphis provider**, plus a generic `tvsearch_q = false` Torznab
+  option it needed: Memphis's `t=tvsearch` returns 0 hits whenever `q`
+  is present (and ignores `season`/`ep`) while `t=search`/`t=movie`
+  match fine. The flag routes TV queries through the generic op with
+  the raw SxxExx query — episode-level substring matching verified —
+  keeping the `cat=5000` filter; the no-query `latest` browse keeps
+  `t=tvsearch`, which works. Compliant indexers are untouched.
+
 ## [1.3.6] - 2026-08-09
 
 ### Added
@@ -841,7 +880,10 @@ inside]` over `[type icons (all/movie/series) | one cycling sort pill
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.3.4...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.4.0...HEAD
+[1.4.0]: https://github.com/uplg/iris/compare/1.3.6...1.4.0
+[1.3.6]: https://github.com/uplg/iris/compare/1.3.5...1.3.6
+[1.3.5]: https://github.com/uplg/iris/compare/1.3.4...1.3.5
 [1.3.4]: https://github.com/uplg/iris/compare/1.3.3...1.3.4
 [1.3.3]: https://github.com/uplg/iris/compare/1.3.2...1.3.3
 [1.3.2]: https://github.com/uplg/iris/compare/1.3.1...1.3.2

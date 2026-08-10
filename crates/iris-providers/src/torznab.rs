@@ -30,6 +30,12 @@
 //! # tv_categories    = "5000,5030,5040,5045,5070"
 //! # referer    = "https://indexer.example/"
 //! # user_agent = "..."
+//! # The indexer's `t=tvsearch` breaks on `q` (0 hits whenever a query
+//! # string is present — e.g. Memphis): route TV queries through the
+//! # generic `t=search` with the RAW query instead, so the SxxExx marker
+//! # stays in the substring match, keeping the TV category filter.
+//! # `t=tvsearch` withOUT `q` still serves `latest`.
+//! # tvsearch_q = false
 //! ```
 
 use std::collections::HashMap;
@@ -77,6 +83,9 @@ pub struct TorznabProvider {
     api_key: String,
     movie_categories: String,
     tv_categories: String,
+    /// False when the indexer's `t=tvsearch` can't match a `q` param
+    /// (see module doc) — TV queries then ride the generic `t=search`.
+    tvsearch_q: bool,
     http: Client,
     /// `external_id` -> signed download URL captured from search responses.
     link_cache: Mutex<LinkCache>,
@@ -111,6 +120,46 @@ impl LinkCache {
     }
 }
 
+/// Which category override string a search op should carry.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum CatBucket {
+    Tv,
+    Movie,
+    None,
+}
+
+/// Map Iris's coarse `MediaKind` filter to Torznab's search operation +
+/// category bucket. With no filter we fall back to the generic search,
+/// which any compliant indexer supports.
+///
+/// A season hint from the SCENE parser forces the TV path even without
+/// an explicit [`MediaKind`]: `t=tvsearch` accepts `season=`/`ep=` params
+/// that filter at the indexer — a massive precision win on "Classroom
+/// of the Elite S04E11" style queries. When `tvsearch_q` is false the
+/// indexer's tvsearch can't match a query string at all, so TV queries
+/// ride the generic `t=search` (raw query, no structured params) while
+/// keeping the TV category filter.
+///
+/// Returns `(t_op, category bucket, send structured season/ep)`.
+fn plan_search(
+    kind: Option<MediaKind>,
+    has_se_hint: bool,
+    tvsearch_q: bool,
+) -> (&'static str, CatBucket, bool) {
+    let tv = has_se_hint || matches!(kind, Some(MediaKind::Tv));
+    if tv {
+        if tvsearch_q {
+            ("tvsearch", CatBucket::Tv, true)
+        } else {
+            ("search", CatBucket::Tv, false)
+        }
+    } else if matches!(kind, Some(MediaKind::Movie)) {
+        ("movie", CatBucket::Movie, false)
+    } else {
+        ("search", CatBucket::None, false)
+    }
+}
+
 impl TorznabProvider {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
         let base_url_str = field_str(entry, "base_url")?;
@@ -135,6 +184,11 @@ impl TorznabProvider {
             .and_then(|v| v.as_str())
             .unwrap_or(DEFAULT_TV_CATEGORIES)
             .to_string();
+        let tvsearch_q = entry
+            .fields
+            .get("tvsearch_q")
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(true);
         let referer = entry.fields.get("referer").and_then(|v| v.as_str());
         let user_agent = entry
             .fields
@@ -179,6 +233,7 @@ impl TorznabProvider {
             api_key,
             movie_categories,
             tv_categories,
+            tvsearch_q,
             http,
             link_cache: Mutex::new(LinkCache::new()),
         }))
@@ -300,37 +355,23 @@ impl SearchProvider for TorznabProvider {
         let page = q.page.unwrap_or(1).max(1);
         let offset = (page - 1) * limit;
 
-        // Map Iris's coarse `MediaKind` filter to Torznab's two
-        // dedicated search operations + the corresponding category
-        // bucket. With no filter we fall back to the generic search,
-        // which any compliant indexer supports.
-        //
-        // Override: when the SCENE parser found a season (or season+
-        // episode) in the user query, force `t=tvsearch` even without
-        // an explicit MediaKind. Torznab's tvsearch op accepts
-        // `season=` / `ep=` parameters that filter at the indexer
-        // (e.g. c411 / theoldschool) instead of relying on substring
-        // matching the full `q` — a massive precision win on
-        // "Classroom of the Elite S04E11" style queries.
         let has_se_hint = q.season.is_some();
-        let (t_op, cats) = if has_se_hint {
-            ("tvsearch", self.tv_categories.as_str())
-        } else {
-            match q.kind {
-                Some(MediaKind::Movie) => ("movie", self.movie_categories.as_str()),
-                Some(MediaKind::Tv) => ("tvsearch", self.tv_categories.as_str()),
-                None => ("search", ""),
-            }
+        let (t_op, bucket, structured_se) = plan_search(q.kind, has_se_hint, self.tvsearch_q);
+        let cats = match bucket {
+            CatBucket::Tv => self.tv_categories.as_str(),
+            CatBucket::Movie => self.movie_categories.as_str(),
+            CatBucket::None => "",
         };
 
-        // When we have a parsed title, send that as `q=` (cleaner
-        // match than the raw user string with `S04E11` baked in) and
-        // hand the structured season/episode separately. Falls back
-        // to the raw query when the parser had nothing useful.
+        // When we have a parsed title AND the indexer will receive the
+        // structured `season=`/`ep=` params, send the title as `q=`
+        // (cleaner match than the raw user string with `S04E11` baked
+        // in). On the `t=search` fallback the raw query goes out
+        // verbatim — the SxxExx marker IS the episode filter there.
         let q_param = q
             .parsed_title
             .as_deref()
-            .filter(|t| !t.is_empty() && has_se_hint)
+            .filter(|t| !t.is_empty() && has_se_hint && structured_se)
             .map_or_else(|| q.q.clone(), str::to_string);
 
         let mut qs: Vec<(&'static str, String)> = vec![
@@ -346,8 +387,9 @@ impl SearchProvider for TorznabProvider {
         // Season / episode hints (Torznab tvsearch native). `episode==0`
         // is the in-band season-pack sentinel from the parser — pass
         // only the season in that case so the indexer returns the
-        // pack alongside the episodes.
-        if let Some(s) = q.season {
+        // pack alongside the episodes. Skipped on the `t=search`
+        // fallback: the generic op has no season/ep params.
+        if structured_se && let Some(s) = q.season {
             qs.push(("season", s.to_string()));
             if let Some(e) = q.episode
                 && e > 0
@@ -368,6 +410,8 @@ impl SearchProvider for TorznabProvider {
         // Torznab's search ops return the indexer's newest items when called
         // with no `q=`. Pick the op + category bucket for the kind; omit `q`
         // entirely (rather than send an empty one) for broad compatibility.
+        // `tvsearch_q = false` indexers keep tvsearch HERE: only the
+        // q-filtered form is broken, the no-query browse works.
         let (t_op, cats) = match kind {
             Some(MediaKind::Movie) => ("movie", self.movie_categories.as_str()),
             Some(MediaKind::Tv) => ("tvsearch", self.tv_categories.as_str()),
@@ -939,6 +983,49 @@ mod tests {
     </item>
   </channel>
 </rss>"#;
+
+    #[test]
+    fn plan_search_maps_kinds_and_tvsearch_fallback() {
+        // Compliant indexer: TV (explicit kind or season hint) → tvsearch
+        // with structured season/ep.
+        assert_eq!(
+            plan_search(Some(MediaKind::Tv), false, true),
+            ("tvsearch", CatBucket::Tv, true)
+        );
+        assert_eq!(
+            plan_search(None, true, true),
+            ("tvsearch", CatBucket::Tv, true)
+        );
+        assert_eq!(
+            plan_search(Some(MediaKind::Movie), false, true),
+            ("movie", CatBucket::Movie, false)
+        );
+        assert_eq!(
+            plan_search(None, false, true),
+            ("search", CatBucket::None, false)
+        );
+
+        // tvsearch_q = false (Memphis): TV queries fall back to the
+        // generic op, keep the TV cat filter, and drop structured
+        // season/ep (the raw SxxExx query is the filter).
+        assert_eq!(
+            plan_search(Some(MediaKind::Tv), false, false),
+            ("search", CatBucket::Tv, false)
+        );
+        assert_eq!(
+            plan_search(None, true, false),
+            ("search", CatBucket::Tv, false)
+        );
+        // Movie + generic paths are unaffected by the flag.
+        assert_eq!(
+            plan_search(Some(MediaKind::Movie), false, false),
+            ("movie", CatBucket::Movie, false)
+        );
+        assert_eq!(
+            plan_search(None, false, false),
+            ("search", CatBucket::None, false)
+        );
+    }
 
     #[test]
     fn parses_sample_feed() {

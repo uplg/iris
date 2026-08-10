@@ -19,7 +19,7 @@ api_key_env = "C411_API_KEY"
 [[providers]]
 id = "tos"
 kind = "unit3d"
-enabled = true
+enabled = false
 base_url = "https://theoldschool.cc"
 api_key_env = "TOS_API_KEY"
 
@@ -100,3 +100,41 @@ base_url = "https://tr4ker.net"
 api_path = "/api/"
 api_key_env = "TR4KER_API_KEY"
 api_key_header = "X-Api-Key"
+
+# YggReborn — francophone tracker exposing clean generic Torznab 1.3
+# (caps, search/tvsearch with season/ep, torznab:attr seeders/peers/size,
+# token-signed download links returning real bencoded .torrent files,
+# guid = bare infohash → stable external_id). Standard 2000/5000 category
+# buckets, so the provider defaults apply unchanged.
+# base_url points at api.yggreborn.org directly: the advertised
+# www.yggreborn.org/api 302-redirects there on every request.
+# Tracker-side rate limits (300 queries / 120 grabs per hour) are far
+# above what discovery polling + household searches generate.
+# Releases are explicitly tagged (MULTI/FRENCH/VOSTFR) so no
+# default_language hint is needed.
+[[providers]]
+id = "yggreborn"
+kind = "torznab"
+enabled = true
+base_url = "https://api.yggreborn.org"
+api_key_env = "YGGREBORN_API_KEY"
+
+# Memphis — young francophone tracker with a partial generic Torznab:
+# t=search / t=movie honor `q` (case-insensitive, separator-normalized
+# substring over release names, cat filter respected) but t=tvsearch
+# returns 0 hits whenever `q` is present and ignores season/ep —
+# hence `tvsearch_q = false`, which routes TV queries through t=search
+# with the raw SxxExx query (verified to match at episode level).
+# t=tvsearch without q works and serves the latest/browse path.
+# guid = "memphis-<id>" (stable), download links are apikey-signed and
+# return real bencoded .torrent files. Standard 2000/5000 buckets.
+# supportedParams has no limit/offset → pagination past page 1 may
+# repeat items; harmless (clients dedup on provider_id:external_id).
+[[providers]]
+id = "memphis"
+kind = "torznab"
+enabled = true
+base_url = "https://memphis.fit"
+api_path = "/api/torznab"
+api_key_env = "MEMPHIS_API_KEY"
+tvsearch_q = false
