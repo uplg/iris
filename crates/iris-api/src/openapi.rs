@@ -118,6 +118,7 @@ use utoipa::OpenApi;
         crate::routes::admin::user_history,
         crate::routes::admin::audit_log,
         crate::routes::admin::list_users,
+        crate::routes::admin::delete_user,
         crate::routes::admin::reset_user_password,
         crate::routes::admin::set_user_display_name,
         crate::routes::admin::trigger_gc,

@@ -59,6 +59,12 @@ import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
 
+/** Above this size the grab needs an explicit confirm — mirrors the web
+ *  PreviewDialog guard. Born from a user grabbing a complete-series pack
+ *  right after grabbing the one season they actually wanted; huge packs
+ *  hog the shared disk and get everyone's library GC-evicted sooner. */
+private const val HUGE_GRAB_BYTES = 50L * 1024 * 1024 * 1024
+
 /**
  * Full-screen detail view for a search hit. Shown when the user picks a
  * card on [SearchScreen]; lets them check what they're about to grab
@@ -97,6 +103,9 @@ fun SearchDetailScreen(
     // Holds the server message; renders a ConfirmDialog whose CONFIRM
     // retries the grab with allowDuplicate.
     var dupMessage by remember { mutableStateOf<String?>(null) }
+    // >50 GB guard: the Download press opens a ConfirmDialog instead of
+    // grabbing; only the explicit confirm proceeds.
+    var hugeConfirm by remember { mutableStateOf(false) }
 
     fun grab(allowDuplicate: Boolean) {
         if (ingesting) return
@@ -303,6 +312,11 @@ fun SearchDetailScreen(
                     if (dead) "Dead torrent" else if (ingesting) "Starting…" else "▶  Download & play",
                     {
                         if (ingesting || dead) return@IrisButton
+                        val size = details?.fileSizeBytes
+                        if (size != null && size > HUGE_GRAB_BYTES) {
+                            hugeConfirm = true
+                            return@IrisButton
+                        }
                         grab(allowDuplicate = false)
                     },
                     enabled = details != null && !ingesting && !dead,
@@ -344,6 +358,23 @@ fun SearchDetailScreen(
         }
 
         item(key = "trailing") { Box(Modifier.padding(vertical = Spacing.xl)) }
+    }
+
+    if (hugeConfirm) {
+        val size = details?.fileSizeBytes ?: 0L
+        ConfirmDialog(
+            eyebrow = "Huge release",
+            title = details?.title ?: "This release",
+            body = "This release is ${formatGiB(size)} — over 50 GB. Huge packs (complete series, " +
+                "full box sets) eat the shared disk and get everyone's library cleaned up sooner. " +
+                "Are you really sure you want it?",
+            confirmLabel = "Yes, download ${formatGiB(size)}",
+            onConfirm = {
+                hugeConfirm = false
+                grab(allowDuplicate = false)
+            },
+            onCancel = { hugeConfirm = false },
+        )
     }
 
     dupMessage?.let { msg ->

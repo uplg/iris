@@ -60,11 +60,15 @@ pub async fn list(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<AuditLogRow>, sqlx::Error> {
+    // LEFT JOIN: audit rows outlive their actor's account (migration 0036
+    // dropped the FK for exactly that), so a deleted user's actions keep
+    // showing up under a placeholder name instead of vanishing.
     sqlx::query_as::<_, AuditLogRow>(
-        "SELECT a.id, a.actor_id, u.display_name as actor_display_name, a.action, \
+        "SELECT a.id, a.actor_id, \
+            COALESCE(u.display_name, 'deleted user') as actor_display_name, a.action, \
             a.resource_type, a.resource_id, a.details, a.created_at \
          FROM audit_log a \
-         JOIN users u ON u.id = a.actor_id \
+         LEFT JOIN users u ON u.id = a.actor_id \
          ORDER BY a.created_at DESC \
          LIMIT ?1 OFFSET ?2",
     )

@@ -204,6 +204,9 @@ export const admin = {
     api.post<void>(`/admin/users/${userId}/password`, { new_password }),
   setDisplayName: (userId: string, display_name: string) =>
     api.post<void>(`/admin/users/${userId}/display-name`, { display_name }),
+  /** Permanently remove an account. Their grabs stay in the shared
+   *  library (re-attributed to the caller); everything personal goes. */
+  deleteUser: (userId: string) => api.delete<void>(`/admin/users/${userId}`),
   listRemux: () => api.get<RemuxJobView[]>("/admin/remux"),
   wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${key}`),
   activeSessions: () => api.get<ActiveSession[]>("/admin/active-sessions"),

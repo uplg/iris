@@ -27,6 +27,7 @@ pub fn router() -> Router<AppState> {
         .route("/gc", axum::routing::post(trigger_gc))
         .route("/storage", get(storage_stats))
         .route("/users", get(list_users))
+        .route("/users/{id}", axum::routing::delete(delete_user))
         .route(
             "/users/{id}/password",
             axum::routing::post(reset_user_password),
@@ -341,6 +342,56 @@ pub(crate) async fn list_users(
             })
             .collect(),
     ))
+}
+
+/// Remove an account. Personal data (sessions, watch progress, follows,
+/// preferences) cascades away; the target's grabs are re-attributed to
+/// the acting admin so the shared library keeps every release. The
+/// self-delete guard doubles as the "last admin standing" guarantee —
+/// the caller is an admin and can't remove themselves.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/users/{id}",
+    operation_id = "delete_user",
+    params(("id" = Uuid, Path, description = "Target user id")),
+    responses(
+        (status = 204, description = "Account deleted; sessions revoked, grabs re-attributed to the caller"),
+        (status = 400, description = "Cannot delete your own account"),
+        (status = 403, description = "Caller is not an admin"),
+        (status = 404, description = "No such user"),
+    ),
+    tag = "admin",
+)]
+pub(crate) async fn delete_user(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<axum::http::StatusCode> {
+    let user_id = iris_core::ids::UserId::from(id);
+    if user_id == admin.0.id {
+        return Err(ApiError::BadRequest(
+            "cannot delete your own account".into(),
+        ));
+    }
+    let Some(target) = iris_db::users::find_by_id(state.db(), user_id).await? else {
+        return Err(ApiError::NotFound);
+    };
+    if !iris_db::users::delete(state.db(), user_id, admin.0.id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if let Err(e) = iris_db::audit::record(
+        state.db(),
+        admin.0.id,
+        "user.delete",
+        "user",
+        Some(&id.to_string()),
+        Some(&target.email),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, user_id = %id, "audit log write failed");
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

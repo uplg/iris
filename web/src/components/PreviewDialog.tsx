@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Play } from "lucide-react";
+import { Play, TriangleAlert } from "lucide-react";
 import DOMPurify from "dompurify";
 import {
   Dialog,
@@ -23,6 +23,12 @@ import {
 } from "@/lib/api";
 import { formatSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+/** Above this total size the grab needs an explicit second click — born
+ *  from a user grabbing a complete-series pack right after grabbing the
+ *  one season they actually wanted. Big packs hog the shared disk and
+ *  get everyone's library GC-evicted sooner. */
+const HUGE_GRAB_BYTES = 50 * 1024 ** 3;
 
 type Props = {
   open: boolean;
@@ -70,6 +76,9 @@ export function PreviewDialog({
    *  CTA to an explicit "Download another copy" that retries with
    *  `allow_duplicate`. */
   const [dupMessage, setDupMessage] = useState<string | null>(null);
+  /** Two-step guard for >50 GB releases: the first Play click arms the
+   *  warning instead of ingesting; only the explicit confirm proceeds. */
+  const [hugeWarned, setHugeWarned] = useState(false);
 
   useEffect(() => {
     if (!open || !providerId || !externalId) return;
@@ -81,6 +90,7 @@ export function PreviewDialog({
     setPickedIdx(null);
     setShowNfo(false);
     setDupMessage(null);
+    setHugeWarned(false);
     // Fire both requests in parallel — preview is required (drives the
     // file picker + ingest), details is best-effort (some providers
     // don't expose them and we want the dialog to still open).
@@ -133,8 +143,14 @@ export function PreviewDialog({
   // with an explanation instead of letting the user hit the wall.
   const notStreamable = preview != null && !preview.streamable;
 
+  const huge = preview != null && preview.total_size_bytes > HUGE_GRAB_BYTES;
+
   const onPlay = async (allowDuplicate = false) => {
     if (dead || notStreamable || !preview || pickedIdx == null || !providerId || !externalId) {
+      return;
+    }
+    if (huge && !hugeWarned) {
+      setHugeWarned(true);
       return;
     }
     setIngesting(true);
@@ -322,6 +338,28 @@ export function PreviewDialog({
           </div>
         )}
 
+        {hugeWarned &&
+          !dupMessage &&
+          preview && (
+            // Armed by the first Play click on a >50 GB release. Loud on
+            // purpose: complete-series packs grabbed "just in case" hog the
+            // shared disk and get everyone's library evicted sooner.
+            <div className="mt-2 flex items-start gap-2.5 rounded-md border-2 border-warn/60 bg-warn/10 px-3 py-2.5 text-sm text-warn">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+              <div>
+                <p className="font-semibold">
+                  This release is {formatSize(preview.total_size_bytes)} — are you really sure you
+                  want it?
+                </p>
+                <p className="mt-1 text-xs opacity-90">
+                  Huge packs (complete series, full box sets) eat the shared disk and get everyone's
+                  library cleaned up sooner. If you only want one season or episode, grab that
+                  release instead.
+                </p>
+              </div>
+            </div>
+          )}
+
         {dupMessage && (
           <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
             {dupMessage}. Download another copy anyway?
@@ -343,7 +381,11 @@ export function PreviewDialog({
                 onClick={() => onPlay()}
                 disabled={pickedIdx == null || ingesting || !preview || dead || notStreamable}
               >
-                {ingesting ? "Starting…" : "Download anyway"}
+                {ingesting
+                  ? "Starting…"
+                  : hugeWarned && preview
+                    ? `Yes, download ${formatSize(preview.total_size_bytes)}`
+                    : "Download anyway"}
               </Button>
               <Button
                 onClick={() => {
@@ -358,6 +400,15 @@ export function PreviewDialog({
                 Play existing
               </Button>
             </>
+          ) : hugeWarned && preview ? (
+            <Button
+              variant="destructive"
+              onClick={() => onPlay()}
+              disabled={pickedIdx == null || ingesting || dead || notStreamable}
+            >
+              <TriangleAlert className="size-4" />
+              {ingesting ? "Starting…" : `Yes, download ${formatSize(preview.total_size_bytes)}`}
+            </Button>
           ) : (
             <Button
               onClick={() => onPlay()}

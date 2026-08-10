@@ -350,6 +350,41 @@
         }
       }
     },
+    "/api/admin/users/{id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Remove an account. Personal data (sessions, watch progress, follows,\npreferences) cascades away; the target's grabs are re-attributed to\nthe acting admin so the shared library keeps every release. The\nself-delete guard doubles as the \"last admin standing\" guarantee —\nthe caller is an admin and can't remove themselves.",
+        "operationId": "delete_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Target user id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Account deleted; sessions revoked, grabs re-attributed to the caller"
+          },
+          "400": {
+            "description": "Cannot delete your own account"
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          },
+          "404": {
+            "description": "No such user"
+          }
+        }
+      }
+    },
     "/api/admin/users/{id}/display-name": {
       "post": {
         "tags": [

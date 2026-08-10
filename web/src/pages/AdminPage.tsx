@@ -40,6 +40,7 @@ import {
   type Invitation,
   type UserView,
 } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { formatSize } from "@/lib/format";
 
 function status(inv: Invitation) {
@@ -399,13 +400,16 @@ function StorageView({
 }
 
 function UsersCard() {
+  const auth = useAuth();
   const users = useQuery({
     queryKey: ["admin", "users"],
     queryFn: admin.listUsers,
   });
   const [resetTarget, setResetTarget] = useState<UserView | null>(null);
   const [renameTarget, setRenameTarget] = useState<UserView | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<UserView | null>(null);
   const [filter, setFilter] = useState("");
+  const selfId = auth.status === "authenticated" ? auth.user.id : null;
 
   const all = users.data;
   const q = filter.trim().toLowerCase();
@@ -451,7 +455,13 @@ function UsersCard() {
           <p className="text-sm text-muted-foreground">No users match “{filter.trim()}”.</p>
         ) : (
           <>
-            <UserList users={filtered} onReset={setResetTarget} onRename={setRenameTarget} />
+            <UserList
+              users={filtered}
+              selfId={selfId}
+              onReset={setResetTarget}
+              onRename={setRenameTarget}
+              onDelete={setDeleteTarget}
+            />
             {q ? (
               <p className="text-xs text-muted-foreground">
                 Showing {filtered.length} of {all.length}.
@@ -468,6 +478,10 @@ function UsersCard() {
         target={renameTarget}
         onOpenChange={(open) => !open && setRenameTarget(null)}
       />
+      <DeleteUserDialog
+        target={deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+      />
     </Card>
   );
 }
@@ -477,12 +491,16 @@ function UsersCard() {
 // `estimateSize` is exact — no `measureElement` needed.
 function UserList({
   users,
+  selfId,
   onReset,
   onRename,
+  onDelete,
 }: {
   users: UserView[];
+  selfId: string | null;
   onReset: (u: UserView) => void;
   onRename: (u: UserView) => void;
+  onDelete: (u: UserView) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const ROW_HEIGHT = 60;
@@ -548,6 +566,17 @@ function UserList({
                 >
                   <KeyRound className="size-3.5" />
                   <span className="sr-only">Reset password</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => onDelete(u)}
+                  disabled={u.id === selfId}
+                  title={u.id === selfId ? "You can't delete your own account" : "Delete account"}
+                >
+                  <Trash2 className="size-3.5" />
+                  <span className="sr-only">Delete account</span>
                 </Button>
               </div>
             </div>
@@ -755,6 +784,73 @@ function DisplayNameDialog({
           >
             <Pencil className="size-4" />
             {rename.isPending ? "Saving…" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteUserDialog({
+  target,
+  onOpenChange,
+}: {
+  target: UserView | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const qc = useQueryClient();
+  const del = useMutation({
+    mutationFn: (id: string) => admin.deleteUser(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      qc.invalidateQueries({ queryKey: ["admin", "invitations"] });
+      onOpenChange(false);
+    },
+  });
+
+  const open = target != null;
+  const onClose = (next: boolean) => {
+    if (!next) del.reset();
+    onOpenChange(next);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Delete account</DialogTitle>
+          <DialogDescription>
+            {target ? (
+              <>
+                Permanently remove <span className="font-medium">{target.email}</span>
+                {target.is_admin ? " (an admin)" : null}.
+              </>
+            ) : null}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2 text-sm text-muted-foreground">
+          <p>
+            Their sessions, watch history, follows and preferences are deleted. Releases they
+            grabbed stay in the shared library (re-attributed to you).
+          </p>
+          <p className="font-medium text-destructive">This cannot be undone.</p>
+          {del.error && (
+            <p className="text-sm text-destructive">
+              {del.error instanceof Error ? del.error.message : "failed"}
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onClose(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={!target || del.isPending}
+            onClick={() => target && del.mutate(target.id)}
+          >
+            <Trash2 className="size-4" />
+            {del.isPending ? "Deleting…" : "Delete account"}
           </Button>
         </DialogFooter>
       </DialogContent>

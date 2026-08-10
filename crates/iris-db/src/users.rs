@@ -169,6 +169,33 @@ pub async fn update_password_hash(
     Ok(res.rows_affected() == 1)
 }
 
+/// Delete an account. `reassign_torrents_to` (the acting admin) inherits
+/// the target's grabs first — `torrents.added_by` is `ON DELETE CASCADE`
+/// and the library is household-shared, so letting the cascade run would
+/// silently evict every release the deleted user ever grabbed. Everything
+/// personal (sessions, watch progress, follows, preferences, dismissals)
+/// cascades away as intended.
+pub async fn delete(
+    pool: &SqlitePool,
+    id: UserId,
+    reassign_torrents_to: UserId,
+) -> Result<bool, sqlx::Error> {
+    let target: Uuid = id.into();
+    let heir: Uuid = reassign_torrents_to.into();
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE torrents SET added_by = ?1 WHERE added_by = ?2")
+        .bind(heir)
+        .bind(target)
+        .execute(&mut *tx)
+        .await?;
+    let res = sqlx::query("DELETE FROM users WHERE id = ?1")
+        .bind(target)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(res.rows_affected() == 1)
+}
+
 pub async fn update_display_name(
     pool: &SqlitePool,
     id: UserId,
@@ -181,4 +208,89 @@ pub async fn update_display_name(
         .execute(pool)
         .await?;
     Ok(res.rows_affected() == 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn migrated_pool() -> SqlitePool {
+        // foreign_keys ON to mirror prod (`pool::connect`) — the whole point
+        // of `delete` is steering what the cascades do.
+        let opts =
+            <sqlx::sqlite::SqliteConnectOptions as std::str::FromStr>::from_str("sqlite::memory:")
+                .expect("parse sqlite url")
+                .foreign_keys(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("open in-memory sqlite");
+        crate::migrate::run(&pool).await.expect("run migrations");
+        pool
+    }
+
+    async fn make_user(pool: &SqlitePool, email: &str) -> UserId {
+        create(
+            pool,
+            NewUser {
+                email: email.to_owned(),
+                password_hash: String::new(),
+                is_admin: false,
+            },
+        )
+        .await
+        .expect("insert user")
+        .id
+    }
+
+    async fn insert_torrent(pool: &SqlitePool, infohash: &str, added_by: UserId) {
+        let owner: Uuid = added_by.into();
+        sqlx::query(
+            "INSERT INTO torrents (id, infohash, name, total_size_bytes, added_by, added_at) \
+             VALUES (?1, ?2, ?3, 1024, ?4, ?5)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(infohash)
+        .bind(format!("release-{infohash}"))
+        .bind(owner)
+        .bind(Utc::now())
+        .execute(pool)
+        .await
+        .expect("insert torrent");
+    }
+
+    #[tokio::test]
+    async fn delete_reassigns_torrents_and_keeps_audit() {
+        let pool = migrated_pool().await;
+        let admin = make_user(&pool, "admin@t.test").await;
+        let target = make_user(&pool, "leaver@t.test").await;
+        insert_torrent(&pool, "aaaa", target).await;
+        crate::audit::record(&pool, target, "torrent.delete", "torrent", Some("x"), None)
+            .await
+            .unwrap();
+
+        assert!(delete(&pool, target, admin).await.unwrap());
+
+        assert!(find_by_id(&pool, target).await.unwrap().is_none());
+        // The grab survives, re-attributed to the acting admin instead of
+        // cascading away with the account.
+        let (owner,): (Uuid,) =
+            sqlx::query_as("SELECT added_by FROM torrents WHERE infohash = 'aaaa'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(UserId::from(owner), admin);
+        // The audit trail outlives the account, under a placeholder name.
+        let rows = crate::audit::list(&pool, 10, 0).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].actor_display_name, "deleted user");
+    }
+
+    #[tokio::test]
+    async fn delete_missing_user_is_false() {
+        let pool = migrated_pool().await;
+        let admin = make_user(&pool, "admin@t.test").await;
+        assert!(!delete(&pool, UserId::new(), admin).await.unwrap());
+    }
 }
