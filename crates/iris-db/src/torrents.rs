@@ -47,6 +47,11 @@ pub struct TorrentRow {
     /// column is reconciled by [`reconcile_uploaded`] from the live session
     /// counter and survives both events.
     pub uploaded_bytes_total: i64,
+    /// Lifetime download counter — max progress ever observed for this
+    /// infohash (progress is absolute on-disk state, so max-ever ≈ bytes
+    /// fetched). Survives restarts and, via the soft-deleted row, GC
+    /// eviction. Denominator of every ratio display.
+    pub downloaded_bytes_total: i64,
     /// `"movie"` / `"tv"` from the parent collection. Null for
     /// standalone torrents not yet attached to one. Clients pass
     /// this to `/api/metadata/tmdb/{id}?kind=` — TMDB has separate
@@ -135,7 +140,7 @@ pub async fn find_by_infohash(
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
          c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
@@ -151,7 +156,7 @@ pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Err
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
          c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
@@ -252,6 +257,40 @@ pub async fn reconcile_uploaded(
     Ok(())
 }
 
+/// Reconcile the lifetime download counter from a live snapshot's
+/// `progress_bytes`. Monotonic max: progress is an absolute on-disk
+/// state (it climbs during the post-restart recheck without any network
+/// traffic), so deltas would phantom-count every restart — max-ever is
+/// the honest approximation. A re-download after GC eviction is
+/// consciously not double-counted.
+pub async fn reconcile_downloaded(
+    pool: &SqlitePool,
+    infohash: &str,
+    progress_now: u64,
+) -> Result<(), sqlx::Error> {
+    let now = i64::try_from(progress_now).unwrap_or(i64::MAX);
+    sqlx::query(
+        "UPDATE torrents SET downloaded_bytes_total = MAX(downloaded_bytes_total, ?1) \
+         WHERE infohash = ?2",
+    )
+    .bind(now)
+    .bind(infohash)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Sum of `downloaded_bytes_total` across every torrent ever ingested,
+/// including soft-deleted ones — the "since the beginning" denominator
+/// matching [`total_uploaded_bytes`], so the global ratio compares two
+/// lifetime quantities instead of lifetime upload vs current disk.
+pub async fn total_downloaded_bytes(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let row: (Option<i64>,) = sqlx::query_as("SELECT SUM(downloaded_bytes_total) FROM torrents")
+        .fetch_one(pool)
+        .await?;
+    Ok(u64::try_from(row.0.unwrap_or(0)).unwrap_or(0))
+}
+
 /// Sum of `uploaded_bytes_total` across every torrent ever ingested,
 /// including soft-deleted ones (a torrent we've already evicted still
 /// represents work the seedbox did for the swarm).
@@ -331,7 +370,7 @@ pub async fn list_in_collection(
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
          c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \
@@ -359,7 +398,7 @@ pub async fn list_deleted_in_collection(
     sqlx::query_as::<_, TorrentRow>(
         "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
          t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
          c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
          FROM torrents t \
          JOIN users u ON u.id = t.added_by \

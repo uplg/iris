@@ -37,6 +37,13 @@ async fn reconcile_once(pool: &SqlitePool, engine: &Engine) {
         {
             tracing::warn!(error = %e, infohash = %snap.infohash, "seed_stats reconcile failed");
         }
+        // Same idea for downloads (monotonic max of on-disk progress) so
+        // ratios divide two lifetime quantities. See `reconcile_downloaded`.
+        if let Err(e) =
+            iris_db::torrents::reconcile_downloaded(pool, &snap.infohash, snap.progress_bytes).await
+        {
+            tracing::warn!(error = %e, infohash = %snap.infohash, "seed_stats dl reconcile failed");
+        }
         // Persist "fully downloaded" while the session can still answer it.
         // After a restart the re-checking (`initializing`) session reports
         // finished = false for minutes; the DB stamp is what lets streaming

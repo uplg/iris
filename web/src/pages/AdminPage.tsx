@@ -350,6 +350,7 @@ function StorageView({
       target_pct: number;
       torrent_count: number;
       total_uploaded_bytes: number;
+      total_downloaded_bytes?: number;
     }>
   >["data"] &
     object;
@@ -359,11 +360,11 @@ function StorageView({
       ? Math.min(100, (data.used_bytes / data.max_storage_bytes) * 100)
       : 0;
   const overThreshold = data.used_bytes >= data.threshold_bytes;
-  // Ratio = lifetime upload / lifetime download. We approximate "lifetime
-  // download" as `used_bytes` since librqbit doesn't persist a download
-  // counter for deleted torrents either; once a torrent is GC'd the only
-  // honest baseline left is what's currently on disk.
-  const ratio = data.used_bytes > 0 ? data.total_uploaded_bytes / data.used_bytes : null;
+  // Ratio = lifetime upload / lifetime download — both persisted by the
+  // seed-stats reconciler (migration 0037), so evicted torrents keep
+  // counting in the denominator instead of inflating the ratio.
+  const lifetimeDownloaded = data.total_downloaded_bytes ?? 0;
+  const ratio = lifetimeDownloaded > 0 ? data.total_uploaded_bytes / lifetimeDownloaded : null;
   return (
     <div className="grid gap-2">
       <div className="flex items-baseline justify-between text-sm">

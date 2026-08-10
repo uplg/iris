@@ -5370,6 +5370,12 @@
               "$ref": "#/components/schemas/TorrentView"
             }
           },
+          "total_downloaded_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lifetime download over the same population — the matching\nratio denominator (dividing lifetime upload by the LIVE\ntorrents' progress overstated the ratio as soon as the GC\nevicted anything). Additive field; older clients ignore it.",
+            "minimum": 0
+          },
           "total_uploaded_bytes": {
             "type": "integer",
             "format": "int64",
@@ -6974,6 +6980,12 @@
             "type": "integer",
             "format": "int64"
           },
+          "total_downloaded_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lifetime total downloaded over the same population — the honest\nglobal-ratio denominator (current disk usage understates it once\nthe GC has evicted anything). Additive field.",
+            "minimum": 0
+          },
           "total_uploaded_bytes": {
             "type": "integer",
             "format": "int64",
@@ -7663,6 +7675,12 @@
                 ],
                 "format": "uuid",
                 "description": "Parent collection UUID, once `collection_assign` has grouped this\ntorrent. `None` for orphan torrents (no SCENE identity / not yet\nassigned). Additive field — lets a client deep-link a multi-file\ntorrent straight to its collection page rather than a generic\nfallback. Older clients ignore the unknown field."
+              },
+              "downloaded_bytes_total": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Lifetime download counter (max on-disk progress ever observed) —\nthe ratio denominator matching `uploaded_bytes_total`'s horizon.\nAdditive field; older clients ignore it.",
+                "minimum": 0
               },
               "id": {
                 "type": "string",

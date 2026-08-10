@@ -57,6 +57,12 @@ pub(crate) enum LibraryResponse {
         /// view show the "since the beginning" total without needing
         /// admin scope (the admin storage endpoint does the same sum).
         total_uploaded_bytes: u64,
+        /// Lifetime download over the same population — the matching
+        /// ratio denominator (dividing lifetime upload by the LIVE
+        /// torrents' progress overstated the ratio as soon as the GC
+        /// evicted anything). Additive field; older clients ignore it.
+        #[serde(default)]
+        total_downloaded_bytes: u64,
     },
 }
 
@@ -128,6 +134,7 @@ pub(crate) async fn list_library(
                         .and_then(iris_core::search::MediaKind::from_wire),
                     collection_id: row.collection_id,
                     uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
+                    downloaded_bytes_total: u64::try_from(row.downloaded_bytes_total).unwrap_or(0),
                     snapshot,
                 });
             }
@@ -136,9 +143,13 @@ pub(crate) async fn list_library(
         let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
             .await
             .unwrap_or(0);
+        let total_downloaded_bytes = iris_db::torrents::total_downloaded_bytes(state.db())
+            .await
+            .unwrap_or(0);
         return Ok(Json(LibraryResponse::Torrents {
             items: out,
             total_uploaded_bytes,
+            total_downloaded_bytes,
         }));
     }
     // Default: collections — the shared live listing, plus the CALLER's
@@ -462,6 +473,7 @@ pub(crate) async fn collection_detail(
                     .and_then(iris_core::search::MediaKind::from_wire),
                 collection_id: row.collection_id,
                 uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
+                downloaded_bytes_total: u64::try_from(row.downloaded_bytes_total).unwrap_or(0),
                 snapshot,
             });
         }

@@ -87,17 +87,18 @@ fun TorrentsScreen(
     val layout = LocalTvLayout.current
     var torrents by remember { mutableStateOf<List<TorrentView>?>(null) }
     var totalUploaded by remember { mutableStateOf(0L) }
+    var totalDownloaded by remember { mutableStateOf(0L) }
     var error by remember { mutableStateOf<String?>(null) }
     var loadVersion by remember { mutableIntStateOf(0) }
     var deleting by remember { mutableStateOf<String?>(null) }
 
-    suspend fun fetch(): Pair<List<TorrentView>, Long>? {
+    suspend fun fetch(): Triple<List<TorrentView>, Long, Long>? {
         val url = container.sessionStore.serverUrl.first() ?: return null
         val res = withContext(Dispatchers.IO) {
             runCatching { container.apiFor(url).library("torrents") }.getOrNull()
         }
         val t = (res as? LibraryResponse.TorrentsWrapper)?.value ?: return null
-        return t.items to t.totalUploadedBytes
+        return Triple(t.items, t.totalUploadedBytes, t.totalDownloadedBytes ?: 0L)
     }
 
     LaunchedEffect(loadVersion) {
@@ -112,6 +113,7 @@ fun TorrentsScreen(
         } else {
             torrents = got.first
             totalUploaded = got.second
+            totalDownloaded = got.third
         }
     }
 
@@ -123,6 +125,7 @@ fun TorrentsScreen(
             val got = runCatching { fetch() }.getOrNull() ?: continue
             if (got.first != torrents) torrents = got.first
             if (got.second != totalUploaded) totalUploaded = got.second
+            if (got.third != totalDownloaded) totalDownloaded = got.third
         }
     }
 
@@ -209,7 +212,7 @@ fun TorrentsScreen(
                 }
                 IrisButton("← Back", onBack, variant = IrisButtonVariant.Ghost, focusedScale = 1f)
             }
-            list?.let { SummaryStrip(it, totalUploaded) }
+            list?.let { SummaryStrip(it, totalUploaded, totalDownloaded) }
             error?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = Danger)
             }
@@ -255,11 +258,12 @@ fun TorrentsScreen(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun SummaryStrip(items: List<TorrentView>, totalUploaded: Long) {
+private fun SummaryStrip(items: List<TorrentView>, totalUploaded: Long, totalDownloaded: Long) {
     val downBps = items.sumOf { it.downloadSpeedBps }
     val upBps = items.sumOf { it.uploadSpeedBps }
-    val downloaded = items.sumOf { it.progressBytes }
-    val ratio = if (downloaded > 0) totalUploaded.toDouble() / downloaded else null
+    // Lifetime / lifetime — dividing by the LIVE torrents' progress
+    // overstated the ratio as soon as the GC had evicted anything.
+    val ratio = if (totalDownloaded > 0) totalUploaded.toDouble() / totalDownloaded else null
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
@@ -338,7 +342,13 @@ private fun TorrentCard(
     val multi = videos.size > 1
     val pct = t.progressPct.toFloat().coerceIn(0f, 100f)
     val finished = pct >= 100f
-    val ratio = if (t.progressBytes > 0) t.uploadedBytesTotal.toDouble() / t.progressBytes else null
+    // Both counters are lifetime (survive restarts and regrabs) so the
+    // ratio is stable from the first paint — no more inflated values
+    // while a fresh session's progress catches up to a past life's seed.
+    val lifetimeDownloaded = t.downloadedBytesTotal ?: 0L
+    val ratio =
+        if (lifetimeDownloaded > 0) t.uploadedBytesTotal.toDouble() / lifetimeDownloaded
+        else null
 
     Surface(
         modifier = Modifier.fillMaxWidth(),

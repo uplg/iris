@@ -560,6 +560,11 @@ pub(crate) struct StorageStats {
     /// including soft-deleted ones. Reconciled from librqbit's session
     /// counter every 30 s — see `iris_api::seed_stats`.
     total_uploaded_bytes: u64,
+    /// Lifetime total downloaded over the same population — the honest
+    /// global-ratio denominator (current disk usage understates it once
+    /// the GC has evicted anything). Additive field.
+    #[serde(default)]
+    total_downloaded_bytes: u64,
 }
 
 #[utoipa::path(
@@ -586,6 +591,9 @@ pub(crate) async fn storage_stats(
     let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
         .await
         .unwrap_or(0);
+    let total_downloaded_bytes = iris_db::torrents::total_downloaded_bytes(state.db())
+        .await
+        .unwrap_or(0);
     Ok(Json(StorageStats {
         used_bytes: used,
         max_storage_bytes: max,
@@ -595,6 +603,7 @@ pub(crate) async fn storage_stats(
         target_pct: cfg.cleanup_target_pct,
         torrent_count: count.0,
         total_uploaded_bytes,
+        total_downloaded_bytes,
     }))
 }
 

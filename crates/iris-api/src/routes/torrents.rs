@@ -984,6 +984,11 @@ pub struct TorrentView {
     /// Lifetime upload counter — survives session restarts and GC
     /// evictions, unlike `snapshot.uploaded_bytes`.
     pub uploaded_bytes_total: u64,
+    /// Lifetime download counter (max on-disk progress ever observed) —
+    /// the ratio denominator matching `uploaded_bytes_total`'s horizon.
+    /// Additive field; older clients ignore it.
+    #[serde(default)]
+    pub downloaded_bytes_total: u64,
     #[serde(flatten)]
     pub snapshot: TorrentSnapshot,
 }
@@ -1017,6 +1022,7 @@ pub(crate) async fn list(
                 kind: row.kind.as_deref().and_then(MediaKind::from_wire),
                 collection_id: row.collection_id,
                 uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
+                downloaded_bytes_total: u64::try_from(row.downloaded_bytes_total).unwrap_or(0),
                 snapshot,
             });
         }
@@ -1057,6 +1063,7 @@ pub(crate) async fn get_one(
         kind: row.kind.as_deref().and_then(MediaKind::from_wire),
         collection_id: row.collection_id,
         uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
+        downloaded_bytes_total: u64::try_from(row.downloaded_bytes_total).unwrap_or(0),
         snapshot,
     }))
 }

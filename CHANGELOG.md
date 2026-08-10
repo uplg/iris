@@ -44,6 +44,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeping the `cat=5000` filter; the no-query `latest` browse keeps
   `t=tvsearch`, which works. Compliant indexers are untouched.
 
+### Fixed
+
+- **Seed ratios now divide two lifetime quantities.** The global
+  "Seeded all-time" ratio divided lifetime upload by the LIVE torrents'
+  progress (admin: by current disk usage), overstating it as soon as
+  the GC had evicted anything; the per-torrent ratio divided lifetime
+  upload by the current session's progress, so a regrab inherited its
+  previous life's upload and showed an instant bogus ratio. Migration
+  0037 adds `torrents.downloaded_bytes_total` (max on-disk progress
+  ever observed, reconciled by the 30 s seed-stats tick — progress is
+  absolute state, so max-ever is the honest approximation and restarts
+  can't phantom-count the recheck climb), backfilled from
+  `total_size_bytes` for every finished row including evicted ones.
+  Web (library summary + per-torrent rows + admin storage) and TV
+  (TorrentsScreen summary + rows) all divide lifetime by lifetime.
+
 ## [1.3.6] - 2026-08-09
 
 ### Added

@@ -633,6 +633,7 @@ function TorrentsView() {
   }, [allItems, filter]);
 
   const totalUploaded = data && data.view === "torrents" ? data.total_uploaded_bytes : 0;
+  const totalDownloaded = data && data.view === "torrents" ? (data.total_downloaded_bytes ?? 0) : 0;
 
   if (isLoading) return <SkeletonCard count={3} />;
   if (error) return <ErrorState error={error} />;
@@ -641,7 +642,11 @@ function TorrentsView() {
 
   return (
     <div className="grid gap-3">
-      <SeedSummary totalUploaded={totalUploaded} items={allItems} />
+      <SeedSummary
+        totalUploaded={totalUploaded}
+        totalDownloaded={totalDownloaded}
+        items={allItems}
+      />
       <TorrentFilter
         value={filter}
         onChange={setFilter}
@@ -775,11 +780,20 @@ function VirtualTorrentList({
   );
 }
 
-function SeedSummary({ totalUploaded, items }: { totalUploaded: number; items: TorrentView[] }) {
+function SeedSummary({
+  totalUploaded,
+  totalDownloaded,
+  items,
+}: {
+  totalUploaded: number;
+  totalDownloaded: number;
+  items: TorrentView[];
+}) {
   const liveUpSpeed = items.reduce((s, t) => s + t.upload_speed_bps, 0);
   const liveDownSpeed = items.reduce((s, t) => s + t.download_speed_bps, 0);
-  const downloaded = items.reduce((s, t) => s + t.progress_bytes, 0);
-  const ratio = downloaded > 0 ? totalUploaded / downloaded : null;
+  // Lifetime / lifetime — dividing by the LIVE torrents' progress
+  // overstated the ratio as soon as the GC had evicted anything.
+  const ratio = totalDownloaded > 0 ? totalUploaded / totalDownloaded : null;
   return (
     <div className="sticky top-2 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-950/40 px-4 py-3 backdrop-blur">
       <div className="flex items-baseline gap-2">
@@ -823,7 +837,11 @@ function TorrentRow({
   const videos = t.files.filter((f) => VIDEO_RE.test(f.path));
   const [expanded, setExpanded] = useState(false);
   const finished = t.finished || pct >= 100;
-  const ratio = t.progress_bytes > 0 ? t.uploaded_bytes_total / t.progress_bytes : null;
+  // Both counters are lifetime (survive restarts and regrabs) so the
+  // ratio is stable from the first paint — no more inflated values while
+  // a fresh session's progress catches up to a past life's seed.
+  const lifetimeDownloaded = t.downloaded_bytes_total ?? 0;
+  const ratio = lifetimeDownloaded > 0 ? t.uploaded_bytes_total / lifetimeDownloaded : null;
 
   return (
     <div className="group rounded-lg border border-border/70 bg-card/60 transition hover:border-border">
