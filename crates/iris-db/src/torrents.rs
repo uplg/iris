@@ -101,7 +101,13 @@ pub struct NewTorrent {
 pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sqlx::Error> {
     if let Some(existing) = find_by_infohash(pool, &new.infohash).await? {
         if existing.deleted_at.is_some() {
-            sqlx::query("UPDATE torrents SET deleted_at = NULL WHERE id = ?1")
+            // Re-grab of an evicted/deleted torrent: the payload is gone from
+            // disk (librqbit re-preallocates zero-filled files), so the old
+            // `finished_at` no longer reflects reality. Reset it — endpoints
+            // like `play_asset` trust `finished_at` as "complete on disk" and
+            // would otherwise probe a zero-filled preallocation. It gets
+            // re-stamped by `set_finished` when the re-download completes.
+            sqlx::query("UPDATE torrents SET deleted_at = NULL, finished_at = NULL WHERE id = ?1")
                 .bind(existing.id)
                 .execute(pool)
                 .await?;
@@ -301,7 +307,8 @@ pub async fn total_uploaded_bytes(pool: &SqlitePool) -> Result<u64, sqlx::Error>
     Ok(u64::try_from(row.0.unwrap_or(0)).unwrap_or(0))
 }
 
-/// Stamp `finished_at` (first completion only — never moves once set).
+/// Stamp `finished_at` (idempotent — only fills a NULL slot; `upsert`
+/// resets it to NULL on re-grab so a re-download re-stamps on completion).
 /// Called from the 30 s seed-stats tick for every snapshot reporting
 /// `finished`, so the flag converges shortly after completion and is
 /// already in place when a later deploy puts the restored session
@@ -436,4 +443,103 @@ pub async fn dismiss_gone_release(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    /// Single-connection in-memory pool, migrated through the latest schema.
+    async fn migrated_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory sqlite");
+        crate::migrate::run(&pool).await.expect("run migrations");
+        pool
+    }
+
+    /// Re-grabbing an evicted torrent must reset `finished_at`: the payload
+    /// is gone from disk, and endpoints (`play_asset` & co) trust
+    /// `finished_at` as "complete on disk". A stale stamp made them probe a
+    /// zero-filled librqbit preallocation and 500 instead of returning the
+    /// retryable "still downloading" 400.
+    #[tokio::test]
+    async fn regrab_resets_finished_at() {
+        let pool = migrated_pool().await;
+        let user = crate::users::create(
+            &pool,
+            crate::users::NewUser {
+                email: "t@example.com".into(),
+                password_hash: "x".into(),
+                is_admin: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+
+        let new = NewTorrent {
+            infohash: "aa".repeat(20),
+            name: "Splash 1984".into(),
+            total_size_bytes: 1024,
+            source_provider: None,
+            source_external_id: None,
+            added_by: user,
+        };
+        let row = upsert(&pool, new.clone()).await.unwrap();
+        mark_finished(&pool, &row.infohash).await.unwrap();
+        soft_delete(&pool, TorrentId(row.id)).await.unwrap();
+
+        let regrabbed = upsert(&pool, new).await.unwrap();
+        assert_eq!(regrabbed.id, row.id, "re-grab reuses the row");
+        assert!(regrabbed.deleted_at.is_none(), "re-grab un-soft-deletes");
+        assert!(
+            regrabbed.finished_at.is_none(),
+            "re-grab must clear the stale finished_at"
+        );
+
+        // …and completion of the re-download re-stamps it.
+        mark_finished(&pool, &regrabbed.infohash).await.unwrap();
+        let done = find_by_infohash(&pool, &regrabbed.infohash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(done.finished_at.is_some());
+    }
+
+    /// A live (non-deleted) duplicate grab keeps its `finished_at` — only
+    /// the evicted→re-grab path resets it.
+    #[tokio::test]
+    async fn duplicate_grab_of_live_torrent_keeps_finished_at() {
+        let pool = migrated_pool().await;
+        let user = crate::users::create(
+            &pool,
+            crate::users::NewUser {
+                email: "t2@example.com".into(),
+                password_hash: "x".into(),
+                is_admin: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+
+        let new = NewTorrent {
+            infohash: "bb".repeat(20),
+            name: "Still Here".into(),
+            total_size_bytes: 2048,
+            source_provider: None,
+            source_external_id: None,
+            added_by: user,
+        };
+        let row = upsert(&pool, new.clone()).await.unwrap();
+        mark_finished(&pool, &row.infohash).await.unwrap();
+
+        let again = upsert(&pool, new).await.unwrap();
+        assert_eq!(again.id, row.id);
+        assert!(again.finished_at.is_some(), "live dup keeps finished_at");
+    }
 }

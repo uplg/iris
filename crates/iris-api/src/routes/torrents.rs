@@ -2151,12 +2151,15 @@ pub(crate) async fn play_asset(
     // DB `finished_at` outranks the snapshot: during the post-deploy
     // `initializing` re-check the snapshot reports finished = false for
     // fully-downloaded torrents — this gate used to break Tier F for
-    // the whole re-check window.
+    // the whole re-check window. A *missing* snapshot with no
+    // `finished_at` is the opposite case (grab so fresh the engine
+    // hasn't registered it yet) and must count as still downloading,
+    // not fall through to probing a zero-filled preallocation.
     if row.finished_at.is_none()
         && state
             .engine()
             .get_by_infohash(&infohash)
-            .is_some_and(|s| !s.finished)
+            .is_none_or(|s| !s.finished)
     {
         return Err(ApiError::BadRequest(
             "torrent still downloading — wait until it's complete to play".into(),
