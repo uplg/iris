@@ -96,6 +96,14 @@ export type EngineHandle = {
    *  subs. Engines without a `<video>` element are a no-op — ASS/PGS
    *  overlay paths run from `IrisPlayer` instead. */
   setNativeSubtitle: (streamIdx: number | null) => void;
+  /** Repoint the `<track>` element for `streamIdx` at `url`. A track
+   *  element fetches its src exactly once — the `.vtt` extraction of a
+   *  partially-downloaded source is truncated at the first sparse hole,
+   *  so the player bumps the URL (`?v=<subtitleVersion>`) as the
+   *  torrent progresses and the src change makes the browser re-run
+   *  the track fetch in place. Engines without `<track>` elements
+   *  (C/D) omit it. */
+  setNativeSubtitleSrc?: (streamIdx: number, url: string) => void;
 
   // Optional escape hatches ------------------------------------------
   /** The underlying `<video>` element when the engine has one. Used by
@@ -254,6 +262,13 @@ export function videoBackedHandle(
         }
       };
       apply();
+    },
+    setNativeSubtitleSrc: (streamIdx, url) => {
+      const el = extras.nativeTrackMap?.get(streamIdx);
+      // Compare the attribute, not `el.src` (which reflects back as an
+      // absolute URL and would never equal the relative form we set).
+      if (!el || el.getAttribute("src") === url) return;
+      el.src = url;
     },
     videoElement: () => video,
     canvasElement: () => null,

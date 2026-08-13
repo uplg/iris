@@ -60,6 +60,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Web (library summary + per-torrent rows + admin storage) and TV
   (TorrentsScreen summary + rows) all divide lifetime by lifetime.
 
+- **Native (SRT/WebVTT) subtitles no longer stay blank when resuming
+  mid-file on a still-downloading torrent.** The `.vtt` extracted from
+  a partial source is truncated at the first sparse hole, and a
+  `<track>` element fetches its src exactly once — so a resume past the
+  hole had no cues for the whole session (toggling the track only flips
+  `mode`, which never re-fetches; only restarting from 0 showed the
+  early cues). The `?v=<subtitleVersion>` catch-up mechanism the
+  ASS/PGS overlay path already had now also repoints the native
+  `<track>` src on every progress milestone, making the browser re-run
+  the track fetch in place across Tier A/B/F.
+
 ## [1.3.6] - 2026-08-09
 
 ### Added

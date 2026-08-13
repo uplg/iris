@@ -88,7 +88,9 @@ export type IrisPlayerProps = {
    *  the client received. Threaded into overlay subtitle URLs as a
    *  `?v=<token>` cache-buster: when it bumps, the SubtitleOverlay
    *  hot-reloads via `libass.setTrackByUrl` in place — no worker
-   *  recreate, no canvas flash, no re-pick from the menu. Drives the
+   *  recreate, no canvas flash, no re-pick from the menu — and native
+   *  `<track>` elements get their src repointed so the browser re-runs
+   *  the track fetch. Drives the
    *  "subs catch up as the torrent downloads" UX. The token should
    *  flip to a stable value (e.g. `"final"`) once the torrent is
    *  finished so the URL stops mutating and the response can be HTTP
@@ -276,6 +278,25 @@ export function IrisPlayer(props: IrisPlayerProps) {
     },
     [props.onActiveSubtitleChange],
   );
+
+  // Hot-reload native (`<track>`) subtitles as the torrent downloads —
+  // the same catch-up mechanism the ASS/PGS overlay path gets via its
+  // `?v=` URL watch. Without this, a `.vtt` extracted from a partially
+  // downloaded source (truncated at the first sparse hole) is fetched
+  // once at mount and never again: resuming mid-file shows no cues past
+  // the hole for the whole session, and toggling the track only flips
+  // `mode`, which never re-fetches. Declared BEFORE the mode-flip
+  // effect below so the versioned src is in place when the track first
+  // goes `showing` on mount (avoids a double fetch).
+  useEffect(() => {
+    if (!handle?.setNativeSubtitleSrc) return;
+    for (const sub of nativeSubs) {
+      const url = props.subtitleVersion
+        ? `${sub.vttUrl}?v=${encodeURIComponent(props.subtitleVersion)}`
+        : sub.vttUrl;
+      handle.setNativeSubtitleSrc(sub.stream_idx, url);
+    }
+  }, [handle, nativeSubs, props.subtitleVersion]);
 
   // Push the active native subtitle into the engine. Engines that
   // back a `<video>` element (A/B/F) flip `<track>.mode` for the
