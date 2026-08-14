@@ -71,6 +71,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<track>` src on every progress milestone, making the browser re-run
   the track fetch in place across Tier A/B/F.
 
+### Changed
+
+- **Frontend dependency pass — everything to latest stable.** Notables:
+  mediabunny 1.50.8 → 1.53.1 (the DTS + open-GOP patch re-verified
+  against upstream — neither landed there — and regenerated as
+  `patches/mediabunny@1.53.1.patch`; the two `AudioSampleSource` call
+  sites migrated off the now-deprecated `bitrate` field to
+  `quality: new Quality({ bitrate })` — the bare-number `Quality` form
+  means a 0..1 qualitative level, not a bitrate), hls.js 1.6.16 → 1.7.0
+  (no removed exports; the new `liveMaxUnchangedPlaylistRefresh` live
+  error defaults to `Infinity`, so the tuner path is unaffected), plus
+  React 19.2.8, Vite 8.2.1, TanStack Router/Query/Virtual, Tailwind
+  4.3.3, radix-ui, lucide-react, shadcn CLI, oxlint 1.78, oxfmt 0.63
+  (no reformats) and friends. `tools/api-gen` is already current and
+  deliberately stays on TypeScript 6 (needs `ts.factory`).
+
 ## [1.3.6] - 2026-08-09
 
 ### Added

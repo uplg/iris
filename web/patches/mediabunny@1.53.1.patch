@@ -1,5 +1,5 @@
 diff --git a/dist/mediabunny.d.ts b/dist/mediabunny.d.ts
-index 0d2596c..5d2ba63 100644
+index 7f21e39c8355d5fdbf5311574fa8e2c3579a529a..71922619770ccc13b23ad32ed0737fce2f2a0073 100644
 --- a/dist/mediabunny.d.ts
 +++ b/dist/mediabunny.d.ts
 @@ -149,7 +149,7 @@ export declare type AttachedImage = {
@@ -11,7 +11,7 @@ index 0d2596c..5d2ba63 100644
  
  /**
   * A sink that retrieves decoded audio samples from an audio track and converts them to `AudioBuffer` instances. This is
-@@ -3284,7 +3284,7 @@ export declare type MpegTsOutputFormatOptions = {
+@@ -3369,7 +3369,7 @@ export declare type MpegTsOutputFormatOptions = {
   * @group Codecs
   * @public
   */
@@ -21,7 +21,7 @@ index 0d2596c..5d2ba63 100644
  /**
   * This target just discards all incoming data. It is useful for when you need an {@link Output} but extract data from
 diff --git a/dist/modules/src/codec.d.ts b/dist/modules/src/codec.d.ts
-index 164aa27..0edd98f 100644
+index c818f4c7ad2486f8c023898e879ade784745f52c..b2b7b71374c42b47988bce0e40a0209463dc8732 100644
 --- a/dist/modules/src/codec.d.ts
 +++ b/dist/modules/src/codec.d.ts
 @@ -24,13 +24,13 @@ export declare const PCM_AUDIO_CODECS: readonly ["pcm-s16", "pcm-s16be", "pcm-s2
@@ -41,7 +41,7 @@ index 164aa27..0edd98f 100644
   * List of known subtitle codecs, ordered by encoding preference.
   * @group Codecs
 diff --git a/dist/modules/src/codec.js b/dist/modules/src/codec.js
-index a207683..5f71217 100644
+index 363d3d8583a622fd6ba0f040cc6753f64d681bcc..0fd4e26b6acfdd4fd8c8558920a9ad10717e2582 100644
 --- a/dist/modules/src/codec.js
 +++ b/dist/modules/src/codec.js
 @@ -54,6 +54,7 @@ export const NON_PCM_AUDIO_CODECS = [
@@ -80,10 +80,10 @@ index a207683..5f71217 100644
          return codec;
      }
 diff --git a/dist/modules/src/isobmff/isobmff-muxer.js b/dist/modules/src/isobmff/isobmff-muxer.js
-index a55e563..a0340db 100644
+index c18269d9ae2715505b53c42b501d7ea422a27b8a..cdaedcc307eafddcf60b2b46d6dd9d273784f53f 100644
 --- a/dist/modules/src/isobmff/isobmff-muxer.js
 +++ b/dist/modules/src/isobmff/isobmff-muxer.js
-@@ -575,13 +575,24 @@ export class IsobmffMuxer extends Muxer {
+@@ -603,13 +603,24 @@ export class IsobmffMuxer extends Muxer {
              // (presentation timestamp & decode order are all you need), but it is a concept in ISOBMFF so we need to
              // model it.
              sample.decodeTimestamp = sortedTimestamps[i];
@@ -111,7 +111,7 @@ index a55e563..a0340db 100644
                  trackData.lastSample.timescaleUnitsToNextSample = delta;
                  if (!this.isFragmented) {
 diff --git a/dist/modules/src/matroska/ebml.js b/dist/modules/src/matroska/ebml.js
-index 42eeea9..a71b130 100644
+index 42eeea93c04d41ad4441fa576bb53a76c165f1a5..a71b1300a2502995c7ba56e2b0c4918313c16999 100644
 --- a/dist/modules/src/matroska/ebml.js
 +++ b/dist/modules/src/matroska/ebml.js
 @@ -664,6 +664,7 @@ export const CODEC_STRING_MAP = {
@@ -123,7 +123,7 @@ index 42eeea9..a71b130 100644
      'pcm-s16': 'A_PCM/INT/LIT',
      'pcm-s16be': 'A_PCM/INT/BIG',
 diff --git a/dist/modules/src/matroska/matroska-demuxer.js b/dist/modules/src/matroska/matroska-demuxer.js
-index 3956d4a..0844149 100644
+index 3956d4aa6a6d90657d86f7baf700e00667b1f7aa..08441496991f6b657b7d59c4007fbbb2402338e7 100644
 --- a/dist/modules/src/matroska/matroska-demuxer.js
 +++ b/dist/modules/src/matroska/matroska-demuxer.js
 @@ -795,6 +795,10 @@ export class MatroskaDemuxer extends Demuxer {

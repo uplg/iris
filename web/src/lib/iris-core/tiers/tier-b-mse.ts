@@ -30,6 +30,7 @@ import {
   Input,
   Mp4OutputFormat,
   Output,
+  Quality,
   StreamTarget,
   type StreamTargetChunk,
   UrlSource,
@@ -981,7 +982,9 @@ export const mountTierB: EngineMount = async (opts) => {
         const srcChannels = await audioTrack.getNumberOfChannels();
         const source = new AudioSampleSource({
           codec: encoderChoice.codec,
-          bitrate: encoderChoice.codec === "opus" ? 128_000 : 192_000,
+          // `new Quality(<number>)` means a 0..1 qualitative level, NOT
+          // a bitrate — the explicit `{ bitrate }` form is required.
+          quality: new Quality({ bitrate: encoderChoice.codec === "opus" ? 128_000 : 192_000 }),
           ...(encoderChoice.channels !== srcChannels
             ? { transform: { numberOfChannels: encoderChoice.channels } }
             : {}),
