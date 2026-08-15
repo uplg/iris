@@ -1,5 +1,5 @@
 diff --git a/dist/mediabunny.d.ts b/dist/mediabunny.d.ts
-index 7f21e39c8355d5fdbf5311574fa8e2c3579a529a..71922619770ccc13b23ad32ed0737fce2f2a0073 100644
+index fbf10c8477c6dcf3e777275bb80259523fbb1e89..f0667c1982eac81d1f74b9b46b9c777b382d8bbc 100644
 --- a/dist/mediabunny.d.ts
 +++ b/dist/mediabunny.d.ts
 @@ -149,7 +149,7 @@ export declare type AttachedImage = {
@@ -11,7 +11,7 @@ index 7f21e39c8355d5fdbf5311574fa8e2c3579a529a..71922619770ccc13b23ad32ed0737fce
  
  /**
   * A sink that retrieves decoded audio samples from an audio track and converts them to `AudioBuffer` instances. This is
-@@ -3369,7 +3369,7 @@ export declare type MpegTsOutputFormatOptions = {
+@@ -3444,7 +3444,7 @@ export declare type MpegTsOutputFormatOptions = {
   * @group Codecs
   * @public
   */
