@@ -35,6 +35,12 @@ export const IRIS_WEB_VERSION: string = __IRIS_WEB_VERSION__;
 
 const NO_RETRY_PATHS = new Set(["/auth/refresh", "/auth/login", "/auth/register", "/auth/logout"]);
 
+/** Bound on the session bootstrap/rotation fetches. Browser fetch has no
+ *  timeout, so a stalled connection (Cloudflare tunnel blip) used to pin the
+ *  boot screen on "loading…" forever; with this the call aborts, the caller
+ *  classifies it as transient and retries. */
+const AUTH_TIMEOUT_MS = 15_000;
+
 function clientHeaders(extra?: HeadersInit): HeadersInit {
   // X-Iris-Client lands on every outbound API request so the server
   // can log usage and (optionally) gate via `MIN_WEB_VERSION`. Cheap:
@@ -80,6 +86,7 @@ function refreshSession(): Promise<RefreshOutcome> {
         method: "POST",
         credentials: "include",
         headers: clientHeaders(),
+        signal: AbortSignal.timeout(AUTH_TIMEOUT_MS),
       });
       if (res.ok) return { ok: true, user: (await res.json()) as User };
       return { ok: false, status: res.status };
@@ -96,13 +103,19 @@ function refreshSession(): Promise<RefreshOutcome> {
   return run;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  timeoutMs?: number,
+): Promise<T> {
   const fire = () =>
     fetch(`/api${path}`, {
       method,
       credentials: "include",
       headers: clientHeaders(body ? { "Content-Type": "application/json" } : undefined),
       body: body ? JSON.stringify(body) : undefined,
+      signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
     });
   let res = await fire();
   // Transparent re-auth on expired access cookie. Without this any in-
@@ -154,7 +167,9 @@ export type Invitation = components["schemas"]["InvitationView"];
 export type CreatedInvitation = components["schemas"]["CreatedInvitation"];
 
 export const auth = {
-  me: () => api.get<User>("/me"),
+  // Timeout-bounded: only the AuthProvider bootstrap calls this, and it must
+  // fail fast on a stalled connection so the retry loop can take over.
+  me: () => request<User>("GET", "/me", undefined, AUTH_TIMEOUT_MS),
   login: (email: string, password: string) => api.post<User>("/auth/login", { email, password }),
   register: (invite_token: string, email: string, password: string) =>
     api.post<User>("/auth/register", { invite_token, email, password }),

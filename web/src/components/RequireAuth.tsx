@@ -8,7 +8,7 @@ export function RequireAuth({ adminOnly = false }: { adminOnly?: boolean }) {
   if (auth.status === "loading") {
     return (
       <div className="flex min-h-screen items-center justify-center text-muted-foreground">
-        loading…
+        {auth.retrying ? "connection is unstable — retrying…" : "loading…"}
       </div>
     );
   }

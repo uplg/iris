@@ -10,7 +10,7 @@ import {
 import { ApiError, AUTH_EXPIRED_EVENT, auth as authApi, type User } from "./api";
 
 type AuthState =
-  | { status: "loading" }
+  | { status: "loading"; retrying: boolean }
   | { status: "anonymous" }
   | { status: "authenticated"; user: User };
 
@@ -24,25 +24,54 @@ type AuthContextValue = AuthState & {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>({ status: "loading" });
+  const [state, setState] = useState<AuthState>({ status: "loading", retrying: false });
 
-  const refresh = useCallback(async () => {
+  // One session-bootstrap attempt. "transient" = neither call reached an auth
+  // verdict (timeout, network error, 429/5xx) — the cookies may still be
+  // valid, so the caller must retry rather than bounce a live session to
+  // /login. Only an explicit 401/403 from the refresh settles as anonymous.
+  const bootstrap = useCallback(async (): Promise<"settled" | "transient"> => {
     try {
       const user = await authApi.me();
       setState({ status: "authenticated", user });
+      return "settled";
     } catch {
       try {
         const user = await authApi.refresh();
         setState({ status: "authenticated", user });
-      } catch {
-        setState({ status: "anonymous" });
+        return "settled";
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+          setState({ status: "anonymous" });
+          return "settled";
+        }
+        return "transient";
       }
     }
   }, []);
 
+  // Bootstrap with backoff retry (timer approved — CLAUDE.md web-timer rule):
+  // a transient failure keeps the boot screen up and retries instead of
+  // hanging on a stalled fetch forever.
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let cancelled = false;
+    let timer: number | undefined;
+    const run = async (delayMs: number) => {
+      if ((await bootstrap()) === "transient" && !cancelled) {
+        setState({ status: "loading", retrying: true });
+        timer = window.setTimeout(() => void run(Math.min(delayMs * 2, 30_000)), delayMs);
+      }
+    };
+    void run(2_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [bootstrap]);
+
+  const refresh = useCallback(async () => {
+    await bootstrap();
+  }, [bootstrap]);
 
   // api.ts dispatches this when an authenticated request gets 401 and
   // the refresh attempt also fails — the user is effectively logged out.
