@@ -20,6 +20,7 @@ import {
   type EngineMount,
 } from "../engine";
 import { mountLiveAudio, type LiveAudioHandle } from "../live-audio";
+import type { Manifest } from "../manifest-client";
 
 export const mountTierF: EngineMount = async (opts) => {
   const { container, streamUrl, nativeSubs, audioTrackIndex } = opts;
@@ -85,6 +86,17 @@ export const mountTierF: EngineMount = async (opts) => {
   console.log(`[iris-core] Tier F mount: useHlsJs=${useHlsJs} nativeHls=${nativeHls}`);
   if (nativeHls) {
     video.src = streamUrl;
+    // Parity with the hls.js branch's MANIFEST_PARSED hook: apply the
+    // inherited audio pick once Safari has populated `audioTracks`
+    // (empty before metadata), so a remount / tier demote keeps the
+    // user's language instead of snapping back to the default.
+    if (audioTrackIndex !== undefined && audioTrackIndex >= 0) {
+      video.addEventListener(
+        "loadedmetadata",
+        () => setNativeAudioTrack(video, String(audioTrackIndex), opts.manifest.audio),
+        { once: true },
+      );
+    }
     if (live) {
       // Live channels autoplay (the channel click IS the intent). Safari
       // decodes E-AC-3 natively on Apple hardware, so no sidecar here.
@@ -107,7 +119,7 @@ export const mountTierF: EngineMount = async (opts) => {
         video.load();
       },
       audioTracks: () => collectNativeAudioTracks(video),
-      setAudioTrack: (id) => setNativeAudioTrack(video, id),
+      setAudioTrack: (id) => setNativeAudioTrack(video, id, opts.manifest.audio),
     });
   }
 
@@ -446,7 +458,12 @@ function collectHlsAudioTracks(hls: Hls): EngineAudioTrack[] {
   }));
 }
 
-/** Fallback for Safari native HLS — read the browser's `audioTracks`. */
+/** Fallback for Safari native HLS — read the browser's `audioTracks`.
+ *  Ids are POSITIONAL (`"0"`, `"1"`, …) to live in the same namespace as
+ *  the chrome's manifest-derived menu ids. Never expose Safari's own
+ *  `AudioTrack.id`: it's 1-based ("1", "2", …), so menu id "1" used to
+ *  match BOTH Safari's first track (by id) and the second (by position),
+ *  enabling two tracks at once — the "picked Korean, got French" bug. */
 function collectNativeAudioTracks(video: HTMLVideoElement): EngineAudioTrack[] {
   const nativeTracks = (video as HTMLVideoElement & { audioTracks?: AudioTrackList }).audioTracks;
   if (!nativeTracks) return [];
@@ -455,7 +472,7 @@ function collectNativeAudioTracks(video: HTMLVideoElement): EngineAudioTrack[] {
     const t = nativeTracks[i];
     if (!t) continue;
     out.push({
-      id: t.id || String(i),
+      id: String(i),
       label: t.label || t.language || `Audio ${i + 1}`,
       lang: t.language || undefined,
       active: t.enabled,
@@ -464,13 +481,81 @@ function collectNativeAudioTracks(video: HTMLVideoElement): EngineAudioTrack[] {
   return out;
 }
 
-function setNativeAudioTrack(video: HTMLVideoElement, id: string): void {
+/** ISO 639-2 (ffprobe / `manifest.audio[].lang`) → 639-1 (what Safari
+ *  reports from the playlist's `LANGUAGE` attribute, normalised by
+ *  shaka-packager). Mirrors the server's `iso639_2to1` in remuxer.rs. */
+const ISO639_2TO1: Record<string, string> = {
+  fre: "fr",
+  fra: "fr",
+  eng: "en",
+  spa: "es",
+  ger: "de",
+  deu: "de",
+  ita: "it",
+  por: "pt",
+  rus: "ru",
+  jpn: "ja",
+  kor: "ko",
+  chi: "zh",
+  zho: "zh",
+  ara: "ar",
+  dut: "nl",
+  nld: "nl",
+  pol: "pl",
+  swe: "sv",
+  tur: "tr",
+  ukr: "uk",
+  heb: "he",
+  hin: "hi",
+  vie: "vi",
+  ces: "cs",
+  cze: "cs",
+  dan: "da",
+  fin: "fi",
+  nor: "no",
+  ron: "ro",
+  rum: "ro",
+  gre: "el",
+  ell: "el",
+};
+
+function normalizeLang(lang: string | null | undefined): string | null {
+  if (!lang) return null;
+  const primary = lang.toLowerCase().split("-")[0] ?? "";
+  if (primary === "" || primary === "und") return null;
+  return ISO639_2TO1[primary] ?? primary;
+}
+
+/** `id` is an index into `manifest.audio` (the chrome menu's namespace).
+ *  Safari's `AudioTrackList` order for native HLS is not guaranteed to
+ *  match the playlist's `EXT-X-MEDIA` order, so resolve by language
+ *  first (unambiguous when each track has a distinct language) and fall
+ *  back to position. Exactly one track ends up enabled. */
+function setNativeAudioTrack(
+  video: HTMLVideoElement,
+  id: string,
+  manifestAudio: Manifest["audio"],
+): void {
   const nativeTracks = (video as HTMLVideoElement & { audioTracks?: AudioTrackList }).audioTracks;
   if (!nativeTracks) return;
+  const idx = Number(id);
+  if (!Number.isFinite(idx) || idx < 0) return;
+  let target = idx;
+  const wantedLang = normalizeLang(manifestAudio[idx]?.lang);
+  if (wantedLang) {
+    const matches: number[] = [];
+    for (let i = 0; i < nativeTracks.length; i += 1) {
+      if (normalizeLang(nativeTracks[i]?.language) === wantedLang) matches.push(i);
+    }
+    if (matches.length === 1) target = matches[0] ?? idx;
+  }
+  console.log(
+    `[iris-core] Tier F native: setAudioTrack id=${id} lang=${wantedLang ?? "?"} → native index ${target}`,
+  );
   for (let i = 0; i < nativeTracks.length; i += 1) {
     const t = nativeTracks[i];
     if (!t) continue;
-    t.enabled = t.id === id || String(i) === id;
+    t.enabled = i === target;
   }
 }
 
