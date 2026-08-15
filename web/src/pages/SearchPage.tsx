@@ -116,7 +116,10 @@ export function SearchPage() {
   const { q: queryParam } = searchRoute.useSearch();
   const navigate = searchRoute.useNavigate();
   const [q, setQ] = useState(queryParam ?? "");
-  const debounced = useDebounce(q.trim(), 350);
+  // 600 ms: the tracker fan-out is expensive (every keystroke pause used to
+  // burst slow scrapers like hdtorrents into 429). The TMDB typeahead below
+  // stays at 250 ms for responsiveness.
+  const debounced = useDebounce(q.trim(), 600);
   const [picked, setPicked] = useState<SearchResult | null>(null);
   const [page, setPage] = useState(1);
   const [sortMode, setSortMode] = useState<SortMode>("relevance");
@@ -157,14 +160,18 @@ export function SearchPage() {
   const { sort_by, order } = apiSort(sortMode);
   const { data, isFetching, error } = useQuery({
     queryKey: ["search", debounced, page, sortMode, kind],
-    queryFn: () =>
-      search.query(debounced, {
-        page,
-        limit: PAGE_SIZE,
-        sort_by,
-        order,
-        kind: kind ?? undefined,
-      }),
+    queryFn: ({ signal }) =>
+      search.query(
+        debounced,
+        {
+          page,
+          limit: PAGE_SIZE,
+          sort_by,
+          order,
+          kind: kind ?? undefined,
+        },
+        signal,
+      ),
     enabled: debounced.length >= 2,
     placeholderData: keepPreviousData,
   });

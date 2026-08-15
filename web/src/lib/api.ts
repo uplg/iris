@@ -103,11 +103,25 @@ function refreshSession(): Promise<RefreshOutcome> {
   return run;
 }
 
+type RequestOpts = {
+  timeoutMs?: number;
+  /** External cancellation (React Query's queryFn signal). Aborting tears the
+   *  connection down, which cancels the handler — and its upstream tracker
+   *  fan-out — server-side too. */
+  signal?: AbortSignal;
+};
+
+function requestSignal(opts?: RequestOpts): AbortSignal | undefined {
+  const timeout = opts?.timeoutMs === undefined ? undefined : AbortSignal.timeout(opts.timeoutMs);
+  if (opts?.signal && timeout) return AbortSignal.any([opts.signal, timeout]);
+  return opts?.signal ?? timeout;
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  timeoutMs?: number,
+  opts?: RequestOpts,
 ): Promise<T> {
   const fire = () =>
     fetch(`/api${path}`, {
@@ -115,7 +129,7 @@ async function request<T>(
       credentials: "include",
       headers: clientHeaders(body ? { "Content-Type": "application/json" } : undefined),
       body: body ? JSON.stringify(body) : undefined,
-      signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
+      signal: requestSignal(opts),
     });
   let res = await fire();
   // Transparent re-auth on expired access cookie. Without this any in-
@@ -169,7 +183,7 @@ export type CreatedInvitation = components["schemas"]["CreatedInvitation"];
 export const auth = {
   // Timeout-bounded: only the AuthProvider bootstrap calls this, and it must
   // fail fast on a stalled connection so the retry loop can take over.
-  me: () => request<User>("GET", "/me", undefined, AUTH_TIMEOUT_MS),
+  me: () => request<User>("GET", "/me", undefined, { timeoutMs: AUTH_TIMEOUT_MS }),
   login: (email: string, password: string) => api.post<User>("/auth/login", { email, password }),
   register: (invite_token: string, email: string, password: string) =>
     api.post<User>("/auth/register", { invite_token, email, password }),
@@ -276,14 +290,16 @@ export type SearchOpts = {
 };
 
 export const search = {
-  query: (q: string, opts: SearchOpts = {}) => {
+  /** `signal` cancels a superseded search (next keystroke) so the tracker
+   *  fan-out stops server-side instead of running to completion. */
+  query: (q: string, opts: SearchOpts = {}, signal?: AbortSignal) => {
     const qs = new URLSearchParams({ q });
     if (opts.page) qs.set("page", String(opts.page));
     if (opts.limit) qs.set("limit", String(opts.limit));
     if (opts.sort_by) qs.set("sort_by", opts.sort_by);
     if (opts.order) qs.set("order", opts.order);
     if (opts.kind) qs.set("kind", opts.kind);
-    return api.get<AggregatedResults>(`/search?${qs}`);
+    return request<AggregatedResults>("GET", `/search?${qs}`, undefined, { signal });
   },
 };
 

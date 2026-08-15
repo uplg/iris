@@ -16,6 +16,13 @@ use crate::SearchProvider;
 /// 15–20 s client timeouts.
 const SEARCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Per-provider cap on concurrent searches. Search-as-you-type bursts a
+/// dozen fan-outs within seconds; a slow scraping tracker (hdtorrents)
+/// then sees them all in parallel and starts answering 429. Two in
+/// flight is plenty for one household — the excess queues inside the
+/// search deadline and expires without ever hitting the tracker.
+const MAX_INFLIGHT_PER_PROVIDER: usize = 2;
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProviderInfo {
     pub id: String,
@@ -68,6 +75,9 @@ pub struct ProviderRegistry {
     /// as `Unknown` (= "no badge") would leave anglophone users
     /// without a visual cue.
     default_languages: Arc<HashMap<String, String>>,
+    /// Provider-id → semaphore bounding concurrent `search` calls
+    /// ([`MAX_INFLIGHT_PER_PROVIDER`]).
+    search_permits: Arc<HashMap<String, Arc<tokio::sync::Semaphore>>>,
 }
 
 impl ProviderRegistry {
@@ -90,9 +100,19 @@ impl ProviderRegistry {
                 }
             }
         }
+        let permits = map
+            .keys()
+            .map(|id| {
+                (
+                    id.clone(),
+                    Arc::new(tokio::sync::Semaphore::new(MAX_INFLIGHT_PER_PROVIDER)),
+                )
+            })
+            .collect();
         Ok(Self {
             providers: Arc::new(map),
             default_languages: Arc::new(defaults),
+            search_permits: Arc::new(permits),
         })
     }
 
@@ -145,8 +165,28 @@ impl ProviderRegistry {
             let p = p.clone();
             let id = id.clone();
             let q = q.clone();
+            let sem = self.search_permits.get(&id).cloned();
             futs.push(async move {
-                let res = match tokio::time::timeout(SEARCH_DEADLINE, p.search(&q)).await {
+                // The concurrency permit is taken inside the deadline: a
+                // search queued behind a burst expires without ever hitting
+                // the tracker, and dropping the future (client disconnect)
+                // releases the permit immediately.
+                let started = std::time::Instant::now();
+                let _permit = if let Some(sem) = &sem {
+                    let Ok(permit) = tokio::time::timeout(SEARCH_DEADLINE, sem.acquire()).await
+                    else {
+                        let err = Error::Provider(format!(
+                            "skipped: queued behind concurrent searches for {}s",
+                            SEARCH_DEADLINE.as_secs()
+                        ));
+                        return (id, Err(err));
+                    };
+                    permit.ok()
+                } else {
+                    None
+                };
+                let remaining = SEARCH_DEADLINE.saturating_sub(started.elapsed());
+                let res = match tokio::time::timeout(remaining, p.search(&q)).await {
                     Ok(res) => res,
                     Err(_) => Err(Error::Provider(format!(
                         "timed out after {}s",
