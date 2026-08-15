@@ -44,10 +44,10 @@ iris-caps = { path = "crates/iris-caps" }
 iris-reco = { path = "crates/iris-reco" }
 
 # Async runtime + http
-tokio = { version = "1.52.3", features = ["full"] }
-tokio-util = { version = "0.7.18", features = ["io"] }
-futures = "0.3.32"
-async-trait = "0.1.89"
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-util = { version = "0.7.19", features = ["io"] }
+futures = "0.3.34"
+async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["macros", "http2"] }
 axum-extra = { version = "0.12.6", features = ["typed-header", "cookie", "cookie-private"] }
 tower = { version = "0.5.3", features = ["util"] }
@@ -59,8 +59,8 @@ tower-http = { version = "0.7.0", features = [
   "set-header",
   "normalize-path",
 ] }
-hyper = "1.10.1"
-http = "1.4.2"
+hyper = "1.11.0"
+http = "1.5.0"
 reqwest = { version = "0.13.4", default-features = false, features = [
   "json",
   "query",
@@ -74,15 +74,15 @@ reqwest = { version = "0.13.4", default-features = false, features = [
   "cookies",
   "form",
 ] }
-bytes = "1.11.1"
+bytes = "1.12.1"
 # Mozilla's CA root bundle, compiled into the binary — so outbound TLS trust
 # doesn't depend on the (stale/incomplete) CA store of the Wolfi runtime image.
-webpki-root-certs = "1.0.8"
+webpki-root-certs = "1.0.9"
 
 # Serde / config
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-toml = "1.1.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.4"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 
 # OpenAPI — utoipa derives the spec from the route handlers + serde types.
@@ -104,18 +104,18 @@ sqlx = { version = "0.9.0", default-features = false, features = [
 
 # Auth (latest stable; argon2 0.6 is rc)
 argon2 = "0.5.3"
-jsonwebtoken = { version = "10.4.0", default-features = false, features = ["rust_crypto"] }
-rand = "0.10.1"
+jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto"] }
+rand = "0.10.2"
 
 # Errors / logging
-thiserror = "2.0.18"
-anyhow = "1.0.103"
+thiserror = "2.0.20"
+anyhow = "1.0.104"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 
 # Utility
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }
-uuid = { version = "1.23.3", features = ["v4", "serde"] }
+uuid = { version = "1.24.1", features = ["v4", "serde"] }
 url = { version = "2.5.8", features = ["serde"] }
 quick-xml = "0.41.0"
 # HTML scraping for API-less trackers (hdtorrents). `deterministic` keeps
@@ -127,7 +127,7 @@ scraper = { version = "0.27.0", default-features = false, features = [
   "deterministic",
 ] }
 semver = "1.0.28"
-base64 = "0.22.1"
+base64 = "0.23.1"
 hex = "0.4.3"
 once_cell = "1.21.4"
 flate2 = "1.1.9"
@@ -135,14 +135,11 @@ hmac = "0.13.0"
 sha2 = "0.11.0"
 
 # Torrent / media
-# librqbit 9.x pre-release — pinned to the published `9.0.0-rc.0` (release
-# candidate, opted in deliberately; the user runs the 9.x line). It ships
-# `client_name_and_version()` + `SessionOptions::client_name_and_version`
-# (PR 577) — needed because UNIT3D-Announce trackers (e.g. theoldschool.cc)
-# reject HTTP announces with absent/long User-Agents, and 8.x had no public
-# knob. The git patch is gone now that the option is in a published crate;
-# bump to the stable 9.0.0 once ikatson ships it.
-librqbit = "=9.0.0-rc.0"
+# librqbit 9.x ships `client_name_and_version()` +
+# `SessionOptions::client_name_and_version` (PR 577) — needed because
+# UNIT3D-Announce trackers (e.g. theoldschool.cc) reject HTTP announces
+# with absent/long User-Agents, and 8.x had no public knob.
+librqbit = "9.0.0"
 
 # Recommendation — static text embeddings (model2vec). Official Rust impl,
 # CPU-only lookup-table inference; see crates/iris-reco + RECOSYS.md §4.

@@ -114,9 +114,13 @@ pub enum TorrentState {
 impl TorrentState {
     fn from_librqbit(s: TorrentStatsState) -> Self {
         match s {
-            TorrentStatsState::Initializing => Self::Initializing,
+            // 9.0 stable: a paused initial hash-check reports as Initializing{paused};
+            // surface it as Paused so clients offer resume instead of an endless spinner.
+            TorrentStatsState::Initializing { paused: false } => Self::Initializing,
+            TorrentStatsState::Initializing { paused: true } | TorrentStatsState::Paused => {
+                Self::Paused
+            }
             TorrentStatsState::Live => Self::Live,
-            TorrentStatsState::Paused => Self::Paused,
             TorrentStatsState::Error => Self::Error,
         }
     }
