@@ -18,6 +18,14 @@ use tokio::sync::RwLock;
 /// AniList changes day-to-day at most; a 6 h cache matches the scheduler
 /// cadence and keeps the keyless public endpoint happy.
 const ANILIST_CACHE_TTL: Duration = Duration::from_hours(6);
+/// Failed lookups (403 outage/ban, network error, bad payload) are cached
+/// too — otherwise every scheduler cycle re-hammers the same titles, which
+/// is exactly what keeps a Cloudflare ban alive. Short TTL so recovery is
+/// picked up quickly once the endpoint is healthy again.
+const ANILIST_FAILURE_TTL: Duration = Duration::from_mins(15);
+/// AniList's keyless rate limit is 30 req/min in degraded mode; spacing
+/// outgoing requests ≥ 2 s keeps scheduler batches from bursting.
+const ANILIST_MIN_INTERVAL: Duration = Duration::from_secs(2);
 const ENDPOINT: &str = "https://graphql.anilist.co";
 
 #[derive(Clone)]
@@ -27,7 +35,10 @@ pub struct AniListClient {
 
 struct Inner {
     http: reqwest::Client,
+    /// `cache_key` → (expiry, items). Expiry-based (not insertion-based) so
+    /// success and failure entries can carry different TTLs.
     cache: RwLock<HashMap<String, (Instant, Vec<AniListMedia>)>>,
+    last_request: tokio::sync::Mutex<Option<Instant>>,
 }
 
 /// A normalized AniList title — ready to reconcile to TMDB or fall back
@@ -89,6 +100,7 @@ impl AniListClient {
             inner: Arc::new(Inner {
                 http,
                 cache: RwLock::new(HashMap::new()),
+                last_request: tokio::sync::Mutex::new(None),
             }),
         })
     }
@@ -119,32 +131,35 @@ impl AniListClient {
         query: &str,
         variables: serde_json::Value,
     ) -> Vec<AniListMedia> {
-        if let Some((at, items)) = self.inner.cache.read().await.get(&cache_key).cloned()
-            && at.elapsed() < ANILIST_CACHE_TTL
+        if let Some((expires_at, items)) = self.inner.cache.read().await.get(&cache_key).cloned()
+            && Instant::now() < expires_at
         {
             return items;
         }
+        self.throttle().await;
         let body = serde_json::json!({ "query": query, "variables": variables });
         let res = match self.inner.http.post(ENDPOINT).json(&body).send().await {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(error = %e, cache_key, "anilist fetch failed");
-                return Vec::new();
+                return self.cache_failure(cache_key).await;
             }
         };
         if !res.status().is_success() {
             tracing::warn!(status = %res.status(), cache_key, "anilist non-success");
-            return Vec::new();
+            return self.cache_failure(cache_key).await;
         }
         let parsed: GqlResponse = match res.json().await {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, cache_key, "anilist parse failed");
-                return Vec::new();
+                return self.cache_failure(cache_key).await;
             }
         };
         let Some(page) = parsed.data.and_then(|d| d.page) else {
-            return Vec::new();
+            // GraphQL-level error (`data: null` with 200) — same treatment
+            // as a transport failure.
+            return self.cache_failure(cache_key).await;
         };
         let mut out: Vec<AniListMedia> = Vec::new();
         let mut seen: HashSet<i64> = HashSet::new();
@@ -162,8 +177,30 @@ impl AniListClient {
             .cache
             .write()
             .await
-            .insert(cache_key, (Instant::now(), out.clone()));
+            .insert(cache_key, (Instant::now() + ANILIST_CACHE_TTL, out.clone()));
         out
+    }
+
+    /// Space outgoing requests ≥ [`ANILIST_MIN_INTERVAL`] apart. The lock is
+    /// held through the sleep so concurrent callers queue instead of all
+    /// firing together once the interval elapses.
+    async fn throttle(&self) {
+        let mut last = self.inner.last_request.lock().await;
+        if let Some(prev) = *last {
+            let wait = ANILIST_MIN_INTERVAL.saturating_sub(prev.elapsed());
+            if !wait.is_zero() {
+                tokio::time::sleep(wait).await;
+            }
+        }
+        *last = Some(Instant::now());
+    }
+
+    async fn cache_failure(&self, cache_key: String) -> Vec<AniListMedia> {
+        self.inner.cache.write().await.insert(
+            cache_key,
+            (Instant::now() + ANILIST_FAILURE_TTL, Vec::new()),
+        );
+        Vec::new()
     }
 }
 
@@ -269,5 +306,38 @@ impl RawMedia {
             average_score: self.average_score.map(|s| s / 100.0),
             is_movie,
         })
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "hits the live AniList API"]
+    async fn failure_cache_and_throttle() {
+        let client = AniListClient::new().unwrap();
+        let t0 = Instant::now();
+        let first = client.search("bleach").await;
+        let d1 = t0.elapsed();
+        eprintln!("first call: {d1:?} → {} items", first.len());
+
+        let t1 = Instant::now();
+        let second = client.search("bleach").await;
+        let d2 = t1.elapsed();
+        eprintln!("second call (same key): {d2:?} → {} items", second.len());
+        assert!(
+            d2 < Duration::from_millis(100),
+            "same key must hit cache, took {d2:?}"
+        );
+
+        let t2 = Instant::now();
+        let third = client.search("naruto").await;
+        let d3 = t2.elapsed();
+        eprintln!("third call (new key): {d3:?} → {} items", third.len());
+        assert!(
+            t0.elapsed() >= ANILIST_MIN_INTERVAL,
+            "new key must be throttled ≥ {ANILIST_MIN_INTERVAL:?} after first request"
+        );
     }
 }
