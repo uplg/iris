@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { getRouteApi, Link, Navigate, useNavigate } from "@tanstack/react-router";
+import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 import { Brand } from "@/components/Brand";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -26,9 +26,13 @@ export function RegisterPage() {
     if (tokenParam) setToken(tokenParam);
   }, [tokenParam]);
 
-  if (auth.status === "authenticated") {
-    return <Navigate to="/" replace />;
-  }
+  // Already signed in → leave the auth page. Imperative effect, not a
+  // rendered `<Navigate>` — see RequireAuth for the livelock this avoids.
+  const authenticated = auth.status === "authenticated";
+  useEffect(() => {
+    if (authenticated) void navigate({ to: "/", replace: true });
+  }, [authenticated, navigate]);
+  if (authenticated) return null;
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();

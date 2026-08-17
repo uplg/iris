@@ -26,6 +26,13 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: "loading", retrying: false });
 
+  // Idempotent "logged out" settle. The bootstrap catch and the
+  // AUTH_EXPIRED_EVENT listener can both fire in the same tick; keeping the
+  // state object's identity stable avoids gratuitous context re-renders.
+  const settleAnonymous = useCallback(() => {
+    setState((prev) => (prev.status === "anonymous" ? prev : { status: "anonymous" }));
+  }, []);
+
   // One session-bootstrap attempt. "transient" = neither call reached an auth
   // verdict (timeout, network error, 429/5xx) — the cookies may still be
   // valid, so the caller must retry rather than bounce a live session to
@@ -42,13 +49,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return "settled";
       } catch (e) {
         if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
-          setState({ status: "anonymous" });
+          settleAnonymous();
           return "settled";
         }
         return "transient";
       }
     }
-  }, []);
+  }, [settleAnonymous]);
 
   // Bootstrap with backoff retry (timer approved — CLAUDE.md web-timer rule):
   // a transient failure keeps the boot screen up and retries instead of
@@ -78,10 +85,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Flip to `anonymous` here so RequireAuth redirects to /login instead
   // of letting React Query render the raw "Unauthorized" message.
   useEffect(() => {
-    const handler = () => setState({ status: "anonymous" });
-    window.addEventListener(AUTH_EXPIRED_EVENT, handler);
-    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handler);
-  }, []);
+    window.addEventListener(AUTH_EXPIRED_EVENT, settleAnonymous);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, settleAnonymous);
+  }, [settleAnonymous]);
 
   // Keep-alive: while authenticated, periodically rotate the access cookie
   // by hitting /auth/refresh. Without this, byte-range requests for the
@@ -101,12 +107,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // old code bounced to login on ANY rejection, which is the main
           // "logged out for no reason" path.
           if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
-            setState({ status: "anonymous" });
+            settleAnonymous();
           }
         });
     }, 25 * 60_000);
     return () => window.clearInterval(interval);
-  }, [state.status]);
+  }, [state.status, settleAnonymous]);
 
   const login = useCallback(async (email: string, password: string) => {
     const user = await authApi.login(email, password);
