@@ -32,7 +32,7 @@ Three project-wide rules — never relax them without explicit user approval.
 
 | Layer       | Stack                                                                              |
 | ----------- | ---------------------------------------------------------------------------------- |
-| Backend     | Rust 2024 workspace (edition 2024, rust-version 1.97), Axum 0.8, sqlx 0.9 / SQLite |
+| Backend     | Rust 2024 workspace (edition 2024, rust-version 1.98), Axum 0.8, sqlx 0.9 / SQLite |
 | Torrent     | librqbit 9.0.0.rc-0                                                                |
 | Media       | ffmpeg-driven remuxer + HLS manifest builder + JS subtitle pipeline                |
 | Auth        | JWT in HttpOnly cookies, argon2id, invitation-only registration                    |
@@ -141,6 +141,22 @@ not a 500.
 2. Register the `kind` in `registry.rs::build_provider`.
 3. Add `pub mod <name>;` in `src/lib.rs`.
 4. Add a `[[providers]]` entry to `config/providers.toml`.
+
+Per-provider policy knobs live on that entry and default to the historical
+behaviour (`ProviderPolicy` in `registry.rs`):
+
+- `default_language` — tracker-wide convention for releases with no tag.
+  Only for SINGLE-language trackers; a mixed one (nyaa carries English
+  fansubs, French `VF`/`VOSTFR` rips and raws side by side) must emit a
+  per-result hint on `SearchResult::language` instead, which
+  `ranking::resolve_language` prefers over this.
+- `catalog = false` — search-only: the freshness scheduler won't ingest the
+  provider's `latest()` into the discovery shelves. For high-volume,
+  narrow-taxonomy trackers (nyaa) that would bury the catalogue.
+- `seed = false` — pause grabs from this provider once they finish
+  downloading (files stay on disk; playback reads from disk). Enforced by
+  the 30 s `seed_stats` loop from `torrents.source_provider`, so flipping
+  the knob takes effect on already-downloaded torrents too.
 
 If the tracker exposes a Torznab API, **compose `TorznabProvider`** from
 the new module — don't reimplement the wire format. `c411.rs` is the

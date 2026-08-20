@@ -540,8 +540,11 @@ fn blob_to_vec(blob: &[u8]) -> Option<Vec<f32>> {
         return None;
     }
     Some(
-        blob.chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().expect("chunks_exact(4) yields 4 bytes")))
+        blob.as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .map(f32::from_le_bytes)
             .collect(),
     )
 }

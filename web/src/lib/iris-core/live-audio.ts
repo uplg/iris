@@ -15,6 +15,13 @@
  * time derived from the stream's `EXT-X-PROGRAM-DATE-TIME` — the audio
  * sample's `timestamp` (epoch seconds) and `hls.playingDate` (a Date). We
  * schedule each PCM buffer so its PDT lines up with the video's current PDT.
+ *
+ * That anchor is also a HARD PRECONDITION: a playlist without
+ * `EXT-X-PROGRAM-DATE-TIME` (most community TNT restreams — Vavoo's feeds
+ * carry none) leaves `hls.playingDate` null forever, and the mount used to
+ * park on it indefinitely while holding a SECOND full read of the stream
+ * open — doubling upstream bandwidth on a feed we weren't playing a sample
+ * of. We now refuse to mount without PDT and say so.
  */
 
 import type Hls from "hls.js";
@@ -54,6 +61,13 @@ export async function mountLiveAudio(
   masterUrl: string,
 ): Promise<LiveAudioHandle> {
   ensureLibavAudioDecoderRegistered();
+
+  if (hls.latestLevelDetails && !hls.latestLevelDetails.hasProgramDateTime) {
+    console.warn(
+      "[live-audio] playlist carries no EXT-X-PROGRAM-DATE-TIME — cannot sync a sidecar, staying silent",
+    );
+    return { dispose: () => {} };
+  }
 
   let disposed = false;
   // Set once the throttle is wired; dispose() calls it so a parked decode
@@ -166,6 +180,12 @@ export async function mountLiveAudio(
       resolve(p);
       return;
     }
+    // Ticks observed while the video advances but exposes no PDT. The
+    // up-front `hasProgramDateTime` check catches this for a loaded
+    // playlist; this is the backstop for the race where details land after
+    // the mount. ~10 `timeupdate`s is a couple of seconds of playback.
+    const NO_PDT_TICKS = 10;
+    let ticks = 0;
     const onTick = () => {
       if (disposed) {
         cleanup();
@@ -176,6 +196,13 @@ export async function mountLiveAudio(
       if (v !== null) {
         cleanup();
         resolve(v);
+        return;
+      }
+      ticks += 1;
+      if (ticks >= NO_PDT_TICKS && hls.latestLevelDetails?.hasProgramDateTime === false) {
+        console.warn("[live-audio] no PROGRAM-DATE-TIME after playback started — giving up");
+        cleanup();
+        resolve(null);
       }
     };
     const cleanup = () => {

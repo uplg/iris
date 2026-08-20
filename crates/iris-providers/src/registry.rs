@@ -62,19 +62,50 @@ pub struct ParsedQueryInfo {
     pub year: Option<u16>,
 }
 
+/// Per-provider behaviour declared in `providers.toml`, beyond "which
+/// tracker is this". Everything here defaults to the pre-existing
+/// behaviour, so an entry that declares none of it behaves exactly as
+/// before.
+#[derive(Debug, Clone)]
+pub struct ProviderPolicy {
+    /// Default language string (`"english"` / `"french"` / `"multi"`) for
+    /// releases that ship with no explicit marker. Seedpool ships English
+    /// by convention without ever tagging the file, and treating that as
+    /// `Unknown` (= "no badge") would leave anglophone users without a
+    /// visual cue. Francophone trackers tag explicitly, so they need none.
+    pub default_language: Option<String>,
+    /// Whether the freshness scheduler may ingest this provider's
+    /// `latest()` feed into the discovery catalogue. `false` makes the
+    /// provider search-only: it answers user queries and nothing else.
+    ///
+    /// This is what keeps a high-volume, narrow-taxonomy tracker from
+    /// taking the catalogue over — nyaa.si indexes anime exclusively and
+    /// publishes hundreds of releases a day, so letting its rolling window
+    /// into the shelves would bury everything else under fansub raws while
+    /// contributing nothing the household browses by.
+    pub catalog: bool,
+    /// Whether torrents grabbed from this provider keep seeding once they
+    /// finish downloading. `false` pauses them at completion (files stay on
+    /// disk, playback is unaffected — it reads from disk).
+    pub seed: bool,
+}
+
+impl Default for ProviderPolicy {
+    fn default() -> Self {
+        Self {
+            default_language: None,
+            catalog: true,
+            seed: true,
+        }
+    }
+}
+
 /// Holds all enabled providers and fans out searches in parallel.
 #[derive(Clone, Default)]
 pub struct ProviderRegistry {
     providers: Arc<HashMap<String, Arc<dyn SearchProvider>>>,
-    /// Provider-id → default language string (`"english"` / `"french"`
-    /// / `"multi"`). Read from the optional `default_language` field
-    /// on each `[[providers]]` entry in `providers.toml`. Used by
-    /// the API layer to disambiguate releases that ship with no
-    /// explicit language marker — Seedpool ships English by
-    /// convention without ever tagging the file, and treating that
-    /// as `Unknown` (= "no badge") would leave anglophone users
-    /// without a visual cue.
-    default_languages: Arc<HashMap<String, String>>,
+    /// Provider-id → its declared [`ProviderPolicy`].
+    policies: Arc<HashMap<String, ProviderPolicy>>,
     /// Provider-id → semaphore bounding concurrent `search` calls
     /// ([`MAX_INFLIGHT_PER_PROVIDER`]).
     search_permits: Arc<HashMap<String, Arc<tokio::sync::Semaphore>>>,
@@ -83,11 +114,9 @@ pub struct ProviderRegistry {
 impl ProviderRegistry {
     pub fn from_entries(entries: &[ProviderEntry]) -> Result<Self> {
         let mut map: HashMap<String, Arc<dyn SearchProvider>> = HashMap::new();
-        let mut defaults: HashMap<String, String> = HashMap::new();
+        let mut policies: HashMap<String, ProviderPolicy> = HashMap::new();
         for entry in entries.iter().filter(|e| e.enabled) {
-            if let Some(toml::Value::String(s)) = entry.fields.get("default_language") {
-                defaults.insert(entry.id.clone(), s.to_ascii_lowercase());
-            }
+            policies.insert(entry.id.clone(), policy_of(entry));
             match build_provider(entry) {
                 Ok(p) => {
                     tracing::info!(provider = %entry.id, kind = %entry.kind, "loaded provider");
@@ -111,9 +140,14 @@ impl ProviderRegistry {
             .collect();
         Ok(Self {
             providers: Arc::new(map),
-            default_languages: Arc::new(defaults),
+            policies: Arc::new(policies),
             search_permits: Arc::new(permits),
         })
+    }
+
+    /// The policy a provider declared, or the defaults for an unknown id.
+    pub fn policy(&self, provider_id: &str) -> ProviderPolicy {
+        self.policies.get(provider_id).cloned().unwrap_or_default()
     }
 
     /// Look up the default language string a provider entry declared
@@ -121,7 +155,29 @@ impl ProviderRegistry {
     /// field — most francophone trackers tag releases explicitly so
     /// the parser's `detect_language` covers them without a default.
     pub fn default_language(&self, provider_id: &str) -> Option<&str> {
-        self.default_languages.get(provider_id).map(String::as_str)
+        self.policies
+            .get(provider_id)
+            .and_then(|p| p.default_language.as_deref())
+    }
+
+    /// Ids the freshness scheduler may pull `latest()` from — see
+    /// [`ProviderPolicy::catalog`].
+    pub fn catalog_ids(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .providers
+            .keys()
+            .filter(|id| self.policy(id).catalog)
+            .cloned()
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Whether torrents grabbed from `provider_id` should keep seeding once
+    /// complete — see [`ProviderPolicy::seed`]. Unknown providers (a grab
+    /// whose tracker was since removed from the config) keep seeding.
+    pub fn seeds(&self, provider_id: &str) -> bool {
+        self.policy(provider_id).seed
     }
 
     pub fn ids(&self) -> Vec<String> {
@@ -230,6 +286,25 @@ impl ProviderRegistry {
     }
 }
 
+fn policy_of(entry: &ProviderEntry) -> ProviderPolicy {
+    let flag = |key: &str, default: bool| {
+        entry
+            .fields
+            .get(key)
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(default)
+    };
+    ProviderPolicy {
+        default_language: entry
+            .fields
+            .get("default_language")
+            .and_then(|v| v.as_str())
+            .map(str::to_ascii_lowercase),
+        catalog: flag("catalog", true),
+        seed: flag("seed", true),
+    }
+}
+
 /// Factory: dispatches on `entry.kind` to construct a concrete provider.
 /// New tracker types plug in here.
 pub fn build_provider(entry: &ProviderEntry) -> Result<Arc<dyn SearchProvider>> {
@@ -240,6 +315,7 @@ pub fn build_provider(entry: &ProviderEntry) -> Result<Arc<dyn SearchProvider>> 
         "unit3d" => Ok(crate::unit3d::Unit3dProvider::from_config(entry)?),
         "c411" => Ok(crate::c411::C411::from_config(entry)?),
         "hdtorrents" => Ok(crate::hdtorrents::HdTorrents::from_config(entry)?),
+        "nyaa" => Ok(crate::nyaa::NyaaProvider::from_config(entry)?),
         "torrentleech" => Ok(crate::torrentleech::TorrentLeech::from_config(entry)?),
         other => Err(Error::Provider(format!(
             "unknown provider kind: {other} (provider id: {})",

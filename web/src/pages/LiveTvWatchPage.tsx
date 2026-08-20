@@ -12,9 +12,12 @@ import { programmeProgress } from "@/pages/LiveTvPage";
 /** Faster than the grid (30 s): the overlay shows a live progress bar. */
 const EPG_REFETCH_MS = 30_000;
 
-/** Auto source-rotations before we give up and show the failure banner.
- *  "Try another source" resets the budget (fresh player section). */
-const MAX_AUTO_ROTATIONS = 2;
+/** Floor for auto source-rotations before we give up and show the failure
+ *  banner. The real budget is the channel's actual source count, reported by
+ *  the master route as `x-iris-live-sources` — M6 is carried by four Vavoo
+ *  feeds and a fixed budget of two could never reach the fourth. "Try another
+ *  source" resets it (fresh player section). */
+const MIN_AUTO_ROTATIONS = 2;
 
 const noop = () => {
   /* live: no progress to persist */
@@ -178,10 +181,11 @@ function LivePlayerSection(props: { country: string; channelId: string; channelN
 
   const probeQ = useQuery({
     queryKey: ["livetv", "probe", country, channelId, attempt],
-    queryFn: async (): Promise<{ tier: DecodeTier }> => {
+    queryFn: async (): Promise<{ tier: DecodeTier; sources: number }> => {
       const res = await fetch(masterUrl, { credentials: "include" });
       if (!res.ok) throw new Error(`master fetch failed (${res.status})`);
       const upstream = res.headers.get("x-iris-live-upstream");
+      const sources = Number(res.headers.get("x-iris-live-sources"));
       // Tuner feed (broadcast -c copy, open-GOP H.264 + E-AC-3) plays via
       // the WebCodecs live engine — client-side decode with our own
       // broadcast concealment; MSE's in-browser decoders kill the pipeline
@@ -189,7 +193,10 @@ function LivePlayerSection(props: { country: string; channelId: string; channelN
       // Tier F: the native HLS pipeline decodes E-AC-3 + deinterlaces on
       // Apple hardware.
       const webcodecs = typeof globalThis.VideoDecoder !== "undefined";
-      return { tier: upstream === "tuner" && webcodecs ? "C" : "F" };
+      return {
+        tier: upstream === "tuner" && webcodecs ? "C" : "F",
+        sources: Number.isFinite(sources) && sources > 0 ? sources : MIN_AUTO_ROTATIONS,
+      };
     },
     staleTime: 0,
     gcTime: 0,
@@ -215,7 +222,8 @@ function LivePlayerSection(props: { country: string; channelId: string; channelN
     void livetv.reportPlaybackError(country, channelId).catch(() => {
       /* best-effort */
     });
-    if (rotations.current < MAX_AUTO_ROTATIONS) {
+    const budget = Math.max(MIN_AUTO_ROTATIONS, probeQ.data?.sources ?? 0);
+    if (rotations.current < budget) {
       rotations.current += 1;
       setAttempt((n) => n + 1);
     } else {

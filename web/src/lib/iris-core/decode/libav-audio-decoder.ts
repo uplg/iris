@@ -40,13 +40,11 @@ const SUPPORTED: ReadonlySet<AudioCodec> = new Set<AudioCodec>([
   "ac3",
   "eac3",
   "flac",
-  // `dts` is wired through a local mediabunny patch (see
-  // `patches/mediabunny+*.patch`) — vanilla upstream's Matroska
-  // demuxer skips `A_DTS` tracks because it doesn't carry the
-  // codec ID in its map. Our patch adds the mapping; the libav
-  // `dca` decoder picks up the packets and produces PCM samples.
-  // DTS-HD MA core layer is decoded; the extension substream is
-  // dropped (fine — Tier B re-encodes to AAC anyway).
+  // mediabunny surfaces `A_DTS` Matroska tracks natively since 1.55
+  // (it used to need a local patch); the libav `dca` decoder picks up
+  // the packets and produces PCM samples. DTS-HD MA core layer is
+  // decoded; the extension substream is dropped (fine — Tier B
+  // re-encodes to AAC anyway).
   "dts",
   "pcm-s16",
   "pcm-s24",
@@ -116,7 +114,7 @@ let libavSingleton: Promise<LibavLike> | null = null;
  *  servers running outside Docker fall back to `default`. */
 async function detectIrisVariant(): Promise<boolean> {
   try {
-    const res = await fetch("/libavjs/libav-6.9.8.1-iris.wasm.mjs", {
+    const res = await fetch("/libavjs/libav-6.10.9.0-iris.wasm.mjs", {
       method: "HEAD",
       cache: "no-store",
     });

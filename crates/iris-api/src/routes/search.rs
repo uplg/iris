@@ -132,15 +132,7 @@ pub(crate) async fn search(
     // the UI would mean "no signal at all" instead of the real
     // "this is English by provider convention".
     for r in &mut agg.results {
-        let detected = iris_media::filename::detect_language(&r.title);
-        let resolved = if detected == iris_media::filename::Language::Unknown {
-            state
-                .providers()
-                .default_language(&r.provider_id)
-                .map_or(detected, iris_media::filename::Language::parse_tag)
-        } else {
-            detected
-        };
+        let resolved = crate::ranking::resolve_language(r, state.providers());
         r.language = Some(resolved.as_str().to_string());
         r.codec = Some(
             iris_media::filename::detect_codec(&r.title)

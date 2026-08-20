@@ -192,22 +192,38 @@ export const mountTierF: EngineMount = async (opts) => {
   let liveAudioStarted = false;
   let liveMasterReloads = 0;
   if (live) {
-    // The E-AC-3 detector: hls.js only creates buffers for codecs MSE
-    // supports. A live stream that reaches BUFFER_CODECS with no audio in
-    // ANY buffer (neither a dedicated `audio` buffer nor a muxed
-    // `audiovideo` one) almost certainly carries audio the browser can't
-    // decode (E-AC-3/AC-3 in a TS feed) — decode it ourselves via the
-    // WebAudio sidecar, synced through EXT-X-PROGRAM-DATE-TIME. When a
-    // muxed `audiovideo` buffer exists the element plays its own audio,
-    // so starting the sidecar would double it.
-    hls.on(Hls.Events.BUFFER_CODECS, (_evt, data) => {
-      const d = data as { audio?: unknown; audiovideo?: unknown };
-      if (d.audio || d.audiovideo || liveAudioStarted || disposed) return;
+    // The E-AC-3 detector. hls.js only creates SourceBuffers for codecs MSE
+    // can decode, so "the stream is playing and there is still no audio
+    // buffer" is the signal that the feed carries audio the browser refuses
+    // (E-AC-3/AC-3 in a TS feed) and we have to decode it ourselves through
+    // the WebAudio sidecar.
+    //
+    // The subtlety that bit us: BUFFER_CODECS fires ONCE PER STREAM
+    // CONTROLLER. With an alternate audio rendition the main controller
+    // announces `video` first and the audio controller announces `audio` a
+    // beat later. Deciding on that first video-only event put the sidecar
+    // and the element's own audio on the speakers simultaneously — the
+    // double-audio bug.
+    //
+    // So the decision is made on accumulated state, deferred until fragments
+    // are actually landing, and REVERSIBLE: an audio buffer showing up late
+    // retracts it and disposes the sidecar instead of doubling.
+    const buffers = new Set<string>();
+    const hasMseAudio = () => buffers.has("audio") || buffers.has("audiovideo");
+    /** Fragments buffered before we conclude no audio buffer is coming. Two
+     *  is past the point where an alt-audio controller would have announced
+     *  its own codecs. */
+    const DECIDE_AFTER_FRAGS = 2;
+    let fragsBuffered = 0;
+
+    const startSidecar = () => {
       liveAudioStarted = true;
       console.info("[iris-core] Tier F live: no MSE-decodable audio — starting WebAudio sidecar");
       mountLiveAudio(video, hls, streamUrl)
         .then((h) => {
-          if (disposed) h.dispose();
+          // `disposed` covers engine teardown; `hasMseAudio()` covers hls.js
+          // announcing an audio buffer while we were mounting.
+          if (disposed || hasMseAudio()) h.dispose();
           else liveAudio = h;
         })
         .catch((e: unknown) => {
@@ -215,6 +231,25 @@ export const mountTierF: EngineMount = async (opts) => {
           // dead channel.
           console.warn("[iris-core] Tier F live: audio sidecar failed — video stays silent", e);
         });
+    };
+
+    hls.on(Hls.Events.BUFFER_CODECS, (_evt, data) => {
+      for (const name of Object.keys(data)) buffers.add(name);
+      if (!hasMseAudio() || disposed) return;
+      // The element plays its own audio after all — retract.
+      if (liveAudio || liveAudioStarted) {
+        console.info(
+          `[iris-core] Tier F live: MSE audio buffer appeared (${[...buffers].join("+")}) — dropping the sidecar`,
+        );
+        liveAudio?.dispose();
+        liveAudio = null;
+      }
+    });
+
+    hls.on(Hls.Events.FRAG_BUFFERED, () => {
+      if (disposed || liveAudioStarted || hasMseAudio()) return;
+      fragsBuffered += 1;
+      if (fragsBuffered >= DECIDE_AFTER_FRAGS) startSidecar();
     });
   }
 
@@ -272,104 +307,99 @@ export const mountTierF: EngineMount = async (opts) => {
     console.log("[iris-core] Tier F: AUDIO_TRACK_SWITCHED to id", data.id);
     opts.onAudioTracksChange?.(collectHlsAudioTracks(hls));
   });
-  // Error handling, mirrored from Vidstack's `HLSController.#onError`
-  // but bounded. `hls.recoverMediaError()` detaches the media
-  // element and re-loads the manifest from scratch; when the
-  // underlying issue is content-shaped (Firefox + 4K HEVC HDR, a
-  // bsf strip ate something VT needed, …) the recovery itself
-  // trips the same fatal `bufferAppendError` within seconds and we
-  // loop forever — the user sees "Tier F: HLS manifest parsed"
-  // every couple seconds. Cap at `MAX_RECOVER` attempts inside a
-  // `RECOVER_WINDOW_MS` sliding window; past that, surface the
-  // error AND stop the loader so subsequent error events don't
-  // re-fire `opts.onError` (which would re-set the banner on every
-  // tick) or keep streaming bytes from the server.
-  const MAX_RECOVER = 2;
-  const RECOVER_WINDOW_MS = 8_000;
-  const recentRecoveries: number[] = [];
+  // Error handling. hls.js 1.7 ships its OWN recovery machinery: the
+  // `ErrorController` listens for `ERROR` from the Hls constructor — so
+  // before this handler — attaches a plan to `data.errorAction`, and applies
+  // it: switching level, penalty-boxing an alternate, and, when the plan
+  // carries the `ResetMediaSource` flag (`mediaSourceRequiresReset`), calling
+  // `hls.recoverMediaError()` itself. It marks the plan `resolved` when it
+  // worked, and only leaves `data.fatal` set when it ran out of options —
+  // in which case it has already stopped the loader.
+  //
+  // Our 1.6-era handler called `recoverMediaError()` unconditionally on every
+  // fatal media error, which under 1.7 means a SECOND detach/re-attach cycle
+  // racing the one hls.js just started — manufacturing exactly the
+  // `bufferAppendError` / `mediaSourceRequiresReset` storm it was supposed to
+  // clear, and then reporting a perfectly healthy feed as broken (the backend
+  // cools a reported source down household-wide). So: let hls.js drive, and
+  // only act on what it declares unrecoverable.
+  //
+  // `ErrorActionFlags` is a `const enum` in hls.js's .d.ts, which
+  // `isolatedModules` forbids importing — mirror the one value we read.
+  const FLAG_RESET_MEDIA_SOURCE = 16; // ErrorActionFlags.ResetMediaSource
+  // Self-recovery attempts for a fatal media error hls.js did NOT already
+  // reset the MediaSource for. One is enough: if the first re-attach doesn't
+  // take, the content is the problem and rotating beats looping.
+  const MAX_RECOVER = 1;
+  let recoveries = 0;
   let surfaced = false;
+
+  // `recoverMediaError()` — ours or hls.js's — detaches and re-attaches the
+  // media element, which RESETS `currentTime` to 0. Mid-film that silently
+  // restarted the user from the beginning. Restore the position on the first
+  // `canplay` after the reset: one-shot, event-driven, and a no-op both when
+  // hls.js kept the position and on live (where re-joining at the live edge
+  // is the desired outcome, not a regression).
+  const armPlayheadRestore = () => {
+    if (live) return;
+    const resumeAt = video.currentTime;
+    if (resumeAt <= 1) return;
+    const restore = () => {
+      video.removeEventListener("canplay", restore);
+      if (video.currentTime < resumeAt - 1) {
+        console.warn(
+          `[iris-core] Tier F: post-recovery playhead at ${video.currentTime.toFixed(1)}s — restoring ${resumeAt.toFixed(1)}s`,
+        );
+        try {
+          video.currentTime = resumeAt;
+        } catch {
+          /* element torn down — dispose path owns it */
+        }
+      }
+    };
+    video.addEventListener("canplay", restore);
+  };
+
+  const giveUp = (message: string) => {
+    surfaced = true;
+    // Stop the loader so subsequent error events don't re-fire
+    // `opts.onError` (which would re-set the banner / re-demote the source on
+    // every tick) or keep streaming bytes from the server. `hls.destroy()`
+    // would be ideal but it can re-enter this handler with its own teardown
+    // errors; full `destroy()` runs in the engine's `dispose()` once
+    // IrisPlayer / the page react to the surfaced error.
+    try {
+      hls.stopLoad();
+    } catch {
+      /* idempotent */
+    }
+    try {
+      hls.detachMedia();
+    } catch {
+      /* idempotent */
+    }
+    opts.onError(new Error(message));
+  };
+
   hls.on(Hls.Events.ERROR, (_event, data) => {
     if (surfaced) {
-      // Already gave up. Swallow further fatal errors so we don't
-      // re-fire `opts.onError` and re-trigger the banner / demote
-      // path on every subsequent tick.
+      // Already gave up. Swallow the rest.
       return;
     }
+    const action = data.errorAction;
+    const resetsMediaSource = ((action?.flags ?? 0) & FLAG_RESET_MEDIA_SOURCE) !== 0;
     if (!data.fatal) {
-      console.warn("[iris-core] hls.js non-fatal", data.type, data.details);
+      // hls.js is handling it — including, when the flag is set, a media
+      // source reset it performs itself.
+      if (resetsMediaSource) armPlayheadRestore();
+      console.warn("[iris-core] hls.js non-fatal", data.type, data.details, action?.resolved);
       return;
     }
-    if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-      const now = performance.now();
-      while (recentRecoveries.length > 0 && now - recentRecoveries[0]! > RECOVER_WINDOW_MS) {
-        recentRecoveries.shift();
-      }
-      if (recentRecoveries.length >= MAX_RECOVER) {
-        surfaced = true;
-        console.error(
-          `[iris-core] Tier F: ${recentRecoveries.length} fatal recoveries in ${RECOVER_WINDOW_MS}ms — surfacing ${data.details}`,
-        );
-        // Stop the loader; `hls.destroy()` would be ideal but it
-        // can re-enter this handler with its own teardown errors,
-        // so we go for the lighter `stopLoad()` + `detachMedia()`.
-        // Full `destroy()` runs in the engine's `dispose()` path
-        // once IrisPlayer / WatchPage react to the surfaced error.
-        try {
-          hls.stopLoad();
-        } catch {
-          /* idempotent */
-        }
-        try {
-          hls.detachMedia();
-        } catch {
-          /* idempotent */
-        }
-        opts.onError(new Error(`hls.js fatal ${data.type}: ${data.details}`));
-        return;
-      }
-      recentRecoveries.push(now);
-      console.warn(
-        `[iris-core] Tier F: fatal mediaError ${data.details} — recoverMediaError() #${recentRecoveries.length}`,
-      );
-      // `recoverMediaError()` detaches + re-attaches the media element,
-      // which RESETS `currentTime` to 0 — a mid-film bufferAppendError
-      // (Firefox background-tab memory pressure is a known trigger)
-      // silently restarted the user from the beginning. This internal
-      // recovery never goes through IrisPlayer's remount, so the
-      // live-playhead resume there can't help; restore the position
-      // ourselves on the first `canplay` after recovery. One-shot,
-      // event-driven, and a no-op when hls.js kept the position.
-      const resumeAt = video.currentTime;
-      if (resumeAt > 1) {
-        const restore = () => {
-          video.removeEventListener("canplay", restore);
-          if (video.currentTime < resumeAt - 1) {
-            console.warn(
-              `[iris-core] Tier F: post-recovery playhead at ${video.currentTime.toFixed(1)}s — restoring ${resumeAt.toFixed(1)}s`,
-            );
-            try {
-              video.currentTime = resumeAt;
-            } catch {
-              /* element torn down — dispose path owns it */
-            }
-          }
-        };
-        video.addEventListener("canplay", restore);
-      }
-      try {
-        hls.recoverMediaError();
-      } catch (e) {
-        surfaced = true;
-        try {
-          hls.stopLoad();
-        } catch {
-          /* idempotent */
-        }
-        opts.onError(e instanceof Error ? e : new Error(String(e)));
-      }
-      return;
-    }
+
+    // Fatal: hls.js could not resolve it and has stopped the loader.
     if (live && data.type === Hls.ErrorTypes.NETWORK_ERROR && liveMasterReloads < 3) {
+      // A dying upstream 502s for a beat while the backend cools it down and
+      // elects the next feed — reloading the master picks up that election.
       liveMasterReloads += 1;
       console.warn(
         `[iris-core] Tier F live: fatal network error — reloading master (${liveMasterReloads}/3)`,
@@ -377,13 +407,26 @@ export const mountTierF: EngineMount = async (opts) => {
       hls.loadSource(streamUrl);
       return;
     }
-    surfaced = true;
-    try {
-      hls.stopLoad();
-    } catch {
-      /* idempotent */
+    if (
+      data.type === Hls.ErrorTypes.MEDIA_ERROR &&
+      !resetsMediaSource &&
+      recoveries < MAX_RECOVER
+    ) {
+      recoveries += 1;
+      console.warn(
+        `[iris-core] Tier F: fatal mediaError ${data.details} — recoverMediaError() #${recoveries}`,
+      );
+      armPlayheadRestore();
+      try {
+        hls.recoverMediaError();
+        return;
+      } catch (e) {
+        giveUp(e instanceof Error ? e.message : String(e));
+        return;
+      }
     }
-    opts.onError(new Error(`hls.js fatal ${data.type}: ${data.details}`));
+    console.error(`[iris-core] Tier F: unrecoverable ${data.type} / ${data.details}`);
+    giveUp(`hls.js fatal ${data.type}: ${data.details}`);
   });
 
   // Now attach + load. Order taken from Vidstack: listeners are

@@ -5,6 +5,91 @@ All notable changes to Iris are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **nyaa.si provider.** Public anime tracker, consumed through its RSS feed
+  (RSS 2.0 + a `nyaa:` namespace carrying the fields Torznab puts in
+  `<torznab:attr>`). No auth and no link cache: the download URL is derivable
+  from the torrent id, so grabs are restart-safe without a persisted
+  `download_url`. Two new per-provider config knobs, both set for it:
+  `catalog = false` keeps its firehose (hundreds of anime releases a day) out
+  of the discovery shelves — it answers user searches and nothing else — and
+  `seed = false` leaves the swarm once a download completes (the seed-stats
+  loop pauses the torrent; files stay on disk and playback is untouched since
+  it reads from disk). Both default to the previous behaviour, so every other
+  provider is unaffected.
+
+### Fixed
+
+- **Live TV: the web player fought hls.js 1.7 instead of using it.** 1.7 ships
+  its own recovery machinery — it attaches a plan to `data.errorAction` and
+  applies it, including calling `recoverMediaError()` itself for a media
+  source reset. Tier F's 1.6-era handler called `recoverMediaError()` on top
+  of that, so a second detach/re-attach raced the first and manufactured the
+  `bufferAppendError` storm it was meant to clear — then reported the feed as
+  broken, which cooled a healthy source down household-wide. Tier F now lets
+  hls.js drive and only acts on what it declares unrecoverable.
+- **Live TV: double audio (WebAudio sidecar + the element's own track).**
+  `BUFFER_CODECS` fires once per stream controller, so with an alternate audio
+  rendition the main controller announces `video` and the audio controller
+  announces `audio` a beat later. The sidecar latched on that first video-only
+  event and never reconsidered. The decision is now accumulated across every
+  event, deferred until fragments are actually landing, and reversible — a
+  late audio buffer disposes the sidecar instead of doubling it.
+- **Live TV: the audio sidecar burned bandwidth on playlists it can't sync
+  to.** It anchors on `EXT-X-PROGRAM-DATE-TIME`; a playlist without one (every
+  Vavoo feed) left it parked forever on `hls.playingDate` while holding a
+  SECOND full read of the stream open. It now refuses to mount and says so.
+- **Live TV: clients gave up before reaching a channel's last feed.** The web
+  player's rotation budget was a fixed 2 and the TV's a fixed 3, but M6 has no
+  official CDN left and is carried by four Vavoo feeds alone. The master route
+  now reports the candidate count (`x-iris-live-sources`) and the web sizes its
+  budget from it; the TV's ceiling was raised past any realistic fallback count.
+- **Live TV: one browser could park a working feed for 24 hours.** A
+  client-reported playback failure escalated on the same ladder as a failed
+  server-side probe, up to a 24 h cooldown — so a browser-side bug walked all
+  four of M6's feeds out of the election. Playback reports now cap at 30 min;
+  probe failures (hard evidence, fetched by us) keep the full ladder.
+- **Fansub releases never became episodes.** The bracketed anime shape
+  (`[Judas] One Piece - 1174 [1080p]`) carries an absolute number and NO
+  season, and every caller that stores an episode row required a
+  `(season, episode)` pair — so those releases parsed cleanly and were then
+  dropped on the floor: no library episode after a grab, no
+  `available_episodes` offer, no Watchlist row, no "play next". The new
+  `filename::season_episode_key` folds them onto season 1, the convention
+  `follows::parsed_matches_episode` already read absolutes back with. Public
+  anime trackers name releases this way almost exclusively, so nyaa would
+  have been unusable for series tracking without it. Episode `0` is excluded
+  (it's the season-pack sentinel downstream) and packs, which carry no
+  episode marker at all, still yield no key.
+- **`Multi-Subs` was read as multi-audio.** `-` is a token separator, so the
+  fansub convention for "one Japanese audio track, many SUBTITLE tracks" was
+  detected as `MULTi` — badging a raw as bilingual and, worse, handing it the
+  `MULTi` bonus in the grab tie-break so it beat releases the household can
+  actually understand.
+- **Bare `VF` was not recognised as French.** Only `VFF` / `VFQ` / `VF2` /
+  `VOSTFR` were. A fansub release tagged just `VF` read as `Unknown` and then
+  inherited its provider's default language — labelling a French dub English.
+- Language resolution now consults a per-result provider hint before the
+  tracker-wide `default_language`, so a MIXED tracker isn't flattened to one
+  default. nyaa emits that hint from its category (`1_2` english-translated
+  only; `1_3` is "translated into something it won't name" — where the French
+  scene lives — and `1_4` is untranslated raws).
+
+### Changed
+
+- Rust 1.98 (workspace `rust-version` + the Docker builder image), and every
+  Rust and web dependency to its current stable — notably librqbit 9.0.1,
+  hls.js 1.7.1 (which fixes `BUFFER_APPEND_NO_PROGRESS` false positives),
+  mediabunny 1.55.1 and libav.js 6.10.9.0. The mediabunny patch shrank to just
+  the open-GOP decode-timestamp clamp: 1.55 upstreamed DTS support, and more
+  thoroughly than the local patch did (it distinguishes dtsc/dtsh/dtsl/dtse).
+  librqbit 9.0.1 also pulls quick-xml 0.41 into `librqbit-upnp`, so the two
+  `RUSTSEC-2026-019x` ignores in `deny.toml` — which the entry itself flagged
+  to revisit on librqbit 9 — are gone: the vulnerable 0.38.4 has left the tree.
+
 ## [1.4.0] - 2026-08-10
 
 ### Added

@@ -26,7 +26,7 @@ use chrono::{DateTime, Datelike, Utc};
 use iris_config::DiscoveryConfig;
 use iris_core::search::{MediaKind, SearchResult};
 use iris_db::SqlitePool;
-use iris_media::filename::{self, Language};
+use iris_media::filename::Language;
 use iris_providers::ProviderRegistry;
 
 use crate::anilist::{AniListClient, AniListMedia};
@@ -83,13 +83,17 @@ pub fn spawn(
     };
     tokio::spawn(async move {
         // One slice per (provider, kind); a full pass over `slices` is a cycle.
+        // `catalog_ids()`, not `ids()`: a provider can declare itself
+        // search-only (`catalog = false`) and stay out of the shelves. See
+        // `ProviderPolicy::catalog` — nyaa.si's anime firehose would
+        // otherwise bury the catalogue.
         let slices: Vec<(String, MediaKind)> = providers
-            .ids()
+            .catalog_ids()
             .into_iter()
             .flat_map(|id| KINDS.iter().map(move |k| (id.clone(), *k)))
             .collect();
         if slices.is_empty() {
-            tracing::info!("freshness scheduler: no providers; not starting");
+            tracing::info!("freshness scheduler: no catalogue providers; not starting");
             return;
         }
 
@@ -145,16 +149,7 @@ async fn run_slice(
     }
 
     let window_start = Utc::now() - chrono::Duration::weeks(cfg.poll_window_weeks.max(1));
-    let best = collect_best(
-        pool,
-        tmdb,
-        providers,
-        provider_id,
-        kind,
-        page.results,
-        window_start,
-    )
-    .await;
+    let best = collect_best(pool, tmdb, providers, kind, page.results, window_start).await;
     let upserted = upsert_window_rows(
         pool,
         tmdb,
@@ -180,7 +175,6 @@ async fn collect_best(
     pool: &SqlitePool,
     tmdb: &TmdbClient,
     providers: &ProviderRegistry,
-    provider_id: &str,
     kind: MediaKind,
     results: Vec<SearchResult>,
     window_start: DateTime<Utc>,
@@ -207,16 +201,7 @@ async fn collect_best(
             continue;
         };
 
-        // Language: detected from the SCENE name, falling back to the
-        // provider's configured default for untagged releases.
-        let detected = filename::detect_language(&r.title);
-        let lang = if detected == Language::Unknown {
-            providers
-                .default_language(provider_id)
-                .map_or(detected, Language::parse_tag)
-        } else {
-            detected
-        };
+        let lang = crate::ranking::resolve_language(&r, providers);
         let is_multi = lang == Language::Multi;
         let replace = best.get(&tmdb_id).is_none_or(|(existing, ex_lang)| {
             iris_core::ranking::recommended_cmp(

@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet};
 use iris_core::search::{SearchQuery, SearchResult};
 use iris_db::episode_files::LibraryEpisodeKey;
 use iris_media::filename::{Language, detect_language, parse, series_key};
+use iris_providers::ProviderRegistry;
 use iris_providers::registry::{AggregatedResults, ParsedQueryInfo};
 use sqlx::SqlitePool;
 
@@ -198,6 +199,32 @@ pub fn rerank_results(agg: &mut AggregatedResults, q: &SearchQuery, lib: &Librar
     }
 
     agg.results = scored.into_iter().map(|(_, _, r)| r).collect();
+}
+
+/// The language badge for a provider result, in precedence order:
+///
+/// 1. an explicit tag in the SCENE title (`VOSTFR`, `MULTi`, …) — always
+///    wins, it describes THIS release;
+/// 2. a hint the provider itself attached (`SearchResult::language`) —
+///    nyaa knows from its own category taxonomy whether a release is
+///    english-translated, which is per-result knowledge no static config
+///    can express;
+/// 3. the provider's configured `default_language` — a whole-tracker
+///    convention (Seedpool ships English and never tags it).
+///
+/// The two fallbacks are deliberately ordered that way: a mixed-language
+/// tracker (nyaa carries English fansubs, French `VF`/`VOSTFR` rips and
+/// untranslated raws side by side) must not be flattened to one default,
+/// or half its catalogue gets the wrong badge.
+pub(crate) fn resolve_language(r: &SearchResult, providers: &ProviderRegistry) -> Language {
+    let detected = detect_language(&r.title);
+    if detected != Language::Unknown {
+        return detected;
+    }
+    r.language
+        .as_deref()
+        .or_else(|| providers.default_language(&r.provider_id))
+        .map_or(Language::Unknown, Language::parse_tag)
 }
 
 /// Build the [`iris_core::ranking::Candidate`] view of a result for the

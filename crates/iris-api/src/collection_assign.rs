@@ -131,10 +131,7 @@ pub async fn assign_after_ingest(
     // unrelated Watchlist follow.
     if kind == Kind::Tv {
         for (file_idx, parsed) in &parsed_files {
-            let Some(season) = parsed.season else {
-                continue;
-            };
-            let Some(episode) = parsed.episode else {
+            let Some((season, episode)) = filename::season_episode_key(parsed) else {
                 continue;
             };
             let _ = episode_files::upsert(
@@ -817,7 +814,7 @@ impl AnimeHeal<'_> {
             let Some(p) = filename::parse(leaf) else {
                 continue;
             };
-            let (Some(season), Some(episode)) = (p.season, p.episode) else {
+            let Some((season, episode)) = filename::season_episode_key(&p) else {
                 continue;
             };
             let _ = episode_files::upsert(
@@ -861,7 +858,7 @@ async fn backfill_episode_absolutes(pool: &SqlitePool, infohash: &str, files: &[
         let Some(p) = filename::parse(leaf) else {
             continue;
         };
-        let (Some(season), Some(episode)) = (p.season, p.episode) else {
+        let Some((season, episode)) = filename::season_episode_key(&p) else {
             continue;
         };
         let _ = episode_files::correct_scene_parsed_with_absolute(

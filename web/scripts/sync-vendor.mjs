@@ -74,9 +74,9 @@ const VENDOR = [
     pkg: "libav.js",
     expectMajor: 6,
     files: [
-      ["dist/libav-6.9.8.1-default.wasm.js", "libavjs/libav-6.9.8.1-default.wasm.js"],
-      ["dist/libav-6.9.8.1-default.wasm.mjs", "libavjs/libav-6.9.8.1-default.wasm.mjs"],
-      ["dist/libav-6.9.8.1-default.wasm.wasm", "libavjs/libav-6.9.8.1-default.wasm.wasm"],
+      ["dist/libav-6.10.9.0-default.wasm.js", "libavjs/libav-6.10.9.0-default.wasm.js"],
+      ["dist/libav-6.10.9.0-default.wasm.mjs", "libavjs/libav-6.10.9.0-default.wasm.mjs"],
+      ["dist/libav-6.10.9.0-default.wasm.wasm", "libavjs/libav-6.10.9.0-default.wasm.wasm"],
     ],
   },
 ];

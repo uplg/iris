@@ -200,8 +200,13 @@ fn spawn_background_jobs(
 
     // Lifetime-upload reconciler — every 30 s, merge librqbit's session
     // upload counters into `torrents.uploaded_bytes_total` so the value
-    // survives restarts and GC evictions.
-    seed_stats::spawn(pool.clone(), app_state.engine().clone());
+    // survives restarts and GC evictions. Also enforces the per-provider
+    // `seed = false` policy (pause on completion).
+    seed_stats::spawn(
+        pool.clone(),
+        app_state.engine().clone(),
+        app_state.providers().clone(),
+    );
 
     // Live TV: keep lazily-loaded country playlists + programme guides
     // fresh. Countries load on first client access; this loop only

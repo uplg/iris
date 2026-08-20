@@ -62,8 +62,13 @@ private const val OVERLAY_VISIBLE_MS = 4_000L
 
 /** Automatic reconnect attempts on a playback error before giving up to the
  *  Retry UI. Each attempt first tells the backend to demote the dead source,
- *  then reloads — so the retries walk through a channel's fallback feeds. */
-private const val MAX_AUTO_RETRIES = 3
+ *  then reloads — so the retries walk through a channel's fallback feeds.
+ *
+ *  Must therefore EXCEED the largest realistic fallback count, or the last
+ *  feeds are unreachable: M6 has no official CDN left (the group DMCA'd its
+ *  restreams) and is carried by four Vavoo feeds alone, which a budget of 3
+ *  could never walk to the end of. */
+private const val MAX_AUTO_RETRIES = 6
 
 /** Decode escalation ladder for a silent no-start. ExoPlayer can sit in
  *  BUFFERING forever WITHOUT raising `onPlayerError` (hardware decoders wedge

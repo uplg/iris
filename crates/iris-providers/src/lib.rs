@@ -12,6 +12,7 @@
 
 pub mod c411;
 pub mod hdtorrents;
+pub mod nyaa;
 pub mod registry;
 pub mod tls;
 pub mod torr9;

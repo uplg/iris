@@ -1,0 +1,31 @@
+diff --git a/dist/modules/src/isobmff/isobmff-muxer.js b/dist/modules/src/isobmff/isobmff-muxer.js
+index e76fa452164356601a7920e8192665205acbb75d..71f8e5965eaf153a26368a9ef29dc3d3e7a81b9a 100644
+--- a/dist/modules/src/isobmff/isobmff-muxer.js
++++ b/dist/modules/src/isobmff/isobmff-muxer.js
+@@ -606,13 +606,24 @@ export class IsobmffMuxer extends Muxer {
+             // (presentation timestamp & decode order are all you need), but it is a concept in ISOBMFF so we need to
+             // model it.
+             sample.decodeTimestamp = sortedTimestamps[i];
++            // [iris patch] Open-GOP fix. Clamp decode timestamp to stay monotonic across
++            // GOP boundaries (open-GOP leading pictures present before the previous GOP's
++            // max PTS) so the assert below doesn't trip; PTS is unchanged (the signed
++            // composition offset in trun is recomputed from this decodeTimestamp).
++            if (trackData.lastTimescaleUnits !== null) {
++                const minDecodeTimestamp = trackData.lastTimescaleUnits / trackData.timescale;
++                if (sample.decodeTimestamp < minDecodeTimestamp) {
++                    sample.decodeTimestamp = minDecodeTimestamp;
++                }
++            }
+             const sampleCompositionTimeOffset = intoTimescale(sample.timestamp - sample.decodeTimestamp, trackData.timescale);
+             const durationInTimescale = intoTimescale(sample.duration, trackData.timescale);
+             if (trackData.lastTimescaleUnits !== null) {
+                 assert(trackData.lastSample);
+                 const timescaleUnits = intoTimescale(sample.decodeTimestamp, trackData.timescale, false);
+-                const delta = Math.round(timescaleUnits - trackData.lastTimescaleUnits);
+-                assert(delta >= 0);
++                // [iris patch] Clamp (belt-and-suspenders for float drift); the decodeTimestamp
++                // clamp above already keeps this non-negative.
++                const delta = Math.max(0, Math.round(timescaleUnits - trackData.lastTimescaleUnits));
+                 trackData.lastTimescaleUnits += delta;
+                 trackData.lastSample.timescaleUnitsToNextSample = delta;
+                 if (!this.isFragmented) {

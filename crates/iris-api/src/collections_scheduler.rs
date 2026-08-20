@@ -251,22 +251,20 @@ async fn check_one(
         if !result_belongs(normalized, &result_key, sibling_exists) {
             continue;
         }
-        let Some(s) = parsed.season else { continue };
-        let Some(e) = parsed.episode else { continue };
+        // Bracketed fansub names (`[Judas] One Piece - 1174`) carry an
+        // absolute number and no season — the whole convention on public
+        // anime trackers. `season_episode_key` folds them onto season 1 so
+        // they become real offers instead of being dropped here.
+        let Some((s, e)) = filename::season_episode_key(&parsed) else {
+            continue;
+        };
         // `episode == 0` is the SCENE parser's season-pack sentinel.
         // Stored alongside individual episodes so the grab path can
         // fall back to "ingest the pack, find the requested episode
         // inside" when no singleton offer exists. The API splits
         // packs into a separate `season_packs` field — the UI never
         // shows them as episode rows.
-        let detected = filename::detect_language(&r.title);
-        let lang = if detected == Language::Unknown {
-            providers
-                .default_language(&r.provider_id)
-                .map_or(detected, Language::parse_tag)
-        } else {
-            detected
-        };
+        let lang = crate::ranking::resolve_language(&r, providers);
         let key = (i64::from(s), i64::from(e), lang);
         // Keep the recommended-best per (S, E, language): smallest sane
         // size first, seeders only as a garde-fou. Without this a 51 GB

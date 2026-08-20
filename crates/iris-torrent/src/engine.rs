@@ -286,6 +286,19 @@ impl Engine {
         handle.ok_or(EngineError::NotFound)
     }
 
+    /// Stop a torrent's swarm activity without removing it: the files stay
+    /// on disk and the handle stays in the session (so `file_path` still
+    /// resolves and playback, which reads from disk, is unaffected).
+    ///
+    /// This is how the `seed = false` provider policy is enforced —
+    /// completing the download and then leaving the swarm, rather than
+    /// seeding indefinitely.
+    pub async fn pause_by_infohash(&self, infohash: &str) -> Result<(), EngineError> {
+        let handle = self.handle_by_infohash(infohash)?;
+        self.session.pause(&handle).await?;
+        Ok(())
+    }
+
     pub async fn delete_by_infohash(
         &self,
         infohash: &str,

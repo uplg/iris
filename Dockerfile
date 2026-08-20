@@ -23,10 +23,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 # Clone libav.js. The version is pinned to match what the web frontend
 # pulled in via `bun install libav.js` so the loader's expected
-# filename (`libav-6.9.8.1-iris.*`) matches the version emscripten
+# filename (`libav-6.10.9.0-iris.*`) matches the version emscripten
 # spits out.
 ARG LIBAVJS_REPO=https://github.com/Yahweasel/libav.js
-ARG LIBAVJS_REF=v6.9.8.1
+ARG LIBAVJS_REF=v6.10.9.0
 RUN git clone --depth 1 --branch ${LIBAVJS_REF} ${LIBAVJS_REPO} /build/libav.js
 WORKDIR /build/libav.js
 # Custom variant config. `mkconfig.js` must run from inside `configs/`
@@ -45,18 +45,17 @@ WORKDIR /build/libav.js
 # It handles core DTS losslessly and falls back to the core layer
 # for DTS-HD MA (the extension substream is silently dropped) —
 # acceptable for Tier B since we re-encode to AAC stereo/5.1 anyway.
-# This pairs with the `mediabunny` patch (see `patches/mediabunny+*.patch`)
-# which teaches the Matroska parser to surface `A_DTS` tracks as
-# `dts` — upstream mediabunny ignores them. If that patch ever fails
-# to apply, DTS files quietly fall through to Tier F (server-side
-# ffmpeg HLS) which is still functional.
+# This pairs with mediabunny's Matroska parser, which surfaces `A_DTS`
+# tracks as `dts` natively since 1.55 (it used to take a local patch).
+# Without a client-side DTS decoder those files fall through to Tier F
+# (server-side ffmpeg HLS), which is still functional.
 RUN cd configs && node mkconfig.js iris \
     '["avformat","avcodec","avfilter","swresample","audio-filters","parser-aac","parser-ac3","parser-dca","decoder-ac3","decoder-eac3","decoder-flac","decoder-dca","decoder-pcm_s16le","decoder-pcm_s24le","decoder-pcm_s32le","decoder-pcm_f32le"]'
 RUN --mount=type=cache,target=/build/libav.js/build,sharing=locked \
     make build-iris -j"$(nproc)" \
-    && cp dist/libav-6.9.8.1-iris.wasm.wasm /libav-iris.wasm \
-    && cp dist/libav-6.9.8.1-iris.wasm.mjs /libav-iris.wasm.mjs \
-    && cp dist/libav-6.9.8.1-iris.wasm.js /libav-iris.wasm.js
+    && cp dist/libav-6.10.9.0-iris.wasm.wasm /libav-iris.wasm \
+    && cp dist/libav-6.10.9.0-iris.wasm.mjs /libav-iris.wasm.mjs \
+    && cp dist/libav-6.10.9.0-iris.wasm.js /libav-iris.wasm.js
 
 ###############################################################################
 # 1) Frontend build (bun + Vite)
@@ -77,9 +76,9 @@ COPY web/ ./
 # Drop the iris-variant WASM into public/ so Vite copies it into dist.
 # (The npm-package libav.js wasm files in public/libavjs/ stay as the
 # fallback when the iris variant isn't present.)
-COPY --from=libav-builder /libav-iris.wasm public/libavjs/libav-6.9.8.1-iris.wasm.wasm
-COPY --from=libav-builder /libav-iris.wasm.mjs public/libavjs/libav-6.9.8.1-iris.wasm.mjs
-COPY --from=libav-builder /libav-iris.wasm.js public/libavjs/libav-6.9.8.1-iris.wasm.js
+COPY --from=libav-builder /libav-iris.wasm public/libavjs/libav-6.10.9.0-iris.wasm.wasm
+COPY --from=libav-builder /libav-iris.wasm.mjs public/libavjs/libav-6.10.9.0-iris.wasm.mjs
+COPY --from=libav-builder /libav-iris.wasm.js public/libavjs/libav-6.10.9.0-iris.wasm.js
 # Per-deploy build id baked into the bundle + emitted to dist/version.json so
 # already-open tabs can detect a redeploy and offer a reload. `.git` is excluded
 # from the build context, so Vite can't read the sha itself — pass it as a build
@@ -106,7 +105,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 # itself must be copied out *before* the RUN finishes — otherwise it
 # vanishes with the cache when the next build runs.
 ###############################################################################
-FROM rust:1.97-trixie AS rust-builder
+FROM rust:1.98-trixie AS rust-builder
 WORKDIR /app
 ENV CARGO_TERM_COLOR=never
 COPY rust-toolchain.toml Cargo.toml Cargo.lock* ./
@@ -122,7 +121,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # 3) Runtime — Chainguard Wolfi (glibc)
 #
 # glibc (2.43) just like Debian, so the prebuilt glibc shaka-packager binary
-# and the glibc Rust binary (built above on rust:1.97-trixie / glibc 2.41 —
+# and the glibc Rust binary (built above on rust:1.98-trixie / glibc 2.41 —
 # older, so it runs fine on Wolfi's newer 2.43) work UNCHANGED. NOT Alpine:
 # musl would break the prebuilt shaka binary and hurt librqbit's allocation-
 # heavy throughput. Verified codec parity — Wolfi's ffmpeg ships every

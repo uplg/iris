@@ -16,7 +16,7 @@ members = [
 [workspace.package]
 version = "1.4.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.98"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -139,7 +139,7 @@ sha2 = "0.11.0"
 # `SessionOptions::client_name_and_version` (PR 577) — needed because
 # UNIT3D-Announce trackers (e.g. theoldschool.cc) reject HTTP announces
 # with absent/long User-Agents, and 8.x had no public knob.
-librqbit = "9.0.0"
+librqbit = "9.0.1"
 
 # Recommendation — static text embeddings (model2vec). Official Rust impl,
 # CPU-only lookup-table inference; see crates/iris-reco + RECOSYS.md §4.

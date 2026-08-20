@@ -40,6 +40,17 @@ const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 const SOURCE_COOLDOWN_BASE: Duration = Duration::from_mins(10);
 const SOURCE_COOLDOWN_MAX: Duration = Duration::from_hours(24);
 
+/// Ceiling for cooldowns triggered by a CLIENT playback report, as opposed to
+/// a failed server-side probe. A probe failure is hard evidence (we fetched
+/// the playlist and its variant ourselves); a playback report is a guess made
+/// by a browser about a feed the server can reach perfectly well, and browser
+/// media stacks produce false accusations wholesale — one hls.js release
+/// turning append hiccups into fatal errors was enough to walk all four of
+/// M6's feeds up the 24 h ladder and leave the channel dark. Reports still
+/// escalate (a genuinely unplayable feed keeps losing elections) but can
+/// never park a source for longer than this.
+const PLAYBACK_COOLDOWN_MAX: Duration = Duration::from_mins(30);
+
 /// Concurrency cap for the background health probe.
 const PROBE_CONCURRENCY: usize = 12;
 
@@ -144,6 +155,11 @@ pub struct MasterPlaylist {
     pub body: String,
     pub source_index: usize,
     pub upstream_host: String,
+    /// How many fallback sources the channel has in total. Surfaced to
+    /// clients so a player that keeps failing rotates through ALL of them
+    /// instead of giving up on a fixed budget — M6 is carried by four Vavoo
+    /// feeds and a two-rotation cap could never reach the fourth.
+    pub source_count: usize,
 }
 
 /// Now/next programme pair for one channel.
@@ -238,13 +254,23 @@ impl SourceHealth {
     }
 
     fn mark_failure(&self, now_ms: u64) {
+        self.cool_down(now_ms, SOURCE_COOLDOWN_MAX);
+    }
+
+    /// A client said it couldn't PLAY this source. Same escalation, lower
+    /// ceiling — see [`PLAYBACK_COOLDOWN_MAX`].
+    fn mark_playback_failure(&self, now_ms: u64) {
+        self.cool_down(now_ms, PLAYBACK_COOLDOWN_MAX);
+    }
+
+    fn cool_down(&self, now_ms: u64, ceiling: Duration) {
         let failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
         let exp = u32::try_from(failures.saturating_sub(1))
             .unwrap_or(u32::MAX)
             .min(16);
         let backoff = SOURCE_COOLDOWN_BASE
             .saturating_mul(2u32.saturating_pow(exp))
-            .min(SOURCE_COOLDOWN_MAX);
+            .min(ceiling);
         let millis = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX);
         self.cooldown_until_ms
             .store(now_ms.saturating_add(millis), Ordering::Relaxed);
@@ -808,6 +834,7 @@ impl LiveTvService {
                             ),
                             source_index: si,
                             upstream_host: base.host_str().unwrap_or("unknown").to_string(),
+                            source_count: channel.sources.len(),
                         });
                     }
                     Err(e) => {
@@ -1302,7 +1329,7 @@ impl LiveTvService {
         let now_ms = epoch_ms();
 
         let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
-        snap.health[idx][active].mark_failure(now_ms);
+        snap.health[idx][active].mark_playback_failure(now_ms);
         // Re-elect: first source not cooling down, if any.
         let next = (0..channel.sources.len()).find(|&si| !snap.health[idx][si].in_cooldown(now_ms));
         if let Some(si) = next {
@@ -1894,6 +1921,7 @@ fn tuner_elected(
         body: prefix_segment_uris(body, "transcode/"),
         source_index: si,
         upstream_host: "tuner".to_string(),
+        source_count: snap.channels[idx].sources.len(),
     }
 }
 

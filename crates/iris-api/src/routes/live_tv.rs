@@ -277,6 +277,11 @@ pub(crate) async fn live_master(
     if let Ok(v) = playlist.upstream_host.parse() {
         headers.insert("x-iris-live-upstream", v);
     }
+    // Total candidates for this channel, so a client that keeps failing can
+    // size its rotation budget to actually reach the last one.
+    if let Ok(v) = playlist.source_count.to_string().parse() {
+        headers.insert("x-iris-live-sources", v);
+    }
     Ok(resp)
 }
 

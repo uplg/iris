@@ -593,7 +593,7 @@ fn normalize_infohash(raw: &str) -> Option<String> {
     }
     if s.len() == 80 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
         let mut inner = String::with_capacity(40);
-        for chunk in s.as_bytes().chunks_exact(2) {
+        for chunk in s.as_bytes().as_chunks::<2>().0 {
             let hi = (chunk[0] as char).to_digit(16)?;
             let lo = (chunk[1] as char).to_digit(16)?;
             let byte = u8::try_from((hi << 4) | lo).ok()?;

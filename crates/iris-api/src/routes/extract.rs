@@ -27,9 +27,19 @@ where
 {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let app: AppState = AppState::from_ref(state);
+    fn from_request_parts(
+        parts: &mut Parts,
+        state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> {
+        // Nothing here awaits — the token is in the headers and verification
+        // is pure CPU — so hand axum a ready future instead of an async block
+        // that would poll once for nothing.
+        std::future::ready(Self::from_parts(parts, &AppState::from_ref(state)))
+    }
+}
 
+impl AuthUser {
+    fn from_parts(parts: &Parts, app: &AppState) -> Result<Self, ApiError> {
         let header_token = parts
             .headers
             .get(http::header::AUTHORIZATION)

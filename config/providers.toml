@@ -138,3 +138,39 @@ base_url = "https://memphis.fit"
 api_path = "/api/torznab"
 api_key_env = "MEMPHIS_API_KEY"
 tvsearch_q = false
+
+# nyaa.si — public anime tracker. No API key, no account: the whole
+# catalogue is a public RSS feed.
+#
+# Two knobs exist for exactly this provider:
+#
+#   catalog = false — search-only. Nyaa indexes anime and nothing else, at
+#   hundreds of releases a day, so letting the freshness scheduler ingest its
+#   rolling window would bury the discovery shelves under fansub raws. It
+#   answers user searches and stays out of everything else (no featured
+#   carousel either — it has no such concept).
+#
+#   seed = false — leave the swarm once the download completes. The
+#   seed-stats loop pauses the torrent at completion; files stay on disk and
+#   playback is untouched (it reads from disk). Removing this line makes the
+#   torrent seed like any other, on the next 30 s tick.
+#
+# `categories` defaults to 1_0 (all anime); narrow to 1_2 for
+# english-translated only. `filter`: 0 = everything, 1 = no remakes,
+# 2 = trusted uploaders only.
+[[providers]]
+id = "nyaa"
+kind = "nyaa"
+enabled = true
+base_url = "https://nyaa.si"
+categories = "1_0"
+filter = 0
+catalog = false
+seed = false
+# Deliberately NO `default_language`: unlike Seedpool, nyaa is a MIXED
+# tracker. Its `1_2` tree is english-translated, `1_3` is translated into
+# something it won't name (the French fansub scene lives there — `Pandora
+# Hearts - CUSTOM DVDRIP - VF VOSTFR - x264 AC3`) and `1_4` is untranslated
+# raws. A single tracker-wide default would badge half of that wrong, so the
+# provider emits a per-result hint from the category instead and the title's
+# own VF / VOSTFR / MULTi tag always wins over it.

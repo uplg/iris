@@ -215,6 +215,31 @@ pub fn absolute_from_parsed(p: &Parsed) -> Option<u32> {
     }
 }
 
+/// The `(season, episode)` an episode row is keyed on, or `None` when the
+/// name designates no single episode (a pack, a movie, unparseable noise).
+///
+/// Seasonal releases answer directly. The **bracketed fansub shape**
+/// (`[Judas] One Piece - 1174 [1080p]`) carries an absolute number and NO
+/// season, which is the entire naming convention on public anime trackers —
+/// so without this it parses fine and is then dropped by every caller that
+/// needs a season, and the release never becomes a library episode nor an
+/// `available_episodes` offer (no Watchlist row, no "play next"). It maps to
+/// season 1 by the same convention `follows::parsed_matches_episode` already
+/// reads absolutes back with: "fleuve numbering arrives as season=1,
+/// episode=<absolute>".
+///
+/// Episode `0` is excluded: it's the season-pack sentinel in
+/// `available_episodes`, so an anime episode 0 (a common special) would be
+/// stored as a pack. Rare enough to drop, and dropping is the safe direction.
+pub fn season_episode_key(p: &Parsed) -> Option<(u32, u32)> {
+    if let (Some(s), Some(e)) = (p.season, p.episode) {
+        return Some((s, e));
+    }
+    p.absolute_episode
+        .filter(|abs| *abs > 0)
+        .map(|abs| (1, abs))
+}
+
 /// SCENE-aware ordering for raw torrent file lists. Compares two
 /// file paths by:
 ///
@@ -282,7 +307,7 @@ pub fn detect_language(title: &str) -> Language {
     let upper = title.to_ascii_uppercase();
     // Multi-audio first — matches both FR and EN preferences when
     // resolved through `Language::satisfies`.
-    if has_token(&upper, "MULTI") {
+    if has_multi_audio_token(&upper) {
         return Language::Multi;
     }
     // French markers. `SUBFRENCH` / `TRUEFRENCH` are subsets of
@@ -303,6 +328,12 @@ pub fn detect_language(title: &str) -> Language {
         "FR2",
         "VOQ",
         "VOF",
+        // Bare `VF` — the plain "version française" marker. Fansub releases
+        // (nyaa carries a French scene: `Pandora Hearts - CUSTOM DVDRIP -
+        // VF VOSTFR - x264 AC3`) often tag only this. Without it such a
+        // release reads as Unknown and then inherits whatever default its
+        // provider declares — labelling a French dub as English.
+        "VF",
     ] {
         if has_token(&upper, marker) {
             return Language::French;
@@ -585,25 +616,53 @@ fn is_attribute_boundary(token: &str) -> bool {
 /// between separators (or at string ends). Without this `FRENCH`
 /// would match against `FRENCHTOAST` and similar; matters less in
 /// practice for these specific tokens but cheap to do right.
-fn has_token(haystack: &str, needle: &str) -> bool {
+/// `MULTI` as a MULTI-AUDIO marker, which is what [`Language::Multi`] means.
+///
+/// `-` is a token separator, so a plain `has_token(.., "MULTI")` also fires on
+/// `[Multi-Subs]` — the fansub convention for "one Japanese audio track, many
+/// SUBTITLE tracks", which is the opposite of a bilingual release. Reading it
+/// as multi-audio badges a raw as `MULTi` and, worse, hands it the `MULTi`
+/// bonus in the grab tie-break, so it wins over a release the household can
+/// actually understand.
+fn has_multi_audio_token(upper: &str) -> bool {
+    let bytes = upper.as_bytes();
+    let mut i = 0;
+    while let Some(pos) = find_token(upper, "MULTI", i) {
+        let after = pos + "MULTI".len();
+        // Skip the separator, then look at the following word.
+        let word = after + usize::from(after < bytes.len() && is_sep_byte(bytes[after]));
+        if !upper[word..].starts_with("SUB") {
+            return true;
+        }
+        i = after;
+    }
+    false
+}
+
+/// Byte offset of `needle` as a whole token in `haystack`, at or after `from`.
+fn find_token(haystack: &str, needle: &str, from: usize) -> Option<usize> {
     let bytes = haystack.as_bytes();
     let nbytes = needle.as_bytes();
     if nbytes.is_empty() || nbytes.len() > bytes.len() {
-        return false;
+        return None;
     }
-    let mut i = 0;
+    let mut i = from;
     while i + nbytes.len() <= bytes.len() {
         if &bytes[i..i + nbytes.len()] == nbytes {
             let before_ok = i == 0 || is_sep_byte(bytes[i - 1]);
             let after = i + nbytes.len();
             let after_ok = after == bytes.len() || is_sep_byte(bytes[after]);
             if before_ok && after_ok {
-                return true;
+                return Some(i);
             }
         }
         i += 1;
     }
-    false
+    None
+}
+
+fn has_token(haystack: &str, needle: &str) -> bool {
+    find_token(haystack, needle, 0).is_some()
 }
 
 fn is_sep_byte(b: u8) -> bool {
@@ -1288,6 +1347,78 @@ mod tests {
         assert_eq!(
             detect_language("Show.Name.S01E01.FR2.1080p.WEB.x264-XYZ"),
             Language::French,
+        );
+    }
+
+    /// The bracketed fansub shape carries an absolute episode and NO season.
+    /// Every caller that stores an episode row needs a `(season, episode)`
+    /// pair, so without the fold those releases parse cleanly and are then
+    /// silently dropped — no library episode, no `available_episodes` offer,
+    /// no "play next". Public anime trackers name releases this way almost
+    /// exclusively.
+    #[test]
+    fn season_episode_key_folds_fansub_absolutes_onto_season_one() {
+        let p = parse("[Judas] One Piece - 1174 [1080p][HEVC x265 10bit][Multi-Subs]").unwrap();
+        assert_eq!(p.season, None, "the name carries no season marker");
+        assert_eq!(p.absolute_episode, Some(1174));
+        assert_eq!(season_episode_key(&p), Some((1, 1174)));
+
+        // Seasonal names are untouched.
+        let seasonal =
+            parse("Classroom.of.the.Elite.S04E11.VOSTFR.1080p.WEB.x264-Tsundere-Raws").unwrap();
+        assert_eq!(season_episode_key(&seasonal), Some((4, 11)));
+
+        // Fleuve SCENE form already arrived as (1, absolute) — unchanged.
+        let fleuve = parse("One.Piece.S01E1156.VOSTFR.1080p.WEB.x264-Tsundere-Raws").unwrap();
+        assert_eq!(season_episode_key(&fleuve), Some((1, 1156)));
+
+        // A batch / season pack has no episode marker at all: still no key,
+        // so it can't masquerade as episode 1.
+        let pack = parse("[Delivroozzi] Sakamoto Desu ga [VOSTFR BD x265 1080p]").unwrap();
+        assert_eq!(pack.absolute_episode, None);
+        assert_eq!(season_episode_key(&pack), None);
+
+        // Episode 0 is the season-pack sentinel downstream — never fold it.
+        let ep0 = parse("[Group] Some Show - 00 [1080p]").unwrap();
+        assert_eq!(ep0.absolute_episode, Some(0));
+        assert_eq!(season_episode_key(&ep0), None);
+    }
+
+    /// nyaa.si naming, which the francophone/anglophone trackers never
+    /// produce: fansub brackets, bare `VF`, and — the trap — `Multi-Subs`.
+    #[test]
+    fn detect_language_fansub_titles() {
+        // Bare VF: the plain French-dub marker. Real nyaa release name.
+        assert_eq!(
+            detect_language("Pandora Hearts - CUSTOM DVDRIP - VF VOSTFR - x264 AC3"),
+            Language::French,
+        );
+        assert_eq!(
+            detect_language("[Group] Some Show - 12 [1080p][VF][x264]"),
+            Language::French,
+        );
+        // `Multi-Subs` / `MultiSub` is MANY SUBTITLE TRACKS over one Japanese
+        // audio track — the opposite of a bilingual release. Reading it as
+        // multi-AUDIO badges a raw as `MULTi` and hands it the `MULTi` bonus
+        // in the grab tie-break, so it beats a release the household can
+        // actually watch.
+        assert_eq!(
+            detect_language("[Judas] One Piece - 1174 [1080p][HEVC x265 10bit][Multi-Subs]"),
+            Language::Unknown,
+        );
+        assert_eq!(
+            detect_language("[Erai-raws] Show - 01 [1080p CR WEBRip AAC][MultiSub][5B5CABFE]"),
+            Language::Unknown,
+        );
+        // …but a genuine multi-audio tag still reads as Multi, including when
+        // the same title also lists multiple subtitle tracks.
+        assert_eq!(
+            detect_language("[Group] Show - 01 [1080p][Multi-Audio][Multi-Subs]"),
+            Language::Multi,
+        );
+        assert_eq!(
+            detect_language("[Group] Show - 01 [1080p][Multi-Subs][MULTi]"),
+            Language::Multi,
         );
     }
 
