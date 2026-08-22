@@ -424,6 +424,9 @@ export const mountTierB: EngineMount = async (opts) => {
   let sinkBytes = 0;
   /** Appends still to be traced this generation (see the `updateend` probe). */
   let appendProbesLeft = 0;
+  /** Firefox only: playhead position to apply once a buffered range covers it.
+   *  See `anchorPlayhead` for why it can't be set up front. */
+  let pendingPlayheadAnchor: number | null = null;
   /** Most recent reason a feed loop parked, or null when both are running. */
   let feedPark: string | null = null;
   // Diagnostics: furthest video timestamp handed to the muxer, and whether
@@ -577,14 +580,19 @@ export const mountTierB: EngineMount = async (opts) => {
    *
    *  Wakes when playback advances (`notifyBufferRoom` on `timeupdate`) or on
    *  dispose — never on a timer, so it can't deadlock. */
+  /** Where playback is, or is about to be. While a Firefox anchor is deferred
+   *  the element still reads 0 — gating the feed on that would park it before
+   *  the first packet and deadlock the anchor, which needs buffered data. */
+  const effectivePlayhead = (): number => pendingPlayheadAnchor ?? video.currentTime;
+
   const waitBufferRoom = (ts: number): Promise<void> =>
     new Promise<void>((resolve) => {
-      const ready = () => disposed || ts - video.currentTime <= bufferAheadTarget;
+      const ready = () => disposed || ts - effectivePlayhead() <= bufferAheadTarget;
       if (ready()) {
         resolve();
         return;
       }
-      feedPark = `room ts=${ts.toFixed(1)} currentTime=${video.currentTime.toFixed(1)} target=${bufferAheadTarget}`;
+      feedPark = `room ts=${ts.toFixed(1)} playhead=${effectivePlayhead().toFixed(1)} target=${bufferAheadTarget}`;
       const w = () => {
         if (!ready()) return;
         bufferRoomWaiters.delete(w);
@@ -593,6 +601,52 @@ export const mountTierB: EngineMount = async (opts) => {
       };
       bufferRoomWaiters.add(w);
     });
+
+  /** Move the playhead to `t`.
+   *
+   *  On Firefox this is DEFERRED until a buffered range actually covers `t`.
+   *  Setting `currentTime` while the SourceBuffer is still empty puts the
+   *  element into a pending seek (`seeking=true` from the moment the init
+   *  segment parses), and Firefox then never commits the coded frame groups
+   *  that follow: `sb.buffered` stays empty across megabytes of completed
+   *  appends, with no error and no event. Measured on a resume at 82.7 s —
+   *  `append#1 seeking=false readyState=0`, then `#2..#4 seeking=true
+   *  buffered=[empty]` with appendWindow, timestampOffset, mode, duration and
+   *  seekable all correct. A t=0 mount never trips it because `currentTime`
+   *  already equals the data start, so no seek is pending.
+   *
+   *  Chrome keeps the immediate set: it commits the appends regardless, and the
+   *  early anchor is what makes `canplay` fire when the buffered range starts
+   *  past 0. */
+  const anchorPlayhead = (t: number): void => {
+    if (t <= 0) return;
+    if (firefox) {
+      pendingPlayheadAnchor = t;
+      return;
+    }
+    try {
+      if (Math.abs(video.currentTime - t) > 0.05) video.currentTime = t;
+    } catch {
+      /* swallow */
+    }
+  };
+
+  /** Apply a deferred anchor once the data it needs is buffered. */
+  const applyPendingAnchor = (): void => {
+    const t = pendingPlayheadAnchor;
+    if (t === null || !sourceBuffer) return;
+    for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
+      if (sourceBuffer.buffered.start(i) - 0.25 <= t && sourceBuffer.buffered.end(i) >= t) {
+        pendingPlayheadAnchor = null;
+        try {
+          if (Math.abs(video.currentTime - t) > 0.05) video.currentTime = t;
+        } catch {
+          /* swallow */
+        }
+        return;
+      }
+    }
+  };
 
   const evictPlayedRange = (keepSeconds: number): boolean => {
     if (!sourceBuffer || sourceBuffer.updating) return false;
@@ -1103,15 +1157,7 @@ export const mountTierB: EngineMount = async (opts) => {
     // we do it here, AFTER the SourceBuffer has been cleared and
     // the init segment has been pushed, so Firefox sees a
     // coherent state from the next `appendBuffer` onward.
-    if (playheadTarget > 0) {
-      try {
-        if (Math.abs(video.currentTime - playheadTarget) > 0.05) {
-          video.currentTime = playheadTarget;
-        }
-      } catch {
-        /* swallow */
-      }
-    }
+    anchorPlayhead(playheadTarget);
 
     // Resume playback (if we paused above) once the playhead is
     // anchored. The video will buffer for a beat before frames
@@ -1615,6 +1661,7 @@ export const mountTierB: EngineMount = async (opts) => {
       );
     }
     pendingOp = null;
+    applyPendingAnchor();
     evictPlayedRange(playedKeep);
     // Grow the forward window + seek-back window back toward their ceilings
     // once we've been quota-free for a while — restores deep buffering after a
@@ -1685,17 +1732,14 @@ export const mountTierB: EngineMount = async (opts) => {
     //      hundreds-of-MB linear remux from byte 0 that `Conversion`
     //      did on resume.
     if (opts.startPosition > 0) {
-      // Position the playhead at startPosition BEFORE pumping. MSE
-      // only fires `canplay` once a buffered range covers the
-      // playhead — with currentTime stuck at 0 and buffered =
-      // [~startPosition, X], canplay would never come. Suppress
-      // `bindVideoCallbacks`' canplay-based initial seek so it
-      // doesn't fight us when data finally arrives.
-      try {
-        video.currentTime = opts.startPosition;
-      } catch {
-        /* swallow */
-      }
+      // Anchor the playhead at startPosition. MSE only fires `canplay` once a
+      // buffered range covers the playhead — with currentTime stuck at 0 and
+      // buffered = [~startPosition, X], canplay would never come. On Firefox
+      // `anchorPlayhead` defers the actual assignment until the data is there
+      // (see its comment); the feed gate follows `effectivePlayhead()` in the
+      // meantime. Suppress `bindVideoCallbacks`' canplay-based initial seek
+      // either way so it doesn't fight us when data arrives.
+      anchorPlayhead(opts.startPosition);
       initialSeek.done = true;
     }
     await runManualPipeline(opts.startPosition);
