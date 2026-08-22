@@ -964,6 +964,18 @@ export const mountTierB: EngineMount = async (opts) => {
         ? videoStartPacket.timestamp
         : seekStart;
 
+    // Audio starts where the VIDEO starts, not at `seekStart`. `getKeyPacket`
+    // lands on the keyframe at/before the seek target, and this file's x265
+    // encode is scene-cut keyed (median GOP 3.8 s, up to 13.8 s), so a seek can
+    // put the video start 8+ s before the audio start. mediabunny then pads the
+    // late track: the muxed audio track's declared duration comes out
+    // `gap` seconds longer than the video's (measured: 117.6 s vs 109.1 s for an
+    // 8.48 s gap; aligning the starts brings it to 109.2 s and cuts the emitted
+    // chunk count from 12 to 4). Firefox-MSE stalls on that stream with an empty
+    // buffered range and no error; Chrome and a t=0 mount (gap = 0) are fine.
+    // Decoding the extra lead-in costs a fraction of a second of E-AC-3.
+    const audioStart = videoStartPacket ? videoStartPacket.timestamp : seekStart;
+
     const allAudio = await liveInput.getAudioTracks();
     const audioTrack = allAudio[chosenAudioIdx] ?? null;
     type AudioFeed =
@@ -1140,7 +1152,7 @@ export const mountTierB: EngineMount = async (opts) => {
               // isn't at exactly 0, `getKeyPacket(0)` returns null. Fall back to
               // the first key packet so a non-zero start doesn't silently drop
               // the whole (browser-native) audio track.
-              let startPacket = await packetSink.getKeyPacket(seekStart);
+              let startPacket = await packetSink.getKeyPacket(audioStart);
               if (!startPacket) {
                 startPacket = await packetSink.getFirstKeyPacket();
               }
@@ -1186,11 +1198,12 @@ export const mountTierB: EngineMount = async (opts) => {
               console.log(
                 `[iris-core] Tier B: audio transcode start — src=${chosenAudio?.codec} ` +
                   `ch=${chosenAudio?.channels} sr=${chosenAudio?.sample_rate} → ` +
-                  `${encoderChoice?.codec} ${encoderChoice?.channels}ch (seek=${seekStart.toFixed(1)}s)`,
+                  `${encoderChoice?.codec} ${encoderChoice?.channels}ch ` +
+                  `(seek=${seekStart.toFixed(1)}s audioStart=${audioStart.toFixed(1)}s)`,
               );
               let audioSamples = 0;
               try {
-                for await (const sample of sampleSink.samples(seekStart, Infinity)) {
+                for await (const sample of sampleSink.samples(audioStart, Infinity)) {
                   if (audioSamples === 0) {
                     console.log(
                       `[iris-core] Tier B: first audio sample decoded — fmt=${sample.format} ` +
