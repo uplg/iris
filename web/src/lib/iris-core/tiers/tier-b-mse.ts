@@ -891,6 +891,12 @@ export const mountTierB: EngineMount = async (opts) => {
         `pendingOp=${pendingOp ?? "none"} updating=${sourceBuffer.updating} queue=${appendQueue.length} ` +
         `err=${video.error ? `${video.error.code}:${video.error.message}` : "none"} ` +
         `sink=${sinkChunks}chunks/${(sinkBytes / 1e6).toFixed(1)}MB park=${feedPark ?? "none"} ` +
+        // Separates "no data reached the SourceBuffer" from "data is there but
+        // the video decoder produces no frames" — the two look identical from
+        // a frozen picture, and the second one still plays audio.
+        `video=${video.videoWidth}x${video.videoHeight} ` +
+        `frames=${video.getVideoPlaybackQuality?.().totalVideoFrames ?? "n/a"}/` +
+        `${video.getVideoPlaybackQuality?.().droppedVideoFrames ?? "n/a"}dropped ` +
         `ranges=[${bufferedRangesStr()}]`,
     );
     // RECOVERY for a wedged op: if we're starved (`waiting`) yet the SourceBuffer
