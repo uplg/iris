@@ -416,6 +416,14 @@ export const mountTierB: EngineMount = async (opts) => {
   // STALL showing `pendingOp=append updating=true` means the append is wedged
   // (the recovery in `onWaiting` aborts it).
   let pendingOp: "append" | "remove" | null = null;
+  // DIAGNOSTIC (Firefox resume-stall hunt): a mount with `startPosition > 0`
+  // ends with `queue=0 readyState=0 ranges=[empty]` while the feed reports
+  // fedMax past the playhead — so either the muxer emitted nothing, or a feed
+  // loop is parked in one of the two gates. These three pin which.
+  let sinkChunks = 0;
+  let sinkBytes = 0;
+  /** Most recent reason a feed loop parked, or null when both are running. */
+  let feedPark: string | null = null;
   // Diagnostics: furthest video timestamp handed to the muxer, and whether
   // the video feed loop has finished. Distinguishes "demux/feed stopped"
   // (fedMax frozen / feedEnded) from "decoder stalled with a full buffer".
@@ -540,9 +548,11 @@ export const mountTierB: EngineMount = async (opts) => {
         resolve();
         return;
       }
+      feedPark = `balance ts=${ts.toFixed(1)} other=${otherFedMax().toFixed(1)} cap=${TRACK_LEAD_CAP}`;
       const w = () => {
         if (!ready()) return;
         trackWaiters.delete(w);
+        feedPark = null;
         resolve();
       };
       trackWaiters.add(w);
@@ -572,9 +582,11 @@ export const mountTierB: EngineMount = async (opts) => {
         resolve();
         return;
       }
+      feedPark = `room ts=${ts.toFixed(1)} currentTime=${video.currentTime.toFixed(1)} target=${bufferAheadTarget}`;
       const w = () => {
         if (!ready()) return;
         bufferRoomWaiters.delete(w);
+        feedPark = null;
         resolve();
       };
       bufferRoomWaiters.add(w);
@@ -748,6 +760,7 @@ export const mountTierB: EngineMount = async (opts) => {
         `readyState=${video.readyState} netState=${video.networkState} ` +
         `pendingOp=${pendingOp ?? "none"} updating=${sourceBuffer.updating} queue=${appendQueue.length} ` +
         `err=${video.error ? `${video.error.code}:${video.error.message}` : "none"} ` +
+        `sink=${sinkChunks}chunks/${(sinkBytes / 1e6).toFixed(1)}MB park=${feedPark ?? "none"} ` +
         `ranges=[${bufferedRangesStr()}]`,
     );
     // RECOVERY for a wedged op: if we're starved (`waiting`) yet the SourceBuffer
@@ -860,6 +873,9 @@ export const mountTierB: EngineMount = async (opts) => {
    *  `Conversion`. See the comment on `restartConversionFromSeek`. */
   const runManualPipeline = async (seekStart: number): Promise<void> => {
     lastConversionStartWall = performance.now();
+    sinkChunks = 0;
+    sinkBytes = 0;
+    feedPark = null;
     videoFedMax = seekStart;
     audioFedMax = seekStart;
     videoFeedEnded = false;
@@ -1291,6 +1307,14 @@ export const mountTierB: EngineMount = async (opts) => {
     return new WritableStream<StreamTargetChunk>({
       write: async (chunk) => {
         if (disposed || generation !== conversionGeneration) return;
+        if (sinkChunks === 0) {
+          console.log(
+            `[iris-core] Tier B: first muxer chunk — ${chunk.data.byteLength}B ` +
+              `@pos=${chunk.position} gen=${generation}`,
+          );
+        }
+        sinkChunks += 1;
+        sinkBytes += chunk.data.byteLength;
         appendQueue.push(chunk.data);
         drainQueue();
         while (
