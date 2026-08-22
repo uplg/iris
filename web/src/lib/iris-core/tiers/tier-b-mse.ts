@@ -422,6 +422,8 @@ export const mountTierB: EngineMount = async (opts) => {
   // loop is parked in one of the two gates. These three pin which.
   let sinkChunks = 0;
   let sinkBytes = 0;
+  /** Appends still to be traced this generation (see the `updateend` probe). */
+  let appendProbesLeft = 0;
   /** Most recent reason a feed loop parked, or null when both are running. */
   let feedPark: string | null = null;
   // Diagnostics: furthest video timestamp handed to the muxer, and whether
@@ -875,6 +877,7 @@ export const mountTierB: EngineMount = async (opts) => {
     lastConversionStartWall = performance.now();
     sinkChunks = 0;
     sinkBytes = 0;
+    appendProbesLeft = 4;
     feedPark = null;
     videoFedMax = seekStart;
     audioFedMax = seekStart;
@@ -1586,6 +1589,31 @@ export const mountTierB: EngineMount = async (opts) => {
   }
 
   sourceBuffer.addEventListener("updateend", () => {
+    // DIAGNOSTIC (Firefox resume stall): a t=0 mount and a resume append the
+    // same fMP4 structure and only the media timestamps differ — yet the resume
+    // leaves `buffered` empty. Everything that can silently drop a coded frame
+    // group lives in these fields, so dump them for the first few appends of
+    // each generation. `seeking` is the one to watch: the mount sets
+    // `currentTime` before ANY data exists, and Firefox runs a real seek on the
+    // track demuxer (that is where "manager is detached" came from earlier).
+    if (appendProbesLeft > 0 && sourceBuffer) {
+      appendProbesLeft -= 1;
+      const sb = sourceBuffer;
+      const ranges = (tr: TimeRanges) =>
+        tr.length === 0
+          ? "empty"
+          : Array.from(
+              { length: tr.length },
+              (_, i) => `${tr.start(i).toFixed(1)}-${tr.end(i).toFixed(1)}`,
+            ).join(",");
+      console.log(
+        `[iris-core] Tier B append#${sinkChunks}: sb.buffered=[${ranges(sb.buffered)}] ` +
+          `appendWindow=[${sb.appendWindowStart},${sb.appendWindowEnd}] tsOffset=${sb.timestampOffset} ` +
+          `mode=${sb.mode} msDuration=${mediaSource.duration} msState=${mediaSource.readyState} ` +
+          `currentTime=${video.currentTime.toFixed(2)} seeking=${video.seeking} ` +
+          `seekable=[${ranges(video.seekable)}] readyState=${video.readyState}`,
+      );
+    }
     pendingOp = null;
     evictPlayedRange(playedKeep);
     // Grow the forward window + seek-back window back toward their ceilings
