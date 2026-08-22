@@ -711,40 +711,39 @@ export const mountTierB: EngineMount = async (opts) => {
   const describeBoxes = (buf: Uint8Array): string => {
     try {
       const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-      const out: string[] = [];
-      let off = 0;
-      let tfdt = "";
-      while (off + 8 <= buf.byteLength && out.length < 12) {
-        let size = dv.getUint32(off);
-        const type = String.fromCharCode(
-          buf[off + 4]!,
-          buf[off + 5]!,
-          buf[off + 6]!,
-          buf[off + 7]!,
-        );
-        if (size === 1 && off + 16 <= buf.byteLength) size = Number(dv.getBigUint64(off + 8));
-        if (size < 8) break;
-        out.push(`${type}:${size}`);
-        // `tfdt` lives at moof > traf > tfdt; scan the moof payload for it.
-        if (type === "moof" && !tfdt) {
-          const end = Math.min(off + size, buf.byteLength);
-          for (let i = off + 8; i + 16 <= end; i += 1) {
-            if (
-              buf[i + 4] === 0x74 &&
-              buf[i + 5] === 0x66 &&
-              buf[i + 6] === 0x64 &&
-              buf[i + 7] === 0x74
-            ) {
-              const version = buf[i + 8]!;
-              const base = version === 1 ? Number(dv.getBigUint64(i + 12)) : dv.getUint32(i + 12);
-              tfdt = ` tfdt(v${version})=${base}`;
-              break;
-            }
+      const top: string[] = [];
+      const trafs: string[] = [];
+      // Walk `moof > traf` and report EVERY track fragment: id, base media
+      // decode time and sample count. A first fragment that is missing one of
+      // the tracks declared in the init segment is a shape Firefox rejects
+      // outright — and the Opus encoder sits between the audio feed and the
+      // muxer, so the audio traf can plausibly be absent from the first moof on
+      // a mid-stream start while it is present at t=0.
+      const walk = (from: number, to: number, inTraf: boolean) => {
+        let o = from;
+        while (o + 8 <= to) {
+          let size = dv.getUint32(o);
+          const type = String.fromCharCode(buf[o + 4]!, buf[o + 5]!, buf[o + 6]!, buf[o + 7]!);
+          if (size === 1 && o + 16 <= to) size = Number(dv.getBigUint64(o + 8));
+          if (size < 8 || o + size > to) break;
+          if (!inTraf && from === 0) top.push(`${type}:${size}`);
+          if (type === "moof") walk(o + 8, o + size, false);
+          else if (type === "traf") {
+            trafs.push("");
+            walk(o + 8, o + size, true);
+          } else if (inTraf && type === "tfhd") {
+            trafs[trafs.length - 1] += `track${dv.getUint32(o + 12)}`;
+          } else if (inTraf && type === "tfdt") {
+            const v = buf[o + 8] === 1 ? Number(dv.getBigUint64(o + 12)) : dv.getUint32(o + 12);
+            trafs[trafs.length - 1] += `(tfdt=${v}`;
+          } else if (inTraf && type === "trun") {
+            trafs[trafs.length - 1] += `, ${dv.getUint32(o + 12)} samples)`;
           }
+          o += size;
         }
-        off += size;
-      }
-      return out.join(" ") + tfdt;
+      };
+      walk(0, buf.byteLength, false);
+      return `${top.join(" ")}${trafs.length ? ` | ${trafs.length} traf: ${trafs.join("  ")}` : ""}`;
     } catch {
       return "unparsable";
     }
