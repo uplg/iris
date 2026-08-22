@@ -56,9 +56,10 @@ const WASM_BINARY_URL = "/hevcjs/hevc-decode.wasm";
 const WORKER_URL = "/hevcjs/transcode-worker.js";
 
 /** Seconds of media the feeds may run ahead of the playhead. The WASM
- *  transcode is the bottleneck, not memory, so this is smaller than Tier B's
- *  window — a deep buffer would just queue work the user may seek away from. */
-const AHEAD_TARGET_S = 16;
+ *  transcode is the bottleneck, not memory: this window is the runway the
+ *  decoder has to absorb a spell of CPU contention without the playhead
+ *  catching up with it. Too deep only wastes work the user seeks away from. */
+const AHEAD_TARGET_S = 30;
 /** How far one track may run ahead of the other before it waits. */
 const TRACK_LEAD_CAP_S = 4;
 /** Fragments the muxer emits. Short ones matter more here than in Tier B: the
@@ -266,6 +267,18 @@ export const mountTierE: EngineMount = async (opts) => {
     opts.onError?.(e);
   };
 
+  // The element's own `waiting`/`playing` events cover steady-state buffering,
+  // but they say nothing before playback has ever started — and that is exactly
+  // the window where this tier makes the user wait longest, transcoding the
+  // first fragment. Report it explicitly.
+  let busy = false;
+  const setBusy = (next: boolean) => {
+    if (busy === next || disposed) return;
+    busy = next;
+    opts.onBusyChange?.(next);
+  };
+  setBusy(true);
+
   await new Promise<void>((resolve, reject) => {
     const onOpen = () => {
       mediaSource.removeEventListener("sourceopen", onOpen);
@@ -372,6 +385,7 @@ export const mountTierE: EngineMount = async (opts) => {
         lane.appended += 1;
         if (!lane.reported && lane.sb.buffered.length > 0) {
           lane.reported = true;
+          if (lane.name === "video") setBusy(false);
           const b = lane.sb.buffered;
           console.log(
             `[iris-core] Tier E: ${lane.name} lane first buffered ` +
@@ -449,6 +463,13 @@ export const mountTierE: EngineMount = async (opts) => {
   };
 
   const startPipeline = async (seekStart: number): Promise<void> => {
+    setBusy(true);
+    // Claim the target NOW, before the demuxer has even been asked where the
+    // keyframe is. `effectivePlayhead` is what the chrome's scrubber reads, so
+    // without this the position falls back to the pre-seek one for the whole
+    // transcode and the seek reads as "it came back". Refined to the keyframe
+    // below, once we know it.
+    pendingAnchor = seekStart > 0 ? seekStart : null;
     generation += 1;
     const gen = generation;
     await cancelPipelines();
@@ -458,11 +479,13 @@ export const mountTierE: EngineMount = async (opts) => {
       videoLane.queue.length = 0;
       videoLane.fedMax = seekStart;
       videoLane.ended = false;
+      videoLane.reported = false;
     }
     if (audioLane) {
       audioLane.queue.length = 0;
       audioLane.fedMax = seekStart;
       audioLane.ended = false;
+      audioLane.reported = false;
     }
 
     const liveInput = input;
@@ -668,6 +691,7 @@ export const mountTierE: EngineMount = async (opts) => {
   try {
     await startPipeline(opts.startPosition);
   } catch (e) {
+    setBusy(false);
     const err = e instanceof Error ? e : new Error(String(e));
     fail(err);
     throw err;
@@ -676,6 +700,7 @@ export const mountTierE: EngineMount = async (opts) => {
   const dispose = async (): Promise<void> => {
     if (disposed) return;
     disposed = true;
+    opts.onBusyChange?.(false);
     notify();
     video.removeEventListener("timeupdate", onTimeUpdate);
     unbindVideo();
@@ -718,9 +743,13 @@ export const mountTierE: EngineMount = async (opts) => {
 
   const handle: EngineHandle = {
     ...base,
+    // While a restart is in flight the element still sits at the old position;
+    // report where we are heading instead.
+    currentTime: () => effectivePlayhead(),
     seek: (s: number) => {
       const target = Math.max(0, s);
       if (isBuffered(target)) {
+        pendingAnchor = null;
         try {
           video.currentTime = target;
         } catch {

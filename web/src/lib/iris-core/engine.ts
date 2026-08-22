@@ -52,6 +52,10 @@ export type EngineMountOptions = {
   live?: boolean;
 
   onReady?: () => void;
+  /** Fired when the engine starts or stops making the user wait: buffering,
+   *  seeking, or — Tier E — transcoding a fragment before it can show
+   *  anything. Event-driven on purpose; nothing here polls. */
+  onBusyChange?: (busy: boolean) => void;
   /** Fires on `timeupdate` (native) or on the master-clock tick (C/D). */
   onTimeUpdate?: (mediaTimeSeconds: number) => void;
   onDurationChange?: (durationSeconds: number) => void;
@@ -139,6 +143,8 @@ export function bindVideoCallbacks(
   };
   const onPlaying = () => opts.onPlayingChange?.(true);
   const onEnded = () => opts.onEnded?.();
+  const onBusy = () => opts.onBusyChange?.(true);
+  const onIdle = () => opts.onBusyChange?.(false);
   const onCanPlay = () => {
     if (initialSeek.done) return;
     initialSeek.done = true;
@@ -157,6 +163,15 @@ export function bindVideoCallbacks(
   video.addEventListener("playing", onPlaying);
   video.addEventListener("ended", onEnded);
   video.addEventListener("canplay", onCanPlay);
+  // Busy while the element is starved or repositioning, idle once it can
+  // actually show something. `seeking`/`seeked` matter for Tier E, where a
+  // reposition means a fresh transcode rather than an instant jump.
+  video.addEventListener("waiting", onBusy);
+  video.addEventListener("stalled", onBusy);
+  video.addEventListener("seeking", onBusy);
+  video.addEventListener("canplay", onIdle);
+  video.addEventListener("playing", onIdle);
+  video.addEventListener("seeked", onIdle);
   return () => {
     video.removeEventListener("timeupdate", onTime);
     video.removeEventListener("durationchange", onDuration);
@@ -165,6 +180,12 @@ export function bindVideoCallbacks(
     video.removeEventListener("playing", onPlaying);
     video.removeEventListener("ended", onEnded);
     video.removeEventListener("canplay", onCanPlay);
+    video.removeEventListener("waiting", onBusy);
+    video.removeEventListener("stalled", onBusy);
+    video.removeEventListener("seeking", onBusy);
+    video.removeEventListener("canplay", onIdle);
+    video.removeEventListener("playing", onIdle);
+    video.removeEventListener("seeked", onIdle);
   };
 }
 

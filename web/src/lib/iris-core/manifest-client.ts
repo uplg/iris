@@ -148,6 +148,10 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
     /hevc|hev1|hvc1|h265|x265/i.test(hevcPrimary.codec) &&
     hevcMseNeedsIdrStart()
   ) {
+    console.log(
+      `[iris-core] Tier E (IDR-start): codec=${hevcPrimary.codec} ` +
+        `${hevcPrimary.width ?? "?"}x${hevcPrimary.height ?? "?"} ua=${navigator.userAgent}`,
+    );
     return "E";
   }
 
@@ -192,7 +196,14 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
   // `opus` and `mp4a.40.2`. Mobile stays excluded by the gate far above (the
   // WASM transcoder is the heap-heavy engine that trips mobile OOM).
   if (primary && /hevc|hev1|hvc1|h265|x265/i.test(primary.codec) && (primary.height ?? 0) <= 1080) {
-    if (typeof VideoEncoder !== "undefined") return "E";
+    if (typeof VideoEncoder !== "undefined") {
+      console.log(
+        `[iris-core] Tier E (no native decode): codec=${primary.codec} ` +
+          `${primary.width ?? "?"}x${primary.height ?? "?"} mse=${codecsMse} ` +
+          `webcodecs=${primary.codec_string ?? "?"}`,
+      );
+      return "E";
+    }
   }
 
   return "F";

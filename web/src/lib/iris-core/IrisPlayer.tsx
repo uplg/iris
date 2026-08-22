@@ -9,6 +9,7 @@
  * which track is active.
  */
 
+import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { isWindowsChromium } from "./caps";
@@ -133,6 +134,9 @@ export function IrisPlayer(props: IrisPlayerProps) {
   // visible so the user always sees the cursor on initial mount;
   // the chrome flips this to `false` after 2.5 s of mouse-still.
   const [controlsVisible, setControlsVisible] = useState(true);
+  // Engine-reported wait: buffering, seeking, or a Tier E fragment being
+  // transcoded. Starts true — every mount waits for its first frame.
+  const [busy, setBusy] = useState(true);
   // Stable DOM node the engine mounts its `<video>` (or `<canvas>`)
   // into. We create it ONCE, outside React's reconciliation, so that
   // when `createPortal` moves the player tree into a Document
@@ -324,6 +328,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
   useEffect(() => {
     const container = videoHostRef.current;
     if (!container) return;
+    setBusy(true);
     // Live engines are dedicated modules (HLS-following input, no seek
     // machinery): Tier C live = WebCodecs + canvas with client-side
     // broadcast concealment (the tuner path); Tier B live = the MSE
@@ -381,6 +386,10 @@ export function IrisPlayer(props: IrisPlayerProps) {
             }
             props.onTimeUpdate(t);
           },
+          onBusyChange: setBusy,
+          // Canvas tiers (C/D) have no media element for `onBusyChange` to
+          // hang off, so their `onReady` is what clears the spinner.
+          onReady: () => setBusy(false),
           onDurationChange: props.onDurationChange,
           onSeeking: props.onSeeking,
           onPause: props.onPause,
@@ -621,6 +630,14 @@ export function IrisPlayer(props: IrisPlayerProps) {
             style={{ background: "rgba(0, 0, 0, 0.01)" }}
           />
         )}
+      {busy && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 flex items-center justify-center"
+        >
+          <Loader2 className="size-10 animate-spin text-white/70 drop-shadow-lg" />
+        </div>
+      )}
       <SubtitleOverlay
         host={wrapper}
         track={activeOverlay}
