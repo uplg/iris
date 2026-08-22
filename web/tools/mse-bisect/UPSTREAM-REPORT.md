@@ -3,8 +3,9 @@
 To file against **Core :: Audio/Video: Playback**. Follow-up to
 [bug 2049615](https://bugzilla.mozilla.org/show_bug.cgi?id=2049615).
 
-Reproducer in `upstream/`: three 25 KB fragmented MP4s, a shell script that
-regenerates them, and one self-contained HTML page.
+Reproducer: one self-contained 112 KB HTML file, `repro-standalone.html`. It
+carries the three test fragments inside it and needs no server and no sibling
+files. Open it and it prints the table below.
 
 ## Summary
 
@@ -35,13 +36,13 @@ Bug 2049615 is `RESOLVED FIXED`, `target_milestone` `154 Branch`;
 
 ## Steps to reproduce
 
-```
-cd upstream && ./make-repro.sh && python3 -m http.server 8099
-# open http://127.0.0.1:8099/repro.html
-```
+Open `repro-standalone.html` in the browser under test. Nothing else is needed;
+it runs from `file://` as well as over HTTP.
 
+To rebuild it from scratch: `./make-repro.sh && ./make-standalone.sh`.
 `make-repro.sh` cuts three 4 s fragmented MP4s from two open-GOP HEVC Main 10
-sources that differ only in B-frame count:
+sources that differ only in B-frame count, and `make-standalone.sh` embeds them
+into the page as base64.
 
 | file                  | starts on         | leading pictures   |
 | --------------------- | ----------------- | ------------------ |
@@ -49,7 +50,7 @@ sources that differ only in B-frame count:
 | `B-cra-clean.mp4`     | `CRA_NUT` at t=6  | none (`bframes=0`) |
 | `C-cra-with-rasl.mp4` | `CRA_NUT` at t=6  | 4 RASL pictures    |
 
-`repro.html` appends each file's init segment and first media segment to a fresh
+The page appends each file's init segment and first media segment to a fresh
 `SourceBuffer`, waits for `updateend`, and reports `buffered` plus
 `getVideoPlaybackQuality().totalVideoFrames`. It also rewrites the first slice
 NAL's type in place, to establish which types the engine opens a coded frame
