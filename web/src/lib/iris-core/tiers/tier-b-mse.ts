@@ -1546,6 +1546,21 @@ export const mountTierB: EngineMount = async (opts) => {
     : chosenAudio?.codec_string;
   const codecs = [videoCodec, audioCodec].filter((c): c is string => !!c).join(",");
   const mime = codecs ? `video/mp4; codecs="${codecs}"` : "video/mp4";
+  // DIAGNOSTIC (Firefox HEVC/Opus stall): `isTypeSupported` on the COMBINED
+  // string is famously optimistic — Firefox can answer true, parse the init
+  // segment (readyState → HAVE_METADATA) and then drop every coded frame,
+  // leaving `ranges=[empty]` with no error. Breaking the answer down per track
+  // says which half it actually claims to handle. Note Firefox only reaches the
+  // Opus path at all because its AudioEncoder has no AAC (see the probe above),
+  // so `audioNeedsTranscode` + Firefox is the one combination that muxes Opus
+  // into fMP4 — the exact case that stalls.
+  console.log(
+    `[iris-core] Tier B MIME support: combined="${mime}" → ${MediaSource.isTypeSupported(mime)} | ` +
+      `video-only → ${videoCodec ? MediaSource.isTypeSupported(`video/mp4; codecs="${videoCodec}"`) : "n/a"} | ` +
+      `audio-in-video/mp4 → ${audioCodec ? MediaSource.isTypeSupported(`video/mp4; codecs="${audioCodec}"`) : "n/a"} | ` +
+      `audio-in-audio/mp4 → ${audioCodec ? MediaSource.isTypeSupported(`audio/mp4; codecs="${audioCodec}"`) : "n/a"} | ` +
+      `transcode=${audioNeedsTranscode}`,
+  );
   if (!MediaSource.isTypeSupported(mime)) {
     await dispose();
     const err = new Error(`MIME not supported by MSE: ${mime}`);
