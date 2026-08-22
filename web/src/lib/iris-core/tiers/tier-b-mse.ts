@@ -749,6 +749,30 @@ export const mountTierB: EngineMount = async (opts) => {
     }
   };
 
+  /** If `buf` holds an init segment (`ftyp`/`moov`) immediately followed by a
+   *  media segment (`moof`), return the two halves; otherwise null. */
+  const initSegmentSplit = (buf: Uint8Array): [Uint8Array, Uint8Array] | null => {
+    try {
+      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      let o = 0;
+      let sawInit = false;
+      while (o + 8 <= buf.byteLength) {
+        let size = dv.getUint32(o);
+        const type = String.fromCharCode(buf[o + 4]!, buf[o + 5]!, buf[o + 6]!, buf[o + 7]!);
+        if (size === 1 && o + 16 <= buf.byteLength) size = Number(dv.getBigUint64(o + 8));
+        if (size < 8 || o + size > buf.byteLength) return null;
+        if (type === "ftyp" || type === "moov") sawInit = true;
+        else if (type === "moof") {
+          return sawInit && o > 0 ? [buf.subarray(0, o), buf.subarray(o)] : null;
+        } else return null;
+        o += size;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
   const drainQueue = () => {
     if (disposed || !sourceBuffer || sourceBuffer.updating) return;
     const next = appendQueue.shift();
@@ -1421,7 +1445,20 @@ export const mountTierB: EngineMount = async (opts) => {
         }
         sinkChunks += 1;
         sinkBytes += chunk.data.byteLength;
-        appendQueue.push(chunk.data);
+        // Split an `ftyp`/`moov` init segment away from the media that follows
+        // it in the same chunk, so the SourceBuffer receives the init on its own
+        // — the shape every DASH/HLS player uses, and the one difference left
+        // between our appends and theirs. Mediabunny hands us `moov` glued to
+        // the first `moof`+`mdat`; Firefox accepts that when the media starts at
+        // zero and drops it when the media starts mid-stream, with both trafs
+        // present and correct (`track1(tfdt=1327104, 83 samples)
+        // track2(tfdt=1105920, 165 samples)`, both = 23.04 s).
+        const split = initSegmentSplit(chunk.data);
+        if (split) {
+          appendQueue.push(split[0], split[1]);
+        } else {
+          appendQueue.push(chunk.data);
+        }
         drainQueue();
         while (
           !disposed &&
