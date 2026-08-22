@@ -129,10 +129,38 @@ decodes on every other engine we tried.
 
 ## Measured
 
-### Gecko 154 (with the fix) — the regression
+### Both engines, same page, same three files
 
-Real 1920×960 HEVC Main 10 open-GOP file, fragment starting at the CRA at
-178.1 s, produced by our own remuxer (leading pictures excluded from the feed):
+`upstream/repro.html` run on Firefox 153 (Playwright build) and on Gecko 154
+(Zen 1.21.15b, `rv:154.0`), same machine. `frames` is
+`getVideoPlaybackQuality().totalVideoFrames` after 1.5 s of playback.
+
+| case                          | first slice NAL | Gecko 153 `buffered` / frames / error      | Gecko 154 `buffered` / frames / error      |
+| ----------------------------- | --------------- | ------------------------------------------ | ------------------------------------------ |
+| A — t=0, IDR entry (control)  | `IDR_N_LP`      | `0.00–4.00` · 36 · none                    | `0.00–4.00` · 37 · none                    |
+| **B — t=6, clean CRA entry**  | `CRA_NUT`       | `0.00–4.00` · **37** · none                | **empty** · 0 · **none**                   |
+| B — CRA relabelled `IDR_N_LP` | `IDR_N_LP`      | `0.00–4.00` · 0 · `MediaError 3`, `-12909` | `0.00–4.00` · 0 · `MediaError 3`, `-12909` |
+| B — CRA relabelled `BLA_N_LP` | `BLA_N_LP`      | `0.00–4.00` · **37** · none                | **empty** · 0 · none                       |
+| C — t=6, CRA with RASL kept   | `CRA_NUT`       | `0.08–4.36` · 0 · `MediaError 3`, `-17694` | **empty** · 0 · none                       |
+
+Row B is the whole bug in one line. The same 25 KB fragment, correctly
+signalled, starting on a self-contained random access point: 154 stores nothing
+and reports nothing. Not an error, not an event, not a console line — the
+`error` column really does say `none` while `buffered` is empty.
+
+`BLA_N_LP` moves with the CRA in both directions, which is the signature of
+`H265NALU::IsIframe()` rather than of anything the decoder did: BLA and CRA are
+both IRAP pictures the function does not count.
+
+On 154 row C reads `empty` for the same reason as row B — the samples never
+reach the decoder, so the RASL problem it is there to expose is invisible. It is
+only observable on 153, which is where the next section takes its evidence.
+
+### The real-world file, Gecko 154
+
+Corroboration on the content this started from: 1920×960 HEVC Main 10 open-GOP,
+fragment starting at the CRA at 178.1 s, produced by our own remuxer (leading
+pictures excluded from the feed, so the equivalent of case B).
 
 | coded frame group starts on           | `buffered`    | frames decoded                 |
 | ------------------------------------- | ------------- | ------------------------------ |
@@ -141,20 +169,9 @@ Real 1920×960 HEVC Main 10 open-GOP file, fragment starting at the CRA at
 | `CRA_NUT` relabelled `IDR_N_LP`       | `178.1–188.0` | 0, `kVTVideoDecoderBadDataErr` |
 | `CRA_NUT` relabelled `BLA_N_LP`       | **empty**     | 0                              |
 
-No error, no event, no console output in the CRA row. The appends complete
-normally.
-
-### Gecko 153 (without the fix) — same page, same files
-
-Firefox 153 (Playwright build), synthetic files from `make-repro.sh`:
-
-| case                          | first slice NAL | `buffered`  | frames | error                             |
-| ----------------------------- | --------------- | ----------- | ------ | --------------------------------- |
-| A — t=0, IDR start (control)  | `IDR_N_LP`      | `0.00–4.00` | 36     | none                              |
-| B — t=6, clean CRA            | `CRA_NUT`       | `0.00–4.00` | **37** | none                              |
-| B — CRA relabelled `IDR_N_LP` | `IDR_N_LP`      | `0.00–4.00` | 0      | `MediaError 3`, OSStatus `-12909` |
-| B — CRA relabelled `BLA_N_LP` | `BLA_N_LP`      | `0.00–4.00` | **37** | none                              |
-| C — t=6, CRA with RASL kept   | `CRA_NUT`       | `0.08–4.36` | 0      | `MediaError 3`, OSStatus `-17694` |
+Same shape as the synthetic case, at a different resolution, level and GOP
+length. If a `testsrc` encode is not convincing, we can attach an excerpt of
+this one.
 
 ### File playback, both engines
 
@@ -178,7 +195,8 @@ to. In MSE there is not.
 
 ## The second finding: the CRA is not what VideoToolbox chokes on
 
-Compare rows B and C above, on the engine that still lets a CRA through:
+Compare rows B and C on Gecko 153 — the engine that still lets a CRA reach the
+decoder, and therefore the only one where this is observable at all:
 
 - **B — CRA, leading pictures removed: 37 frames, no error.** VideoToolbox
   decodes a CRA as the first sample after a seek, cleanly.
@@ -204,10 +222,10 @@ RASL pictures when `NoRaslOutputFlag = 1` fixes the cause, restores CRA seeking
 on file playback _and_ on MSE, and lets both the H.264 and HEVC branches of that
 `#ifdef` go away.
 
-Also worth noting from the same table: `BLA_N_LP` decodes fine on 153 (37
-frames), and is refused at the buffering stage on 154 like the CRA. Whatever
-replaces the current guard, `H265NALU::IsIframe()` counting only IDR is worth
-revisiting on its own — BLA and CRA are IRAP pictures too.
+Whatever replaces the current guard, `H265NALU::IsIframe()` counting only IDR
+is worth revisiting on its own. `BLA_N_LP` decodes on 153 exactly as well as the
+CRA does and is refused on 154 exactly as the CRA is — both are IRAP pictures
+that the function does not count.
 
 ## Why the silence is the worst part
 
