@@ -29,15 +29,11 @@ or resumed.
 |              |                                                                          |
 | ------------ | ------------------------------------------------------------------------ |
 | Affected     | Gecko 154 on macOS (measured on Zen 1.21.15b, `rv:154.0`, Apple silicon) |
-| Not affected | Gecko 153 on macOS                                                       |
+| Not affected | Gecko 153 on macOS; Chrome 151 on macOS                                  |
 | Content      | HEVC Main 10, open-GOP (x265 `--open-gop`)                               |
 
 Bug 2049615 is `RESOLVED FIXED`, `target_milestone` `154 Branch`;
 `cf_status_firefox152` and `cf_status_firefox153` are `wontfix`.
-
-Chrome on the same machine plays and seeks the real-world file below through the
-same player. We have not run `repro.html` itself on a Chromium build with HEVC
-support, so that row is left out of the table.
 
 ## Steps to reproduce
 
@@ -66,25 +62,36 @@ fragment references nothing outside itself.
 
 ## Measured
 
-Same page, same files, same machine.
+Same page, same files, same machine. `frames` is
+`getVideoPlaybackQuality().totalVideoFrames` after 1.5 s of playback.
 
-| case                      | first slice NAL | Gecko 153                                           | Gecko 154                                           |
-| ------------------------- | --------------- | --------------------------------------------------- | --------------------------------------------------- |
-| A — IDR entry (control)   | `IDR_N_LP`      | `0.00–4.00` · 36 frames · no error                  | `0.00–4.00` · 37 frames · no error                  |
-| **B — clean CRA entry**   | `CRA_NUT`       | `0.00–4.00` · **37 frames** · no error              | **empty** · 0 frames · **no error**                 |
-| B — relabelled `IDR_N_LP` | `IDR_N_LP`      | `0.00–4.00` · 0 · `MediaError 3`, OSStatus `-12909` | `0.00–4.00` · 0 · `MediaError 3`, OSStatus `-12909` |
-| B — relabelled `BLA_N_LP` | `BLA_N_LP`      | `0.00–4.00` · **37 frames** · no error              | **empty** · 0 frames · no error                     |
-| C — CRA entry, RASL kept  | `CRA_NUT`       | `0.08–4.36` · 0 · `MediaError 3`, OSStatus `-17694` | **empty** · 0 frames · no error                     |
+| case                      | first slice NAL | Gecko 153                       | Gecko 154                    | Chrome 151                      |
+| ------------------------- | --------------- | ------------------------------- | ---------------------------- | ------------------------------- |
+| A — IDR entry (control)   | `IDR_N_LP`      | `0.00–4.00` · 36 · no error     | `0.00–4.00` · 37 · no error  | `0.00–4.00` · 40 · no error     |
+| **B — clean CRA entry**   | `CRA_NUT`       | `0.00–4.00` · **37** · no error | **empty** · 0 · **no error** | `0.00–4.00` · **41** · no error |
+| B — relabelled `IDR_N_LP` | `IDR_N_LP`      | `0.00–4.00` · 0 · `-12909`      | `0.00–4.00` · 0 · `-12909`   | `0.00–4.00` · 0 · `-12909`      |
+| B — relabelled `BLA_N_LP` | `BLA_N_LP`      | `0.00–4.00` · **37** · no error | **empty** · 0 · no error     | `0.00–4.00` · **42** · no error |
+| C — CRA entry, RASL kept  | `CRA_NUT`       | `0.08–4.36` · 0 · `-17694`      | **empty** · 0 · no error     | `0.24–4.36` · **43** · no error |
 
-Row B is the regression: the same fragment, 37 frames on 153, nothing stored and
-nothing reported on 154.
+Row B is the regression: the same 25 KB fragment, 37 frames on Gecko 153 and 41
+on Chrome, nothing stored and nothing reported on Gecko 154.
 
-Two further measurements from the same table:
+Chrome and Gecko are both on VideoToolbox here — Chrome's error text in the
+`IDR_N_LP` row reads `PipelineStatus::PIPELINE_ERROR_DECODE: Error
+Domain=NSOSStatusErrorDomain Code=-12909 "(null)" (-12909):
+VTDecompressionOutputCallback`, and Gecko's reads `AppleVTDecoder::OnDecodeError`.
 
-- `BLA_N_LP` behaves exactly like `CRA_NUT` on both engines.
-- On Gecko 153, where a CRA still reaches the decoder, the fragment decodes when
-  its RASL pictures are absent (row B, 37 frames) and fails with OSStatus
-  `-17694` (`kVTVideoDecoderReferenceMissingErr`) when they are present (row C).
+Three further measurements from the same table:
+
+- The `IDR_N_LP` relabel fails identically on all three engines with OSStatus
+  `-12909` (`kVTVideoDecoderBadDataErr`). An IDR slice header omits
+  `slice_pic_order_cnt_lsb`, so the relabelled slice no longer parses as what it
+  claims to be. This row is the control for the relabelling itself.
+- `BLA_N_LP` behaves exactly like `CRA_NUT` on all three engines.
+- Row C — a CRA entry point with its RASL pictures kept — decodes on Chrome (43
+  frames, no error) and fails on Gecko 153 with OSStatus `-17694`
+  (`kVTVideoDecoderReferenceMissingErr`). On Gecko 154 the samples do not reach
+  the decoder, so the row reads empty for the same reason as row B.
 
 The same behaviour reproduces on a real 1920×960 HEVC Main 10 open-GOP file at a
 CRA 178.1 s in: `buffered` empty on Gecko 154, `0.0–10.0` with 149 frames when
@@ -145,7 +152,8 @@ Any of these would be enough:
 
 1. Keep the CRA keyframe flag on the MSE path. The guard's stated concern is the
    first sample fed to VideoToolbox after a demuxer seek; MSE performs no
-   demuxer seek and does not choose the entry point.
+   demuxer seek and does not choose the entry point. Chrome accepts every row of
+   the table above on the same OS and the same decoder.
 2. Surface the drop — a `MediaError`, a SourceBuffer error event, or a console
    warning in release builds.
 
@@ -157,7 +165,7 @@ Any of these would be enough:
 | Init segment split off from the first `moof`+`mdat`                                                                 | no change                                                                                                                                   |
 | `appendWindowStart`, `timestampOffset`, `mode="sequence"`, duplicate init append, `abort()` before the media append | no change                                                                                                                                   |
 | `removeSourceBuffer` + `addSourceBuffer` on seek                                                                    | next seek fails with `MediaError 3` / "manager is detached"                                                                                 |
-| Relabel the CRA `IDR_N_LP`                                                                                          | buffers, then `MediaError 3`, OSStatus `-12909` (an IDR slice header omits `slice_pic_order_cnt_lsb`)                                       |
+| Relabel the CRA `IDR_N_LP`                                                                                          | buffers, then `MediaError 3`, OSStatus `-12909` — fails the same way on Chrome                                                              |
 | Relabel the CRA `BLA_N_LP`                                                                                          | `buffered` empty, as with the CRA                                                                                                           |
 | WebCodecs `VideoDecoder`                                                                                            | `isConfigSupported` returns `supported: false` for `hvc1.2.4.L120.B0`, `hev1.2.4.L120.B0` and `hvc1.1.6.L93.B0`; `avc1.640028` returns true |
 
