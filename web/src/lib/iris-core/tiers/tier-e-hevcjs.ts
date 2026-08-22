@@ -90,6 +90,15 @@ const KEYFRAME_SNAP_S = 2;
  *  that slows the very transcode it is waiting on. The cushion has to be built
  *  out of transcoded output, not backlog. */
 const IN_FLIGHT_CAP_S = 8;
+/** Cushion to build before letting playback start after a mount or a seek. The
+ *  transcoder is slowest exactly when it is coldest — worker spin-up, decoder
+ *  init, an empty pipeline — so starting the moment two frames exist means
+ *  playback immediately outruns it and stutters until the two rates cross. One
+ *  honest wait under the spinner is better than thirty seconds of hiccups. */
+const STARTUP_CUSHION_S = 6;
+/** Same idea after a mid-playback rebuffer, where the pipeline is already warm
+ *  and only needs to get back in front of the playhead. */
+const REBUFFER_CUSHION_S = 4;
 /** Rolling window over per-segment throughput, in segments. At the forced
  *  boundary cadence that is roughly the last 12 s of media. */
 const SPEED_WINDOW = 8;
@@ -268,7 +277,7 @@ export const mountTierE: EngineMount = async (opts) => {
   container.appendChild(video);
 
   const initialSeek = { done: false };
-  const unbindVideo = bindVideoCallbacks(video, opts, initialSeek);
+  const unbindVideo = bindVideoCallbacks(video, { ...opts, onBusyChange: undefined }, initialSeek);
 
   const mediaSource = new MediaSource();
   const objectUrl = URL.createObjectURL(mediaSource);
@@ -413,7 +422,6 @@ export const mountTierE: EngineMount = async (opts) => {
         lane.appended += 1;
         if (!lane.reported && lane.sb.buffered.length > 0) {
           lane.reported = true;
-          if (lane.name === "video") setBusy(false);
           const b = lane.sb.buffered;
           console.log(
             `[iris-core] Tier E: ${lane.name} lane first buffered ` +
@@ -421,6 +429,7 @@ export const mountTierE: EngineMount = async (opts) => {
           );
         }
         applyPendingAnchor();
+        if (lane.name === "video") enforceHold();
       }
     } finally {
       lane.draining = false;
@@ -450,6 +459,29 @@ export const mountTierE: EngineMount = async (opts) => {
     return 0;
   };
 
+  // Playback hold. `holdUntil` is the cushion in seconds that has to exist
+  // before the element is allowed to run; 0 means no hold.
+  let holdUntil = STARTUP_CUSHION_S;
+  let heldPaused = false;
+  const cushion = (): number =>
+    videoLane ? bufferedAheadOf(videoLane.sb.buffered, effectivePlayhead()) : 0;
+  const enforceHold = () => {
+    if (disposed || holdUntil <= 0) return;
+    if (cushion() >= holdUntil) {
+      holdUntil = 0;
+      setBusy(false);
+      if (heldPaused) {
+        heldPaused = false;
+        void video.play().catch(() => {});
+      }
+      return;
+    }
+    if (!video.paused) {
+      heldPaused = true;
+      video.pause();
+      setBusy(true);
+    }
+  };
   const waiters = new Set<() => void>();
   const notify = () => {
     // Copy first: a waiter that resolves removes itself from the set.
@@ -499,7 +531,21 @@ export const mountTierE: EngineMount = async (opts) => {
   // Wake the feed gates. `timeupdate` covers steady playback; the rest cover a
   // stalled element, where the buffered ranges still grow as the worker drains
   // its queue and nothing else would tell us. All event-driven — no polling.
-  const onProgress = () => notify();
+  const onProgress = () => {
+    enforceHold();
+    notify();
+  };
+  // A mid-playback starvation means the transcoder fell behind. Resuming on the
+  // two frames that unblock `canplay` just starves again a second later; get
+  // back in front of the playhead first.
+  const onStarved = () => {
+    if (holdUntil <= 0 && !video.paused && video.currentTime > 0) {
+      holdUntil = REBUFFER_CUSHION_S;
+    }
+    enforceHold();
+    notify();
+  };
+  video.addEventListener("waiting", onStarved);
   const WAKE_EVENTS = ["timeupdate", "progress", "waiting", "stalled", "canplay", "playing"];
   for (const e of WAKE_EVENTS) video.addEventListener(e, onProgress);
 
@@ -534,6 +580,7 @@ export const mountTierE: EngineMount = async (opts) => {
 
   const startPipeline = async (seekStart: number): Promise<void> => {
     setBusy(true);
+    holdUntil = STARTUP_CUSHION_S;
     // Claim the target NOW, before the demuxer has even been asked where the
     // keyframe is. `effectivePlayhead` is what the chrome's scrubber reads, so
     // without this the position falls back to the pre-seek one for the whole
@@ -801,6 +848,7 @@ export const mountTierE: EngineMount = async (opts) => {
     notify();
     unsubscribeSpeed?.();
     for (const e of WAKE_EVENTS) video.removeEventListener(e, onProgress);
+    video.removeEventListener("waiting", onStarved);
     unbindVideo();
     await cancelPipelines();
     try {
@@ -841,6 +889,20 @@ export const mountTierE: EngineMount = async (opts) => {
 
   const handle: EngineHandle = {
     ...base,
+    // During a hold, play means "start as soon as there is enough", not "start
+    // now" — starting now is exactly what stutters. Pause cancels that intent.
+    play: async () => {
+      if (holdUntil > 0) {
+        heldPaused = true;
+        enforceHold();
+        return;
+      }
+      await video.play();
+    },
+    pause: () => {
+      heldPaused = false;
+      video.pause();
+    },
     // While a restart is in flight the element still sits at the old position;
     // report where we are heading instead.
     currentTime: () => effectivePlayhead(),
