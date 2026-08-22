@@ -1,0 +1,104 @@
+<!doctype html><meta charset=utf-8><title>Iris — test HEVC CRA / IDR / BLA</title>
+<style>body{font:14px/1.6 system-ui;margin:2rem;max-width:60rem}td,th{padding:.3rem .8rem;text-align:left;
+border-bottom:1px solid #ddd}code{background:#f4f4f4;padding:.1rem .3rem}video{width:320px;background:#000}</style>
+<body>
+<h1>HEVC : point d'entrée aléatoire</h1>
+<p>Ouvre cette page dans le navigateur à tester. Elle prend <code>midstream.mp4</code>
+(produit par <code>gen-variants.mjs</code>), réétiquette le premier NAL de tranche, et mesure
+ce que MSE en fait. <code>buffered</code> vide = le navigateur refuse d'entrer sur ce type de NAL.
+<code>frames=0</code> avec <code>buffered</code> rempli = il l'accepte mais ne sait pas le décoder.</p>
+<table id=t><tr><th>variante<th>NAL<th>buffered<th>frames<th>variance pixels<th>erreur</tr></table>
+<script>
+const MIME_INPUT = new URLSearchParams(location.search).get("mime")
+  || 'video/mp4; codecs="hvc1.2.4.L120.B0"';
+const NAMES = { 20: "IDR_N_LP", 21: "CRA_NUT", 18: "BLA_N_LP", 19: "IDR_W_RADL" };
+
+function boxes(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const segs = []; let o = 0, initEnd = 0, mdatStart = 0;
+  while (o + 8 <= buf.byteLength) {
+    let sz = dv.getUint32(o);
+    const t = String.fromCharCode(buf[o+4],buf[o+5],buf[o+6],buf[o+7]);
+    if (sz === 1) sz = Number(dv.getBigUint64(o+8));
+    if (sz < 8) break;
+    if (t === "ftyp" || t === "moov") initEnd = o + sz;
+    else if (t === "moof") {
+      let e = o + sz;
+      let s2 = dv.getUint32(e);
+      const t2 = String.fromCharCode(buf[e+4],buf[e+5],buf[e+6],buf[e+7]);
+      if (s2 === 1) s2 = Number(dv.getBigUint64(e+8));
+      if (t2 === "mdat") { if (!mdatStart) mdatStart = e + 8; e += s2; }
+      segs.push(buf.subarray(o, e)); o = e; continue;
+    }
+    o += sz;
+  }
+  return { init: buf.subarray(0, initEnd), segs, mdatStart };
+}
+
+/** Réécrit le type du premier NAL de tranche (NAL préfixées par 4 octets de longueur). */
+function relabel(buf, mdatStart, nalType) {
+  const copy = new Uint8Array(buf);
+  const dv = new DataView(copy.buffer);
+  let o = mdatStart;
+  while (o + 5 <= copy.length) {
+    const n = dv.getUint32(o);
+    if (n <= 0 || o + 4 + n > copy.length) break;
+    const t = (copy[o+4] >> 1) & 0x3f;
+    if (t < 32) { copy[o+4] = (copy[o+4] & 0x81) | (nalType << 1); return { copy, was: t }; }
+    o += 4 + n;
+  }
+  return { copy, was: -1 };
+}
+
+async function measure(data, label, nal) {
+  const { init, segs } = boxes(data);
+  const v = document.createElement("video");
+  v.muted = true; v.playsInline = true; v.controls = true;
+  document.body.appendChild(v);
+  const ms = new MediaSource();
+  const url = URL.createObjectURL(ms);
+  v.src = url;
+  await new Promise(r => ms.addEventListener("sourceopen", r, { once: true }));
+  const sb = ms.addSourceBuffer(MIME_INPUT);
+  sb.mode = "segments";
+  const app = b => new Promise(res => {
+    let done = false; const f = () => { if (done) return; done = true; res(); };
+    sb.addEventListener("updateend", f, { once: true });
+    sb.addEventListener("error", f, { once: true });
+    setTimeout(f, 5000);
+    try { sb.appendBuffer(b); } catch (e) { f(); }
+  });
+  await app(init);
+  for (const g of segs.slice(0, 2)) await app(g);
+  const ranges = sb.buffered.length
+    ? `${sb.buffered.start(0).toFixed(1)}–${sb.buffered.end(0).toFixed(1)}` : "vide";
+  if (sb.buffered.length) { try { v.currentTime = sb.buffered.start(0) + 0.2; } catch (e) {} }
+  await v.play().catch(() => {});
+  await new Promise(r => setTimeout(r, 6000));
+  const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+  let variance = "n/a";
+  try {
+    const c = document.createElement("canvas"); c.width = 64; c.height = 36;
+    const g = c.getContext("2d"); g.drawImage(v, 0, 0, 64, 36);
+    const d = g.getImageData(0, 0, 64, 36).data;
+    let a = 0, a2 = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) { const y = (d[i]+d[i+1]+d[i+2])/3; a += y; a2 += y*y; n++; }
+    const m = a/n; variance = Math.round(a2/n - m*m);
+  } catch (e) {}
+  const row = document.getElementById("t").insertRow();
+  row.innerHTML = `<td>${label}<td>${nal}<td>${ranges}<td>${q ? q.totalVideoFrames : "?"}`
+    + `<td>${variance}<td>${v.error ? v.error.code + " : " + v.error.message : "aucune"}`;
+}
+
+(async () => {
+  const raw = new Uint8Array(await (await fetch("midstream.mp4")).arrayBuffer());
+  const { mdatStart } = boxes(raw);
+  const original = relabel(raw, mdatStart, ((raw[0] || 0), 21)).was;
+  await measure(raw, "tel quel", `${original} = ${NAMES[original] ?? "?"}`);
+  for (const t of [20, 18, 19]) {
+    const { copy } = relabel(raw, mdatStart, t);
+    await measure(copy, `réétiqueté`, `${t} = ${NAMES[t]}`);
+  }
+  document.title = "terminé";
+})();
+</script></body>
