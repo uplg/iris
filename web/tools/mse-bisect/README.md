@@ -65,3 +65,45 @@ Une seule remarque de méthode, apprise à la dure : `HTMLMediaElement.play()` r
 une promesse qui **ne se résout jamais** quand la lecture ne démarre pas. Un
 `await v.play().catch(…)` bloque alors pour toujours et le `.catch` n'y change rien.
 Ne jamais l'attendre dans un banc de test.
+
+## Verdict : régression Firefox 154, corrigée en amont
+
+Ce n'est ni un bug d'Iris ni un bug propre à Zen. Le mécanisme est dans Gecko.
+
+`dom/media/platforms/agnostic/bytestreams/H265.h` — seuls les IDR comptent comme
+image intra, alors que CRA et BLA sont aussi des IRAP au sens de la norme :
+
+    bool IsIframe() const {
+      return mNalUnitType == NAL_TYPES::IDR_W_RADL ||
+             mNalUnitType == NAL_TYPES::IDR_N_LP;
+    }
+
+`dom/media/mp4/MP4Demuxer.cpp` — le drapeau `sync` du conteneur est **écrasé** sur
+macOS, avec la raison écrite noir sur blanc :
+
+    #ifdef MOZ_APPLEMEDIA
+      // VideoToolbox can return a bad data error if a CRA frame is the first
+      // sample after a seek. Only IDR_W_RADL/IDR_N_LP are safe starting points.
+      auto isIDR = H265::IsKeyFrame(sample);
+      bool keyframe = isIDR.isOk() && isIDR.unwrap();
+
+L'échantillon CRA n'est donc pas un keyframe ; MSE, qui exige un point d'accès
+aléatoire après un init segment, le jette — ainsi que tous les suivants, puisque
+`need random access point` reste vrai. D'où `buffered` vide, sans erreur ni
+événement. Et forcer le passage en réétiquetant en IDR déclenche exactement
+l'erreur que ce garde-fou évite : `kVTVideoDecoderBadDataErr` (−12909).
+
+Historique : bug 1967475 (oct. 2025, « Only set IDR frame as keyframe for H264 on
+MacOS ») introduit l'écrasement ; bug 2049615 en est la régression pour le HEVC
+open-GOP, « Fix HEVC seeking on macOS when open-GOP CRA frames are present »,
+corrigée pour Firefox 154 et non rétroportée en 153.
+
+Mesuré ici — et attention au piège, la version produit d'un fork ne dit rien de sa
+base Gecko, il faut lire `navigator.userAgent` :
+
+| moteur | seek HEVC open-GOP |
+| --- | --- |
+| Gecko 153 (Firefox de Playwright) | fonctionne |
+| Gecko 154 (Zen 1.21.15b, build antérieur au correctif) | `buffered` vide |
+
+Rien à corriger côté Iris : le remède est une mise à jour du navigateur.
