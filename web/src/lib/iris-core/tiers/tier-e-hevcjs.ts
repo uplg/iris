@@ -86,9 +86,13 @@ const FORCED_BOUNDARY_MAX_S = 3;
 const KEYFRAME_SNAP_S = 2;
 /** Ceiling on media handed to the proxy but not yet transcoded. The proxy
  *  takes appends eagerly, so without this the feed races ahead of the worker
- *  and parks tens of seconds of compressed HEVC in its queue — memory pressure
+ *  and parks tens of seconds of compressed HEVC in its queue: memory pressure
  *  that slows the very transcode it is waiting on. The cushion has to be built
- *  out of transcoded output, not backlog. */
+ *  out of transcoded output, not backlog.
+ *
+ *  This is also what makes a restart cheap. The stale backlog a seek leaves
+ *  behind is bounded by this, so there is no need to reach into the proxy and
+ *  flush it. */
 const IN_FLIGHT_CAP_S = 8;
 /** Cushion to build before letting playback start after a mount or a seek. The
  *  transcoder is slowest exactly when it is coldest — worker spin-up, decoder
@@ -395,9 +399,8 @@ export const mountTierE: EngineMount = async (opts) => {
       };
       lane.sb.addEventListener("updateend", done, { once: true });
       lane.sb.addEventListener("error", done, { once: true });
-      // A restart calls `abort()` to flush the proxy's backlog. The spec queues
-      // `updateend` after `abort`, but this SourceBuffer is hevc.js's stand-in
-      // — settle on either, or a drain loop parks forever holding `draining`.
+      // Belt and braces: an `abort` on this SourceBuffer must settle the
+      // append too, or a drain loop parks forever holding `draining`.
       lane.sb.addEventListener("abort", done, { once: true });
       try {
         // hevc.js transfers the buffer to its worker; a view onto a shared
@@ -441,9 +444,17 @@ export const mountTierE: EngineMount = async (opts) => {
     // init segment delivered whole. The audio lane is a plain SourceBuffer and
     // takes mediabunny's chunking as-is.
     const framer = lane.name === "video" ? new InitFramer() : null;
+    let firstChunk = true;
     return new WritableStream<StreamTargetChunk>({
       write: (chunk) => {
         if (disposed || gen !== generation) return;
+        if (firstChunk) {
+          firstChunk = false;
+          console.log(
+            `[iris-core] Tier E: ${lane.name} muxer emitted its first chunk ` +
+              `(${chunk.data.byteLength}B) for gen ${gen}`,
+          );
+        }
         const parts = framer ? framer.push(chunk.data) : [chunk.data];
         for (const part of parts) lane.queue.push(part);
         if (parts.length > 0) void drain(lane);
@@ -592,21 +603,6 @@ export const mountTierE: EngineMount = async (opts) => {
     await cancelPipelines();
     if (disposed || gen !== generation) return;
 
-    // Flush hevc.js's own backlog, not just ours. The proxy accepts appends
-    // eagerly and transcodes them behind our back, so a deep runway means the
-    // worker is sitting on tens of seconds of segments for a position the user
-    // just left — it would chew through all of them before reaching the new
-    // one. `abort()` is what the intercept patches to drop that queue; it also
-    // resets the segment parser, which is fine because every restart builds a
-    // new Output and therefore emits a fresh init segment.
-    for (const lane of [videoLane, audioLane]) {
-      if (!lane) continue;
-      try {
-        if (mediaSource.readyState === "open") lane.sb.abort();
-      } catch {
-        /* not open, or nothing in flight */
-      }
-    }
     if (videoLane) {
       videoLane.queue.length = 0;
       videoLane.fedMax = seekStart;
@@ -759,6 +755,12 @@ export const mountTierE: EngineMount = async (opts) => {
           toAdd,
           first ? { decoderConfig: decoderConfig ?? undefined } : undefined,
         );
+        if (first) {
+          console.log(
+            `[iris-core] Tier E: first video packet fed at ${packet.timestamp.toFixed(1)}s ` +
+              `(gen ${gen})`,
+          );
+        }
         first = false;
         if (videoLane && packet.timestamp > videoLane.fedMax) videoLane.fedMax = packet.timestamp;
         notify();
