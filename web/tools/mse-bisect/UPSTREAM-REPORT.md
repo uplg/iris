@@ -9,7 +9,8 @@ files. Open it and it prints the table below.
 
 ## Summary
 
-On macOS, Gecko 154 does not treat an HEVC CRA picture as a random access point.
+On macOS (Tahoe 26.6.2), Gecko 154 does not treat an HEVC CRA picture as a
+random access point.
 On the file-playback path the demuxer falls back to the preceding IDR. On the
 MSE path there is nothing to fall back to, because the page supplies the
 fragments. The coded frame group is never opened: the CRA is dropped, `need
@@ -27,8 +28,8 @@ or resumed.
 
 |              |                                                                          |
 | ------------ | ------------------------------------------------------------------------ |
-| Affected     | Gecko 154 on macOS (measured on Zen 1.21.15b, `rv:154.0`, Apple silicon) |
-| Not affected | Gecko 153 on macOS; Chrome 151 on macOS                                  |
+| Affected     | Gecko 154 on macOS 26.6.2, Apple silicon (UA `rv:154.0`) |
+| Not affected | Gecko 153 on macOS; Chrome 151 on macOS |
 | Content      | HEVC Main 10, open-GOP (x265 `--open-gop`)                               |
 
 Bug 2049615 is `RESOLVED FIXED`, `target_milestone` `154 Branch`;
