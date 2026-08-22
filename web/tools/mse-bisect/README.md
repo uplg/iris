@@ -112,3 +112,34 @@ Conséquence : mettre à jour n'y changera rien, c'est l'état courant et voulu 
 Firefox 154+ sur macOS. Nos drapeaux de conteneur sont pourtant corrects
 (`trun first_sample_flags=0x02000000` : sync, ne dépend de rien), identiques entre
 le fragment t=0 et le fragment mi-flux, et acceptés par tous les autres moteurs.
+
+## Zen embarque bien le correctif — et c'est le correctif qui nous casse
+
+Vérifié sur le fichier de reproduction du patch amont, généré avec sa propre
+commande, en lecture **fichier** (pas MSE), seek à 2,0 s comme son test :
+
+    ffmpeg -f lavfi -i testsrc=duration=4:size=128x96:rate=30 \
+      -c:v libx265 -x265-params keyint=30:min-keyint=30:open-gop=1:info=0 \
+      -an test_hevc_open_gop.mp4
+
+| moteur | seek(2.0) en lecture fichier |
+| --- | --- |
+| Firefox 153 | `err=3 AppleVTDecoder::OnDecodeError:ffffbae2` — le bug d'origine |
+| Zen / Gecko 154 | `ct=4.00 frames=61 err=aucune` — corrigé |
+
+Le patch retire le drapeau keyframe des CRA pour que **le démuxeur retombe sur
+l'IDR précédent** (son propre test le dit : « CRA keyframe flags are stripped on
+Apple platforms, so the seek falls back to the preceding IDR »). En lecture
+fichier il y a toujours un IDR en amont où retomber. En MSE il n'y en a pas :
+c'est la page qui choisit les fragments, et Gecko jette simplement ce qu'on lui
+donne.
+
+D'où l'inversion apparente de nos mesures, qui est en réalité parfaitement
+cohérente :
+
+| | lecture fichier | MSE mi-flux |
+| --- | --- | --- |
+| Firefox 153 (sans le correctif) | échoue | fonctionne |
+| Gecko 154 (avec) | fonctionne | `buffered` vide |
+
+Le correctif amont laisse donc MSE sans recours. Ça vaut un signalement.
