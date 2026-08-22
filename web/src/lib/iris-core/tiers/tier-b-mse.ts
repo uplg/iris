@@ -702,10 +702,61 @@ export const mountTierB: EngineMount = async (opts) => {
 
   // queue drain
 
+  /** DIAGNOSTIC: list the top-level ISOBMFF boxes in a buffer we are about to
+   *  append, plus the first `tfdt` base media decode time. Five hypotheses about
+   *  WHY Firefox drops these appends have now been disproved by measurement, so
+   *  the next question is what is actually in them — a `moov` with no media
+   *  (muxer withholding) looks identical from the outside to media Firefox
+   *  rejected. */
+  const describeBoxes = (buf: Uint8Array): string => {
+    try {
+      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      const out: string[] = [];
+      let off = 0;
+      let tfdt = "";
+      while (off + 8 <= buf.byteLength && out.length < 12) {
+        let size = dv.getUint32(off);
+        const type = String.fromCharCode(
+          buf[off + 4]!,
+          buf[off + 5]!,
+          buf[off + 6]!,
+          buf[off + 7]!,
+        );
+        if (size === 1 && off + 16 <= buf.byteLength) size = Number(dv.getBigUint64(off + 8));
+        if (size < 8) break;
+        out.push(`${type}:${size}`);
+        // `tfdt` lives at moof > traf > tfdt; scan the moof payload for it.
+        if (type === "moof" && !tfdt) {
+          const end = Math.min(off + size, buf.byteLength);
+          for (let i = off + 8; i + 16 <= end; i += 1) {
+            if (
+              buf[i + 4] === 0x74 &&
+              buf[i + 5] === 0x66 &&
+              buf[i + 6] === 0x64 &&
+              buf[i + 7] === 0x74
+            ) {
+              const version = buf[i + 8]!;
+              const base = version === 1 ? Number(dv.getBigUint64(i + 12)) : dv.getUint32(i + 12);
+              tfdt = ` tfdt(v${version})=${base}`;
+              break;
+            }
+          }
+        }
+        off += size;
+      }
+      return out.join(" ") + tfdt;
+    } catch {
+      return "unparsable";
+    }
+  };
+
   const drainQueue = () => {
     if (disposed || !sourceBuffer || sourceBuffer.updating) return;
     const next = appendQueue.shift();
     if (!next) return;
+    if (appendProbesLeft > 0) {
+      console.log(`[iris-core] Tier B appending ${next.byteLength}B — ${describeBoxes(next)}`);
+    }
     try {
       sourceBuffer.appendBuffer(next.slice().buffer);
       pendingOp = "append";
