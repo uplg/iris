@@ -445,7 +445,7 @@ export const mountTierF: EngineMount = async (opts) => {
   video.appendChild(hlsSource);
   hls.loadSource(streamUrl);
 
-  const handle: EngineHandle = videoBackedHandle(video, {
+  const base = videoBackedHandle(video, {
     nativeTrackMap,
     fallbackDuration: opts.manifest.duration_s ?? null,
     dispose: async () => {
@@ -489,6 +489,31 @@ export const mountTierF: EngineMount = async (opts) => {
       hls.audioTrack = idx;
     },
   });
+
+  // What hls.js chose and why, which the media element cannot answer.
+  const handle: EngineHandle = {
+    ...base,
+    stats: () => {
+      const lvl = hls.levels[hls.currentLevel];
+      return [
+        ...(base.stats?.() ?? []),
+        [
+          "variant",
+          lvl
+            ? `${hls.currentLevel} of ${hls.levels.length} · ${lvl.width}x${lvl.height} · ` +
+              `${(lvl.bitrate / 1e6).toFixed(1)}Mbps${hls.autoLevelEnabled ? " (auto)" : " (locked)"}`
+            : `none picked yet, ${hls.levels.length} available`,
+        ],
+        ["bandwidth", `${(hls.bandwidthEstimate / 1e6).toFixed(1)}Mbps estimated`],
+        [
+          "audio",
+          hls.audioTracks.length
+            ? `track ${hls.audioTrack} of ${hls.audioTracks.length}`
+            : "muxed with video",
+        ],
+      ];
+    },
+  };
   return handle;
 };
 

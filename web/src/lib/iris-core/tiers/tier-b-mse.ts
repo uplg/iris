@@ -1524,6 +1524,30 @@ export const mountTierB: EngineMount = async (opts) => {
   // for instant playback.
   const handle: EngineHandle = {
     ...baseHandle,
+    // The adaptive buffer window, the feed's reach and the append queue are
+    // what a Tier B stall is always about; none of them is visible from the
+    // media element.
+    stats: () => [
+      ...(baseHandle.stats?.() ?? []),
+      [
+        "window",
+        `ahead ${bufferedAheadSeconds().toFixed(0)}s of ${bufferAheadTarget.toFixed(0)}s ` +
+          `· behind ${playedKeep.toFixed(0)}s · ~${(residentBytesEstimate() / 1e6).toFixed(0)}MB`,
+      ],
+      [
+        "feed",
+        `video to ${videoFedMax.toFixed(1)}s${videoFeedEnded ? " (ended)" : ""} · ` +
+          `audio to ${audioFedMax === Number.POSITIVE_INFINITY ? "end" : `${audioFedMax.toFixed(1)}s`}`,
+      ],
+      [
+        "append",
+        `${appendQueue.length} queued · ${pendingOp ?? "idle"}` +
+          `${sourceBuffer?.updating ? " · updating" : ""} · ${sinkChunks} chunks ` +
+          `(${(sinkBytes / 1e6).toFixed(1)}MB) from the muxer`,
+      ],
+      ["park", feedPark ?? "both feeds running"],
+      ["pipeline", `generation ${conversionGeneration}, ${mime}`],
+    ],
     seek: (s: number) => {
       const target = Math.max(0, s);
       if (isTimeBuffered(target)) {

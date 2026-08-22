@@ -94,6 +94,10 @@ export const mountTierC: EngineMount = async (opts) => {
   let seekGeneration = 0;
   let paused = false;
   let disposed = false;
+  // Debug-panel counters. Cheap: two increments on paths that already run
+  // per frame and per audio buffer.
+  let framesRendered = 0;
+  let audioBuffers = 0;
 
   const spinPipelines = (fromSeconds: number, generation: number): void => {
     videoHandle = startVideoPipeline({
@@ -106,6 +110,7 @@ export const mountTierC: EngineMount = async (opts) => {
           return;
         }
         renderer.enqueue(frame);
+        framesRendered += 1;
         fireReady();
       },
       onError,
@@ -124,6 +129,7 @@ export const mountTierC: EngineMount = async (opts) => {
             return;
           }
           scheduler.enqueue(data);
+          audioBuffers += 1;
         },
         onError,
       });
@@ -162,6 +168,22 @@ export const mountTierC: EngineMount = async (opts) => {
         /* idempotent */
       }
     },
+    stats: () => [
+      ["time", `${currentMediaTime().toFixed(2)} / ${opts.manifest.duration_s?.toFixed(1) ?? "?"}`],
+      ["state", paused ? "paused" : "playing"],
+      ["render", `canvas, ${framesRendered} frame(s) enqueued`],
+      [
+        "decode",
+        `${probe.config.codec ?? "?"} via WebCodecs${probe.hardware ? ", hardware" : ", software"}`,
+      ],
+      [
+        "audio",
+        audioTrack
+          ? `${audioBuffers} buffer(s), clock at ${scheduler.currentMediaTimeSeconds().toFixed(2)}s`
+          : "none, video clock",
+      ],
+      ["pipeline", `seek generation ${seekGeneration}, target ${currentSeekTarget.toFixed(1)}s`],
+    ],
     currentTime: () => currentMediaTime(),
     duration: () => opts.manifest.duration_s ?? null,
     paused: () => paused,
