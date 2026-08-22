@@ -867,6 +867,27 @@ export const mountTierB: EngineMount = async (opts) => {
         // ANY movement of either clock (including a user seek resetting
         // them backwards) means something else is driving recovery.
         if (Math.abs(video.currentTime - snapT) > 0.25 || videoFedMax !== snapFed) return;
+        // The decoder never produced a picture. If media covers the playhead,
+        // playback isn't paused, and `totalVideoFrames` is still 0, restarting
+        // the pipeline cannot help — the browser has the bytes and cannot turn
+        // them into frames. That is what an unsupported profile looks like from
+        // JS: `MediaSource.isTypeSupported` said yes, appends succeed,
+        // `readyState` reaches HAVE_ENOUGH_DATA, audio plays, picture frozen.
+        // HEVC Main 10 is the case that prompted this (Firefox's support is
+        // hardware- and version-dependent, and a fork on an older base can lack
+        // what a newer build has), but nothing here is codec-specific. Demote
+        // instead: Tier F transcodes server-side and always decodes.
+        const quality = video.getVideoPlaybackQuality?.();
+        if (quality && quality.totalVideoFrames === 0 && isTimeBuffered(video.currentTime)) {
+          fail(
+            new Error(
+              `Tier B: no video frame decoded after ${STALL_WATCHDOG_MS}ms with media buffered ` +
+                `at the playhead (t=${snapT.toFixed(1)}s, ranges=[${bufferedRangesStr()}], ` +
+                `${video.videoWidth}x${video.videoHeight}) — this browser cannot decode the stream`,
+            ),
+          );
+          return;
+        }
         console.warn(
           `[iris-core] Tier B frozen feed: t=${snapT.toFixed(1)}s fedMax=${snapFed.toFixed(1)}s ` +
             `unchanged after ${STALL_WATCHDOG_MS}ms — rebuilding input, restarting at playhead`,
