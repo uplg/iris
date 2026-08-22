@@ -29,6 +29,7 @@ import {
   ALL_FORMATS,
   AudioSampleSink,
   AudioSampleSource,
+  EncodedPacket,
   EncodedPacketSink,
   EncodedVideoPacketSource,
   Input,
@@ -64,6 +65,11 @@ const TRACK_LEAD_CAP_S = 4;
  *  proxy cannot start transcoding until a whole fragment has arrived, so this
  *  is the floor on startup and post-seek latency. */
 const FRAGMENT_S = 0.5;
+/** Cadence at which we force a fragment boundary — see the video pump. */
+const FORCED_BOUNDARY_S = 1.5;
+/** Snap the playhead back to the keyframe when the requested position is more
+ *  than this far past it. */
+const KEYFRAME_SNAP_S = 2;
 
 let intercept: { install: () => void; uninstall: () => void } | null = null;
 let installed = false;
@@ -476,7 +482,22 @@ export const mountTierE: EngineMount = async (opts) => {
     const mediaStart = startPacket.timestamp;
     if (videoLane) videoLane.fedMax = mediaStart;
     if (audioLane) audioLane.fedMax = mediaStart;
-    pendingAnchor = seekStart > 0 ? seekStart : null;
+    // Land on the keyframe rather than the requested position when the gap is
+    // wide. The decoder must start at `mediaStart` either way, and the WASM
+    // transcode runs at roughly 0.8x realtime — so honouring an exact target
+    // means watching a blank player while a whole GOP is transcoded and thrown
+    // away. Measured on this file: 13.8 s to first frame anchored at the target
+    // versus the first fragment landing in ~2 s. A seek that lands a few
+    // seconds early beats a seek that looks broken; Tier B keeps exact
+    // positioning because hardware decode makes the lead-in free.
+    const gap = seekStart - mediaStart;
+    pendingAnchor = seekStart > 0 ? (gap > KEYFRAME_SNAP_S ? mediaStart : seekStart) : null;
+    if (gap > KEYFRAME_SNAP_S) {
+      console.log(
+        `[iris-core] Tier E: snapping ${seekStart.toFixed(1)}s → keyframe ` +
+          `${mediaStart.toFixed(1)}s (${gap.toFixed(1)}s of lead-in would transcode first)`,
+      );
+    }
 
     const vOut = new Output({
       format: new Mp4OutputFormat({ fastStart: "fragmented", minimumFragmentDuration: FRAGMENT_S }),
@@ -535,6 +556,20 @@ export const mountTierE: EngineMount = async (opts) => {
     const videoPump = (async () => {
       let first = true;
       const decoderConfig = await videoTrack.getDecoderConfig();
+      // Mediabunny closes a fragment only on a keyframe (`keyFrameQueuedEverywhere`
+      // in its ISOBMFF muxer), so `minimumFragmentDuration` cannot shorten one: on
+      // a scene-cut-keyed x265 rip the first fragment spans a whole GOP — measured
+      // at 5.5 MB / ~10 s here — and hevc.js emits nothing until it has all of it.
+      // That was 12.6 s of pure transcode before the first frame.
+      //
+      // We hand mediabunny the packets, so we place the boundaries: marking a
+      // delta packet `key` makes the muxer close there. Safe in this pipeline
+      // because our fMP4 is read by hevc.js alone, never by the browser's HEVC
+      // demuxer, and hevc.js keeps decoder state across segments
+      // (`processMediaSegmentStreaming`) — a fragment opening mid-GOP is a
+      // continuation, not a random access point. Only the FIRST fragment must
+      // start on a real keyframe, and it does: `startPacket`.
+      let nextBoundary = mediaStart + FORCED_BOUNDARY_S;
       for await (const packet of packetSink.packets(startPacket)) {
         if (disposed || gen !== generation) break;
         // Open-GOP leading pictures decode after the random access point but
@@ -548,8 +583,13 @@ export const mountTierE: EngineMount = async (opts) => {
               packet.timestamp <= otherFed(audioLane) + TRACK_LEAD_CAP_S),
         );
         if (disposed || gen !== generation) break;
+        let toAdd = packet;
+        if (!first && packet.type !== "key" && packet.timestamp >= nextBoundary) {
+          toAdd = new EncodedPacket(packet.data, "key", packet.timestamp, packet.duration);
+          nextBoundary = packet.timestamp + FORCED_BOUNDARY_S;
+        }
         await videoSrc.add(
-          packet,
+          toAdd,
           first ? { decoderConfig: decoderConfig ?? undefined } : undefined,
         );
         first = false;
