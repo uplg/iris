@@ -1,25 +1,69 @@
 /**
- * Tier E — hevc.js MSE intercept. HEVC bitstream is transcoded to
- * H.264 in a worker; the browser's MSE only ever sees H.264.
+ * Tier E — hevc.js, split-track pipeline.
  *
- * The flow re-uses Tier B's Mediabunny → fMP4 → MSE plumbing
- * verbatim — what changes is that `installMSEIntercept()` is called
- * before MediaSource is constructed, which transparently routes any
- * `hev1.*` / `hvc1.*` SourceBuffer through the WASM HEVC decoder +
- * H.264 encoder.
+ * Mediabunny demuxes the source and remuxes it into TWO fragmented MP4
+ * streams, each single-track, feeding two SourceBuffers on one MediaSource:
  *
- * Gated by `pickTier` to:
- *   - codec = HEVC (otherwise Tier B already works)
- *   - height ≤ 1080 (hevc.js does ~21 fps on 4K, not real-time)
- *   - browser ∈ Chromium-family (Firefox lacks WebCodecs H.264 encode
- *     in some versions; conservative)
+ *   video (HEVC) → SourceBuffer("video/mp4; codecs=hvc1…")  ← hevc.js proxy
+ *                  the proxy transcodes to H.264 in a WASM worker, so the
+ *                  browser only ever sees `avc1…`
+ *   audio        → SourceBuffer("audio/mp4; codecs=…")      ← native, untouched
+ *
+ * Why split rather than reuse Tier B's single muxed SourceBuffer: hevc.js's
+ * muxed path is AAC-only ("the AAC audio is passed through … main-thread path;
+ * AAC only"), and Firefox has no AAC in WebCodecs — Tier B falls back to Opus
+ * there. Handing the muxed proxy an Opus stream makes it create a real buffer
+ * for `avc1…,mp4a.40.2` and then queue every append forever, without an error.
+ * Video alone through the proxy sidesteps that entirely.
+ *
+ * Why this tier exists on macOS at all, where hevc.js's own matrix says
+ * "No — native": the problem there is not decoding HEVC, it is *entering* an
+ * HEVC stream. Gecko 154+ strips the keyframe flag from CRA pictures
+ * (`MP4Demuxer.cpp`, bug 2049615), and an open-GOP rip has one IDR, at t=0 — so
+ * MSE silently drops every mid-stream start and `buffered` stays empty. Routing
+ * through hevc.js means Gecko sees H.264 and the guard never applies.
+ * See `web/tools/mse-bisect/README.md` for the measurements.
  */
 
-import type { EngineMount } from "../engine";
+import {
+  ALL_FORMATS,
+  AudioSampleSink,
+  AudioSampleSource,
+  EncodedPacketSink,
+  EncodedVideoPacketSource,
+  Input,
+  Mp4OutputFormat,
+  Output,
+  Quality,
+  type StreamTargetChunk,
+  StreamTarget,
+  UrlSource,
+} from "mediabunny";
+
+import {
+  appendNativeTrack,
+  bindVideoCallbacks,
+  videoBackedHandle,
+  type EngineHandle,
+  type EngineMount,
+} from "../engine";
+import { ensureLibavAudioDecoderRegistered, libavCanDecode } from "../decode/libav-audio-decoder";
+import { pickAudioEncoder, relaxMediabunnyGopCheck } from "./tier-b-mse";
 
 const WASM_URL = "/hevcjs/hevc-decode.js";
 const WASM_BINARY_URL = "/hevcjs/hevc-decode.wasm";
 const WORKER_URL = "/hevcjs/transcode-worker.js";
+
+/** Seconds of media the feeds may run ahead of the playhead. The WASM
+ *  transcode is the bottleneck, not memory, so this is smaller than Tier B's
+ *  window — a deep buffer would just queue work the user may seek away from. */
+const AHEAD_TARGET_S = 16;
+/** How far one track may run ahead of the other before it waits. */
+const TRACK_LEAD_CAP_S = 4;
+/** Fragments the muxer emits. Short ones matter more here than in Tier B: the
+ *  proxy cannot start transcoding until a whole fragment has arrived, so this
+ *  is the floor on startup and post-seek latency. */
+const FRAGMENT_S = 0.5;
 
 let intercept: { install: () => void; uninstall: () => void } | null = null;
 let installed = false;
@@ -27,24 +71,12 @@ let installCount = 0;
 
 /** Publish the WASM decoder factory as `globalThis.HEVCDecoderModule`.
  *
- *  hevc.js resolves its decoder like this:
- *
- *      if (typeof globalThis.HEVCDecoderModule === "function") { … }
- *      const mod = await import(wasmUrl);
- *      const fn = mod.default ?? mod;
- *
- *  The second path needs `hevc-decode.js` to be an ES module. The file the
- *  package ships — and that `sync-vendor` copies into `public/hevcjs/` — is the
- *  UMD build: it ends in `module.exports = HEVCDecoderModule` / `define([...])`
- *  and exports nothing to ESM. A browser `import()` of it therefore yields a
- *  namespace with no `default`, and hevc.js dies on
- *  `(mod.default ?? mod) is not a function` — which is why Tier E never
- *  started, in Firefox and in Chromium alike.
- *
- *  A classic `<script>` is what a UMD bundle is built for: it assigns the
- *  global, and hevc.js then takes its first branch and never reaches the
- *  import. Loading it here rather than vendoring an ESM variant keeps
- *  `sync-vendor` copying exactly what the package publishes. */
+ *  hevc.js resolves its decoder as `globalThis.HEVCDecoderModule` first, then
+ *  falls back to `await import(wasmUrl)` and `mod.default ?? mod`. The file the
+ *  package publishes — and that `sync-vendor` copies into `public/hevcjs/` — is
+ *  the IIFE/UMD build: a browser `import()` of it yields a namespace with no
+ *  `default` and the call throws. A classic `<script>` is what that build is
+ *  for; it assigns the global and the import is never reached. */
 function ensureDecoderGlobal(): Promise<void> {
   const g = globalThis as { HEVCDecoderModule?: unknown };
   if (typeof g.HEVCDecoderModule === "function") return Promise.resolve();
@@ -90,33 +122,576 @@ async function ensureIntercept(): Promise<void> {
 function releaseIntercept(): void {
   if (!intercept || !installed) return;
   installCount = Math.max(0, installCount - 1);
-  // Don't uninstall while the SourceBuffer still references the
-  // intercept's proxy machinery — uninstall on the last release.
   if (installCount === 0) {
     intercept.uninstall();
     installed = false;
   }
 }
 
-export const mountTierE: EngineMount = async (opts) => {
-  await ensureIntercept();
-  // Delegate the rest to Tier B — the intercept transparently catches
-  // hev1/hvc1 SourceBuffer creations and routes through HEVC→H.264.
-  const { mountTierB } = await import("./tier-b-mse");
-  let handle;
-  try {
-    handle = await mountTierB(opts);
-  } catch (e) {
-    releaseIntercept();
-    throw e;
-  }
-  const originalDispose = handle.dispose;
-  handle.dispose = async () => {
-    try {
-      await originalDispose();
-    } finally {
-      releaseIntercept();
+/** Re-frame mediabunny's chunk stream for hevc.js.
+ *
+ *  Mediabunny writes `ftyp` as its own 28-byte chunk, then a second chunk
+ *  carrying `moov` followed by the first `moof`+`mdat`. hevc.js decides what a
+ *  chunk is with `isInitSegment`, which only looks at the first box type — so a
+ *  lone `ftyp` is accepted as a complete init segment, handed to the
+ *  transcoder, and the queue then stalls with no error and no "Init segment
+ *  parsed". Every later append piles up behind it.
+ *
+ *  So hand it what it expects: one append containing `ftyp`+`moov`, then media
+ *  segments. This accumulates until the `moov` is complete, emits the pair, and
+ *  passes everything after through untouched. */
+class InitFramer {
+  private pending: Uint8Array[] = [];
+  private pendingBytes = 0;
+  private initDone = false;
+
+  /** Returns the buffers to append, in order. */
+  push(chunk: Uint8Array): Uint8Array[] {
+    if (this.initDone) return [chunk];
+    this.pending.push(chunk);
+    this.pendingBytes += chunk.byteLength;
+    const joined = new Uint8Array(this.pendingBytes);
+    let at = 0;
+    for (const part of this.pending) {
+      joined.set(part, at);
+      at += part.byteLength;
     }
+    const end = InitFramer.initSegmentEnd(joined);
+    if (end < 0) return []; // `moov` not complete yet — keep accumulating
+    this.initDone = true;
+    this.pending = [];
+    this.pendingBytes = 0;
+    const rest = joined.subarray(end);
+    return rest.byteLength > 0 ? [joined.subarray(0, end), rest] : [joined.subarray(0, end)];
+  }
+
+  /** Byte offset just past `moov`, or -1 while it is still incomplete. */
+  private static initSegmentEnd(buf: Uint8Array): number {
+    if (buf.byteLength < 8) return -1;
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let o = 0;
+    while (o + 8 <= buf.byteLength) {
+      let size = dv.getUint32(o);
+      const type = String.fromCharCode(buf[o + 4]!, buf[o + 5]!, buf[o + 6]!, buf[o + 7]!);
+      if (size === 1) {
+        if (o + 16 > buf.byteLength) return -1;
+        size = Number(dv.getBigUint64(o + 8));
+      }
+      if (size < 8) return -1;
+      if (o + size > buf.byteLength) return -1; // box truncated
+      if (type === "moov") return o + size;
+      o += size;
+    }
+    return -1;
+  }
+}
+
+/** One SourceBuffer plus the serialised queue feeding it. */
+type Lane = {
+  name: "video" | "audio";
+  sb: SourceBuffer;
+  queue: Uint8Array[];
+  draining: boolean;
+  fedMax: number;
+  ended: boolean;
+  /** Diagnostics: how many appends landed, and whether we logged first data. */
+  appended: number;
+  reported: boolean;
+};
+
+export const mountTierE: EngineMount = async (opts) => {
+  const { container, manifest, streamUrl, nativeSubs, audioTrackIndex } = opts;
+
+  if (typeof globalThis.MediaSource === "undefined") {
+    throw new Error("Tier E: MediaSource is not available");
+  }
+  const videoCodecString = manifest.video[0]?.codec_string;
+  if (!videoCodecString) throw new Error("Tier E: manifest has no video codec string");
+
+  const chosenAudioIdx = Math.max(0, audioTrackIndex ?? manifest.audio.findIndex((a) => a.default));
+  const chosenAudio = manifest.audio[chosenAudioIdx] ?? null;
+  const audioNeedsTranscode = chosenAudio != null && !chosenAudio.browser_native;
+  if (audioNeedsTranscode && !libavCanDecode(chosenAudio.codec)) {
+    throw new Error(`Tier E: audio codec ${chosenAudio.codec} not transcodable client-side`);
+  }
+  if (audioNeedsTranscode) ensureLibavAudioDecoderRegistered();
+
+  let encoderChoice: Awaited<ReturnType<typeof pickAudioEncoder>> = null;
+  if (audioNeedsTranscode && chosenAudio) {
+    encoderChoice = await pickAudioEncoder(chosenAudio.channels, chosenAudio.sample_rate ?? 48000);
+    if (!encoderChoice) {
+      throw new Error("Tier E: no usable AudioEncoder for this source");
+    }
+  }
+  const audioMp4Codec = audioNeedsTranscode
+    ? (encoderChoice?.mp4Codec ?? "mp4a.40.2")
+    : chosenAudio?.codec_string;
+
+  await ensureIntercept();
+
+  container.innerHTML = "";
+  const video = document.createElement("video");
+  video.className = "h-full w-full object-contain";
+  video.playsInline = true;
+  const nativeTrackMap = new Map<number, HTMLTrackElement>();
+  for (const sub of nativeSubs) appendNativeTrack(video, sub, nativeTrackMap);
+  container.appendChild(video);
+
+  const initialSeek = { done: false };
+  const unbindVideo = bindVideoCallbacks(video, opts, initialSeek);
+
+  const mediaSource = new MediaSource();
+  const objectUrl = URL.createObjectURL(mediaSource);
+  video.src = objectUrl;
+
+  let disposed = false;
+  let generation = 0;
+  let videoLane: Lane | null = null;
+  let audioLane: Lane | null = null;
+  let videoOutput: Output | null = null;
+  let audioOutput: Output | null = null;
+  let input: Input | null = null;
+  /** Playhead to apply once the video lane has buffered it. Setting
+   *  `currentTime` before any data exists leaves Firefox in a pending seek. */
+  let pendingAnchor: number | null = null;
+
+  const fail = (e: Error) => {
+    if (disposed) return;
+    opts.onError?.(e);
+  };
+
+  await new Promise<void>((resolve, reject) => {
+    const onOpen = () => {
+      mediaSource.removeEventListener("sourceopen", onOpen);
+      resolve();
+    };
+    const onErr = () => {
+      mediaSource.removeEventListener("sourceopen", onOpen);
+      reject(new Error("Tier E: MediaSource errored before opening"));
+    };
+    mediaSource.addEventListener("sourceopen", onOpen, { once: true });
+    mediaSource.addEventListener("error", onErr, { once: true });
+  });
+
+  if (manifest.duration_s && manifest.duration_s > 0) {
+    try {
+      mediaSource.duration = manifest.duration_s;
+    } catch {
+      /* some engines refuse before a buffer exists */
+    }
+  }
+
+  const makeLane = (name: "video" | "audio", mime: string): Lane => {
+    const sb = mediaSource.addSourceBuffer(mime);
+    sb.mode = "segments";
+    return {
+      name,
+      sb,
+      queue: [],
+      draining: false,
+      fedMax: 0,
+      ended: false,
+      appended: 0,
+      reported: false,
+    };
+  };
+
+  // Video first: the intercept swaps this one for its transcoding proxy.
+  videoLane = makeLane("video", `video/mp4; codecs="${videoCodecString}"`);
+  if (chosenAudio && audioMp4Codec) {
+    audioLane = makeLane("audio", `audio/mp4; codecs="${audioMp4Codec}"`);
+  }
+  console.log(
+    `[iris-core] Tier E: video SourceBuffer "${videoCodecString}" (proxied), ` +
+      `audio ${audioLane ? `"${audioMp4Codec}"` : "none"}`,
+  );
+
+  const effectivePlayhead = (): number => pendingAnchor ?? video.currentTime;
+
+  const applyPendingAnchor = (): void => {
+    const t = pendingAnchor;
+    if (t === null || !videoLane) return;
+    const b = videoLane.sb.buffered;
+    for (let i = 0; i < b.length; i += 1) {
+      if (b.start(i) - 0.25 <= t && b.end(i) >= t) {
+        pendingAnchor = null;
+        try {
+          if (Math.abs(video.currentTime - t) > 0.05) video.currentTime = t;
+        } catch {
+          /* swallow */
+        }
+        return;
+      }
+    }
+  };
+
+  /** Append one buffer and resolve when the SourceBuffer is idle again.
+   *
+   *  The hevc.js proxy fires `updateend` as soon as it has *queued* the data,
+   *  not when the transcode lands, and its `updating` stays false throughout —
+   *  so this only serialises our own calls, which is all `appendBuffer`
+   *  requires. The transcode back-pressure comes from the feed gates instead. */
+  const appendOnce = (lane: Lane, data: Uint8Array): Promise<void> =>
+    new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        lane.sb.removeEventListener("updateend", done);
+        lane.sb.removeEventListener("error", done);
+        resolve();
+      };
+      lane.sb.addEventListener("updateend", done, { once: true });
+      lane.sb.addEventListener("error", done, { once: true });
+      try {
+        // hevc.js transfers the buffer to its worker; a view onto a shared
+        // ArrayBuffer would detach the parent and starve every later append.
+        lane.sb.appendBuffer(data.slice().buffer);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "QuotaExceededError") {
+          lane.queue.unshift(data);
+        }
+        done();
+      }
+    });
+
+  const drain = async (lane: Lane): Promise<void> => {
+    if (lane.draining) return;
+    lane.draining = true;
+    try {
+      while (!disposed && lane.queue.length > 0) {
+        const next = lane.queue.shift();
+        if (!next) break;
+        await appendOnce(lane, next);
+        lane.appended += 1;
+        if (!lane.reported && lane.sb.buffered.length > 0) {
+          lane.reported = true;
+          const b = lane.sb.buffered;
+          console.log(
+            `[iris-core] Tier E: ${lane.name} lane first buffered ` +
+              `[${b.start(0).toFixed(1)}-${b.end(0).toFixed(1)}] after ${lane.appended} appends`,
+          );
+        }
+        applyPendingAnchor();
+      }
+    } finally {
+      lane.draining = false;
+    }
+  };
+
+  const sinkFor = (lane: Lane, gen: number): WritableStream<StreamTargetChunk> => {
+    // Only the video lane goes through the hevc.js proxy, and only it needs the
+    // init segment delivered whole. The audio lane is a plain SourceBuffer and
+    // takes mediabunny's chunking as-is.
+    const framer = lane.name === "video" ? new InitFramer() : null;
+    return new WritableStream<StreamTargetChunk>({
+      write: (chunk) => {
+        if (disposed || gen !== generation) return;
+        const parts = framer ? framer.push(chunk.data) : [chunk.data];
+        for (const part of parts) lane.queue.push(part);
+        if (parts.length > 0) void drain(lane);
+      },
+    });
+  };
+
+  const waiters = new Set<() => void>();
+  const notify = () => {
+    // Copy first: a waiter that resolves removes itself from the set.
+    for (const w of Array.from(waiters)) w();
+  };
+  const gate = (ready: () => boolean): Promise<void> =>
+    new Promise<void>((resolve) => {
+      if (ready()) return resolve();
+      const w = () => {
+        if (!ready()) return;
+        waiters.delete(w);
+        resolve();
+      };
+      waiters.add(w);
+    });
+
+  const onTimeUpdate = () => notify();
+  video.addEventListener("timeupdate", onTimeUpdate);
+
+  const makeInput = (): Input =>
+    new Input({
+      source: new UrlSource(streamUrl, {
+        // Same 5xx-is-transient treatment as Tier B: a redeploy must pause
+        // playback, not demote the tier.
+        fetchFn: async (url, init) => {
+          const res = await fetch(url, init);
+          if (res.status >= 500) throw new Error(`iris-stream-transient-5xx ${res.status}`);
+          return res;
+        },
+        getRetryDelay: (attempts) => (attempts >= 12 ? null : Math.min(8, 0.5 * 2 ** attempts)),
+      }),
+      formats: ALL_FORMATS,
+    });
+
+  const cancelPipelines = async (): Promise<void> => {
+    const prevVideo = videoOutput;
+    const prevAudio = audioOutput;
+    videoOutput = null;
+    audioOutput = null;
+    for (const out of [prevVideo, prevAudio]) {
+      try {
+        await out?.cancel();
+      } catch {
+        /* cancelled is expected */
+      }
+    }
+  };
+
+  const startPipeline = async (seekStart: number): Promise<void> => {
+    generation += 1;
+    const gen = generation;
+    await cancelPipelines();
+    if (disposed || gen !== generation) return;
+
+    if (videoLane) {
+      videoLane.queue.length = 0;
+      videoLane.fedMax = seekStart;
+      videoLane.ended = false;
+    }
+    if (audioLane) {
+      audioLane.queue.length = 0;
+      audioLane.fedMax = seekStart;
+      audioLane.ended = false;
+    }
+
+    const liveInput = input;
+    if (!liveInput) throw new Error("Tier E: input not initialised");
+
+    const videoTrack = await liveInput.getPrimaryVideoTrack();
+    if (!videoTrack) throw new Error("Tier E: no primary video track");
+    const videoCodec = await videoTrack.getCodec();
+    if (!videoCodec) throw new Error("Tier E: unknown video codec");
+
+    const packetSink = new EncodedPacketSink(videoTrack);
+    const startPacket =
+      (await packetSink.getKeyPacket(seekStart)) ?? (await packetSink.getFirstKeyPacket());
+    if (!startPacket) throw new Error("Tier E: no keyframe found");
+    // `getKeyPacket` lands at or before the target, so both feeds start there
+    // and the muxer never has to pad a late track.
+    const mediaStart = startPacket.timestamp;
+    if (videoLane) videoLane.fedMax = mediaStart;
+    if (audioLane) audioLane.fedMax = mediaStart;
+    pendingAnchor = seekStart > 0 ? seekStart : null;
+
+    const vOut = new Output({
+      format: new Mp4OutputFormat({ fastStart: "fragmented", minimumFragmentDuration: FRAGMENT_S }),
+      target: new StreamTarget(sinkFor(videoLane!, gen)),
+    });
+    relaxMediabunnyGopCheck(vOut);
+    const videoSrc = new EncodedVideoPacketSource(videoCodec);
+    vOut.addVideoTrack(videoSrc);
+    videoOutput = vOut;
+
+    const allAudio = await liveInput.getAudioTracks();
+    const audioTrack = allAudio[chosenAudioIdx] ?? null;
+    let audioSrc: AudioSampleSource | null = null;
+    let audioPassthrough: import("mediabunny").EncodedAudioPacketSource | null = null;
+    let aOut: Output | null = null;
+    if (audioLane && audioTrack) {
+      aOut = new Output({
+        format: new Mp4OutputFormat({
+          fastStart: "fragmented",
+          minimumFragmentDuration: FRAGMENT_S,
+        }),
+        target: new StreamTarget(sinkFor(audioLane, gen)),
+      });
+      if (audioNeedsTranscode && encoderChoice) {
+        const srcChannels = await audioTrack.getNumberOfChannels();
+        audioSrc = new AudioSampleSource({
+          codec: encoderChoice.codec,
+          // `new Quality(<number>)` is a 0..1 level, not a bitrate — the
+          // explicit `{ bitrate }` form is the one that means bits per second.
+          quality: new Quality({ bitrate: encoderChoice.codec === "opus" ? 128_000 : 192_000 }),
+          ...(encoderChoice.channels !== srcChannels
+            ? { transform: { numberOfChannels: encoderChoice.channels } }
+            : {}),
+        });
+        aOut.addAudioTrack(audioSrc);
+      } else {
+        const { EncodedAudioPacketSource } = await import("mediabunny");
+        const codec = await audioTrack.getCodec();
+        if (codec) {
+          audioPassthrough = new EncodedAudioPacketSource(codec);
+          aOut.addAudioTrack(audioPassthrough);
+        }
+      }
+      audioOutput = aOut;
+    }
+
+    await vOut.start();
+    await aOut?.start();
+    if (disposed || gen !== generation) return;
+
+    if (seekStart > 0) initialSeek.done = true;
+
+    const otherFed = (lane: Lane | null): number =>
+      lane && !lane.ended ? lane.fedMax : Number.POSITIVE_INFINITY;
+
+    const videoPump = (async () => {
+      let first = true;
+      const decoderConfig = await videoTrack.getDecoderConfig();
+      for await (const packet of packetSink.packets(startPacket)) {
+        if (disposed || gen !== generation) break;
+        // Open-GOP leading pictures decode after the random access point but
+        // present before it; their references are not in this segment.
+        if (packet.timestamp < mediaStart) continue;
+        await gate(
+          () =>
+            disposed ||
+            gen !== generation ||
+            (packet.timestamp - effectivePlayhead() <= AHEAD_TARGET_S &&
+              packet.timestamp <= otherFed(audioLane) + TRACK_LEAD_CAP_S),
+        );
+        if (disposed || gen !== generation) break;
+        await videoSrc.add(
+          packet,
+          first ? { decoderConfig: decoderConfig ?? undefined } : undefined,
+        );
+        first = false;
+        if (videoLane && packet.timestamp > videoLane.fedMax) videoLane.fedMax = packet.timestamp;
+        notify();
+      }
+      await videoSrc.close();
+      if (videoLane) videoLane.ended = true;
+      notify();
+    })();
+
+    const audioPump = (async () => {
+      if (!audioLane || !audioTrack || (!audioSrc && !audioPassthrough)) return;
+      if (audioSrc) {
+        const sink = new AudioSampleSink(audioTrack);
+        for await (const sample of sink.samples(mediaStart, Infinity)) {
+          if (disposed || gen !== generation) {
+            sample.close();
+            break;
+          }
+          await gate(
+            () =>
+              disposed ||
+              gen !== generation ||
+              (sample.timestamp - effectivePlayhead() <= AHEAD_TARGET_S &&
+                sample.timestamp <= otherFed(videoLane) + TRACK_LEAD_CAP_S),
+          );
+          if (disposed || gen !== generation) {
+            sample.close();
+            break;
+          }
+          await audioSrc.add(sample);
+          if (sample.timestamp > audioLane.fedMax) audioLane.fedMax = sample.timestamp;
+          sample.close();
+          notify();
+        }
+        await audioSrc.close();
+      } else if (audioPassthrough) {
+        const aSink = new EncodedPacketSink(audioTrack);
+        const aStart = (await aSink.getKeyPacket(mediaStart)) ?? (await aSink.getFirstKeyPacket());
+        if (aStart) {
+          let first = true;
+          const cfg = await audioTrack.getDecoderConfig();
+          for await (const packet of aSink.packets(aStart)) {
+            if (disposed || gen !== generation) break;
+            await gate(
+              () =>
+                disposed ||
+                gen !== generation ||
+                (packet.timestamp - effectivePlayhead() <= AHEAD_TARGET_S &&
+                  packet.timestamp <= otherFed(videoLane) + TRACK_LEAD_CAP_S),
+            );
+            if (disposed || gen !== generation) break;
+            await audioPassthrough.add(
+              packet,
+              first ? { decoderConfig: cfg ?? undefined } : undefined,
+            );
+            first = false;
+            if (packet.timestamp > audioLane.fedMax) audioLane.fedMax = packet.timestamp;
+            notify();
+          }
+        }
+        await audioPassthrough.close();
+      }
+      audioLane.ended = true;
+      notify();
+    })();
+
+    void Promise.all([videoPump, audioPump]).catch((e: unknown) => {
+      if (disposed || gen !== generation) return;
+      fail(e instanceof Error ? e : new Error(String(e)));
+    });
+  };
+
+  input = makeInput();
+  try {
+    await startPipeline(opts.startPosition);
+  } catch (e) {
+    const err = e instanceof Error ? e : new Error(String(e));
+    fail(err);
+    throw err;
+  }
+
+  const dispose = async (): Promise<void> => {
+    if (disposed) return;
+    disposed = true;
+    notify();
+    video.removeEventListener("timeupdate", onTimeUpdate);
+    unbindVideo();
+    await cancelPipelines();
+    try {
+      input?.dispose();
+    } catch {
+      /* idempotent */
+    }
+    try {
+      if (mediaSource.readyState === "open") mediaSource.endOfStream();
+    } catch {
+      /* idempotent */
+    }
+    try {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    } catch {
+      /* idempotent */
+    }
+    URL.revokeObjectURL(objectUrl);
+    releaseIntercept();
+  };
+
+  const isBuffered = (t: number): boolean => {
+    if (!videoLane) return false;
+    const b = videoLane.sb.buffered;
+    for (let i = 0; i < b.length; i += 1) {
+      if (b.start(i) - 0.25 <= t && b.end(i) + 0.25 >= t) return true;
+    }
+    return false;
+  };
+
+  const base = videoBackedHandle(video, {
+    dispose,
+    nativeTrackMap,
+    fallbackDuration: manifest.duration_s ?? null,
+  });
+
+  const handle: EngineHandle = {
+    ...base,
+    seek: (s: number) => {
+      const target = Math.max(0, s);
+      if (isBuffered(target)) {
+        try {
+          video.currentTime = target;
+        } catch {
+          /* swallow */
+        }
+        return;
+      }
+      void startPipeline(target).catch((e: unknown) => {
+        console.warn("[iris-core] Tier E: seek pipeline failed", e);
+      });
+    },
   };
   return handle;
 };
