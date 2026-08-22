@@ -143,3 +143,36 @@ cohérente :
 | Gecko 154 (avec) | fonctionne | `buffered` vide |
 
 Le correctif amont laisse donc MSE sans recours. Ça vaut un signalement.
+
+## Le contournement qui marche : hevc.js sur le chemin NON MUXÉ
+
+`hevcjs-videoonly-probe.html` — mesuré sur Zen / Gecko 154, avec un fMP4
+vidéo seule démarrant sur un CRA mi-flux (le cas qui casse Tier B) :
+
+    addSourceBuffer("video/mp4; codecs=\"hvc1.2.4.L120.B0\"") → H.264 proxy avec avc1.64002a
+    Worker transcoder ready
+    Init segment parsed
+    Transcoding segment (1539985B) [streaming]…
+    H.264 init segment appended [streaming]
+    Streaming done (8 chunks), buffered: 187.40s
+    RÉSULTAT : buffered=[178.1-188.0] frames=124 rs=4 err=aucune
+
+Gecko ne voit donc jamais de HEVC, jamais de CRA, et le garde-fou de
+`MP4Demuxer.cpp` ne mord pas. Ça fonctionne bien que la matrice de hevc.js
+annonce « Chrome/Edge/Firefox (Mac) → No — native » : sur macOS le HEVC est
+natif, donc la lib s'efface d'elle-même — mais rien ne l'empêche de tourner si
+on l'installe explicitement.
+
+Deux pièges à connaître avant d'écrire un adaptateur :
+
+1. **Chemin muxé = AAC uniquement.** Le README est explicite : « for muxed A/V …
+   the AAC audio is passed through … (main-thread path; AAC only) ». Le proxy
+   muxé se crée en réclamant `avc1…,mp4a.40.2`, et sur Firefox notre audio est
+   de l'Opus (pas d'encodeur AAC dans WebCodecs). La file d'appends ne se vide
+   jamais, sans erreur. D'où : **vidéo seule dans le proxy, audio dans un
+   SourceBuffer natif à côté.**
+
+2. **hevc.js transfère le buffer au worker.** Passer un `subarray` d'un buffer
+   partagé détache le parent : le segment suivant arrive à `0B` et lève
+   « attempting to access detached ArrayBuffer ». Chaque `appendBuffer` doit
+   posséder son propre buffer. Tier B le fait déjà (`next.slice().buffer`).
