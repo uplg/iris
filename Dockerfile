@@ -3,19 +3,15 @@
 # Docker 23+. Without this directive the cache mounts below are silently
 # ignored and you're back to recompiling everything every time.
 
-###############################################################################
-# 0) Custom libav.js build — adds AC-3 / E-AC-3 codecs that none of the
-#    npm-published libav.js variants ship (Dolby licensing). Built once,
-#    cached on subsequent docker builds via BuildKit's `target` cache.
-#
-#    The Iris client uses libav.js for real-time audio transcode in
-#    Tier B (Mediabunny → MSE). Without these codecs, files with
-#    Dolby audio would have to fall back to Tier F (server-side
-#    ffmpeg) — defeating the point of client-side transcode.
-###############################################################################
+# Custom libav.js build — adds AC-3 / E-AC-3 codecs that none of the
+# npm-published libav.js variants ship (Dolby licensing). The Iris client
+# uses libav.js for real-time audio transcode in Tier B (Mediabunny → MSE);
+# without these codecs, Dolby-audio files fall back to Tier F (server-side
+# ffmpeg), defeating the point of client-side transcode.
+
 # Recent emsdk — the image is multi-arch (linux/amd64 + linux/arm64)
 # so building on Apple Silicon doesn't go through qemu emulation.
-FROM emscripten/emsdk:6.0.0 AS libav-builder
+FROM emscripten/emsdk:6.0.8 AS libav-builder
 WORKDIR /build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -57,10 +53,8 @@ RUN --mount=type=cache,target=/build/libav.js/build,sharing=locked \
     && cp dist/libav-6.10.9.0-iris.wasm.mjs /libav-iris.wasm.mjs \
     && cp dist/libav-6.10.9.0-iris.wasm.js /libav-iris.wasm.js
 
-###############################################################################
-# 1) Frontend build (bun + Vite)
-###############################################################################
-FROM oven/bun:1 AS web-builder
+# Frontend build (bun + Vite)
+FROM oven/bun:1.4 AS web-builder
 WORKDIR /app/web
 # Copy lockfiles AND the patches directory before installing — bun
 # resolves `patchedDependencies` paths during `install`, so the patch
@@ -91,34 +85,46 @@ ENV IRIS_WEB_BUILD_ID=${IRIS_WEB_BUILD_ID}
 RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
     bun run build
 
-###############################################################################
-# 2) Rust workspace build
+# Rust workspace build. `cargo chef cook` compiles the dependency tree from a
+# manifest-only recipe into a real image LAYER, so editing a `.rs` file leaves
+# it untouched. This replaces the previous `--mount=type=cache` on /app/target:
+# the two are mutually exclusive (a cache mount would shadow the cooked layer),
+# and the trade is deliberate — a workspace-crate edit loses incremental reuse
+# and recompiles its dependents, but cold and off-host builds gain a layer that
+# survives `builder prune` and travels via `--cache-from`. The registry / git
+# mounts stay: they hold downloaded sources, not build output.
 #
-# Three cache mounts:
-#   - cargo registry: index + downloaded crate tarballs from crates.io
-#   - cargo git: cloned git dependencies (none today, future-proof)
-#   - target: the build output directory, where >95% of compile time lives
+# The chef base must stay rust 1.98.0 on trixie — the runtime stage's glibc
+# note depends on that exact pairing.
 #
-# Cache mounts persist across `docker build` invocations on the same host,
-# so a one-line code change recompiles iris-api only (~10 s) instead of
-# the entire dep tree (~2 min). They are NOT layered, so the binary
-# itself must be copied out *before* the RUN finishes — otherwise it
-# vanishes with the cache when the next build runs.
-###############################################################################
-FROM rust:1.98-trixie AS rust-builder
+# `--bin iris` on `cook` mirrors the final build, so cook doesn't also compile
+# every crate's dev-dependencies. `migrations/` lands in the app layer only:
+# `iris-db` embeds it via `sqlx::migrate!`, so it must invalidate that layer
+# and must not invalidate the deps layer.
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1.98.0-trixie AS chef
 WORKDIR /app
 ENV CARGO_TERM_COLOR=never
+
+FROM chef AS planner
 COPY rust-toolchain.toml Cargo.toml Cargo.lock* ./
+COPY crates ./crates
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS rust-builder
+COPY rust-toolchain.toml ./
+COPY --from=planner /app/recipe.json ./recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo chef cook --release --bin iris --recipe-path recipe.json
+COPY Cargo.toml Cargo.lock* ./
 COPY crates ./crates
 COPY migrations ./migrations
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    --mount=type=cache,target=/app/target,sharing=locked \
     cargo build --release --bin iris \
     && cp /app/target/release/iris /iris
 
-###############################################################################
-# 3) Runtime — Chainguard Wolfi (glibc)
+# Runtime — Chainguard Wolfi (glibc)
 #
 # glibc (2.43) just like Debian, so the prebuilt glibc shaka-packager binary
 # and the glibc Rust binary (built above on rust:1.98-trixie / glibc 2.41 —
@@ -135,7 +141,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # The `iris-data` named volume is host-side and untouched by swapping the
 # base; the process runs as uid 1001 — the same uid the old Debian `iris`
 # user wrote prod data with — so it keeps full read/write on existing data.
-###############################################################################
 FROM cgr.dev/chainguard/wolfi-base AS runtime
 ARG TARGETARCH
 # `apk` here is Wolfi's package manager — glibc packages, NOT Alpine's musl.
