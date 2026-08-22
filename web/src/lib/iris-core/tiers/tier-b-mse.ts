@@ -416,10 +416,6 @@ export const mountTierB: EngineMount = async (opts) => {
   // STALL showing `pendingOp=append updating=true` means the append is wedged
   // (the recovery in `onWaiting` aborts it).
   let pendingOp: "append" | "remove" | null = null;
-  /** Assigned during MSE setup below. Drops the current SourceBuffer and adds a
-   *  fresh one, so a restart hands its new init segment a VIRGIN segment parser
-   *  instead of one that already parsed another init + fragments. */
-  let resetSourceBuffer: (() => Promise<void>) | null = null;
   // Diagnostics: furthest video timestamp handed to the muxer, and whether
   // the video feed loop has finished. Distinguishes "demux/feed stopped"
   // (fedMax frozen / feedEnded) from "decoder stalled with a full buffer".
@@ -1032,20 +1028,23 @@ export const mountTierB: EngineMount = async (opts) => {
       /* idempotent */
     }
 
-    if (sourceBuffer && resetSourceBuffer) {
-      // This used to be `remove(0, Infinity)` — the very call `evictPlayedRange`
-      // refuses to make on Firefox, for the reason documented there: a
-      // `SourceBuffer.remove()` wedges FF in `updating=true` forever, with no
-      // `updateend` and no `error` (bug 1120084), so every later append queues
-      // behind an operation that never finishes. The eviction path got the
-      // `if (firefox) return false` guard; this seek path never did, which is
-      // why a t=0 mount plays (no remove) while EVERY seek stalls with
-      // `ranges=[empty]`.
-      //
-      // Recreating the SourceBuffer reaches the same end state — an empty
-      // buffer ready for a fresh init segment — without ever calling `remove`.
-      await resetSourceBuffer();
-    } else if (sourceBuffer) {
+    // Firefox: touch the SourceBuffer with NEITHER `remove()` NOR
+    // `removeSourceBuffer()`. `evictPlayedRange` already documents why
+    // `remove()` is banned here — it wedges FF in `updating=true` forever with
+    // no `updateend`/`error` (bug 1120084), which is precisely why every seek
+    // stalled with `ranges=[empty]` while a t=0 mount played. Recycling the
+    // SourceBuffer instead is worse, not better: `removeSourceBuffer()` detaches
+    // the `TrackBuffersManager` out from under the live `MediaSourceTrackDemuxer`
+    // and the next seek dies with `media error 3` / "manager is detached".
+    //
+    // So on FF we leave the buffer alone. Mediabunny emits absolute media
+    // timestamps and `mode` is "segments", so the restart's fragments land as a
+    // NEW buffered range around the seek target; the stale range is left for
+    // Firefox's own eviction, which it does from the side furthest from the
+    // playhead (same reasoning as `evictPlayedRange`). Appends into an
+    // untouched SourceBuffer are the one path FF handles reliably — it is what
+    // steady-state playback does.
+    if (sourceBuffer && !firefox) {
       await waitForUpdateEnd();
       try {
         sourceBuffer.remove(0, Number.POSITIVE_INFINITY);
@@ -1397,7 +1396,6 @@ export const mountTierB: EngineMount = async (opts) => {
     } catch {
       /* idempotent */
     }
-    URL.revokeObjectURL(objectUrl);
     try {
       if (mediaSource.readyState === "open") mediaSource.endOfStream();
     } catch {
@@ -1408,6 +1406,22 @@ export const mountTierB: EngineMount = async (opts) => {
     } catch {
       /* idempotent */
     }
+    // Detach the element from the MediaSource before revoking the URL. Without
+    // this the `<video>` keeps `src="blob:…"` pointing at a torn-down
+    // MediaSource, and the NEXT engine mounted on the same element (Tier F
+    // after a demote) inherits a resource Firefox is still erroring on
+    // (`NS_ERROR_DOM_MEDIA_CANCELED`, "could not be decoded") — which showed up
+    // as hls.js looping forever on non-fatal `bufferFullError` because playback
+    // could never start to drain the buffer. `load()` is the spec-defined reset:
+    // it aborts the current resource selection and returns the element to
+    // NETWORK_EMPTY so the next tier gets a clean slate.
+    try {
+      video.removeAttribute("src");
+      video.load();
+    } catch {
+      /* idempotent */
+    }
+    URL.revokeObjectURL(objectUrl);
   };
 
   const audioTracksFn = () => {
@@ -1498,76 +1512,8 @@ export const mountTierB: EngineMount = async (opts) => {
     throw err;
   }
 
-  const openSourceBuffer = (): SourceBuffer => {
-    const sb = mediaSource.addSourceBuffer(mime);
-    sb.mode = "segments";
-    sb.addEventListener("updateend", () => {
-      // A listener from a SourceBuffer we already recycled must not touch the
-      // live one's bookkeeping.
-      if (sb !== sourceBuffer) return;
-      pendingOp = null;
-      evictPlayedRange(playedKeep);
-      // Grow the forward window + seek-back window back toward their ceilings
-      // once we've been quota-free for a while — restores deep buffering after a
-      // transient high-bitrate stretch ends.
-      if (video.currentTime - lastQuotaT > 10) {
-        if (playedKeep < behindCeiling) {
-          playedKeep = Math.min(behindCeiling, playedKeep + 2);
-        }
-        if (bufferAheadTarget < aheadCeiling) {
-          bufferAheadTarget = Math.min(aheadCeiling, bufferAheadTarget + 5);
-        }
-      }
-      drainQueue();
-      if (!opts.onReady) return;
-      if (sb.buffered.length > 0) {
-        opts.onReady();
-        opts.onReady = undefined;
-      }
-    });
-    sb.addEventListener("error", () => {
-      if (sb !== sourceBuffer) return;
-      fail(new Error("SourceBuffer error"));
-    });
-    return sb;
-  };
-
-  resetSourceBuffer = async () => {
-    const stale = sourceBuffer;
-    if (!stale) return;
-    appendQueue.length = 0;
-    pendingOp = null;
-    // `removeSourceBuffer` throws while an op is in flight; `abort()` is the
-    // spec-defined way to end it — the same lever the FF unwedge pulls.
-    try {
-      if (stale.updating) stale.abort();
-    } catch {
-      /* already idle */
-    }
-    sourceBuffer = null;
-    try {
-      mediaSource.removeSourceBuffer(stale);
-    } catch (e) {
-      console.warn("[iris-core] Tier B: removeSourceBuffer failed", e);
-    }
-    if (mediaSource.readyState !== "open") {
-      console.warn(
-        `[iris-core] Tier B: MediaSource is "${mediaSource.readyState}" — cannot recycle ` +
-          `the SourceBuffer, the restart will have nowhere to append`,
-      );
-      return;
-    }
-    sourceBuffer = openSourceBuffer();
-    if (manifest.duration_s && manifest.duration_s > 0) {
-      try {
-        mediaSource.duration = manifest.duration_s;
-      } catch {
-        /* swallow */
-      }
-    }
-  };
-
-  sourceBuffer = openSourceBuffer();
+  sourceBuffer = mediaSource.addSourceBuffer(mime);
+  sourceBuffer.mode = "segments";
 
   // Anchor the timeline to the manifest's known duration. Setting
   // this AFTER `addSourceBuffer` matches the order most browsers
@@ -1582,6 +1528,29 @@ export const mountTierB: EngineMount = async (opts) => {
       console.warn("[iris-core] Tier B: failed to set MediaSource.duration", e);
     }
   }
+
+  sourceBuffer.addEventListener("updateend", () => {
+    pendingOp = null;
+    evictPlayedRange(playedKeep);
+    // Grow the forward window + seek-back window back toward their ceilings
+    // once we've been quota-free for a while — restores deep buffering after a
+    // transient high-bitrate stretch ends.
+    if (video.currentTime - lastQuotaT > 10) {
+      if (playedKeep < behindCeiling) {
+        playedKeep = Math.min(behindCeiling, playedKeep + 2);
+      }
+      if (bufferAheadTarget < aheadCeiling) {
+        bufferAheadTarget = Math.min(aheadCeiling, bufferAheadTarget + 5);
+      }
+    }
+    drainQueue();
+    if (!opts.onReady) return;
+    if (sourceBuffer && sourceBuffer.buffered.length > 0) {
+      opts.onReady();
+      opts.onReady = undefined;
+    }
+  });
+  sourceBuffer.addEventListener("error", () => fail(new Error("SourceBuffer error")));
 
   // Spin up the first Conversion
 
