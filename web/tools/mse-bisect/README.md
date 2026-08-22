@@ -1,7 +1,7 @@
 # mse-bisect
 
 Bench used to settle the Firefox "resume stalls, t=0 plays" hunt. It mounts the
-real `mountTierB` in a bare page — no React, no chrome, no Iris app — driven by
+real `mountTierB` in a bare page (no React, no chrome, no Iris app) driven by
 Playwright Firefox. It reproduces the engine faithfully and does NOT reproduce
 the bug, which is how we learned the fault was not in Tier B.
 
@@ -19,7 +19,7 @@ The minimal reproducer Mozilla can run is in [`upstream/`](upstream/).
 
 `serve.mjs` serves the MKV with byte ranges, mediabunny's browser bundle, the
 libav wasm (drop the `-iris` variant into `libavjs/` for E-AC-3) and the page.
-Each run prints `buffered=[…]` per start position — empty means Firefox took the
+Each run prints `buffered=[...]` per start position. Empty means Firefox took the
 appends and stored nothing, which is the failure signature.
 
 AC-3 / E-AC-3 decode needs the Docker-built libav variant:
@@ -29,7 +29,7 @@ AC-3 / E-AC-3 decode needs the Docker-built libav variant:
     docker cp $cid:/libav-iris.wasm.mjs  libavjs/libav-6.10.9.0-iris.wasm.mjs
     docker cp $cid:/libav-iris.wasm.js   libavjs/libav-6.10.9.0-iris.wasm.js
 
-## upstream/ — the minimal reproducer
+## upstream/: the minimal reproducer
 
 Self-contained, no Iris code, no dependencies beyond a static file server. This
 is what goes on the bug. See `upstream/make-repro.sh` for how the three files
@@ -38,10 +38,10 @@ are generated and `upstream/repro.html` for what it measures.
     cd upstream && ./make-repro.sh && python3 -m http.server 8099
     # then http://127.0.0.1:8099/repro.html in the browser under test
 
-The page derives each file's `hvc1.…` codec string from its own `hvcC`, so any
+The page derives each file's `hvc1` codec string from its own `hvcC`, so any
 HEVC fragmented MP4 dropped next to it works unchanged.
 
-## zen-check.html — random HEVC entry point, against the real file
+## zen-check.html: random HEVC entry point, against the real file
 
 Open it in the browser under test, by hand: Playwright only drives its own
 Firefox, not a fork like Zen. (geckodriver can drive one, but the setup is
@@ -54,28 +54,28 @@ brittle and `upstream/repro.html` covers the same ground with less ceremony.)
 The page relabels the fragment's first slice NAL and measures what MSE does with
 each type. Reading the table:
 
-- `buffered` **empty** → the browser refuses to enter on that NAL type;
-- `buffered` filled but `frames=0` → it accepts it and cannot decode it;
-- `frames` > 0 with non-zero pixel variance → a real picture.
+- `buffered` **empty**: the browser refuses to enter on that NAL type;
+- `buffered` filled but `frames=0`: it accepts it and cannot decode it;
+- `frames` > 0 with non-zero pixel variance: a real picture.
 
 Measured on Zen 1.21.15b (`rv:154.0`), x265 open-GOP file:
 
 | coded frame group starts on           | buffered      | frames decoded                 |
 | ------------------------------------- | ------------- | ------------------------------ |
-| `IDR_N_LP` (t=0, the file's only IDR) | `0.0–10.0`    | 149                            |
+| `IDR_N_LP` (t=0, the file's only IDR) | `0.0-10.0`    | 149                            |
 | `CRA_NUT` (any mid-stream keyframe)   | **empty**     | 0                              |
 | `CRA_NUT`, mediabunny muxer unpatched | **empty**     | 0                              |
-| `CRA_NUT` → `IDR_N_LP`                | `178.1–188.0` | 0, `kVTVideoDecoderBadDataErr` |
-| `CRA_NUT` → `BLA_N_LP`                | **empty**     | 0                              |
+| `CRA_NUT` to `IDR_N_LP`               | `178.1-188.0` | 0, `kVTVideoDecoderBadDataErr` |
+| `CRA_NUT` to `BLA_N_LP`               | **empty**     | 0                              |
 
 This Gecko opens a coded frame group only on an **IDR**. CRA and BLA are refused
 at the buffering stage; relabelling to IDR gets past buffering and then breaks
 decode, because an IDR slice header omits `slice_pic_order_cnt_lsb`. Converting
 a CRA to a real IDR would mean rewriting the POC of every following picture in
-the GOP — bitstream surgery in the hot path, out of the question here.
+the GOP, which is bitstream surgery in the hot path and out of the question here.
 
 One method note, learned the hard way: `HTMLMediaElement.play()` returns a
-promise that **never settles** when playback cannot start. `await v.play().catch(…)`
+promise that **never settles** when playback cannot start. `await v.play().catch(...)`
 then blocks forever and the `.catch` changes nothing. Never await it in a bench.
 
 ## Why this is Firefox 154+ behaving as intended, not a passing regression
@@ -88,18 +88,18 @@ overwrites the container's sync flag with that answer under `#ifdef MOZ_APPLEMED
 **Mind the direction of the upstream history.** Bug 1967475 (fixed in 146)
 introduced the override for H.264. Bug 2049615 (fixed in **154**) extended it to
 HEVC: its patch strips the keyframe flag from CRA pictures. So it is not a fix
-that restores CRA seeking — it is the one that forbids it, for file playback,
+that restores CRA seeking, it is the one that forbids it, for file playback,
 where the demuxer can then fall back to a real IDR. In MSE there is nothing to
 fall back to: the page supplies the fragments and Gecko discards what it is
 given.
 
-Measured here, and consistent with that reading — and note that a fork's product
-version says nothing about its Gecko base, read `navigator.userAgent`:
+Measured here, and consistent with that reading. Note that a fork's product
+version says nothing about its Gecko base; read `navigator.userAgent`:
 
-| engine                                     | HEVC open-GOP seek in MSE           |
-| ------------------------------------------ | ----------------------------------- |
-| Gecko 153 (Playwright's Firefox)           | works — the CRA is still a keyframe |
-| Gecko 154 (Zen 1.21.15b, build 2026-08-18) | `buffered` empty — CRA demoted      |
+| engine                                     | HEVC open-GOP seek in MSE          |
+| ------------------------------------------ | ---------------------------------- |
+| Gecko 153 (Playwright's Firefox)           | works, the CRA is still a keyframe |
+| Gecko 154 (Zen 1.21.15b, build 2026-08-18) | `buffered` empty, CRA demoted      |
 
 Updating therefore changes nothing: this is the current, intended state of
 Firefox 154+ on macOS. Our container flags are correct
@@ -107,7 +107,7 @@ Firefox 154+ on macOS. Our container flags are correct
 between the t=0 fragment and the mid-stream one, and accepted by every other
 engine.
 
-## Zen does ship the fix — and it is the fix that breaks us
+## Zen does ship the fix, and it is the fix that breaks us
 
 Verified with the upstream patch's own reproducer, generated with its own
 command, in **file** playback (not MSE), seeking to 2.0 s like its test:
@@ -116,10 +116,10 @@ command, in **file** playback (not MSE), seeking to 2.0 s like its test:
       -c:v libx265 -x265-params keyint=30:min-keyint=30:open-gop=1:info=0 \
       -an test_hevc_open_gop.mp4
 
-| engine          | `seek(2.0)` on file playback                                      |
-| --------------- | ----------------------------------------------------------------- |
-| Firefox 153     | `err=3 AppleVTDecoder::OnDecodeError:ffffbae2` — the original bug |
-| Zen / Gecko 154 | `ct=4.00 frames=61 err=none` — fixed                              |
+| engine          | `seek(2.0)` on file playback                                     |
+| --------------- | ---------------------------------------------------------------- |
+| Firefox 153     | `err=3 AppleVTDecoder::OnDecodeError:ffffbae2`, the original bug |
+| Zen / Gecko 154 | `ct=4.00 frames=61 err=none`, fixed                              |
 
 Hence the apparent inversion in our measurements, which is in fact perfectly
 coherent:
@@ -129,30 +129,30 @@ coherent:
 | Firefox 153 (without the fix) | fails         | works            |
 | Gecko 154 (with it)           | works         | `buffered` empty |
 
-## The workaround that works: hevc.js on the UNMUXED path
+## The workaround that works: hevc.js on the unmuxed path
 
-`hevcjs-videoonly-probe.html` — measured on Zen / Gecko 154 with a video-only
+`hevcjs-videoonly-probe.html`, measured on Zen / Gecko 154 with a video-only
 fMP4 starting on a mid-stream CRA (the case that breaks Tier B):
 
-    addSourceBuffer("video/mp4; codecs=\"hvc1.2.4.L120.B0\"") → H.264 proxy, avc1.64002a
+    addSourceBuffer("video/mp4; codecs=\"hvc1.2.4.L120.B0\"") gives an H.264 proxy, avc1.64002a
     Worker transcoder ready
     Init segment parsed
-    Transcoding segment (1539985B) [streaming]…
+    Transcoding segment (1539985B) [streaming]...
     H.264 init segment appended [streaming]
     Streaming done (8 chunks), buffered: 187.40s
     RESULT: buffered=[178.1-188.0] frames=124 rs=4 err=none
 
 Gecko therefore never sees HEVC, never sees a CRA, and the `MP4Demuxer.cpp`
 guard never bites. This works even though hevc.js's own matrix says
-"Chrome/Edge/Firefox (Mac) → No — native": on macOS HEVC is native, so the lib
-steps aside by default — but nothing stops it running if you install it
+"Chrome/Edge/Firefox (Mac): No, native". On macOS HEVC is native, so the lib
+steps aside by default, but nothing stops it running if you install it
 explicitly.
 
 Two traps worth knowing before writing an adapter:
 
-1. **The muxed path is AAC-only.** The README is explicit: "for muxed A/V … the
-   AAC audio is passed through … (main-thread path; AAC only)". The muxed proxy
-   is created by asking for `avc1…,mp4a.40.2`, and on Firefox our audio is Opus
+1. **The muxed path is AAC-only.** The README is explicit: "for muxed A/V ... the
+   AAC audio is passed through ... (main-thread path; AAC only)". The muxed proxy
+   is created by asking for `avc1...,mp4a.40.2`, and on Firefox our audio is Opus
    (no AAC encoder in WebCodecs). The append queue then never drains, without an
    error. Hence: **video alone through the proxy, audio in a native SourceBuffer
    alongside.**
@@ -163,11 +163,11 @@ Two traps worth knowing before writing an adapter:
 
 ## What Tier E costs, and what governs it
 
-The WASM decode is the bottleneck — the H.264 encode side already goes through
+The WASM decode is the bottleneck. The H.264 encode side already goes through
 WebCodecs, and Firefox's `VideoDecoder` answers `supported: false` for every
 hvc1/hev1 config, so hardware HEVC decode is not reachable from the page.
 
-Measured throughput on a 1920×960 Main 10 rip swings either side of real time
+Measured throughput on a 1920x960 Main 10 rip swings either side of real time
 depending on what else the machine is doing. hevc.js publishes one
 `SegmentPerfStat` per transcoded segment on its perf bus; Tier E subscribes to
 it and uses `speedX` to size its runway, holds playback until a cushion exists

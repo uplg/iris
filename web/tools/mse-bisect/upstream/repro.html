@@ -130,7 +130,7 @@
     return null;
   }
 
-  /** Build the `hvc1.…` codec string from the file's own hvcC, so this page
+  /** Build the `hvc1` codec string from the file's own hvcC, so this page
    *  works unchanged with any HEVC fMP4 you drop next to it. */
   function codecStringFromHvcC(buf) {
     for (let i = 0; i + 4 < buf.byteLength; i += 1) {
@@ -198,7 +198,7 @@
   async function run(label, file, relabelTo) {
     const buf = new Uint8Array(await (await fetch(file)).arrayBuffer());
     const split = splitInit(buf);
-    if (!split) return row(label, "—", 0, "no moof in file", 0, "");
+    if (!split) return row(label, "?", 0, "no moof in file", 0, "");
     let [init, media] = split;
     const codec = codecStringFromHvcC(init);
     const lenSize = nalLengthSize(init);
@@ -282,11 +282,11 @@
 
   (async () => {
     log(navigator.userAgent);
-    await run("A — t=0, starts on IDR_N_LP (control)", "A-idr-start.mp4", null);
-    await run("B — t=6, starts on a clean CRA_NUT", "B-cra-clean.mp4", null);
-    await run("B — same, CRA relabelled IDR_N_LP", "B-cra-clean.mp4", 20);
-    await run("B — same, CRA relabelled BLA_N_LP", "B-cra-clean.mp4", 18);
-    await run("C — t=6, CRA_NUT with RASL kept", "C-cra-with-rasl.mp4", null);
+    await run("A: t=0, starts on IDR_N_LP (control)", "A-idr-start.mp4", null);
+    await run("B: t=6, starts on a clean CRA_NUT", "B-cra-clean.mp4", null);
+    await run("B: same, CRA relabelled IDR_N_LP", "B-cra-clean.mp4", 20);
+    await run("B: same, CRA relabelled BLA_N_LP", "B-cra-clean.mp4", 18);
+    await run("C: t=6, CRA_NUT with RASL kept", "C-cra-with-rasl.mp4", null);
     log("done");
   })();
 </script>

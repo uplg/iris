@@ -10,7 +10,7 @@
 #   C-cra-with-rasl.mp4 t=6, starts on a CRA, RASL pictures kept
 #
 # B is the isolated case: a CRA that is a complete, self-contained random
-# access point — nothing in the fragment references anything outside it, and
+# access point. Nothing in the fragment references anything outside it, and
 # every other engine decodes it. C carries the RASL pictures that ffmpeg's
 # stream-copy seek leaves in; per the spec those are non-decodable when the CRA
 # begins the bitstream (NoRaslOutputFlag = 1) and must be discarded.
