@@ -67,18 +67,29 @@ const WORKER_URL = "/hevcjs/transcode-worker.js";
  *  a transcoder with plenty of headroom needs almost none, one running close
  *  to real time needs all it can get. Too deep only wastes work on a seek. */
 const AHEAD_MIN_S = 30;
-const AHEAD_MAX_S = 120;
+const AHEAD_MAX_S = 90;
 /** How far one track may run ahead of the other before it waits. */
 const TRACK_LEAD_CAP_S = 4;
 /** Fragments the muxer emits. Short ones matter more here than in Tier B: the
  *  proxy cannot start transcoding until a whole fragment has arrived, so this
  *  is the floor on startup and post-seek latency. */
 const FRAGMENT_S = 0.5;
-/** Cadence at which we force a fragment boundary — see the video pump. */
-const FORCED_BOUNDARY_S = 1.5;
+/** Cadence at which we force a fragment boundary — see the video pump. Ramped:
+ *  the proxy transcodes a whole fragment before emitting anything, so the first
+ *  one after a seek sets the time-to-first-frame and wants to be short, while
+ *  steady-state fragments want to be long enough to amortise the per-segment
+ *  demux/mux/postMessage cost. */
+const FORCED_BOUNDARY_START_S = 0.75;
+const FORCED_BOUNDARY_MAX_S = 3;
 /** Snap the playhead back to the keyframe when the requested position is more
  *  than this far past it. */
 const KEYFRAME_SNAP_S = 2;
+/** Ceiling on media handed to the proxy but not yet transcoded. The proxy
+ *  takes appends eagerly, so without this the feed races ahead of the worker
+ *  and parks tens of seconds of compressed HEVC in its queue — memory pressure
+ *  that slows the very transcode it is waiting on. The cushion has to be built
+ *  out of transcoded output, not backlog. */
+const IN_FLIGHT_CAP_S = 8;
 /** Rolling window over per-segment throughput, in segments. At the forced
  *  boundary cadence that is roughly the last 12 s of media. */
 const SPEED_WINDOW = 8;
@@ -475,7 +486,7 @@ export const mountTierE: EngineMount = async (opts) => {
     // Below real time the cushion drains no matter how deep it is. Say so once
     // per 10 s of playback — it is the difference between "this machine cannot
     // do it" and a transient we already absorbed.
-    if (avg < 1 && video.currentTime - lastSlowLogT > 10) {
+    if (avg < 1 && speeds.length >= 4 && video.currentTime - lastSlowLogT > 10) {
       lastSlowLogT = video.currentTime;
       const ahead = videoLane ? bufferedAheadOf(videoLane.sb.buffered, video.currentTime) : 0;
       console.warn(
@@ -485,8 +496,12 @@ export const mountTierE: EngineMount = async (opts) => {
     }
   });
 
-  const onTimeUpdate = () => notify();
-  video.addEventListener("timeupdate", onTimeUpdate);
+  // Wake the feed gates. `timeupdate` covers steady playback; the rest cover a
+  // stalled element, where the buffered ranges still grow as the worker drains
+  // its queue and nothing else would tell us. All event-driven — no polling.
+  const onProgress = () => notify();
+  const WAKE_EVENTS = ["timeupdate", "progress", "waiting", "stalled", "canplay", "playing"];
+  for (const e of WAKE_EVENTS) video.addEventListener(e, onProgress);
 
   const makeInput = (): Input =>
     new Input({
@@ -646,6 +661,15 @@ export const mountTierE: EngineMount = async (opts) => {
     const otherFed = (lane: Lane | null): number =>
       lane && !lane.ended ? lane.fedMax : Number.POSITIVE_INFINITY;
 
+    /** Furthest media time the worker has actually produced. Before it has
+     *  produced anything, the segment start — so the first fragments are let
+     *  through rather than deadlocking on an empty buffer. */
+    const transcodedEnd = (): number => {
+      const b = videoLane?.sb.buffered;
+      if (!b || b.length === 0) return mediaStart;
+      return Math.max(mediaStart, b.end(b.length - 1));
+    };
+
     const videoPump = (async () => {
       let first = true;
       const decoderConfig = await videoTrack.getDecoderConfig();
@@ -662,7 +686,8 @@ export const mountTierE: EngineMount = async (opts) => {
       // (`processMediaSegmentStreaming`) — a fragment opening mid-GOP is a
       // continuation, not a random access point. Only the FIRST fragment must
       // start on a real keyframe, and it does: `startPacket`.
-      let nextBoundary = mediaStart + FORCED_BOUNDARY_S;
+      let boundaryStep = FORCED_BOUNDARY_START_S;
+      let nextBoundary = mediaStart + boundaryStep;
       for await (const packet of packetSink.packets(startPacket)) {
         if (disposed || gen !== generation) break;
         // Open-GOP leading pictures decode after the random access point but
@@ -673,13 +698,15 @@ export const mountTierE: EngineMount = async (opts) => {
             disposed ||
             gen !== generation ||
             (packet.timestamp - effectivePlayhead() <= aheadTarget &&
+              packet.timestamp - transcodedEnd() <= IN_FLIGHT_CAP_S &&
               packet.timestamp <= otherFed(audioLane) + TRACK_LEAD_CAP_S),
         );
         if (disposed || gen !== generation) break;
         let toAdd = packet;
         if (!first && packet.type !== "key" && packet.timestamp >= nextBoundary) {
           toAdd = new EncodedPacket(packet.data, "key", packet.timestamp, packet.duration);
-          nextBoundary = packet.timestamp + FORCED_BOUNDARY_S;
+          boundaryStep = Math.min(FORCED_BOUNDARY_MAX_S, boundaryStep * 2);
+          nextBoundary = packet.timestamp + boundaryStep;
         }
         await videoSrc.add(
           toAdd,
@@ -773,7 +800,7 @@ export const mountTierE: EngineMount = async (opts) => {
     opts.onBusyChange?.(false);
     notify();
     unsubscribeSpeed?.();
-    video.removeEventListener("timeupdate", onTimeUpdate);
+    for (const e of WAKE_EVENTS) video.removeEventListener(e, onProgress);
     unbindVideo();
     await cancelPipelines();
     try {
