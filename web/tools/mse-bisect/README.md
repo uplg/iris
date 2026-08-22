@@ -45,13 +45,13 @@ en fait pour chaque type. Lecture du tableau :
 
 Ce qui a été mesuré sur Zen 1.21 (base Firefox ~147), fichier x265 open-GOP :
 
-| début du groupe de frames | buffered | frames décodées |
-| --- | --- | --- |
-| `IDR_N_LP` (t=0, seul IDR du fichier) | `0.0–10.0` | 149 |
-| `CRA_NUT` (tout keyframe mi-flux) | **vide** | 0 |
-| `CRA_NUT`, muxer mediabunny NON patché | **vide** | 0 |
-| `CRA_NUT` → `IDR_N_LP` | `178.1–188.0` | 0, `kVTVideoDecoderBadDataErr` |
-| `CRA_NUT` → `BLA_N_LP` | **vide** | 0 |
+| début du groupe de frames              | buffered      | frames décodées                |
+| -------------------------------------- | ------------- | ------------------------------ |
+| `IDR_N_LP` (t=0, seul IDR du fichier)  | `0.0–10.0`    | 149                            |
+| `CRA_NUT` (tout keyframe mi-flux)      | **vide**      | 0                              |
+| `CRA_NUT`, muxer mediabunny NON patché | **vide**      | 0                              |
+| `CRA_NUT` → `IDR_N_LP`                 | `178.1–188.0` | 0, `kVTVideoDecoderBadDataErr` |
+| `CRA_NUT` → `BLA_N_LP`                 | **vide**      | 0                              |
 
 Conclusion : ce Gecko n'ouvre un groupe de frames que sur un **IDR**. Le CRA et le
 BLA sont refusés au stade du tampon ; réétiqueter en IDR passe le tampon puis casse
@@ -103,10 +103,10 @@ c'est l'application qui fournit les fragments, et Gecko jette ce qu'on lui donne
 Mesuré ici, et cohérent avec cette lecture — et la version produit d'un fork ne dit
 rien de sa base Gecko, il faut lire `navigator.userAgent` :
 
-| moteur | seek HEVC open-GOP en MSE |
-| --- | --- |
-| Gecko 153 (Firefox de Playwright) | fonctionne — le CRA est encore un keyframe |
-| Gecko 154 (Zen 1.21.15b, build du 18/08/2026) | `buffered` vide — CRA dégradé |
+| moteur                                        | seek HEVC open-GOP en MSE                  |
+| --------------------------------------------- | ------------------------------------------ |
+| Gecko 153 (Firefox de Playwright)             | fonctionne — le CRA est encore un keyframe |
+| Gecko 154 (Zen 1.21.15b, build du 18/08/2026) | `buffered` vide — CRA dégradé              |
 
 Conséquence : mettre à jour n'y changera rien, c'est l'état courant et voulu de
 Firefox 154+ sur macOS. Nos drapeaux de conteneur sont pourtant corrects
@@ -122,10 +122,10 @@ commande, en lecture **fichier** (pas MSE), seek à 2,0 s comme son test :
       -c:v libx265 -x265-params keyint=30:min-keyint=30:open-gop=1:info=0 \
       -an test_hevc_open_gop.mp4
 
-| moteur | seek(2.0) en lecture fichier |
-| --- | --- |
-| Firefox 153 | `err=3 AppleVTDecoder::OnDecodeError:ffffbae2` — le bug d'origine |
-| Zen / Gecko 154 | `ct=4.00 frames=61 err=aucune` — corrigé |
+| moteur          | seek(2.0) en lecture fichier                                      |
+| --------------- | ----------------------------------------------------------------- |
+| Firefox 153     | `err=3 AppleVTDecoder::OnDecodeError:ffffbae2` — le bug d'origine |
+| Zen / Gecko 154 | `ct=4.00 frames=61 err=aucune` — corrigé                          |
 
 Le patch retire le drapeau keyframe des CRA pour que **le démuxeur retombe sur
 l'IDR précédent** (son propre test le dit : « CRA keyframe flags are stripped on
@@ -137,10 +137,10 @@ donne.
 D'où l'inversion apparente de nos mesures, qui est en réalité parfaitement
 cohérente :
 
-| | lecture fichier | MSE mi-flux |
-| --- | --- | --- |
-| Firefox 153 (sans le correctif) | échoue | fonctionne |
-| Gecko 154 (avec) | fonctionne | `buffered` vide |
+|                                 | lecture fichier | MSE mi-flux     |
+| ------------------------------- | --------------- | --------------- |
+| Firefox 153 (sans le correctif) | échoue          | fonctionne      |
+| Gecko 154 (avec)                | fonctionne      | `buffered` vide |
 
 Le correctif amont laisse donc MSE sans recours. Ça vaut un signalement.
 

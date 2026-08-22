@@ -46,10 +46,10 @@ init segment then the media segment to a `SourceBuffer` opened with
 
 macOS on Apple silicon, same file, same machine:
 
-| | file playback, seek(2.0) | MSE, mid-stream append |
-| --- | --- | --- |
+|                               | file playback, seek(2.0)                                 | MSE, mid-stream append          |
+| ----------------------------- | -------------------------------------------------------- | ------------------------------- |
 | Firefox 153 (without the fix) | `MediaError` 3, `AppleVTDecoder::OnDecodeError:ffffbae2` | works, `buffered=[178.1-188.1]` |
-| Gecko 154 (with the fix) | works, `ct=4.00`, 61 frames, no error | `buffered=[empty]`, no error |
+| Gecko 154 (with the fix)      | works, `ct=4.00`, 61 frames, no error                    | `buffered=[empty]`, no error    |
 
 Container flags are correct and identical between the t=0 fragment and the
 mid-stream one — `tfhd default_sample_flags=0x01010000`,

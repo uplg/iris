@@ -3,19 +3,36 @@
 //
 //   bun gen-variants.mjs /chemin/vers/film.mkv 180
 //
-import { Input, Output, Mp4OutputFormat, StreamTarget, FilePathSource,
-  EncodedPacketSink, EncodedVideoPacketSource, ALL_FORMATS } from "mediabunny";
+import {
+  Input,
+  Output,
+  Mp4OutputFormat,
+  StreamTarget,
+  FilePathSource,
+  EncodedPacketSink,
+  EncodedVideoPacketSource,
+  ALL_FORMATS,
+} from "mediabunny";
 import { writeFileSync } from "node:fs";
 
 const [file, seekArg] = process.argv.slice(2);
-if (!file) { console.error("usage: bun gen-variants.mjs <film.mkv> [secondes]"); process.exit(1); }
+if (!file) {
+  console.error("usage: bun gen-variants.mjs <film.mkv> [secondes]");
+  process.exit(1);
+}
 const seek = Number(seekArg ?? 180);
 
 const input = new Input({ source: new FilePathSource(file), formats: ALL_FORMATS });
 const parts = [];
 const output = new Output({
   format: new Mp4OutputFormat({ fastStart: "fragmented", minimumFragmentDuration: 1 }),
-  target: new StreamTarget(new WritableStream({ write(c) { parts.push({ pos: c.position, data: new Uint8Array(c.data) }); } })),
+  target: new StreamTarget(
+    new WritableStream({
+      write(c) {
+        parts.push({ pos: c.position, data: new Uint8Array(c.data) });
+      },
+    }),
+  ),
 });
 const track = await input.getPrimaryVideoTrack();
 const src = new EncodedVideoPacketSource(await track.getCodec());
@@ -27,7 +44,7 @@ const config = await track.getDecoderConfig();
 let first = true;
 for await (const p of sink.packets(start)) {
   if (p.timestamp > start.timestamp + 10) break;
-  if (p.timestamp < start.timestamp) continue;   // images de tête, comme Tier B
+  if (p.timestamp < start.timestamp) continue; // images de tête, comme Tier B
   await src.add(p, first ? { decoderConfig: config } : undefined);
   first = false;
 }

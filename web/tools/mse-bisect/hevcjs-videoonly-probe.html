@@ -1,74 +1,118 @@
-<!doctype html><meta charset=utf-8><body><script type="module">
-window.__out = [];
-const log = s => { window.__out.push(s); console.log(s); };
-const _l = console.log.bind(console), _w = console.warn.bind(console), _e = console.error.bind(console);
-console.log = (...a) => { window.__out.push("· " + a.map(String).join(" ").slice(0,170)); _l(...a); };
-console.warn = (...a) => { window.__out.push("⚠ " + a.map(String).join(" ").slice(0,170)); _w(...a); };
-console.error = (...a) => { window.__out.push("✗ " + a.map(String).join(" ").slice(0,170)); _e(...a); };
+<!doctype html><meta charset="utf-8" />
+<body>
+  <script type="module">
+    window.__out = [];
+    const log = (s) => {
+      window.__out.push(s);
+      console.log(s);
+    };
+    const _l = console.log.bind(console),
+      _w = console.warn.bind(console),
+      _e = console.error.bind(console);
+    console.log = (...a) => {
+      window.__out.push("· " + a.map(String).join(" ").slice(0, 170));
+      _l(...a);
+    };
+    console.warn = (...a) => {
+      window.__out.push("⚠ " + a.map(String).join(" ").slice(0, 170));
+      _w(...a);
+    };
+    console.error = (...a) => {
+      window.__out.push("✗ " + a.map(String).join(" ").slice(0, 170));
+      _e(...a);
+    };
 
-import { installMSEIntercept } from "@hevcjs/core";
+    import { installMSEIntercept } from "@hevcjs/core";
 
-function cut(buf) {
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  const segs = []; let o = 0, initEnd = 0;
-  while (o + 8 <= buf.byteLength) {
-    let sz = dv.getUint32(o);
-    const t = String.fromCharCode(buf[o+4],buf[o+5],buf[o+6],buf[o+7]);
-    if (sz === 1) sz = Number(dv.getBigUint64(o+8));
-    if (sz < 8) break;
-    if (t === "ftyp" || t === "moov") initEnd = o + sz;
-    else if (t === "moof") {
-      let e = o + sz;
-      let s2 = dv.getUint32(e);
-      const t2 = String.fromCharCode(buf[e+4],buf[e+5],buf[e+6],buf[e+7]);
-      if (s2 === 1) s2 = Number(dv.getBigUint64(e+8));
-      if (t2 === "mdat") e += s2;
-      segs.push(buf.subarray(o, e)); o = e; continue;
+    function cut(buf) {
+      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      const segs = [];
+      let o = 0,
+        initEnd = 0;
+      while (o + 8 <= buf.byteLength) {
+        let sz = dv.getUint32(o);
+        const t = String.fromCharCode(buf[o + 4], buf[o + 5], buf[o + 6], buf[o + 7]);
+        if (sz === 1) sz = Number(dv.getBigUint64(o + 8));
+        if (sz < 8) break;
+        if (t === "ftyp" || t === "moov") initEnd = o + sz;
+        else if (t === "moof") {
+          let e = o + sz;
+          let s2 = dv.getUint32(e);
+          const t2 = String.fromCharCode(buf[e + 4], buf[e + 5], buf[e + 6], buf[e + 7]);
+          if (s2 === 1) s2 = Number(dv.getBigUint64(e + 8));
+          if (t2 === "mdat") e += s2;
+          segs.push(buf.subarray(o, e));
+          o = e;
+          continue;
+        }
+        o += sz;
+      }
+      return { init: buf.subarray(0, initEnd), segs };
     }
-    o += sz;
-  }
-  return { init: buf.subarray(0, initEnd), segs };
-}
 
-(async () => {
-  const file = new URLSearchParams(location.search).get("f") ?? "mb-mid.mp4";
-  installMSEIntercept({
-    workerUrl: "/hevcjs/transcode-worker.js",
-    wasmUrl: "/hevcjs/hevc-decode.js",
-    wasmBinaryUrl: "/hevcjs/hevc-decode.wasm",
-    logLevel: "debug",
-  });
-  const buf = new Uint8Array(await (await fetch("/fixtures/" + file)).arrayBuffer());
-  const { init, segs } = cut(buf);
-  log(`${file} : init=${init.byteLength}B, ${segs.length} segments`);
+    (async () => {
+      const file = new URLSearchParams(location.search).get("f") ?? "mb-mid.mp4";
+      installMSEIntercept({
+        workerUrl: "/hevcjs/transcode-worker.js",
+        wasmUrl: "/hevcjs/hevc-decode.js",
+        wasmBinaryUrl: "/hevcjs/hevc-decode.wasm",
+        logLevel: "debug",
+      });
+      const buf = new Uint8Array(await (await fetch("/fixtures/" + file)).arrayBuffer());
+      const { init, segs } = cut(buf);
+      log(`${file} : init=${init.byteLength}B, ${segs.length} segments`);
 
-  const v = document.createElement("video");
-  v.muted = true; v.controls = true; document.body.appendChild(v);
-  const ms = new MediaSource();
-  v.src = URL.createObjectURL(ms);
-  await new Promise(r => ms.addEventListener("sourceopen", r, { once: true }));
-  // chemin NON MUXÉ : vidéo seule
-  const sb = ms.addSourceBuffer('video/mp4; codecs="hvc1.2.4.L120.B0"');
-  sb.mode = "segments";
-  const app = b => new Promise(res => {
-    let d = false; const f = () => { if (d) return; d = true; res(); };
-    sb.addEventListener("updateend", f, { once: true });
-    sb.addEventListener("error", f, { once: true });
-    setTimeout(f, 20000);
-    try { sb.appendBuffer(b); } catch (e) { log("append a levé " + e.name); res(); }
-  });
-  await app(new Uint8Array(init));
-  for (const g of segs.slice(0, 2)) await app(new Uint8Array(g));
-  // le transcodage est asynchrone : laisser du temps
-  await new Promise(r => setTimeout(r, 20000));
-  const ranges = sb.buffered.length
-    ? Array.from({length: sb.buffered.length}, (_,i)=>`${sb.buffered.start(i).toFixed(1)}-${sb.buffered.end(i).toFixed(1)}`).join(",")
-    : "vide";
-  if (sb.buffered.length) { try { v.currentTime = sb.buffered.start(0) + 0.2; } catch(e){} }
-  void v.play().catch(()=>{});
-  await new Promise(r => setTimeout(r, 5000));
-  const q = v.getVideoPlaybackQuality?.();
-  log(`RÉSULTAT ${file} : buffered=[${ranges}] frames=${q?.totalVideoFrames} rs=${v.readyState} err=${v.error?v.error.code:"aucune"}`);
-  log("DONE"); document.title = "done";
-})();
-</script></body>
+      const v = document.createElement("video");
+      v.muted = true;
+      v.controls = true;
+      document.body.appendChild(v);
+      const ms = new MediaSource();
+      v.src = URL.createObjectURL(ms);
+      await new Promise((r) => ms.addEventListener("sourceopen", r, { once: true }));
+      // chemin NON MUXÉ : vidéo seule
+      const sb = ms.addSourceBuffer('video/mp4; codecs="hvc1.2.4.L120.B0"');
+      sb.mode = "segments";
+      const app = (b) =>
+        new Promise((res) => {
+          let d = false;
+          const f = () => {
+            if (d) return;
+            d = true;
+            res();
+          };
+          sb.addEventListener("updateend", f, { once: true });
+          sb.addEventListener("error", f, { once: true });
+          setTimeout(f, 20000);
+          try {
+            sb.appendBuffer(b);
+          } catch (e) {
+            log("append a levé " + e.name);
+            res();
+          }
+        });
+      await app(new Uint8Array(init));
+      for (const g of segs.slice(0, 2)) await app(new Uint8Array(g));
+      // le transcodage est asynchrone : laisser du temps
+      await new Promise((r) => setTimeout(r, 20000));
+      const ranges = sb.buffered.length
+        ? Array.from(
+            { length: sb.buffered.length },
+            (_, i) => `${sb.buffered.start(i).toFixed(1)}-${sb.buffered.end(i).toFixed(1)}`,
+          ).join(",")
+        : "vide";
+      if (sb.buffered.length) {
+        try {
+          v.currentTime = sb.buffered.start(0) + 0.2;
+        } catch (e) {}
+      }
+      void v.play().catch(() => {});
+      await new Promise((r) => setTimeout(r, 5000));
+      const q = v.getVideoPlaybackQuality?.();
+      log(
+        `RÉSULTAT ${file} : buffered=[${ranges}] frames=${q?.totalVideoFrames} rs=${v.readyState} err=${v.error ? v.error.code : "aucune"}`,
+      );
+      log("DONE");
+      document.title = "done";
+    })();
+  </script>
+</body>
