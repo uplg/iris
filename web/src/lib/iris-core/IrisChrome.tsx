@@ -398,9 +398,14 @@ function ScrubBar(props: {
       // `touch-none` stops the drag from also scrolling the page on a
       // phone; a slightly taller track on mobile is easier to grab.
       className="relative h-2.5 w-full cursor-pointer touch-none rounded bg-white/15 sm:h-2"
+      tabIndex={0}
+      aria-label="Seek"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      // <input type="range"> can't layer the buffered-range segments under
+      // the thumb, so the scrub bar stays a div with explicit slider ARIA.
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
       role="slider"
       aria-valuemin={0}
       aria-valuemax={dur}

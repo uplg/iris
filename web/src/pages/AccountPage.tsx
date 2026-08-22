@@ -359,8 +359,8 @@ function IdentityCard() {
 
   // Re-sync local input if the auth user changes (e.g. /me refresh).
   useEffect(() => {
-    if (auth.status === "authenticated") setName(auth.user.display_name);
-  }, [auth.status === "authenticated" ? auth.user.display_name : ""]);
+    setName(currentName);
+  }, [currentName]);
 
   const save = useMutation({
     mutationFn: (n: string) => authApi.changeDisplayName(n),

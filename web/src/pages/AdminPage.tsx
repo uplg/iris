@@ -108,17 +108,17 @@ export function AdminPage() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button asChild variant="outline" size="sm">
-              <Link to="/library" search={{ view: "torrents" }}>
-                <List className="size-3.5" />
-                Raw torrents view
-              </Link>
+            <Button
+              variant="outline"
+              size="sm"
+              render={<Link to="/library" search={{ view: "torrents" }} />}
+            >
+              <List className="size-3.5" />
+              Raw torrents view
             </Button>
-            <Button asChild variant="ghost" size="sm">
-              <Link to="/">
-                <ArrowLeft className="size-3.5" />
-                Back to home
-              </Link>
+            <Button variant="ghost" size="sm" render={<Link to="/" />}>
+              <ArrowLeft className="size-3.5" />
+              Back to home
             </Button>
           </div>
         </header>
@@ -196,7 +196,9 @@ export function AdminPage() {
                       <th className="px-3 py-2 text-left sm:px-4">Created</th>
                       <th className="hidden px-3 py-2 text-left sm:table-cell sm:px-4">Expires</th>
                       <th className="px-3 py-2 text-left sm:px-4">Status</th>
-                      <th className="px-3 py-2 sm:px-4"></th>
+                      <th className="px-3 py-2 sm:px-4">
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -277,7 +279,9 @@ function RemuxCacheCard() {
                   <th className="px-2 py-1">State</th>
                   <th className="px-2 py-1 text-right">Size</th>
                   <th className="hidden px-2 py-1 sm:table-cell">Updated</th>
-                  <th className="px-2 py-1"></th>
+                  <th className="px-2 py-1">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -544,11 +548,14 @@ function UserList({
                 {new Date(u.created_at).toLocaleDateString()}
               </span>
               <div className="flex shrink-0 items-center gap-1.5">
-                <Button size="sm" variant="outline" asChild title="View watch history">
-                  <Link to="/admin/users/$userId/history" params={{ userId: u.id }}>
-                    <HistoryIcon className="size-3.5" />
-                    <span className="sr-only">View watch history</span>
-                  </Link>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  title="View watch history"
+                  render={<Link to="/admin/users/$userId/history" params={{ userId: u.id }} />}
+                >
+                  <HistoryIcon className="size-3.5" />
+                  <span className="sr-only">View watch history</span>
                 </Button>
                 <Button
                   size="sm"

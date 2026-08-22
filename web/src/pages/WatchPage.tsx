@@ -48,6 +48,7 @@ import {
 } from "@/lib/iris-core/manifest-client";
 import { IrisPlayer } from "@/lib/iris-core/IrisPlayer";
 import { readStoredVolume, writeStoredVolume } from "@/lib/player-volume";
+import { readLocal, writeLocal } from "@/lib/safe-storage";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
@@ -94,13 +95,16 @@ function watchedPctOf(p?: FileProgressEntry): number | null {
 // and sticks across episodes + sessions.
 const THEATER_KEY = "iris:theater";
 
+// Stable identity for the "collection not loaded" case: an inline `?? []` is a
+// fresh array every render, which silently defeats the episode-list memo.
+const NO_AVAILABLE_EPISODES: AvailableEpisodeEntry[] = [];
+
 function readStoredTheater(): boolean {
-  return typeof localStorage !== "undefined" && localStorage.getItem(THEATER_KEY) === "1";
+  return readLocal(THEATER_KEY) === "1";
 }
 
 function writeStoredTheater(on: boolean): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(THEATER_KEY, on ? "1" : "0");
+  writeLocal(THEATER_KEY, on ? "1" : "0");
 }
 
 const watchRoute = getRouteApi("/auth/shell/watch/$infohash/$idx");
@@ -513,7 +517,7 @@ export function WatchPage() {
   // language variant gets its own chip so the user can explicitly pick one.
   // This side panel is a compact "what's next" list, not a language picker,
   // so it dedupes to ONE row per (season, episode) below — see `discovered`.
-  const availableEpisodes = collectionQ.data?.available_episodes ?? [];
+  const availableEpisodes = collectionQ.data?.available_episodes ?? NO_AVAILABLE_EPISODES;
   const isTvCollection = !!collectionId && data?.kind === "tv";
 
   // The episode currently playing, looked up in the collection's merged
@@ -778,7 +782,7 @@ export function WatchPage() {
     // maybePromptNext / canPromptNext are recomputed each render but
     // capture stable refs; the eslint exhaustive-deps rule misfires
     // here, ignore by listing only the load-bearing identities.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
     [infohash, fileIdx, canPromptNext],
   );
   const onDurationChange = useCallback((d: number) => {
@@ -812,7 +816,10 @@ export function WatchPage() {
       completed: true,
     });
     maybePromptNext();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Same reason as `onTimeUpdateCb` above: `maybePromptNext` is rebuilt
+    // every render but only reads refs, so listing it would re-create this
+    // callback on every render for nothing.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [infohash, fileIdx]);
 
   // Capture saved audio + subtitle picks so the next progress save
@@ -917,8 +924,8 @@ export function WatchPage() {
                 {regrab.isPending ? "Grabbing…" : regrab.isSuccess ? "Starting…" : "Grab it again"}
               </Button>
             )}
-            <Button asChild variant="secondary">
-              <Link to="/library">Open library</Link>
+            <Button variant="secondary" render={<Link to="/library" />}>
+              Open library
             </Button>
           </>
         }
@@ -995,17 +1002,20 @@ export function WatchPage() {
               <RectangleHorizontal className="size-4" />
               Theater
             </Button>
-            <Button asChild variant="outline" size="sm">
-              <a href={torrents.downloadUrl(infohash, fileIdx)} download={fileName}>
-                <Download className="size-4" />
-                Download
-              </a>
+            <Button
+              variant="outline"
+              size="sm"
+              // Base UI merges the Button's children into the rendered <a>, so the
+              // anchor does get content — the rule only sees the empty literal.
+              // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label
+              render={<a href={torrents.downloadUrl(infohash, fileIdx)} download={fileName} />}
+            >
+              <Download className="size-4" />
+              Download
             </Button>
-            <Button asChild variant="ghost" size="sm">
-              <Link to="/library">
-                <LibraryIcon className="size-4" />
-                Library
-              </Link>
+            <Button variant="ghost" size="sm" render={<Link to="/library" />}>
+              <LibraryIcon className="size-4" />
+              Library
             </Button>
           </div>
         </div>
@@ -1256,14 +1266,20 @@ export function WatchPage() {
                               ? "Resume"
                               : "Play"}
                           </Button>
-                          <Button asChild size="sm" variant="outline">
-                            <a
-                              href={torrents.downloadUrl(row.infohash, row.fileIdx)}
-                              download={row.primary}
-                            >
-                              <Download className="size-3.5" />
-                              <span className="sr-only">Download</span>
-                            </a>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            render={
+                              // Base UI merges the Button's children into the rendered <a>.
+                              // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label
+                              <a
+                                href={torrents.downloadUrl(row.infohash, row.fileIdx)}
+                                download={row.primary}
+                              />
+                            }
+                          >
+                            <Download className="size-3.5" />
+                            <span className="sr-only">Download</span>
                           </Button>
                         </>
                       )}

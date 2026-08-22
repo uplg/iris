@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App.tsx";
+import { readSession, writeSession } from "./lib/safe-storage";
 
 // Stale-chunk recovery. After a redeploy, an open tab still holds the
 // OLD `index.html` and its hashed chunk filenames (e.g.
@@ -18,13 +19,13 @@ import App from "./App.tsx";
 // stale-reload attempt we surface the error instead of looping.
 const STALE_RELOAD_KEY = "iris.staleReloadAt";
 window.addEventListener("vite:preloadError", (event) => {
-  const last = Number(sessionStorage.getItem(STALE_RELOAD_KEY) ?? "0");
+  const last = Number(readSession(STALE_RELOAD_KEY) ?? "0");
   const now = Date.now();
   if (now - last < 10_000) {
     console.error("[iris] preload error after recent reload — leaving page intact", event);
     return;
   }
-  sessionStorage.setItem(STALE_RELOAD_KEY, String(now));
+  writeSession(STALE_RELOAD_KEY, String(now));
   console.warn("[iris] stale bundle detected, reloading to pick up new build");
   window.location.reload();
 });

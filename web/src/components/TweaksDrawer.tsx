@@ -26,15 +26,19 @@ export function TweaksDrawer({ open, onClose }: { open: boolean; onClose: () => 
   return (
     <div
       role="presentation"
-      onClick={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
       className="fixed inset-0 z-50 grid items-start justify-items-end bg-black/40 p-4 backdrop-blur-sm"
       style={{ paddingTop: "calc(var(--header-h) + 8px)" }}
     >
       <div
+        // A native <dialog> would bring its own top-layer + modal semantics;
+        // this panel is positioned under the header on purpose.
+        // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
         role="dialog"
         aria-modal="true"
         aria-label="Display settings"
-        onClick={(e) => e.stopPropagation()}
         className="grid w-[min(360px,calc(100vw-2rem))] gap-4 rounded-xl border border-border bg-elev p-[18px] shadow-2xl"
       >
         <div className="flex items-center justify-between">

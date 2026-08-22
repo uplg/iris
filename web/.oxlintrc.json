@@ -1,10 +1,27 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "oxc"],
+  "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y", "import", "promise"],
   "categories": {
     "correctness": "error"
   },
-  "rules": {},
+  "rules": {
+    // Automatic JSX runtime — React is never in scope on purpose.
+    "react-in-jsx-scope": "off",
+
+    // React Compiler diagnostics. The build runs plain @vitejs/plugin-react
+    // with no compiler, so these report on a transform we never apply; every
+    // hit in this repo was a deliberate, reviewed pattern (latest-ref writes,
+    // DOM mutation through a ref, `setState` to adjust state when a prop
+    // changes). Re-enable the whole group the day the compiler goes in.
+    "react/incompatible-library": "off",
+    "react/preserve-manual-memoization": "off",
+    "react/immutability": "off",
+    "react/refs": "off",
+    "react/set-state-in-effect": "off",
+
+    // Default depth 2 misses a label whose text sits in nested layout divs.
+    "jsx-a11y/label-has-associated-control": ["error", { "depth": 4 }]
+  },
   "env": {
     "builtin": true
   },

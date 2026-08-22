@@ -390,14 +390,18 @@ function Hero({ collection }: { collection: CollectionDetail }) {
             </h1>
             {playTarget && (
               <div className="flex flex-wrap gap-2.5">
-                <Button asChild size="lg" className="h-11">
-                  <Link
-                    to="/watch/$infohash/$idx"
-                    params={{ infohash: playTarget.infohash, idx: String(playTarget.idx) }}
-                  >
-                    <Play className="size-4.5" />
-                    {resume ? "Resume" : "Play"}
-                  </Link>
+                <Button
+                  size="lg"
+                  className="h-11"
+                  render={
+                    <Link
+                      to="/watch/$infohash/$idx"
+                      params={{ infohash: playTarget.infohash, idx: String(playTarget.idx) }}
+                    />
+                  }
+                >
+                  <Play className="size-4.5" />
+                  {resume ? "Resume" : "Play"}
                 </Button>
               </div>
             )}

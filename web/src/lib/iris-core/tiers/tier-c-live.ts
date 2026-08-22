@@ -372,7 +372,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
         `presentation=single-element`,
     );
 
-    // ---- MSE on the ONE element ----------------------------------------
+    // MSE on the ONE element
     const ms = new MediaSource();
     mediaSrc = ms;
     objectUrl = URL.createObjectURL(ms);
@@ -442,7 +442,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
       if (!disposed) fail(new Error("live: SourceBuffer error"));
     });
 
-    // ---- one muxer, both tracks -----------------------------------------
+    // one muxer, both tracks
     const muxOutput = new Output({
       format: new Mp4OutputFormat({ fastStart: "fragmented", minimumFragmentDuration: 0.5 }),
       target: new StreamTarget(
@@ -488,7 +488,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
     }
     await muxOutput.start();
 
-    // ---- audio feed (bookkeeping-stamped, encoder stamps ignored) --------
+    // audio feed (bookkeeping-stamped, encoder stamps ignored)
     if (audioTrack && audioPlan && audioFeed) {
       const plan = audioPlan;
       const feed = audioFeed;
@@ -681,7 +681,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
       audioFedRel = Number.POSITIVE_INFINITY;
     }
 
-    // ---- video: decode (join concealment) → hw re-encode → mux ----------
+    // video: decode (join concealment) → hw re-encode → mux
 
     let decoderBroken: Error | null = null;
     let encoderBroken: Error | null = null;

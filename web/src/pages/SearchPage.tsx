@@ -27,6 +27,7 @@ import {
   metadata,
   search,
   tmdbImage,
+  type AggregatedResults,
   type LibraryMatch,
   type MediaKind,
   type ParsedQueryInfo,
@@ -90,6 +91,10 @@ function formatSceneMarker(season: number, episode: number | null | undefined): 
 
 const PAGE_SIZE = 25;
 
+// Stable identity for the "no results yet" case. An inline `?? []` allocates a
+// fresh array every render, which silently defeats the `totals` memo below.
+const NO_PROVIDER_META: NonNullable<AggregatedResults["providers"]> = [];
+
 function useDebounce<T>(value: T, delay = 300): T {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -142,7 +147,7 @@ export function SearchPage() {
     setPage(1);
   }, [debounced, sortMode, kind]);
 
-  // ---------- TMDB typeahead ----------
+  // TMDB typeahead
   const typeaheadQ = useDebounce(q.trim(), 250);
   const suggestionsQ = useQuery({
     queryKey: ["tmdb-suggest", typeaheadQ],
@@ -151,7 +156,7 @@ export function SearchPage() {
     staleTime: 60_000,
   });
 
-  // ---------- Indexer search ----------
+  // Indexer search
   // The server is the source of truth for ordering. In `relevance`
   // mode it sends nothing back through `sort_by`, leaving the
   // backend's parser-aware ranker (title/SxxExx + quality +
@@ -181,7 +186,7 @@ export function SearchPage() {
   // the same grid ("you already have this"). Page 1 only: the server
   // returns them with every page and repeating them is noise.
   const libMatches = page === 1 ? (data?.library_matches ?? []) : [];
-  const meta = data?.providers ?? [];
+  const meta = data?.providers ?? NO_PROVIDER_META;
   const totals = useMemo(() => {
     let count = 0;
     let pages = 0;
@@ -235,6 +240,8 @@ export function SearchPage() {
             <SearchIcon className="absolute left-4 top-1/2 size-4.5 -translate-y-1/2 text-fg-dim" />
             <Input
               ref={inputRef}
+              // Deliberate: /search exists to be typed into immediately.
+              // oxlint-disable-next-line jsx-a11y/no-autofocus
               autoFocus
               placeholder="Title, year, anything…"
               className="h-13 pl-12 text-base"
@@ -264,9 +271,8 @@ export function SearchPage() {
             />
           </div>
           <ToggleGroup
-            type="single"
-            value={kind ?? "all"}
-            onValueChange={(v) => setKind(v === "movie" || v === "tv" ? v : null)}
+            value={[kind ?? "all"]}
+            onValueChange={(v) => setKind(v[0] === "movie" || v[0] === "tv" ? v[0] : null)}
             className="shrink-0"
           >
             <ToggleGroupItem value="all" aria-label="All categories">

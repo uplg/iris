@@ -46,7 +46,7 @@ import {
   type EngineMount,
 } from "../engine";
 
-// ---- Live SourceBuffer window -------------------------------------
+// Live SourceBuffer window
 //
 // The window kept resident in the SourceBuffer is bounded by a SECONDS
 // target that is itself sized from the file's average bitrate (byte budget
@@ -474,7 +474,7 @@ export const mountTierB: EngineMount = async (opts) => {
   };
   video.addEventListener("error", onErr);
 
-  // ---- buffer helpers ----------------------------------------------
+  // buffer helpers
 
   /** Seconds of media buffered after the current playhead. CRITICAL: walks
    *  forward across ADJACENT ranges, bridging the sub-second gaps between
@@ -632,7 +632,7 @@ export const mountTierB: EngineMount = async (opts) => {
     return span * bytesPerSecond;
   };
 
-  // ---- queue drain ------------------------------------------------
+  // queue drain
 
   const drainQueue = () => {
     if (disposed || !sourceBuffer || sourceBuffer.updating) return;
@@ -673,7 +673,7 @@ export const mountTierB: EngineMount = async (opts) => {
     }
   };
 
-  // ---- stall recovery (event-driven, no timer) --------------------
+  // stall recovery (event-driven, no timer)
   //
   // A `waiting`/`stalled` event means the playhead ran dry. Two
   // mid-playback failure modes this rescues — both surfaced as the
@@ -1318,7 +1318,7 @@ export const mountTierB: EngineMount = async (opts) => {
   };
   document.addEventListener("visibilitychange", onVisibility);
 
-  // ---- Public handle ---------------------------------------------
+  // Public handle
 
   const dispose = async (): Promise<void> => {
     if (disposed) return;
@@ -1435,7 +1435,7 @@ export const mountTierB: EngineMount = async (opts) => {
     },
   };
 
-  // ---- Initial MediaSource + SourceBuffer setup ------------------
+  // Initial MediaSource + SourceBuffer setup
 
   await new Promise<void>((resolve, reject) => {
     const onOpen = () => {
@@ -1508,7 +1508,7 @@ export const mountTierB: EngineMount = async (opts) => {
   });
   sourceBuffer.addEventListener("error", () => fail(new Error("SourceBuffer error")));
 
-  // ---- Spin up the first Conversion -----------------------------
+  // Spin up the first Conversion
 
   // Input factory rather than a one-shot construction: the frozen-feed
   // watchdog (see `onWaiting`) rebuilds the Input to get fresh HTTP

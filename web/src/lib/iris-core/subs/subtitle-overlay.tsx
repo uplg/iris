@@ -107,7 +107,7 @@ export function SubtitleOverlay({ host, track, getCurrentTime }: Props) {
     };
     // Re-mount only when the track identity changes — not on URL-only
     // updates, which the second effect handles in-place.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [host, streamIdx, codec, kind]);
 
   useEffect(() => {

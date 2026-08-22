@@ -256,37 +256,38 @@ export function PreviewDialog({
                 {sortedFiles.map((f) => {
                   const selected = pickedIdx === f.index;
                   return (
-                    <li
-                      key={f.index}
-                      className={cn(
-                        "flex cursor-pointer items-center gap-3 px-3 py-2 text-sm transition",
-                        selected ? "bg-accent text-accent-foreground" : "hover:bg-muted/40",
-                      )}
-                      onClick={() => setPickedIdx(f.index)}
-                    >
-                      <input
-                        type="radio"
-                        checked={selected}
-                        onChange={() => setPickedIdx(f.index)}
-                        className="accent-current"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="break-all font-mono text-xs" title={f.path}>
-                          {f.path}
+                    <li key={f.index}>
+                      <label
+                        className={cn(
+                          "flex cursor-pointer items-center gap-3 px-3 py-2 text-sm transition",
+                          selected ? "bg-accent text-accent-foreground" : "hover:bg-muted/40",
+                        )}
+                      >
+                        <input
+                          type="radio"
+                          name="preview-file"
+                          checked={selected}
+                          onChange={() => setPickedIdx(f.index)}
+                          className="accent-current"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="break-all font-mono text-xs" title={f.path}>
+                            {f.path}
+                          </div>
+                          <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+                            <span>{formatSize(f.size_bytes)}</span>
+                            {f.is_video ? (
+                              <Badge variant="secondary" className="text-[10px]">
+                                video
+                              </Badge>
+                            ) : f.extension ? (
+                              <span className="text-[10px] uppercase tracking-wide">
+                                {f.extension}
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
-                        <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                          <span>{formatSize(f.size_bytes)}</span>
-                          {f.is_video ? (
-                            <Badge variant="secondary" className="text-[10px]">
-                              video
-                            </Badge>
-                          ) : f.extension ? (
-                            <span className="text-[10px] uppercase tracking-wide">
-                              {f.extension}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
+                      </label>
                     </li>
                   );
                 })}

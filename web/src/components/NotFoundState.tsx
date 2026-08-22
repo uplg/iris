@@ -39,11 +39,7 @@ export function NotFoundState({
         )}
       </div>
       <div className="flex flex-wrap items-center justify-center gap-3">
-        {actions ?? (
-          <Button asChild>
-            <Link to="/">Back to home</Link>
-          </Button>
-        )}
+        {actions ?? <Button render={<Link to="/" />}>Back to home</Button>}
       </div>
     </div>
   );

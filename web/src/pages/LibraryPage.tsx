@@ -877,14 +877,18 @@ function TorrentRow({
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {videos.length === 1 && (
-                <Button asChild size="sm" variant="outline">
-                  <Link
-                    to="/watch/$infohash/$idx"
-                    params={{ infohash: t.infohash, idx: String(videos[0]!.index) }}
-                  >
-                    <Play className="size-3.5" />
-                    Play
-                  </Link>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  render={
+                    <Link
+                      to="/watch/$infohash/$idx"
+                      params={{ infohash: t.infohash, idx: String(videos[0]!.index) }}
+                    />
+                  }
+                >
+                  <Play className="size-3.5" />
+                  Play
                 </Button>
               )}
               {videos.length > 1 && (
@@ -1072,17 +1076,26 @@ function FileEntry({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        <Button asChild size="sm">
-          <Link to="/watch/$infohash/$idx" params={{ infohash, idx: String(file.index) }}>
-            <Play className="size-3.5" />
-            {watchedPct != null && watchedPct > 0 && !watch?.completed ? "Resume" : "Play"}
-          </Link>
+        <Button
+          size="sm"
+          render={
+            <Link to="/watch/$infohash/$idx" params={{ infohash, idx: String(file.index) }} />
+          }
+        >
+          <Play className="size-3.5" />
+          {watchedPct != null && watchedPct > 0 && !watch?.completed ? "Resume" : "Play"}
         </Button>
-        <Button asChild size="sm" variant="outline" title="Download">
-          <a href={torrents.downloadUrl(infohash, file.index)} download={fname}>
-            <Download className="size-3.5" />
-            <span className="sr-only">Download</span>
-          </a>
+        <Button
+          size="sm"
+          variant="outline"
+          title="Download"
+          // Base UI merges the Button's children into the rendered <a>, so the
+          // anchor does get content — the rule only sees the empty literal.
+          // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label
+          render={<a href={torrents.downloadUrl(infohash, file.index)} download={fname} />}
+        >
+          <Download className="size-3.5" />
+          <span className="sr-only">Download</span>
         </Button>
       </div>
     </li>

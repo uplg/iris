@@ -351,14 +351,18 @@ function ResumeHero({ item, grab }: { item: ContinueWatchingItem; grab: GrabAndP
                 : `Play ${episodeTag(item) ?? "next episode"}`}
           </Button>
         ) : (
-          <Button asChild size="lg" className="h-11">
-            <Link
-              to="/watch/$infohash/$idx"
-              params={{ infohash: item.infohash, idx: String(item.file_idx) }}
-            >
-              <Play className="size-4.5" />
-              Resume
-            </Link>
+          <Button
+            size="lg"
+            className="h-11"
+            render={
+              <Link
+                to="/watch/$infohash/$idx"
+                params={{ infohash: item.infohash, idx: String(item.file_idx) }}
+              />
+            }
+          >
+            <Play className="size-4.5" />
+            Resume
           </Button>
         )
       }
@@ -478,11 +482,9 @@ function LibraryHero({ torrent }: { torrent: TorrentView }) {
       meta={meta}
       overview={md?.overview}
       actions={
-        <Button asChild size="lg" className="h-11">
-          <Link to={href}>
-            <Play className="size-4.5" />
-            {torrent.collection_id ? "Open" : "Play"}
-          </Link>
+        <Button size="lg" className="h-11" render={<Link to={href} />}>
+          <Play className="size-4.5" />
+          {torrent.collection_id ? "Open" : "Play"}
         </Button>
       }
     />

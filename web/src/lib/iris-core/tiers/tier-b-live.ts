@@ -168,7 +168,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
   let wedgeLastT = -1;
   let wedgeAppends = 0;
 
-  // ---- waiters (all flushed on dispose AND on restart) --------------
+  // waiters (all flushed on dispose AND on restart)
 
   const trackWaiters = new Set<() => void>();
   const notifyTrackProgress = () => {
@@ -219,7 +219,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
       bufferRoomWaiters.add(w);
     });
 
-  // ---- buffer plumbing ------------------------------------------------
+  // buffer plumbing
 
   const bufferedAheadSeconds = (): number => {
     if (!sourceBuffer || sourceBuffer.buffered.length === 0) return 0;
@@ -293,7 +293,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
     return false;
   };
 
-  // ---- in-place restart ------------------------------------------------
+  // in-place restart
 
   /** Tear down the current MediaSource + pipeline and start a fresh cycle
    *  at the live edge, on the SAME `<video>`. Absorbs VideoToolbox decode
@@ -336,7 +336,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
     }
   };
 
-  // ---- video element error handling -------------------------------------
+  // video element error handling
 
   // Per-cycle one-shot (Firefox can fire `error` repeatedly). Reset by
   // `startCycle` when it re-arms the element with a fresh MediaSource.
@@ -386,7 +386,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
   video.addEventListener("waiting", onWaiting);
   video.addEventListener("stalled", onWaiting);
 
-  // ---- dispose -----------------------------------------------------------
+  // dispose
 
   const dispose = async (): Promise<void> => {
     if (disposed) return;
@@ -421,7 +421,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
     }
   };
 
-  // ---- stream probing (once per mount) ------------------------------------
+  // stream probing (once per mount)
 
   let mime = "";
   let videoDecoderConfigCodec = "";
@@ -540,7 +540,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
       console.warn("[iris-core] live: SourceBuffer error event");
     });
 
-    // ---- anchor at the live edge (playlist metadata, never client clock) --
+    // anchor at the live edge (playlist metadata, never client clock)
     phase("MediaSource open");
     const videoTrack = await liveInput.getPrimaryVideoTrack();
     if (!videoTrack) throw new Error("live: no video track");
@@ -603,7 +603,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
         `idrHunt=${hunted}`,
     );
 
-    // ---- output + sink ----------------------------------------------------
+    // output + sink
     let sinkChunks = 0;
     const newOutput = new Output({
       format: new Mp4OutputFormat({ fastStart: "fragmented", minimumFragmentDuration: 1 }),
@@ -701,7 +701,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
     await newOutput.start();
     if (disposed || gen !== generation) return;
 
-    // ---- feed loops (anchor-relative timestamps into the muxer) -----------
+    // feed loops (anchor-relative timestamps into the muxer)
 
     const startTs = startPacket.timestamp;
     const videoP = (async () => {
@@ -838,7 +838,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
       });
   };
 
-  // ---- mount: probe once, then run the first cycle -----------------------
+  // mount: probe once, then run the first cycle
 
   const mount0 = performance.now();
   try {

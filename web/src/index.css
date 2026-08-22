@@ -272,14 +272,12 @@ body {
   }
 }
 
-/* ---------------------------------------------------------------------------
- * Semantic typography utilities.
+/* Semantic typography utilities.
  *
  * Centralising the heading / body / caption combos here keeps callsites
  * visually noiseless AND makes a future restyle a one-file edit instead of
  * a global search-replace. Use these in preference to ad-hoc Tailwind
- * combinations for new code.
- * --------------------------------------------------------------------------- */
+ * combinations for new code. */
 
 @utility display {
   /* Oversized hero / page titles — Cal Sans, very tight tracking. */

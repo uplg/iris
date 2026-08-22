@@ -271,12 +271,13 @@ export function IrisPlayer(props: IrisPlayerProps) {
   // pick. Used by the chrome menu (passed as `onSubtitleChange`).
   // We don't fire from the bare `setActiveSubtitle` because it's
   // also called internally on initial mount with no user intent.
+  const { onActiveSubtitleChange } = props;
   const onSubtitlePick = useCallback(
     (track: SubtitleTrack | null) => {
       setActiveSubtitle(track);
-      props.onActiveSubtitleChange?.(track ? track.stream_idx : null);
+      onActiveSubtitleChange?.(track ? track.stream_idx : null);
     },
-    [props.onActiveSubtitleChange],
+    [onActiveSubtitleChange],
   );
 
   // Hot-reload native (`<track>`) subtitles as the torrent downloads —
@@ -461,7 +462,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
     // `engineRemountVersion` counter. `audioTrackIndex` deliberately
     // isn't a dep: it gets captured by closure and reflects the
     // user's latest pick at the moment the effect actually runs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [props.tier, props.src, mountStartPosition, engineRemountVersion]);
 
   const onAudioPick = (id: string) => {
@@ -587,6 +588,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
   );
 
   const playerNode = (
+    // oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
     <div
       ref={setWrapper}
       onClick={onSurfaceClick}

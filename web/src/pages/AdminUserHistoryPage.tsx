@@ -37,11 +37,9 @@ export function AdminUserHistoryPage() {
               User history
             </h1>
           </div>
-          <Button asChild variant="ghost" size="sm">
-            <Link to="/admin">
-              <ArrowLeft className="size-3.5" />
-              Back to admin
-            </Link>
+          <Button variant="ghost" size="sm" render={<Link to="/admin" />}>
+            <ArrowLeft className="size-3.5" />
+            Back to admin
           </Button>
         </header>
 

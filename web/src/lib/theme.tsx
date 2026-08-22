@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { readLocal, writeLocal } from "./safe-storage";
 
 export type Theme = "light" | "dark" | "system";
 export type Accent = "violet" | "indigo" | "emerald" | "amber" | "rose";
@@ -43,8 +44,7 @@ type ThemeContextValue = {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 function readStored<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
-  if (typeof window === "undefined") return fallback;
-  const v = window.localStorage.getItem(key);
+  const v = readLocal(key);
   return allowed.includes(v as T) ? (v as T) : fallback;
 }
 
@@ -92,15 +92,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [density]);
 
   const setAndPersist = useCallback((t: Theme) => {
-    window.localStorage.setItem(THEME_STORAGE_KEY, t);
+    writeLocal(THEME_STORAGE_KEY, t);
     setTheme(t);
   }, []);
   const setAccentAndPersist = useCallback((a: Accent) => {
-    window.localStorage.setItem(ACCENT_STORAGE_KEY, a);
+    writeLocal(ACCENT_STORAGE_KEY, a);
     setAccent(a);
   }, []);
   const setDensityAndPersist = useCallback((d: Density) => {
-    window.localStorage.setItem(DENSITY_STORAGE_KEY, d);
+    writeLocal(DENSITY_STORAGE_KEY, d);
     setDensity(d);
   }, []);
 

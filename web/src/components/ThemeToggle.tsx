@@ -15,11 +15,9 @@ export function ThemeToggle({ size = "sm" }: { size?: "sm" | "default" }) {
   const Icon = resolved === "dark" ? Moon : Sun;
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size={size} title="Theme">
-          <Icon className="size-4" />
-          <span className="sr-only">Toggle theme</span>
-        </Button>
+      <DropdownMenuTrigger render={<Button variant="ghost" size={size} title="Theme" />}>
+        <Icon className="size-4" />
+        <span className="sr-only">Toggle theme</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuLabel>Theme</DropdownMenuLabel>
