@@ -8,6 +8,7 @@ import {
   Loader2,
   Play,
   RectangleHorizontal,
+  Search,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -29,7 +30,7 @@ import {
   type PlayStatus,
   type TorrentView,
 } from "@/lib/api";
-import { formatSize } from "@/lib/format";
+import { formatSize, prettySceneName } from "@/lib/format";
 import {
   Dialog,
   DialogContent,
@@ -697,6 +698,19 @@ export function WatchPage() {
     },
   });
 
+  // What to look for when this release turns out to be dead. The SCENE name
+  // is the wrong query — searching it finds the same corpse. A series wants
+  // its title plus the episode; anything else wants the title the name
+  // cleans up to.
+  const retrySearchQuery = (() => {
+    const title = collectionQ.data?.display_title;
+    if (title && currentEpisode) {
+      return `${title} S${String(currentEpisode.season).padStart(2, "0")}E${String(currentEpisode.episode).padStart(2, "0")}`;
+    }
+    if (title) return title;
+    return prettySceneName(data?.name ?? "");
+  })();
+
   const sidePanelTitle =
     isTvCollection && ((collectionEpisodes?.length ?? 0) > 0 || availableEpisodes.length > 0)
       ? "Episodes"
@@ -1161,6 +1175,7 @@ export function WatchPage() {
               ) : (
                 <PlayerLoadingStatus
                   torrent={data}
+                  onSearchAgain={() => navigate({ to: "/search", search: { q: retrySearchQuery } })}
                   probeFetching={probeQ.isFetching}
                   probeError={probeQ.error}
                   progressPending={progressQ.isPending}
@@ -1417,6 +1432,7 @@ function PlayerLoadingStatus({
   progressPending,
   playStatus,
   playError,
+  onSearchAgain,
 }: {
   torrent: TorrentView;
   probeFetching: boolean;
@@ -1424,6 +1440,7 @@ function PlayerLoadingStatus({
   progressPending: boolean;
   playStatus: PlayStatus | null;
   playError: unknown;
+  onSearchAgain: () => void;
 }) {
   const fileOnDisk =
     probeError == null ||
@@ -1431,10 +1448,44 @@ function PlayerLoadingStatus({
     !probeError.message.includes("not yet on disk");
   const downloadPct = Math.min(100, Math.max(0, torrent.progress_pct));
 
+  // Dead swarm. Two ways to know, and both matter.
+  //
+  // The backend is authoritative: `/probe` spends a 30s prefetch window
+  // trying to pull the header, and returns a distinct 409 when it comes back
+  // with nothing and the engine reports no peers and no throughput.
+  //
+  // The snapshot catches what that misses. Once the header IS on disk the
+  // probe succeeds, so a swarm that dies afterwards leaves the page sitting
+  // on "Buffering first bytes" at some percentage, forever, with no error to
+  // key on. Two minutes since the torrent was added keeps a fresh add from
+  // being written off while it is still finding the swarm.
+  // Both timestamps come from the server, so this is pure with respect to
+  // render and immune to client clock skew: `fetched_at` is when the engine
+  // snapshot was taken, `added_at` when the torrent was accepted.
+  const ageMinutes =
+    (new Date(torrent.fetched_at).getTime() - new Date(torrent.added_at).getTime()) / 60_000;
+  const deadSwarm =
+    (probeError instanceof Error && /no seeders|^stalled:/i.test(probeError.message)) ||
+    (torrent.state !== "initializing" &&
+      !torrent.finished &&
+      torrent.peers === 0 &&
+      torrent.download_speed_bps === 0 &&
+      downloadPct < 100 &&
+      ageMinutes > 2);
+
   type Step = { label: string; sub?: string; pct?: number };
   let step: Step;
   let isError = torrent.state === "error";
-  if (torrent.state === "error") {
+  if (deadSwarm) {
+    isError = true;
+    step = {
+      label: "Nobody is sharing this release",
+      sub:
+        `The tracker advertised seeders, but none of them answered. ` +
+        `Iris has ${downloadPct.toFixed(0)}% of the file and no way to get the rest. ` +
+        `Search again and grab a different release.`,
+    };
+  } else if (torrent.state === "error") {
     step = {
       label: "Torrent error",
       sub: torrent.error ?? "Engine reported a fault. Try removing and re-adding.",
@@ -1528,6 +1579,12 @@ function PlayerLoadingStatus({
         <div className="w-64">
           <Progress value={step.pct} className="h-1" />
         </div>
+      )}
+      {deadSwarm && (
+        <Button size="sm" onClick={onSearchAgain}>
+          <Search className="size-3.5" />
+          Search again
+        </Button>
       )}
     </div>
   );
