@@ -216,14 +216,15 @@ time depending on machine load.
 
 ## Attachments
 
-| file                           |                                                |
-| ------------------------------ | ---------------------------------------------- |
-| `upstream/make-repro.sh`       | regenerates the three files (ffmpeg + libx265) |
-| `upstream/A-idr-start.mp4`     | 25 KB, IDR entry point                         |
-| `upstream/B-cra-clean.mp4`     | 25 KB, CRA entry point, no leading pictures    |
-| `upstream/C-cra-with-rasl.mp4` | 26 KB, CRA entry point, RASL kept              |
-| `upstream/repro.html`          | prints the table above                         |
+| file                    |                                                        |
+| ----------------------- | ------------------------------------------------------ |
+| `repro-standalone.html` | 112 KB, everything in one file, prints the table above |
+| `make-repro.sh`         | regenerates the three fragments (ffmpeg + libx265)     |
+| `make-standalone.sh`    | embeds them into the page                              |
 
-`repro.html` derives each file's `hvc1` codec string from its own `hvcC`, so any
-HEVC fragmented MP4 dropped next to it works unchanged. A short excerpt of the
-real-world 1920x960 Main 10 file is available on request.
+The unpacked form is in the same directory: `A-idr-start.mp4`,
+`B-cra-clean.mp4`, `C-cra-with-rasl.mp4` and `repro.html`, which fetches them as
+siblings when they are present. The page derives each file's `hvc1` codec string
+from its own `hvcC`, so any HEVC fragmented MP4 dropped next to it works
+unchanged. A short excerpt of the real-world 1920x960 Main 10 file is available
+on request.
