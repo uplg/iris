@@ -991,6 +991,13 @@ export const mountTierB: EngineMount = async (opts) => {
     // buffered range and no error; Chrome and a t=0 mount (gap = 0) are fine.
     // Decoding the extra lead-in costs a fraction of a second of E-AC-3.
     const audioStart = videoStartPacket ? videoStartPacket.timestamp : seekStart;
+    // Re-seed the interleave baselines on the REAL start. They were set to
+    // `seekStart` before the keyframe was resolved, and the keyframe can sit
+    // seconds earlier — a baseline in the future makes `waitTrackBalance`
+    // believe a track is further along than it is (the log showed video parked
+    // at `ts=377.2 other=373.0` while the audio was really only at 363).
+    videoFedMax = audioStart;
+    audioFedMax = audioStart;
 
     const allAudio = await liveInput.getAudioTracks();
     const audioTrack = allAudio[chosenAudioIdx] ?? null;
@@ -1520,7 +1527,17 @@ export const mountTierB: EngineMount = async (opts) => {
     mediaSource.addEventListener("error", onMseErr);
   });
 
-  const videoCodec = manifest.video[0]?.codec_string;
+  // Mediabunny writes `hvc1` sample entries (parameter sets live in the sample
+  // entry, not in-band), which ffprobe confirms on its output. The manifest
+  // advertises the `hev1.…` flavour (`hevc_codec_string` in iris-media). The two
+  // are NOT interchangeable, and Firefox enforces the distinction: a
+  // SourceBuffer opened for `hev1` parses an `hvc1` init segment — tracks are
+  // discovered, `readyState` reaches HAVE_METADATA — and then silently drops
+  // every coded frame, so `buffered` stays empty with no error and no event.
+  // That is the "seek stalls on HEVC, plays on Chrome, AVC rips are fine"
+  // signature: `sink=6chunks/11.7MB queue=0 updating=false ranges=[empty]`.
+  // Chrome normalises the two brands, which is why it never showed.
+  const videoCodec = manifest.video[0]?.codec_string?.replace(/^hev1\./, "hvc1.");
   // For transcoded audio, advertise whichever codec the
   // AudioEncoder probe selected (AAC on Chrome, Opus on Firefox).
   // For passthrough, use whatever the source already had.
