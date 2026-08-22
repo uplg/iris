@@ -132,8 +132,12 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
   // single IDR at the head and every later keyframe is a CRA that this engine
   // refuses to open a coded frame group on. Route to hevc.js instead: it
   // transcodes to H.264 in a WASM worker, so what reaches MSE is a codec with
-  // no such restriction. Above 1080p hevc.js runs at ~21 fps, so the server
-  // remux (F) is the honest answer there.
+  // no such restriction.
+  //
+  // No resolution gate here, unlike the generic Tier E branch at the bottom:
+  // there, E is one option among several and skipping 4K costs nothing. Here it
+  // is the only engine that can seek at all, so a heavy transcode beats a
+  // player that cannot leave t=0.
   //
   // This sits BEFORE the Tier A/B branches on purpose: `codecsMse` is true for
   // `hev1.*` on these builds — `isTypeSupported` says yes and the demuxer then
@@ -144,7 +148,7 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
     /hevc|hev1|hvc1|h265|x265/i.test(hevcPrimary.codec) &&
     hevcMseNeedsIdrStart()
   ) {
-    return (hevcPrimary.height ?? 0) <= 1080 ? "E" : "F";
+    return "E";
   }
 
   // Tier A: must be MSE-friendly AND native audio (we can't inject
@@ -177,8 +181,9 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
   }
 
   // Tier E: HEVC at ≤ 1080p where neither MSE nor WebCodecs accept the codec.
-  // hevc.js transcodes to H.264 in a WASM worker. 4K is excluded because
-  // hevc.js hits ~21 fps there.
+  // hevc.js transcodes to H.264 in a WASM worker. The 4K exclusion and the
+  // "~21 fps" figure behind it are inherited from this gate's original author
+  // and have not been re-measured here.
   //
   // No longer Chromium-only: that gate was hedging against Firefox lacking
   // WebCodecs H.264 encode. Measured on Gecko 154 — `VideoEncoder
