@@ -43,14 +43,25 @@ en fait pour chaque type. Lecture du tableau :
 - `buffered` rempli mais `frames=0` → il l'accepte et ne sait pas le décoder ;
 - `frames` > 0 et variance de pixels non nulle → image réelle.
 
-Ce qui a été mesuré sur Zen 1.21 (base Firefox ~147) contre Firefox 153 :
+Ce qui a été mesuré sur Zen 1.21 (base Firefox ~147), fichier x265 open-GOP :
 
-| début du groupe de frames | Firefox 153 | Zen 1.21 |
+| début du groupe de frames | buffered | frames décodées |
 | --- | --- | --- |
-| `IDR_N_LP` (t=0) | joue | joue |
-| `CRA_NUT` (tout keyframe mi-flux) | joue | `buffered` vide |
-| `CRA_NUT` réétiqueté `IDR_N_LP` | — | bufferise, puis `kVTVideoDecoderBadDataErr` |
+| `IDR_N_LP` (t=0, seul IDR du fichier) | `0.0–10.0` | 149 |
+| `CRA_NUT` (tout keyframe mi-flux) | **vide** | 0 |
+| `CRA_NUT`, muxer mediabunny NON patché | **vide** | 0 |
+| `CRA_NUT` → `IDR_N_LP` | `178.1–188.0` | 0, `kVTVideoDecoderBadDataErr` |
+| `CRA_NUT` → `BLA_N_LP` | **vide** | 0 |
 
-`BLA_N_LP` reste à mesurer : c'est le candidat sérieux, parce que son en-tête de
-tranche a la même structure que celle d'un CRA — contrairement à `IDR_N_LP`, qui
-omet `slice_pic_order_cnt_lsb` et fait donc lire la suite de travers.
+Conclusion : ce Gecko n'ouvre un groupe de frames que sur un **IDR**. Le CRA et le
+BLA sont refusés au stade du tampon ; réétiqueter en IDR passe le tampon puis casse
+le décodage, parce qu'un en-tête de tranche d'IDR omet `slice_pic_order_cnt_lsb`.
+
+Convertir proprement un CRA en IDR imposerait de réécrire aussi les POC de toutes
+les images suivantes du GOP (un IDR force POC=0 et les suivantes sont relatives) —
+de la chirurgie de bitstream dans le chemin chaud, hors de question ici.
+
+Une seule remarque de méthode, apprise à la dure : `HTMLMediaElement.play()` renvoie
+une promesse qui **ne se résout jamais** quand la lecture ne démarre pas. Un
+`await v.play().catch(…)` bloque alors pour toujours et le `.catch` n'y change rien.
+Ne jamais l'attendre dans un banc de test.
