@@ -711,6 +711,21 @@ export function WatchPage() {
     return prettySceneName(data?.name ?? "");
   })();
 
+  // A release nobody is sharing is not worth keeping: the partial bytes are
+  // dead weight and the episode mapping keeps pointing the library at
+  // something unplayable. Remove it, then go find a live one. The navigation
+  // waits for the removal to succeed rather than assuming it did, so a
+  // failure surfaces where the user still is.
+  const replaceDead = useMutation({
+    mutationFn: () => torrents.remove(infohash),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["library"] });
+      void qc.invalidateQueries({ queryKey: ["continue-watching"] });
+      if (collectionId) void qc.invalidateQueries({ queryKey: ["collection", collectionId] });
+      navigate({ to: "/search", search: { q: retrySearchQuery } });
+    },
+  });
+
   const sidePanelTitle =
     isTvCollection && ((collectionEpisodes?.length ?? 0) > 0 || availableEpisodes.length > 0)
       ? "Episodes"
@@ -1175,7 +1190,9 @@ export function WatchPage() {
               ) : (
                 <PlayerLoadingStatus
                   torrent={data}
-                  onSearchAgain={() => navigate({ to: "/search", search: { q: retrySearchQuery } })}
+                  onReplace={() => replaceDead.mutate()}
+                  replacing={replaceDead.isPending}
+                  replaceError={replaceDead.error}
                   probeFetching={probeQ.isFetching}
                   probeError={probeQ.error}
                   progressPending={progressQ.isPending}
@@ -1432,7 +1449,9 @@ function PlayerLoadingStatus({
   progressPending,
   playStatus,
   playError,
-  onSearchAgain,
+  onReplace,
+  replacing,
+  replaceError,
 }: {
   torrent: TorrentView;
   probeFetching: boolean;
@@ -1440,7 +1459,9 @@ function PlayerLoadingStatus({
   progressPending: boolean;
   playStatus: PlayStatus | null;
   playError: unknown;
-  onSearchAgain: () => void;
+  onReplace: () => void;
+  replacing: boolean;
+  replaceError: unknown;
 }) {
   const fileOnDisk =
     probeError == null ||
@@ -1483,7 +1504,8 @@ function PlayerLoadingStatus({
       sub:
         `The tracker advertised seeders, but none of them answered. ` +
         `Iris has ${downloadPct.toFixed(0)}% of the file and no way to get the rest. ` +
-        `Search again and grab a different release.`,
+        `Removing it frees the partial download and clears the mapping the ` +
+        `library keeps pointing at it.`,
     };
   } else if (torrent.state === "error") {
     step = {
@@ -1581,10 +1603,21 @@ function PlayerLoadingStatus({
         </div>
       )}
       {deadSwarm && (
-        <Button size="sm" onClick={onSearchAgain}>
-          <Search className="size-3.5" />
-          Search again
-        </Button>
+        <div className="grid justify-items-center gap-2">
+          <Button size="sm" disabled={replacing} onClick={onReplace}>
+            {replacing ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Search className="size-3.5" />
+            )}
+            Remove and search again
+          </Button>
+          {replaceError instanceof Error && (
+            <span className="text-xs text-destructive">
+              Could not remove it: {replaceError.message}
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
