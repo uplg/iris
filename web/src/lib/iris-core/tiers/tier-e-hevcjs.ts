@@ -51,15 +51,23 @@ import {
 import { ensureLibavAudioDecoderRegistered, libavCanDecode } from "../decode/libav-audio-decoder";
 import { pickAudioEncoder, relaxMediabunnyGopCheck } from "./tier-b-mse";
 
+/** `subscribeSegmentStat` from `@hevcjs/core`, captured on first load. The lib
+ *  publishes one stat per transcoded segment, `speedX` being media-seconds
+ *  produced per wall-second — the only honest measure of whether the WASM
+ *  decoder is keeping up on this machine right now. */
+let subscribeSegmentStat: ((l: (s: { speedX: number }) => void) => () => void) | null = null;
+
 const WASM_URL = "/hevcjs/hevc-decode.js";
 const WASM_BINARY_URL = "/hevcjs/hevc-decode.wasm";
 const WORKER_URL = "/hevcjs/transcode-worker.js";
 
-/** Seconds of media the feeds may run ahead of the playhead. The WASM
- *  transcode is the bottleneck, not memory: this window is the runway the
- *  decoder has to absorb a spell of CPU contention without the playhead
- *  catching up with it. Too deep only wastes work the user seeks away from. */
-const AHEAD_TARGET_S = 30;
+/** Seconds of media the feeds may run ahead of the playhead — the runway the
+ *  transcoder has to absorb a spell of CPU contention without the playhead
+ *  catching up with it. Sized from measured throughput between these bounds:
+ *  a transcoder with plenty of headroom needs almost none, one running close
+ *  to real time needs all it can get. Too deep only wastes work on a seek. */
+const AHEAD_MIN_S = 30;
+const AHEAD_MAX_S = 120;
 /** How far one track may run ahead of the other before it waits. */
 const TRACK_LEAD_CAP_S = 4;
 /** Fragments the muxer emits. Short ones matter more here than in Tier B: the
@@ -71,6 +79,9 @@ const FORCED_BOUNDARY_S = 1.5;
 /** Snap the playhead back to the keyframe when the requested position is more
  *  than this far past it. */
 const KEYFRAME_SNAP_S = 2;
+/** Rolling window over per-segment throughput, in segments. At the forced
+ *  boundary cadence that is roughly the last 12 s of media. */
+const SPEED_WINDOW = 8;
 
 let intercept: { install: () => void; uninstall: () => void } | null = null;
 let installed = false;
@@ -107,6 +118,7 @@ async function ensureIntercept(): Promise<void> {
   if (!intercept) {
     // Lazy-load the lib so only Tier E sessions pay the ~70 KB cost.
     const mod = await import("@hevcjs/core");
+    subscribeSegmentStat = mod.subscribeSegmentStat;
     await ensureDecoderGlobal();
     intercept = {
       install: () =>
@@ -358,10 +370,15 @@ export const mountTierE: EngineMount = async (opts) => {
         settled = true;
         lane.sb.removeEventListener("updateend", done);
         lane.sb.removeEventListener("error", done);
+        lane.sb.removeEventListener("abort", done);
         resolve();
       };
       lane.sb.addEventListener("updateend", done, { once: true });
       lane.sb.addEventListener("error", done, { once: true });
+      // A restart calls `abort()` to flush the proxy's backlog. The spec queues
+      // `updateend` after `abort`, but this SourceBuffer is hevc.js's stand-in
+      // — settle on either, or a drain loop parks forever holding `draining`.
+      lane.sb.addEventListener("abort", done, { once: true });
       try {
         // hevc.js transfers the buffer to its worker; a view onto a shared
         // ArrayBuffer would detach the parent and starve every later append.
@@ -414,6 +431,14 @@ export const mountTierE: EngineMount = async (opts) => {
     });
   };
 
+  /** Contiguous seconds buffered ahead of `t`, 0 if `t` isn't in a range. */
+  const bufferedAheadOf = (b: TimeRanges, t: number): number => {
+    for (let i = 0; i < b.length; i += 1) {
+      if (b.start(i) - 0.25 <= t && b.end(i) + 0.25 >= t) return Math.max(0, b.end(i) - t);
+    }
+    return 0;
+  };
+
   const waiters = new Set<() => void>();
   const notify = () => {
     // Copy first: a waiter that resolves removes itself from the set.
@@ -429,6 +454,36 @@ export const mountTierE: EngineMount = async (opts) => {
       };
       waiters.add(w);
     });
+
+  // Throughput-sized runway. `speedX` is media-seconds transcoded per
+  // wall-second; `speedX - 1` is the rate at which the cushion grows during
+  // playback. The thinner that headroom, the longer a cushion we need to ride
+  // out a dip — so the target is inversely proportional to it, and a
+  // comfortable transcoder keeps a small window (less work thrown away on a
+  // seek, less memory held). Clamped at both ends.
+  let aheadTarget = AHEAD_MIN_S;
+  const speeds: number[] = [];
+  let lastSlowLogT = -Infinity;
+  const unsubscribeSpeed = subscribeSegmentStat?.((stat) => {
+    if (disposed || !Number.isFinite(stat.speedX) || stat.speedX <= 0) return;
+    speeds.push(stat.speedX);
+    if (speeds.length > SPEED_WINDOW) speeds.shift();
+    const avg = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+    const headroom = Math.min(1, Math.max(0.25, avg - 1));
+    aheadTarget = Math.min(AHEAD_MAX_S, Math.max(AHEAD_MIN_S, AHEAD_MIN_S / headroom));
+    notify();
+    // Below real time the cushion drains no matter how deep it is. Say so once
+    // per 10 s of playback — it is the difference between "this machine cannot
+    // do it" and a transient we already absorbed.
+    if (avg < 1 && video.currentTime - lastSlowLogT > 10) {
+      lastSlowLogT = video.currentTime;
+      const ahead = videoLane ? bufferedAheadOf(videoLane.sb.buffered, video.currentTime) : 0;
+      console.warn(
+        `[iris-core] Tier E: transcode below real time — ${avg.toFixed(2)}x ` +
+          `over the last ${speeds.length} segments, ${ahead.toFixed(0)}s of cushion left`,
+      );
+    }
+  });
 
   const onTimeUpdate = () => notify();
   video.addEventListener("timeupdate", onTimeUpdate);
@@ -475,6 +530,21 @@ export const mountTierE: EngineMount = async (opts) => {
     await cancelPipelines();
     if (disposed || gen !== generation) return;
 
+    // Flush hevc.js's own backlog, not just ours. The proxy accepts appends
+    // eagerly and transcodes them behind our back, so a deep runway means the
+    // worker is sitting on tens of seconds of segments for a position the user
+    // just left — it would chew through all of them before reaching the new
+    // one. `abort()` is what the intercept patches to drop that queue; it also
+    // resets the segment parser, which is fine because every restart builds a
+    // new Output and therefore emits a fresh init segment.
+    for (const lane of [videoLane, audioLane]) {
+      if (!lane) continue;
+      try {
+        if (mediaSource.readyState === "open") lane.sb.abort();
+      } catch {
+        /* not open, or nothing in flight */
+      }
+    }
     if (videoLane) {
       videoLane.queue.length = 0;
       videoLane.fedMax = seekStart;
@@ -602,7 +672,7 @@ export const mountTierE: EngineMount = async (opts) => {
           () =>
             disposed ||
             gen !== generation ||
-            (packet.timestamp - effectivePlayhead() <= AHEAD_TARGET_S &&
+            (packet.timestamp - effectivePlayhead() <= aheadTarget &&
               packet.timestamp <= otherFed(audioLane) + TRACK_LEAD_CAP_S),
         );
         if (disposed || gen !== generation) break;
@@ -637,7 +707,7 @@ export const mountTierE: EngineMount = async (opts) => {
             () =>
               disposed ||
               gen !== generation ||
-              (sample.timestamp - effectivePlayhead() <= AHEAD_TARGET_S &&
+              (sample.timestamp - effectivePlayhead() <= aheadTarget &&
                 sample.timestamp <= otherFed(videoLane) + TRACK_LEAD_CAP_S),
           );
           if (disposed || gen !== generation) {
@@ -662,7 +732,7 @@ export const mountTierE: EngineMount = async (opts) => {
               () =>
                 disposed ||
                 gen !== generation ||
-                (packet.timestamp - effectivePlayhead() <= AHEAD_TARGET_S &&
+                (packet.timestamp - effectivePlayhead() <= aheadTarget &&
                   packet.timestamp <= otherFed(videoLane) + TRACK_LEAD_CAP_S),
             );
             if (disposed || gen !== generation) break;
@@ -702,6 +772,7 @@ export const mountTierE: EngineMount = async (opts) => {
     disposed = true;
     opts.onBusyChange?.(false);
     notify();
+    unsubscribeSpeed?.();
     video.removeEventListener("timeupdate", onTimeUpdate);
     unbindVideo();
     await cancelPipelines();
