@@ -8,7 +8,7 @@
  */
 
 import type { components } from "../api-types";
-import { capsHeader, isMobileLike, probeCapabilities } from "./caps";
+import { capsHeader, hevcMseNeedsIdrStart, isMobileLike, probeCapabilities } from "./caps";
 import { libavCanDecode } from "./decode/libav-audio-decoder";
 import { cheapProbeVideoCodec } from "./decode/webcodecs-probe";
 
@@ -126,6 +126,27 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
     return "F";
   }
 
+  // HEVC where MSE will only ever start on an IDR (Firefox-family on macOS,
+  // Gecko 154+ — see `hevcMseNeedsIdrStart`). Tier B would play from t=0 and
+  // then die on the first seek or resume, because an open-GOP rip carries a
+  // single IDR at the head and every later keyframe is a CRA that this engine
+  // refuses to open a coded frame group on. Route to hevc.js instead: it
+  // transcodes to H.264 in a WASM worker, so what reaches MSE is a codec with
+  // no such restriction. Above 1080p hevc.js runs at ~21 fps, so the server
+  // remux (F) is the honest answer there.
+  //
+  // This sits BEFORE the Tier A/B branches on purpose: `codecsMse` is true for
+  // `hev1.*` on these builds — `isTypeSupported` says yes and the demuxer then
+  // drops the frames — so B would otherwise win and fail later.
+  const hevcPrimary = manifest.video[0];
+  if (
+    hevcPrimary &&
+    /hevc|hev1|hvc1|h265|x265/i.test(hevcPrimary.codec) &&
+    hevcMseNeedsIdrStart()
+  ) {
+    return (hevcPrimary.height ?? 0) <= 1080 ? "E" : "F";
+  }
+
   // Tier A: must be MSE-friendly AND native audio (we can't inject
   // libav.js into a vanilla `<video src>` — the engine is the
   // browser, no hooks). Tier B picks up the libav-transcoded case.
@@ -155,14 +176,18 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
     if (probe.supportedAny) return "D";
   }
 
-  // Tier E: HEVC at ≤ 1080p in a Chromium-family browser where
-  // neither MSE nor WebCodecs accept the codec. hevc.js transcodes
-  // to H.264 in a WASM worker. 4K is excluded because hevc.js hits
-  // ~21 fps on 4K.
+  // Tier E: HEVC at ≤ 1080p where neither MSE nor WebCodecs accept the codec.
+  // hevc.js transcodes to H.264 in a WASM worker. 4K is excluded because
+  // hevc.js hits ~21 fps there.
+  //
+  // No longer Chromium-only: that gate was hedging against Firefox lacking
+  // WebCodecs H.264 encode. Measured on Gecko 154 — `VideoEncoder
+  // .isConfigSupported` returns true for avc1 baseline, main AND high at
+  // 1920x960, `VideoDecoder` likewise, and MSE accepts `avc1.640028` with both
+  // `opus` and `mp4a.40.2`. Mobile stays excluded by the gate far above (the
+  // WASM transcoder is the heap-heavy engine that trips mobile OOM).
   if (primary && /hevc|hev1|hvc1|h265|x265/i.test(primary.codec) && (primary.height ?? 0) <= 1080) {
-    const ua = navigator.userAgent;
-    const chromiumish = /Chrome|Edg/.test(ua) && !/Mobile/.test(ua);
-    if (chromiumish) return "E";
+    if (typeof VideoEncoder !== "undefined") return "E";
   }
 
   return "F";

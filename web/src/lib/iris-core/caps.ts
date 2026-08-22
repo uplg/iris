@@ -179,6 +179,37 @@ export function isWindowsChromium(): boolean {
 }
 
 /** Test-only hook to reset the memoised result. */
+/**
+ * True when this engine will refuse to open an MSE coded frame group on an
+ * HEVC CRA picture — i.e. Firefox-family on macOS from Gecko 154.
+ *
+ * `MP4Demuxer.cpp` strips the keyframe flag from CRA samples under
+ * `#ifdef MOZ_APPLEMEDIA` ("VideoToolbox can return a bad data error if a CRA
+ * frame is the first sample after a seek. Only IDR_W_RADL/IDR_N_LP are safe
+ * starting points"), and `H265NALU::IsIframe()` counts only `IDR_W_RADL` and
+ * `IDR_N_LP`. MSE needs a random access point after an init segment, so the CRA
+ * is dropped and — `need random access point` staying true — so is every sample
+ * after it: `buffered` stays empty with no error and no event.
+ *
+ * That is fatal for open-GOP HEVC, which carries exactly one IDR, at t=0: the
+ * file plays from the start and no seek or resume can ever begin. It is the
+ * intended behaviour upstream (bug 2049615, landed for Firefox 154, extending
+ * the H.264 rule from bug 1967475), not a passing regression, so there is
+ * nothing to wait for. Verified on Gecko 154: `buffered` empty mid-stream,
+ * while Gecko 153 — before the flag was stripped — plays the same fragments.
+ *
+ * Deliberately not codec-string-based: `MediaSource.isTypeSupported` answers
+ * true for `hev1.*` on these builds, which is exactly what makes this bite.
+ */
+export function hevcMseNeedsIdrStart(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  if (!/Gecko\/|Firefox\//.test(ua)) return false;
+  if (!/Mac OS X|Macintosh/.test(ua)) return false;
+  const rv = /rv:(\d+)/.exec(ua);
+  return rv ? Number(rv[1]) >= 154 : false;
+}
+
 export function __resetCapsCacheForTests(): void {
   cached = null;
   cachedHeader = null;
