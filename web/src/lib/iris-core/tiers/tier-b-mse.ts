@@ -222,7 +222,7 @@ export async function pickAudioEncoder(
     /* fall through */
   }
 
-  console.log(
+  console.warn(
     `[iris-core] Tier B: no encodable audio codec @ ${sampleRate}Hz (source: ${srcChannels}ch)`,
   );
   encoderProbeCache.set(key, null);
@@ -416,14 +416,11 @@ export const mountTierB: EngineMount = async (opts) => {
   // STALL showing `pendingOp=append updating=true` means the append is wedged
   // (the recovery in `onWaiting` aborts it).
   let pendingOp: "append" | "remove" | null = null;
-  // DIAGNOSTIC (Firefox resume-stall hunt): a mount with `startPosition > 0`
-  // ends with `queue=0 readyState=0 ranges=[empty]` while the feed reports
-  // fedMax past the playhead — so either the muxer emitted nothing, or a feed
-  // loop is parked in one of the two gates. These three pin which.
+  // Bytes the muxer has actually produced this generation. Reported in the
+  // STALL line: zero here means the muxer emitted nothing, so the fault is
+  // upstream of MSE (a parked feed loop) rather than a rejected append.
   let sinkChunks = 0;
   let sinkBytes = 0;
-  /** Appends still to be traced this generation (see the `updateend` probe). */
-  let appendProbesLeft = 0;
   /** Firefox only: playhead position to apply once a buffered range covers it.
    *  See `anchorPlayhead` for why it can't be set up front. */
   let pendingPlayheadAnchor: number | null = null;
@@ -609,11 +606,10 @@ export const mountTierB: EngineMount = async (opts) => {
    *  element into a pending seek (`seeking=true` from the moment the init
    *  segment parses), and Firefox then never commits the coded frame groups
    *  that follow: `sb.buffered` stays empty across megabytes of completed
-   *  appends, with no error and no event. Measured on a resume at 82.7 s —
-   *  `append#1 seeking=false readyState=0`, then `#2..#4 seeking=true
-   *  buffered=[empty]` with appendWindow, timestampOffset, mode, duration and
-   *  seekable all correct. A t=0 mount never trips it because `currentTime`
-   *  already equals the data start, so no seek is pending.
+   *  appends, with no error and no event — measured on a resume at 82.7 s with
+   *  appendWindow, timestampOffset, mode, duration and seekable all correct. A
+   *  t=0 mount never trips it because `currentTime` already equals the data
+   *  start, so no seek is pending.
    *
    *  Chrome keeps the immediate set: it commits the appends regardless, and the
    *  early anchor is what makes `canplay` fire when the buffered range starts
@@ -702,53 +698,6 @@ export const mountTierB: EngineMount = async (opts) => {
 
   // queue drain
 
-  /** DIAGNOSTIC: list the top-level ISOBMFF boxes in a buffer we are about to
-   *  append, plus the first `tfdt` base media decode time. Five hypotheses about
-   *  WHY Firefox drops these appends have now been disproved by measurement, so
-   *  the next question is what is actually in them — a `moov` with no media
-   *  (muxer withholding) looks identical from the outside to media Firefox
-   *  rejected. */
-  const describeBoxes = (buf: Uint8Array): string => {
-    try {
-      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-      const top: string[] = [];
-      const trafs: string[] = [];
-      // Walk `moof > traf` and report EVERY track fragment: id, base media
-      // decode time and sample count. A first fragment that is missing one of
-      // the tracks declared in the init segment is a shape Firefox rejects
-      // outright — and the Opus encoder sits between the audio feed and the
-      // muxer, so the audio traf can plausibly be absent from the first moof on
-      // a mid-stream start while it is present at t=0.
-      const walk = (from: number, to: number, inTraf: boolean) => {
-        let o = from;
-        while (o + 8 <= to) {
-          let size = dv.getUint32(o);
-          const type = String.fromCharCode(buf[o + 4]!, buf[o + 5]!, buf[o + 6]!, buf[o + 7]!);
-          if (size === 1 && o + 16 <= to) size = Number(dv.getBigUint64(o + 8));
-          if (size < 8 || o + size > to) break;
-          if (!inTraf && from === 0) top.push(`${type}:${size}`);
-          if (type === "moof") walk(o + 8, o + size, false);
-          else if (type === "traf") {
-            trafs.push("");
-            walk(o + 8, o + size, true);
-          } else if (inTraf && type === "tfhd") {
-            trafs[trafs.length - 1] += `track${dv.getUint32(o + 12)}`;
-          } else if (inTraf && type === "tfdt") {
-            const v = buf[o + 8] === 1 ? Number(dv.getBigUint64(o + 12)) : dv.getUint32(o + 12);
-            trafs[trafs.length - 1] += `(tfdt=${v}`;
-          } else if (inTraf && type === "trun") {
-            trafs[trafs.length - 1] += `, ${dv.getUint32(o + 12)} samples)`;
-          }
-          o += size;
-        }
-      };
-      walk(0, buf.byteLength, false);
-      return `${top.join(" ")}${trafs.length ? ` | ${trafs.length} traf: ${trafs.join("  ")}` : ""}`;
-    } catch {
-      return "unparsable";
-    }
-  };
-
   /** If `buf` holds an init segment (`ftyp`/`moov`) immediately followed by a
    *  media segment (`moof`), return the two halves; otherwise null. */
   const initSegmentSplit = (buf: Uint8Array): [Uint8Array, Uint8Array] | null => {
@@ -777,9 +726,6 @@ export const mountTierB: EngineMount = async (opts) => {
     if (disposed || !sourceBuffer || sourceBuffer.updating) return;
     const next = appendQueue.shift();
     if (!next) return;
-    if (appendProbesLeft > 0) {
-      console.log(`[iris-core] Tier B appending ${next.byteLength}B — ${describeBoxes(next)}`);
-    }
     try {
       sourceBuffer.appendBuffer(next.slice().buffer);
       pendingOp = "append";
@@ -948,10 +894,10 @@ export const mountTierB: EngineMount = async (opts) => {
   // the queue is empty (the healthy case).
   const onTimeUpdate = () => {
     if (disposed || !sourceBuffer) return;
-    // Telemetry every ~10 s of playback (gated on currentTime, not a timer):
+    // Telemetry every ~30 s of playback (gated on currentTime, not a timer):
     // tells us whether resident memory is BOUNDED (buffer too big for the
     // machine) or CLIMBING (a leak), and whether the byte budget engages.
-    if (video.currentTime - lastTelemetryT > 10) {
+    if (video.currentTime - lastTelemetryT > 30) {
       lastTelemetryT = video.currentTime;
       const heap = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory
         ?.usedJSHeapSize;
@@ -1011,7 +957,6 @@ export const mountTierB: EngineMount = async (opts) => {
     lastConversionStartWall = performance.now();
     sinkChunks = 0;
     sinkBytes = 0;
-    appendProbesLeft = 4;
     feedPark = null;
     videoFedMax = seekStart;
     audioFedMax = seekStart;
@@ -1298,11 +1243,6 @@ export const mountTierB: EngineMount = async (opts) => {
       notifyTrackProgress();
       if (newGen === conversionGeneration && !disposed) {
         videoFeedEnded = true;
-        console.warn(
-          `[iris-core] Tier B: video feed loop ENDED at fedMax=${videoFedMax.toFixed(1)}s ` +
-            `(demuxer reached end-of-stream — if the file isn't fully downloaded or /stream ` +
-            `truncates, this is why playback freezes here)`,
-        );
       }
     })();
 
@@ -1350,34 +1290,10 @@ export const mountTierB: EngineMount = async (opts) => {
               // Transcode: AudioSampleSink uses our registered libav
               // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
               // AudioSampleSource encodes them to AAC via WebCodecs.
-              //
-              // DIAGNOSTIC (AC-3-in-MP4 silent-stall hunt): these logs pin
-              // WHERE the audio feed dies when `audioFedMax` stays 0 and the
-              // muxer never emits a fragment. The three signatures:
-              //   • "transcode start" but NEVER "first sample" + NEVER "ended"
-              //       → the sink is BLOCKED before yielding (byte-read hang on a
-              //         non-interleaved MP4 whose audio bytes aren't downloaded,
-              //         or a decoder deadlock). [hypothesis 3 / decode-hang]
-              //   • "ended after 0 samples" → the decode produced nothing without
-              //         throwing (data/codec issue swallowed by mediabunny). [1]
-              //   • "first sample decoded" but audioFedMax stays 0 → the ENCODER
-              //         (`source.add`) hangs on the first sample. [2]
+
               const sampleSink = new AudioSampleSink(audioTrack);
-              console.log(
-                `[iris-core] Tier B: audio transcode start — src=${chosenAudio?.codec} ` +
-                  `ch=${chosenAudio?.channels} sr=${chosenAudio?.sample_rate} → ` +
-                  `${encoderChoice?.codec} ${encoderChoice?.channels}ch ` +
-                  `(seek=${seekStart.toFixed(1)}s audioStart=${audioStart.toFixed(1)}s)`,
-              );
-              let audioSamples = 0;
               try {
                 for await (const sample of sampleSink.samples(audioStart, Infinity)) {
-                  if (audioSamples === 0) {
-                    console.log(
-                      `[iris-core] Tier B: first audio sample decoded — fmt=${sample.format} ` +
-                        `ch=${sample.numberOfChannels} sr=${sample.sampleRate} t=${sample.timestamp.toFixed(2)}s`,
-                    );
-                  }
                   if (disposed || newGen !== conversionGeneration) {
                     sample.close();
                     break;
@@ -1393,7 +1309,6 @@ export const mountTierB: EngineMount = async (opts) => {
                     break;
                   }
                   await audioFeed.source.add(sample);
-                  audioSamples += 1;
                   if (sample.timestamp > audioFedMax) audioFedMax = sample.timestamp;
                   notifyTrackProgress();
                   sample.close();
@@ -1406,10 +1321,6 @@ export const mountTierB: EngineMount = async (opts) => {
                 console.error("[iris-core] Tier B: audio transcode loop threw", e);
                 throw e;
               }
-              console.log(
-                `[iris-core] Tier B: audio sink ended after ${audioSamples} samples ` +
-                  `(audioFedMax=${audioFedMax.toFixed(1)}s)`,
-              );
               await audioFeed.source.close();
             }
             // Audio done — stop gating video against a frozen audioFedMax.
@@ -1443,22 +1354,13 @@ export const mountTierB: EngineMount = async (opts) => {
     return new WritableStream<StreamTargetChunk>({
       write: async (chunk) => {
         if (disposed || generation !== conversionGeneration) return;
-        if (sinkChunks === 0) {
-          console.log(
-            `[iris-core] Tier B: first muxer chunk — ${chunk.data.byteLength}B ` +
-              `@pos=${chunk.position} gen=${generation}`,
-          );
-        }
         sinkChunks += 1;
         sinkBytes += chunk.data.byteLength;
         // Split an `ftyp`/`moov` init segment away from the media that follows
-        // it in the same chunk, so the SourceBuffer receives the init on its own
-        // — the shape every DASH/HLS player uses, and the one difference left
-        // between our appends and theirs. Mediabunny hands us `moov` glued to
-        // the first `moof`+`mdat`; Firefox accepts that when the media starts at
-        // zero and drops it when the media starts mid-stream, with both trafs
-        // present and correct (`track1(tfdt=1327104, 83 samples)
-        // track2(tfdt=1105920, 165 samples)`, both = 23.04 s).
+        // it in the same chunk, so the SourceBuffer receives the init on its
+        // own — the shape every DASH/HLS player uses. Mediabunny hands us
+        // `moov` glued to the first `moof`+`mdat`, which some demuxers accept
+        // only when the media starts at zero.
         const split = initSegmentSplit(chunk.data);
         if (split) {
           appendQueue.push(split[0], split[1]);
@@ -1688,21 +1590,6 @@ export const mountTierB: EngineMount = async (opts) => {
     : chosenAudio?.codec_string;
   const codecs = [videoCodec, audioCodec].filter((c): c is string => !!c).join(",");
   const mime = codecs ? `video/mp4; codecs="${codecs}"` : "video/mp4";
-  // DIAGNOSTIC (Firefox HEVC/Opus stall): `isTypeSupported` on the COMBINED
-  // string is famously optimistic — Firefox can answer true, parse the init
-  // segment (readyState → HAVE_METADATA) and then drop every coded frame,
-  // leaving `ranges=[empty]` with no error. Breaking the answer down per track
-  // says which half it actually claims to handle. Note Firefox only reaches the
-  // Opus path at all because its AudioEncoder has no AAC (see the probe above),
-  // so `audioNeedsTranscode` + Firefox is the one combination that muxes Opus
-  // into fMP4 — the exact case that stalls.
-  console.log(
-    `[iris-core] Tier B MIME support: combined="${mime}" → ${MediaSource.isTypeSupported(mime)} | ` +
-      `video-only → ${videoCodec ? MediaSource.isTypeSupported(`video/mp4; codecs="${videoCodec}"`) : "n/a"} | ` +
-      `audio-in-video/mp4 → ${audioCodec ? MediaSource.isTypeSupported(`video/mp4; codecs="${audioCodec}"`) : "n/a"} | ` +
-      `audio-in-audio/mp4 → ${audioCodec ? MediaSource.isTypeSupported(`audio/mp4; codecs="${audioCodec}"`) : "n/a"} | ` +
-      `transcode=${audioNeedsTranscode}`,
-  );
   if (!MediaSource.isTypeSupported(mime)) {
     await dispose();
     const err = new Error(`MIME not supported by MSE: ${mime}`);
@@ -1728,31 +1615,6 @@ export const mountTierB: EngineMount = async (opts) => {
   }
 
   sourceBuffer.addEventListener("updateend", () => {
-    // DIAGNOSTIC (Firefox resume stall): a t=0 mount and a resume append the
-    // same fMP4 structure and only the media timestamps differ — yet the resume
-    // leaves `buffered` empty. Everything that can silently drop a coded frame
-    // group lives in these fields, so dump them for the first few appends of
-    // each generation. `seeking` is the one to watch: the mount sets
-    // `currentTime` before ANY data exists, and Firefox runs a real seek on the
-    // track demuxer (that is where "manager is detached" came from earlier).
-    if (appendProbesLeft > 0 && sourceBuffer) {
-      appendProbesLeft -= 1;
-      const sb = sourceBuffer;
-      const ranges = (tr: TimeRanges) =>
-        tr.length === 0
-          ? "empty"
-          : Array.from(
-              { length: tr.length },
-              (_, i) => `${tr.start(i).toFixed(1)}-${tr.end(i).toFixed(1)}`,
-            ).join(",");
-      console.log(
-        `[iris-core] Tier B append#${sinkChunks}: sb.buffered=[${ranges(sb.buffered)}] ` +
-          `appendWindow=[${sb.appendWindowStart},${sb.appendWindowEnd}] tsOffset=${sb.timestampOffset} ` +
-          `mode=${sb.mode} msDuration=${mediaSource.duration} msState=${mediaSource.readyState} ` +
-          `currentTime=${video.currentTime.toFixed(2)} seeking=${video.seeking} ` +
-          `seekable=[${ranges(video.seekable)}] readyState=${video.readyState}`,
-      );
-    }
     pendingOp = null;
     applyPendingAnchor();
     evictPlayedRange(playedKeep);
