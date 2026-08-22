@@ -38,6 +38,8 @@ const ENGINE_LOADERS: Record<DecodeTier, () => Promise<{ mount: EngineMount }>> 
 };
 
 export type IrisPlayerProps = {
+  /** Next-episode control for the transport bar. `null` hides it. */
+  nextEpisode?: { label: string; onPlay: () => void } | null;
   tier: DecodeTier;
   src: string;
   /** Reserved for future tier-specific MIME handling; ignored today. */
@@ -644,6 +646,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
         getCurrentTime={() => currentTimeRef.current}
       />
       <IrisChrome
+        nextEpisode={props.nextEpisode ?? null}
         handle={handle}
         manifest={props.manifest}
         live={props.live}

@@ -25,6 +25,7 @@ import {
   Play,
   Rewind,
   FastForward,
+  SkipForward,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -59,6 +60,11 @@ export type IrisChromeProps = {
   /** Document PiP controller. `supported=false` hides the button. */
   documentPip: ChromePipControl;
   title: string;
+  /** Next-episode control. `null` hides it. Lives in the transport row
+   *  rather than floating over the picture, mirroring the TV player: there
+   *  the button sits in the native controller layout so the D-pad reaches
+   *  it like any other transport control. */
+  nextEpisode?: { label: string; onPlay: () => void } | null;
   /** Notified whenever the controls visibility flips. The parent
    *  uses this to hide the mouse cursor over the player surface
    *  while playback is uninterrupted — matches the cursor-hide
@@ -279,6 +285,17 @@ export function IrisChrome(props: IrisChromeProps) {
                 icon={<FastForward className="size-4" />}
                 onClick={() => handle.seek(handle.currentTime() + 10)}
               />
+              {props.nextEpisode && (
+                <button
+                  title={props.nextEpisode.label}
+                  aria-label={props.nextEpisode.label}
+                  onClick={props.nextEpisode.onPlay}
+                  className="ml-0.5 flex shrink-0 items-center gap-1.5 rounded px-2 py-1.5 transition-colors hover:bg-white/15"
+                >
+                  <SkipForward className="size-4" />
+                  <span className="hidden text-[12px] font-medium sm:inline">Next</span>
+                </button>
+              )}
               <TimeDisplay current={currentTime} total={duration} />
             </>
           )}

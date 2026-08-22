@@ -94,9 +94,9 @@ function watchedPctOf(p?: FileProgressEntry): number | null {
 // A device-level display choice like volume, so it's persisted locally
 // and sticks across episodes + sessions.
 const THEATER_KEY = "iris:theater";
-/** How long before the end the auto-advance card appears. It doubles as the
- *  countdown, so this is also how long the user has to cancel. */
-const AUTO_ADVANCE_LEAD_S = 20;
+/** Fraction of the runtime past which the control bar offers the next
+ *  episode. Same threshold the TV player uses. */
+const NEXT_EPISODE_FRACTION = 0.95;
 
 // Stable identity for the "collection not loaded" case: an inline `?? []` is a
 // fresh array every render, which silently defeats the episode-list memo.
@@ -164,11 +164,8 @@ export function WatchPage() {
   const [nextEpGrabbing, setNextEpGrabbing] = useState(false);
   const nextEpDismissedRef = useRef(false);
   const nextEpPromptedRef = useRef(false);
-  // Auto-advance countdown, in whole seconds, or null when the card is
-  // hidden. Fed from `timeupdate` rather than a timer: the number the user
-  // reads IS the time left in the file, so there is nothing to tick.
-  const [autoAdvanceIn, setAutoAdvanceIn] = useState<number | null>(null);
-  const autoAdvanceOffRef = useRef(false);
+  // Near the end of the file: arms the control bar's next-episode button.
+  const [nearEnd, setNearEnd] = useState(false);
   const subtitleTrackRef = useRef<number | null>(null);
   // Last user-picked audio track index (into `manifest.audio`). Kept
   // in a ref — not state — so the various save paths read the latest
@@ -727,8 +724,7 @@ export function WatchPage() {
     nextEpDismissedRef.current = false;
     nextEpPromptedRef.current = false;
     setNextEpModalOpen(false);
-    autoAdvanceOffRef.current = false;
-    setAutoAdvanceIn(null);
+    setNearEnd(false);
     outageRef.current = false;
     setOutage(false);
     setStreamNonce(0);
@@ -752,7 +748,7 @@ export function WatchPage() {
   // The next episode is already on disk, so the player can jump straight to
   // it. `status === "available"` is the other case entirely: nothing to play
   // yet, which is what the grab dialog below is for.
-  const autoAdvanceTarget =
+  const nextOnDisk =
     nextEp?.status === "downloaded" && nextEp.infohash && nextEp.file_idx != null
       ? {
           infohash: nextEp.infohash,
@@ -762,24 +758,13 @@ export function WatchPage() {
         }
       : null;
 
-  const autoAdvanceRef = useRef(false);
-  const goToNextEpisodeRef = useRef<() => void>(() => {});
-
   const goToNextEpisode = () => {
-    if (!autoAdvanceTarget) return;
-    autoAdvanceOffRef.current = true;
-    setAutoAdvanceIn(null);
+    if (!nextOnDisk) return;
     navigate({
       to: "/watch/$infohash/$idx",
-      params: {
-        infohash: autoAdvanceTarget.infohash,
-        idx: String(autoAdvanceTarget.fileIdx),
-      },
+      params: { infohash: nextOnDisk.infohash, idx: String(nextOnDisk.fileIdx) },
     });
   };
-
-  autoAdvanceRef.current = autoAdvanceTarget != null && !autoAdvanceOffRef.current;
-  goToNextEpisodeRef.current = goToNextEpisode;
 
   function maybePromptNext() {
     if (!canPromptNext || nextEpPromptedRef.current) return;
@@ -809,16 +794,9 @@ export function WatchPage() {
         });
       }
       const totalDur = lastDurationRef.current;
-      // Auto-advance card. `timeupdate` fires several times a second, so
-      // clamp to whole seconds and let React bail out when the displayed
-      // number has not moved: ~20 renders for the whole countdown, and none
-      // outside the window. Seeking backwards widens `remaining` and the
-      // card withdraws on its own.
-      if (autoAdvanceRef.current && totalDur != null && totalDur > 0) {
-        const remaining = totalDur - t;
-        const secs =
-          remaining > 0 && remaining <= AUTO_ADVANCE_LEAD_S ? Math.ceil(remaining) : null;
-        setAutoAdvanceIn((prev) => (prev === secs ? prev : secs));
+      if (totalDur != null && totalDur > 0) {
+        const near = t / totalDur >= NEXT_EPISODE_FRACTION;
+        setNearEnd((prev) => (prev === near ? prev : near));
       }
       // Next-episode prompt at >= 95 % of duration. Belt-and-suspenders
       // with onEnded — short episodes can skip the threshold sample.
@@ -860,19 +838,15 @@ export function WatchPage() {
     [infohash, fileIdx],
   );
   const onEndedCb = useCallback(() => {
-    if (infohash) {
-      void progressApi.put(infohash, fileIdx, {
-        position_seconds: lastDurationRef.current ?? lastTimeRef.current,
-        duration_seconds: lastDurationRef.current,
-        audio_track_idx: audioTrackRef.current,
-        subtitle_track_idx: subtitleTrackRef.current,
-        completed: true,
-      });
-    }
-    if (autoAdvanceRef.current) {
-      goToNextEpisodeRef.current();
-      return;
-    }
+    setNearEnd(true);
+    if (!infohash) return;
+    void progressApi.put(infohash, fileIdx, {
+      position_seconds: lastDurationRef.current ?? lastTimeRef.current,
+      duration_seconds: lastDurationRef.current,
+      audio_track_idx: audioTrackRef.current,
+      subtitle_track_idx: subtitleTrackRef.current,
+      completed: true,
+    });
     maybePromptNext();
     // Same reason as `onTimeUpdateCb` above: `maybePromptNext` is rebuilt
     // every render but only reads refs, so listing it would re-create this
@@ -1100,7 +1074,7 @@ export function WatchPage() {
           <div className="grid min-w-0 gap-6">
             <div
               className={cn(
-                "relative aspect-video w-full overflow-hidden rounded-xl border border-border bg-black shadow-2xl",
+                "aspect-video w-full overflow-hidden rounded-xl border border-border bg-black shadow-2xl",
                 // Theater: full-width strip, height capped to the viewport
                 // (minus header + title row) — the video letterboxes inside
                 // via its own `object-contain`, YouTube-style.
@@ -1116,6 +1090,17 @@ export function WatchPage() {
                   // demote remounts keep the same key — only `src` changes —
                   // so the live playhead survives those.
                   key={`${infohash}:${fileIdx}`}
+                  // Offered only once the file is nearly over, and only when
+                  // the episode is already on disk. The `available` case is
+                  // the grab dialog below: there is nothing to play yet.
+                  nextEpisode={
+                    nearEnd && nextOnDisk
+                      ? {
+                          label: `Next: S${nextOnDisk.season.toString().padStart(2, "0")}E${nextOnDisk.episode.toString().padStart(2, "0")}`,
+                          onPlay: goToNextEpisode,
+                        }
+                      : null
+                  }
                   tier={tier}
                   src={playSrc}
                   srcType={playSrcType}
@@ -1182,36 +1167,6 @@ export function WatchPage() {
                   playStatus={playStatusQ.data ?? null}
                   playError={playStatusQ.error}
                 />
-              )}
-
-              {/* Auto-advance. Sibling of the player, not a child: a click
-                  here must not reach the video surface, which toggles
-                  playback. The countdown is the file's own remaining time, so
-                  nothing ticks it. */}
-              {autoAdvanceIn != null && autoAdvanceTarget && (
-                <div className="absolute right-4 bottom-20 z-10 max-w-[calc(100%-2rem)] rounded-lg border border-border bg-background/95 p-3 shadow-2xl backdrop-blur">
-                  <p className="text-xs text-muted-foreground">Up next</p>
-                  <p className="mt-0.5 text-sm font-medium">
-                    S{autoAdvanceTarget.season.toString().padStart(2, "0")}E
-                    {autoAdvanceTarget.episode.toString().padStart(2, "0")} in {autoAdvanceIn}s
-                  </p>
-                  <div className="mt-2 flex justify-end gap-2">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        autoAdvanceOffRef.current = true;
-                        setAutoAdvanceIn(null);
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button size="sm" onClick={goToNextEpisode}>
-                      <Play className="size-3.5" />
-                      Play now
-                    </Button>
-                  </div>
-                </div>
               )}
             </div>
 

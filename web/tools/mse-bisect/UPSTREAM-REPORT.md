@@ -26,11 +26,11 @@ or resumed.
 
 ## Environment
 
-|              |                                                                          |
-| ------------ | ------------------------------------------------------------------------ |
+|              |                                                          |
+| ------------ | -------------------------------------------------------- |
 | Affected     | Gecko 154 on macOS 26.6.2, Apple silicon (UA `rv:154.0`) |
-| Not affected | Gecko 153 on macOS; Chrome 151 on macOS |
-| Content      | HEVC Main 10, open-GOP (x265 `--open-gop`)                               |
+| Not affected | Gecko 153 on macOS; Chrome 151 on macOS                  |
+| Content      | HEVC Main 10, open-GOP (x265 `--open-gop`)               |
 
 Bug 2049615 is `RESOLVED FIXED`, `target_milestone` `154 Branch`;
 `cf_status_firefox152` and `cf_status_firefox153` are `wontfix`.
