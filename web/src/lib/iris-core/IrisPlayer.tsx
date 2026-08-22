@@ -598,6 +598,34 @@ export function IrisPlayer(props: IrisPlayerProps) {
     [],
   );
 
+  // Static half of the debug panel: what was chosen and from what. The engine
+  // supplies the live half through `handle.stats`.
+  const debugInfo = useMemo<Array<[string, string]>>(() => {
+    const v = props.manifest.video[0];
+    const a = props.manifest.audio[audioTrackIndex] ?? props.manifest.audio[0];
+    return [
+      ["tier", `${props.tier}${props.live ? " (live)" : ""}`],
+      ["source", props.manifest.container],
+      [
+        "video",
+        v
+          ? `${v.codec} ${v.codec_string ?? ""} ${v.width ?? "?"}x${v.height ?? "?"}`.trim()
+          : "none",
+      ],
+      [
+        "audio",
+        a
+          ? `${a.codec} ${a.codec_string ?? ""} ${a.channels ?? "?"}ch ${a.lang ?? "?"}`.trim()
+          : "none",
+      ],
+      [
+        "subs",
+        `${props.manifest.subtitles.length} track(s), active ${activeSubtitle?.codec ?? "none"}`,
+      ],
+      ["agent", navigator.userAgent],
+    ];
+  }, [props.manifest, props.tier, props.live, audioTrackIndex, activeSubtitle]);
+
   const playerNode = (
     // oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
     <div
@@ -646,6 +674,7 @@ export function IrisPlayer(props: IrisPlayerProps) {
         getCurrentTime={() => currentTimeRef.current}
       />
       <IrisChrome
+        debugInfo={debugInfo}
         nextEpisode={props.nextEpisode ?? null}
         handle={handle}
         manifest={props.manifest}

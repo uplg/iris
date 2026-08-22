@@ -23,6 +23,7 @@ import {
   Pause,
   PictureInPicture2,
   Play,
+  Bug,
   Rewind,
   FastForward,
   SkipForward,
@@ -65,6 +66,10 @@ export type IrisChromeProps = {
    *  the button sits in the native controller layout so the D-pad reaches
    *  it like any other transport control. */
   nextEpisode?: { label: string; onPlay: () => void } | null;
+  /** Static facts for the debug panel, prepended to whatever the engine
+   *  reports. The panel is hidden entirely when this is absent AND the
+   *  handle has no `stats`. */
+  debugInfo?: Array<[string, string]>;
   /** Notified whenever the controls visibility flips. The parent
    *  uses this to hide the mouse cursor over the player surface
    *  while playback is uninterrupted — matches the cursor-hide
@@ -100,7 +105,12 @@ export function IrisChrome(props: IrisChromeProps) {
     active: i === props.activeAudioIndex,
   }));
   const [menu, setMenu] = useState<"none" | "subs" | "audio">("none");
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [engineStats, setEngineStats] = useState<Array<[string, string]>>([]);
   const [scrubbing, setScrubbing] = useState(false);
+  // Read inside the rAF loop, which must not restart when the panel opens.
+  const debugOpenRef = useRef(false);
+  debugOpenRef.current = debugOpen;
   const [hovered, setHovered] = useState(true);
   const scrubTargetRef = useRef<number | null>(null);
 
@@ -135,6 +145,9 @@ export function IrisChrome(props: IrisChromeProps) {
       setVolume(handle.volume());
       setMuted(handle.muted());
       setBuffered(handle.buffered());
+      // Only while the panel is open: these reads walk TimeRanges and query
+      // playback quality, which is not free at 60 Hz.
+      if (debugOpenRef.current) setEngineStats(handle.stats?.() ?? []);
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -232,7 +245,24 @@ export function IrisChrome(props: IrisChromeProps) {
       // because the bar's `data-iris-chrome` is hit first.
       className="absolute inset-0 z-10 flex flex-col"
     >
-      <div className="pointer-events-none flex-1" />
+      <div className="pointer-events-none flex-1">
+        {debugOpen && (
+          <div
+            // `data-iris-chrome` so a click here is not treated as a tap on
+            // the video surface, which toggles playback. Interactive on
+            // purpose: the panel scrolls when a value is long.
+            data-iris-chrome
+            className="pointer-events-auto absolute left-2 top-2 max-h-[70%] max-w-[min(28rem,calc(100%-1rem))] overflow-auto rounded-lg bg-black/75 p-3 font-mono text-[11px] leading-relaxed text-white/90 backdrop-blur sm:left-3 sm:top-3"
+          >
+            {[...(props.debugInfo ?? []), ...engineStats].map(([k, v]) => (
+              <div key={k} className="flex gap-2">
+                <span className="w-20 shrink-0 text-white/50">{k}</span>
+                <span className="min-w-0 break-words">{v}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div
         data-iris-chrome
@@ -356,6 +386,12 @@ export function IrisChrome(props: IrisChromeProps) {
               active={props.documentPip.isActive}
             />
           )}
+          <Button
+            label={debugOpen ? "Hide debug info" : "Debug info"}
+            icon={<Bug className="size-4" />}
+            active={debugOpen}
+            onClick={() => setDebugOpen((v) => !v)}
+          />
           <Button
             label="Fullscreen"
             icon={<Maximize className="size-4" />}

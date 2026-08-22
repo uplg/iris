@@ -109,6 +109,12 @@ export type EngineHandle = {
    *  (C/D) omit it. */
   setNativeSubtitleSrc?: (streamIdx: number, url: string) => void;
 
+  /** Ordered `[label, value]` pairs for the player's debug panel. Every
+   *  engine describes itself: the panel renders whatever it is handed and
+   *  knows nothing about tiers. Polled from the chrome's existing rAF loop,
+   *  and only while the panel is open. */
+  stats?: () => Array<[string, string]>;
+
   // Optional escape hatches ------------------------------------------
   /** The underlying `<video>` element when the engine has one. Used by
    *  `IrisChrome` for native fullscreen + Document PiP wiring. Returns
@@ -210,7 +216,34 @@ export function videoBackedHandle(
     fallbackDuration?: number | null;
   },
 ): EngineHandle {
+  const ranges = (tr: TimeRanges): string =>
+    tr.length === 0
+      ? "none"
+      : Array.from(
+          { length: tr.length },
+          (_, i) => `${tr.start(i).toFixed(1)}-${tr.end(i).toFixed(1)}`,
+        ).join(" ");
   return {
+    stats: () => {
+      const q = video.getVideoPlaybackQuality?.();
+      const err = video.error;
+      const out: Array<[string, string]> = [
+        [
+          "time",
+          `${video.currentTime.toFixed(2)} / ${Number.isFinite(video.duration) ? video.duration.toFixed(1) : "?"}`,
+        ],
+        [
+          "state",
+          `ready ${video.readyState} · net ${video.networkState}${video.seeking ? " · seeking" : ""}${video.paused ? " · paused" : ""}`,
+        ],
+        ["picture", video.videoWidth ? `${video.videoWidth}x${video.videoHeight}` : "no frame yet"],
+        ["buffered", ranges(video.buffered)],
+      ];
+      if (q)
+        out.push(["frames", `${q.totalVideoFrames} decoded · ${q.droppedVideoFrames} dropped`]);
+      if (err) out.push(["error", `${err.code} ${err.message}`]);
+      return out;
+    },
     dispose: extras.dispose,
     currentTime: () => video.currentTime,
     duration: () => {

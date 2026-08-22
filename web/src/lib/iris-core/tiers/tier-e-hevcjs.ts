@@ -891,6 +891,29 @@ export const mountTierE: EngineMount = async (opts) => {
 
   const handle: EngineHandle = {
     ...base,
+    // Everything the generic video stats cannot see: this tier's own
+    // throughput, the runway it sized from it, and whether playback is being
+    // held back on purpose rather than starved.
+    stats: () => [
+      ...(base.stats?.() ?? []),
+      [
+        "transcode",
+        speeds.length
+          ? `${(speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(2)}x real time ` +
+            `over ${speeds.length} segment${speeds.length > 1 ? "s" : ""}`
+          : "no segment measured yet",
+      ],
+      ["cushion", `${cushion().toFixed(1)}s of ${aheadTarget.toFixed(0)}s runway`],
+      [
+        "gate",
+        holdUntil > 0
+          ? `holding for ${holdUntil}s of cushion`
+          : videoLane
+            ? `feeding, fed to ${videoLane.fedMax.toFixed(1)}s`
+            : "no video lane",
+      ],
+      ["pipeline", `generation ${generation}, ${videoCodecString} proxied to H.264`],
+    ],
     // During a hold, play means "start as soon as there is enough", not "start
     // now" — starting now is exactly what stutters. Pause cancels that intent.
     play: async () => {
