@@ -1,0 +1,291 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>MSE + HEVC open-GOP: CRA start is dropped silently</title>
+<style>
+  body {
+    font:
+      13px/1.5 ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      monospace;
+    margin: 2rem;
+    max-width: 60rem;
+  }
+  h1 {
+    font-size: 15px;
+  }
+  table {
+    border-collapse: collapse;
+    margin: 1rem 0;
+  }
+  td,
+  th {
+    border: 1px solid #bbb;
+    padding: 4px 10px;
+    text-align: left;
+  }
+  th {
+    background: #eee;
+  }
+  .ok {
+    color: #0a0;
+  }
+  .bad {
+    color: #c00;
+    font-weight: bold;
+  }
+  pre {
+    background: #f4f4f4;
+    padding: 8px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+  }
+  video {
+    width: 320px;
+    background: #000;
+  }
+</style>
+
+<h1>MSE + HEVC open-GOP: a CRA start is dropped silently</h1>
+
+<p>
+  Serve this directory over HTTP (<code>python3 -m http.server 8099</code>) and open
+  <code>http://127.0.0.1:8099/repro.html</code>. Both files are produced by
+  <code>make-repro.sh</code> from one open-GOP HEVC Main 10 source.
+</p>
+
+<p>
+  Each row appends an init segment and one media segment to a fresh
+  <code>SourceBuffer</code>, waits for <code>updateend</code>, then reports
+  <code>buffered</code> and how many frames the element actually decoded.
+</p>
+
+<table id="out">
+  <tr>
+    <th>case</th>
+    <th>first slice NAL</th>
+    <th>appended</th>
+    <th>buffered</th>
+    <th>frames</th>
+    <th>error</th>
+  </tr>
+</table>
+
+<video id="v" controls muted></video>
+<pre id="log"></pre>
+
+<script>
+  const NAL_NAMES = {
+    0: "TRAIL_N",
+    1: "TRAIL_R",
+    2: "TSA_N",
+    3: "TSA_R",
+    4: "STSA_N",
+    5: "STSA_R",
+    6: "RADL_N",
+    7: "RADL_R",
+    8: "RASL_N",
+    9: "RASL_R",
+    16: "BLA_W_LP",
+    17: "BLA_W_RADL",
+    18: "BLA_N_LP",
+    19: "IDR_W_RADL",
+    20: "IDR_N_LP",
+    21: "CRA_NUT",
+    32: "VPS",
+    33: "SPS",
+    34: "PPS",
+    35: "AUD",
+    39: "SEI_PREFIX",
+  };
+  const logEl = document.getElementById("log");
+  const log = (m) => {
+    logEl.textContent += m + "\n";
+  };
+
+  /** Walk top-level ISOBMFF boxes. */
+  function* boxes(buf, from = 0, to = buf.byteLength) {
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let o = from;
+    while (o + 8 <= to) {
+      let size = dv.getUint32(o);
+      const type = String.fromCharCode(buf[o + 4], buf[o + 5], buf[o + 6], buf[o + 7]);
+      let header = 8;
+      if (size === 1) {
+        size = Number(dv.getBigUint64(o + 8));
+        header = 16;
+      }
+      if (size < header || o + size > to) return;
+      yield { type, start: o, end: o + size, header };
+      o += size;
+    }
+  }
+
+  /** Split `ftyp`+`moov` from the media that follows. */
+  function splitInit(buf) {
+    for (const b of boxes(buf)) {
+      if (b.type === "moof") return [buf.subarray(0, b.start), buf.subarray(b.start)];
+    }
+    return null;
+  }
+
+  /** Build the `hvc1.…` codec string from the file's own hvcC, so this page
+   *  works unchanged with any HEVC fMP4 you drop next to it. */
+  function codecStringFromHvcC(buf) {
+    for (let i = 0; i + 4 < buf.byteLength; i += 1) {
+      if (buf[i] === 0x68 && buf[i + 1] === 0x76 && buf[i + 2] === 0x63 && buf[i + 3] === 0x43) {
+        const c = buf.subarray(i + 4);
+        const space = ["", "A", "B", "C"][(c[1] >> 6) & 3];
+        const idc = c[1] & 0x1f;
+        // general_profile_compatibility_flags, bit-reversed, as hex.
+        let compat = 0;
+        const raw = (c[2] << 24) | (c[3] << 16) | (c[4] << 8) | c[5];
+        for (let b = 0; b < 32; b += 1) compat |= ((raw >>> b) & 1) << (31 - b);
+        const tier = (c[1] >> 5) & 1 ? "H" : "L";
+        const level = c[12];
+        const constraint = [];
+        for (let b = 6; b < 12; b += 1) constraint.push(c[b].toString(16).padStart(2, "0"));
+        while (constraint.length && constraint[constraint.length - 1] === "00") constraint.pop();
+        return `hvc1.${space}${idc}.${(compat >>> 0).toString(16)}.${tier}${level}${
+          constraint.length ? "." + constraint.join(".") : ""
+        }`;
+      }
+    }
+    return null;
+  }
+
+  /** NAL unit length prefix size, from hvcC's lengthSizeMinusOne. */
+  function nalLengthSize(buf) {
+    for (let i = 0; i + 22 < buf.byteLength; i += 1) {
+      if (buf[i] === 0x68 && buf[i + 1] === 0x76 && buf[i + 2] === 0x63 && buf[i + 3] === 0x43) {
+        return (buf[i + 4 + 21] & 3) + 1;
+      }
+    }
+    return 4;
+  }
+
+  /** First VCL (slice) NAL type inside the first mdat, and its byte offset. */
+  function firstSliceNal(media, lenSize) {
+    for (const b of boxes(media)) {
+      if (b.type !== "mdat") continue;
+      let o = b.start + b.header;
+      while (o + lenSize <= b.end) {
+        let len = 0;
+        for (let k = 0; k < lenSize; k += 1) len = len * 256 + media[o + k];
+        o += lenSize;
+        if (len <= 0 || o + len > b.end) break;
+        const type = (media[o] >> 1) & 0x3f;
+        if (type < 32) return { type, offset: o };
+        o += len;
+      }
+    }
+    return null;
+  }
+
+  /** Rewrite the first slice NAL's type in place. Used to prove which NAL
+   *  types this engine will open a coded frame group on. */
+  function relabel(media, lenSize, newType) {
+    const copy = media.slice();
+    const hit = firstSliceNal(copy, lenSize);
+    if (!hit) return null;
+    copy[hit.offset] = (copy[hit.offset] & 0x81) | (newType << 1);
+    return copy;
+  }
+
+  const video = document.getElementById("v");
+
+  async function run(label, file, relabelTo) {
+    const buf = new Uint8Array(await (await fetch(file)).arrayBuffer());
+    const split = splitInit(buf);
+    if (!split) return row(label, "—", 0, "no moof in file", 0, "");
+    let [init, media] = split;
+    const codec = codecStringFromHvcC(init);
+    const lenSize = nalLengthSize(init);
+    let nal = firstSliceNal(media, lenSize);
+
+    if (relabelTo != null) {
+      const patched = relabel(media, lenSize, relabelTo);
+      if (patched) {
+        media = patched;
+        nal = firstSliceNal(media, lenSize);
+      }
+    }
+    const nalName = nal ? `${NAL_NAMES[nal.type] ?? nal.type} (${nal.type})` : "?";
+
+    const mime = `video/mp4; codecs="${codec}"`;
+    if (!MediaSource.isTypeSupported(mime)) {
+      return row(label, nalName, 0, `isTypeSupported false for ${mime}`, 0, "");
+    }
+
+    const ms = new MediaSource();
+    video.src = URL.createObjectURL(ms);
+    await new Promise((r) => ms.addEventListener("sourceopen", r, { once: true }));
+    const sb = ms.addSourceBuffer(mime);
+    sb.mode = "segments";
+
+    const append = (data) =>
+      new Promise((resolve) => {
+        const done = () => {
+          sb.removeEventListener("updateend", done);
+          sb.removeEventListener("error", done);
+          resolve();
+        };
+        sb.addEventListener("updateend", done, { once: true });
+        sb.addEventListener("error", done, { once: true });
+        sb.appendBuffer(data);
+      });
+
+    await append(init);
+    await append(media);
+
+    const ranges = sb.buffered.length
+      ? Array.from(
+          { length: sb.buffered.length },
+          (_, i) => `${sb.buffered.start(i).toFixed(2)}-${sb.buffered.end(i).toFixed(2)}`,
+        ).join(", ")
+      : "EMPTY";
+
+    // Give the decoder a real chance to produce pictures.
+    if (sb.buffered.length) {
+      try {
+        video.currentTime = sb.buffered.start(0) + 0.01;
+      } catch {}
+      video.play().catch(() => {});
+      await new Promise((r) => setTimeout(r, 1500));
+      video.pause();
+    }
+    const q = video.getVideoPlaybackQuality?.();
+    const err = video.error ? `MediaError ${video.error.code} ${video.error.message}` : "none";
+
+    row(
+      label,
+      nalName,
+      init.byteLength + media.byteLength,
+      ranges,
+      q?.totalVideoFrames ?? "n/a",
+      err,
+    );
+    log(`${label}: mime=${mime} lengthSize=${lenSize}`);
+    URL.revokeObjectURL(video.src);
+  }
+
+  function row(label, nal, bytes, buffered, frames, err) {
+    const tr = document.getElementById("out").insertRow();
+    const cells = [label, nal, `${bytes} B`, buffered, String(frames), err];
+    cells.forEach((c, i) => {
+      const td = tr.insertCell();
+      td.textContent = c;
+      if (i === 3) td.className = c === "EMPTY" ? "bad" : "ok";
+    });
+  }
+
+  (async () => {
+    log(navigator.userAgent);
+    await run("A — t=0, starts on IDR_N_LP (control)", "A-idr-start.mp4", null);
+    await run("B — t=6, starts on a clean CRA_NUT", "B-cra-clean.mp4", null);
+    await run("B — same, CRA relabelled IDR_N_LP", "B-cra-clean.mp4", 20);
+    await run("B — same, CRA relabelled BLA_N_LP", "B-cra-clean.mp4", 18);
+    await run("C — t=6, CRA_NUT with RASL kept", "C-cra-with-rasl.mp4", null);
+    log("done");
+  })();
+</script>
