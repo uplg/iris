@@ -193,10 +193,24 @@
     return copy;
   }
 
+  /** Read one of the three files. `make-standalone.sh` prepends an
+   *  `EMBEDDED_FILES` map of base64 bodies so the page works as a single
+   *  attachment, with no sibling files and no server. */
+  async function loadFile(name) {
+    const embedded = globalThis.EMBEDDED_FILES?.[name];
+    if (embedded) {
+      const bin = atob(embedded);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    return new Uint8Array(await (await fetch(name)).arrayBuffer());
+  }
+
   const video = document.getElementById("v");
 
   async function run(label, file, relabelTo) {
-    const buf = new Uint8Array(await (await fetch(file)).arrayBuffer());
+    const buf = await loadFile(file);
     const split = splitInit(buf);
     if (!split) return row(label, "?", 0, "no moof in file", 0, "");
     let [init, media] = split;

@@ -35,8 +35,13 @@ Self-contained, no Iris code, no dependencies beyond a static file server. This
 is what goes on the bug. See `upstream/make-repro.sh` for how the three files
 are generated and `upstream/repro.html` for what it measures.
 
-    cd upstream && ./make-repro.sh && python3 -m http.server 8099
-    # then http://127.0.0.1:8099/repro.html in the browser under test
+    cd upstream && ./make-repro.sh && ./make-standalone.sh
+    # then open repro-standalone.html in the browser under test
+
+`make-standalone.sh` embeds the three fragments into the page as base64, giving
+one 112 KB file that runs from `file://` with no server and no sibling files.
+That is the form to attach to a bug. `repro.html` is the same page reading the
+fragments as siblings, for local iteration.
 
 The page derives each file's `hvc1` codec string from its own `hvcC`, so any
 HEVC fragmented MP4 dropped next to it works unchanged.
