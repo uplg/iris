@@ -1,0 +1,110 @@
+<!doctype html><meta charset="utf-8" />
+<script type="importmap">
+  {
+    "imports": { "mediabunny": "/mb/patched.js", "libav.js": "/libavjs-pkg/dist/libav-default.mjs" }
+  }
+</script>
+<body>
+  <div id="host" style="width: 640px; height: 360px"></div>
+  <script type="module">
+    import { mountTierB } from "/tierb.js";
+
+    const manifest = {
+      container: "matroska,webm",
+      duration_s: 2564.36,
+      filename: "x.mkv",
+      file_idx: 0,
+      infohash: "x",
+      schema_version: 1,
+      size_bytes: 838192823,
+      chapters: [],
+      subtitles: [],
+      download: null,
+      header_byte_range: null,
+      tail_byte_range: null,
+      index_at_end: true,
+      moov_at_start: false,
+      video: [
+        {
+          codec: "hevc",
+          codec_string: "hev1.2.4.L120.B0",
+          width: 1920,
+          height: 960,
+          bit_depth: 10,
+          profile: "Main 10",
+          level: 120,
+          fps_num: 25,
+          fps_den: 1,
+          stream_idx: 0,
+          hdr: null,
+          color_matrix: null,
+          color_primaries: null,
+          color_transfer: null,
+          max_cll: null,
+          max_fall: null,
+        },
+      ],
+      audio: [
+        {
+          codec: "eac3",
+          codec_string: "ec-3",
+          browser_native: false,
+          channels: 2,
+          sample_rate: 48000,
+          stream_idx: 1,
+          default: true,
+          forced: false,
+          lang: "eng",
+          title: null,
+          bitrate: null,
+          channel_layout: "stereo",
+        },
+      ],
+    };
+
+    async function run(startPosition, label) {
+      const host = document.createElement("div");
+      host.style.cssText = "width:640px;height:360px";
+      document.getElementById("host").appendChild(host);
+      const out = [`### ${label} (startPosition=${startPosition}s)`];
+      let handle = null;
+      try {
+        handle = await mountTierB({
+          container: host,
+          manifest,
+          streamUrl: new URLSearchParams(location.search).get("src") ?? "/media.mkv",
+          startPosition,
+          nativeSubs: [],
+          onError: (e) => out.push(`  onError: ${(e && e.message) || e}`),
+        });
+        await new Promise((r) => setTimeout(r, 9000));
+        const v = host.querySelector("video");
+        const b = v && v.buffered;
+        const ranges =
+          !b || b.length === 0
+            ? "empty"
+            : Array.from(
+                { length: b.length },
+                (_, i) => `${b.start(i).toFixed(1)}-${b.end(i).toFixed(1)}`,
+              ).join(",");
+        out.push(
+          `  buffered=[${ranges}] readyState=${v && v.readyState} currentTime=${v && v.currentTime.toFixed(2)}`,
+        );
+      } catch (e) {
+        out.push(`  EXCEPTION ${(e && e.message) || e}`);
+      }
+      try {
+        await handle?.dispose();
+      } catch {}
+      console.log(out.join("\n"));
+    }
+    const positions = (new URLSearchParams(location.search).get("at") ?? "0,178,373")
+      .split(",")
+      .map(Number);
+    for (const t of positions) {
+      await run(t, `MICROIRIS start=${t}`);
+    }
+    console.log("DONE");
+    document.title = "done";
+  </script>
+</body>

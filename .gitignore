@@ -32,3 +32,10 @@
 /android-tv/app/.cxx/
 /android-tv/.idea/
 .repository-analysis/
+
+# Local-only artefacts of the MSE bisect harness (bundles, wasm, sample media).
+web/tools/mse-bisect/tierb.js
+web/tools/mse-bisect/libavdec.js
+web/tools/mse-bisect/libavjs/
+web/tools/mse-bisect/*.mp4
+web/tools/mse-bisect/node_modules/
