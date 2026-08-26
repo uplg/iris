@@ -298,6 +298,12 @@ pub(crate) async fn details(
         // Provider doesn't expose a details endpoint — surface as a 404
         // so the frontend can hide the preview button cleanly.
         Ok(None) => Err(ApiError::NotFound),
+        // A refusal is the tracker's answer, not a bug on our side — pass the
+        // reason through instead of burying it in a 500.
+        Err(iris_core::Error::ProviderRefused(m)) => {
+            tracing::warn!(provider = %params.provider, id = %params.id, reason = %m, "details refused");
+            Err(ApiError::ProviderRefused(m))
+        }
         Err(e) => {
             tracing::warn!(provider = %params.provider, id = %params.id, error = %e, "details fetch failed");
             Err(ApiError::Internal(anyhow::anyhow!("details: {e}")))

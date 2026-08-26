@@ -26,3 +26,7 @@ hex = { workspace = true }
 anyhow = { workspace = true }
 sqlx = { workspace = true }
 librqbit = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+urlencoding = { workspace = true }
+webpki-root-certs = { workspace = true }

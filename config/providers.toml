@@ -37,6 +37,11 @@ api_key_env = "SEEDPOOL_API_KEY"
 # users without a visual cue. The francophone trackers tag releases
 # explicitly (VOSTFR / VFF / MULTI) so they don't need a default.
 default_language = "english"
+# One download at a time, enforced by the tracker: over the cap it 302s the
+# `.torrent` request to the torrent page ("You have reached your download slot
+# limit"), which reads as a bare 401 on our side. Declared here so a grab is
+# refused up-front, naming the release that holds the slot.
+leech_slots = 1
 
 # HD-Torrents — English private HD tracker, no API at all: cookie
 # session (login.php) + HTML scraping of torrents.php. Credentials are

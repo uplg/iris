@@ -20,6 +20,8 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use utoipa::ToSchema;
 
+use crate::announce;
+
 /// `librqbit` re-exports `ManagedTorrentHandle` as a private type alias inside
 /// `torrent_state`; keep the local alias explicit so callers don't need to
 /// know the inner shape.
@@ -160,6 +162,10 @@ pub struct IngestResult {
 pub struct Engine {
     session: Arc<Session>,
     download_dir: PathBuf,
+    /// Port we advertise to trackers — needed to reproduce librqbit's own
+    /// announce parameters when we send the `stopped` it never sends.
+    listen_port: u16,
+    http: reqwest::Client,
 }
 
 impl Engine {
@@ -203,10 +209,48 @@ impl Engine {
             ..Default::default()
         };
         let session = Session::new_with_opts(download_dir.clone(), opts).await?;
+        // Same identity librqbit announces with: some private trackers run a
+        // UA regex on announces and bounce anything unfamiliar. TLS trust is
+        // the bundled Mozilla roots, not the image's — full rationale in
+        // `iris_providers::tls`, which every other outbound client uses (this
+        // crate can't reach it without depending on the provider layer).
+        let roots: Vec<reqwest::Certificate> = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .filter_map(|der| reqwest::Certificate::from_der(der.as_ref()).ok())
+            .collect();
+        let http = reqwest::Client::builder()
+            .tls_certs_only(roots)
+            .user_agent(client_ua())
+            .build()
+            .map_err(|e| anyhow::anyhow!("tracker http client: {e}"))?;
         Ok(Arc::new(Self {
             session,
             download_dir,
+            listen_port,
+            http,
         }))
+    }
+
+    /// Leave the swarm properly: announce `event=stopped` to the torrent's
+    /// trackers before we drop it. librqbit only ever sends `started` on HTTP
+    /// trackers, so without this the tracker keeps counting the peer until its
+    /// own stale-peer sweep — which on a slot-limited tracker blocks every
+    /// further grab (see `announce`). Best-effort and never fatal.
+    async fn announce_stopped(&self, handle: &Handle) {
+        let shared = handle.shared();
+        if shared.trackers.is_empty() {
+            return;
+        }
+        let stats = handle.stats();
+        let announce = announce::StoppedAnnounce {
+            info_hash: shared.info_hash.0,
+            peer_id: shared.peer_id.0,
+            port: self.listen_port,
+            uploaded: stats.uploaded_bytes,
+            downloaded: stats.progress_bytes,
+            left: stats.total_bytes.saturating_sub(stats.progress_bytes),
+        };
+        announce::announce_stopped(&self.http, shared.trackers.iter().cloned(), &announce).await;
     }
 
     pub fn download_dir(&self) -> &std::path::Path {
@@ -295,6 +339,7 @@ impl Engine {
     /// seeding indefinitely.
     pub async fn pause_by_infohash(&self, infohash: &str) -> Result<(), EngineError> {
         let handle = self.handle_by_infohash(infohash)?;
+        self.announce_stopped(&handle).await;
         self.session.pause(&handle).await?;
         Ok(())
     }
@@ -305,6 +350,7 @@ impl Engine {
         delete_files: bool,
     ) -> Result<(), EngineError> {
         let handle = self.handle_by_infohash(infohash)?;
+        self.announce_stopped(&handle).await;
         self.session
             .delete(handle.id().into(), delete_files)
             .await?;

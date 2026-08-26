@@ -88,6 +88,15 @@ pub struct ProviderPolicy {
     /// finish downloading. `false` pauses them at completion (files stay on
     /// disk, playback is unaffected — it reads from disk).
     pub seed: bool,
+    /// How many of this tracker's torrents may be downloading at once, when
+    /// the tracker itself enforces a cap. `None` = no cap declared.
+    ///
+    /// Over the cap, UNIT3D doesn't answer the `.torrent` request with a
+    /// readable error: it 302s to the torrent page, which our JSON `Accept`
+    /// turns into a Laravel `401 Unauthenticated`. Declaring the cap lets the
+    /// grab be refused before we ask, with a message naming what holds the
+    /// slot.
+    pub leech_slots: Option<u32>,
 }
 
 impl Default for ProviderPolicy {
@@ -96,6 +105,7 @@ impl Default for ProviderPolicy {
             default_language: None,
             catalog: true,
             seed: true,
+            leech_slots: None,
         }
     }
 }
@@ -178,6 +188,12 @@ impl ProviderRegistry {
     /// whose tracker was since removed from the config) keep seeding.
     pub fn seeds(&self, provider_id: &str) -> bool {
         self.policy(provider_id).seed
+    }
+
+    /// Concurrent-download cap the tracker enforces, if it declared one —
+    /// see [`ProviderPolicy::leech_slots`].
+    pub fn leech_slots(&self, provider_id: &str) -> Option<u32> {
+        self.policy(provider_id).leech_slots
     }
 
     pub fn ids(&self) -> Vec<String> {
@@ -302,6 +318,11 @@ fn policy_of(entry: &ProviderEntry) -> ProviderPolicy {
             .map(str::to_ascii_lowercase),
         catalog: flag("catalog", true),
         seed: flag("seed", true),
+        leech_slots: entry
+            .fields
+            .get("leech_slots")
+            .and_then(toml::Value::as_integer)
+            .and_then(|n| u32::try_from(n).ok()),
     }
 }
 
@@ -321,5 +342,29 @@ pub fn build_provider(entry: &ProviderEntry) -> Result<Arc<dyn SearchProvider>> 
             "unknown provider kind: {other} (provider id: {})",
             entry.id
         ))),
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::policy_of;
+    use iris_config::ProviderEntry;
+
+    fn entry(toml_body: &str) -> ProviderEntry {
+        toml::from_str(toml_body).expect("valid provider entry")
+    }
+
+    #[test]
+    fn leech_slots_is_opt_in() {
+        let plain = entry("id = \"tos\"\nkind = \"unit3d\"\n");
+        assert_eq!(policy_of(&plain).leech_slots, None);
+
+        let capped = entry("id = \"seedpool\"\nkind = \"unit3d\"\nleech_slots = 1\n");
+        assert_eq!(policy_of(&capped).leech_slots, Some(1));
+
+        // A nonsense value must not silently become a cap of 0, which would
+        // lock every grab out of the tracker.
+        let negative = entry("id = \"x\"\nkind = \"unit3d\"\nleech_slots = -3\n");
+        assert_eq!(policy_of(&negative).leech_slots, None);
     }
 }

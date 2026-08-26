@@ -22,6 +22,14 @@ pub enum Error {
     #[error("upstream provider error: {0}")]
     Provider(String),
 
+    /// The tracker answered the request but refused to serve it — the
+    /// account is resolved, a policy said no. Distinct from [`Self::Provider`]
+    /// so the API can hand the user an actionable message instead of a raw
+    /// `401 Unauthorized` (UNIT3D 302s a refused `.torrent` download to the
+    /// torrent page, which our JSON `Accept` turns into a Laravel 401).
+    #[error("provider refused the request: {0}")]
+    ProviderRefused(String),
+
     #[error("internal: {0}")]
     Internal(String),
 }

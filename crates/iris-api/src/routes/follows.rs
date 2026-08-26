@@ -1568,6 +1568,10 @@ async fn ingest_picked(
     //      the indexer. Works for torr9-style providers that don't
     //      ship a URL in the search payload, and as a fallback when
     //      the persisted URL has expired.
+    // Same slot guard as the manual grab (`torrents::check_leech_slots`):
+    // the follow scheduler grabs unattended, so on a capped tracker it is the
+    // likeliest way to walk into the cap without anyone reading the error.
+    crate::routes::torrents::check_leech_slots(state, &pick.indexer_provider).await?;
     if !pick.magnet.is_empty() {
         return state
             .engine()

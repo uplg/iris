@@ -2504,13 +2504,17 @@ dependencies = [
  "iris-db",
  "iris-media",
  "librqbit",
+ "reqwest",
  "serde",
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
  "tracing",
+ "url",
+ "urlencoding",
  "utoipa",
+ "webpki-root-certs",
 ]
 
 [[package]]

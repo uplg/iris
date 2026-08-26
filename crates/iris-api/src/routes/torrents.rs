@@ -387,6 +387,9 @@ pub(crate) async fn preview(
         .providers()
         .get(&body.provider_id)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown provider `{}`", body.provider_id)))?;
+    // The preview needs the `.torrent` too, so a full slot breaks the dialog
+    // exactly like it breaks the grab — same guard, same message.
+    check_leech_slots(&state, &body.provider_id).await?;
     let source = resolve_release(&state, &provider, &body.provider_id, &body.external_id).await?;
     let bytes = match source {
         TorrentSource::TorrentFile(b) => b,
@@ -481,6 +484,49 @@ pub(crate) async fn regrab(
 /// `details()` / seeders can't be verified so they're allowed through.
 async fn is_dead(provider: &Arc<dyn iris_providers::SearchProvider>, external_id: &str) -> bool {
     matches!(provider.details(external_id).await, Ok(Some(d)) if d.seeders == Some(0))
+}
+
+/// Refuse a grab the tracker would refuse anyway, before asking it.
+///
+/// A tracker that caps concurrent downloads (see
+/// [`iris_providers::registry::ProviderPolicy::leech_slots`]) answers a
+/// `.torrent` request over the cap with a redirect our JSON `Accept` turns
+/// into `401 Unauthenticated` — unreadable, and it lands on the preview
+/// dialog, which needs the `.torrent` to list files. Counting our own
+/// in-progress torrents for that provider gets the user a message naming
+/// what holds the slot instead.
+///
+/// Only *live* unfinished torrents count: a paused one has announced
+/// `stopped` on the way out, so the tracker no longer counts it either.
+pub(crate) async fn check_leech_slots(state: &AppState, provider_id: &str) -> ApiResult<()> {
+    let Some(slots) = state.providers().leech_slots(provider_id) else {
+        return Ok(());
+    };
+    let unfinished: std::collections::HashMap<String, iris_torrent::TorrentSnapshot> = state
+        .engine()
+        .list()
+        .into_iter()
+        .filter(|s| !s.finished && s.state != iris_torrent::TorrentState::Paused)
+        .map(|s| (s.infohash.clone(), s))
+        .collect();
+    if unfinished.is_empty() {
+        return Ok(());
+    }
+    let holding: Vec<String> = iris_db::torrents::list_active(state.db())
+        .await?
+        .into_iter()
+        .filter(|row| row.source_provider.as_deref() == Some(provider_id))
+        .filter_map(|row| unfinished.get(&row.infohash).map(|snap| (row, snap)))
+        .map(|(row, snap)| format!("{} ({:.0}%)", row.name, snap.progress_pct))
+        .collect();
+    if u32::try_from(holding.len()).unwrap_or(u32::MAX) < slots {
+        return Ok(());
+    }
+    let plural = if slots == 1 { "" } else { "s" };
+    Err(ApiError::ProviderSlotLimit(format!(
+        "`{provider_id}` allows {slots} download{plural} at a time. In progress: {}. Finish or remove it before grabbing another one.",
+        holding.join(", "),
+    )))
 }
 
 /// Resolve a release to a [`TorrentSource`], preferring the persisted
@@ -599,6 +645,7 @@ pub(crate) async fn ingest_core(
         return Err(ApiError::DeadTorrent);
     }
 
+    check_leech_slots(state, &provider_id).await?;
     let source = resolve_release(state, &provider, &provider_id, &external_id).await?;
     pre_engine_guards(state, &source, allow_duplicate).await?;
     let result = match source {
@@ -2510,6 +2557,7 @@ fn map_provider_err(e: iris_core::Error) -> ApiError {
         iris_core::Error::NotFound(m) | iris_core::Error::Provider(m) => {
             ApiError::BadRequest(format!("provider: {m}"))
         }
+        iris_core::Error::ProviderRefused(m) => ApiError::ProviderRefused(m),
         iris_core::Error::InvalidInput(m) => ApiError::BadRequest(m),
         other => ApiError::Internal(anyhow::anyhow!(other)),
     }

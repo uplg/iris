@@ -34,6 +34,17 @@ pub enum ApiError {
     /// carries the existing copies for display.
     #[error("{0}")]
     DuplicateInLibrary(String),
+    /// The tracker answered but declined to serve the release — a
+    /// download-slot limit, revoked download rights, a moderation state.
+    /// Distinct code so clients show the provider's actual reason instead of
+    /// the raw `401 Unauthorized` the refusal arrives as.
+    #[error("{0}")]
+    ProviderRefused(String),
+    /// The provider caps concurrent downloads and the cap is reached. Held
+    /// apart from [`Self::ProviderRefused`] because we detect it *before*
+    /// asking the tracker, and the message names what's holding the slot.
+    #[error("{0}")]
+    ProviderSlotLimit(String),
     /// A remote origin we depend on (live TV playlist / stream / guide)
     /// failed. 502 so clients can distinguish "their side" from "our side".
     #[error("upstream unavailable: {0}")]
@@ -57,6 +68,14 @@ impl IntoResponse for ApiError {
             ApiError::DuplicateInLibrary(_) => (
                 StatusCode::CONFLICT,
                 "duplicate_in_library",
+                self.to_string(),
+            ),
+            ApiError::ProviderRefused(_) => {
+                (StatusCode::CONFLICT, "provider_refused", self.to_string())
+            }
+            ApiError::ProviderSlotLimit(_) => (
+                StatusCode::CONFLICT,
+                "provider_slot_limit",
                 self.to_string(),
             ),
             ApiError::Upstream(_) => (StatusCode::BAD_GATEWAY, "upstream", self.to_string()),

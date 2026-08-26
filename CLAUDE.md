@@ -33,7 +33,7 @@ Three project-wide rules — never relax them without explicit user approval.
 | Layer       | Stack                                                                              |
 | ----------- | ---------------------------------------------------------------------------------- |
 | Backend     | Rust 2024 workspace (edition 2024, rust-version 1.98), Axum 0.8, sqlx 0.9 / SQLite |
-| Torrent     | librqbit 9.0.0.rc-0                                                                |
+| Torrent     | librqbit 9.0.1                                                                     |
 | Media       | ffmpeg-driven remuxer + HLS manifest builder + JS subtitle pipeline                |
 | Auth        | JWT in HttpOnly cookies, argon2id, invitation-only registration                    |
 | Frontend    | React 19, Vite 8, Tailwind 4, shadcn/ui (radix), TanStack Query, Tanstack Router   |
@@ -157,6 +157,22 @@ behaviour (`ProviderPolicy` in `registry.rs`):
   downloading (files stay on disk; playback reads from disk). Enforced by
   the 30 s `seed_stats` loop from `torrents.source_provider`, so flipping
   the knob takes effect on already-downloaded torrents too.
+- `leech_slots = N` — the tracker caps concurrent downloads (seedpool: 1).
+  Over the cap UNIT3D 302s the `.torrent` request to the torrent page, which
+  our JSON `Accept` turns into a bare `401 Unauthenticated`, so
+  `torrents::check_leech_slots` refuses the grab (and the preview, which also
+  needs the `.torrent`) up-front and names the release holding the slot.
+  Counts live unfinished torrents only — a paused one has announced
+  `stopped`, so the tracker isn't counting it either.
+
+**Leaving a swarm:** librqbit never sends `event=stopped` on an HTTP tracker
+(9.0.1 constructs `TrackerRequestEvent::Stopped` only on the UDP path), so
+`Engine::delete_by_infohash` / `pause_by_infohash` send it themselves
+(`iris-torrent/src/announce.rs`) before dropping the torrent. Without it a
+torrent removed before completion leaves a ghost leecher on the tracker until
+its own stale-peer sweep — an hour of "download slot limit" on a capped
+tracker. The announce counters mirror librqbit's own so the tracker sees no
+delta jump.
 
 If the tracker exposes a Torznab API, **compose `TorznabProvider`** from
 the new module — don't reimplement the wire format. `c411.rs` is the

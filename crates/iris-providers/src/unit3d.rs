@@ -241,6 +241,21 @@ impl Unit3dProvider {
         Ok(Some(envelope))
     }
 
+    /// A `.torrent` download the tracker answered but declined to serve.
+    /// The account resolved (a bad rsskey redirects to `/login` instead), so
+    /// this is policy, not credentials — and the message has to say so,
+    /// because the raw shape reaching the user is an unexplained
+    /// `401 Unauthorized` on a preview dialog that otherwise works.
+    /// Seedpool's one-download-slot limit is the case that produced it.
+    fn refused(provider: &str, status: reqwest::StatusCode) -> Error {
+        Error::ProviderRefused(format!(
+            "`{provider}` refused the .torrent download (HTTP {status}). The API key is \
+             fine — search and details still work — so this is a tracker-side rule: \
+             usually a download-slot limit (finish or remove the download in progress \
+             first) or a restriction on the account.",
+        ))
+    }
+
     /// GET a pre-signed `download_link` and validate the body is a
     /// bencoded `.torrent`. A rejected rsskey link doesn't 4xx directly:
     /// `UNIT3D` 302s to the torrent's web page, which our JSON `Accept`
@@ -256,6 +271,19 @@ impl Unit3dProvider {
         if !res.status().is_success() {
             let status = res.status();
             let body = res.text().await.unwrap_or_default();
+            tracing::warn!(
+                provider = %self.id,
+                external_id,
+                %status,
+                body_preview = %body.chars().take(200).collect::<String>(),
+                "unit3d download refused by the tracker",
+            );
+            if matches!(
+                status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            ) {
+                return Err(Self::refused(&self.id, status));
+            }
             return Err(Error::Provider(format!(
                 "unit3d `{}` download failed: HTTP {status} — {}",
                 self.id,
@@ -856,6 +884,24 @@ impl TorrentEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The refusal text is what the user reads in the preview dialog, so it
+    /// has to name the tracker, the status, and the two things worth
+    /// checking. The no-double-space assertion guards the line
+    /// continuations: collapse one and the sentence grows a gap.
+    #[test]
+    fn refusal_message_reads_as_one_sentence() {
+        let err = Unit3dProvider::refused("seedpool", reqwest::StatusCode::UNAUTHORIZED);
+        let Error::ProviderRefused(msg) = err else {
+            panic!("a refused download must not degrade to a generic provider error");
+        };
+        assert!(msg.starts_with("`seedpool` refused the .torrent download (HTTP 401"));
+        assert!(msg.contains("download-slot limit"));
+        assert!(
+            !msg.contains("  "),
+            "continuation leaked into the text: {msg}"
+        );
+    }
 
     /// Matches the runtime types audited against the live
     /// `theoldschool.cc` response (`tmdb_id` is a JSON **number**, not

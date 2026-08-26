@@ -100,7 +100,22 @@ pub trait SearchProvider: Send + Sync {
     async fn fetch_bytes(&self, url: &str) -> Result<bytes::Bytes> {
         let resp = reqwest::get(url)
             .await
-            .map_err(|e| Error::Provider(format!("fetch_bytes get: {e}")))?
+            .map_err(|e| Error::Provider(format!("fetch_bytes get: {e}")))?;
+        let status = resp.status();
+        // A signed URL the tracker declines to honour is policy, not a
+        // transport failure — say so, or the user reads a bare 401 and
+        // goes looking for a broken API key that isn't broken.
+        if matches!(
+            status,
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Err(Error::ProviderRefused(format!(
+                "`{}` refused the .torrent download (HTTP {status}) — a tracker-side \
+                 rule (download-slot limit or account restriction), not the API key.",
+                self.id()
+            )));
+        }
+        let resp = resp
             .error_for_status()
             .map_err(|e| Error::Provider(format!("fetch_bytes status: {e}")))?;
         resp.bytes()
