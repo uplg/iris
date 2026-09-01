@@ -4,6 +4,7 @@ import android.app.SearchManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -13,9 +14,15 @@ import androidx.lifecycle.lifecycleScope
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.ui.IrisRoot
+import studio.kahn.iris.tv.ui.components.PlayerKeyRouter
 import studio.kahn.iris.tv.ui.theme.IrisTvTheme
 
 class MainActivity : ComponentActivity() {
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (PlayerKeyRouter.handler?.invoke(event) == true) return true
+        return super.dispatchKeyEvent(event)
+    }
 
     @OptIn(ExperimentalTvMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {

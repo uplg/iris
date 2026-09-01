@@ -62,19 +62,39 @@ class IrisPlayerView(context: Context) : PlayerView(context) {
         player?.addListener(playbackListener)
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    /** True while a centre press we consumed is still held: its release must
+     *  not reach the play/pause button the overlay just focused. */
+    private var swallowCentreUp = false
+
+    /**
+     * Centre key with the overlay hidden: toggle play/pause and bring the
+     * overlay up. Returns true when the key was consumed. Fed from the
+     * activity through [PlayerKeyRouter] (the view itself holds no focus
+     * while the overlay is hidden) and from [dispatchKeyEvent] for the cases
+     * where it does.
+     */
+    fun onRemoteKey(event: KeyEvent): Boolean {
         val centre = when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
             KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_BUTTON_A -> true
             else -> false
         }
-        if (centre && !isControllerFullyVisible) {
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                Util.handlePlayPauseButtonAction(player)
-                showController()
-            }
+        if (!centre) return false
+        if (event.action == KeyEvent.ACTION_UP && swallowCentreUp) {
+            swallowCentreUp = false
             return true
         }
+        if (isControllerFullyVisible || player == null) return false
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            Util.handlePlayPauseButtonAction(player)
+            showController()
+            swallowCentreUp = true
+        }
+        return true
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (onRemoteKey(event)) return true
         val wasVisible = isControllerFullyVisible
         val handled = super.dispatchKeyEvent(event)
         // Any key while the overlay is up keeps it up a while longer — and

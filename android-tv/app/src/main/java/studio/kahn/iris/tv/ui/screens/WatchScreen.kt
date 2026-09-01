@@ -44,7 +44,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.PlayerView
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
@@ -70,6 +69,7 @@ import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
 import studio.kahn.iris.tv.ui.components.IrisPlayerView
+import studio.kahn.iris.tv.ui.components.PlayerKeyRouter
 
 /** A title counts as watched/done once playback passes this fraction — the
  *  last ~10 % is credits / recap, so 90 % is "finished" for both movies
@@ -1104,7 +1104,14 @@ private fun ReadyPlayer(
     // Captured for the BackHandler below so the first back-press can
     // dismiss the controller overlay before the second one actually
     // leaves the screen.
-    var playerView by remember { mutableStateOf<PlayerView?>(null) }
+    var playerView by remember { mutableStateOf<IrisPlayerView?>(null) }
+    // The activity offers every key to the mounted player first — see
+    // `PlayerKeyRouter` for why the view can't rely on focus for that.
+    DisposableEffect(playerView) {
+        val view = playerView
+        if (view != null) PlayerKeyRouter.handler = { view.onRemoteKey(it) }
+        onDispose { PlayerKeyRouter.handler = null }
+    }
     // `iris_next_episode` lives in the controller layout (not a Compose
     // overlay) so the D-pad reaches it like every other transport control —
     // see the LaunchedEffect below for the visibility/click wiring.

@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-02
+
 ### Added
+
+- **Firefox on macOS keeps hardware HEVC.** Gecko 154+ opens an MSE coded
+  frame group only on an IDR picture (`MP4Demuxer.cpp`, bug 2049615 — ours is
+  bugzilla 2065822). An open-GOP rip has one IDR, at t=0, so every seek and
+  resume fed a CRA that Gecko dropped silently, and the only engine that could
+  seek was hevc.js: a WASM transcode to H.264, decoded in software. Tier B now
+  splices the picture a run opens on into a real IDR_W_RADL — the slice header
+  loses `slice_pic_order_cnt_lsb`, the short-term RPS, the long-term refs and
+  the temporal MVP flag, everything else and the slice data stay byte-exact —
+  and shifts the POC lsb of every later picture in the run by the CRA's, so
+  all reference deltas still resolve. Mid-run CRAs and their RASL pictures are
+  untouched; a stream the rewriter does not fully understand (multilayer, 3D,
+  SCC) demotes to hevc.js. `web/tools/hevc-splice/check.ts` verifies any file
+  offline: ffmpeg decodes the spliced run frame-for-frame identical to the
+  original.
+- **Android TV player overlay.** The D-pad centre key toggles play/pause on
+  the spot when the overlay is hidden (and brings it up), instead of only
+  revealing the overlay and leaving the user to walk to the play button. The
+  overlay fades in and out as one layer — Media3's own choreography hid the
+  main bar first and the progress bar two seconds later, which read as the
+  overlay hanging before it closed — and the black band behind the bottom
+  buttons is gone. Keys reach the player through the activity
+  (`PlayerKeyRouter`): with the overlay hidden nothing inside the `PlayerView`
+  holds focus, so the D-pad never got there on its own.
 
 - **nyaa.si provider.** Public anime tracker, consumed through its RSS feed
   (RSS 2.0 + a `nyaa:` namespace carrying the fields Torznab puts in
@@ -23,6 +49,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iPad: every HEVC file went to the server remux, with a spinner stuck over
+  a playing picture.** WebKit's `MediaSource.isTypeSupported` answers false
+  for every `hev1.*` codec string and only takes the `hvc1.*` spelling of the
+  same profile, while the manifest always synthesises `hev1.` — so an iPad
+  reported no HEVC decoder at all and `pickTier` fell to Tier F for a codec
+  the device decodes in hardware. The probe now retries the `hvc1` spelling;
+  such files stay off Tier A (AVFoundation refuses an `hev1`-tagged MP4 in
+  `<video src>`, and the manifest cannot tell which tag the file carries) and
+  play through Tier B, where Mediabunny writes `hvc1` sample entries anyway.
+  The spinner: Safari fires `stalled` mid-playback whenever the fetch goes
+  idle with a full buffer, with no `playing` after it. `stalled` now only
+  counts when the element is actually starved, and a moving `timeupdate`
+  closes any spinner an event pair missed.
 - **Live TV: the web player fought hls.js 1.7 instead of using it.** 1.7 ships
   its own recovery machinery — it attaches a plan to `data.errorAction` and
   applies it, including calling `recoverMediaError()` itself for a media
@@ -83,12 +122,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rust 1.98 (workspace `rust-version` + the Docker builder image), and every
   Rust and web dependency to its current stable — notably librqbit 9.0.1,
   hls.js 1.7.1 (which fixes `BUFFER_APPEND_NO_PROGRESS` false positives),
-  mediabunny 1.55.1 and libav.js 6.10.9.0. The mediabunny patch shrank to just
+  mediabunny 1.55.5 and libav.js 6.10.9.0. The mediabunny patch shrank to just
   the open-GOP decode-timestamp clamp: 1.55 upstreamed DTS support, and more
   thoroughly than the local patch did (it distinguishes dtsc/dtsh/dtsl/dtse).
   librqbit 9.0.1 also pulls quick-xml 0.41 into `librqbit-upnp`, so the two
   `RUSTSEC-2026-019x` ignores in `deny.toml` — which the entry itself flagged
   to revisit on librqbit 9 — are gone: the vulnerable 0.38.4 has left the tree.
+- argon2 0.6 (no longer an RC) and quick-xml 0.42. The PHC layout of stored
+  password hashes is unchanged, so every existing password keeps verifying;
+  the XML parsers (nyaa, torr9, torznab, the XMLTV guide) moved to 0.42's
+  `str`-based events.
+- Android TV: AGP 9.4.0, Kotlin 2.4.10, Gradle 9.7.1, Compose BOM 2026.08.00,
+  Navigation 2.10.0, Media3 1.11.0 (decoder AARs rebuilt; the dav1d 10-bit
+  patch still applies), OkHttp 5.5.0, Coil 3.6.1. Media3 1.11 carries the
+  MediaCodec fixes behind the reported HEVC freezes: a codec swallowing every
+  sample after a flush, frame-rate estimation when the stream declares none,
+  a grace period on transient audio underruns. Navigation 2.10 sets its floor
+  at API 24, so `minSdk` moves from 23 to 24: no Android TV device is left on
+  6.0, and Play Services stopped updating there in 2024 anyway.
 
 ## [1.4.0] - 2026-08-10
 
