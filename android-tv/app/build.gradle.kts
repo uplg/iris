@@ -27,7 +27,7 @@ android {
 
     defaultConfig {
         applicationId = "studio.kahn.iris.tv"
-        minSdk = 23           // Android TV reaches further back than phones
+        minSdk = 24           // navigation 2.10 floor; no Android TV box is left on 6.0
         targetSdk = 37
         versionCode = 30
         versionName = "1.4.0"
@@ -83,7 +83,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
         // The OpenAPI-generated DTOs use java.time.OffsetDateTime; desugaring
-        // backports it (and the rest of java.time) to minSdk 23.
+        // backports it (and the rest of java.time) to minSdk 24.
         isCoreLibraryDesugaringEnabled = true
     }
 

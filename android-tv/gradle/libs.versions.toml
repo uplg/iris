@@ -1,54 +1,54 @@
 [versions]
-# ----- Toolchain (verified June 2026 latest stables on maven central + maven.google.com) -----
-agp = "9.2.1"               # latest stable; 9.3.0 is RC-only — hold per "no RC/alpha" rule
-kotlin = "2.4.0"             # June 2026 (latest stable per github.com/JetBrains/kotlin)
+# ----- Toolchain (verified September 2026 latest stables on maven central + maven.google.com) -----
+agp = "9.4.0"               # latest stable; 9.5.0 is alpha-only — hold per "no RC/alpha" rule
+kotlin = "2.4.10"            # September 2026 (2.4.20 is RC-only)
 
 # ----- AndroidX core -----
 # core-ktx 1.19 + lifecycle 2.11 require compileSdk 37 (bumped below).
 core-ktx = "1.19.0"
 activity-compose = "1.13.0"
 lifecycle = "2.11.0"
-nav-compose = "2.9.8"
+nav-compose = "2.10.0"        # minSdk 24 floor (the app moved there for it)
 
 # ----- Compose -----
 # BOM pins the whole compose.* family; only override individual artifacts if
 # you really need a newer one. Compose-for-TV lives outside the BOM.
-compose-bom = "2026.06.01"
+compose-bom = "2026.08.00"
 # Note: tv-foundation hasn't shipped a 1.1.0 stable as of writing — the
 # androidx.tv 1.1 release line is `tv-material` only. Stay on 1.0.0 here.
 compose-tv-foundation = "1.0.0"
 compose-tv-material = "1.1.0"
 
 # ----- Media3 (ExoPlayer) -----
-media3 = "1.10.1"            # latest stable; bump => rebuild lib-decoder-{ffmpeg,av1} AARs (scripts/)
+media3 = "1.11.0"            # latest stable; bump => rebuild lib-decoder-{ffmpeg,av1} AARs (scripts/)
 
 # ----- Networking -----
 # Retrofit 3.0.0 is out and works with Square's official kotlinx-serialization
 # converter; we use that pair instead of JakeWharton's standalone fork.
 retrofit = "3.0.0"
-okhttp = "5.4.0"
+okhttp = "5.5.0"
 kotlinx-serialization = "1.11.0"
 
 # ----- Persistence + images -----
-# datastore 1.3 is alpha only as of June 2026; stay on 1.2.1.
+# datastore 1.3 is alpha only as of September 2026; stay on 1.2.1.
 # coil 3.x is the latest line: artifacts moved from `io.coil-kt` to
 # `io.coil-kt.coil3` and now require an explicit network module.
 datastore = "1.2.1"
-coil = "3.5.0"
+coil = "3.6.1"
 
 # ----- Android TV channels (home launcher rows) -----
 tvprovider = "1.1.0"
 work = "2.11.2"
 
 # ----- Desugaring -----
-# Backports java.time (used by the OpenAPI-generated DTOs) to minSdk 23.
+# Backports java.time (used by the OpenAPI-generated DTOs) to minSdk 24.
 desugar-jdk-libs = "2.1.5"
 
 # ----- Codegen -----
 # Generates the @Serializable DTO layer from ../web/openapi.json (utoipa-
 # derived spec). Pinned to the same release as the openapi-generator line the
 # web side validates against. Models only — Retrofit interface stays hand-written.
-openapi-generator = "7.23.0"
+openapi-generator = "7.25.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
