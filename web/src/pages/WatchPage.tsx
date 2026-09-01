@@ -47,6 +47,7 @@ import {
   rawStreamUrl,
   type DecodeTier,
 } from "@/lib/iris-core/manifest-client";
+import { hevcMseNeedsIdrStart } from "@/lib/iris-core/caps";
 import { IrisPlayer } from "@/lib/iris-core/IrisPlayer";
 import { readStoredVolume, writeStoredVolume } from "@/lib/player-volume";
 import { readLocal, writeLocal } from "@/lib/safe-storage";
@@ -350,15 +351,21 @@ export function WatchPage() {
    *  the correct stop on the way down. */
   const nextDemotionTarget = useCallback(
     (from: DecodeTier): DecodeTier => {
+      const primary = manifest?.video[0];
+      const isHevc = primary != null && /hevc|hev1|hvc1|h265|x265/i.test(primary.codec);
       if ((from === "C" || from === "D") && manifest) {
-        const primary = manifest.video[0];
-        const isHevc = primary != null && /hevc|hev1|hvc1|h265|x265/i.test(primary.codec);
         const within1080p = (primary?.height ?? 0) <= 1080 && (primary?.height ?? 0) > 0;
         const chromiumish =
           /Chrome|Edg/.test(navigator.userAgent) && !/Mobile/.test(navigator.userAgent);
         if (isHevc && within1080p && chromiumish && !demotedRef.current.has("E")) {
           return "E";
         }
+      }
+      // Gecko 154+/macOS HEVC runs Tier B with the CRA splice; if that refuses
+      // the stream, hevc.js is the engine that can still seek — not F, whose
+      // fragments meet the same demuxer.
+      if (from === "B" && isHevc && hevcMseNeedsIdrStart() && !demotedRef.current.has("E")) {
+        return "E";
       }
       return "F";
     },

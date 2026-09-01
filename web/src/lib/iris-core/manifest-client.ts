@@ -145,21 +145,19 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
   }
 
   // HEVC where MSE will only ever start on an IDR (Firefox-family on macOS,
-  // Gecko 154+ — see `hevcMseNeedsIdrStart`). Tier B would play from t=0 and
-  // then die on the first seek or resume, because an open-GOP rip carries a
-  // single IDR at the head and every later keyframe is a CRA that this engine
-  // refuses to open a coded frame group on. Route to hevc.js instead: it
-  // transcodes to H.264 in a WASM worker, so what reaches MSE is a codec with
-  // no such restriction.
-  //
-  // No resolution gate here, unlike the generic Tier E branch at the bottom:
-  // there, E is one option among several and skipping 4K costs nothing. Here it
-  // is the only engine that can seek at all, so a heavy transcode beats a
-  // player that cannot leave t=0.
+  // Gecko 154+ — see `hevcMseNeedsIdrStart`). An open-GOP rip carries a single
+  // IDR at the head and every later keyframe is a CRA this engine refuses to
+  // open a coded frame group on, so a plain Tier B plays from t=0 and dies on
+  // the first seek or resume. Tier B knows: it splices the CRA a run starts on
+  // into a real IDR (`hevc-cra-splice.ts`) and the platform decoder keeps the
+  // file. Tier A would hand the raw file to the same demuxer, where a
+  // mid-file seek falls back to decoding from the head IDR — minutes of
+  // catch-up on a feature — so B it is, mp4 or not. Should the splice refuse
+  // the stream, the demotion routes to hevc.js (WASM transcode) rather than F.
   //
   // This sits BEFORE the Tier A/B branches on purpose: `codecsMse` is true for
   // `hev1.*` on these builds — `isTypeSupported` says yes and the demuxer then
-  // drops the frames — so B would otherwise win and fail later.
+  // drops the frames — so A could otherwise win and fail later.
   const hevcPrimary = manifest.video[0];
   if (
     hevcPrimary &&
@@ -167,10 +165,10 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
     hevcMseNeedsIdrStart()
   ) {
     console.log(
-      `[iris-core] Tier E (IDR-start): codec=${hevcPrimary.codec} ` +
+      `[iris-core] Tier B (CRA splice): codec=${hevcPrimary.codec} ` +
         `${hevcPrimary.width ?? "?"}x${hevcPrimary.height ?? "?"} ua=${navigator.userAgent}`,
     );
-    return "E";
+    return audioTranscodable ? "B" : "F";
   }
 
   // Tier A: must be MSE-friendly AND native audio (we can't inject

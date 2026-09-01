@@ -36,7 +36,8 @@ import {
   UrlSource,
 } from "mediabunny";
 
-import { isMobileLike } from "../caps";
+import { hevcMseNeedsIdrStart, isMobileLike } from "../caps";
+import { HevcCraSplicer, descriptionBytes, splicePacket } from "../decode/hevc-cra-splice";
 import { ensureLibavAudioDecoderRegistered, libavCanDecode } from "../decode/libav-audio-decoder";
 import {
   appendNativeTrack,
@@ -1198,6 +1199,17 @@ export const mountTierB: EngineMount = async (opts) => {
       if (!startPacket) return;
       const decoderConfig = await videoTrack.getDecoderConfig();
       let firstMeta = true;
+      // Gecko 154+ on macOS opens a coded frame group only on an IDR, and an
+      // open-GOP HEVC rip has one, at t=0. The splicer relabels the CRA this
+      // run starts on as a real IDR (header rewrite + POC shift for the rest
+      // of the run — see `hevc-cra-splice.ts`), so the hardware decoder keeps
+      // the file instead of the WASM transcode. Built per run: the shift is
+      // relative to this run's opening picture. A source it can't read throws
+      // `HevcSpliceUnsupported`, which fails the pipeline and demotes.
+      const splicer =
+        sourceVideoCodec === "hevc" && hevcMseNeedsIdrStart()
+          ? new HevcCraSplicer(descriptionBytes(decoderConfig?.description ?? undefined))
+          : null;
 
       // Feed every packet in decode order. We used to DROP open-GOP "stray"
       // (PTS < keyframe) and "bridge" (PTS ≥ next keyframe) frames to dodge
@@ -1232,7 +1244,7 @@ export const mountTierB: EngineMount = async (opts) => {
         await waitBufferRoom(packet.timestamp);
         if (disposed || newGen !== conversionGeneration) break;
         const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
-        await videoSrc.add(packet, meta);
+        await videoSrc.add(splicer ? splicePacket(splicer, packet) : packet, meta);
         firstMeta = false;
         if (packet.timestamp > videoFedMax) videoFedMax = packet.timestamp;
         notifyTrackProgress();

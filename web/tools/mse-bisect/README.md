@@ -76,8 +76,12 @@ Measured on Zen 1.21.15b (`rv:154.0`), x265 open-GOP file:
 This Gecko opens a coded frame group only on an **IDR**. CRA and BLA are refused
 at the buffering stage; relabelling to IDR gets past buffering and then breaks
 decode, because an IDR slice header omits `slice_pic_order_cnt_lsb`. Converting
-a CRA to a real IDR would mean rewriting the POC of every following picture in
-the GOP, which is bitstream surgery in the hot path and out of the question here.
+a CRA to a real IDR means rewriting that slice header and shifting the POC of
+every following picture in the run. That is what
+`src/lib/iris-core/decode/hevc-cra-splice.ts` does on this Gecko, so Tier B
+keeps the platform decoder; `tools/hevc-splice/check.ts` verifies the rewrite
+offline against any file (ffmpeg decodes the spliced run frame-for-frame
+identical to the original).
 
 One method note, learned the hard way: `HTMLMediaElement.play()` returns a
 promise that **never settles** when playback cannot start. `await v.play().catch(...)`
@@ -134,7 +138,10 @@ coherent:
 | Firefox 153 (without the fix) | fails         | works            |
 | Gecko 154 (with it)           | works         | `buffered` empty |
 
-## The workaround that works: hevc.js on the unmuxed path
+## The fallback that works: hevc.js on the unmuxed path
+
+Now the demotion target when the splice above refuses a stream (Tier B → E on
+this Gecko), no longer the first choice: it decodes in software.
 
 `hevcjs-videoonly-probe.html`, measured on Zen / Gecko 154 with a video-only
 fMP4 starting on a mid-stream CRA (the case that breaks Tier B):
