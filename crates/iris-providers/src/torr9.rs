@@ -928,14 +928,12 @@ fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<Search
 
     let read_enclosure = |e: &quick_xml::events::BytesStart, item: &mut RssItem| {
         for attr in e.attributes().flatten() {
-            let Ok(raw) = std::str::from_utf8(&attr.value) else {
-                continue;
-            };
+            let raw: &str = &attr.value;
             let val =
                 xml_unescape(raw).map_or_else(|_| raw.to_string(), std::borrow::Cow::into_owned);
             match attr.key.as_ref() {
-                b"url" => item.enclosure_url = Some(val),
-                b"length" => item.length = val.parse().ok(),
+                "url" => item.enclosure_url = Some(val),
+                "length" => item.length = val.parse().ok(),
                 _ => {}
             }
         }
@@ -944,12 +942,12 @@ fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<Search
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"item" => cur = Some(RssItem::default()),
-                b"title" => tag = Some(RssTag::Title),
-                b"link" => tag = Some(RssTag::Link),
-                b"guid" => tag = Some(RssTag::Guid),
-                b"pubDate" => tag = Some(RssTag::PubDate),
-                b"enclosure" => {
+                "item" => cur = Some(RssItem::default()),
+                "title" => tag = Some(RssTag::Title),
+                "link" => tag = Some(RssTag::Link),
+                "guid" => tag = Some(RssTag::Guid),
+                "pubDate" => tag = Some(RssTag::PubDate),
+                "enclosure" => {
                     if let Some(item) = cur.as_mut() {
                         read_enclosure(&e, item);
                     }
@@ -958,18 +956,16 @@ fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<Search
                 _ => tag = None,
             },
             Ok(Event::Empty(e)) => {
-                if e.name().as_ref() == b"enclosure"
+                if e.name().as_ref() == "enclosure"
                     && let Some(item) = cur.as_mut()
                 {
                     read_enclosure(&e, item);
                 }
             }
             Ok(Event::Text(t)) => {
-                if let (Some(item), Some(tg)) = (cur.as_mut(), tag)
-                    && let Ok(decoded) = t.decode()
-                {
-                    let text = xml_unescape(decoded.as_ref())
-                        .map_or_else(|_| decoded.to_string(), std::borrow::Cow::into_owned);
+                if let (Some(item), Some(tg)) = (cur.as_mut(), tag) {
+                    let text = xml_unescape(&t)
+                        .map_or_else(|_| t.to_string(), std::borrow::Cow::into_owned);
                     let text = text.trim().to_string();
                     if !text.is_empty() {
                         match tg {
@@ -985,7 +981,7 @@ fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<Search
                 }
             }
             Ok(Event::End(e)) => {
-                if e.name().as_ref() == b"item"
+                if e.name().as_ref() == "item"
                     && let Some(r) = cur
                         .take()
                         .and_then(|i| i.into_search_result(provider_id, kind))

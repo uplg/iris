@@ -836,22 +836,16 @@ fn parse_torznab_xml(body: &str) -> Result<ParsedTorznab> {
                 handle_empty(&e, current.as_mut(), &mut out);
             }
             Ok(Event::Text(t)) => {
-                if current.is_some()
-                    && last_tag.is_some()
-                    && let Some(text) = text_value(&t)
-                {
-                    text_acc.push_str(&text);
+                if current.is_some() && last_tag.is_some() {
+                    text_acc.push_str(&text_value(&t));
                 }
             }
             Ok(Event::CData(c)) => {
                 // Some indexers (Nexum) wrap `<title>` — and occasionally
                 // `<link>` / `<guid>` — in CDATA. CDATA is literal text (no
                 // XML-entity unescaping), so push the raw bytes verbatim.
-                if current.is_some()
-                    && last_tag.is_some()
-                    && let Ok(text) = std::str::from_utf8(c.as_ref())
-                {
-                    text_acc.push_str(text);
+                if current.is_some() && last_tag.is_some() {
+                    text_acc.push_str(&c);
                 }
             }
             Ok(Event::GeneralRef(r)) => {
@@ -876,12 +870,12 @@ fn parse_torznab_xml(body: &str) -> Result<ParsedTorznab> {
                 }
                 text_acc.clear();
                 match e.name().as_ref() {
-                    b"item" => {
+                    "item" => {
                         if let Some(item) = current.take() {
                             out.items.push(item);
                         }
                     }
-                    b"channel" => in_channel = false,
+                    "channel" => in_channel = false,
                     _ => {}
                 }
                 last_tag = None;
@@ -899,22 +893,22 @@ fn parse_torznab_xml(body: &str) -> Result<ParsedTorznab> {
 }
 
 fn handle_start(
-    name: &[u8],
+    name: &str,
     in_channel: &mut bool,
     current: &mut Option<RawItem>,
     last_tag: &mut Option<TagKind>,
 ) {
     match name {
-        b"channel" => *in_channel = true,
-        b"item" if *in_channel => *current = Some(RawItem::default()),
-        b"title" => *last_tag = Some(TagKind::Title),
-        b"link" => *last_tag = Some(TagKind::Link),
-        b"guid" => *last_tag = Some(TagKind::Guid),
-        b"size" => *last_tag = Some(TagKind::Size),
-        b"category" => *last_tag = Some(TagKind::Category),
-        b"description" => *last_tag = Some(TagKind::Description),
-        b"pubDate" => *last_tag = Some(TagKind::PubDate),
-        b"comments" => *last_tag = Some(TagKind::Comments),
+        "channel" => *in_channel = true,
+        "item" if *in_channel => *current = Some(RawItem::default()),
+        "title" => *last_tag = Some(TagKind::Title),
+        "link" => *last_tag = Some(TagKind::Link),
+        "guid" => *last_tag = Some(TagKind::Guid),
+        "size" => *last_tag = Some(TagKind::Size),
+        "category" => *last_tag = Some(TagKind::Category),
+        "description" => *last_tag = Some(TagKind::Description),
+        "pubDate" => *last_tag = Some(TagKind::PubDate),
+        "comments" => *last_tag = Some(TagKind::Comments),
         _ => *last_tag = None,
     }
 }
@@ -925,20 +919,19 @@ fn handle_empty(
     out: &mut ParsedTorznab,
 ) {
     let name = e.name();
-    let bytes = name.as_ref();
-    if bytes.ends_with(b"torznab:attr") || bytes.ends_with(b":attr") {
+    let name = name.as_ref();
+    if name.ends_with("torznab:attr") || name.ends_with(":attr") {
         if let Some(item) = current {
             apply_torznab_attr_element(e, item);
         }
-    } else if bytes == b"enclosure" {
+    } else if name == "enclosure" {
         if let Some(item) = current {
             apply_enclosure_element(e, item);
         }
-    } else if bytes.ends_with(b":response") || bytes == b"response" {
+    } else if name.ends_with(":response") || name == "response" {
         for attr in e.attributes().flatten() {
-            if attr.key.as_ref() == b"total"
-                && let Some(s) = attr_value(&attr)
-                && let Ok(n) = s.parse()
+            if attr.key.as_ref() == "total"
+                && let Ok(n) = attr_value(&attr).parse()
             {
                 out.total = Some(n);
             }
@@ -950,8 +943,8 @@ fn apply_torznab_attr_element(e: &quick_xml::events::BytesStart<'_>, item: &mut 
     let (mut k, mut v) = (None, None);
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
-            b"name" => k = attr_value(&attr),
-            b"value" => v = attr_value(&attr),
+            "name" => k = Some(attr_value(&attr)),
+            "value" => v = Some(attr_value(&attr)),
             _ => {}
         }
     }
@@ -963,17 +956,13 @@ fn apply_torznab_attr_element(e: &quick_xml::events::BytesStart<'_>, item: &mut 
 fn apply_enclosure_element(e: &quick_xml::events::BytesStart<'_>, item: &mut RawItem) {
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
-            b"url" => {
-                if let Some(s) = attr_value(&attr) {
-                    // Enclosure always wins — see [`RawItem::download_url`].
-                    item.download_url = Some(s);
-                    item.download_url_from_enclosure = true;
-                }
+            "url" => {
+                // Enclosure always wins — see [`RawItem::download_url`].
+                item.download_url = Some(attr_value(&attr));
+                item.download_url_from_enclosure = true;
             }
-            b"length" => {
-                if let Some(s) = attr_value(&attr)
-                    && let Ok(n) = s.parse()
-                {
+            "length" => {
+                if let Ok(n) = attr_value(&attr).parse() {
                     item.size.get_or_insert(n);
                 }
             }
@@ -1054,7 +1043,7 @@ fn resolve_general_ref(r: &BytesRef<'_>) -> Option<char> {
         return Some(ch);
     }
     // The five predefined XML named entities.
-    match r.decode().ok()?.as_ref() {
+    match &**r {
         "amp" => Some('&'),
         "lt" => Some('<'),
         "gt" => Some('>'),
@@ -1064,21 +1053,16 @@ fn resolve_general_ref(r: &BytesRef<'_>) -> Option<char> {
     }
 }
 
-/// Decode an attribute value (`Cow<[u8]>` raw bytes from quick-xml) into
-/// an owned `String` with XML entities unescaped. Returns `None` on
-/// malformed UTF-8; entity-unescape failures fall through to the raw
-/// decoded string (Torznab attrs almost never carry escapable chars).
-fn attr_value(attr: &Attribute) -> Option<String> {
-    let raw = std::str::from_utf8(&attr.value).ok()?;
-    Some(xml_unescape(raw).map_or_else(|_| raw.to_string(), std::borrow::Cow::into_owned))
+/// Attribute value with XML entities unescaped; an unescape failure falls
+/// through to the raw string (Torznab attrs almost never carry escapable
+/// chars).
+fn attr_value(attr: &Attribute) -> String {
+    let raw: &str = &attr.value;
+    xml_unescape(raw).map_or_else(|_| raw.to_string(), std::borrow::Cow::into_owned)
 }
 
-fn text_value(t: &BytesText) -> Option<String> {
-    let decoded = t.decode().ok()?;
-    Some(xml_unescape(&decoded).map_or_else(
-        |_| decoded.clone().into_owned(),
-        std::borrow::Cow::into_owned,
-    ))
+fn text_value(t: &BytesText) -> String {
+    xml_unescape(t).map_or_else(|_| t.to_string(), std::borrow::Cow::into_owned)
 }
 
 /// Best-effort RFC 2822 parse — Torznab `<pubDate>` follows RSS, but

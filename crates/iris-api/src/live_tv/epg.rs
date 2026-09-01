@@ -105,26 +105,22 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"channel" => {
+                "channel" => {
                     current_channel_id = e
                         .attributes()
                         .flatten()
-                        .find(|a| a.key.as_ref() == b"id")
-                        .map(|a| String::from_utf8_lossy(&a.value).to_lowercase());
+                        .find(|a| a.key.as_ref() == "id")
+                        .map(|a| a.value.to_lowercase());
                 }
-                b"display-name" if current_channel_id.is_some() => field = Some("display-name"),
-                b"programme" => current = programme_open(&e, window_start, window_end),
-                b"title" if current.is_some() => field = Some("title"),
-                b"desc" if current.is_some() => field = Some("desc"),
-                b"category" if current.is_some() => field = Some("category"),
+                "display-name" if current_channel_id.is_some() => field = Some("display-name"),
+                "programme" => current = programme_open(&e, window_start, window_end),
+                "title" if current.is_some() => field = Some("title"),
+                "desc" if current.is_some() => field = Some("desc"),
+                "category" if current.is_some() => field = Some("category"),
                 _ => {}
             },
             Ok(Event::Text(t)) => {
-                let text = || {
-                    t.decode()
-                        .map(std::borrow::Cow::into_owned)
-                        .unwrap_or_default()
-                };
+                let text = || t.to_string();
                 // <display-name> inside a <channel>: fold name → id (first wins).
                 if field == Some("display-name")
                     && let Some(id) = &current_channel_id
@@ -150,7 +146,7 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
                 }
             }
             Ok(Event::End(e)) => match e.name().as_ref() {
-                b"programme" => {
+                "programme" => {
                     if let Some((channel, prog)) = current.take()
                         && !prog.title.is_empty()
                     {
@@ -158,8 +154,8 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
                     }
                     field = None;
                 }
-                b"channel" => current_channel_id = None,
-                b"title" | b"desc" | b"category" | b"display-name" => field = None,
+                "channel" => current_channel_id = None,
+                "title" | "desc" | "category" | "display-name" => field = None,
                 _ => {}
             },
             // EOF ends the parse; a mid-document error salvages what parsed
@@ -185,11 +181,11 @@ fn programme_open(
 ) -> Option<(String, Programme)> {
     let (mut channel, mut start, mut stop) = (None, None, None);
     for attr in e.attributes().flatten() {
-        let value = String::from_utf8_lossy(&attr.value);
+        let value = &attr.value;
         match attr.key.as_ref() {
-            b"channel" => channel = Some(value.to_lowercase()),
-            b"start" => start = parse_xmltv_time(&value),
-            b"stop" => stop = parse_xmltv_time(&value),
+            "channel" => channel = Some(value.to_lowercase()),
+            "start" => start = parse_xmltv_time(value),
+            "stop" => stop = parse_xmltv_time(value),
             _ => {}
         }
     }

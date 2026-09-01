@@ -102,8 +102,8 @@ sqlx = { version = "0.9.0", default-features = false, features = [
   "chrono",
 ] }
 
-# Auth (latest stable; argon2 0.6 is rc)
-argon2 = "0.5.3"
+# Auth (latest stable)
+argon2 = "0.6.0"
 jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto"] }
 rand = "0.10.2"
 
@@ -121,7 +121,7 @@ url = { version = "2.5.8", features = ["serde"] }
 # (`info_hash` / `peer_id` are 20 arbitrary bytes, not text). Same crate
 # librqbit encodes its own announces with, so ours match byte for byte.
 urlencoding = "2.1.3"
-quick-xml = "0.41.0"
+quick-xml = "0.42.0"
 # HTML scraping for API-less trackers (hdtorrents). `deterministic` keeps
 # attribute order (IndexMap) — HD-Torrents hides the upload date in unquoted
 # attribute NAMES, so iteration order is load-bearing. Default features off:

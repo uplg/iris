@@ -368,18 +368,18 @@ enum Tag {
     Size,
 }
 
-fn tag_of(name: &[u8]) -> Option<Tag> {
+fn tag_of(name: &str) -> Option<Tag> {
     match name {
-        b"title" => Some(Tag::Title),
-        b"link" => Some(Tag::Link),
-        b"guid" => Some(Tag::Guid),
-        b"pubDate" => Some(Tag::PubDate),
-        b"nyaa:seeders" => Some(Tag::Seeders),
-        b"nyaa:leechers" => Some(Tag::Leechers),
-        b"nyaa:infoHash" => Some(Tag::InfoHash),
-        b"nyaa:category" => Some(Tag::Category),
-        b"nyaa:categoryId" => Some(Tag::CategoryId),
-        b"nyaa:size" => Some(Tag::Size),
+        "title" => Some(Tag::Title),
+        "link" => Some(Tag::Link),
+        "guid" => Some(Tag::Guid),
+        "pubDate" => Some(Tag::PubDate),
+        "nyaa:seeders" => Some(Tag::Seeders),
+        "nyaa:leechers" => Some(Tag::Leechers),
+        "nyaa:infoHash" => Some(Tag::InfoHash),
+        "nyaa:category" => Some(Tag::Category),
+        "nyaa:categoryId" => Some(Tag::CategoryId),
+        "nyaa:size" => Some(Tag::Size),
         _ => None,
     }
 }
@@ -424,7 +424,7 @@ fn parse_nyaa_rss(body: &str) -> Result<Vec<RawItem>> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
                 text.clear();
-                if e.name().as_ref() == b"item" {
+                if e.name().as_ref() == "item" {
                     current = Some(RawItem::default());
                     tag = None;
                 } else if current.is_some() {
@@ -432,26 +432,20 @@ fn parse_nyaa_rss(body: &str) -> Result<Vec<RawItem>> {
                 }
             }
             Ok(Event::Text(t)) => {
-                if current.is_some()
-                    && tag.is_some()
-                    && let Ok(s) = t.decode()
-                {
-                    text.push_str(&s);
+                if current.is_some() && tag.is_some() {
+                    text.push_str(&t);
                 }
             }
             Ok(Event::CData(c)) => {
                 // CDATA is literal — no entity unescaping.
-                if current.is_some()
-                    && tag.is_some()
-                    && let Ok(s) = std::str::from_utf8(c.as_ref())
-                {
-                    text.push_str(s);
+                if current.is_some() && tag.is_some() {
+                    text.push_str(&c);
                 }
             }
             Ok(Event::GeneralRef(r)) => {
                 if current.is_some()
                     && tag.is_some()
-                    && let Some(ch) = resolve_ref(r.as_ref())
+                    && let Some(ch) = resolve_ref(&r)
                 {
                     text.push(ch);
                 }
@@ -465,7 +459,7 @@ fn parse_nyaa_rss(body: &str) -> Result<Vec<RawItem>> {
                 }
                 text.clear();
                 tag = None;
-                if e.name().as_ref() == b"item"
+                if e.name().as_ref() == "item"
                     && let Some(item) = current.take()
                 {
                     items.push(item);
@@ -481,8 +475,7 @@ fn parse_nyaa_rss(body: &str) -> Result<Vec<RawItem>> {
 }
 
 /// Resolve an XML entity reference body (the bytes between `&` and `;`).
-fn resolve_ref(raw: &[u8]) -> Option<char> {
-    let s = std::str::from_utf8(raw).ok()?;
+fn resolve_ref(s: &str) -> Option<char> {
     match s {
         "amp" => Some('&'),
         "lt" => Some('<'),
