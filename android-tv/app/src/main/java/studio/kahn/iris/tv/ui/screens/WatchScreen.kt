@@ -69,6 +69,7 @@ import studio.kahn.iris.tv.data.installIrisTrackNameProvider
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.IrisPlayerView
 
 /** A title counts as watched/done once playback passes this fraction — the
  *  last ~10 % is credits / recap, so 90 % is "finished" for both movies
@@ -88,7 +89,8 @@ private fun isWatched(posMs: Long, durMs: Long?): Boolean =
  * in the background and long-polled by the HTTP layer when missing).
  *
  * D-pad maps to PlayerView's built-in TV controls (play/pause, seek,
- * subtitle + audio track selection via the settings menu). Multi-audio
+ * subtitle + audio track selection via the settings menu); `IrisPlayerView`
+ * adds the centre-key play/pause toggle and the single-layer overlay fade. Multi-audio
  * renditions are exposed natively by `HlsMediaSource` — Media3 picks
  * up `EXT-X-MEDIA TYPE=AUDIO` entries from the manifest and surfaces
  * them via the standard track-selection API.
@@ -1125,13 +1127,11 @@ private fun ReadyPlayer(
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
-            PlayerView(ctx).apply {
+            IrisPlayerView(ctx).apply {
                 this.player = player
-                useController = true
                 setShowSubtitleButton(true)
                 setShowFastForwardButton(true)
                 setShowRewindButton(true)
-                controllerAutoShow = true
                 layoutParams = android.widget.FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
                 // Hold the screen-on flag for as long as the PlayerView is
                 // attached. Without this, Android TV blanks the panel after
