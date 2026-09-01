@@ -136,7 +136,15 @@ export function bindVideoCallbacks(
   opts: EngineMountOptions,
   initialSeek: { done: boolean },
 ): () => void {
-  const onTime = () => opts.onTimeUpdate?.(video.currentTime);
+  const onTime = () => {
+    opts.onTimeUpdate?.(video.currentTime);
+    // A moving playhead is the one proof nobody is waiting. It closes any
+    // spinner a missed event pair left open — Safari's `stalled` with no
+    // `playing` after it being the known one.
+    if (!video.paused && !video.seeking && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+      opts.onBusyChange?.(false);
+    }
+  };
   const onDuration = () => {
     if (Number.isFinite(video.duration) && video.duration > 0) {
       opts.onDurationChange?.(video.duration);
@@ -151,6 +159,13 @@ export function bindVideoCallbacks(
   const onEnded = () => opts.onEnded?.();
   const onBusy = () => opts.onBusyChange?.(true);
   const onIdle = () => opts.onBusyChange?.(false);
+  // `stalled` is a network signal, not a playback one: WebKit fires it whenever
+  // the fetch goes quiet for a few seconds — buffer full, picture moving — and
+  // nothing follows it, since playback never stopped. Only a starved element is
+  // actually waiting.
+  const onStalled = () => {
+    if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) onBusy();
+  };
   const onCanPlay = () => {
     if (initialSeek.done) return;
     initialSeek.done = true;
@@ -173,7 +188,7 @@ export function bindVideoCallbacks(
   // actually show something. `seeking`/`seeked` matter for Tier E, where a
   // reposition means a fresh transcode rather than an instant jump.
   video.addEventListener("waiting", onBusy);
-  video.addEventListener("stalled", onBusy);
+  video.addEventListener("stalled", onStalled);
   video.addEventListener("seeking", onBusy);
   video.addEventListener("canplay", onIdle);
   video.addEventListener("playing", onIdle);
@@ -187,7 +202,7 @@ export function bindVideoCallbacks(
     video.removeEventListener("ended", onEnded);
     video.removeEventListener("canplay", onCanPlay);
     video.removeEventListener("waiting", onBusy);
-    video.removeEventListener("stalled", onBusy);
+    video.removeEventListener("stalled", onStalled);
     video.removeEventListener("seeking", onBusy);
     video.removeEventListener("canplay", onIdle);
     video.removeEventListener("playing", onIdle);

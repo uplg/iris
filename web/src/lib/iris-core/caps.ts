@@ -52,6 +52,23 @@ const CONTAINER_PROBES: Array<{ name: string; mime: string }> = [
   // for the future demux-via-mediabunny path (Phase 2a).
 ];
 
+/**
+ * `MediaSource.isTypeSupported` with the WebKit HEVC quirk folded in. Safari
+ * (macOS and iPadOS alike) answers false for every `hev1.*` codec string and
+ * true only for the `hvc1.*` spelling of the same profile/level — Apple's HLS
+ * authoring rule, applied to MSE. Same decoder either way, and every fMP4 we
+ * hand MSE for HEVC carries `hvc1` sample entries (Mediabunny in Tier B,
+ * `-tag:v hvc1` in the server remux), so a `hvc1` yes is a real yes. Without
+ * this an iPad reports no HEVC decoder at all and every HEVC file lands on
+ * Tier F — a server remux for a codec the device decodes in hardware.
+ */
+export function mseSupportsType(mime: string): boolean {
+  if (typeof globalThis.MediaSource === "undefined") return false;
+  if (MediaSource.isTypeSupported(mime)) return true;
+  const hvc1 = mime.replace(/\bhev1\./g, "hvc1.");
+  return hvc1 !== mime && MediaSource.isTypeSupported(hvc1);
+}
+
 let cached: ClientCaps | null = null;
 let cachedHeader: string | null = null;
 
@@ -68,7 +85,7 @@ export async function probeCapabilities(): Promise<ClientCaps> {
     : [];
   // Phase 0: just MSE-level probing. WebCodecs HW probing comes Phase 2b.
   const videoDecoders = mse
-    ? VIDEO_PROBES.filter((p) => MediaSource.isTypeSupported(p.mime)).map((p) => p.name)
+    ? VIDEO_PROBES.filter((p) => mseSupportsType(p.mime)).map((p) => p.name)
     : [];
   const audioDecoders = mse
     ? AUDIO_PROBES.filter((p) => MediaSource.isTypeSupported(p.mime)).map((p) => p.name)
@@ -80,7 +97,7 @@ export async function probeCapabilities(): Promise<ClientCaps> {
   const subtitles = ["webvtt"];
 
   const hdr: string[] = [];
-  if (mse && MediaSource.isTypeSupported('video/mp4; codecs="hev1.2.4.L153.B0"')) {
+  if (mse && mseSupportsType('video/mp4; codecs="hev1.2.4.L153.B0"')) {
     // hev1 Main10 / L5.1 is the HDR10 capability marker; deeper detection
     // (PQ vs HLG, max_cll honouring) lands Phase 2c when WebGPU canvases
     // get configured for HDR.

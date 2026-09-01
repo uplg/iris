@@ -8,7 +8,13 @@
  */
 
 import type { components } from "../api-types";
-import { capsHeader, hevcMseNeedsIdrStart, isMobileLike, probeCapabilities } from "./caps";
+import {
+  capsHeader,
+  hevcMseNeedsIdrStart,
+  isMobileLike,
+  mseSupportsType,
+  probeCapabilities,
+} from "./caps";
 import { libavCanDecode } from "./decode/libav-audio-decoder";
 import { cheapProbeVideoCodec } from "./decode/webcodecs-probe";
 
@@ -90,8 +96,20 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
 
   const codecsMse = manifest.video.every((v) => {
     const mime = v.codec_string ? `video/mp4; codecs="${v.codec_string}"` : `video/mp4`;
-    return MediaSource.isTypeSupported(mime);
+    return mseSupportsType(mime);
   });
+  // WebKit: MSE takes this HEVC only under the `hvc1` spelling (see
+  // `mseSupportsType`). Tier B is fine — Mediabunny writes `hvc1` sample
+  // entries whatever the source had — but Tier A hands the raw file to
+  // `<video src>`, and AVFoundation refuses an MP4 whose sample entry is
+  // `hev1` (the reason every "HEVC for Apple" recipe ends in `-tag:v hvc1`).
+  // The manifest's codec string is synthesised from profile/level, so it can't
+  // tell us which tag the file carries: keep such files off Tier A.
+  const hevcOnlyAsHvc1 = manifest.video.some(
+    (v) =>
+      v.codec_string?.startsWith("hev1.") === true &&
+      !MediaSource.isTypeSupported(`video/mp4; codecs="${v.codec_string}"`),
+  );
   const audioNative = manifest.audio.every((a) => a.browser_native);
   // libav.js + WebCodecs.AudioEncoder lets us transcode AC-3, E-AC-3
   // and FLAC to AAC client-side at mount time (see Tier B's audio
@@ -118,7 +136,7 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
   // native-codec MKV — keep it. (Desktop keeps the full cascade below.)
   const isMp4Family = /mp4|mov|m4v|isobmff/i.test(manifest.container);
   if (isMobileLike()) {
-    if (codecsMse && audioNative && isMp4Family) return "A";
+    if (codecsMse && audioNative && isMp4Family && !hevcOnlyAsHvc1) return "A";
     // `audioTranscodable` is guaranteed true here (the `!audioNative &&
     // !audioTranscodable` early-return above, plus `audioNative ⟹
     // audioTranscodable`), so any MSE-decodable video lands on B.
@@ -159,9 +177,9 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
   // libav.js into a vanilla `<video src>` — the engine is the
   // browser, no hooks). Tier B picks up the libav-transcoded case.
   if (codecsMse && audioNative) {
-    if (isMp4Family) return "A";
+    if (isMp4Family && !hevcOnlyAsHvc1) return "A";
     const tierBContainers = /matroska|webm|avi|mpegts|quicktime|mov/i;
-    if (tierBContainers.test(manifest.container)) return "B";
+    if (tierBContainers.test(manifest.container) || hevcOnlyAsHvc1) return "B";
   }
 
   // Tier B with audio transcode: MSE accepts the video, libav.js
