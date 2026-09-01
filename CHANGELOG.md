@@ -30,8 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   revealing the overlay and leaving the user to walk to the play button. The
   overlay fades in and out as one layer — Media3's own choreography hid the
   main bar first and the progress bar two seconds later, which read as the
-  overlay hanging before it closed — and the black band behind the bottom
-  buttons is gone. Keys reach the player through the activity
+  overlay hanging before it closed — and the flat black wash behind it
+  (plus the band under the bottom buttons) gives way to top and bottom
+  shadows over a light dim, so the picture stays readable underneath. Keys
+  reach the player through the activity
   (`PlayerKeyRouter`): with the overlay hidden nothing inside the `PlayerView`
   holds focus, so the D-pad never got there on its own.
 

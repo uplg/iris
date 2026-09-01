@@ -10,10 +10,12 @@
 -->
 <merge xmlns:android="http://schemas.android.com/apk/res/android">
 
+  <!-- Top/bottom shadows + a light dim instead of Media3's flat 60% black:
+       the picture stays readable under the overlay. -->
   <View android:id="@id/exo_controls_background"
       android:layout_width="0dp"
       android:layout_height="0dp"
-      android:background="@color/exo_black_opacity_60"/>
+      android:background="@drawable/iris_player_scrim"/>
 
   <!-- Top-left header: a focusable Back-to-Home button next to the title.
        The button lives INSIDE the controller (not in a Compose overlay) so the
