@@ -29,8 +29,8 @@ android {
         applicationId = "studio.kahn.iris.tv"
         minSdk = 24           // navigation 2.10 floor; no Android TV box is left on 6.0
         targetSdk = 37
-        versionCode = 30
-        versionName = "1.4.0"
+        versionCode = 31
+        versionName = "1.4.1"
         // Build stamp surfaced in Settings: versionName/versionCode stay equal
         // across pre-release iterations, so without this there's no way to tell
         // WHICH build actually runs on the device. Via BuildStampSource — see
