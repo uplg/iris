@@ -50,6 +50,7 @@ import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
 import studio.kahn.iris.tv.data.humanizePlaybackError
 import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.OnOutputLost
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
@@ -160,6 +161,11 @@ fun LiveTvWatchScreen(
     // placeholder AND cancels the connect timeout. Stable state + reset in the
     // (re)load effect (same stale-capture reasoning as `autoRetryCount`).
     var playing by remember { mutableStateOf(false) }
+    // Picture gone while the activity stayed started (TV switched off over
+    // infrared, dongle awake — see `OnOutputLost`). Nothing tells us when it
+    // is back, so the next remote key reloads (key handler below) and an
+    // overlay says so meanwhile. Cleared by the (re)load effect.
+    var outputLost by remember { mutableStateOf(false) }
     // Compose owns focus + input on this screen (the PlayerView is pure
     // display). `rootFocus` holds focus during playback so DPAD zapping works;
     // `retryFocus` takes it when the error card appears so its buttons are
@@ -242,6 +248,7 @@ fun LiveTvWatchScreen(
         val url = serverUrl ?: return@LaunchedEffect
         errorMessage = null
         playing = false
+        outputLost = false
         val base = if (url.endsWith("/")) url else "$url/"
         // SERVER stage plays the backend's deinterlaced/re-encoded variant;
         // the earlier stages play the plain proxied original.
@@ -361,6 +368,12 @@ fun LiveTvWatchScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    OnOutputLost {
+        if (player.value != null && !outputLost) {
+            outputLost = true
+            player.value?.stop()
+        }
+    }
 
     val zap: (Int) -> Unit = zap@{ delta ->
         if (channels.isEmpty()) return@zap
@@ -388,6 +401,12 @@ fun LiveTvWatchScreen(
                 }
                 // Any remote press brings the channel strip back for a beat.
                 overlayTick++
+                // First key once the picture is back: rejoin the live edge.
+                // Back still leaves the screen.
+                if (outputLost && event.nativeKeyEvent.keyCode != KeyEvent.KEYCODE_BACK) {
+                    retryNonce++
+                    return@onPreviewKeyEvent true
+                }
                 // Preview phase: DPAD/CHANNEL up-down zap even while the error
                 // card's buttons hold focus (letting the viewer escape a dead
                 // channel); left/right/center fall through to those buttons.
@@ -432,7 +451,27 @@ fun LiveTvWatchScreen(
         // adb on the household TVs, so the stage line + elapsed seconds ARE
         // the debugging story ("which step is it stuck on?"). Cleared by the
         // player listener (or the stall ladder flips to the error card).
-        if (errorMessage == null && !playing) {
+        if (outputLost) {
+            Box(
+                Modifier.fillMaxSize().background(Color.Black),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "The picture went away, so the live stream was stopped.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = IrisColors.MutedForeground,
+                    )
+                    Text(
+                        "Press any button to rejoin the live edge.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = IrisColors.MutedForeground,
+                    )
+                }
+            }
+        }
+
+        if (errorMessage == null && !playing && !outputLost) {
             // Per-attempt elapsed ticker (Android timers are fine — the
             // no-timer rule is web-only).
             var elapsedS by remember(channelId, retryNonce, stage) {

@@ -1051,46 +1051,54 @@ private fun ReadyPlayer(
         }
     }
 
-    // Pause + cut the stream when the user leaves via Home (`ON_STOP`).
-    // Without this the torrent stream and the tick loop above kept running
-    // in the background, draining bandwidth indefinitely. `pause()` stops
-    // ExoPlayer from pulling further byte ranges — `WAKE_MODE_NETWORK`
-    // (see `PlayerFactory.buildPlayer`) releases its wake lock automatically
-    // once paused — and we push one immediate progress save (instead of
-    // waiting for the next 7s tick) so the admin presence view reflects the
-    // paused state right away. No auto-resume on `ON_START`: the user
-    // presses Play explicitly, matching the Netflix/YouTube-TV convention.
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    DisposableEffect(player, lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
-                player.pause()
-                val pos = player.currentPosition
-                if (pos > 0) {
-                    val dur = filmDurationMs.takeIf { it > 0 } ?: player.duration.takeIf { it > 0 }
-                    val audioIdx = currentAudioIdxRef.get()
-                    val subIdx = currentSubIdxRef.get()
-                    container.applicationScope.launch {
-                        runCatching {
-                            container.apiFor(serverUrl).saveProgress(
-                                infohash = infohash,
-                                idx = fileIdx,
-                                body = ProgressUpdate(
-                                    positionSeconds = pos / 1000.0,
-                                    durationSeconds = dur?.div(1000.0),
-                                    audioTrackIdx = audioIdx?.toLong(),
-                                    subtitleTrackIdx = subIdx?.toLong(),
-                                    completed = isWatched(pos, dur),
-                                    playing = false,
-                                ),
-                            )
-                        }
-                    }
+    // Pause + cut the stream when the user leaves via Home (`ON_STOP`) or
+    // the picture stops reaching them (`OnOutputLost`: TV switched off over
+    // infrared while the dongle stays awake). Without this the torrent stream
+    // and the tick loop above kept running in the background, draining
+    // bandwidth indefinitely. `pause()` stops ExoPlayer from pulling further byte
+    // ranges — `WAKE_MODE_NETWORK` (see `PlayerFactory.buildPlayer`)
+    // releases its wake lock automatically once paused — and we push one
+    // immediate progress save (instead of waiting for the next 7s tick) so
+    // the admin presence view reflects the paused state right away. No
+    // auto-resume on `ON_START`: the user presses Play explicitly, matching
+    // the Netflix/YouTube-TV convention.
+    val suspendPlayback: () -> Unit = {
+        player.pause()
+        val pos = player.currentPosition
+        if (pos > 0) {
+            val dur = filmDurationMs.takeIf { it > 0 } ?: player.duration.takeIf { it > 0 }
+            val audioIdx = currentAudioIdxRef.get()
+            val subIdx = currentSubIdxRef.get()
+            container.applicationScope.launch {
+                runCatching {
+                    container.apiFor(serverUrl).saveProgress(
+                        infohash = infohash,
+                        idx = fileIdx,
+                        body = ProgressUpdate(
+                            positionSeconds = pos / 1000.0,
+                            durationSeconds = dur?.div(1000.0),
+                            audioTrackIdx = audioIdx?.toLong(),
+                            subtitleTrackIdx = subIdx?.toLong(),
+                            completed = isWatched(pos, dur),
+                            playing = false,
+                        ),
+                    )
                 }
             }
         }
+    }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(player, lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) suspendPlayback()
+        }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    // A screen-off that the lifecycle does follow with `ON_STOP` fires this
+    // first; the second call finds the player already paused and skips.
+    studio.kahn.iris.tv.ui.components.OnOutputLost {
+        if (player.playWhenReady) suspendPlayback()
     }
 
     // The title TextView lives inside our overridden controller layout
