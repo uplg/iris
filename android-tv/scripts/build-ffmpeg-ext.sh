@@ -41,10 +41,10 @@ if [[ -z "${MEDIA3_VERSION}" ]]; then
     exit 1
 fi
 
-# FFmpeg release. 7.1 is the latest stable line as of writing; bumps
+# FFmpeg release tag. 9.0.1 is the latest stable as of 2026-09-08; bumps
 # require re-validating the codec list against the Media3 JNI wrapper
 # (some symbol names move between major versions).
-FFMPEG_VERSION="${FFMPEG_VERSION:-release/7.1}"
+FFMPEG_VERSION="${FFMPEG_VERSION:-n9.0.1}"
 
 # Codecs enabled in the build. Add anything Android can't decode
 # natively; trim aggressively to keep the resulting .so files small.
@@ -126,7 +126,7 @@ if [[ -z "${NDK_PATH}" && -d "${SDK_NDK_DIR}" ]]; then
     # Try the build-friendly ranges in priority order. `sort -V` picks
     # the highest patch within each major; we walk majors low-to-high
     # only if the preferred one isn't installed.
-    for major_pattern in '^26\.' '^25\.' '^24\.' '^23\.'; do
+    for major_pattern in '^28\.' '^27\.' '^26\.' '^25\.' '^24\.' '^23\.'; do
         candidate="$(ls -1 "${SDK_NDK_DIR}" 2>/dev/null \
             | grep -E "${major_pattern}" \
             | sort -V \
@@ -138,7 +138,7 @@ if [[ -z "${NDK_PATH}" && -d "${SDK_NDK_DIR}" ]]; then
     done
 fi
 if [[ -z "${NDK_PATH}" || ! -d "${NDK_PATH}" ]]; then
-    echo "Compatible Android NDK not found (r23–r26 expected)." >&2
+    echo "Compatible Android NDK not found (r23–r28 expected)." >&2
     echo "  Searched: ${SDK_NDK_DIR}" >&2
     echo "  Available: $(ls "${SDK_NDK_DIR}" 2>/dev/null | tr '\n' ' ')" >&2
     echo "  Install NDK r26 via Android Studio → SDK Manager → SDK Tools → NDK (Side by side)," >&2
@@ -197,6 +197,13 @@ fi
 # ---------------------------------------------------------------------
 # 2. Build FFmpeg native libs for each ABI.
 # ---------------------------------------------------------------------
+# FFmpeg 9 dropped libpostproc, and with it the `--disable-postproc` flag
+# Media3's build_ffmpeg.sh (written against 6.0) still passes; configure
+# refuses unknown options outright. Strip it when the checkout doesn't know it.
+if ! grep -q -- 'disable-postproc' "${JNI_DIR}/ffmpeg/configure"; then
+    sed -i.orig '/--disable-postproc/d' "${JNI_DIR}/build_ffmpeg.sh"
+fi
+
 echo "→ Building FFmpeg native libraries…"
 cd "${EXT_DIR}/jni"
 

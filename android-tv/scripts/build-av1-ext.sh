@@ -67,8 +67,9 @@ MEDIA3_GIT_TAG="${MEDIA3_GIT_TAG:-${MEDIA3_VERSION}}"
 # dav1d + cpu_features are cloned at tip per Media3's `decoder_av1`
 # README (no Media3-aligned tags). Pin a known-good commit here (env
 # override) if a future tip breaks the native build.
-DAV1D_REF="${DAV1D_REF:-}"               # empty = default branch
-CPU_FEATURES_REF="${CPU_FEATURES_REF:-}" # empty = default branch
+# Latest stable tags as of 2026-09-08.
+DAV1D_REF="${DAV1D_REF:-1.5.4}"
+CPU_FEATURES_REF="${CPU_FEATURES_REF:-v0.11.0}"
 
 # ---------------------------------------------------------------------
 # Host build tools required by dav1d (meson/ninja/nasm) — fail early
@@ -92,7 +93,7 @@ fi
 SDK_NDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-${HOME}/Library/Android/sdk}}/ndk"
 NDK_PATH="${ANDROID_NDK_HOME:-${NDK_HOME:-}}"
 if [[ -z "${NDK_PATH}" && -d "${SDK_NDK_DIR}" ]]; then
-    for major_pattern in '^27\.' '^26\.' '^25\.'; do
+    for major_pattern in '^28\.' '^27\.' '^26\.' '^25\.'; do
         candidate="$(ls -1 "${SDK_NDK_DIR}" 2>/dev/null \
             | grep -E "${major_pattern}" \
             | sort -V \
@@ -104,7 +105,7 @@ if [[ -z "${NDK_PATH}" && -d "${SDK_NDK_DIR}" ]]; then
     done
 fi
 if [[ -z "${NDK_PATH}" || ! -d "${NDK_PATH}" ]]; then
-    echo "Compatible Android NDK not found (r25-r27 expected)." >&2
+    echo "Compatible Android NDK not found (r25-r28 expected)." >&2
     echo "  Searched: ${SDK_NDK_DIR}" >&2
     echo "  Set ANDROID_NDK_HOME=/path/to/ndk explicitly." >&2
     exit 1

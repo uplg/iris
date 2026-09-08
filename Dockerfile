@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.27
 # ^ enables BuildKit cache-mounts (`--mount=type=cache`). Default with
 # Docker 23+. Without this directive the cache mounts below are silently
 # ignored and you're back to recompiling everything every time.
@@ -11,7 +11,7 @@
 
 # Recent emsdk — the image is multi-arch (linux/amd64 + linux/arm64)
 # so building on Apple Silicon doesn't go through qemu emulation.
-FROM emscripten/emsdk:6.0.8 AS libav-builder
+FROM emscripten/emsdk:6.0.9 AS libav-builder
 WORKDIR /build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -54,7 +54,7 @@ RUN --mount=type=cache,target=/build/libav.js/build,sharing=locked \
     && cp dist/libav-6.10.9.0-iris.wasm.js /libav-iris.wasm.js
 
 # Frontend build (bun + Vite)
-FROM oven/bun:1.4 AS web-builder
+FROM oven/bun:1.4.2 AS web-builder
 WORKDIR /app/web
 # Copy lockfiles AND the patches directory before installing — bun
 # resolves `patchedDependencies` paths during `install`, so the patch
@@ -94,8 +94,12 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 # survives `builder prune` and travels via `--cache-from`. The registry / git
 # mounts stay: they hold downloaded sources, not build output.
 #
-# The chef base must stay rust 1.98.0 on trixie — the runtime stage's glibc
-# note depends on that exact pairing.
+# The chef base must stay on trixie — the runtime stage's glibc note depends
+# on that pairing. Neither cargo-chef nor the official rust image has shipped
+# a 1.98.1 tag yet (checked 2026-09-08: `rust:1.98-trixie` still resolves to
+# the 1.98.0 digest), so the base stays 1.98.0 and rustup installs the
+# toolchain `rust-toolchain.toml` names into its own cached layer, before any
+# source is copied. Swap the base tag once a 1.98.1 image exists.
 #
 # `--bin iris` on `cook` mirrors the final build, so cook doesn't also compile
 # every crate's dev-dependencies. `migrations/` lands in the app layer only:
@@ -104,6 +108,8 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 FROM lukemathwalker/cargo-chef:0.1.78-rust-1.98.0-trixie AS chef
 WORKDIR /app
 ENV CARGO_TERM_COLOR=never
+COPY rust-toolchain.toml ./
+RUN rustup toolchain install && cargo --version
 
 FROM chef AS planner
 COPY rust-toolchain.toml Cargo.toml Cargo.lock* ./
@@ -127,13 +133,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # Runtime — Chainguard Wolfi (glibc)
 #
 # glibc (2.43) just like Debian, so the prebuilt glibc shaka-packager binary
-# and the glibc Rust binary (built above on rust:1.98-trixie / glibc 2.41 —
+# and the glibc Rust binary (built above on rust 1.98.1 / trixie glibc 2.41 —
 # older, so it runs fine on Wolfi's newer 2.43) work UNCHANGED. NOT Alpine:
 # musl would break the prebuilt shaka binary and hurt librqbit's allocation-
-# heavy throughput. Verified codec parity — Wolfi's ffmpeg ships every
-# decoder / demuxer / encoder Iris uses server-side (h264/hevc/vp9/av1,
-# aac/ac3/eac3/dts/flac/opus, the native AAC encoder, mkv/mp4/ts/avi demux,
-# ass/pgs/srt).
+# heavy throughput. Codec parity re-verified on ffmpeg 9.0.1 (2026-09-08):
+# Wolfi's build ships every decoder / demuxer / encoder / bsf Iris uses
+# server-side (h264/hevc/vp9/av1+dav1d, aac/ac3/eac3/dts/flac/opus/truehd,
+# libx264/libx265 + the native AAC encoder, mkv/mp4/ts/avi demux, hls/mp4
+# mux, ass/pgs/srt/webvtt, filter_units). It is built WITHOUT libzimg, so
+# there is no `zscale`: the remuxer's HDR → SDR flatten rides on swscale's
+# own colour management instead (`transcode_video_filter` in `remuxer.rs`).
 #
 # Why Wolfi over debian:trixie-slim (measured on arm64, runtime layers only):
 #   image size  750 MB → 298 MB   ·   CVEs  261 (11 crit / 39 high) → 0
@@ -144,9 +153,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 FROM cgr.dev/chainguard/wolfi-base AS runtime
 ARG TARGETARCH
 # `apk` here is Wolfi's package manager — glibc packages, NOT Alpine's musl.
-RUN apk add --no-cache ca-certificates-bundle ffmpeg tini curl
+# `ffmpeg-9.0` is Wolfi's versioned package (it provides the bare `ffmpeg`
+# name too, which is what a plain `apk add ffmpeg` resolves to today); naming
+# it keeps the line from silently jumping majors on the next rebuild.
+RUN apk add --no-cache ca-certificates-bundle ffmpeg-9.0 tini curl
 
-ARG SHAKA_VERSION=v3.7.2
+ARG SHAKA_VERSION=v3.9.3
 RUN set -eux; \
     case "${TARGETARCH}" in \
         amd64) shaka_arch=x64 ;; \
