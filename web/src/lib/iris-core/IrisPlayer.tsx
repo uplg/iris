@@ -20,6 +20,7 @@ import { nativeSubtitleUrl } from "./manifest-client";
 import { attachMediaSession } from "./os/media-session";
 import { useDocumentPip } from "./os/document-pip";
 import { SubtitleOverlay, subtitleOverlayKind } from "./subs/subtitle-overlay";
+import { normalizeLang, pickPreferredSubtitle } from "./subs/pick-subtitle";
 import { mountTierA } from "./tiers/tier-a-native";
 
 /**
@@ -193,9 +194,10 @@ export function IrisPlayer(props: IrisPlayerProps) {
       return restored;
     }
     // No per-file pick → honour the per-user preferred audio language.
-    const pref = props.preferredAudioLang?.toLowerCase();
+    // Normalised on both sides: one release tags `fre`, the next `fra`.
+    const pref = normalizeLang(props.preferredAudioLang);
     if (pref) {
-      const match = props.manifest.audio.findIndex((a) => a.lang?.toLowerCase() === pref);
+      const match = props.manifest.audio.findIndex((a) => normalizeLang(a.lang) === pref);
       if (match >= 0) return match;
     }
     return defaultAudioIndex;
@@ -257,14 +259,12 @@ export function IrisPlayer(props: IrisPlayerProps) {
       if (match) return match;
     }
     // No per-file pick → honour the per-user preferred subtitle language.
-    const pref = props.preferredSubtitleLang?.toLowerCase();
+    // `pickPreferredSubtitle` ranks the non-forced, non-SDH track first and
+    // yields null when the language is absent: subs stay off rather than
+    // forcing a different language onto the user.
+    const pref = props.preferredSubtitleLang?.trim().toLowerCase();
     if (pref === "off") return null;
-    if (pref) {
-      const match = props.manifest.subtitles.find((s) => s.lang?.toLowerCase() === pref);
-      // Preferred language absent → leave subs off rather than forcing a
-      // different language onto the user.
-      return match ?? null;
-    }
+    if (pref) return pickPreferredSubtitle(props.manifest.subtitles, pref);
     const def = props.manifest.subtitles.find((s) => s.default);
     if (def) return def;
     const nativeFirst = props.manifest.subtitles.find((s) => subtitleOverlayKind(s) === "native");

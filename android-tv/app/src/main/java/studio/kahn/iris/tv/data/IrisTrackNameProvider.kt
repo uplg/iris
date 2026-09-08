@@ -49,7 +49,14 @@ internal class IrisTrackNameProvider(resources: Resources) : TrackNameProvider {
             roles and C.ROLE_FLAG_COMMENTARY != 0 -> parts += "Commentary"
             roles and C.ROLE_FLAG_ALTERNATE != 0 -> parts += "Alternate"
         }
-        if (format.selectionFlags and C.SELECTION_FLAG_FORCED != 0) parts += "Forced"
+        // The extractor strips the flag itself so the menu lists the track
+        // (see `ForcedVisibleExtractorsFactory`); the registry keeps the label.
+        if (
+            format.selectionFlags and C.SELECTION_FLAG_FORCED != 0 ||
+            ForcedTextTracks.isForced(format.id)
+        ) {
+            parts += "Forced"
+        }
 
         return parts.joinToString(" · ")
     }

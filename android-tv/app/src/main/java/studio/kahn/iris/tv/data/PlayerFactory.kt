@@ -31,31 +31,52 @@ import okhttp3.OkHttpClient
 import studio.kahn.iris.tv.BuildConfig
 
 /**
+ * Text tracks whose `forced` flag [ForcedVisibleExtractorsFactory] stripped,
+ * by `Format.id` (the container track id), so the settings menu can still
+ * label them. Process-wide because the app drives one player at a time;
+ * [buildPlayer] resets it, and ids only mean something for the file that
+ * player is on.
+ */
+object ForcedTextTracks {
+    private val ids = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    fun reset() = ids.clear()
+
+    fun mark(id: String) {
+        ids.add(id)
+    }
+
+    fun isForced(id: String?): Boolean = id != null && id in ids
+}
+
+/**
  * [DefaultExtractorsFactory] that strips `C.SELECTION_FLAG_FORCED` from
- * AUDIO track formats as the extractor emits them.
+ * AUDIO and TEXT track formats as the extractor emits them.
  *
- * Old French multi MKVs (Breaking Bad S01/S02 notably) carry a bogus
- * `forced` disposition on the dub track — a mux error, "forced" has no
- * real meaning for audio. `PlayerControlView.gatherSupportedTrackInfosOfType`
- * unconditionally skips forced tracks when building the selection list,
- * so the track PLAYS via automatic language selection (the audio
- * selector's scoring ignores the flag) yet never appears in the settings
- * menu: a user who switched to another language has no way back. The web
- * client is immune (its menu is built from the ffprobe manifest), so the
- * flag must die here, TV-side.
+ * `PlayerControlView.gatherSupportedTrackInfosOfType` unconditionally
+ * skips forced tracks when building the settings menu. For audio the flag
+ * is a mux error to begin with (old French multi MKVs, Breaking Bad
+ * S01/S02 notably, flag the dub track): the track PLAYS via automatic
+ * language selection yet never appears in the menu, so a user who switched
+ * language has no way back. For subtitles the flag is often just as bogus
+ * (Hope 2013, a fansub whose only French track is "forced") and the effect
+ * is worse: the track renders, the menu offers "None" only, and the
+ * viewer can neither switch nor persist a pick. The web client is immune
+ * (its menu is built from the ffprobe manifest), so the flag must die
+ * here, TV-side. What the flag meant for playback is not lost: our track
+ * selection never leans on Media3's forced auto-show (text is either
+ * disabled outright or pinned by [SubtitlePick]), and the "Forced" label
+ * in [IrisTrackNameProvider] reads [ForcedTextTracks] instead.
  *
  * Stripping at the extractor keeps `Format`/`TrackGroup` identity
  * consistent everywhere (menu labels, `TrackSelectionOverride` keying,
  * selector state all see the same instance) — unlike rewriting at a
  * `ForwardingPlayer` facade, which would break override lookups.
- * Subtitle tracks keep their forced flag: there it carries real
- * semantics (auto-shown segments) and drives the "Forced" label in
- * [IrisTrackNameProvider]. Progressive-only by construction — the HLS
- * paths build their tracks from the server manifest, not from this
- * factory.
+ * Progressive-only by construction — the HLS paths build their tracks
+ * from the server manifest, not from this factory.
  */
 @UnstableApi
-private class ForcedAudioVisibleExtractorsFactory : ExtractorsFactory {
+private class ForcedVisibleExtractorsFactory : ExtractorsFactory {
     private val delegate = DefaultExtractorsFactory()
 
     override fun createExtractors(): Array<Extractor> =
@@ -83,7 +104,11 @@ private class ForcedAudioVisibleExtractorsFactory : ExtractorsFactory {
     private class StrippingOutput(private val delegate: ExtractorOutput) : ExtractorOutput {
         override fun track(id: Int, type: Int): TrackOutput {
             val real = delegate.track(id, type)
-            return if (type == C.TRACK_TYPE_AUDIO) StrippingTrackOutput(real) else real
+            return when (type) {
+                C.TRACK_TYPE_AUDIO -> StrippingTrackOutput(real, remember = false)
+                C.TRACK_TYPE_TEXT -> StrippingTrackOutput(real, remember = true)
+                else -> real
+            }
         }
 
         override fun endTracks() = delegate.endTracks()
@@ -91,9 +116,13 @@ private class ForcedAudioVisibleExtractorsFactory : ExtractorsFactory {
         override fun seekMap(seekMap: SeekMap) = delegate.seekMap(seekMap)
     }
 
-    private class StrippingTrackOutput(private val delegate: TrackOutput) : TrackOutput {
+    private class StrippingTrackOutput(
+        private val delegate: TrackOutput,
+        private val remember: Boolean,
+    ) : TrackOutput {
         override fun format(format: Format) {
             val stripped = if (format.selectionFlags and C.SELECTION_FLAG_FORCED != 0) {
+                if (remember) format.id?.let(ForcedTextTracks::mark)
                 format.buildUpon()
                     .setSelectionFlags(format.selectionFlags and C.SELECTION_FLAG_FORCED.inv())
                     .build()
@@ -154,7 +183,8 @@ fun buildPlayer(
     preferPlatformAv1: Boolean = false,
 ): ExoPlayer {
     val dataSourceFactory = OkHttpDataSource.Factory(mediaOkHttp).setUserAgent(userAgent)
-    val mediaSourceFactory = DefaultMediaSourceFactory(context, ForcedAudioVisibleExtractorsFactory())
+    ForcedTextTracks.reset()
+    val mediaSourceFactory = DefaultMediaSourceFactory(context, ForcedVisibleExtractorsFactory())
         .setDataSourceFactory(dataSourceFactory)
 
     // Renderers factory. The FFmpeg decoder extension is built and

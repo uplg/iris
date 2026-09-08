@@ -61,6 +61,7 @@ import studio.kahn.iris.tv.data.MediaProbe
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.UpdatePlaybackPrefs
 import studio.kahn.iris.tv.data.ProgressUpdate
+import studio.kahn.iris.tv.data.SubtitlePick
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
@@ -593,6 +594,13 @@ private fun ReadyPlayer(
         }
     }
 
+    // No per-file pick: the track the per-user language preference maps
+    // to (non-forced before forced, plain before SDH — see `SubtitlePick`).
+    val preferredSubOrdinal: Int? = remember(probe, initialSubIdx, prefSubLang) {
+        if (initialSubIdx != null || prefSubLang == "off") null
+        else SubtitlePick.preferredOrdinal(probe.subtitle, prefSubLang)
+    }
+
     // Hint Media3 toward the saved language at load time so the very
     // first frames play with the right audio (avoids a brief "wrong
     // language" beat before the override applies). This is best-effort
@@ -624,9 +632,10 @@ private fun ReadyPlayer(
             // No per-file pick → per-user subtitle preference.
             prefSubLang == "off" -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             // Enable only when the preferred language is actually present —
-            // never force a different language onto the user.
-            prefSubLang != null &&
-                probe.subtitle.any { it.language.equals(prefSubLang, ignoreCase = true) } -> {
+            // never force a different language onto the user. The language
+            // hint is best-effort (Media3 would settle on the forced track);
+            // the exact track is pinned on the first `onTracksChanged` below.
+            preferredSubOrdinal != null -> {
                 params.setPreferredTextLanguage(prefSubLang)
                 params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             }
@@ -871,7 +880,7 @@ private fun ReadyPlayer(
                 // doesn't recognise (group missing entirely), and the
                 // native gear menu HIDES tracks below FORMAT_HANDLED or
                 // flagged forced (the latter is neutralised for audio by
-                // `ForcedAudioVisibleExtractorsFactory`). Any hit here is a
+                // `ForcedVisibleExtractorsFactory`). Any hit here is a
                 // genuine extractor drop or decoder gap worth a bug
                 // report — log it; video + remaining audio play fine.
                 if (
@@ -900,6 +909,10 @@ private fun ReadyPlayer(
                     initialRestoreDone.set(true)
                     val params = player.trackSelectionParameters.buildUpon()
                     var dirty = false
+                    // The subtitle ordinal this file settles on, seeded into
+                    // `currentSubIdxRef` below so the next event compares
+                    // against what was pinned, not against "nothing yet".
+                    var settledSubOrdinal = subGroups.indexOfFirst { it.isSelected }
                     if (
                         savedAudioOrdinal != null &&
                         savedAudioOrdinal in audioGroups.indices
@@ -915,24 +928,45 @@ private fun ReadyPlayer(
                             dirty = true
                         }
                     }
-                    when (savedSubOrdinal) {
-                        -1 -> { /* already disabled via LaunchedEffect */ }
-                        null -> { /* no preference */ }
-                        else -> if (savedSubOrdinal in subGroups.indices) {
-                            val currentSelected = subGroups.indexOfFirst { it.isSelected }
-                            if (currentSelected != savedSubOrdinal) {
-                                val target = subGroups[savedSubOrdinal]
-                                params
-                                    .setOverrideForType(
-                                        androidx.media3.common.TrackSelectionOverride(
-                                            target.mediaTrackGroup, 0,
-                                        ),
-                                    )
-                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                                dirty = true
-                            }
+                    // Pin either this file's saved pick or the preference's
+                    // pick: Media3's own ranking would take the forced track.
+                    val pinSubOrdinal = when (savedSubOrdinal) {
+                        -1 -> null
+                        null -> preferredSubOrdinal
+                        else -> savedSubOrdinal
+                    }
+                    if (pinSubOrdinal != null && pinSubOrdinal in subGroups.indices) {
+                        settledSubOrdinal = pinSubOrdinal
+                        if (subGroups.indexOfFirst { it.isSelected } != pinSubOrdinal) {
+                            val target = subGroups[pinSubOrdinal]
+                            params
+                                .setOverrideForType(
+                                    androidx.media3.common.TrackSelectionOverride(
+                                        target.mediaTrackGroup, 0,
+                                    ),
+                                )
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            dirty = true
                         }
                     }
+                    // Seed the refs with the settled state. Left at the saved
+                    // values (null on a fresh file), the next event read
+                    // "no subtitle selected" as a change and persisted it —
+                    // per file AND as the per-user "off" preference — with
+                    // no viewer action behind it.
+                    val settledAudioOrdinal =
+                        savedAudioOrdinal?.takeIf { it in audioGroups.indices }
+                            ?: audioGroups.indexOfFirst { it.isSelected }
+                    currentAudioIdxRef.set(
+                        probe.audio.getOrNull(settledAudioOrdinal)?.index ?: currentAudioIdxRef.get(),
+                    )
+                    currentSubIdxRef.set(
+                        if (settledSubOrdinal >= 0) {
+                            probe.subtitle.getOrNull(settledSubOrdinal)?.index ?: currentSubIdxRef.get()
+                        } else {
+                            -1
+                        },
+                    )
                     if (dirty) player.trackSelectionParameters = params.build()
                     return
                 }
