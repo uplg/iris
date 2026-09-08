@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-09-08
+
+### Fixed
+
+- **TV: playback no longer runs on behind a switched-off TV.** A Chromecast
+  whose remote turns the TV off over infrared (no CEC) never sleeps, and the
+  player's `keepScreenOn` keeps it awake, so the activity was never stopped
+  and an episode kept streaming for as long as the TV stayed off. The player
+  now also listens for the signals that do arrive in that setup — screen off,
+  the HDMI audio sink dropping, the HDMI hot-plug line falling — and treats
+  any of them like leaving via Home: VOD pauses and flushes its progress
+  (Play resumes it), Live TV stops and rejoins the live edge on the next
+  remote key.
+- **Subtitles no longer "switch themselves off" on the next episode.** A
+  MULTi release carries several tracks in one language — "Forcés" (forced,
+  and usually flagged default by the muxer), "Complets", "SDH". With no
+  per-file pick yet, both clients restored by preferred language and let
+  the first match win: Media3's ranking on the TV (the `default` flag
+  breaks the tie), a plain `find` on the web. Both landed on the forced
+  track, a handful of cues that reads as "no subtitles", ten episodes in a
+  row on Mousetrap S01. The pick is now one shared rule (`SubtitlePick`
+  on TV, `pick-subtitle.ts` on web): within the preferred language,
+  non-forced before forced, plain before SDH, and no pick at all when the
+  language is absent. Language tags are normalised on both sides, so a
+  release tagged `fra` matches a preference recorded from one tagged `fre`.
+  The TV also seeds its track refs from the settled selection: left at
+  "nothing yet", its first real tracks event read "no subtitle selected"
+  as a change and persisted it, per file and as the per-user "off"
+  preference, with no viewer action behind it.
+- **TV: a subtitle track flagged "forced" was invisible in the menu.**
+  Media3's settings menu skips forced text tracks, so a fansub whose only
+  French track carries the flag (Hope 2013) rendered on screen while the
+  menu offered "None" and no pick could be persisted. The extractor now
+  strips the flag from text tracks the way it already did for audio; the
+  "Forced" label survives through a registry the track-name provider reads.
+  Nothing relied on Media3's forced auto-show: subtitles are either
+  disabled outright or pinned to an explicit track.
+- **HDR sources could not be transcoded for decode-poor boxes.** The caps
+  catch-up re-encode (AV1 on a box without AV1 silicon, or a >1080p
+  downscale) flattens a PQ/HLG source to BT.709 SDR, and did so through
+  `zscale`, which the Wolfi ffmpeg in the runtime image does not ship (no
+  libzimg): every such transcode died on "No such filter: 'zscale'" since
+  June. The flatten now uses swscale's own colour management (FFmpeg ≥ 8,
+  `out_transfer=bt709:...:intent=perceptual`), folded into the existing
+  1080p-cap `scale` pass. Measured on a synthetic PQ ramp against the
+  production ffmpeg: perceptual intent rolls highlights off smoothly where
+  the default (relative colorimetric) clipped the upper half to white; the
+  encoded stream carries BT.709 VUI tags.
+
+### Changed
+
+- Dependency pass, everything to its current stable. Rust: no root
+  dependency had moved, the lockfile picks up the transitive refresh. Web:
+  Base UI 1.8.0, hls.js 1.7.2, mediabunny 1.56.0 (upstream still asserts on
+  open-GOP decode timestamps, so the local clamp patch is re-applied on the
+  new version), TanStack Router 1.170.33, dompurify 3.4.15, lucide 1.43.0,
+  oxlint 1.82.0, oxfmt 0.67.0. Android TV: Kotlin 2.4.20 (stable now, was
+  RC-only at the last pass), Coil 3.6.2. Held on purpose: AGP 9.5,
+  activity 1.14, lifecycle 2.12, datastore 1.3, kotlinx-serialization 1.12
+  and WorkManager 2.12 are alpha or RC only; TypeScript 7 stays out of
+  `web/tools/api-gen` because the generator needs the TS 6 compiler API.
+- Rust 1.98.1 (`rust-toolchain.toml`). Neither cargo-chef nor the official
+  rust image has a 1.98.1 tag yet, so the Docker builder keeps its 1.98.0
+  base and installs the toolchain the file names into its own cached layer,
+  before any source is copied; the base tag moves once an image exists.
+- Dockerfile pins refreshed: BuildKit syntax 1.27, emscripten 6.0.9 for the
+  libav.js build (libav.js itself is still at its latest, 6.10.9.0), bun
+  1.4.2 (exact, was the floating 1.4), shaka-packager 3.9.3 (fixes since
+  3.7.2 are HLS default-rendition ordering, AES-128 and AV1 OBU parsing; the
+  remuxer's `--default_language` path is unaffected). The runtime now names
+  Wolfi's `ffmpeg-9.0` package: a bare `apk add ffmpeg` already resolves to
+  9.0.1 there, naming it keeps the next rebuild from jumping majors silently.
+  Codec, format, filter, bsf and CLI-option parity re-verified against
+  everything `iris-media` and the live-TV transcoder invoke.
+- Android TV decoder extensions rebuilt on pinned upstreams: FFmpeg 9.0.1
+  (was the floating `release/7.1` branch), dav1d 1.5.4 and cpu_features
+  0.11.0 (both were "whatever the default branch had"), NDK r28. FFmpeg 9
+  dropped libpostproc, and Media3's `build_ffmpeg.sh` still passes
+  `--disable-postproc`, which configure now refuses: the build script strips
+  the flag when the checkout doesn't know it. Media3 stays at 1.11.0, so the
+  AAR names and the dav1d 10-bit patch are unchanged.
+
 ## [1.4.1] - 2026-09-02
 
 ### Added
