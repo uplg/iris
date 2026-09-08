@@ -937,20 +937,7 @@ async fn run_ffmpeg(
             ten_bit,
             tonemap,
         } => {
-            // Filter chain: optional HDR (PQ/HLG) → BT.709 SDR tonemap, then
-            // a never-upscale 1080p cap so a CPU-only encoder isn't handed a
-            // 4K source it can't keep ahead of playback.
-            let mut filters: Vec<&str> = Vec::new();
-            if tonemap {
-                filters.push(
-                    "zscale=t=linear:npl=100,format=gbrpf32le,tonemap=hable:desat=0,\
-                     zscale=p=bt709:t=bt709:m=bt709:r=tv",
-                );
-            }
-            filters
-                .push("scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease");
-            let vf = filters.join(",");
-            cmd.args(["-vf", vf.as_str()]);
+            cmd.args(["-vf", &transcode_video_filter(tonemap)]);
             // Force a keyframe every 2 s (fps-independent) so shaka can cut
             // self-contained HLS segments from the re-encoded stream.
             cmd.args(["-force_key_frames", "expr:gte(t,n_forced*2)"]);
@@ -1114,16 +1101,7 @@ async fn run_ffmpeg_hls(
     // Video: 1080p-capped re-encode, optional HDR → SDR tonemap, keyframe
     // every 2 s so HLS segments are self-contained.
     cmd.args(["-map", "0:V:0"]);
-    let mut filters: Vec<&str> = Vec::new();
-    if tonemap {
-        filters.push(
-            "zscale=t=linear:npl=100,format=gbrpf32le,tonemap=hable:desat=0,\
-             zscale=p=bt709:t=bt709:m=bt709:r=tv",
-        );
-    }
-    filters.push("scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease");
-    let vf = filters.join(",");
-    cmd.args(["-vf", vf.as_str()]);
+    cmd.args(["-vf", &transcode_video_filter(tonemap)]);
     cmd.args(["-force_key_frames", "expr:gte(t,n_forced*2)"]);
     let crf = encode.crf.to_string();
     match codec {
@@ -1392,9 +1370,45 @@ async fn drain_stderr_to_log(stderr: tokio::process::ChildStderr, log_path: Path
 #[allow(dead_code)]
 fn _silence_child_unused(_: &Child) {}
 
+/// `-vf` chain for a `VideoMode::Transcode` re-encode: a never-upscale 1080p
+/// cap, so a CPU-only encoder isn't handed a 4K source it can't keep ahead of
+/// playback, with the optional HDR (PQ/HLG) → BT.709 SDR flatten folded into
+/// the same `scale` pass. The flatten rides on swscale's own colour
+/// management (`FFmpeg` 8 and later) rather than `zscale`: the Wolfi ffmpeg in the
+/// runtime image is built without libzimg, so the former `zscale`+`tonemap`
+/// chain died with "No such filter" in production. Input primaries/transfer
+/// stay on `auto` (read off the decoded frames, so PQ and HLG both work);
+/// `intent=perceptual` is what makes it a tone-map — the default, relative
+/// colorimetric, clips everything above SDR white to 235.
+fn transcode_video_filter(tonemap: bool) -> String {
+    let mut scale = String::from(
+        "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease",
+    );
+    if tonemap {
+        scale.push_str(
+            ":out_primaries=bt709:out_transfer=bt709:out_color_matrix=bt709:out_range=tv:intent=perceptual",
+        );
+    }
+    scale
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcode_filter_never_needs_zimg() {
+        for tonemap in [false, true] {
+            let vf = transcode_video_filter(tonemap);
+            assert!(!vf.contains("zscale"), "{vf}");
+            assert!(
+                vf.starts_with("scale=w='min(1920,iw)':h='min(1080,ih)'"),
+                "{vf}"
+            );
+            assert_eq!(vf.contains("intent=perceptual"), tonemap, "{vf}");
+            assert_eq!(vf.contains("out_transfer=bt709"), tonemap, "{vf}");
+        }
+    }
 
     /// Build a cache entry dir with a payload file and a `.last_played`
     /// sentinel whose mtime is `age` in the past.
