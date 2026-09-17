@@ -79,6 +79,30 @@ apk:
 apk-debug:
     cd android-tv && ./gradlew :app:assembleDebug
 
+# The update channel is https://synthe.se/app-release.apk (Caddy on yuki
+# serving /var/www/iris; https://uplg.xyz/app-release.* 301s there for the
+# clients still pointing at the old host). The sidecar is derived from
+# `versionName` in android-tv/app/build.gradle.kts so it cannot drift from
+# the APK. Both files land under a temporary name and are renamed in place,
+# APK first, so the sidecar never announces a version whose APK is not
+# fully there yet.
+
+# Publish the release APK from `just apk` + its version sidecar to yuki (ssh alias).
+apk-push host="yuki" dir="/var/www/iris":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    apk=android-tv/app/build/outputs/apk/release/app-release.apk
+    [ -f "$apk" ] || { echo "no release APK at $apk - run \`just apk\` first"; exit 1; }
+    version=$(sed -nE 's/^[[:space:]]*versionName = "([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' android-tv/app/build.gradle.kts)
+    [ -n "$version" ] || { echo "could not read versionName from android-tv/app/build.gradle.kts"; exit 1; }
+    echo "pushing $apk ($(du -h "$apk" | cut -f1)) as version $version to {{ host }}:{{ dir }}"
+    scp -q "$apk" "{{ host }}:{{ dir }}/app-release.apk.tmp"
+    printf '%s\n' "$version" | ssh "{{ host }}" "cat > '{{ dir }}/app-release.version.tmp' \
+      && chmod 644 '{{ dir }}/app-release.apk.tmp' '{{ dir }}/app-release.version.tmp' \
+      && mv '{{ dir }}/app-release.apk.tmp' '{{ dir }}/app-release.apk' \
+      && mv '{{ dir }}/app-release.version.tmp' '{{ dir }}/app-release.version'"
+    echo "published: $(curl -fsS https://synthe.se/app-release.version) at https://synthe.se/app-release.apk"
+
 # Rebuild the native Media3 decoder AARs (after a media3 bump — long compile).
 tv-aars:
     cd android-tv && rm -rf .ffmpeg-ext-build/media && ./scripts/build-ffmpeg-ext.sh && ./scripts/build-av1-ext.sh

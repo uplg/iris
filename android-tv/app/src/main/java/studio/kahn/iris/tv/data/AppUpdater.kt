@@ -24,7 +24,10 @@ import java.io.IOException
  * "Update Iris TV?" confirmation; we never silently replace anything.
  *
  * The fixed URLs are intentional — the user self-hosts the APK on
- * `uplg.xyz` and rebuilds out-of-band. Alongside the APK we also
+ * `synthe.se` (`just apk-push`) and rebuilds out-of-band. Builds up
+ * to 1.4.2 point at `uplg.xyz`, which 301s to the same paths on
+ * synthe.se; keep that redirect alive as long as those clients
+ * exist. Alongside the APK we also
  * publish a plain-text `app-release.version` sidecar containing just
  * the semver of what's hosted (one line, e.g. `0.2.0`). Whenever the
  * APK is replaced, this file is replaced too — that's how the
@@ -34,7 +37,7 @@ import java.io.IOException
 object AppUpdater {
 
     /** Where the latest APK is hosted. */
-    const val APK_URL: String = "https://uplg.xyz/app-release.apk"
+    const val APK_URL: String = "https://synthe.se/app-release.apk"
 
     /** Sidecar plain-text file containing only the semver of the
      *  APK at [APK_URL] (e.g. `0.2.0\n`). Replaced atomically with
@@ -42,7 +45,7 @@ object AppUpdater {
      *  Settings card shows "version check unavailable" but the
      *  Download button still works (best-effort, never block the
      *  update path). */
-    const val LATEST_VERSION_URL: String = "https://uplg.xyz/app-release.version"
+    const val LATEST_VERSION_URL: String = "https://synthe.se/app-release.version"
 
     /** Cache subdirectory used by [downloadApk]; cleared on each
      *  successful install request. */

@@ -286,6 +286,31 @@ pub async fn reconcile_downloaded(
     Ok(())
 }
 
+/// One-shot repair for inflated lifetime upload counters (e.g. after a
+/// double-writer incident counted every delta twice): clamp any row whose
+/// lifetime ratio exceeds `max_ratio` back down to
+/// `downloaded_bytes_total * max_ratio`. The download side is trustworthy
+/// (a monotonic max of absolute on-disk progress, idempotent under
+/// concurrent writers), so the ratio ceiling only ever cuts phantom
+/// upload. Rows with no recorded download are left alone — partial
+/// seeders genuinely upload without completing. Idempotent: a second run
+/// matches no rows.
+pub async fn clamp_uploaded_ratios(
+    pool: &SqlitePool,
+    max_ratio: u32,
+) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE torrents SET uploaded_bytes_total = downloaded_bytes_total * ?1 \
+          WHERE downloaded_bytes_total > 0 \
+            AND uploaded_bytes_total > downloaded_bytes_total * ?1",
+    )
+    .bind(i64::from(max_ratio))
+    .bind(i64::from(max_ratio))
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 /// Sum of `downloaded_bytes_total` across every torrent ever ingested,
 /// including soft-deleted ones — the "since the beginning" denominator
 /// matching [`total_uploaded_bytes`], so the global ratio compares two
@@ -541,5 +566,86 @@ mod tests {
         let again = upsert(&pool, new).await.unwrap();
         assert_eq!(again.id, row.id);
         assert!(again.finished_at.is_some(), "live dup keeps finished_at");
+    }
+
+    /// Upsert a row then overwrite its lifetime counters — test helper
+    /// for seeding exact counter states without fabricating sessions.
+    async fn set_counters(
+        pool: &SqlitePool,
+        user: UserId,
+        infohash: &str,
+        up: i64,
+        down: i64,
+    ) -> String {
+        let row = upsert(
+            pool,
+            NewTorrent {
+                infohash: infohash.into(),
+                name: "x".into(),
+                total_size_bytes: 1024,
+                source_provider: None,
+                source_external_id: None,
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE torrents SET uploaded_bytes_total = ?1, downloaded_bytes_total = ?2 \
+              WHERE id = ?3",
+        )
+        .bind(up)
+        .bind(down)
+        .bind(row.id)
+        .execute(pool)
+        .await
+        .unwrap();
+        row.infohash
+    }
+
+    /// One-shot clamp: a 4411x row comes back to the ceiling, sane rows
+    /// and download-less partial seeders are untouched, re-running is a
+    /// no-op, and the next session delta accumulates cleanly on top.
+    #[tokio::test]
+    async fn clamp_uploaded_ratios_repairs_only_outliers() {
+        let pool = migrated_pool().await;
+        let user = crate::users::create(
+            &pool,
+            crate::users::NewUser {
+                email: "t3@example.com".into(),
+                password_hash: "x".into(),
+                is_admin: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+
+        let wild = set_counters(&pool, user, &"cc".repeat(20), 4_411_000, 1_000).await;
+        let sane = set_counters(&pool, user, &"dd".repeat(20), 5_000, 1_000).await;
+        let partial = set_counters(&pool, user, &"ee".repeat(20), 9_000, 0).await;
+
+        assert_eq!(clamp_uploaded_ratios(&pool, 10).await.unwrap(), 1);
+
+        let row = find_by_infohash(&pool, &wild).await.unwrap().unwrap();
+        assert_eq!(row.uploaded_bytes_total, 10_000);
+        let row = find_by_infohash(&pool, &sane).await.unwrap().unwrap();
+        assert_eq!(row.uploaded_bytes_total, 5_000);
+        let row = find_by_infohash(&pool, &partial)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.uploaded_bytes_total, 9_000);
+
+        assert_eq!(
+            clamp_uploaded_ratios(&pool, 10).await.unwrap(),
+            0,
+            "second run matches nothing"
+        );
+
+        // Session deltas keep accumulating honestly on the repaired base.
+        reconcile_uploaded(&pool, &wild, 100).await.unwrap();
+        let row = find_by_infohash(&pool, &wild).await.unwrap().unwrap();
+        assert_eq!(row.uploaded_bytes_total, 10_100);
     }
 }

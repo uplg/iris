@@ -474,7 +474,7 @@ fun IrisRoot(
         // EXCEPT on the Settings screen, where the in-app updater
         // lives — otherwise the user would be stuck with no path to
         // resolve the situation. AppUpdater downloads the APK from a
-        // fixed external URL (`uplg.xyz`), unaffected by the server
+        // fixed external URL (`synthe.se`), unaffected by the server
         // gate, so the update flow keeps working.
         val currentRoute by navController.currentBackStackEntryAsState()
         if (clientOutdated && currentRoute?.destination?.route != Routes.SETTINGS) {

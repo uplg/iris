@@ -21,6 +21,7 @@ pub mod tmdb;
 pub mod tmdb_backfill;
 pub mod tmdb_resolve;
 pub mod watched_backfill;
+pub mod writer_lock;
 
 use std::path::{Path, PathBuf};
 
@@ -168,6 +169,34 @@ fn spawn_disabled_provider_offer_purge(
     });
 }
 
+/// One-shot repair for inflated lifetime upload counters: at most one
+/// boot ever clamps rows whose lifetime ratio exceeds the ceiling back
+/// down to it (see `iris_db::torrents::clamp_uploaded_ratios`). A marker
+/// file in the data dir gates it — deleting the marker re-arms the repair.
+/// Best-effort by design: a failed repair must never brick the boot, it
+/// just logs loudly and the ratios stay as they were.
+async fn run_upload_ratio_repair(pool: &iris_db::SqlitePool, data_dir: &std::path::Path) {
+    const MARKER: &str = ".upload_ratio_repair_v1.done";
+    const MAX_SANE_LIFETIME_RATIO: u32 = 10;
+    if data_dir.join(MARKER).exists() {
+        return;
+    }
+    match iris_db::torrents::clamp_uploaded_ratios(pool, MAX_SANE_LIFETIME_RATIO).await {
+        Ok(0) => tracing::info!("upload ratio repair: counters already sane"),
+        Ok(n) => tracing::warn!(
+            clamped = n,
+            "upload ratio repair: clamped inflated upload counters to 10x lifetime"
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "upload ratio repair failed; ratios stay inflated");
+            return;
+        }
+    }
+    if let Err(e) = std::fs::write(data_dir.join(MARKER), "v1\n") {
+        tracing::warn!(error = %e, "upload ratio repair: done-marker not written, will retry next boot");
+    }
+}
+
 /// Background tasks that depend on the live `AppState`. Extracted from
 /// `run` to keep that function under the clippy line-count budget.
 fn spawn_background_jobs(
@@ -299,12 +328,24 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         .context("loading providers config")?;
 
     let db_path = cfg.storage.data_dir.join("iris.db");
+    // Single-writer guard FIRST (before the pool opens): two backends on
+    // the same data_dir would each reconcile upload deltas and inflate
+    // every ratio. The lock is held until this process exits.
+    let _writer_lock = writer_lock::acquire(&cfg.storage.data_dir)
+        .with_context(|| {
+            format!(
+                "acquiring single-writer lock in {}",
+                cfg.storage.data_dir.display()
+            )
+        })?;
     let pool = iris_db::connect(&db_path)
         .await
         .with_context(|| format!("connecting to db at {}", db_path.display()))?;
     iris_db::migrate::run(&pool)
         .await
         .context("running migrations")?;
+
+    run_upload_ratio_repair(&pool, &cfg.storage.data_dir).await;
 
     state::bootstrap_admin_if_configured(&pool, &cfg.auth)
         .await

@@ -842,6 +842,9 @@ function TorrentRow({
   // a fresh session's progress catches up to a past life's seed.
   const lifetimeDownloaded = t.downloaded_bytes_total ?? 0;
   const ratio = lifetimeDownloaded > 0 ? t.uploaded_bytes_total / lifetimeDownloaded : null;
+  // Raw lifetime counters behind the ratio — hovering a wild ratio
+  // shows instantly whether the upload or the download side is off.
+  const ratioTitle = `Uploaded ${formatSize(t.uploaded_bytes_total)} / downloaded ${formatSize(lifetimeDownloaded)} (lifetime)`;
 
   return (
     <div className="group rounded-lg border border-border/70 bg-card/60 transition hover:border-border">
@@ -860,9 +863,19 @@ function TorrentRow({
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
                 <StateBadge state={t.state} />
                 <HealthBadge peers={t.peers} finished={finished} state={t.state} />
+                {t.source_provider && (
+                  <Badge
+                    variant="outline"
+                    title={`Grabbed from ${t.source_provider}`}
+                    className="text-[10px] tabular-nums text-muted-foreground"
+                  >
+                    {t.source_provider}
+                  </Badge>
+                )}
                 {ratio != null && (
                   <Badge
                     variant="outline"
+                    title={ratioTitle}
                     className={cn(
                       "text-[10px] tabular-nums",
                       ratio >= 1

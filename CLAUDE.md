@@ -195,8 +195,12 @@ featured carousel built from JSON).
 
 ### Releasing a new TV APK
 
-The TV APK is self-hosted at `https://uplg.xyz/app-release.apk` and
-the in-app updater (`AppUpdater`) pulls it on demand. Settings → App
+The TV APK is self-hosted at `https://synthe.se/app-release.apk`
+(Caddy on yuki, files in `/var/www/iris`; `https://uplg.xyz/app-release.*`
+301s there because shipped builds still point at uplg.xyz) and the
+in-app updater (`AppUpdater`) pulls it on demand. Release = `just apk`
+then `just apk-push`: the recipe uploads the APK and writes the sidecar
+from `versionName`, so the two can't drift. Settings → App
 update also displays "Update available: X.Y.Z" when the installed
 version is stale — that check reads a sidecar text file.
 
@@ -218,8 +222,8 @@ path).
 
 When the sidecar drifts from the APK (e.g. you forgot to update
 it), the worst case is the user gets a "Up to date" message and
-needs to manually hit Download. Don't let that drift — set up the
-two uploads in the same script.
+needs to manually hit Download. `just apk-push` is that script; don't
+upload the files by hand.
 
 ### Versioning & client gate
 
@@ -256,7 +260,7 @@ Required` with `{"error":"client_outdated","message":...,"min_version":...}`.
 - Wait ≥ one full APK release cycle after the new client ships so most
   users have a clean update path.
 - The TV update flow goes through `AppUpdater` (downloads APK from
-  `https://uplg.xyz/app-release.apk`, **bypasses the Iris backend**),
+  `https://synthe.se/app-release.apk`, **bypasses the Iris backend**),
   so even a fully-gated user can still update from Settings → Update
   app. The 426 overlay (`IrisRoot::ClientOutdatedOverlay`) hides
   whenever the user navigates to the Settings route.

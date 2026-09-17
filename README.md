@@ -54,7 +54,7 @@ See [deployment.md](./docs/DEPLOYMENT.md) for server setup.
 ### Install on a TV / box
 
 - Install Downloader by AFTVNews on Google play store.
-- Type the code : **8737385** or use this url : https://uplg.xyz/app-release.apk
+- Type the code : **8737385** or use this url : https://synthe.se/app-release.apk
 - Install (allow unknown sources if needed)
 
 (New updates can be done after using Iris settings screen > Update app.)
@@ -83,4 +83,6 @@ Two gotchas worth knowing before touching it:
   `scripts/build-av1-ext.sh`.
 - A release upload is TWO files: `app-release.apk` **and** the
   `app-release.version` sidecar (plain semver, one line) that powers the
-  "Update available" card in Settings.
+  "Update available" card in Settings. `just apk-push` uploads both to
+  yuki (https://synthe.se/app-release.apk) with the sidecar taken from
+  `versionName`.

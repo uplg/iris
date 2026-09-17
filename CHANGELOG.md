@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Seed ratios no longer depend on there being a single backend.**
+  `uploaded_bytes_total` is reconciled with delta math that assumes one
+  writer: a second backend sharing the same `data_dir` (same `iris.db`)
+  added every delta twice and inflated ratios (seen: 6.7 TB on a torrent
+  the tracker credited 3.9 TB — thousands of x). The backend now takes an
+  exclusive lock on `<data_dir>/.iris-writer.lock` at boot and refuses to
+  start when another instance holds it, instead of silently corrupting
+  counters. The first boot after this deploy also runs a one-shot repair
+  (gated by `.upload_ratio_repair_v1.done`): any row above a 10x lifetime
+  ratio is clamped back to it — the download side is trustworthy, so the
+  ceiling only ever cuts phantom upload. Later boots skip it, so honestly
+  earned high ratios can still grow past the ceiling afterwards.
+
 ## [1.4.2] - 2026-09-08
 
 ### Fixed
