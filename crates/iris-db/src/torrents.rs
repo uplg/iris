@@ -295,10 +295,7 @@ pub async fn reconcile_downloaded(
 /// upload. Rows with no recorded download are left alone — partial
 /// seeders genuinely upload without completing. Idempotent: a second run
 /// matches no rows.
-pub async fn clamp_uploaded_ratios(
-    pool: &SqlitePool,
-    max_ratio: u32,
-) -> Result<u64, sqlx::Error> {
+pub async fn clamp_uploaded_ratios(pool: &SqlitePool, max_ratio: u32) -> Result<u64, sqlx::Error> {
     let res = sqlx::query(
         "UPDATE torrents SET uploaded_bytes_total = downloaded_bytes_total * ?1 \
           WHERE downloaded_bytes_total > 0 \
@@ -631,10 +628,7 @@ mod tests {
         assert_eq!(row.uploaded_bytes_total, 10_000);
         let row = find_by_infohash(&pool, &sane).await.unwrap().unwrap();
         assert_eq!(row.uploaded_bytes_total, 5_000);
-        let row = find_by_infohash(&pool, &partial)
-            .await
-            .unwrap()
-            .unwrap();
+        let row = find_by_infohash(&pool, &partial).await.unwrap().unwrap();
         assert_eq!(row.uploaded_bytes_total, 9_000);
 
         assert_eq!(
