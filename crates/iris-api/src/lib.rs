@@ -21,7 +21,6 @@ pub mod tmdb;
 pub mod tmdb_backfill;
 pub mod tmdb_resolve;
 pub mod watched_backfill;
-pub mod writer_lock;
 
 use std::path::{Path, PathBuf};
 
@@ -328,16 +327,6 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         .context("loading providers config")?;
 
     let db_path = cfg.storage.data_dir.join("iris.db");
-    // Single-writer guard FIRST (before the pool opens): two backends on
-    // the same data_dir would each reconcile upload deltas and inflate
-    // every ratio. The lock is held until this process exits.
-    let _writer_lock = writer_lock::acquire(&cfg.storage.data_dir)
-        .with_context(|| {
-            format!(
-                "acquiring single-writer lock in {}",
-                cfg.storage.data_dir.display()
-            )
-        })?;
     let pool = iris_db::connect(&db_path)
         .await
         .with_context(|| format!("connecting to db at {}", db_path.display()))?;
