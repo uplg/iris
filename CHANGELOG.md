@@ -7,8 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-01
+
+### Added
+
+- **Discovery follows the news, checked against our trackers.** The "For
+  You" shelves and the mood board are now built from what the world is
+  watching right now — TMDB trending, recent French digital releases,
+  series on the air, and SIMKL's public "watched today" lists — joined with
+  what the trackers can actually serve. A pulse job (every 3 h) snapshots
+  those lists and searches the catalogue trackers for a budgeted batch of
+  titles (≈60 per cycle, spaced out), verifying each hit against TMDB before
+  it reaches a shelf; misses are never shown. New shelves: "Trending now",
+  "Just out on streaming", "New episodes this week", "Hot on our trackers",
+  plus "New anime" for accounts that opted in.
+- **Nine curated moods** replace the raw genre list: Chills, Feel-good, Pure
+  action, Mind-bending, Laughs, Love story, Space & sci-fi, Animation, True
+  stories. Each tile names its title of the moment (additive
+  `MoodTile.featured_title`; older clients ignore it).
+- **Language filter on search results** (web + TV): FR / EN / MULTI / VOST /
+  VO chips with counts, read from SCENE tags and, when a release carries
+  none, from the tracker's origin (new `origin` provider knob). Additive
+  `SearchResult.language_tag`.
+- **V3X tracker** (French, general): Torznab search plus logged-in details
+  (description, NFO / MediaInfo, tags, uploader) when `V3X_USER` /
+  `V3X_PASSWORD` are set. The BBCode renderer now handles V3X's
+  `[table]` / `[uicolor]` / `[justify]` markup.
+
+### Changed
+
+- **Personalization is per account.** Shelves hide what this account
+  watched or dismissed and releases in none of its languages; titles
+  already in the library stay, marked "In the library"; a light genre boost
+  comes from the account's onboarding picks and its own recent watches.
+- TMDB and SIMKL attribution on the Discover page (web + TV).
+- Dependencies: Rust 1.99, latest crates / web packages / AndroidX,
+  Media3 1.11.1 with the FFmpeg (n9.0.2) and AV1 decoder extensions rebuilt,
+  emsdk 6.0.10, Gradle 9.8.
+
+### Removed
+
+- The embedding recommender (`iris-reco`, model2vec) and its `[reco]`
+  config section. Migration 0038 drops the stored vectors and the never
+  tracker-confirmed lazy candidates (dismissals of those go with them).
+
 ### Fixed
 
+- **TV: nyaa.si results were stuck on "Loading…".** Nyaa had no details
+  endpoint and the TV screen waited on it; nyaa now serves details from its
+  view page, and the TV treats details as best-effort (Download enabled
+  without them).
 - **Seed ratios no longer depend on there being a single backend.**
   `uploaded_bytes_total` is reconciled with delta math that assumes one
   writer: a second backend sharing the same `data_dir` (same `iris.db`)
@@ -1156,7 +1204,10 @@ inside]` over `[type icons (all/movie/series) | one cycling sort pill
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.4.0...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.5.0...HEAD
+[1.5.0]: https://github.com/uplg/iris/compare/1.4.2...1.5.0
+[1.4.2]: https://github.com/uplg/iris/compare/1.4.1...1.4.2
+[1.4.1]: https://github.com/uplg/iris/compare/1.4.0...1.4.1
 [1.4.0]: https://github.com/uplg/iris/compare/1.3.6...1.4.0
 [1.3.6]: https://github.com/uplg/iris/compare/1.3.5...1.3.6
 [1.3.5]: https://github.com/uplg/iris/compare/1.3.4...1.3.5
