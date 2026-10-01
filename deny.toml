@@ -18,6 +18,12 @@ ignore = [
     "RUSTSEC-2025-0141",
     # bincode 2.0.1 unmaintained — transitive via librqbit. No safe upgrade.
     "RUSTSEC-2025-0060",
+    # ringbuf < 0.5.2 `Consumer::skip`/`clear` double free when an element's
+    # `Drop` panics. Transitive via librqbit-utp 0.7.0 (ringbuf 0.4.8; the fix
+    # is 0.5-only). Unreachable here: librqbit-utp's only ring buffers are
+    # `SharedRb<Heap<u8>>`, and `u8` has no `Drop`. Drop this entry once
+    # librqbit-utp moves to ringbuf >= 0.5.2.
+    "RUSTSEC-2026-0293",
 ]
 
 [licenses]
