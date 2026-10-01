@@ -5,6 +5,10 @@ enabled = false
 base_url = "https://api.torr9.net"
 username_env = "TORR9_USERNAME"
 password_env = "TORR9_PASSWORD"
+# Francophone tracker: in the search language filter an untagged release
+# reads as VO (no French track), since French audio/subs are always tagged.
+# Anglophone trackers get `origin = "en"` implied by `default_language`.
+origin = "fr"
 
 [[providers]]
 id = "c411"
@@ -12,6 +16,7 @@ kind = "c411"
 enabled = true
 base_url = "https://c411.org"
 api_key_env = "C411_API_KEY"
+origin = "fr"
 
 # TheOldSchool — UNIT3D tracker, consumed via the native UNIT3D
 # JSON:API (UNIT3D doesn't ship Torznab). Generate an API key in
@@ -22,6 +27,7 @@ kind = "unit3d"
 enabled = false
 base_url = "https://theoldschool.cc"
 api_key_env = "TOS_API_KEY"
+origin = "fr"
 
 # SeedPool — UNIT3D tracker, same native JSON:API as TOS. Generate an
 # API key in your account settings → API Tokens.
@@ -105,6 +111,7 @@ base_url = "https://tr4ker.net"
 api_path = "/api/"
 api_key_env = "TR4KER_API_KEY"
 api_key_header = "X-Api-Key"
+origin = "fr"
 
 # YggReborn — francophone tracker exposing clean generic Torznab 1.3
 # (caps, search/tvsearch with season/ep, torznab:attr seeders/peers/size,
@@ -123,6 +130,7 @@ kind = "torznab"
 enabled = true
 base_url = "https://api.yggreborn.org"
 api_key_env = "YGGREBORN_API_KEY"
+origin = "fr"
 
 # Memphis — young francophone tracker with a partial generic Torznab:
 # t=search / t=movie honor `q` (case-insensitive, separator-normalized
@@ -143,6 +151,31 @@ base_url = "https://memphis.fit"
 api_path = "/api/torznab"
 api_key_env = "MEMPHIS_API_KEY"
 tvsearch_q = false
+origin = "fr"
+
+# V3X — francophone general tracker (opened 2026-08), custom stack with a
+# clean Torznab endpoint on the API host. `kind = "v3x"` composes the generic
+# Torznab provider and rebuilds download links from the uuid guid, so grabs
+# survive a restart without a fresh search. Create the key under Réglages →
+# Intégrations with the `torznab` scope. Key scopes can't read release pages,
+# so the site login (username/password) backs a cookie session for rich
+# details (BBCode/HTML description, NFO → media info, uploader, team); without
+# it details fall back to the feed snapshot. Login is rate-limited (10/min)
+# and the account must not use 2FA.
+# Standard 2000/5000 buckets, no subcategories. Releases are tagged
+# (MULTi/VFF/VFQ/VOSTFR) and the feed adds one `language` attr per audio track,
+# which backs the badge on untagged titles — no `default_language` needed.
+# Tracker min ratio 0.8: keep seeding.
+[[providers]]
+id = "v3x"
+kind = "v3x"
+enabled = true
+base_url = "https://api.v3x.club"
+api_path = "/torznab/api"
+api_key_env = "V3X_API_KEY"
+username_env = "V3X_USER"
+password_env = "V3X_PASSWORD"
+origin = "fr"
 
 # nyaa.si — public anime tracker. No API key, no account: the whole
 # catalogue is a public RSS feed.

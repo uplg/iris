@@ -9,14 +9,13 @@ members = [
   "crates/iris-torrent",
   "crates/iris-media",
   "crates/iris-caps",
-  "crates/iris-reco",
   "crates/iris-api",
 ]
 
 [workspace.package]
 version = "1.4.2"
 edition = "2024"
-rust-version = "1.98"
+rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -41,7 +40,6 @@ iris-providers = { path = "crates/iris-providers" }
 iris-torrent = { path = "crates/iris-torrent" }
 iris-media = { path = "crates/iris-media" }
 iris-caps = { path = "crates/iris-caps" }
-iris-reco = { path = "crates/iris-reco" }
 
 # Async runtime + http
 tokio = { version = "1.53.1", features = ["full"] }
@@ -144,10 +142,6 @@ sha2 = "0.11.0"
 # UNIT3D-Announce trackers (e.g. theoldschool.cc) reject HTTP announces
 # with absent/long User-Agents, and 8.x had no public knob.
 librqbit = "9.0.1"
-
-# Recommendation — static text embeddings (model2vec). Official Rust impl,
-# CPU-only lookup-table inference; see crates/iris-reco + RECOSYS.md §4.
-model2vec-rs = "0.2.1"
 
 [profile.release]
 lto = "thin"

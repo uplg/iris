@@ -27,8 +27,8 @@ import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Spacing
 
 /**
- * The organized "For You" page — the blended top picks plus per-genre /
- * "because you watched" / new-anime sections (`/api/me/for-you/page`).
+ * The "For You" page — every discovery shelf (`/api/me/for-you/page`): what's
+ * trending, fresh on streaming, airing and hot on our trackers.
  * Reachable from the home nav and the home shelf's "See all →".
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -74,7 +74,7 @@ fun ForYouScreen(
         } else if (shelves.isEmpty()) {
             item(key = "empty") {
                 Text(
-                    "Nothing to recommend yet. Set your preferences and check back once the catalogue has refreshed.",
+                    "Nothing here yet. Discovery follows what's trending and checks it against your trackers every few hours — check back soon.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = IrisColors.FgDim,
                     modifier = Modifier.padding(horizontal = Spacing.gutter),
@@ -95,6 +95,16 @@ fun ForYouScreen(
                         }
                     }
                 }
+            }
+            item(key = "attribution") {
+                // TMDB's terms require attribution; SIMKL's public lists get the same.
+                Text(
+                    "Trends from TMDB and SIMKL, matched against your trackers. " +
+                        "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = IrisColors.FgDim,
+                    modifier = Modifier.padding(horizontal = Spacing.gutter),
+                )
             }
         }
     }

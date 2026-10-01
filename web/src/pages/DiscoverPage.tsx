@@ -13,8 +13,8 @@ const discoverApi = getRouteApi("/auth/shell/discover");
 type Kind = MediaKind;
 
 /**
- * The single "Discover" destination — both halves of the reco system
- * as tabs ("For You" + "Tonight"), mirroring the TV. All state lives
+ * The single "Discover" destination — the trending shelves ("For You")
+ * and the curated mood board ("Tonight") as tabs, mirroring the TV. All state lives
  * in the URL (`?view=&mood=&kind=`) so tabs, boards and mood results
  * stay shareable and Back-friendly; `/for-you` and `/moods` redirect
  * here.
@@ -66,7 +66,7 @@ export function DiscoverPage() {
   );
 }
 
-// "For You" tab — the expanded view of the home shelf.
+// "For You" tab — every discovery shelf (home shows a subset).
 
 function ForYouSection() {
   const q = useQuery({
@@ -83,21 +83,42 @@ function ForYouSection() {
   if (shelves.length === 0) {
     return (
       <p className="px-0.5 text-sm text-muted-foreground">
-        Nothing to recommend yet. Set your preferences in your account and check back once the
-        catalogue has refreshed.
+        Nothing here yet. Discovery follows what&apos;s trending and checks it against your trackers
+        every few hours — check back soon.
       </p>
     );
   }
   return (
-    <div className="lanes">
-      {shelves.map((shelf) => (
-        <Shelf key={shelf.key} title={shelf.title}>
-          {shelf.items.map((card) => (
-            <CatalogCardView key={card.catalog_id} card={card} />
-          ))}
-        </Shelf>
-      ))}
+    <div className="grid gap-4">
+      <div className="lanes">
+        {shelves.map((shelf) => (
+          <Shelf key={shelf.key} title={shelf.title}>
+            {shelf.items.map((card) => (
+              <CatalogCardView key={card.catalog_id} card={card} />
+            ))}
+          </Shelf>
+        ))}
+      </div>
+      <PulseAttribution />
     </div>
+  );
+}
+
+/** TMDB's terms require attribution; SIMKL's public lists get the same. */
+function PulseAttribution() {
+  return (
+    <p className="px-0.5 text-xs text-fg-dim">
+      Trends from{" "}
+      <a href="https://www.themoviedb.org" target="_blank" rel="noreferrer" className="underline">
+        TMDB
+      </a>{" "}
+      and{" "}
+      <a href="https://simkl.com" target="_blank" rel="noreferrer" className="underline">
+        SIMKL
+      </a>
+      , matched against your trackers. This product uses the TMDB API but is not endorsed or
+      certified by TMDB.
+    </p>
   );
 }
 
@@ -142,8 +163,13 @@ function MoodTileButton({ tile, onClick }: { tile: MoodTile; onClick: () => void
       )}
       {/* Legibility scrim under the label. */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/15 to-transparent" />
-      <span className="absolute inset-x-0 bottom-0 line-clamp-2 p-3 text-base font-semibold leading-tight text-white drop-shadow-sm sm:text-lg">
-        {tile.label}
+      <span className="absolute inset-x-0 bottom-0 grid gap-0.5 p-3 drop-shadow-sm">
+        <span className="line-clamp-2 text-base font-semibold leading-tight text-white sm:text-lg">
+          {tile.label}
+        </span>
+        {tile.featured_title && (
+          <span className="line-clamp-1 text-xs text-white/75">Now: {tile.featured_title}</span>
+        )}
       </span>
     </button>
   );

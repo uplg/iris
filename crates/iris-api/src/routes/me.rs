@@ -852,7 +852,7 @@ mod tests {
         assert!(revive_dead_row(&mut r, true));
         assert!(r.grabbable);
         assert!(r.next_up);
-        assert!(r.infohash.is_empty());
+        assert_eq!(r.infohash, "");
         assert_eq!(r.file_idx, 0);
         assert!(r.position_seconds.abs() < f64::EPSILON);
         // Identity the grab endpoint needs survives the conversion.

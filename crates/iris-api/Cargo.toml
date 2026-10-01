@@ -22,10 +22,10 @@ iris-providers = { workspace = true }
 iris-torrent = { workspace = true }
 iris-media = { workspace = true }
 iris-caps = { workspace = true }
-iris-reco = { workspace = true }
 
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+futures = { workspace = true }
 axum = { workspace = true }
 axum-extra = { workspace = true }
 tower = { workspace = true }

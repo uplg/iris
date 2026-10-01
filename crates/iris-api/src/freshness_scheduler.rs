@@ -36,14 +36,13 @@ use crate::tmdb_resolve;
 /// Each full cycle polls every provider for movies then TV.
 const KINDS: [MediaKind; 2] = [MediaKind::Movie, MediaKind::Tv];
 
-/// Lazy reco candidates (`availability='unknown'`, no `released_at`) are GC'd
-/// after this long without a refresh. They're re-derived on request, so a
-/// short window keeps the table lean.
-const LAZY_TTL_DAYS: i64 = 14;
+/// Undated rows (a feed that carried no upload time) are GC'd after this long
+/// without a refresh.
+const UNDATED_TTL_DAYS: i64 = 14;
 
 /// View a search result through the shared "recommended" ordering lens
 /// (smallest sane size first, seeders only as a garde-fou, `MULTi` discounted).
-fn candidate_of(r: &SearchResult, is_multi: bool) -> iris_core::ranking::Candidate {
+pub(crate) fn candidate_of(r: &SearchResult, is_multi: bool) -> iris_core::ranking::Candidate {
     iris_core::ranking::Candidate {
         seeders: r.seeders.map(i64::from),
         size_bytes: r.size_bytes.and_then(|b| i64::try_from(b).ok()),
@@ -51,14 +50,14 @@ fn candidate_of(r: &SearchResult, is_multi: bool) -> iris_core::ranking::Candida
     }
 }
 
-const fn tmdb_kind(kind: MediaKind) -> TmdbKind {
+pub(crate) const fn tmdb_kind(kind: MediaKind) -> TmdbKind {
     match kind {
         MediaKind::Movie => TmdbKind::Movie,
         MediaKind::Tv => TmdbKind::Tv,
     }
 }
 
-const fn kind_str(kind: MediaKind) -> &'static str {
+pub(crate) const fn kind_str(kind: MediaKind) -> &'static str {
     match kind {
         MediaKind::Movie => "movie",
         MediaKind::Tv => "tv",
@@ -150,11 +149,12 @@ async fn run_slice(
 
     let window_start = Utc::now() - chrono::Duration::weeks(cfg.poll_window_weeks.max(1));
     let best = collect_best(pool, tmdb, providers, kind, page.results, window_start).await;
+    let source = format!("freshness:{provider_id}:{}", kind_str(kind));
     let upserted = upsert_window_rows(
         pool,
         tmdb,
         anilist,
-        provider_id,
+        &source,
         kind,
         best,
         cfg.max_content_age_years,
@@ -217,13 +217,14 @@ async fn collect_best(
 }
 
 /// Enrich each best release with full TMDB metadata (+ AniList for anime) and
-/// upsert it into `catalog_items` with `availability='available'`. Returns the
+/// upsert it into `catalog_items` with `availability='available'`. Shared with
+/// the pulse join. `source` tags the rows (diagnostic only). Returns the
 /// number of rows written.
-async fn upsert_window_rows(
+pub(crate) async fn upsert_window_rows(
     pool: &SqlitePool,
     tmdb: &TmdbClient,
     anilist: Option<&AniListClient>,
-    provider_id: &str,
+    source: &str,
     kind: MediaKind,
     best: HashMap<i64, (SearchResult, Language)>,
     max_content_age_years: i64,
@@ -289,7 +290,7 @@ async fn upsert_window_rows(
             popularity: meta.popularity,
             vote_average: meta.vote_score,
             release_date: meta.release_date,
-            source: Some(format!("freshness:{provider_id}:{}", kind_str(kind))),
+            source: Some(source.to_string()),
             availability: "available".to_string(),
             seeders: release.seeders.map(i64::from),
             provider_id: Some(release.provider_id),
@@ -321,14 +322,13 @@ async fn upsert_window_rows(
 }
 
 /// Heuristic: does this TMDB title look like anime? Animation genre (16) in
-/// Japanese. Good enough to gate the (cached) AniList reconciliation. Shared with
-/// the watched-title backfill so both classify anime identically.
-pub(crate) fn is_anime_meta(meta: &MediaMetadata) -> bool {
+/// Japanese. Good enough to gate the (cached) AniList reconciliation.
+fn is_anime_meta(meta: &MediaMetadata) -> bool {
     meta.genre_ids.contains(&16) && meta.original_language.as_deref() == Some("ja")
 }
 
 /// Pick the AniList match for a title, preferring an exact release-year match.
-pub(crate) fn pick_anime(results: &[AniListMedia], year: Option<u32>) -> Option<AniListMedia> {
+fn pick_anime(results: &[AniListMedia], year: Option<u32>) -> Option<AniListMedia> {
     if let Some(y) = year.and_then(|y| u16::try_from(y).ok())
         && let Some(m) = results.iter().find(|m| m.year == Some(y))
     {
@@ -339,8 +339,8 @@ pub(crate) fn pick_anime(results: &[AniListMedia], year: Option<u32>) -> Option<
 
 async fn run_gc(pool: &SqlitePool, cfg: &DiscoveryConfig) {
     let released_before = Utc::now() - chrono::Duration::weeks(cfg.retain_weeks.max(1));
-    let lazy_before = Utc::now() - chrono::Duration::days(LAZY_TTL_DAYS);
-    match iris_db::catalog::prune_window(pool, released_before, lazy_before).await {
+    let undated_before = Utc::now() - chrono::Duration::days(UNDATED_TTL_DAYS);
+    match iris_db::catalog::prune_window(pool, released_before, undated_before).await {
         Ok(n) if n > 0 => tracing::info!(pruned = n, "freshness: window GC slid"),
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "freshness: window GC failed"),

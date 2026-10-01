@@ -149,6 +149,15 @@ private enum class SortMode(val label: String) {
     Title("Title"),
 }
 
+/** Search-filter vocabulary from `SearchResult.languageTag`, display order. */
+private val LANGUAGE_TAGS = listOf(
+    "fr" to "FR",
+    "multi" to "MULTi",
+    "vost" to "VOSTFR",
+    "vo" to "VO",
+    "en" to "EN",
+)
+
 private data class FetchKey(
     val q: String,
     val page: Int,
@@ -206,6 +215,10 @@ fun SearchScreen(
         mutableStateOf(SortMode.Recommended)
     }
     var page by rememberSaveable { mutableIntStateOf(1) }
+    // Best-effort and page-local, like web: filters what this page
+    // returned. Keyed so a new query or kind clears it, while Back from a
+    // result restores it.
+    var langTag by rememberSaveable(submittedQuery, kind) { mutableStateOf<String?>(null) }
 
     var data by remember { mutableStateOf<SearchResponse?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -609,6 +622,26 @@ fun SearchScreen(
                 },
                 modifier = Modifier.focusRequester(filtersFocus),
             )
+            // Language: one pill cycling All → each tag present on this
+            // page, same single D-pad stop as the sort pill.
+            val pageRows = data?.results.orEmpty()
+            val langCounts = pageRows.mapNotNull { it.languageTag }.groupingBy { it }.eachCount()
+            val langOptions = listOf<String?>(null) +
+                LANGUAGE_TAGS.map { it.first }.filter { it in langCounts || it == langTag }
+            if (langOptions.size > 1) {
+                val current = LANGUAGE_TAGS.firstOrNull { it.first == langTag }
+                Chip(
+                    label = if (current == null) {
+                        "Lang: All"
+                    } else {
+                        "Lang: ${current.second} · ${langCounts[current.first] ?: 0}"
+                    },
+                    selected = langTag != null,
+                    onClick = {
+                        langTag = langOptions[(langOptions.indexOf(langTag) + 1) % langOptions.size]
+                    },
+                )
+            }
             // View: a single toggle showing the mode it switches TO.
             TvIconButton(
                 icon = if (viewMode == SearchViewMode.GRID) {
@@ -633,7 +666,8 @@ fun SearchScreen(
         }
 
         // --- Results ---
-        val rows = data?.results.orEmpty()
+        val allRows = data?.results.orEmpty()
+        val rows = langTag?.let { tag -> allRows.filter { it.languageTag == tag } } ?: allRows
         // Library items matching the query — the FIRST entries of the
         // same grid/list ("you already have this"). Page 1 only: the
         // server repeats them on every page.
@@ -652,6 +686,10 @@ fun SearchScreen(
                 page = 1
             }
             pending && rows.isEmpty() && libMatches.isEmpty() -> SkeletonGrid(110.dp)
+            !pending && rows.isEmpty() && libMatches.isEmpty() && allRows.isNotEmpty() -> EmptyHint(
+                title = "Nothing in this language on this page",
+                body = "The language filter only sees the current page — try the next page or another language.",
+            )
             !pending && rows.isEmpty() && libMatches.isEmpty() -> EmptyHint(
                 title = "No results",
                 body = "Try a different title or switch the kind / sort filters.",

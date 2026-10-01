@@ -173,7 +173,13 @@ fun SearchDetailScreen(
             det to m
         }
         det.onSuccess { details = it }
-        det.onFailure { error = it.message ?: "Failed to load details" }
+        // Details are best-effort, as on web: a 404 means the provider has no
+        // detail page (or forgot this id), and the grab doesn't need one.
+        det.onFailure {
+            if ((it as? retrofit2.HttpException)?.code() != 404) {
+                error = it.message ?: "Failed to load details"
+            }
+        }
         meta = m
         loading = false
     }
@@ -213,7 +219,7 @@ fun SearchDetailScreen(
             ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    details?.title ?: "Loading…",
+                    details?.title ?: if (loading) "Loading…" else meta?.title ?: externalId,
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.SemiBold,
                     // tv-material3 Text with no color falls back to a
@@ -277,7 +283,7 @@ fun SearchDetailScreen(
                         if (following) "Following…" else "♥  Follow",
                         {
                             if (following) return@IrisButton
-                            val title = details?.title
+                            val title = details?.title ?: meta?.title
                             if (title.isNullOrBlank()) return@IrisButton
                             following = true
                             error = null
@@ -305,7 +311,7 @@ fun SearchDetailScreen(
                             }
                         },
                         variant = IrisButtonVariant.Ghost,
-                        enabled = details != null && !following && !ingesting,
+                        enabled = (details != null || meta != null) && !following && !ingesting,
                     )
                 }
                 IrisButton(
@@ -319,7 +325,7 @@ fun SearchDetailScreen(
                         }
                         grab(allowDuplicate = false)
                     },
-                    enabled = details != null && !ingesting && !dead,
+                    enabled = !loading && !ingesting && !dead,
                 )
             }
 

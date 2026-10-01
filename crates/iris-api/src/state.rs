@@ -10,7 +10,6 @@ use iris_torrent::{Engine, Gc};
 use crate::anilist::AniListClient;
 use crate::live_tv::LiveTvService;
 use crate::presence::Presence;
-use crate::reco_engine::RecoEngine;
 use crate::tmdb::TmdbClient;
 
 #[derive(Clone)]
@@ -30,7 +29,6 @@ struct Inner {
     pub tmdb: Option<TmdbClient>,
     pub anilist: Option<AniListClient>,
     pub presence: Presence,
-    pub reco: Arc<RecoEngine>,
     pub live_tv: Option<LiveTvService>,
 }
 
@@ -59,7 +57,6 @@ impl AppState {
             cfg.auth.access_ttl_secs,
             cfg.auth.refresh_ttl_secs,
         );
-        let reco = Arc::new(RecoEngine::new(&cfg.reco));
         // Live TV proxy/catalogue — config-gated; a build failure disables
         // the feature instead of blocking boot.
         let live_tv = cfg
@@ -97,7 +94,6 @@ impl AppState {
                 tmdb,
                 anilist,
                 presence: Presence::new(),
-                reco,
                 live_tv,
             }),
         }
@@ -135,9 +131,6 @@ impl AppState {
     }
     pub fn presence(&self) -> &Presence {
         &self.inner.presence
-    }
-    pub fn reco(&self) -> &Arc<RecoEngine> {
-        &self.inner.reco
     }
     pub fn live_tv(&self) -> Option<&LiveTvService> {
         self.inner.live_tv.as_ref()

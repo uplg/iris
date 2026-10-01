@@ -41,10 +41,10 @@ if [[ -z "${MEDIA3_VERSION}" ]]; then
     exit 1
 fi
 
-# FFmpeg release tag. 9.0.1 is the latest stable as of 2026-09-08; bumps
+# FFmpeg release tag. 9.0.2 is the latest stable as of 2026-10-01; bumps
 # require re-validating the codec list against the Media3 JNI wrapper
 # (some symbol names move between major versions).
-FFMPEG_VERSION="${FFMPEG_VERSION:-n9.0.1}"
+FFMPEG_VERSION="${FFMPEG_VERSION:-n9.0.2}"
 
 # Codecs enabled in the build. Add anything Android can't decode
 # natively; trim aggressively to keep the resulting .so files small.

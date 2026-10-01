@@ -9,14 +9,11 @@ import { Tag } from "@/components/Tag";
 import { me as meApi, type CatalogCard } from "@/lib/api";
 
 /**
- * A "For You" card. Opens the SAME preview dialog as a search hit, so the user
- * sees the files / MediaInfo / quality before committing a download:
- *   - a rolling-window card carries its recommended-best release
- *     (`provider_id`/`external_id`) → preview that release directly;
- *   - a lazy recommendation (no resolved release yet) → fall back to a title
- *     search so the user picks + previews a release.
- * Every card is a recommendation candidate (For-You excludes what's already in
- * the library), so all get a "not interested" dismiss button on hover.
+ * A discovery card (For You shelves, mood results). Cards name a title, not
+ * a release: the server leaves `provider_id` null so a click opens a title
+ * search, which ranks a sane release first and previews each before download.
+ * The preview branch stays for a card that does carry a release. Every card
+ * gets a "not interested" dismiss button on hover.
  */
 export function CatalogCardView({ card }: { card: CatalogCard }) {
   const qc = useQueryClient();
@@ -26,10 +23,9 @@ export function CatalogCardView({ card }: { card: CatalogCard }) {
   const dismiss = useMutation({
     mutationFn: () => meApi.dismissForYou(card.catalog_id),
     onSuccess: () => {
-      // The dismiss already records the signal server-side (reco_feedback →
-      // excluded from every reco surface). Refetch each surface that renders
-      // these cards so the dismissed one drops out immediately — including the
-      // mood ("Tonight") results, which were left stale before.
+      // The dismiss is recorded server-side (reco_feedback → hidden from every
+      // discovery surface). Refetch each surface that renders these cards so
+      // the dismissed one drops out.
       void qc.invalidateQueries({ queryKey: ["for-you"] });
       void qc.invalidateQueries({ queryKey: ["for-you-page"] });
       void qc.invalidateQueries({ queryKey: ["mood-results"] });
@@ -43,8 +39,6 @@ export function CatalogCardView({ card }: { card: CatalogCard }) {
     if (hasRelease) {
       setPreview(true);
     } else {
-      // Lazy recommendation — no resolved release yet. Let the user pick one
-      // from search (which previews each before download).
       navigate({ to: "/search", search: { q: card.title } });
     }
   };

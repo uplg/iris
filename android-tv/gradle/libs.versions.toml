@@ -1,26 +1,26 @@
 [versions]
-# Toolchain (verified 2026-09-08 against maven central + maven.google.com)
-agp = "9.4.0"               # latest stable; 9.5.0 is alpha-only — hold per "no RC/alpha" rule
+# Toolchain (verified 2026-10-01 against maven central + maven.google.com)
+agp = "9.4.1"               # latest stable; 9.5.0 is alpha-only — hold per "no RC/alpha" rule
 kotlin = "2.4.20"
 
 # AndroidX core
 # core-ktx 1.19 + lifecycle 2.11 require compileSdk 37 (bumped below).
-core-ktx = "1.19.0"
+core-ktx = "1.19.1"
 activity-compose = "1.13.0"
 lifecycle = "2.11.0"
-nav-compose = "2.10.0"        # minSdk 24 floor (the app moved there for it)
+nav-compose = "2.10.2"        # minSdk 24 floor (the app moved there for it)
 
 # Compose
 # BOM pins the whole compose.* family; only override individual artifacts if
 # you really need a newer one. Compose-for-TV lives outside the BOM.
-compose-bom = "2026.08.00"
+compose-bom = "2026.09.00"
 # Note: tv-foundation hasn't shipped a 1.1.0 stable as of writing — the
 # androidx.tv 1.1 release line is `tv-material` only. Stay on 1.0.0 here.
 compose-tv-foundation = "1.0.0"
 compose-tv-material = "1.1.0"
 
 # Media3 (ExoPlayer)
-media3 = "1.11.0"            # latest stable; bump => rebuild lib-decoder-{ffmpeg,av1} AARs (scripts/)
+media3 = "1.11.1"            # latest stable; bump => rebuild lib-decoder-{ffmpeg,av1} AARs (scripts/)
 
 # Networking
 # Retrofit 3.0.0 is out and works with Square's official kotlinx-serialization
@@ -34,11 +34,11 @@ kotlinx-serialization = "1.11.0"  # 1.12.0 is RC-only as of September 2026
 # coil 3.x is the latest line: artifacts moved from `io.coil-kt` to
 # `io.coil-kt.coil3` and now require an explicit network module.
 datastore = "1.2.1"
-coil = "3.6.2"
+coil = "3.6.3"
 
 # Android TV channels (home launcher rows)
 tvprovider = "1.1.0"
-work = "2.11.2"  # 2.12.0 is rc-only as of September 2026
+work = "2.12.0"
 
 # Desugaring
 # Backports java.time (used by the OpenAPI-generated DTOs) to minSdk 24.

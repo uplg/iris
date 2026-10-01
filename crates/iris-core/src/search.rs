@@ -159,6 +159,13 @@ pub struct SearchResult {
     /// deserialisers stay tolerant to future variants.
     #[serde(default)]
     pub language: Option<String>,
+    /// Finer tag for the search language filter: `"fr"` / `"en"` /
+    /// `"multi"` / `"vost"` / `"vo"`, or absent when nothing says. Keeps
+    /// VOSTFR apart from French dubs, which [`Self::language`] folds
+    /// together, and reads untagged releases through the tracker's origin.
+    /// Best-effort; clients filter the current page on it.
+    #[serde(default)]
+    pub language_tag: Option<String>,
     /// Coarse video-codec tag derived server-side from the SCENE release
     /// name: `"h264"` / `"hevc"` / `"av1"` / `"vp9"` / `"unknown"`. Lets
     /// Android TV badge / deprioritise results the connected box can't
@@ -396,6 +403,7 @@ mod tests {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            language_tag: None,
             codec: None,
             download_url: None,
             parsed_season: None,

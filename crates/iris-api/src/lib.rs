@@ -10,17 +10,17 @@ pub mod middleware;
 pub mod observability;
 pub mod openapi;
 pub mod presence;
+pub mod pulse;
 pub mod ranking;
 pub mod rate_limit;
 pub mod reco;
-pub mod reco_engine;
 pub mod routes;
 pub mod seed_stats;
+pub mod simkl;
 pub mod state;
 pub mod tmdb;
 pub mod tmdb_backfill;
 pub mod tmdb_resolve;
-pub mod watched_backfill;
 
 use std::path::{Path, PathBuf};
 
@@ -217,12 +217,22 @@ fn spawn_background_jobs(
     // candidates into `catalog_items` (availability='available'), GCing the
     // window each cycle. Tracker-first — TMDB is correlation only. Needs TMDB
     // configured (for poster/genre enrichment) and at least one provider.
+    //
+    // Pulse scheduler: snapshots what the world is watching (TMDB trending,
+    // digital releases, on the air, curated moods; SIMKL) and joins a
+    // budgeted batch of those titles against the same trackers by search.
     if let Some(tmdb) = app_state.tmdb() {
         freshness_scheduler::spawn(
             pool.clone(),
             tmdb.clone(),
             app_state.providers().clone(),
             app_state.cfg().discovery.clone(),
+        );
+        pulse::spawn(
+            pool.clone(),
+            tmdb.clone(),
+            app_state.providers().clone(),
+            &app_state.cfg().discovery,
         );
     }
 
@@ -385,21 +395,6 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
     );
 
     spawn_background_jobs(&app_state, pool.clone(), provider_registry);
-
-    // Content-reco embedding loop (ingest path). Resolve the TMDB genre taxonomy
-    // once for the embedding text, then embed pending catalogue rows + keep the
-    // in-memory vector table warm. The request path only reads that table.
-    let genre_names = reco::genre_name_map(&app_state).await;
-    app_state
-        .reco()
-        .clone()
-        .spawn_embedding_loop(pool.clone(), genre_names);
-
-    // Backfill out-of-window watched titles into the catalogue so they get
-    // embedded and enrich taste profiles (WS2). Needs TMDB for the metadata.
-    if let Some(tmdb) = app_state.tmdb() {
-        watched_backfill::spawn(pool.clone(), tmdb.clone());
-    }
 
     let router = app::build_router(app_state);
     let service = app::into_service(router);

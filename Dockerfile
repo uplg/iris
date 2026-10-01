@@ -11,7 +11,7 @@
 
 # Recent emsdk — the image is multi-arch (linux/amd64 + linux/arm64)
 # so building on Apple Silicon doesn't go through qemu emulation.
-FROM emscripten/emsdk:6.0.9 AS libav-builder
+FROM emscripten/emsdk:6.0.10 AS libav-builder
 WORKDIR /build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -95,11 +95,10 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 # mounts stay: they hold downloaded sources, not build output.
 #
 # The chef base must stay on trixie — the runtime stage's glibc note depends
-# on that pairing. Neither cargo-chef nor the official rust image has shipped
-# a 1.98.1 tag yet (checked 2026-09-08: `rust:1.98-trixie` still resolves to
-# the 1.98.0 digest), so the base stays 1.98.0 and rustup installs the
-# toolchain `rust-toolchain.toml` names into its own cached layer, before any
-# source is copied. Swap the base tag once a 1.98.1 image exists.
+# on that pairing. The base stays on 1.98.0 (Docker Hub lags Rust point
+# releases; unverified for 1.99.0 on 2026-10-01) and rustup installs the
+# toolchain `rust-toolchain.toml` names (1.99.0) into its own cached layer,
+# before any source is copied. Swap the base tag once a matching image exists.
 #
 # `--bin iris` on `cook` mirrors the final build, so cook doesn't also compile
 # every crate's dev-dependencies. `migrations/` lands in the app layer only:
@@ -133,7 +132,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # Runtime — Chainguard Wolfi (glibc)
 #
 # glibc (2.43) just like Debian, so the prebuilt glibc shaka-packager binary
-# and the glibc Rust binary (built above on rust 1.98.1 / trixie glibc 2.41 —
+# and the glibc Rust binary (built above on rust 1.99.0 / trixie glibc 2.41 —
 # older, so it runs fine on Wolfi's newer 2.43) work UNCHANGED. NOT Alpine:
 # musl would break the prebuilt shaka binary and hurt librqbit's allocation-
 # heavy throughput. Codec parity re-verified on ffmpeg 9.0.1 (2026-09-08):

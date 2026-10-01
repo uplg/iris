@@ -132,6 +132,8 @@ pub(crate) async fn search(
     // the UI would mean "no signal at all" instead of the real
     // "this is English by provider convention".
     for r in &mut agg.results {
+        r.language_tag = crate::ranking::resolve_language_tag(r, state.providers())
+            .map(|t| t.as_str().to_string());
         let resolved = crate::ranking::resolve_language(r, state.providers());
         r.language = Some(resolved.as_str().to_string());
         r.codec = Some(

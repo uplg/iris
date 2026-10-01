@@ -646,6 +646,9 @@ struct RawItem {
     grabs: Option<u64>,
     /// `year` attr — fallback when the release name carries no year.
     year_attr: Option<u16>,
+    /// Repeated `language` attr: the audio tracks the indexer catalogued
+    /// (V3X: `French` + `English` on a `MULTi`). See [`language_hint`].
+    languages: Vec<String>,
 }
 
 impl RawItem {
@@ -686,6 +689,9 @@ impl RawItem {
                     self.year_attr = Some(n);
                 }
             }
+            "language" if !value.is_empty() => {
+                self.languages.push(value.to_ascii_lowercase());
+            }
             "infohash" if !value.is_empty() => {
                 self.infohash = Some(value.to_ascii_lowercase());
             }
@@ -725,6 +731,7 @@ impl RawItem {
         let tmdb_id = self
             .tmdb_id
             .or_else(|| self.comments.as_deref().and_then(tmdb_id_from_comments));
+        let language = language_hint(&self.languages).map(str::to_string);
 
         SearchResult {
             provider_id: provider_id.to_string(),
@@ -747,7 +754,8 @@ impl RawItem {
             already_in_library: false,
             library_infohash: None,
             library_file_idx: None,
-            language: None,
+            language,
+            language_tag: None,
             codec: None,
             // Captured here so the scheduler can persist it onto
             // `available_episodes.download_url`. The in-memory
@@ -759,6 +767,23 @@ impl RawItem {
             parsed_season: None,
             parsed_episode: None,
         }
+    }
+}
+
+/// Per-result language hint from the indexer's `language` attrs, in the
+/// vocabulary `Language::parse_tag` reads. Only consulted when the title
+/// itself carries no tag (`Dune (1984) - 1080p FR EN x264`). Two or more
+/// audio languages is a multi-audio release; a single unknown language
+/// says nothing the badge can show.
+fn language_hint(languages: &[String]) -> Option<&'static str> {
+    let mut distinct: Vec<&str> = languages.iter().map(String::as_str).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    match distinct.as_slice() {
+        ["french"] => Some("french"),
+        ["english"] => Some("english"),
+        [] | [_] => None,
+        _ => Some("multi"),
     }
 }
 
@@ -1265,6 +1290,7 @@ mod tests {
                 peers: self.peers,
                 grabs: self.grabs,
                 year_attr: self.year_attr,
+                languages: self.languages.clone(),
             }
         }
     }
@@ -1444,6 +1470,65 @@ mod tests {
         assert_eq!(sr.leechers, Some(3), "derived from peers - seeders");
         assert_eq!(sr.tmdb_id, Some(21028), "extracted from <comments>");
         assert_eq!(sr.year, Some(1980));
+    }
+
+    /// Trimmed V3X capture (2026-10): uuid permalink guid, apikey-signed
+    /// download link, and one `language` attr per catalogued audio track.
+    const V3X_FEED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <title>V3X</title>
+    <item>
+      <title>Dune (1984) - 1080p FR EN x264 ac3 mHDgz</title>
+      <guid isPermaLink="true">https://v3x.club/torrents/3839cf2e-c14a-407c-a143-e49ac2b83cf1</guid>
+      <pubDate>Wed, 30 Sep 2026 15:05:19 +0000</pubDate>
+      <size>4294967296</size>
+      <link>https://api.v3x.club/torznab/download?id=3839cf2e-c14a-407c-a143-e49ac2b83cf1&amp;apikey=KEY</link>
+      <torznab:attr name="category" value="2000" />
+      <torznab:attr name="seeders" value="12" />
+      <torznab:attr name="tmdbid" value="841" />
+      <torznab:attr name="language" value="French" />
+      <torznab:attr name="language" value="English" />
+      <torznab:attr name="downloadvolumefactor" value="0" />
+    </item>
+    <item>
+      <title>23.Decembre.2022.1080p.VQ.X264.AC3-mHDgz</title>
+      <guid isPermaLink="true">https://v3x.club/torrents/0b9b5f9e-1111-4a3f-91a6-4203e887a05e</guid>
+      <torznab:attr name="category" value="2000" />
+      <torznab:attr name="language" value="French" />
+    </item>
+    <item>
+      <title>Shaque.Trust.No.One.S01E06.VOSTFR.2160p.NF.WEB-DL.DDPA5.1.SDR.H265-TVPASSION</title>
+      <guid isPermaLink="true">https://v3x.club/torrents/7c1e2f3a-2222-4a3f-91a6-4203e887a05e</guid>
+      <torznab:attr name="category" value="5000" />
+    </item>
+  </channel>
+</rss>"#;
+
+    #[test]
+    fn v3x_language_attrs_become_a_language_hint() {
+        let r: Vec<_> = parse_torznab_xml(V3X_FEED)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|i| i.into_search_result("v3x"))
+            .collect();
+        assert_eq!(r[0].external_id, "3839cf2e-c14a-407c-a143-e49ac2b83cf1");
+        assert_eq!(r[0].language.as_deref(), Some("multi"));
+        assert_eq!(r[0].tmdb_id, Some(841));
+        assert!(r[0].freeleech);
+        assert_eq!(r[1].language.as_deref(), Some("french"));
+        assert_eq!(r[2].language, None, "VOSTFR carries no audio language attr");
+    }
+
+    #[test]
+    fn language_hint_needs_a_known_single_language_or_several() {
+        let v = |xs: &[&str]| xs.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+        assert_eq!(language_hint(&v(&[])), None);
+        assert_eq!(language_hint(&v(&["english"])), Some("english"));
+        assert_eq!(language_hint(&v(&["japanese"])), None);
+        assert_eq!(language_hint(&v(&["french", "french"])), Some("french"));
+        assert_eq!(language_hint(&v(&["french", "japanese"])), Some("multi"));
     }
 
     #[test]

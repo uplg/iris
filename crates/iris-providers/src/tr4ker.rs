@@ -432,7 +432,7 @@ mod tests {
         assert!(d.description.is_none());
         assert_eq!(d.description_format, DescriptionFormat::Plain);
         assert!(d.category.is_none());
-        assert!(d.tags.is_empty());
+        assert_eq!(d.tags, [] as [std::string::String; 0]);
         assert!(d.file_count.is_none());
     }
 }

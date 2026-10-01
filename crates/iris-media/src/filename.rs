@@ -395,6 +395,82 @@ impl Language {
     }
 }
 
+/// Finer audio/subtitle signal for the search language filter. Unlike
+/// [`Language`] — which feeds grab and collection matching and folds every
+/// French marker together — this keeps a VOSTFR release (original audio,
+/// French subtitles) apart from a French dub, which is exactly the
+/// distinction a francophone viewer filters on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LanguageTag {
+    French,
+    English,
+    Multi,
+    /// Original audio with French subtitles (`VOSTFR`, `SUBFRENCH`).
+    Vost,
+    /// Original audio, no French track or subtitles.
+    Vo,
+}
+
+impl LanguageTag {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LanguageTag::French => "fr",
+            LanguageTag::English => "en",
+            LanguageTag::Multi => "multi",
+            LanguageTag::Vost => "vost",
+            LanguageTag::Vo => "vo",
+        }
+    }
+
+    /// From a provider hint in [`Language`]'s vocabulary.
+    pub fn from_language(lang: Language) -> Option<Self> {
+        match lang {
+            Language::French => Some(LanguageTag::French),
+            Language::English => Some(LanguageTag::English),
+            Language::Multi => Some(LanguageTag::Multi),
+            Language::Unknown => None,
+        }
+    }
+}
+
+/// [`LanguageTag`] from the release name alone; `None` when it carries no
+/// marker. A French dub shipped alongside a subtitled or English track
+/// (`VF VOSTFR`, `FR EN`) is a multi-audio release whatever its tagging.
+pub fn detect_language_tag(title: &str) -> Option<LanguageTag> {
+    let upper = title.to_ascii_uppercase();
+    if has_multi_audio_token(&upper) {
+        return Some(LanguageTag::Multi);
+    }
+    let vost = ["VOSTFR", "SUBFRENCH", "VOST", "STFR"]
+        .iter()
+        .any(|m| has_token(&upper, m));
+    let french = [
+        "TRUEFRENCH",
+        "FRENCH",
+        "VFF",
+        "VFQ",
+        "VFI",
+        "VF2",
+        "FR2",
+        "VOQ",
+        "VOF",
+        "VF",
+        "VQ",
+        "FR",
+    ]
+    .iter()
+    .any(|m| has_token(&upper, m));
+    let english = has_token(&upper, "ENGLISH") || has_token(&upper, "EN");
+    match (french, vost, english) {
+        (true, true, _) | (true, _, true) => Some(LanguageTag::Multi),
+        (_, true, _) => Some(LanguageTag::Vost),
+        (true, _, _) => Some(LanguageTag::French),
+        (_, _, true) => Some(LanguageTag::English),
+        _ if has_token(&upper, "VO") => Some(LanguageTag::Vo),
+        _ => None,
+    }
+}
+
 /// Coarse video-codec signal extracted from a SCENE release name. Used
 /// by the Android TV client to badge / deprioritise (never hide — see
 /// `feedback_no_hide_bad_data`) results the connected box can't
@@ -1061,6 +1137,28 @@ fn find_group(stem: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_tag_keeps_vost_apart_from_dubs() {
+        let t = |s: &str| detect_language_tag(s).map(LanguageTag::as_str);
+        assert_eq!(t("Show.S01E05.VOSTFR.2160p.NF.WEB-DL-GRP"), Some("vost"));
+        assert_eq!(t("Movie.2024.SUBFRENCH.1080p.WEB"), Some("vost"));
+        assert_eq!(t("Movie.2024.MULTi.VFF.1080p.BluRay"), Some("multi"));
+        assert_eq!(t("Dune (1984) - 1080p FR EN x264 ac3"), Some("multi"));
+        assert_eq!(
+            t("Pandora Hearts - CUSTOM DVDRIP - VF VOSTFR - x264"),
+            Some("multi")
+        );
+        assert_eq!(t("Movie.2023.TRUEFRENCH.1080p.WEB"), Some("fr"));
+        assert_eq!(t("23.Decembre.2022.1080p.VQ.X264.AC3"), Some("fr"));
+        assert_eq!(t("Movie.2020.ENGLISH.1080p.WEB"), Some("en"));
+        assert_eq!(t("Movie.2020.VO.1080p.WEB"), Some("vo"));
+        assert_eq!(t("Movie.2020.MULTi.SUBS.1080p"), None);
+        assert_eq!(
+            t("Jodorowskys.Dune.2013.BluRay.1080p.REMUX-FraMeSToR"),
+            None
+        );
+    }
 
     #[test]
     fn parses_tv_release() {

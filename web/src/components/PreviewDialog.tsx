@@ -312,19 +312,18 @@ export function PreviewDialog({
           )}
         </div>
 
-        {alreadyInLibrary &&
-          libraryInfohash != null && (
-            // Server-side dedup hit — surface a clear banner so the
-            // user understands why the Play CTA points at the existing
-            // file rather than re-downloading. Without it people kept
-            // accidentally ingesting the same episode twice via a
-            // different release.
-            <div className="mt-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-              You already have this episode in your library. Playing the existing file; use{" "}
-              <span className="font-medium">Download anyway</span> below only if you want a
-              different release.
-            </div>
-          )}
+        {alreadyInLibrary && libraryInfohash != null && (
+          // Server-side dedup hit — surface a clear banner so the
+          // user understands why the Play CTA points at the existing
+          // file rather than re-downloading. Without it people kept
+          // accidentally ingesting the same episode twice via a
+          // different release.
+          <div className="mt-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+            You already have this episode in your library. Playing the existing file; use{" "}
+            <span className="font-medium">Download anyway</span> below only if you want a different
+            release.
+          </div>
+        )}
 
         {dead && (
           // Dead-torrent guard: the chosen release has no seeders, so the
@@ -342,27 +341,25 @@ export function PreviewDialog({
           </div>
         )}
 
-        {hugeWarned &&
-          !dupMessage &&
-          preview && (
-            // Armed by the first Play click on a >50 GB release. Loud on
-            // purpose: complete-series packs grabbed "just in case" hog the
-            // shared disk and get everyone's library evicted sooner.
-            <div className="mt-2 flex items-start gap-2.5 rounded-md border-2 border-warn/60 bg-warn/10 px-3 py-2.5 text-sm text-warn">
-              <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-              <div>
-                <p className="font-semibold">
-                  This release is {formatSize(preview.total_size_bytes)} — are you really sure you
-                  want it?
-                </p>
-                <p className="mt-1 text-xs opacity-90">
-                  Huge packs (complete series, full box sets) eat the shared disk and get everyone's
-                  library cleaned up sooner. If you only want one season or episode, grab that
-                  release instead.
-                </p>
-              </div>
+        {hugeWarned && !dupMessage && preview && (
+          // Armed by the first Play click on a >50 GB release. Loud on
+          // purpose: complete-series packs grabbed "just in case" hog the
+          // shared disk and get everyone's library evicted sooner.
+          <div className="mt-2 flex items-start gap-2.5 rounded-md border-2 border-warn/60 bg-warn/10 px-3 py-2.5 text-sm text-warn">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <div>
+              <p className="font-semibold">
+                This release is {formatSize(preview.total_size_bytes)} — are you really sure you
+                want it?
+              </p>
+              <p className="mt-1 text-xs opacity-90">
+                Huge packs (complete series, full box sets) eat the shared disk and get everyone's
+                library cleaned up sooner. If you only want one season or episode, grab that release
+                instead.
+              </p>
             </div>
-          )}
+          </div>
+        )}
 
         {dupMessage && (
           <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
@@ -706,13 +703,14 @@ function SanitizedHtml({ source }: { source: string }) {
 // BBCode renderer
 //
 // Targeted at the tags torr9 emits: [b], [i], [center], [size=N],
-// [color=#xxx], [url=X]Y[/url], [img]X[/img]. We do a small recursive-
+// [color=#xxx], [url=X]Y[/url], [img]X[/img], plus V3X's [table]/[tr]/[td],
+// [justify] and [uicolor] (its theme accent). We do a small recursive-
 // descent parse rather than a regex-soup: regex doesn't handle nesting,
 // and torr9 nests heavily ([center][size][b][color]…). Unknown tags
 // fall through as plain text so we never lose content.
 
 function BBCode({ source }: { source: string }) {
-  const cleaned = useMemo(() => stripCosmeticSeparators(source), [source]);
+  const cleaned = useMemo(() => stripCosmeticSeparators(source.replace(/\r\n?/g, "\n")), [source]);
   const tree = useMemo(() => parseBBCode(cleaned), [cleaned]);
   return <div className="space-y-1 leading-relaxed">{renderNodes(tree)}</div>;
 }
@@ -827,6 +825,34 @@ function renderTag(n: Extract<BBNode, { type: "tag" }>, key: number): ReactNode 
           {inner}
         </div>
       );
+    case "justify":
+      return (
+        <div key={key} className="text-justify">
+          {inner}
+        </div>
+      );
+    case "uicolor":
+      return (
+        <span key={key} className="text-primary">
+          {inner}
+        </span>
+      );
+    // Table markup only accepts row / cell children: the newlines authors
+    // put between [tr]/[td] would render as stray text nodes (invalid DOM).
+    case "table":
+      return (
+        <table key={key} className="mx-auto my-2 border-collapse text-left">
+          <tbody>{renderNodes(structural(n.children, "tr"))}</tbody>
+        </table>
+      );
+    case "tr":
+      return <tr key={key}>{renderNodes(structural(n.children, "td"))}</tr>;
+    case "td":
+      return (
+        <td key={key} className="px-2 py-1 align-top">
+          {inner}
+        </td>
+      );
     case "size": {
       // Ignore the actual size (everything in the dialog should be
       // body-sized for legibility); only "1" stays small as a hint.
@@ -883,6 +909,11 @@ function renderTag(n: Extract<BBNode, { type: "tag" }>, key: number): ReactNode 
 function safeBbcodeHref(raw: string | null | undefined): string {
   const v = (raw ?? "").trim();
   return /^(https?:|magnet:)/i.test(v) ? v : "#";
+}
+
+/** Keep only `name` tag children — for table rows / cells. */
+function structural(nodes: BBNode[], name: string): BBNode[] {
+  return nodes.filter((c) => c.type === "tag" && c.name === name);
 }
 
 function nodesToText(nodes: BBNode[]): string {

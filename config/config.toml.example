@@ -22,26 +22,21 @@ torrent_port = 45100
 # recent, guaranteed-grabbable titles for the "For You" shelves. Needs [tmdb]
 # configured (poster/genre enrichment) + at least one provider. All values are
 # optional — the defaults shown below are used when the section is absent.
+#
+# Alongside it, the pulse scheduler (no knobs) snapshots what the world is
+# watching every 3 h — TMDB trending / digital releases / on the air / the
+# curated moods, plus SIMKL's public "watched today" lists — and searches the
+# same trackers for a budgeted batch of those titles (≈60 per cycle, spaced).
 [discovery]
 poll_window_weeks = 8        # how far back (upload time) a release may be and still enter the window
 retain_weeks = 4             # how long a windowed release is kept before the GC slides it out
 slice_interval_minutes = 10  # minutes between slices (full cycle ≈ this × providers × 2)
 # Max age (years) of a MOVIE's *content* allowed in the discovery shelves. A
 # 1972 film freshly re-uploaded is a fresh upload but not a fresh release, so
-# it's kept out of discovery (still reachable via recommendations / search).
+# it's kept out of discovery (still reachable via search).
 # TV is exempt (a long-running series airing a new episode is legit). Raise it
 # to embrace older catalogue, lower it for a stricter "recent only" feel.
 max_content_age_years = 10
-
-# Content-first recommendation engine (see RECOSYS.md). All optional — the
-# defaults below apply when the section is absent.
-[reco]
-enabled = true
-# model2vec model id (HF repo or local path). potion-retrieval-32M won the rig
-# sweep; swap to minishlab/potion-base-8M for a smaller (~8 MB) table.
-model = "minishlab/potion-retrieval-32M"
-centroids = 3          # taste centroids per user (weighted k-means)
-embed_batch = 512      # items embedded per background ingest slice
 
 [auth]
 # Override every value below with IRIS_AUTH__<KEY> environment variables in

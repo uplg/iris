@@ -27,12 +27,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use iris_config::ProviderEntry;
 use iris_core::search::{
-    MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult, SortField, SortOrder,
-    TorrentSource,
+    DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
+    SortField, SortOrder, TorrentDetails, TorrentSource,
 };
 use iris_core::{Error, Result};
 use quick_xml::Reader;
 use quick_xml::events::Event;
+use scraper::{ElementRef, Html, Selector};
 
 use crate::SearchProvider;
 use crate::util::parse_size;
@@ -213,7 +214,7 @@ impl SearchProvider for NyaaProvider {
     }
 
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource> {
-        if !external_id.bytes().all(|b| b.is_ascii_digit()) {
+        if !is_torrent_id(external_id) {
             return Err(Error::Provider(format!(
                 "nyaa external_id is not a torrent id: {external_id}"
             )));
@@ -227,6 +228,23 @@ impl SearchProvider for NyaaProvider {
         }
         Ok(TorrentSource::TorrentFile(bytes.to_vec()))
     }
+
+    /// Scraped from the public `/view/<id>` page. Clients open a detail view
+    /// for every hit and the TV one can't grab without it, so a provider
+    /// that answers 404 here strands its results on TV.
+    async fn details(&self, external_id: &str) -> Result<Option<TorrentDetails>> {
+        if !is_torrent_id(external_id) {
+            return Ok(None);
+        }
+        let html = self
+            .fetch(&format!("{}/view/{external_id}", self.base_url))
+            .await?;
+        Ok(parse_view_page(&html, &self.id, external_id))
+    }
+}
+
+fn is_torrent_id(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn download_url(base_url: &str, id: &str) -> String {
@@ -305,6 +323,7 @@ impl RawItem {
             library_infohash: None,
             library_file_idx: None,
             language: category_language(self.category_id.as_deref()).map(str::to_string),
+            language_tag: None,
             codec: None,
             download_url: Some(download_url(base_url, &id)),
             parsed_season: None,
@@ -351,6 +370,98 @@ fn parse_rfc2822(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc2822(s.trim())
         .ok()
         .map(|d| d.with_timezone(&chrono::Utc))
+}
+
+fn sel(css: &str) -> Selector {
+    Selector::parse(css).expect("static selector")
+}
+
+fn text_of(el: ElementRef<'_>) -> String {
+    el.text()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The `/view/<id>` page: a first panel holding `label: value` cell pairs
+/// (`col-md-1` label, the next sibling cell its value), the markdown
+/// description, then the file tree. The first panel's colour class is how
+/// nyaa marks trusted (`panel-success`) and remake (`panel-danger`) uploads.
+fn parse_view_page(html: &str, provider_id: &str, external_id: &str) -> Option<TorrentDetails> {
+    let doc = Html::parse_document(html);
+    let panel = doc.select(&sel("div.panel")).next()?;
+    let title = text_of(panel.select(&sel(".panel-title")).next()?);
+    if title.is_empty() {
+        return None;
+    }
+
+    let mut details = TorrentDetails {
+        provider_id: provider_id.to_string(),
+        external_id: external_id.to_string(),
+        title,
+        description: None,
+        description_format: DescriptionFormat::Plain,
+        nfo: None,
+        media_info: None,
+        tags: Vec::new(),
+        category: None,
+        uploader: None,
+        uploaded_at: None,
+        age: None,
+        seeders: None,
+        leechers: None,
+        times_completed: None,
+        views: None,
+        freeleech: false,
+        exclusive: false,
+        file_count: None,
+        file_size_bytes: None,
+    };
+
+    let classes: Vec<&str> = panel.value().classes().collect();
+    if classes.contains(&"panel-success") {
+        details.tags.push("Trusted".into());
+    } else if classes.contains(&"panel-danger") {
+        details.tags.push("Remake".into());
+    }
+
+    for label in panel.select(&sel(".panel-body .col-md-1")) {
+        let Some(value) = label.next_siblings().find_map(ElementRef::wrap) else {
+            continue;
+        };
+        let text = text_of(value);
+        let number = || text.parse().ok();
+        match text_of(label).trim_end_matches(':') {
+            "Category" => details.category = Some(text.clone()),
+            "Date" => {
+                details.uploaded_at = value
+                    .attr("data-timestamp")
+                    .and_then(|t| t.parse().ok())
+                    .and_then(|t| chrono::DateTime::from_timestamp(t, 0));
+            }
+            "Submitter" => details.uploader = Some(text.clone()),
+            "Seeders" => details.seeders = number(),
+            "Leechers" => details.leechers = number(),
+            "Completed" => details.times_completed = text.parse().ok(),
+            "File size" => details.file_size_bytes = parse_size(&text),
+            _ => {}
+        }
+    }
+
+    details.description = doc
+        .select(&sel("#torrent-description"))
+        .next()
+        .map(|d| d.text().collect::<String>().trim().to_string())
+        .filter(|d| !d.is_empty() && d != "#### No description.");
+
+    let files = doc
+        .select(&sel(".torrent-file-list li > i.fa-file"))
+        .count();
+    details.file_count = u32::try_from(files).ok().filter(|n| *n > 0);
+
+    Some(details)
 }
 
 /// Elements we care about inside an `<item>`. Everything else is skipped.
@@ -543,6 +654,105 @@ mod tests {
 	</channel>
 </rss>"#;
 
+    /// Trimmed capture of `https://nyaa.si/view/2167638` (2026-10).
+    const VIEW: &str = r#"<!DOCTYPE html><html><body><div class="container">
+<div class="panel panel-success">
+	<div class="panel-heading">
+		<h3 class="panel-title">
+			[HatSubs] One Piece 1180 (WEB 1080p) [C2F305AA].mkv
+		</h3>
+	</div>
+	<div class="panel-body">
+		<div class="row">
+			<div class="col-md-1">Category:</div>
+			<div class="col-md-5">
+				<a href="/?c=1_0">Anime</a> - <a href="/?c=1_2">English-translated</a>
+			</div>
+			<div class="col-md-1">Date:</div>
+			<div class="col-md-5" data-timestamp="1790751295">2026-09-30 06:54 UTC</div>
+		</div>
+		<div class="row">
+			<div class="col-md-1">Submitter:</div>
+			<div class="col-md-5">
+<a class="text-success" href="/user/HatSubs" data-toggle="tooltip" title="Trusted">HatSubs</a>			</div>
+			<div class="col-md-1">Seeders:</div>
+			<div class="col-md-5"><span style="color: green;">287</span></div>
+		</div>
+		<div class="row">
+			<div class="col-md-1">Information:</div>
+			<div class="col-md-5">
+				<a rel="noopener noreferrer nofollow" href="https://example.org">https://example.org</a>
+			</div>
+			<div class="col-md-1">Leechers:</div>
+			<div class="col-md-5"><span style="color: red;">5</span></div>
+		</div>
+		<div class="row">
+			<div class="col-md-1">File size:</div>
+			<div class="col-md-5">1.3 GiB</div>
+			<div class="col-md-1">Completed:</div>
+			<div class="col-md-5">1086</div>
+		</div>
+		<div class="row">
+			<div class="col-md-offset-6 col-md-1">Info hash:</div>
+			<div class="col-md-5"><kbd>cf39f9e89d34bf61c37ed687c4973a57f8b6edbd</kbd></div>
+		</div>
+	</div>
+</div>
+<div class="panel panel-default">
+	<div markdown-text class="panel-body" id="torrent-description">Translation: Official&#10;Editing: Notkama&#10;&#10;Last episode of the year &amp; season.</div>
+</div>
+<div class="panel panel-default">
+	<div class="torrent-file-list panel-body">
+		<ul>
+			<li><a href="" class="folder"><i class="fa fa-folder"></i>Batch</a>
+				<ul>
+			<li><i class="fa fa-file"></i>One Piece - 0001.mkv <span class="file-size">(364.4 MiB)</span></li>
+			<li><i class="fa fa-file"></i>One Piece - 0002.mkv <span class="file-size">(367.6 MiB)</span></li>
+				</ul>
+			</li>
+		</ul>
+	</div>
+</div>
+</div></body></html>"#;
+
+    #[test]
+    fn view_page_maps_onto_details() {
+        let d = parse_view_page(VIEW, "nyaa", "2167638").expect("parses");
+        assert_eq!(
+            d.title,
+            "[HatSubs] One Piece 1180 (WEB 1080p) [C2F305AA].mkv"
+        );
+        assert_eq!(d.category.as_deref(), Some("Anime - English-translated"));
+        assert_eq!(d.uploader.as_deref(), Some("HatSubs"));
+        assert_eq!(d.uploaded_at.map(|t| t.timestamp()), Some(1_790_751_295));
+        assert_eq!(d.seeders, Some(287));
+        assert_eq!(d.leechers, Some(5));
+        assert_eq!(d.times_completed, Some(1086));
+        assert_eq!(d.file_size_bytes, parse_size("1.3 GiB"));
+        assert_eq!(d.file_count, Some(2));
+        assert_eq!(d.tags, vec!["Trusted".to_string()]);
+        assert_eq!(
+            d.description.as_deref(),
+            Some("Translation: Official\nEditing: Notkama\n\nLast episode of the year & season.")
+        );
+        assert!(matches!(d.description_format, DescriptionFormat::Plain));
+    }
+
+    #[test]
+    fn view_page_placeholder_description_is_dropped() {
+        let html = VIEW.replace(
+            "Translation: Official&#10;Editing: Notkama&#10;&#10;Last episode of the year &amp; season.",
+            "#### No description.",
+        );
+        let d = parse_view_page(&html, "nyaa", "2167638").expect("parses");
+        assert_eq!(d.description, None);
+    }
+
+    #[test]
+    fn view_page_without_panel_is_none() {
+        assert!(parse_view_page("<html><body>404</body></html>", "nyaa", "1").is_none());
+    }
+
     fn results() -> Vec<SearchResult> {
         parse_nyaa_rss(SAMPLE)
             .expect("sample parses")
@@ -705,5 +915,12 @@ mod tests {
             }
             TorrentSource::Magnet(m) => panic!("expected a .torrent file, got magnet {m}"),
         }
+        let details = p
+            .details(&first.external_id)
+            .await
+            .expect("details")
+            .expect("view page parses");
+        assert_eq!(details.title, first.title);
+        assert!(details.seeders.is_some() && details.file_size_bytes.is_some());
     }
 }

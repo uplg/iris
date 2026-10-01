@@ -46,10 +46,8 @@ struct Inner {
     /// onboarding picker should still pick up the rare addition without
     /// a process restart.
     genres_cache: RwLock<HashMap<&'static str, (Instant, Vec<Genre>)>>,
-    /// Request-keyed cache for the list endpoints (`recommendations` /
-    /// `similar`). Keyed by a string built from the call + params, expires
-    /// after `DISCOVER_CACHE_TTL`, so repeated For-You renders don't re-fetch
-    /// the same recommendation slice.
+    /// Cache for the list endpoints (trending / discover / on the air), keyed
+    /// by path + query, expiring after `LIST_CACHE_TTL`.
     discover_cache: RwLock<HashMap<String, (Instant, Vec<MediaMetadata>)>>,
 }
 
@@ -58,9 +56,20 @@ struct Inner {
 /// onboarding picker current.
 const GENRE_CACHE_TTL: Duration = Duration::from_hours(24);
 
-/// TTL for cached list slices (`recommendations` / `similar`). A few hours
-/// keeps the "Because you watched" shelf cheap across repeated renders.
-const DISCOVER_CACHE_TTL: Duration = Duration::from_hours(6);
+/// TTL for cached list slices. Shorter than the pulse cycle so each pass
+/// sees fresh trending / release lists.
+const LIST_CACHE_TTL: Duration = Duration::from_hours(2);
+
+/// Filters for a mood's [`TmdbClient::discover`] query. Id lists are in
+/// TMDB syntax: `,` = AND, `|` (URL-encoded `%7C`) = OR.
+#[derive(Debug, Clone)]
+pub struct DiscoverFilter {
+    pub with_genres: String,
+    pub without_genres: String,
+    /// Earliest (first) release date, `YYYY-MM-DD`.
+    pub since: chrono::NaiveDate,
+    pub min_votes: u32,
+}
 
 #[derive(Clone)]
 enum CacheEntry {
@@ -392,91 +401,112 @@ impl TmdbClient {
         genres
     }
 
-    /// `/{movie,tv}/{id}/recommendations` — TMDB's collaborative "people who
-    /// liked this also liked" list. Powers the taste-based "Because you
-    /// watched X" shelf; an older recommendation is itself a strong
-    /// availability signal (it has had time to be indexed + seeded).
-    pub async fn recommendations(&self, kind: TmdbKind, tmdb_id: u64) -> Vec<MediaMetadata> {
+    /// `/trending/{movie,tv}/week` — TMDB's short-window activity
+    /// ranking (page views, votes, watchlist adds), the always-available
+    /// "what's hot now" signal. French titles (`fr-FR`) so the pulse job can
+    /// also search francophone trackers by their local title.
+    pub async fn trending(&self, kind: TmdbKind, page: u32) -> Vec<MediaMetadata> {
         let endpoint = kind_marker(kind);
-        let url = format!(
-            "https://api.themoviedb.org/3/{endpoint}/{tmdb_id}/recommendations?api_key={}&page=1",
-            self.inner.api_key
-        );
-        self.fetch_list(format!("recommendations:{endpoint}:{tmdb_id}"), url, kind)
-            .await
+        self.fetch_list(
+            format!("trending/{endpoint}/week?language=fr-FR&page={page}"),
+            kind,
+        )
+        .await
     }
 
-    /// `/discover/{movie,tv}` filtered to ANY of `genre_ids` (OR), popularity-
-    /// sorted — the broad-universe candidate source for the mood/genre board,
-    /// reaching well beyond the rolling catalogue window (classics, back
-    /// catalogue). One page (~20). `vote_count` floor drops obscure noise.
-    pub async fn discover_by_genre(&self, kind: TmdbKind, genre_ids: &[u32]) -> Vec<MediaMetadata> {
-        if genre_ids.is_empty() {
-            return Vec::new();
-        }
-        let endpoint = kind_marker(kind);
-        // `%7C` = `|` = OR (a film matching any of the mood's genres qualifies);
-        // a literal `|` would break URL parsing in reqwest.
-        let genres = genre_ids
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join("%7C");
-        let url = format!(
-            "https://api.themoviedb.org/3/discover/{endpoint}?api_key={}&page=1\
-             &sort_by=popularity.desc&include_adult=false&vote_count.gte=50&with_genres={genres}",
-            self.inner.api_key
-        );
-        self.fetch_list(format!("discover:{endpoint}:{genres}"), url, kind)
-            .await
-    }
-
-    /// `/{movie,tv}/{id}/similar` — content-based (keyword/genre) neighbours.
-    /// Complements [`Self::recommendations`] for the same shelf.
-    pub async fn similar(&self, kind: TmdbKind, tmdb_id: u64) -> Vec<MediaMetadata> {
-        let endpoint = kind_marker(kind);
-        let url = format!(
-            "https://api.themoviedb.org/3/{endpoint}/{tmdb_id}/similar?api_key={}&page=1",
-            self.inner.api_key
-        );
-        self.fetch_list(format!("similar:{endpoint}:{tmdb_id}"), url, kind)
-            .await
-    }
-
-    /// Shared cached fetch for the list endpoints. `recommendations` /
-    /// `similar` return the same paged `{ results: [...] }` envelope of list
-    /// items, so they share one cache + parse path. Returns empty on any error.
-    async fn fetch_list(
+    /// Films whose French digital release (VOD / streaming, release type 4)
+    /// falls in `[since, until]` — what just became watchable at home, and so
+    /// what the trackers are about to carry or already do.
+    pub async fn digital_releases_fr(
         &self,
-        cache_key: String,
-        url: String,
-        kind: TmdbKind,
+        since: chrono::NaiveDate,
+        until: chrono::NaiveDate,
+        page: u32,
     ) -> Vec<MediaMetadata> {
+        self.fetch_list(
+            format!(
+                "discover/movie?language=fr-FR&region=FR&with_release_type=4\
+                 &release_date.gte={since}&release_date.lte={until}\
+                 &sort_by=popularity.desc&include_adult=false&vote_count.gte=5&page={page}"
+            ),
+            TmdbKind::Movie,
+        )
+        .await
+    }
+
+    /// `/tv/on_the_air` — series with an episode airing in the next week.
+    pub async fn on_the_air(&self, page: u32) -> Vec<MediaMetadata> {
+        self.fetch_list(
+            format!("tv/on_the_air?language=fr-FR&timezone=Europe%2FParis&page={page}"),
+            TmdbKind::Tv,
+        )
+        .await
+    }
+
+    /// `/discover/{movie,tv}` for a mood: genre filters inside a
+    /// recency window, popularity-sorted, with a vote floor against noise.
+    pub async fn discover(
+        &self,
+        kind: TmdbKind,
+        filter: &DiscoverFilter,
+        page: u32,
+    ) -> Vec<MediaMetadata> {
+        let endpoint = kind_marker(kind);
+        let date_param = match kind {
+            TmdbKind::Movie => "primary_release_date.gte",
+            TmdbKind::Tv => "first_air_date.gte",
+        };
+        let mut query = format!(
+            "discover/{endpoint}?language=fr-FR&sort_by=popularity.desc&include_adult=false\
+             &vote_count.gte={}&{date_param}={}&page={page}",
+            filter.min_votes, filter.since
+        );
+        for (param, ids) in [
+            ("with_genres", &filter.with_genres),
+            ("without_genres", &filter.without_genres),
+        ] {
+            if !ids.is_empty() {
+                use std::fmt::Write as _;
+                let _ = write!(query, "&{param}={ids}");
+            }
+        }
+        self.fetch_list(query, kind).await
+    }
+
+    /// Shared cached fetch for the paged `{ results: [...] }` list endpoints.
+    /// `path_and_query` is relative to `/3/` and doubles as the cache key.
+    /// Returns empty on any error.
+    async fn fetch_list(&self, path_and_query: String, kind: TmdbKind) -> Vec<MediaMetadata> {
         if let Some((fetched, items)) = self
             .inner
             .discover_cache
             .read()
             .await
-            .get(&cache_key)
+            .get(&path_and_query)
             .cloned()
-            && fetched.elapsed() < DISCOVER_CACHE_TTL
+            && fetched.elapsed() < LIST_CACHE_TTL
         {
             return items;
         }
+        let url = format!(
+            "https://api.themoviedb.org/3/{path_and_query}&api_key={}",
+            self.inner.api_key
+        );
         let res = match self.inner.http.get(&url).send().await {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!(error = %e, cache_key, "tmdb list fetch failed");
+                tracing::warn!(error = %e, path_and_query, "tmdb list fetch failed");
                 return Vec::new();
             }
         };
         if !res.status().is_success() {
+            tracing::warn!(status = %res.status(), path_and_query, "tmdb list fetch refused");
             return Vec::new();
         }
         let raw: TmdbDiscoverRaw = match res.json().await {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!(error = %e, cache_key, "tmdb list parse failed");
+                tracing::warn!(error = %e, path_and_query, "tmdb list parse failed");
                 return Vec::new();
             }
         };
@@ -486,7 +516,7 @@ impl TmdbClient {
             .discover_cache
             .write()
             .await
-            .insert(cache_key, (Instant::now(), items.clone()));
+            .insert(path_and_query, (Instant::now(), items.clone()));
         items
     }
 

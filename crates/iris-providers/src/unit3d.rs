@@ -784,6 +784,7 @@ impl TorrentEnvelope {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            language_tag: None,
             codec: None,
             // UNIT3D ships pre-signed `.torrent` URLs in the
             // search payload. We keep them in the in-memory

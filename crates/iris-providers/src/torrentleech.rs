@@ -1012,6 +1012,7 @@ impl TorrentRow {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            language_tag: None,
             codec: None,
             download_url,
             parsed_season: None,
@@ -1263,7 +1264,7 @@ mod tests {
         assert!(r.category.is_none());
         assert!(r.kind.is_none());
         assert!(!r.freeleech);
-        assert!(r.tags.is_empty());
+        assert_eq!(r.tags, [] as [std::string::String; 0]);
     }
 
     #[test]

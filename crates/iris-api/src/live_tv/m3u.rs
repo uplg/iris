@@ -180,10 +180,19 @@ http://example.com/arte.m3u8
 
     #[test]
     fn entry_without_extinf_or_without_url_is_dropped() {
-        assert!(parse("https://orphan.example/s.m3u8\n").is_empty());
-        assert!(parse("#EXTINF:-1 tvg-id=\"X.fr\",Name\n#EXTM3U\n").is_empty());
+        assert_eq!(
+            parse("https://orphan.example/s.m3u8\n"),
+            Vec::<M3uEntry>::new()
+        );
+        assert_eq!(
+            parse("#EXTINF:-1 tvg-id=\"X.fr\",Name\n#EXTM3U\n"),
+            Vec::<M3uEntry>::new()
+        );
         // EXTINF with no display name after the comma
-        assert!(parse("#EXTINF:-1 tvg-id=\"X.fr\",\nhttp://x/s.m3u8\n").is_empty());
+        assert_eq!(
+            parse("#EXTINF:-1 tvg-id=\"X.fr\",\nhttp://x/s.m3u8\n"),
+            Vec::<M3uEntry>::new()
+        );
     }
 
     #[test]

@@ -24,7 +24,9 @@ use std::collections::{HashMap, HashSet};
 
 use iris_core::search::{SearchQuery, SearchResult};
 use iris_db::episode_files::LibraryEpisodeKey;
-use iris_media::filename::{Language, detect_language, parse, series_key};
+use iris_media::filename::{
+    Language, LanguageTag, detect_language, detect_language_tag, parse, series_key,
+};
 use iris_providers::ProviderRegistry;
 use iris_providers::registry::{AggregatedResults, ParsedQueryInfo};
 use sqlx::SqlitePool;
@@ -227,6 +229,27 @@ pub(crate) fn resolve_language(r: &SearchResult, providers: &ProviderRegistry) -
         .map_or(Language::Unknown, Language::parse_tag)
 }
 
+/// Search-filter tag for a result, best-effort, same precedence as
+/// [`resolve_language`]: the title's own tag, then the provider's per-result
+/// hint, then the tracker's origin. Must run before the search route
+/// overwrites `r.language` with the resolved badge, or the hint is lost.
+pub(crate) fn resolve_language_tag(
+    r: &SearchResult,
+    providers: &ProviderRegistry,
+) -> Option<LanguageTag> {
+    detect_language_tag(&r.title)
+        .or_else(|| {
+            r.language
+                .as_deref()
+                .and_then(|h| LanguageTag::from_language(Language::parse_tag(h)))
+        })
+        .or_else(|| match providers.origin(&r.provider_id) {
+            Some("en") => Some(LanguageTag::English),
+            Some("fr") => Some(LanguageTag::Vo),
+            _ => None,
+        })
+}
+
 /// Build the [`iris_core::ranking::Candidate`] view of a result for the
 /// recommended tie-break: seeders + size + whether it's a `MULTi` release
 /// (so `MULTi` gets the effective-size discount). Language is read from the
@@ -396,6 +419,7 @@ mod tests {
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            language_tag: None,
             codec: None,
             download_url: None,
             parsed_season: None,

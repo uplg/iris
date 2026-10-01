@@ -117,6 +117,15 @@ function useDebounce<T>(value: T, delay = 300): T {
  */
 const searchRoute = getRouteApi("/auth/shell/search");
 
+/** Search-filter vocabulary from `SearchResult.language_tag`, display order. */
+const LANGUAGE_TAGS: { id: string; label: string }[] = [
+  { id: "fr", label: "FR" },
+  { id: "multi", label: "MULTi" },
+  { id: "vost", label: "VOSTFR" },
+  { id: "vo", label: "VO" },
+  { id: "en", label: "EN" },
+];
+
 export function SearchPage() {
   const { q: queryParam } = searchRoute.useSearch();
   const navigate = searchRoute.useNavigate();
@@ -129,6 +138,9 @@ export function SearchPage() {
   const [page, setPage] = useState(1);
   const [sortMode, setSortMode] = useState<SortMode>("relevance");
   const [kind, setKind] = useState<MediaKind | null>(null);
+  // Best-effort and page-local: the tag comes from release names and the
+  // tracker's origin, so it filters what this page returned, not the index.
+  const [langTag, setLangTag] = useState<string | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -146,6 +158,10 @@ export function SearchPage() {
   useEffect(() => {
     setPage(1);
   }, [debounced, sortMode, kind]);
+
+  useEffect(() => {
+    setLangTag(null);
+  }, [debounced, kind]);
 
   // TMDB typeahead
   const typeaheadQ = useDebounce(q.trim(), 250);
@@ -181,7 +197,15 @@ export function SearchPage() {
     placeholderData: keepPreviousData,
   });
 
-  const rows = data?.results ?? [];
+  const allRows = useMemo(() => data?.results ?? [], [data]);
+  const langCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of allRows) {
+      if (r.language_tag) counts.set(r.language_tag, (counts.get(r.language_tag) ?? 0) + 1);
+    }
+    return counts;
+  }, [allRows]);
+  const rows = langTag ? allRows.filter((r) => r.language_tag === langTag) : allRows;
   // Library items matching the query — rendered as the FIRST cards of
   // the same grid ("you already have this"). Page 1 only: the server
   // returns them with every page and repeating them is noise.
@@ -308,6 +332,34 @@ export function SearchPage() {
           ))}
         </div>
 
+        {(langCounts.size > 0 || langTag) && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="eyebrow mr-1">Language</span>
+            {[
+              { id: null, label: "All", count: allRows.length },
+              ...LANGUAGE_TAGS.filter((t) => langCounts.has(t.id) || t.id === langTag).map((t) => ({
+                ...t,
+                count: langCounts.get(t.id) ?? 0,
+              })),
+            ].map((t) => (
+              <button
+                key={t.id ?? "all"}
+                type="button"
+                onClick={() => setLangTag(t.id)}
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] font-medium transition-colors",
+                  langTag === t.id
+                    ? "border-border bg-elev-2 text-foreground"
+                    : "border-transparent text-muted-foreground hover:bg-accent hover:text-foreground",
+                )}
+              >
+                {t.label}
+                <span className="font-mono text-[11px] text-fg-dim">{t.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         {error && <ErrorState title="Search failed" error={error} />}
 
         {data?.parsed_query && <ParsedQueryBanner info={data.parsed_query} rawQuery={debounced} />}
@@ -320,6 +372,11 @@ export function SearchPage() {
           />
         ) : isFetching && rows.length === 0 && libMatches.length === 0 ? (
           <LoadingState label="Searching…" />
+        ) : rows.length === 0 && libMatches.length === 0 && allRows.length > 0 ? (
+          <EmptyState
+            title="Nothing in this language on this page"
+            body="The language filter only sees the current page — try the next page or another language."
+          />
         ) : rows.length === 0 && libMatches.length === 0 ? (
           <EmptyState
             title="No results"

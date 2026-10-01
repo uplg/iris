@@ -775,6 +775,26 @@ fn query_param(url: &Url, key: &str) -> Option<String> {
 /// Scrape one `torrents.php` results page. Rows that don't fit the
 /// expected shape are skipped (never a hard error — a cosmetic site
 /// tweak shouldn't blank the whole provider).
+/// Seeders / leechers sit just before the row's end, except that
+/// moderators see trailing action links appended to every row — one
+/// ("Edit") or four ("delete / recommend / like / Edit").
+fn peer_counts(tds: &[ElementRef<'_>]) -> (Option<u32>, Option<u32>) {
+    let cell_text = |i: usize| -> String { tds[i].text().collect::<String>().trim().to_string() };
+    let mut end = tds.len();
+    if cell_text(end - 1) == "Edit" {
+        end -= 1;
+    } else if end >= 4 && cell_text(end - 4) == "Edit" {
+        end -= 4;
+    }
+    let seeders = (end >= 3)
+        .then(|| parse_count(&cell_text(end - 3)))
+        .flatten();
+    let leechers = (end >= 2)
+        .then(|| parse_count(&cell_text(end - 2)))
+        .flatten();
+    (seeders, leechers)
+}
+
 fn parse_search_page(provider_id: &str, base_url: &Url, html: &str) -> Vec<SearchResult> {
     let doc = Html::parse_document(html);
     let row_sel = Selector::parse("table.mainblockcontenttt tr").expect("static selector");
@@ -840,22 +860,7 @@ fn parse_search_page(provider_id: &str, base_url: &Url, html: &str) -> Vec<Searc
         let uploaded_at = tds[6].child_elements().next().and_then(parse_date_cell);
         let size_bytes = parse_size(&tds[7].text().collect::<String>());
 
-        // Moderators see trailing action links appended to every row —
-        // one ("Edit") or four ("delete / recommend / like / Edit").
-        let mut end = tds.len();
-        let cell_text =
-            |i: usize| -> String { tds[i].text().collect::<String>().trim().to_string() };
-        if cell_text(end - 1) == "Edit" {
-            end -= 1;
-        } else if end >= 4 && cell_text(end - 4) == "Edit" {
-            end -= 4;
-        }
-        let seeders = (end >= 3)
-            .then(|| parse_count(&cell_text(end - 3)))
-            .flatten();
-        let leechers = (end >= 2)
-            .then(|| parse_count(&cell_text(end - 2)))
-            .flatten();
+        let (seeders, leechers) = peer_counts(&tds);
 
         // Freeleech = download counts for nothing: the golden "free"
         // torrents and the ratio-less ones. Partial discounts (25/50/75%)
@@ -888,6 +893,7 @@ fn parse_search_page(provider_id: &str, base_url: &Url, html: &str) -> Vec<Searc
             library_infohash: None,
             library_file_idx: None,
             language: None,
+            language_tag: None,
             codec: None,
             download_url,
             parsed_season: None,

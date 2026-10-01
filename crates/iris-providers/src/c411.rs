@@ -262,6 +262,7 @@ impl C411 {
                 library_infohash: None,
                 library_file_idx: None,
                 language: None,
+                language_tag: None,
                 codec: None,
                 // c411 featured items don't ship a `.torrent` URL
                 // — they're identified by infohash and resolved
@@ -728,7 +729,7 @@ mod tests {
         assert_eq!(d.title, "X");
         assert!(d.description.is_none());
         assert_eq!(d.description_format, DescriptionFormat::Html);
-        assert!(d.tags.is_empty());
+        assert_eq!(d.tags, [] as [std::string::String; 0]);
         assert!(d.category.is_none());
         assert_eq!(d.file_count, Some(0));
     }

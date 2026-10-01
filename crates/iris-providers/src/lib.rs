@@ -20,6 +20,7 @@ pub mod torrentleech;
 pub mod torznab;
 pub mod tr4ker;
 pub mod unit3d;
+pub mod v3x;
 
 mod util;
 

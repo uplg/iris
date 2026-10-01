@@ -14,6 +14,7 @@ pub mod playback_caps;
 pub mod playback_preferences;
 pub mod pool;
 pub mod preferences;
+pub mod pulse;
 pub mod reco_feedback;
 pub mod refresh_tokens;
 pub mod tmdb_cache;

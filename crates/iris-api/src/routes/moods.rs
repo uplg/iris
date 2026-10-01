@@ -1,9 +1,9 @@
-//! `GET /api/me/moods`       — the personalized mood board (tiles, taste-ordered).
+//! `GET /api/me/moods`       — the curated mood board (tiles, taste-ordered).
 //! `GET /api/me/moods/{id}`  — results for a mood, `?kind=movie|tv`.
 //!
-//! Results span the fresh catalogue (instant) + the broad TMDB universe (grab on
-//! demand), recency-filtered to plausibly-grabbable titles and ranked by the
-//! user's taste. See `reco::mood_board` / `reco::mood_results`.
+//! Moods are curated TMDB genre rules (`pulse::MOODS`); results are the
+//! titles our trackers can serve, ranked by popularity, swarm and recency.
+//! See `reco::mood_board` / `reco::mood_results`.
 
 use axum::Json;
 use axum::Router;
@@ -42,7 +42,7 @@ fn kind_of(q: &MoodQuery) -> TmdbKind {
     path = "/api/me/moods",
     operation_id = "get_mood_board",
     params(MoodQuery),
-    responses((status = 200, description = "Genre mood board for the kind", body = reco::MoodBoard)),
+    responses((status = 200, description = "Curated mood board for the kind", body = reco::MoodBoard)),
     tag = "moods",
 )]
 pub(crate) async fn board(

@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.MoodResults
+import androidx.compose.ui.text.style.TextOverflow
 import studio.kahn.iris.tv.data.MoodTile
 import studio.kahn.iris.tv.ui.components.IrisButton
 import studio.kahn.iris.tv.ui.components.IrisButtonVariant
@@ -45,9 +46,9 @@ import studio.kahn.iris.tv.ui.components.touchClick
 
 /**
  * The mood board ("Tonight"): a grid of curated mood tiles (taste-ordered, each
- * with a representative backdrop) + a Film/Series toggle. Picking a mood shows
- * its results (catalogue ∪ broad TMDB, recency-filtered to grabbable,
- * taste-ranked). Board ↔ results is internal state. Mirrors the web /moods page.
+ * with its title of the moment) + a Film/Series toggle. Picking a mood shows
+ * its grabbable titles. Board ↔ results is internal state. Mirrors the web
+ * Discover → Tonight tab.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -211,12 +212,23 @@ private fun MoodTileCard(tile: MoodTile, onClick: () -> Unit) {
                 Modifier.fillMaxSize().padding(Spacing.md),
                 contentAlignment = Alignment.BottomStart,
             ) {
-                Text(
-                    tile.label,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                Column {
+                    Text(
+                        tile.label,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    tile.featuredTitle?.let {
+                        Text(
+                            "Now: $it",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.75f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
     }

@@ -34,8 +34,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub transcode: TranscodeConfig,
     #[serde(default)]
-    pub reco: RecoConfig,
-    #[serde(default)]
     pub live_tv: LiveTvConfig,
     #[serde(default)]
     pub providers_file: Option<PathBuf>,
@@ -252,51 +250,6 @@ impl Default for LiveTvConfig {
     }
 }
 
-/// Tuning for the content-first recommendation engine (see `RECOSYS.md`). The
-/// model embeds each catalogue item once at ingest; the request path only ranks
-/// over the cached vectors, so none of this touches the hot path's memory.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecoConfig {
-    /// Master switch. When false the engine falls back to the legacy linear
-    /// `fresh_score` shelves.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// `model2vec` model id (Hugging Face repo or local path). The English,
-    /// retrieval-tuned `potion-retrieval-32M` won the rig sweep — smaller AND
-    /// more accurate than the multilingual model — so embedding text is
-    /// normalized to English. Swap to `potion-base-8M` for an ~8 MB table.
-    #[serde(default = "default_reco_model")]
-    pub model: String,
-    /// Taste centroids per user (weighted k-means). 3 was the empirical optimum
-    /// on the prod data (1 blurs a household's distinct tastes, 5 over-segments).
-    #[serde(default = "default_reco_centroids")]
-    pub centroids: usize,
-    /// Max items embedded per ingest slice — bounds the background pass so a big
-    /// backfill never monopolises the box.
-    #[serde(default = "default_reco_embed_batch")]
-    pub embed_batch: i64,
-}
-
-fn default_reco_model() -> String {
-    "minishlab/potion-retrieval-32M".to_string()
-}
-fn default_reco_centroids() -> usize {
-    3
-}
-fn default_reco_embed_batch() -> i64 {
-    512
-}
-impl Default for RecoConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            model: default_reco_model(),
-            centroids: default_reco_centroids(),
-            embed_batch: default_reco_embed_batch(),
-        }
-    }
-}
-
 /// Server-side encode settings for the "catch-up" transcode path — used when
 /// a client only software-decodes the source video codec (e.g. AV1 on a TV
 /// box with no AV1 silicon) and the content is heavy (10-bit). The server
@@ -372,7 +325,8 @@ pub struct DiscoveryConfig {
     /// Max age (in years) of a MOVIE's content to enter the discovery window.
     /// The window is about recent *releases*: a 1972 film freshly re-uploaded
     /// is a fresh upload but not a fresh release, so it's kept out of the
-    /// discovery shelves (it can still surface via recommendations / search).
+    /// discovery shelves (it can still surface via search, or through the
+    /// trending pulse when it's genuinely hot again).
     /// TV is exempt — a long-running series airing a new episode is legit
     /// regardless of its first-air year.
     #[serde(default = "default_max_content_age_years")]

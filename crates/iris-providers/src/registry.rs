@@ -97,6 +97,12 @@ pub struct ProviderPolicy {
     /// grab be refused before we ask, with a message naming what holds the
     /// slot.
     pub leech_slots: Option<u32>,
+    /// Language community the tracker serves (`"fr"` / `"en"`), declared as
+    /// `origin` or implied by `default_language`. Gives an untagged release
+    /// its meaning in the search language filter: English on an anglophone
+    /// tracker, original version (no French track) on a francophone one,
+    /// where releases with French audio or subtitles always say so.
+    pub origin: Option<String>,
 }
 
 impl Default for ProviderPolicy {
@@ -106,6 +112,7 @@ impl Default for ProviderPolicy {
             catalog: true,
             seed: true,
             leech_slots: None,
+            origin: None,
         }
     }
 }
@@ -168,6 +175,13 @@ impl ProviderRegistry {
         self.policies
             .get(provider_id)
             .and_then(|p| p.default_language.as_deref())
+    }
+
+    /// See [`ProviderPolicy::origin`].
+    pub fn origin(&self, provider_id: &str) -> Option<&str> {
+        self.policies
+            .get(provider_id)
+            .and_then(|p| p.origin.as_deref())
     }
 
     /// Ids the freshness scheduler may pull `latest()` from — see
@@ -303,6 +317,21 @@ impl ProviderRegistry {
 }
 
 fn policy_of(entry: &ProviderEntry) -> ProviderPolicy {
+    let default_language = entry
+        .fields
+        .get("default_language")
+        .and_then(|v| v.as_str())
+        .map(str::to_ascii_lowercase);
+    let origin = entry
+        .fields
+        .get("origin")
+        .and_then(|v| v.as_str())
+        .map(str::to_ascii_lowercase)
+        .or_else(|| match default_language.as_deref() {
+            Some("english") => Some("en".to_string()),
+            Some("french") => Some("fr".to_string()),
+            _ => None,
+        });
     let flag = |key: &str, default: bool| {
         entry
             .fields
@@ -311,11 +340,8 @@ fn policy_of(entry: &ProviderEntry) -> ProviderPolicy {
             .unwrap_or(default)
     };
     ProviderPolicy {
-        default_language: entry
-            .fields
-            .get("default_language")
-            .and_then(|v| v.as_str())
-            .map(str::to_ascii_lowercase),
+        default_language,
+        origin,
         catalog: flag("catalog", true),
         seed: flag("seed", true),
         leech_slots: entry
@@ -338,6 +364,7 @@ pub fn build_provider(entry: &ProviderEntry) -> Result<Arc<dyn SearchProvider>> 
         "hdtorrents" => Ok(crate::hdtorrents::HdTorrents::from_config(entry)?),
         "nyaa" => Ok(crate::nyaa::NyaaProvider::from_config(entry)?),
         "torrentleech" => Ok(crate::torrentleech::TorrentLeech::from_config(entry)?),
+        "v3x" => Ok(crate::v3x::V3x::from_config(entry)?),
         other => Err(Error::Provider(format!(
             "unknown provider kind: {other} (provider id: {})",
             entry.id
