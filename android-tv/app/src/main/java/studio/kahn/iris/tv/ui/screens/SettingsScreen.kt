@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.formatSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -334,9 +335,9 @@ private fun UpdaterStatus(state: AppUpdater.Progress?) {
         is AppUpdater.Progress.Downloading -> {
             val pct = if (state.total > 0) (state.bytes.toFloat() / state.total).coerceIn(0f, 1f) else null
             val label = if (pct != null) {
-                "Downloading · ${(pct * 100).toInt()}% (${formatBytes(state.bytes)} / ${formatBytes(state.total)})"
+                "Downloading · ${(pct * 100).toInt()}% (${formatSize(state.bytes)} / ${formatSize(state.total)})"
             } else {
-                "Downloading · ${formatBytes(state.bytes)} (size unknown)"
+                "Downloading · ${formatSize(state.bytes)} (size unknown)"
             }
             Text(label, style = MaterialTheme.typography.bodyMedium)
             if (pct != null) {
@@ -365,11 +366,3 @@ private fun UpdaterStatus(state: AppUpdater.Progress?) {
     }
 }
 
-private fun formatBytes(b: Long): String {
-    if (b < 0) return "?"
-    val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f MB", mb)
-    val kb = b / 1_000.0
-    if (kb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f KB", kb)
-    return "$b B"
-}

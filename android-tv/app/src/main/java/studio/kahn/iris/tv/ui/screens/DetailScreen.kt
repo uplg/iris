@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.ui.formatSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -57,9 +59,6 @@ import studio.kahn.iris.tv.ui.theme.Spacing
 import studio.kahn.iris.tv.ui.theme.irisAmbient
 import studio.kahn.iris.tv.ui.components.touchClick
 
-private val VIDEO_EXTS_DETAIL = listOf(
-    ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
-)
 
 /**
  * The "in between" screen for multi-file torrents (TV box sets, anime
@@ -129,7 +128,7 @@ fun DetailScreen(
 
     val progressByIdx = remember(progresses) { progresses.associateBy { it.fileIdx.toInt() } }
     val videoFiles = remember(t) {
-        t.files.filter { f -> VIDEO_EXTS_DETAIL.any { f.path.endsWith(it, ignoreCase = true) } }
+        t.files.filter { f -> isVideoPath(f.path) }
             .sortedBy { it.path }
     }
 
@@ -249,7 +248,7 @@ private fun FileRow(
     val subtitle = when {
         progress?.completed == true -> "Watched"
         pct != null -> "$pct% watched"
-        else -> formatBytes(file.sizeBytes)
+        else -> formatSize(file.sizeBytes)
     }
     // Keep the focused colors inside the dark palette. The default
     // `CardDefaults.colors()` inverts to `inverseSurface` /
@@ -299,10 +298,3 @@ private fun FileRow(
     }
 }
 
-private fun formatBytes(b: Long): String {
-    val gb = b / 1_000_000_000.0
-    if (gb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f GB", gb)
-    val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f MB", mb)
-    return "$b B"
-}

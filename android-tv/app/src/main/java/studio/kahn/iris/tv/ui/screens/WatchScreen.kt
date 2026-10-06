@@ -11,6 +11,8 @@
 
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.formatSpeed
+import studio.kahn.iris.tv.ui.formatSize
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.widget.TextView
 import androidx.compose.foundation.background
@@ -1389,12 +1391,12 @@ private fun stepFor(probeReady: Boolean, torrent: TorrentView?): Step {
     if (torrent != null && torrent.progressPct < 99.9f) {
         val pct = torrent.progressPct / 100f
         val sub = buildString {
-            append(formatBytesShort(torrent.progressBytes))
+            append(formatSize(torrent.progressBytes))
             append(" / ")
-            append(formatBytesShort(torrent.totalSizeBytes))
+            append(formatSize(torrent.totalSizeBytes))
             if (torrent.downloadSpeedBps > 0) {
                 append(" · ")
-                append(formatSpeedShort(torrent.downloadSpeedBps))
+                append(formatSpeed(torrent.downloadSpeedBps))
             }
             if (torrent.peers > 0) {
                 append(" · ${torrent.peers} peers")
@@ -1497,17 +1499,4 @@ private fun buildPlaybackTitle(rawName: String?, episode: EpisodePoint?): String
     } else pretty
 }
 
-private fun formatBytesShort(b: Long): String {
-    val gb = b / 1_000_000_000.0
-    if (gb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f GB", gb)
-    val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f MB", mb)
-    return "$b B"
-}
 
-private fun formatSpeedShort(bps: Long): String {
-    val mbs = bps / 1_000_000.0
-    if (mbs >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f MB/s", mbs)
-    val kbs = bps / 1_000.0
-    return String.format(java.util.Locale.ROOT, "%.0f KB/s", kbs)
-}

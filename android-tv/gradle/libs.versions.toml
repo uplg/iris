@@ -10,6 +10,9 @@ activity-compose = "1.13.0"
 lifecycle = "2.11.0"
 nav-compose = "2.10.2"        # minSdk 24 floor (the app moved there for it)
 
+# Tests
+junit = "4.13.2"
+
 # Compose
 # BOM pins the whole compose.* family; only override individual artifacts if
 # you really need a newer one. Compose-for-TV lives outside the BOM.
@@ -51,6 +54,7 @@ desugar-jdk-libs = "2.1.5"
 openapi-generator = "7.25.0"
 
 [libraries]
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
 desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar-jdk-libs" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }

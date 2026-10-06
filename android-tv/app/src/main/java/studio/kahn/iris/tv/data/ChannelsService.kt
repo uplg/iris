@@ -64,7 +64,7 @@ class ChannelsService(private val context: Context) {
                     t.tmdbId?.let { runCatching { api.tmdbMetadata(it, t.kind?.value) }.getOrNull() }
                 val poster = meta?.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
                 val idx = t.files
-                    .filter { f -> VIDEO_EXTS.any { f.path.endsWith(it, ignoreCase = true) } }
+                    .filter { f -> isVideoPath(f.path) }
                     .maxByOrNull { f -> f.sizeBytes }
                     ?.index ?: 0
                 insertProgram(
@@ -167,11 +167,5 @@ class ChannelsService(private val context: Context) {
                 builder.build().toContentValues(),
             )
         }
-    }
-
-    companion object {
-        private val VIDEO_EXTS = listOf(
-            ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
-        )
     }
 }

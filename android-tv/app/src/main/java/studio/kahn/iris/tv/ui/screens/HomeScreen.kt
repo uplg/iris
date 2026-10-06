@@ -1,5 +1,8 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.ui.formatSpeed
+import studio.kahn.iris.tv.ui.formatSize
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
@@ -677,7 +680,6 @@ private fun HomeContent(
     }
 }
 
-private val VIDEO_EXTS = listOf(".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv")
 
 /**
  * Partition the raw torrent list into the two shelves the Home screen
@@ -707,7 +709,7 @@ private fun routeTorrent(
     onPickTorrent: (String) -> Unit,
 ) {
     val videos = t.files.filter { f ->
-        VIDEO_EXTS.any { f.path.endsWith(it, ignoreCase = true) }
+        isVideoPath(f.path)
     }
     if (videos.size <= 1) {
         val idx = videos.maxByOrNull { f -> f.sizeBytes }?.index ?: 0
@@ -1329,7 +1331,7 @@ private fun CollectionCard(
         if (collection.kind == MediaKind.tv && collection.episodeCount > 0) {
             append("${collection.episodeCount} ep")
         } else {
-            append(formatBytes(collection.totalSizeBytes))
+            append(formatSize(collection.totalSizeBytes))
         }
         if (collection.torrentCount > 1) {
             append(" · ${collection.torrentCount} torrents")
@@ -1365,7 +1367,7 @@ private fun TorrentCard(
         tmdbVerified = torrent.tmdbVerified,
         kindHint = torrent.kind?.value,
         title = prettifyFilename(torrent.name ?: torrent.infohash.take(12)),
-        subtitle = formatBytes(torrent.totalSizeBytes),
+        subtitle = formatSize(torrent.totalSizeBytes),
         progress = null,
         progressColor = null,
         onClick = onClick,
@@ -1408,20 +1410,7 @@ private fun DownloadingCard(
     )
 }
 
-private fun formatBytes(b: Long): String {
-    val gb = b / 1_000_000_000.0
-    if (gb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f GB", gb)
-    val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f MB", mb)
-    return "$b B"
-}
 
-private fun formatSpeed(bps: Long): String {
-    val mbs = bps / 1_000_000.0
-    if (mbs >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f MB/s", mbs)
-    val kbs = bps / 1_000.0
-    return String.format(java.util.Locale.ROOT, "%.0f KB/s", kbs)
-}
 
 /**
  * Strip the file extension and turn the dot/underscore-separated tokens of a

@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.formatSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -418,7 +419,7 @@ private fun LibraryGridCard(
             if (collection.kind == MediaKind.tv && collection.episodeCount > 0) {
                 append("${collection.episodeCount} ep")
             } else {
-                append(formatBytesLib(collection.totalSizeBytes))
+                append(formatSize(collection.totalSizeBytes))
             }
             if (collection.torrentCount > 1) append(" · ${collection.torrentCount}×")
         }
@@ -513,10 +514,3 @@ private fun LibraryGridCard(
 private fun prettify(raw: String): String =
     raw.substringBeforeLast('.', raw).replace('.', ' ').replace('_', ' ').trim()
 
-private fun formatBytesLib(b: Long): String {
-    val gb = b / 1_000_000_000.0
-    if (gb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f GB", gb)
-    val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f MB", mb)
-    return "$b B"
-}

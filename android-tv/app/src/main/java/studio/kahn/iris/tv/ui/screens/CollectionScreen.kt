@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.ui.formatSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.horizontalScroll
@@ -86,9 +88,6 @@ import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
 import studio.kahn.iris.tv.ui.components.touchClick
 
-private val VIDEO_EXTS_C = listOf(
-    ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
-)
 
 /**
  * Unified TV / movie collection screen — the only "what does my
@@ -413,7 +412,7 @@ fun CollectionScreen(
                         }
                     }
                     val tFiles = t.files.filter { f ->
-                        VIDEO_EXTS_C.any { f.path.endsWith(it, ignoreCase = true) }
+                        isVideoPath(f.path)
                     }
                     items(tFiles, key = { f -> "${t.infohash}:${f.index}" }) { f ->
                         Box(
@@ -441,7 +440,7 @@ fun CollectionScreen(
                 }
                 val files: List<Pair<TorrentView, FileEntry>> = d.torrents.flatMap { t ->
                     t.files
-                        .filter { f -> VIDEO_EXTS_C.any { f.path.endsWith(it, ignoreCase = true) } }
+                        .filter { f -> isVideoPath(f.path) }
                         .map { f -> t to f }
                 }
                 items(files, key = { (t, f) -> "${t.infohash}:${f.index}" }) { (t, f) ->
@@ -608,7 +607,7 @@ private fun GoneReleaseRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "${formatFileSize(release.totalSizeBytes)} · via ${release.sourceProvider}",
+                "${formatSize(release.totalSizeBytes)} · via ${release.sourceProvider}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1204,7 +1203,7 @@ private fun VariantChip(
             val meta = listOfNotNull(
                 variant.quality?.takeIf { it.isNotBlank() },
                 variant.seeders?.let { "${it}↑" },
-                variant.sizeBytes?.let { formatFileSize(it) },
+                variant.sizeBytes?.let { formatSize(it) },
             ).joinToString(" · ")
             val grabShape = RoundedCornerShape(Radius.button)
             Button(
@@ -1246,7 +1245,7 @@ private fun VariantChip(
             var focused by remember { mutableStateOf(false) }
             val meta = listOfNotNull(
                 variant.quality?.takeIf { it.isNotBlank() },
-                variant.totalSizeBytes.takeIf { it > 0 }?.let { formatFileSize(it) },
+                variant.totalSizeBytes.takeIf { it > 0 }?.let { formatSize(it) },
             ).joinToString(" · ")
             val goneShape = RoundedCornerShape(Radius.button)
             Button(
@@ -1341,7 +1340,7 @@ private fun SeasonPackBanner(
                 val meta = listOfNotNull(
                     pack.quality?.takeIf { it.isNotBlank() },
                     pack.seeders?.let { "$it seeders" },
-                    pack.sizeBytes?.let { formatFileSize(it) },
+                    pack.sizeBytes?.let { formatSize(it) },
                     "via ${pack.indexerProvider}",
                 ).joinToString(" · ")
                 if (hasFocus && meta.isNotEmpty()) {
@@ -1397,7 +1396,7 @@ private fun ReleaseCopyRow(torrent: TorrentView, onDelete: () -> Unit) {
                     maxLines = 1,
                 )
                 Text(
-                    "${formatFileSize(torrent.totalSizeBytes)} · added by ${torrent.addedByName}",
+                    "${formatSize(torrent.totalSizeBytes)} · added by ${torrent.addedByName}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1443,7 +1442,7 @@ private fun FileRow(file: FileEntry, onClick: () -> Unit) {
                     maxLines = 1,
                 )
                 Text(
-                    formatFileSize(file.sizeBytes),
+                    formatSize(file.sizeBytes),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1484,10 +1483,3 @@ private fun LoadingOrError(error: String?, onBack: () -> Unit) {
     }
 }
 
-private fun formatFileSize(b: Long): String {
-    val gb = b / 1_000_000_000.0
-    if (gb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f GB", gb)
-    val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f MB", mb)
-    return "$b B"
-}

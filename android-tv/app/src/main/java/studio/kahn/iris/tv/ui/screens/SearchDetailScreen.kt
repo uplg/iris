@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.ui.formatSize
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -129,12 +131,8 @@ fun SearchDetailScreen(
                         allowDuplicate = allowDuplicate,
                     )
                 )
-                val videoExts = listOf(
-                    ".mkv", ".mp4", ".webm", ".m4v", ".avi",
-                    ".mov", ".ts", ".mts", ".m2ts", ".wmv",
-                )
                 val videos = res.snapshot.files
-                    .filter { f -> videoExts.any { f.path.endsWith(it, ignoreCase = true) } }
+                    .filter { f -> isVideoPath(f.path) }
                 if (videos.size <= 1) {
                     val idx = videos.maxByOrNull { f -> f.sizeBytes }?.index ?: 0
                     onPickFile(res.snapshot.infohash, idx)
@@ -273,7 +271,7 @@ fun SearchDetailScreen(
                 details?.let { d ->
                     Text(
                         "↑ ${d.seeders ?: 0}   ↓ ${d.leechers ?: 0}" +
-                            (d.fileSizeBytes?.let { "   ·   ${formatGiB(it)}" } ?: ""),
+                            (d.fileSizeBytes?.let { "   ·   ${formatSize(it)}" } ?: ""),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -388,10 +386,10 @@ fun SearchDetailScreen(
         ConfirmDialog(
             eyebrow = "Huge release",
             title = details?.title ?: "This release",
-            body = "This release is ${formatGiB(size)} — over 50 GB. Huge packs (complete series, " +
+            body = "This release is ${formatSize(size)} — over 50 GB. Huge packs (complete series, " +
                 "full box sets) eat the shared disk and get everyone's library cleaned up sooner. " +
                 "Are you really sure you want it?",
-            confirmLabel = "Yes, download ${formatGiB(size)}",
+            confirmLabel = "Yes, download ${formatSize(size)}",
             onConfirm = {
                 hugeConfirm = false
                 grab(allowDuplicate = false)
@@ -624,10 +622,6 @@ private fun formatRuntime(secs: Int): String {
     return if (h > 0) "${h}h${m.toString().padStart(2, '0')}" else "${m}min"
 }
 
-private fun formatGiB(b: Long): String {
-    val gib = b.toDouble() / (1024.0 * 1024.0 * 1024.0)
-    return "%.2f GiB".format(gib)
-}
 
 private fun Int.formatThousands(): String =
     "%,d".format(this).replace(',', ' ')

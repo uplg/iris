@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.ui.formatSize
 import android.app.Activity
 import android.content.Intent
 import android.speech.RecognizerIntent
@@ -1325,7 +1327,7 @@ private fun ResultCard(
                     }
                     result.sizeBytes?.let {
                         Text(
-                            formatSizeShort(it),
+                            formatSize(it),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1468,7 +1470,7 @@ private fun ResultRow(
                     )
                     result.sizeBytes?.let {
                         Text(
-                            "·  ${formatSizeShort(it)}",
+                            "·  ${formatSize(it)}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1883,13 +1885,6 @@ private fun prettifyQuality(q: String): String = when (q) {
     else -> q
 }
 
-private fun formatSizeShort(b: Long): String {
-    val gb = b / 1_000_000_000.0
-    if (gb >= 1.0) return String.format(java.util.Locale.ROOT, "%.1f GB", gb)
-    val mb = b / 1_000_000.0
-    if (mb >= 1.0) return String.format(java.util.Locale.ROOT, "%.0f MB", mb)
-    return "$b B"
-}
 
 private fun ingestAndPlay(
     scope: kotlinx.coroutines.CoroutineScope,
@@ -1916,12 +1911,8 @@ private fun ingestAndPlay(
                     allowDuplicate = allowDuplicate,
                 )
             )
-            val videoExts = listOf(
-                ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov",
-                ".ts", ".mts", ".m2ts", ".wmv",
-            )
             val videos = res.snapshot.files
-                .filter { f -> videoExts.any { f.path.endsWith(it, ignoreCase = true) } }
+                .filter { f -> isVideoPath(f.path) }
             if (videos.size <= 1) {
                 val idx = videos.maxByOrNull { f -> f.sizeBytes }?.index ?: 0
                 onPickFile(res.snapshot.infohash, idx)

@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.ui.formatSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,9 +55,6 @@ import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
 import studio.kahn.iris.tv.ui.components.touchClick
 
-private val VIDEO_EXTS = listOf(
-    ".mkv", ".mp4", ".webm", ".m4v", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".wmv",
-)
 
 // Fully-opaque surfaces sourced from the shared design tokens so the
 // seedbox view reads as the same product as every other screen.
@@ -273,10 +272,10 @@ private fun SummaryStrip(items: List<TorrentView>, totalUploaded: Long, totalDow
             Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
             horizontalArrangement = Arrangement.spacedBy(Spacing.xl),
         ) {
-            Stat("Seeded", formatBytes(totalUploaded), Accent)
+            Stat("Seeded", formatSize(totalUploaded), Accent)
             Stat("Ratio", ratio?.let { "%.2f".format(it) } ?: "—", if ((ratio ?: 0.0) >= 1.0) Good else null)
-            Stat("Down", "↓ ${formatBytes(downBps)}/s", null)
-            Stat("Up", "↑ ${formatBytes(upBps)}/s", Good)
+            Stat("Down", "↓ ${formatSize(downBps)}/s", null)
+            Stat("Up", "↑ ${formatSize(upBps)}/s", Good)
         }
     }
 }
@@ -335,7 +334,7 @@ private fun TorrentCard(
 
     val videos = remember(t.files) {
         t.files
-            .filter { f -> VIDEO_EXTS.any { f.path.endsWith(it, ignoreCase = true) } }
+            .filter { f -> isVideoPath(f.path) }
             .sortedByDescending { it.sizeBytes }
     }
     val single = videos.size == 1
@@ -373,9 +372,9 @@ private fun TorrentCard(
             ) {
                 StateBadge(t.state.value)
                 Meta("${t.peers} peer${if (t.peers == 1) "" else "s"}")
-                Meta("${formatBytes(t.progressBytes)} / ${formatBytes(t.totalSizeBytes)}")
-                Meta("↓ ${formatBytes(t.downloadSpeedBps)}/s")
-                Meta("↑ ${formatBytes(t.uploadSpeedBps)}/s")
+                Meta("${formatSize(t.progressBytes)} / ${formatSize(t.totalSizeBytes)}")
+                Meta("↓ ${formatSize(t.downloadSpeedBps)}/s")
+                Meta("↑ ${formatSize(t.uploadSpeedBps)}/s")
                 ratio?.let {
                     Text(
                         "ratio ${"%.2f".format(it)}",
@@ -482,7 +481,7 @@ private fun TorrentCard(
                                     modifier = Modifier.weight(1f),
                                 )
                                 Text(
-                                    "▶ ${formatBytes(f.sizeBytes)}",
+                                    "▶ ${formatSize(f.sizeBytes)}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Accent,
                                 )
@@ -546,14 +545,3 @@ private fun StateBadge(state: String) {
     }
 }
 
-private fun formatBytes(b: Long): String {
-    if (b < 1_000) return "$b B"
-    val units = listOf("KB", "MB", "GB", "TB")
-    var v = b.toDouble() / 1_000.0
-    var i = 0
-    while (v >= 1_000.0 && i < units.size - 1) {
-        v /= 1_000.0
-        i++
-    }
-    return if (v >= 100) "%.0f %s".format(v, units[i]) else "%.1f %s".format(v, units[i])
-}
