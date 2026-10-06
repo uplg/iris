@@ -34,6 +34,8 @@ pub fn router() -> Router<AppState> {
         .route("/preview", post(preview))
         .route("/", post(ingest).get(list))
         .route("/{infohash}", get(get_one).delete(remove))
+        .route("/{infohash}/pause", post(pause))
+        .route("/{infohash}/resume", post(resume))
         .route("/{infohash}/regrab", post(regrab))
         // `/stream` serves the *raw* source file (range-supported). Used by
         // the download button and as the URL for native MKV players.
@@ -1128,6 +1130,82 @@ pub(crate) async fn get_one(
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/torrents/{infohash}/pause",
+    params(("infohash" = String, Path)),
+    responses(
+        (status = 204, description = "Left the swarm; files stay on disk"),
+        (status = 403, description = "Only an admin or whoever added it"),
+        (status = 404, description = "Unknown infohash"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn pause(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(infohash): Path<String>,
+) -> ApiResult<StatusCode> {
+    let row = owned_row(&state, &user, &infohash).await?;
+    state
+        .engine()
+        .pause_by_infohash(&row.infohash)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine pause: {e}")))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/torrents/{infohash}/resume",
+    params(("infohash" = String, Path)),
+    responses(
+        (status = 204, description = "Back in the swarm"),
+        (status = 403, description = "Only an admin or whoever added it"),
+        (status = 404, description = "Unknown infohash"),
+        (status = 409, description = "The tracker's download slots are full"),
+    ),
+    tag = "torrents",
+)]
+pub(crate) async fn resume(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(infohash): Path<String>,
+) -> ApiResult<StatusCode> {
+    let row = owned_row(&state, &user, &infohash).await?;
+    // An unfinished torrent downloads again: it takes one of the tracker's
+    // download slots, like a grab does.
+    let unfinished = state
+        .engine()
+        .get_by_infohash(&row.infohash)
+        .is_some_and(|s| !s.finished);
+    if unfinished && let Some(provider) = row.source_provider.as_deref() {
+        check_leech_slots(&state, provider).await?;
+    }
+    state
+        .engine()
+        .resume_by_infohash(&row.infohash)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine resume: {e}")))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The torrent's row, once the caller may act on it (pause, resume,
+/// delete): an admin, or whoever added it.
+async fn owned_row(
+    state: &AppState,
+    user: &AuthUser,
+    infohash: &str,
+) -> ApiResult<iris_db::torrents::TorrentRow> {
+    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if !may_delete(user, row.added_by) {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(row)
+}
+
+#[utoipa::path(
     delete,
     path = "/api/torrents/{infohash}",
     operation_id = "remove_torrent",
@@ -1143,12 +1221,7 @@ pub(crate) async fn remove(
     user: AuthUser,
     Path(infohash): Path<String>,
 ) -> ApiResult<StatusCode> {
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    if !may_delete(&user, row.added_by) {
-        return Err(ApiError::Forbidden);
-    }
+    let row = owned_row(&state, &user, &infohash).await?;
     // Capture the final upload delta before the engine drops the torrent —
     // otherwise the bytes uploaded since the last 30 s reconcile tick are
     // lost forever.

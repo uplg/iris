@@ -2195,13 +2195,13 @@
         },
         "responses": {
           "204": {
-            "description": "Password changed; all other sessions revoked"
+            "description": "Password changed; every other session revoked, this one renewed"
           },
           "400": {
-            "description": "New password too short (min 8 chars)"
+            "description": "New password too short (min 8 chars), or the current one is wrong"
           },
           "401": {
-            "description": "Old password mismatch / not authenticated"
+            "description": "Not authenticated"
           }
         }
       }
@@ -3577,6 +3577,35 @@
         }
       }
     },
+    "/api/torrents/{infohash}/pause": {
+      "post": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "pause",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Left the swarm; files stay on disk"
+          },
+          "403": {
+            "description": "Only an admin or whoever added it"
+          },
+          "404": {
+            "description": "Unknown infohash"
+          }
+        }
+      }
+    },
     "/api/torrents/{infohash}/progress": {
       "get": {
         "tags": [
@@ -3643,6 +3672,38 @@
           },
           "404": {
             "description": "Unknown infohash"
+          }
+        }
+      }
+    },
+    "/api/torrents/{infohash}/resume": {
+      "post": {
+        "tags": [
+          "torrents"
+        ],
+        "operationId": "resume",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Back in the swarm"
+          },
+          "403": {
+            "description": "Only an admin or whoever added it"
+          },
+          "404": {
+            "description": "Unknown infohash"
+          },
+          "409": {
+            "description": "The tracker's download slots are full"
           }
         }
       }
@@ -3721,6 +3782,13 @@
           "position_seconds": {
             "type": "number",
             "format": "double"
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB poster path once `tmdb_verified`. Additive."
           },
           "started_at": {
             "type": "string",
@@ -4285,6 +4353,13 @@
           "display_title": {
             "type": "string"
           },
+          "episode_info": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EpisodeInfo"
+            },
+            "description": "TMDB name, runtime, air date and still per (S, E) for every season\nthe page shows. Empty for movies, absolute numbering, or no TMDB id.\nAdditive."
+          },
           "episodes": {
             "type": "array",
             "items": {
@@ -4326,6 +4401,10 @@
           "numbering": {
             "type": "string",
             "description": "How the client should lay out episodes: `\"seasonal\"` (the\ndefault — season tabs) or `\"absolute\"` (one flat ordered\n\"Episode N\" list, for fleuve anime whose releases cram the\nabsolute number into a fake `S01`). Derived from the episode set,\nNOT from `is_anime`: a season-cut anime stays `\"seasonal\"`.\nAdditive — older clients ignore it and keep season tabs."
+          },
+          "on_watchlist": {
+            "type": "boolean",
+            "description": "The caller follows this series (its watchlist). Additive."
           },
           "poster_path": {
             "type": [
@@ -4462,6 +4541,13 @@
             ],
             "format": "int64"
           },
+          "episode_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB's episode title, when known. Additive."
+          },
           "file_idx": {
             "type": "integer",
             "format": "int64"
@@ -4501,6 +4587,13 @@
           "position_seconds": {
             "type": "number",
             "format": "double"
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB poster path once `tmdb_verified`. Additive."
           },
           "season": {
             "type": [
@@ -4848,6 +4941,57 @@
           "watched": {
             "type": "boolean",
             "description": "`true` when the requesting user's `playback_progress.completed`\nis set for this file — drives the \"vu\" badge on the Series page."
+          }
+        }
+      },
+      "EpisodeInfo": {
+        "type": "object",
+        "required": [
+          "season",
+          "episode"
+        ],
+        "properties": {
+          "air_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DD`."
+          },
+          "episode": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "overview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "season": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "still_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB image path, like `poster_path`."
           }
         }
       },
@@ -5499,6 +5643,13 @@
           "position_seconds": {
             "type": "number",
             "format": "double"
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB poster path once `tmdb_verified`. Additive."
           },
           "season": {
             "type": [
@@ -8598,6 +8749,13 @@
             "type": "number",
             "format": "double"
           },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB poster path once `tmdb_verified`. Additive."
+          },
           "season": {
             "type": [
               "integer",
@@ -9041,6 +9199,13 @@
           "position_seconds": {
             "type": "number",
             "format": "double"
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB poster path once `tmdb_verified`. Additive."
           },
           "tmdb_id": {
             "type": [

@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::routes::extract::AuthUser;
+use crate::routes::library;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -47,28 +48,35 @@ pub(crate) struct ChangePasswordRequest {
     operation_id = "change_password",
     request_body = ChangePasswordRequest,
     responses(
-        (status = 204, description = "Password changed; all other sessions revoked"),
-        (status = 400, description = "New password too short (min 8 chars)"),
-        (status = 401, description = "Old password mismatch / not authenticated"),
+        (status = 204, description = "Password changed; every other session revoked, this one renewed"),
+        (status = 400, description = "New password too short (min 8 chars), or the current one is wrong"),
+        (status = 401, description = "Not authenticated"),
     ),
     tag = "me",
 )]
 pub(crate) async fn change_password(
     State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
     user: AuthUser,
     Json(body): Json<ChangePasswordRequest>,
-) -> ApiResult<axum::http::StatusCode> {
+) -> ApiResult<(axum_extra::extract::CookieJar, axum::http::StatusCode)> {
     crate::passwords::check_policy(&body.new_password)?;
     let current = iris_db::users::get_password_hash(state.db(), user.id)
         .await?
         .ok_or(ApiError::Unauthorized)?;
+    // 400, not 401: a wrong current password is a form error, not an
+    // expired session (a 401 makes clients try a refresh first).
     if !crate::passwords::verify(&body.old_password, &current).await? {
-        return Err(ApiError::Unauthorized);
+        return Err(ApiError::BadRequest(
+            "This is not your current password.".into(),
+        ));
     }
     let new_hash = crate::passwords::hash(&body.new_password).await?;
-    // Every session, this one included, logs back in.
+    // Every session ends with the old password; this one gets a fresh pair
+    // so the person who changed it stays signed in here.
     iris_db::users::set_password(state.db(), user.id, &new_hash).await?;
-    Ok(axum::http::StatusCode::NO_CONTENT)
+    let jar = crate::routes::auth::issue_session(&state, &jar, user.id, user.is_admin).await?;
+    Ok((jar, axum::http::StatusCode::NO_CONTENT))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -176,6 +184,12 @@ pub(crate) struct ContinueWatchingItem {
     /// Render "S08E08" from these instead of SCENE-parsing file names.
     season: Option<i64>,
     episode: Option<i64>,
+    /// TMDB's episode title, when known. Additive.
+    #[serde(default)]
+    episode_name: Option<String>,
+    /// TMDB poster path once `tmdb_verified`. Additive.
+    #[serde(default)]
+    poster_path: Option<String>,
     /// True when the tile's target is NOT playable from disk: the next
     /// episode exists (per TMDB, aired) but was never downloaded, or the
     /// previously-owned file is gone (GC-reclaimed, or lost by the
@@ -279,8 +293,7 @@ async fn watchlist_item(
     // Watchlist is TV-only by construction (we derive it from
     // `series_follows`). Hint the TMDB namespace so the same
     // numerical id can't collide with an unrelated movie.
-    let (poster_path, backdrop_path) =
-        crate::routes::library::collection_artwork(state, tmdb_id, "tv").await;
+    let (poster_path, backdrop_path) = library::collection_artwork(state, tmdb_id, "tv").await;
     // "New" cutoff = last ENGAGEMENT (max of page visit and watch)
     // — visit-only kept badging episodes that were already out when
     // the user watched, and badged the whole cache when they had
@@ -617,30 +630,42 @@ pub(crate) async fn continue_watching(
     merged.sort_by_key(|r| std::cmp::Reverse(r.last_watched_at));
     merged.truncate(12);
 
-    let out = merged
-        .into_iter()
-        .map(|r| {
-            let file_path = state.engine().file_name(&r.infohash, r.file_idx);
-            ContinueWatchingItem {
-                infohash: r.infohash,
-                torrent_name: r.torrent_name,
-                tmdb_id: r.tmdb_id,
-                tmdb_verified: r.tmdb_verified,
-                kind: r.kind.as_deref().and_then(MediaKind::from_wire),
-                file_idx: r.file_idx,
-                file_path,
-                position_seconds: r.position_seconds,
-                duration_seconds: r.duration_seconds,
-                last_watched_at: r.last_watched_at,
-                completed: r.completed,
-                collection_id: r.collection_id,
-                next_up: r.next_up,
-                season: r.season,
-                episode: r.episode,
-                grabbable: r.grabbable,
-            }
-        })
-        .collect();
+    let state = &state;
+    let out = crate::fanout::map_ordered(merged, |r| async move {
+        let tv = r.kind.as_deref() == Some("tv");
+        let (episode_name, poster_path) = tokio::join!(
+            async {
+                if tv {
+                    library::episode_name(state, r.tmdb_id, r.season, r.episode).await
+                } else {
+                    None
+                }
+            },
+            library::verified_poster(state, r.tmdb_id, r.tmdb_verified, r.kind.as_deref())
+        );
+        let file_path = state.engine().file_name(&r.infohash, r.file_idx);
+        ContinueWatchingItem {
+            infohash: r.infohash,
+            torrent_name: r.torrent_name,
+            tmdb_id: r.tmdb_id,
+            tmdb_verified: r.tmdb_verified,
+            kind: r.kind.as_deref().and_then(MediaKind::from_wire),
+            file_idx: r.file_idx,
+            file_path,
+            position_seconds: r.position_seconds,
+            duration_seconds: r.duration_seconds,
+            last_watched_at: r.last_watched_at,
+            completed: r.completed,
+            collection_id: r.collection_id,
+            next_up: r.next_up,
+            season: r.season,
+            episode: r.episode,
+            episode_name,
+            poster_path,
+            grabbable: r.grabbable,
+        }
+    })
+    .await;
     Ok(Json(out))
 }
 
@@ -923,6 +948,9 @@ pub(crate) struct HistoryItem {
     source_provider: Option<String>,
     #[serde(default)]
     source_external_id: Option<String>,
+    /// TMDB poster path once `tmdb_verified`. Additive.
+    #[serde(default)]
+    poster_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -953,33 +981,35 @@ pub(crate) async fn history(
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let offset = q.offset.unwrap_or(0).max(0);
     let rows = iris_db::playback::user_history(state.db(), user.id, limit, offset).await?;
-    let out = rows
-        .into_iter()
-        .map(|r| {
-            let file_path = state.engine().file_name(&r.infohash, r.file_idx);
-            HistoryItem {
-                infohash: r.infohash,
-                torrent_name: r.torrent_name,
-                tmdb_id: r.tmdb_id,
-                tmdb_verified: r.tmdb_verified,
-                kind: r.kind.as_deref().and_then(MediaKind::from_wire),
-                file_idx: r.file_idx,
-                file_path,
-                position_seconds: r.position_seconds,
-                duration_seconds: r.duration_seconds,
-                last_watched_at: r.last_watched_at,
-                completed: r.completed,
-                deleted: r.deleted,
-                collection_id: r.collection_id,
-                collection_title: r.collection_title,
-                season: r.season,
-                episode: r.episode,
-                absolute_episode: r.absolute_episode,
-                source_provider: r.source_provider,
-                source_external_id: r.source_external_id,
-            }
-        })
-        .collect();
+    let state = &state;
+    let out = crate::fanout::map_ordered(rows, |r| async move {
+        let poster_path =
+            library::verified_poster(state, r.tmdb_id, r.tmdb_verified, r.kind.as_deref()).await;
+        let file_path = state.engine().file_name(&r.infohash, r.file_idx);
+        HistoryItem {
+            infohash: r.infohash,
+            torrent_name: r.torrent_name,
+            tmdb_id: r.tmdb_id,
+            tmdb_verified: r.tmdb_verified,
+            kind: r.kind.as_deref().and_then(MediaKind::from_wire),
+            file_idx: r.file_idx,
+            file_path,
+            position_seconds: r.position_seconds,
+            duration_seconds: r.duration_seconds,
+            last_watched_at: r.last_watched_at,
+            completed: r.completed,
+            deleted: r.deleted,
+            collection_id: r.collection_id,
+            collection_title: r.collection_title,
+            season: r.season,
+            episode: r.episode,
+            absolute_episode: r.absolute_episode,
+            source_provider: r.source_provider,
+            source_external_id: r.source_external_id,
+            poster_path,
+        }
+    })
+    .await;
     Ok(Json(out))
 }
 

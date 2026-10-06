@@ -120,6 +120,41 @@ pub(crate) async fn collection_artwork(
     }
 }
 
+/// The TMDB poster path for a watch row, trusted only once `verified`
+/// (a wrong poster is worse than none).
+pub(crate) async fn verified_poster(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    verified: bool,
+    kind: Option<&str>,
+) -> Option<String> {
+    if !verified {
+        return None;
+    }
+    collection_artwork(state, tmdb_id, kind.unwrap_or_default())
+        .await
+        .0
+}
+
+/// TMDB's name for one episode, when the series and the episode are known.
+pub(crate) async fn episode_name(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    season: Option<i64>,
+    episode: Option<i64>,
+) -> Option<String> {
+    let client = state.tmdb()?;
+    let tmdb_id = u64::try_from(tmdb_id?).ok()?;
+    let season = u32::try_from(season?).ok()?;
+    let episode = u32::try_from(episode?).ok()?;
+    client
+        .tv_season_episodes(tmdb_id, season)
+        .await
+        .into_iter()
+        .find(|e| e.episode == episode)
+        .and_then(|e| e.name)
+}
+
 #[utoipa::path(
     get,
     path = "/api/library",
@@ -257,6 +292,27 @@ pub(crate) struct CollectionDetail {
     /// deleted torrent. Additive.
     #[serde(default)]
     gone_episodes: Vec<GoneEpisodeEntry>,
+    /// TMDB name, runtime, air date and still per (S, E) for every season
+    /// the page shows. Empty for movies, absolute numbering, or no TMDB id.
+    /// Additive.
+    #[serde(default)]
+    episode_info: Vec<EpisodeInfo>,
+    /// The caller follows this series (its watchlist). Additive.
+    #[serde(default)]
+    on_watchlist: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct EpisodeInfo {
+    season: i64,
+    episode: i64,
+    name: Option<String>,
+    overview: Option<String>,
+    /// `YYYY-MM-DD`.
+    air_date: Option<String>,
+    runtime_minutes: Option<u32>,
+    /// TMDB image path, like `poster_path`.
+    still_path: Option<String>,
 }
 
 /// One reclaimed release the user can re-download from the collection
@@ -518,11 +574,23 @@ pub(crate) async fn collection_detail(
     // auto-create the follow row here: opening a collection page to
     // browse isn't a strong enough signal — auto-tracking belongs to
     // the grab path.
+    let on_watchlist = follow.is_some();
     if let Some(row) = follow {
         let _ = iris_db::follows::mark_visited(state.db(), user.id, row.id).await;
     }
 
     let numbering = derive_numbering(&episodes, &gone_episodes, &available_episodes);
+    let episode_info = if numbering == "seasonal" {
+        let seasons = episodes
+            .iter()
+            .map(|e| e.season)
+            .chain(gone_episodes.iter().map(|e| e.season))
+            .chain(available_episodes.iter().map(|e| e.season))
+            .chain(season_packs.iter().map(|p| p.season));
+        tmdb_episode_info(&state, collection.tmdb_id, seasons).await
+    } else {
+        Vec::new()
+    };
     Ok(Json(CollectionDetail {
         id: collection.id,
         tmdb_id: collection.tmdb_id,
@@ -540,7 +608,36 @@ pub(crate) async fn collection_detail(
         has_new_since_last_visit,
         gone_releases,
         gone_episodes,
+        episode_info,
+        on_watchlist,
     }))
+}
+
+async fn tmdb_episode_info(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    seasons: impl Iterator<Item = i64>,
+) -> Vec<EpisodeInfo> {
+    let (Some(client), Some(tmdb_id)) = (state.tmdb(), tmdb_id.and_then(|t| u64::try_from(t).ok()))
+    else {
+        return Vec::new();
+    };
+    let seasons: std::collections::BTreeSet<u32> =
+        seasons.filter_map(|s| u32::try_from(s).ok()).collect();
+    crate::fanout::map_ordered(seasons, |season| client.tv_season_episodes(tmdb_id, season))
+        .await
+        .into_iter()
+        .flatten()
+        .map(|e| EpisodeInfo {
+            season: e.season.into(),
+            episode: e.episode.into(),
+            name: e.name,
+            overview: e.overview,
+            air_date: e.air_date,
+            runtime_minutes: e.runtime_minutes,
+            still_path: e.still_path,
+        })
+        .collect()
 }
 
 /// The per-caller "gone" view: reclaimed releases with surviving

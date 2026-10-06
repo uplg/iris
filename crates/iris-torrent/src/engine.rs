@@ -447,6 +447,13 @@ impl Engine {
         Ok(())
     }
 
+    /// Rejoin the swarm after [`Self::pause_by_infohash`].
+    pub async fn resume_by_infohash(&self, infohash: &str) -> Result<(), EngineError> {
+        let handle = self.handle_by_infohash(infohash)?;
+        self.session.unpause(&handle).await?;
+        Ok(())
+    }
+
     pub async fn delete_by_infohash(
         &self,
         infohash: &str,

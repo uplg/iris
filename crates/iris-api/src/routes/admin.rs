@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::routes::extract::AdminUser;
+use crate::routes::library::verified_poster;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -73,6 +74,9 @@ pub(crate) struct ActiveSessionView {
     client_version: Option<String>,
     started_at: chrono::DateTime<Utc>,
     last_seen_at: chrono::DateTime<Utc>,
+    /// TMDB poster path once `tmdb_verified`. Additive.
+    #[serde(default)]
+    poster_path: Option<String>,
 }
 
 #[utoipa::path(
@@ -99,6 +103,14 @@ pub(crate) async fn active_sessions(
                 .await?
                 .map_or_else(|| "unknown".to_owned(), |u| u.display_name);
         let card = iris_db::playback::session_card(state.db(), &s.infohash).await?;
+        let kind = card.as_ref().and_then(|c| c.kind.as_deref());
+        let poster_path = verified_poster(
+            &state,
+            card.as_ref().and_then(|c| c.tmdb_id),
+            card.as_ref().is_some_and(|c| c.tmdb_verified),
+            kind,
+        )
+        .await;
         out.push(ActiveSessionView {
             user_id: s.user_id,
             display_name,
@@ -108,10 +120,7 @@ pub(crate) async fn active_sessions(
             torrent_name: card.as_ref().map(|c| c.torrent_name.clone()),
             tmdb_id: card.as_ref().and_then(|c| c.tmdb_id),
             tmdb_verified: card.as_ref().is_some_and(|c| c.tmdb_verified),
-            kind: card
-                .as_ref()
-                .and_then(|c| c.kind.as_deref())
-                .and_then(MediaKind::from_wire),
+            kind: kind.and_then(MediaKind::from_wire),
             position_seconds: s.position_seconds,
             duration_seconds: s.duration_seconds,
             state: s.state.as_str(),
@@ -119,6 +128,7 @@ pub(crate) async fn active_sessions(
             client_version: s.client_version,
             started_at: s.started_at,
             last_seen_at: s.last_seen_at,
+            poster_path,
         });
     }
     Ok(Json(out))
@@ -141,6 +151,9 @@ pub(crate) struct WatchHistoryView {
     duration_seconds: Option<f64>,
     completed: bool,
     last_watched_at: chrono::DateTime<Utc>,
+    /// TMDB poster path once `tmdb_verified`. Additive.
+    #[serde(default)]
+    poster_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -168,9 +181,12 @@ pub(crate) async fn watch_history(
 ) -> ApiResult<Json<Vec<WatchHistoryView>>> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let rows = iris_db::playback::recent_activity(state.db(), limit).await?;
+    let state = &state;
     Ok(Json(
-        rows.into_iter()
-            .map(|r| WatchHistoryView {
+        crate::fanout::map_ordered(rows, |r| async move {
+            WatchHistoryView {
+                poster_path: verified_poster(state, r.tmdb_id, r.tmdb_verified, r.kind.as_deref())
+                    .await,
                 user_id: r.user_id,
                 display_name: r.display_name,
                 file_path: state.engine().file_name(&r.infohash, r.file_idx),
@@ -184,8 +200,9 @@ pub(crate) async fn watch_history(
                 duration_seconds: r.duration_seconds,
                 completed: r.completed,
                 last_watched_at: r.last_watched_at,
-            })
-            .collect(),
+            }
+        })
+        .await,
     ))
 }
 
@@ -224,6 +241,9 @@ pub(crate) struct UserHistoryView {
     source_provider: Option<String>,
     #[serde(default)]
     source_external_id: Option<String>,
+    /// TMDB poster path once `tmdb_verified`. Additive.
+    #[serde(default)]
+    poster_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -264,9 +284,12 @@ pub(crate) async fn user_history(
         offset,
     )
     .await?;
+    let state = &state;
     Ok(Json(
-        rows.into_iter()
-            .map(|r| UserHistoryView {
+        crate::fanout::map_ordered(rows, |r| async move {
+            UserHistoryView {
+                poster_path: verified_poster(state, r.tmdb_id, r.tmdb_verified, r.kind.as_deref())
+                    .await,
                 file_path: state.engine().file_name(&r.infohash, r.file_idx),
                 infohash: r.infohash,
                 torrent_name: r.torrent_name,
@@ -286,8 +309,9 @@ pub(crate) async fn user_history(
                 absolute_episode: r.absolute_episode,
                 source_provider: r.source_provider,
                 source_external_id: r.source_external_id,
-            })
-            .collect(),
+            }
+        })
+        .await,
     ))
 }
 
