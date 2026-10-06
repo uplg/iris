@@ -1144,6 +1144,13 @@ impl LiveTvService {
         let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
         let source = &channel.sources[active];
         let upstream_url = self.resolve_source_url(source).await?;
+        // The elected source can be the tuner: its re-encode tunes an adapter
+        // like a remux does, so it goes through the same mux admission.
+        if let Some(freq) = transcode::tuner_freq(&upstream_url)
+            && !self.inner.transcode.admit_mux(&freq).await
+        {
+            return Err(LiveTvError::Upstream("tuner at mux capacity".into()));
+        }
         let channel_key = format!("{country}:{id}");
         self.inner
             .transcode
