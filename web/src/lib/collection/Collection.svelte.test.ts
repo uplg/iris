@@ -4,6 +4,8 @@ import { render } from 'vitest-browser-svelte';
 import axe from 'axe-core';
 import type { CollectionDetail, TorrentView } from '@iris/api/client';
 import { stubApi } from '#lib/test/api.ts';
+import { queryClient } from '#lib/query.ts';
+import { KEYS } from '#lib/queries.ts';
 import Collection from './Collection.svelte';
 // the page as drawn: the 320 px check needs the shared classes (.btn, .chip, tabs)
 import '../../styles/app.css';
@@ -168,6 +170,14 @@ describe('Collection', () => {
 		await vi.waitFor(() => expect(reads(api)).toBeGreaterThan(before));
 	});
 
+	it('leaving the watchlist reads the follows again (the release page’s “You follow”)', async () => {
+		backend(series(), { 'POST /me/watchlist/remove': null });
+		queryClient.setQueryData(KEYS.follows, []);
+		await render(Collection, { id: 'c1' });
+		await page.getByRole('button', { name: 'On your watchlist' }).click();
+		await vi.waitFor(() => expect(queryClient.getQueryState(KEYS.follows)?.isInvalidated).toBe(true));
+	});
+
 	it('names each season by what is left, and says each episode’s state in words', async () => {
 		backend();
 		await render(Collection, { id: 'c1' });
@@ -281,6 +291,6 @@ describe('Collection', () => {
 			})
 		);
 		await render(Collection, { id: 'm1' });
-		await vi.waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/watch/mv/2', { replaceState: true }));
+		await vi.waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/watch/mv/2', { replace: true }));
 	});
 });

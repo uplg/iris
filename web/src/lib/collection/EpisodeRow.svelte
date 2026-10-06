@@ -5,7 +5,8 @@
 	import Meter from '#lib/components/Meter.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { library, me, progress as progressApi, torrents as torrentsApi, type TorrentView } from '@iris/api/client';
+	import { library, me, type TorrentView } from '@iris/api/client';
+	import { fetchAgain } from '#lib/regrab.ts';
 	import { formatSize } from '@iris/api/format';
 	import { queryClient } from '#lib/query.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
@@ -14,7 +15,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import { refetchCollection } from './actions.ts';
-	import { KEYS } from '#lib/queries.ts';
+	import { read } from '#lib/queries.ts';
 	import { episodeName, episodeWords, languageWord, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
 	import { downloading, offersByLanguage, rowState, type Verb } from './status.ts';
 	import { watchHref } from '#lib/paths.ts';
@@ -37,11 +38,7 @@
 
 	const first = $derived(disk[0]);
 	const watched = createQuery(
-		() => ({
-			queryKey: KEYS.progress(first?.infohash ?? ''),
-			queryFn: () => progressApi.forTorrent(first!.infohash),
-			enabled: !!first
-		}),
+		() => ({ ...read.progress(first?.infohash ?? ''), enabled: !!first }),
 		() => queryClient
 	);
 	const now = $derived(
@@ -93,9 +90,8 @@
 	}
 
 	function again(v: Gone) {
-		// the same release, on purpose: the duplicate guard does not apply
 		void g.run(
-			() => torrentsApi.ingest(v.source_provider, v.source_external_id, null, true),
+			() => fetchAgain(v.infohash),
 			async () => {
 				await refetchCollection(collectionId);
 				await goto(watchHref(v.infohash, v.file_idx));

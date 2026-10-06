@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { AvailableEpisodeEntry, CollectionEpisodeEntry, GoneEpisodeEntry } from '@iris/api/client';
-import { audioChip, firstSeason, mergeEpisodes, mergeEpisodesAbsolute, nameLanguage, qualityWords, seasonsOf } from './merge.ts';
+import type { AvailableEpisodeEntry, CollectionDetail, CollectionEpisodeEntry, GoneEpisodeEntry } from '@iris/api/client';
+import {
+	audioChip,
+	episodesOf,
+	firstSeason,
+	mergeEpisodes,
+	mergeEpisodesAbsolute,
+	nameLanguage,
+	qualityWords,
+	seasonsOf
+} from './merge.ts';
 
 const disk = (season: number, episode: number, language: string, over: Partial<CollectionEpisodeEntry> = {}): CollectionEpisodeEntry => ({
 	season,
@@ -84,5 +93,23 @@ describe('words', () => {
 		expect(nameLanguage('Dune.2021.1080p.BluRay')).toBeNull();
 		expect(qualityWords('Severance.S02.1080p.WEB.H265-GRP')).toBe('1080p · HEVC');
 		expect(qualityWords('Movie.2160p.UHD.HDR.x265')).toBe('2160p · HEVC · HDR');
+	});
+});
+
+describe('a title’s rows, merged once', () => {
+	const title = (over: Partial<CollectionDetail>) =>
+		({
+			kind: 'tv',
+			numbering: 'seasonal',
+			episodes: [disk(1, 2, 'english', { absolute_episode: 14 })],
+			available_episodes: [],
+			gone_episodes: [],
+			...over
+		}) as CollectionDetail;
+
+	it('in the series’ own numbering; a movie has none', () => {
+		expect(episodesOf(title({}))[0]).toMatchObject({ season: 1, episode: 2, absolute: null });
+		expect(episodesOf(title({ numbering: 'absolute' }))[0]).toMatchObject({ absolute: 14 });
+		expect(episodesOf(title({ kind: 'movie' }))).toEqual([]);
 	});
 });

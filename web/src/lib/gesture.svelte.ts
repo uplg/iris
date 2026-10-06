@@ -1,13 +1,12 @@
 // A gesture's whole life, said once: what is in flight (so its own control shows it and does
 // not fire twice), the outcome shown or said, a failure felt, said and shown until read
 // (docs/ux.md § 2 and § 4). Every button that sends something goes through
-// a Gesture; a device tile's on/off goes through Command (command.svelte.ts), which adds the
-// optimistic target and the « no answer » limit.
+// a Gesture (no optimistic state: what shows is what the server answered).
 //
 // A control whose gesture travels keeps the focus: it is never `disabled` (the focus would
 // fall to the page, WCAG 2.4.3), it says it is busy (`pending`), and pressing it again does
-// nothing (`run` ignores a key already in flight). A control that cannot act at all (its
-// device out of reach) says why (`unavailable`).
+// nothing (`run` ignores a key already in flight). A control that cannot act at all says why
+// (`unavailable`).
 
 import { tick } from 'svelte';
 import { ui } from '#lib/ui.svelte.ts';
@@ -21,8 +20,8 @@ export function pending(busy: boolean): { 'aria-disabled'?: 'true'; 'aria-busy'?
 }
 
 /** The attributes of a control that cannot act, to spread on it: not operable, still in place
- * and focusable, described by the element (id `reason`) that says why — the tile's state line
- * (« Injoignable depuis 3 min »), an « offline » line. Nothing when it can act (`reason`
+ * and focusable, described by the element (id `reason`) that says why (« Nothing changed since the
+ * last save »). Nothing when it can act (`reason`
  * false). Its handler still checks: aria-disabled does not stop a click. */
 export function unavailable(reason: string | false | null | undefined): { 'aria-disabled'?: 'true'; 'aria-describedby'?: string } {
 	return reason ? { 'aria-disabled': 'true', 'aria-describedby': reason } : {};
@@ -52,7 +51,7 @@ export class Gesture {
 	}
 
 	/**
-	 * Sends, then hands the answer to `then` (show it, read the device again, say it). Returns
+	 * Sends, then hands the answer to `then` (show it, read the server again, say it). Returns
 	 * the answer, or undefined when it failed (the failure is already told) or when the same
 	 * key was already in flight (a second press of a busy control).
 	 */

@@ -5,7 +5,7 @@
 	// next play. The cache list is read every 10 s.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { admin, type GcReport, type RemuxJobView } from '@iris/api/client';
-	import { formatSize, plural } from '@iris/api/format';
+	import { formatSize, onDay, plural } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
@@ -14,7 +14,6 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import { onDay } from '#lib/history/words.ts';
 	import { remuxQuery, storageQuery } from './queries.ts';
 	import { refreshLibrary } from '#lib/queries.ts';
 

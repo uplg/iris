@@ -146,6 +146,13 @@ export function mergeEpisodesAbsolute(
 	});
 }
 
+/** A series' rows, in its own numbering (merged once per read: the page and its head share them). */
+export function episodesOf(c: CollectionDetail): Episode[] {
+	if (c.kind !== 'tv') return [];
+	const merge = c.numbering === 'absolute' ? mergeEpisodesAbsolute : mergeEpisodes;
+	return merge(c.episodes, c.available_episodes, c.gone_episodes);
+}
+
 export type Season = { season: number; items: Episode[]; packs: SeasonPackEntry[] };
 
 /** The seasons known, from episodes and from pack-only seasons (a pack the only signal yet). */

@@ -284,6 +284,26 @@ describe('home', () => {
 		expect(api.sent('POST', '/me/for-you/dismiss')[0].body).toEqual({ catalog_id: 'k1' });
 	});
 
+	it('first visit, skipped: what the server already holds is kept, only marked done', async () => {
+		const api = home({
+			'/me/preferences': { languages: ['english'], genres: [18], include_anime: true, onboarding_completed: false },
+			'/languages': { languages: [{ value: 'english', label: 'English' }] },
+			'/genres': { genres: [{ id: 18, name: 'Drama' }] },
+			'PUT /me/preferences': (c: { body: unknown }) => ({ ...(c.body as object) }),
+			'/me/continue-watching?include_grabbable=true': never
+		});
+		await show();
+		const sheet = page.getByRole('dialog', { name: 'Personalize your home' });
+		await sheet.getByRole('button', { name: 'Skip for now' }).click();
+		await expect.element(sheet).not.toBeInTheDocument();
+		expect(api.sent('PUT', '/me/preferences')[0].body).toEqual({
+			languages: ['english'],
+			genres: [18],
+			include_anime: true,
+			onboarding_completed: true
+		});
+	});
+
 	it('first visit: asks what one likes, saves it, and closes on the server’s answer', async () => {
 		const api = home({
 			'/me/preferences': { languages: [], genres: [], include_anime: false, onboarding_completed: false },

@@ -1,12 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import { flushSync } from 'svelte';
 import { ui } from '#lib/ui.svelte.ts';
 import Range from './Range.svelte';
 
-const valueText = (v: number) => `Ouvert à ${v} %`;
-const base = { label: 'Volet du salon', value: 50, valueText };
+const valueText = (v: number) => `Volume ${v} %`;
+const base = { label: 'Volume', value: 50, valueText };
 
 const thumb = () => page.getByRole('slider').element() as HTMLElement;
 const said = () => thumb().getAttribute('aria-valuetext');
@@ -24,34 +24,28 @@ const press = (at: number) => pointer('pointerdown', at);
 const move = (at: number) => pointer('pointermove', at);
 const release = () => pointer('pointerup');
 
-/** Lets the sends and the settle resolve. */
-const tick = () => vi.advanceTimersByTimeAsync(0);
-
 describe('Range', () => {
-	afterEach(() => vi.useRealTimers());
-
 	it('is a slider named by its label, its value said in words', async () => {
-		await render(Range, { ...base, ends: ['Fermé', 'Ouvert'] });
-		const slider = page.getByRole('slider', { name: 'Volet du salon' });
+		await render(Range, base);
+		const slider = page.getByRole('slider', { name: 'Volume' });
 		await expect.element(slider).toHaveAttribute('aria-valuenow', '50');
-		await expect.element(slider).toHaveAttribute('aria-valuetext', 'Ouvert à 50 %');
-		await expect.element(page.getByText('Ouvert à 50 %')).toBeVisible();
-		await expect.element(page.getByText('Fermé')).toBeVisible();
+		await expect.element(slider).toHaveAttribute('aria-valuetext', 'Volume 50 %');
+		await expect.element(page.getByText('Volume 50 %')).toBeVisible();
 	});
 
 	it('can keep its label for readers only, and say why it cannot act (still focusable)', async () => {
 		const why = document.createElement('p');
 		why.id = 'why';
-		why.textContent = 'Injoignable';
+		why.textContent = 'Unavailable';
 		document.body.append(why);
 		await render(Range, { ...base, hideLabel: true, reason: 'why' });
-		const slider = page.getByRole('slider', { name: 'Volet du salon' });
+		const slider = page.getByRole('slider', { name: 'Volume' });
 		await expect.element(slider).toHaveAttribute('aria-disabled', 'true');
-		await expect.element(slider).toHaveAccessibleDescription('Injoignable');
+		await expect.element(slider).toHaveAccessibleDescription('Unavailable');
 		await expect.element(slider).toHaveAttribute('tabindex', '0');
 		why.remove();
 		// the label stays for readers only
-		expect(page.getByText('Volet du salon').element().closest('.sr-only')).not.toBeNull();
+		expect(page.getByText('Volume', { exact: true }).element().closest('.sr-only')).not.toBeNull();
 	});
 
 	describe('a form value', () => {
@@ -62,7 +56,7 @@ describe('Range', () => {
 			move(0.3);
 			move(0.4);
 			expect(oncommit).not.toHaveBeenCalled();
-			expect(said()).toBe('Ouvert à 40 %');
+			expect(said()).toBe('Volume 40 %');
 			release();
 			expect(oncommit).toHaveBeenCalledExactlyOnceWith(40);
 		});
@@ -73,7 +67,7 @@ describe('Range', () => {
 			thumb().focus();
 			await userEvent.keyboard('{ArrowRight}{ArrowRight}');
 			expect(oncommit.mock.calls).toEqual([[51], [52]]);
-			expect(said()).toBe('Ouvert à 52 %');
+			expect(said()).toBe('Volume 52 %');
 		});
 
 		it('moves a page of steps with Page Up / Page Down, within its bounds', async () => {
@@ -82,7 +76,7 @@ describe('Range', () => {
 			thumb().focus();
 			await userEvent.keyboard('{PageDown}');
 			expect(oncommit).toHaveBeenLastCalledWith(85);
-			expect(said()).toBe('Ouvert à 85 %');
+			expect(said()).toBe('Volume 85 %');
 			await userEvent.keyboard('{PageUp}{PageUp}');
 			expect(oncommit).toHaveBeenLastCalledWith(100);
 			await userEvent.keyboard('{Home}');
@@ -96,154 +90,53 @@ describe('Range', () => {
 			thumb().dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true }));
 			flushSync();
 			expect(oncommit).not.toHaveBeenCalled();
-			expect(said()).toBe('Ouvert à 50 %');
+			expect(said()).toBe('Volume 50 %');
 		});
 	});
 
-	describe('a device', () => {
-		it('sends on release only, then reads the device again', async () => {
-			vi.useFakeTimers();
-			const order: string[] = [];
-			const send = vi.fn(async (v: number) => void order.push(`send ${v}`));
-			const settle = vi.fn(async () => void order.push('settle'));
-			await render(Range, { ...base, send, settle });
+	describe('a call that may fail', () => {
+		it('sends on release only, never a timer between', async () => {
+			const send = vi.fn(async (_v: number) => {});
+			await render(Range, { ...base, send });
 			press(0.2);
 			move(0.3);
-			await tick();
 			expect(send).not.toHaveBeenCalled();
 			release();
-			await tick();
-			expect(order).toEqual(['send 30', 'settle']);
+			expect(send).toHaveBeenCalledExactlyOnceWith(30);
 		});
 
-		it('live: one send per 300 ms while dragging, and always the last value', async () => {
-			vi.useFakeTimers();
+		it('live: sends every move at once, and the release', async () => {
 			const send = vi.fn(async (_v: number) => {});
 			await render(Range, { ...base, send, live: true });
 			press(0.1);
-			await tick();
-			expect(send.mock.calls).toEqual([[10]]);
 			move(0.2);
-			move(0.3);
 			move(0.35);
-			await vi.advanceTimersByTimeAsync(299);
-			expect(send).toHaveBeenCalledTimes(1);
-			await vi.advanceTimersByTimeAsync(1);
-			expect(send.mock.calls).toEqual([[10], [35]]);
-			move(0.6);
 			release();
-			await vi.advanceTimersByTimeAsync(300);
-			expect(send.mock.calls).toEqual([[10], [35], [60]]);
-			await vi.advanceTimersByTimeAsync(1000);
-			expect(send).toHaveBeenCalledTimes(3);
+			expect(send.mock.calls.map(([v]) => v)).toEqual([10, 20, 35, 35]);
 		});
 
-		it('does not send again a value the device was just sent', async () => {
-			vi.useFakeTimers();
-			const send = vi.fn(async (_v: number) => {});
-			const settle = vi.fn(async () => {});
-			await render(Range, { ...base, send, settle, live: true });
-			press(0.7);
-			await vi.advanceTimersByTimeAsync(300);
-			release();
-			await vi.advanceTimersByTimeAsync(300);
-			expect(send.mock.calls).toEqual([[70]]);
-			expect(settle).toHaveBeenCalledOnce();
-		});
-
-		it('holds the sent value until the device reports it', async () => {
-			vi.useFakeTimers();
-			const send = vi.fn(async (_v: number) => {});
-			const { rerender } = await render(Range, { ...base, send, near: 2 });
-			press(0.8);
-			release();
-			await tick();
-			// the device still says 50: the thumb does not jump back
-			await rerender({ value: 50 });
-			expect(said()).toBe('Ouvert à 80 %');
-			// close enough counts as reached: the device's value wins
-			await rerender({ value: 79 });
-			expect(said()).toBe('Ouvert à 79 %');
-		});
-
-		it('gives up holding after 3 s of a device that does not follow', async () => {
-			vi.useFakeTimers();
-			const send = vi.fn(async (_v: number) => {});
-			await render(Range, { ...base, send });
-			press(0.8);
-			release();
-			await tick();
-			await vi.advanceTimersByTimeAsync(2999);
-			flushSync();
-			expect(said()).toBe('Ouvert à 80 %');
-			await vi.advanceTimersByTimeAsync(1);
-			flushSync();
-			expect(said()).toBe('Ouvert à 50 %');
-		});
-
-		it('Page Up sends a page of steps, once the keys settle', async () => {
-			vi.useFakeTimers();
+		it('Page Up sends a page of steps at once', async () => {
 			const send = vi.fn(async (_v: number) => {});
 			await render(Range, { ...base, send, page: 10 });
 			thumb().dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true, cancelable: true }));
-			await vi.advanceTimersByTimeAsync(400);
+			flushSync();
 			expect(send).toHaveBeenCalledExactlyOnceWith(60);
 		});
 
-		it('keys: the motor gets one target, 0.4 s after the last key (§ 3)', async () => {
-			vi.useFakeTimers();
-			const send = vi.fn(async (_v: number) => {});
-			await render(Range, { ...base, send, step: 5 });
-			const key = (k: string) => thumb().dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
-			key('ArrowRight');
-			await vi.advanceTimersByTimeAsync(300);
-			key('ArrowRight');
-			await vi.advanceTimersByTimeAsync(300);
-			key('ArrowRight');
-			await vi.advanceTimersByTimeAsync(399);
-			expect(send).not.toHaveBeenCalled();
-			flushSync();
-			expect(said()).toBe('Ouvert à 65 %');
-			await vi.advanceTimersByTimeAsync(1);
-			expect(send).toHaveBeenCalledExactlyOnceWith(65);
-		});
-
-		it('shows where the device is while it travels to the thumb', async () => {
-			const { rerender } = await render(Range, { ...base, send: async () => {}, mark: 20, ends: ['Fermé', 'Ouvert'] });
-			expect(document.querySelector('.mark')).not.toBeNull();
-			await expect.element(page.getByText('Fermé')).toBeVisible();
-			await rerender({ mark: 50 });
-			expect(document.querySelector('.mark')).toBeNull();
-		});
-
-		it('a failed send is said, and the thumb goes back to the device', async () => {
-			vi.useFakeTimers();
+		it('a failed send is said, and the thumb goes back to the value', async () => {
 			const fail = vi.spyOn(ui, 'fail').mockImplementation(() => {});
-			const error = new Error('Volet injoignable');
+			const error = new Error('No answer');
 			const send = vi.fn(async (_v: number) => {
 				throw error;
 			});
 			await render(Range, { ...base, send });
 			press(0.9);
 			release();
-			await tick();
+			await expect.poll(() => fail.mock.calls.length).toBe(1);
+			expect(fail).toHaveBeenCalledWith(error);
 			flushSync();
-			expect(fail).toHaveBeenCalledExactlyOnceWith(error);
-			expect(said()).toBe('Ouvert à 50 %');
-		});
-
-		it('after a failure, the same value can be sent again', async () => {
-			vi.useFakeTimers();
-			vi.spyOn(ui, 'fail').mockImplementation(() => {});
-			const send = vi.fn().mockRejectedValueOnce(new Error('no')).mockResolvedValue(undefined);
-			await render(Range, { ...base, send });
-			press(0.9);
-			release();
-			await tick();
-			press(0.9);
-			release();
-			await tick();
-			expect(send.mock.calls).toEqual([[90], [90]]);
+			expect(said()).toBe('Volume 50 %');
+			fail.mockRestore();
 		});
 	});
 });

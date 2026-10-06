@@ -8,19 +8,20 @@
 	import { pending, Gesture } from '#lib/gesture.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
 	import TitlePoster from './TitlePoster.svelte';
-	import { canRestore, groupHistory, itemKey, type Group, type Item } from './groups.ts';
-	import { onDay, progressWords, watchedShare, whatWatched } from './words.ts';
+	import { canRestore, itemKey, type Group, type Item } from './groups.ts';
+	import { onDay } from '@iris/api/format';
+	import { progressWords, watchedShare, whatWatched } from './words.ts';
 	import { watchHref } from '#lib/paths.ts';
 
 	interface Props {
-		items: readonly Item[];
+		/** The history, grouped once by the page (`groupHistory`). */
+		groups: readonly Group[];
 		/** Download a gone release again; without it the list only reads (an admin's view). */
 		onrestore?: (it: Item) => Promise<unknown>;
 		/** Titles lead to their collection page. */
 		collections?: boolean;
 	}
-	let { items, onrestore, collections = true }: Props = $props();
-	const groups = $derived(groupHistory(items));
+	let { groups, onrestore, collections = true }: Props = $props();
 	const g = new Gesture();
 
 	const label = (group: Group, it: Item) => (group.solo ? group.title : (whatWatched(it) ?? it.torrent_name));

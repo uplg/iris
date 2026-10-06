@@ -4,7 +4,7 @@
 	import Meter from '#lib/components/Meter.svelte';
 	import type { LiveChannel, LiveNowNext } from '@iris/api/client';
 	import { timeLeft } from '@iris/api/format';
-	import { logoTone, type LogoTone } from './logo-tone.ts';
+	import { knownTone, readTone, type LogoTone } from './logo-tone.ts';
 	import { nextWords, nowWords, programmeProgress } from './live.ts';
 
 	interface Props {
@@ -19,22 +19,10 @@
 	}
 	let { channel, country, nowNext, at, showNumber = false, countryLabel }: Props = $props();
 
-	let tone = $state<LogoTone>('neutral');
+	// the tone read from the logo once it shows (lazy, like the logo itself)
+	let read = $state<LogoTone>();
+	const tone = $derived(read ?? (channel.logo_url ? knownTone(channel.logo_url) : undefined) ?? 'neutral');
 	let broken = $state(false);
-	$effect(() => {
-		const url = channel.logo_url;
-		if (!url) return;
-		const hit = logoTone(url);
-		if (typeof hit === 'string') {
-			tone = hit;
-			return;
-		}
-		let cancelled = false;
-		void hit.then((t) => !cancelled && (tone = t));
-		return () => {
-			cancelled = true;
-		};
-	});
 
 	const now = $derived(nowNext?.now ?? null);
 	const next = $derived(nowNext?.next ?? null);
@@ -45,7 +33,15 @@
 <a class="tile-link" href="/live/{encodeURIComponent(country)}/{encodeURIComponent(channel.id)}">
 	<span class="well {tone}" aria-hidden="true">
 		{#if channel.logo_url && !broken}
-			<img src={channel.logo_url} alt="" loading="lazy" referrerpolicy="no-referrer" onerror={() => (broken = true)} />
+			{@const url = channel.logo_url}
+			<img
+				src={url}
+				alt=""
+				loading="lazy"
+				referrerpolicy="no-referrer"
+				onload={(e) => (read = readTone(url, e.currentTarget as HTMLImageElement))}
+				onerror={() => (broken = true)}
+			/>
 		{:else}
 			<span class="letter">{channel.name.charAt(0).toUpperCase()}</span>
 		{/if}

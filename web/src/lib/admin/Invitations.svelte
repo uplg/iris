@@ -13,7 +13,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import { onDay } from '#lib/history/words.ts';
+	import { onDay } from '@iris/api/format';
 	import { invitationsQuery, usersQuery } from './queries.ts';
 
 	const invitations = createQuery(invitationsQuery, () => queryClient);

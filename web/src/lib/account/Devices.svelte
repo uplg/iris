@@ -5,7 +5,7 @@
 	// refetchInterval, no timer of our own) until the new device appears, or until the code's
 	// life is over (10 min on the server), when the wait ends and says so.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { plural } from '@iris/api/format';
+	import { onDay, plural } from '@iris/api/format';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -19,14 +19,13 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import { onDay } from '#lib/history/words.ts';
 
 	/** A pairing code's life on the server (routes/devices.rs DEVICE_CODE_TTL_SECS). */
 	const CODE_LIFE_MS = 10 * 60_000;
 	const KINDS: Record<string, string> = { 'android-tv': 'Android TV', web: 'Web' };
 
 	/** Waiting for the TV whose code was accepted: since when, and how many devices there were. */
-	let waiting = $state<{ since: number; had: number } | null>(null);
+	let waiting = $state<{ since: number; had: Set<string> } | null>(null);
 	const list = createQuery(
 		() => ({
 			queryKey: ['devices'],
@@ -55,7 +54,8 @@
 	$effect(() => {
 		if (!waiting || !list.data) return;
 		void list.dataUpdatedAt;
-		if (list.data.length > waiting.had) {
+		// a device not listed before: a re-paired TV replaces its row, a revoke may land meanwhile
+		if (list.data.some((d) => !waiting?.had.has(d.jti))) {
 			waiting = null;
 			ui.toast('Your TV is paired and signed in.');
 		} else if (Date.now() - waiting.since > CODE_LIFE_MS) {
@@ -77,7 +77,7 @@
 		return g.run(
 			() => devices.link(c, label.trim() || undefined),
 			async () => {
-				waiting = { since: Date.now(), had: list.data?.length ?? 0 };
+				waiting = { since: Date.now(), had: new Set((list.data ?? []).map((d) => d.jti)) };
 				code = label = '';
 				ui.say('Code accepted. Waiting for the TV to sign in.');
 				await list.refetch();

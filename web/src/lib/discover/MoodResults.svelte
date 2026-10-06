@@ -3,17 +3,17 @@
 	// recent first, tuned to the account. Its name comes from the board (cached from the tiles,
 	// read on a deep link).
 	import { createQuery } from '@tanstack/svelte-query';
-	import { me, type MediaKind } from '@iris/api/client';
+	import type { MediaKind } from '@iris/api/client';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import { loadable } from '#lib/query.ts';
 	import CatalogCard from '#lib/home/CatalogCard.svelte';
-	import { KEYS } from '#lib/queries.ts';
+	import { read } from '#lib/queries.ts';
 	import { plural } from '@iris/api/format';
 
 	let { mood, kind }: { mood: string; kind: MediaKind } = $props();
-	const board = createQuery(() => ({ queryKey: KEYS.moodBoard(kind), queryFn: () => me.moodBoard(kind) }));
-	const results = createQuery(() => ({ queryKey: [...KEYS.moodResults, mood, kind], queryFn: () => me.moodResults(mood, kind) }));
+	const board = createQuery(() => read.moodBoard(kind));
+	const results = createQuery(() => read.moodResults(mood, kind));
 	const label = $derived(board.data?.moods.find((m) => m.id === mood)?.label ?? 'This mood');
 	const items = $derived(results.data?.items ?? []);
 	const id = $props.id();

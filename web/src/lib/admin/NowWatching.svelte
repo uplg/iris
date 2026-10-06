@@ -4,14 +4,14 @@
 	// paused in words and by its icon, how far, on which app, for how long.
 	import Meter from '#lib/components/Meter.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
-	import { plural } from '@iris/api/format';
+	import { fileName, plural, since } from '@iris/api/format';
 	import type { ActiveSession } from '@iris/api/client';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import Group from '#lib/components/Group.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import TitlePoster from '#lib/history/TitlePoster.svelte';
-	import { fileName, progressWords, since, watchedShare } from '#lib/history/words.ts';
+	import { progressWords, watchedShare } from '#lib/history/words.ts';
 	import { sessionsQuery } from './queries.ts';
 
 	const sessions = createQuery(sessionsQuery, () => queryClient);

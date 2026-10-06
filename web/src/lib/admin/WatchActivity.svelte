@@ -7,7 +7,8 @@
 	import Group from '#lib/components/Group.svelte';
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import { fileName, onDay, progressWords } from '#lib/history/words.ts';
+	import { fileName, onDay } from '@iris/api/format';
+	import { progressWords } from '#lib/history/words.ts';
 	import { watchHistoryQuery } from './queries.ts';
 
 	const history = createQuery(watchHistoryQuery, () => queryClient);

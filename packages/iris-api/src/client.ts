@@ -24,20 +24,23 @@ export class ApiError extends Error {
 }
 
 /** Event fired when a refresh attempt failed and the user must be
- *  treated as logged out. The AuthProvider listens for this and flips
- *  the auth state to `anonymous` so the route guards send the user to
- *  /login instead of leaving stale React Query errors on screen. */
+ *  treated as signed out. The session (`session.ts`) listens for it and
+ *  says `signed_out`, so the shell asks to sign in instead of leaving
+ *  stale query errors on screen. */
 export const AUTH_EXPIRED_EVENT = 'iris:auth-expired';
 
 /** Event fired when any backend request answers HTTP 426 — the
- *  cached bundle is below the server's `MIN_WEB_VERSION`. App.tsx
- *  listens for it and renders a full-screen lock-out with a "Reload"
+ *  cached bundle is below the server's `MIN_WEB_VERSION`. The web app
+ *  listens for it (`update.svelte.ts`) and locks itself with a "Reload"
  *  action so the user pulls the freshly-deployed bundle. */
 export const CLIENT_OUTDATED_EVENT = 'iris:client-outdated';
 
 /** Bundle version baked at build time via Vite `define` — see
  *  `vite.config.ts`. Used in the `X-Iris-Client` header. */
 export const IRIS_WEB_VERSION: string = __IRIS_WEB_VERSION__;
+
+/** A route parameter as one path segment: a crafted id never reaches another API path. */
+const seg = encodeURIComponent;
 
 const NO_RETRY_PATHS = new Set(['/auth/refresh', '/auth/login', '/auth/register', '/auth/logout']);
 
@@ -111,10 +114,12 @@ function refreshSession(): Promise<RefreshOutcome> {
 
 type RequestOpts = {
 	timeoutMs?: number;
-	/** External cancellation (React Query's queryFn signal). Aborting tears the
+	/** External cancellation (TanStack Query's queryFn signal). Aborting tears the
 	 *  connection down, which cancels the handler — and its upstream tracker
 	 *  fan-out — server-side too. */
 	signal?: AbortSignal;
+	/** Outlives the page (a report or a last save sent as it goes away). */
+	keepalive?: boolean;
 };
 
 function requestSignal(opts?: RequestOpts): AbortSignal | undefined {
@@ -123,14 +128,17 @@ function requestSignal(opts?: RequestOpts): AbortSignal | undefined {
 	return opts?.signal ?? timeout;
 }
 
-async function request<T>(method: string, path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
+/** One call to the API, as the server answered it: the client's header, one transparent
+ *  refresh on an expired access cookie, and the 426 lock-out said. */
+async function send(method: string, path: string, body?: unknown, opts?: RequestOpts): Promise<Response> {
 	const fire = () =>
 		fetch(`/api${path}`, {
 			method,
 			credentials: 'include',
 			headers: clientHeaders(body ? { 'Content-Type': 'application/json' } : undefined),
 			body: body ? JSON.stringify(body) : undefined,
-			signal: requestSignal(opts)
+			signal: requestSignal(opts),
+			keepalive: opts?.keepalive
 		});
 	let res = await fire();
 	// Transparent re-auth on expired access cookie. Without this any in-
@@ -143,22 +151,25 @@ async function request<T>(method: string, path: string, body?: unknown, opts?: R
 		if (outcome.ok) {
 			res = await fire(); // retry once with the rotated cookie
 		} else if (outcome.status === 401 || outcome.status === 403) {
-			// The refresh token itself is dead — genuinely logged out. Bounce to
-			// login via a window event so api.ts stays unaware of the auth context's
-			// setState; AuthProvider wires the listener.
+			// The refresh token itself is dead: genuinely signed out. Said through a
+			// window event so the client stays unaware of the session, which listens.
 			window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
 		}
 		// 429 / 5xx / network (status 0): the session is still valid, so do NOT
 		// log out. The original 401 surfaces to the caller as a transient error;
 		// the next poll or the keep-alive recovers once the backend is reachable.
 	}
-	// 426 = the server has decided this cached bundle is below
-	// `MIN_WEB_VERSION`. Surface globally so App.tsx can lock the UI
-	// and prompt the user to reload; checked after the auth retry so
-	// a refresh-then-426 still surfaces.
+	// 426 = the server has decided this cached bundle is below `MIN_WEB_VERSION`.
+	// Said globally so the app locks and offers a reload; checked after the auth
+	// retry so a refresh-then-426 still surfaces.
 	if (res.status === 426) {
 		window.dispatchEvent(new Event(CLIENT_OUTDATED_EVENT));
 	}
+	return res;
+}
+
+async function request<T>(method: string, path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
+	const res = await send(method, path, body, opts);
 	if (res.status === 204) return undefined as T;
 	const data = res.headers.get('content-type')?.includes('application/json') ? await res.json() : await res.text();
 	if (!res.ok) {
@@ -181,7 +192,7 @@ export type Invitation = components['schemas']['InvitationView'];
 export type CreatedInvitation = components['schemas']['CreatedInvitation'];
 
 export const auth = {
-	// Timeout-bounded: only the AuthProvider bootstrap calls this, and it must
+	// Timeout-bounded: only the session bootstrap calls this, and it must
 	// fail fast on a stalled connection so the retry loop can take over.
 	me: () => request<User>('GET', '/me', undefined, { timeoutMs: AUTH_TIMEOUT_MS }),
 	login: (email: string, password: string) => api.post<User>('/auth/login', { email, password }),
@@ -222,24 +233,24 @@ export type AuditLogEntry = components['schemas']['AuditLogView'];
 export const admin = {
 	listInvitations: () => api.get<Invitation[]>('/admin/invitations'),
 	createInvitation: (ttl_secs?: number) => api.post<CreatedInvitation>('/admin/invitations', { ttl_secs }),
-	revokeInvitation: (id: string) => api.delete<void>(`/admin/invitations/${id}`),
+	revokeInvitation: (id: string) => api.delete<void>(`/admin/invitations/${seg(id)}`),
 	storage: () => api.get<StorageStats>('/admin/storage'),
 	triggerGc: () => api.post<GcReport>('/admin/gc'),
 	listUsers: () => api.get<UserView[]>('/admin/users'),
-	resetPassword: (userId: string, new_password: string) => api.post<void>(`/admin/users/${userId}/password`, { new_password }),
-	setDisplayName: (userId: string, display_name: string) => api.post<void>(`/admin/users/${userId}/display-name`, { display_name }),
+	resetPassword: (userId: string, new_password: string) => api.post<void>(`/admin/users/${seg(userId)}/password`, { new_password }),
+	setDisplayName: (userId: string, display_name: string) => api.post<void>(`/admin/users/${seg(userId)}/display-name`, { display_name }),
 	/** Permanently remove an account. Their grabs stay in the shared
 	 *  library (re-attributed to the caller); everything personal goes. */
-	deleteUser: (userId: string) => api.delete<void>(`/admin/users/${userId}`),
+	deleteUser: (userId: string) => api.delete<void>(`/admin/users/${seg(userId)}`),
 	listRemux: () => api.get<RemuxJobView[]>('/admin/remux'),
-	wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${key}`),
+	wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${seg(key)}`),
 	activeSessions: () => api.get<ActiveSession[]>('/admin/active-sessions'),
 	watchHistory: (limit?: number) => api.get<WatchHistoryEntry[]>(`/admin/watch-history${limit ? `?limit=${limit}` : ''}`),
 	/** Full watch history for one user — admin drill-down equivalent of
 	 *  `me.history()`. */
 	userHistory: (userId: string, limit?: number, offset?: number) =>
 		api.get<UserHistoryItem[]>(
-			`/admin/users/${userId}/history?${new URLSearchParams({
+			`/admin/users/${seg(userId)}/history?${new URLSearchParams({
 				...(limit ? { limit: String(limit) } : {}),
 				...(offset ? { offset: String(offset) } : {})
 			}).toString()}`
@@ -260,7 +271,7 @@ export type DeviceView = components['schemas']['DeviceView'];
 export const devices = {
 	list: () => api.get<DeviceView[]>('/me/devices'),
 	link: (code: string, label?: string) => api.post<void>('/me/devices', { code, label }),
-	revoke: (jti: string) => api.delete<void>(`/me/devices/${jti}`)
+	revoke: (jti: string) => api.delete<void>(`/me/devices/${seg(jti)}`)
 };
 
 export type SearchResult = components['schemas']['SearchResult'];
@@ -347,10 +358,10 @@ export const searchDetails = {
 		api.get<ReleaseDetails>(`/search/details?provider=${encodeURIComponent(provider_id)}&id=${encodeURIComponent(external_id)}`)
 };
 
-/** Build a TMDB image URL. Sizes: w92, w154, w185, w342, w500, original. */
+/** Build a TMDB image URL: posters up to w500, backdrops and stills at w780 / w1280. */
 export function tmdbImage(
 	path: string | null | undefined,
-	size: 'w92' | 'w154' | 'w185' | 'w342' | 'w500' | 'original' = 'w185'
+	size: 'w92' | 'w154' | 'w185' | 'w342' | 'w500' | 'w780' | 'w1280' | 'original' = 'w185'
 ): string | null {
 	if (!path) return null;
 	return `https://image.tmdb.org/t/p/${size}${path}`;
@@ -384,32 +395,35 @@ export type UserHistoryItem = components['schemas']['UserHistoryView'];
 
 export type FileProgressEntry = components['schemas']['FileProgressEntry'];
 
+export type ProgressBody = {
+	position_seconds: number;
+	duration_seconds?: number | null;
+	audio_track_idx?: number | null;
+	subtitle_track_idx?: number | null;
+	completed?: boolean;
+	/** Whether the player is actively playing (vs paused) at this
+	 *  heartbeat. Feeds the admin "Now watching" presence state. */
+	playing?: boolean;
+	/** True when this save follows a deliberate user seek. Required for
+	 *  a near-zero position to overwrite substantial stored progress —
+	 *  without it the server's reset guard treats the save as an
+	 *  error-recovery artifact and keeps the old position. */
+	seek?: boolean;
+};
+
 export const progress = {
-	get: (infohash: string, idx: number) => api.get<ProgressView | null>(`/torrents/${infohash}/files/${idx}/progress`),
-	forTorrent: (infohash: string) => api.get<FileProgressEntry[]>(`/torrents/${infohash}/progress`),
-	put: (
-		infohash: string,
-		idx: number,
-		body: {
-			position_seconds: number;
-			duration_seconds?: number | null;
-			audio_track_idx?: number | null;
-			subtitle_track_idx?: number | null;
-			completed?: boolean;
-			/** Whether the player is actively playing (vs paused) at this
-			 *  heartbeat. Feeds the admin "Now watching" presence state. */
-			playing?: boolean;
-			/** True when this save follows a deliberate user seek. Required for
-			 *  a near-zero position to overwrite substantial stored progress —
-			 *  without it the server's reset guard treats the save as an
-			 *  error-recovery artifact and keeps the old position. */
-			seek?: boolean;
-		}
-	) => api.put<void>(`/torrents/${infohash}/files/${idx}/progress`, body),
+	get: (infohash: string, idx: number) => api.get<ProgressView | null>(`/torrents/${seg(infohash)}/files/${idx}/progress`),
+	forTorrent: (infohash: string) => api.get<FileProgressEntry[]>(`/torrents/${seg(infohash)}/progress`),
+	put: (infohash: string, idx: number, body: ProgressBody) => api.put<void>(`/torrents/${seg(infohash)}/files/${idx}/progress`, body),
+	/** The same save, sent as the page goes away (where `sendBeacon` is missing). */
+	putOnLeave: (infohash: string, idx: number, body: ProgressBody) =>
+		request<void>('PUT', `/torrents/${seg(infohash)}/files/${idx}/progress`, body, { keepalive: true }),
+	/** Where the page-leave beacon goes (`navigator.sendBeacon` POSTs this). */
+	beaconUrl: (infohash: string, idx: number) => `/api/torrents/${seg(infohash)}/files/${idx}/progress`,
 	/** Remove this file from the caller's Continue Watching + history. */
-	remove: (infohash: string, idx: number) => api.delete<void>(`/torrents/${infohash}/files/${idx}/progress`),
+	remove: (infohash: string, idx: number) => api.delete<void>(`/torrents/${seg(infohash)}/files/${idx}/progress`),
 	/** Mark this file watched for the caller (also skips a "next up" tile). */
-	markWatched: (infohash: string, idx: number) => api.post<void>(`/torrents/${infohash}/files/${idx}/progress/complete`)
+	markWatched: (infohash: string, idx: number) => api.post<void>(`/torrents/${seg(infohash)}/files/${idx}/progress/complete`)
 };
 
 /** Per-user recommendation preferences (Slice 1 of "For You"). The
@@ -516,31 +530,36 @@ export const torrents = {
 			allow_duplicate: allow_duplicate ?? false
 		}),
 	list: () => api.get<TorrentView[]>('/torrents'),
-	get: (infohash: string) => api.get<TorrentView>(`/torrents/${infohash}`),
+	get: (infohash: string) => api.get<TorrentView>(`/torrents/${seg(infohash)}`),
 	/** Re-ingest a GC-reclaimed release from its recorded provenance —
 	 *  same release, same infohash, saved positions apply again. */
-	regrab: (infohash: string) => api.post<IngestResponse>(`/torrents/${infohash}/regrab`),
-	remove: (infohash: string) => api.delete<void>(`/torrents/${infohash}`),
+	regrab: (infohash: string) => api.post<IngestResponse>(`/torrents/${seg(infohash)}/regrab`),
+	/** An engine failed on this file: the server logs it (and counts the demotion). */
+	reportPlaybackError: (infohash: string, idx: number, body: PlaybackErrorBody) =>
+		request<PlaybackErrorResponse>('POST', `/torrents/${seg(infohash)}/files/${idx}/playback-error`, body, { keepalive: true }),
+	remove: (infohash: string) => api.delete<void>(`/torrents/${seg(infohash)}`),
 	/** Raw source download (range-supported). Browser saves to disk. */
-	downloadUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
-	streamUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
+	downloadUrl: (infohash: string, idx: number) => `/api/torrents/${seg(infohash)}/files/${idx}/stream`,
 	/**
 	 * Universal playback URL — returns the HLS-CMAF master playlist.
-	 * Both web (Vidstack via hls.js) and Android (Media3 HlsMediaSource)
+	 * Both web (hls.js, Tier F) and Android (Media3 HlsMediaSource)
 	 * consume it the same way; multi-audio renditions are exposed via
 	 * EXT-X-MEDIA in the manifest. First request to master.m3u8 blocks
 	 * until ffmpeg has built enough of the cache; later asset fetches
 	 * hit static files via byte-range.
 	 */
-	playUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/play/master.m3u8`,
+	playUrl: (infohash: string, idx: number) => `/api/torrents/${seg(infohash)}/files/${idx}/play/master.m3u8`,
 	/** Polled by the player UI before mounting `<video>`, surfaces the
 	 *  download / remux progress so we can render a meaningful loader. */
-	playStatus: (infohash: string, idx: number) => api.get<PlayStatus>(`/torrents/${infohash}/files/${idx}/play/status`),
-	probe: (infohash: string, idx: number) => api.get<MediaProbe>(`/torrents/${infohash}/files/${idx}/probe`),
-	subtitleUrl: (infohash: string, idx: number, streamIdx: number) => `/api/torrents/${infohash}/files/${idx}/sub/${streamIdx}/track.vtt`
+	playStatus: (infohash: string, idx: number) => api.get<PlayStatus>(`/torrents/${seg(infohash)}/files/${idx}/play/status`),
+	probe: (infohash: string, idx: number) => api.get<MediaProbe>(`/torrents/${seg(infohash)}/files/${idx}/probe`),
+	subtitleUrl: (infohash: string, idx: number, streamIdx: number) =>
+		`/api/torrents/${seg(infohash)}/files/${idx}/sub/${streamIdx}/track.vtt`
 };
 
 export type MediaProbe = components['schemas']['MediaProbe'];
+export type PlaybackErrorBody = components['schemas']['PlaybackErrorBody'];
+export type PlaybackErrorResponse = components['schemas']['PlaybackErrorResponse'];
 export type VideoStream = components['schemas']['VideoStream'];
 export type AudioStream = components['schemas']['AudioStream'];
 export type PlayStatus = components['schemas']['PlayStatus'];
@@ -590,10 +609,10 @@ export type CollectionDetail = components['schemas']['CollectionDetail'];
 
 export const library = {
 	list: (view: 'collections' | 'torrents' = 'collections') => api.get<LibraryResponse>(`/library?view=${view}`),
-	collection: (id: string) => api.get<CollectionDetail>(`/library/collections/${id}`),
+	collection: (id: string) => api.get<CollectionDetail>(`/library/collections/${seg(id)}`),
 	/** Every file of the title watched, or the person's progress on it forgotten. */
-	markWatched: (id: string) => api.post<void>(`/library/collections/${id}/watched`),
-	markUnwatched: (id: string) => api.delete<void>(`/library/collections/${id}/watched`),
+	markWatched: (id: string) => api.post<void>(`/library/collections/${seg(id)}/watched`),
+	markUnwatched: (id: string) => api.delete<void>(`/library/collections/${seg(id)}/watched`),
 	/** Grab a specific (season, episode) for a TV collection. Idempotent —
 	 *  returns `already_grabbed: true` if the episode is already on disk
 	 *  under any infohash. When `language` is set, the server picks
@@ -601,7 +620,7 @@ export const library = {
 	 *  fallback) — used when the user clicked an FR / EN badge. */
 	grabCollectionEpisode: (id: string, season: number, episode: number, language?: string | null) => {
 		const qs = language ? `?language=${encodeURIComponent(language)}` : '';
-		return api.post<GrabEpisodeResponse>(`/library/collections/${id}/grab/${season}/${episode}${qs}`, {});
+		return api.post<GrabEpisodeResponse>(`/library/collections/${seg(id)}/grab/${season}/${episode}${qs}`, {});
 	}
 };
 
@@ -631,14 +650,14 @@ export type GrabEpisodeResponse = components['schemas']['GrabResponse'];
 export const follows = {
 	list: () => api.get<FollowSummary[]>('/me/follows'),
 	add: (name: string, tmdb_id?: number | null) => api.post<FollowSummary>('/me/follows', { name, tmdb_id: tmdb_id ?? null }),
-	remove: (id: string) => api.delete<void>(`/me/follows/${id}`),
+	remove: (id: string) => api.delete<void>(`/me/follows/${seg(id)}`),
 	/** Pass `season` to filter; omit for the full set. */
 	episodes: (id: string, season?: number) =>
 		api.get<EpisodesResponse>(
-			season !== null && season !== undefined ? `/me/follows/${id}/episodes?season=${season}` : `/me/follows/${id}/episodes`
+			season !== null && season !== undefined ? `/me/follows/${seg(id)}/episodes?season=${season}` : `/me/follows/${seg(id)}/episodes`
 		),
 	grabEpisode: (id: string, season: number, episode: number) =>
-		api.post<GrabEpisodeResponse>(`/me/follows/${id}/episodes/${season}/${episode}/grab`),
+		api.post<GrabEpisodeResponse>(`/me/follows/${seg(id)}/episodes/${season}/${episode}/grab`),
 	/** Fetch context for the file currently playing — drives the
 	 *  "Watch next?" modal at episode end. */
 	episodeContext: (infohash: string, file_idx: number) =>
@@ -667,6 +686,13 @@ export const livetv = {
 	/** HLS master playlist for a channel — hand to hls.js / native HLS. */
 	masterUrl: (country: string, channelId: string) =>
 		`/api/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/master.m3u8`,
+	/** GET the master playlist for its headers: which source the backend elected, and how
+	 *  many it has (the GET also warms the election server-side). */
+	masterHeaders: async (country: string, channelId: string): Promise<Headers> => {
+		const res = await send('GET', `/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/master.m3u8`);
+		if (!res.ok) throw new ApiError(res.status, 'error', `master fetch failed (${res.status})`);
+		return res.headers;
+	},
 	/** The served stream is unplayable client-side: the backend cools the
 	 *  active source down and elects the next feed. */
 	reportPlaybackError: (country: string, channelId: string) =>

@@ -59,7 +59,7 @@ describe('progress', () => {
 		s.ended();
 		expect((put.mock.calls.at(-1) as unknown[] | undefined)?.[2]).toMatchObject({ position_seconds: 100, completed: true });
 		s.flush();
-		expect(beacon).toHaveBeenCalledWith('/api/torrents/abc/files/2/progress', expect.stringContaining('"position_seconds":12'));
+		expect(beacon).toHaveBeenCalledWith('abc', 2, expect.objectContaining({ position_seconds: 12 }));
 		beacon.mockClear();
 		s.flush();
 		expect(beacon).not.toHaveBeenCalled();
@@ -71,7 +71,8 @@ describe('language choices', () => {
 
 	it('keeps them for the series when the file belongs to one', async () => {
 		const save = vi.fn(async () => undefined);
-		const c = new PlaybackChoices('col-1', save);
+		const saved = vi.fn();
+		const c = new PlaybackChoices('col-1', save, saved);
 		c.adopt({ audio_language: 'en', subtitle_language: 'off' });
 		await c.audioPicked(m, 1);
 		await c.subtitlePicked(m, 3);
@@ -81,12 +82,14 @@ describe('language choices', () => {
 			{ audio_language: 'fre', subtitle_language: 'eng', collection_id: 'col-1' },
 			{ audio_language: 'fre', subtitle_language: 'off', collection_id: 'col-1' }
 		]);
+		// each saved pick is read again, so the next episode starts in it
+		expect(saved.mock.calls).toEqual([['col-1'], ['col-1'], ['col-1']]);
 		expect(keptForText('col-1')).toBe('Kept for the whole series');
 	});
 
 	it('keeps them account-wide otherwise; a track without a tag changes nothing', () => {
 		const save = vi.fn(async () => undefined);
-		const c = new PlaybackChoices(null, save);
+		const c = new PlaybackChoices(null, save, vi.fn());
 		expect(c.audioPicked(testManifest({ audio: [{ ...m.audio[0], lang: null }] }), 0)).toBeNull();
 		void c.audioPicked(m, 0);
 		expect(save).toHaveBeenCalledWith({ audio_language: 'eng', subtitle_language: null });

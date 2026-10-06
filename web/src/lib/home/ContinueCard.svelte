@@ -2,14 +2,14 @@
 	// One Continue Watching tile: a 16:9 still, the title (its clean TMDB name once the server
 	// trusts the match), the episode, what is left. A tile whose file is not on disk (the next
 	// episode never downloaded, or reclaimed) leads to its series and offers to get it and play.
-	import type { ContinueWatchingItem } from '@iris/api/client';
+	import { tmdbImage, type ContinueWatchingItem } from '@iris/api/client';
 	import { episodeCode, kindLabel, prettySceneName, timeLeft } from '@iris/api/format';
 	import PosterCard from '#lib/components/PosterCard.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { sectionHeading } from '#lib/focus.ts';
 	import CardMenu, { type MenuItem } from './CardMenu.svelte';
-	import { secondsLeft, stillUrl, watched } from './data.ts';
+	import { secondsLeft, watched } from './data.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import { getAndPlay, markWatched, nextName, removeTile, tileHref, tileKey } from './continue.ts';
 
@@ -38,7 +38,7 @@
 <PosterCard
 	href={tileHref(item)}
 	{title}
-	art={stillUrl(md.data?.backdrop_path)}
+	art={tmdbImage(md.data?.backdrop_path, 'w780')}
 	shape="still"
 	meta={code ?? kindLabel(item.kind)}
 	{status}

@@ -3,13 +3,13 @@
 	// of its top title, its name, and that title in words. A tile is a link (the mood is in the
 	// address: shareable, and Back returns to the board).
 	import { createQuery } from '@tanstack/svelte-query';
-	import { me, type MediaKind } from '@iris/api/client';
+	import type { MediaKind } from '@iris/api/client';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import { loadable } from '#lib/query.ts';
-	import { KEYS } from '#lib/queries.ts';
+	import { read } from '#lib/queries.ts';
 
 	let { kind }: { kind: MediaKind } = $props();
-	const board = createQuery(() => ({ queryKey: KEYS.moodBoard(kind), queryFn: () => me.moodBoard(kind) }));
+	const board = createQuery(() => read.moodBoard(kind));
 	const moods = $derived(board.data?.moods ?? []);
 </script>
 

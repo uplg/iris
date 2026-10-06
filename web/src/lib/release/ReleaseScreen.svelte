@@ -6,7 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { follows, searchDetails, tmdbImage, torrents } from '@iris/api/client';
-	import { formatRelative, formatSize, kindWord, languageLabel, prettySceneName } from '@iris/api/format';
+	import { fileName, formatRelative, formatSize, kindWord, languageLabel, prettySceneName } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { KEYS, read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -21,7 +21,7 @@
 	import { backToResults, findRelease } from '#lib/search/cache.ts';
 	import { DEAD, isDead, ownedFile, partWords, sceneMark, seedersWords } from '#lib/search/release.ts';
 	import Description from './Description.svelte';
-	import { fileName, isSample, playWords, sortFiles, autoFile } from './files.ts';
+	import { isSample, playWords, sortFiles, autoFile } from './files.ts';
 	import { Grab, type GrabTarget } from './grab.svelte.ts';
 	import GrabNotice from './GrabNotice.svelte';
 	import { audioWords, subtitleWords, videoWords } from './mediainfo.ts';

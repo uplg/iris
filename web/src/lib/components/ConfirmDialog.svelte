@@ -1,6 +1,6 @@
 <script lang="ts">
 	// A confirmation for what cannot be undone (docs/ux.md § 6): the
-	// consequence said, a button with the precise verb and « Garder », no default button: the
+	// consequence said, a button with the precise verb and « Keep », no default button: the
 	// focus goes to the title.
 	import { AlertDialog } from 'bits-ui';
 	import Icon, { type IconName } from '#lib/components/Icon.svelte';
@@ -10,16 +10,16 @@
 		/** The button that opens it; without one, the caller opens it (`open`). */
 		label?: string;
 		open?: boolean;
-		/** The way back, when « Garder » is not the word (« Continuer »). */
+		/** The way back, when « Keep » is not the word (« Continue »). */
 		keep?: string;
-		/** Its name for readers when the label alone is ambiguous (« Retirer la clé MacBook »). */
+		/** Its name for readers when the label alone is ambiguous (« Remove the MacBook passkey »). */
 		ariaLabel?: string;
 		/** A quiet trigger, in a row of actions. */
 		ghost?: boolean;
 		icon?: IconName;
 		title: string;
 		description: string;
-		/** The precise verb (« Remettre à zéro »). */
+		/** The precise verb (« Delete the release »). */
 		action: string;
 		onconfirm: () => void;
 		/** Its gesture travels: busy, it keeps the focus and does not open again. */

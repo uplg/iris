@@ -13,7 +13,7 @@
 	import Sheet from '#lib/components/Sheet.svelte';
 	import StatusRow from '#lib/components/StatusRow.svelte';
 	import PillChoice from '#lib/components/PillChoice.svelte';
-	import { KEYS, read } from '#lib/queries.ts';
+	import { playbackPrefsSaved, read } from '#lib/queries.ts';
 	import { languageName } from '#lib/language.ts';
 
 	interface Props {
@@ -69,7 +69,7 @@
 					collection_id: collectionId
 				}),
 			async () => {
-				await queryClient.invalidateQueries({ queryKey: KEYS.playbackPrefs(collectionId) });
+				await playbackPrefsSaved(collectionId);
 				draft.reset(next);
 				ui.toast(`Saved for ${title}: audio ${audioWords(next.audio || null)}, subtitles ${subWords(next.subs || null)}.`);
 				close();

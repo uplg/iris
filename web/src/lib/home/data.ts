@@ -53,8 +53,3 @@ export function languagesLine(p: PlaybackPrefs | undefined): string | null {
 	if (parts.length === 0) return null;
 	return `Plays with ${parts.join(', ')}${p.for_collection ? ', as chosen for this series' : ''}.`;
 }
-
-/** A TMDB still wide enough for a 16:9 frame (`tmdbImage` stops at w500). */
-export function stillUrl(path: string | null | undefined, size: 'w780' | 'w1280' = 'w780'): string | null {
-	return path ? `https://image.tmdb.org/t/p/${size}${path}` : null;
-}

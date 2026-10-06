@@ -2,7 +2,8 @@
 	// What was on disk and the episode list cannot show in place (a movie, a pack never split):
 	// how far it was watched, its name; « Download again » brings the same release back (same
 	// infohash: the saved position resumes), « Hide » takes it off this page for this person only.
-	import { me, torrents as torrentsApi, type GoneReleaseEntry } from '@iris/api/client';
+	import { me, type GoneReleaseEntry } from '@iris/api/client';
+	import { fetchAgain } from '#lib/regrab.ts';
 	import { formatRecentTime, formatSize, formatTimecode, percent, plural } from '@iris/api/format';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { refocus } from '#lib/focus.ts';
@@ -64,7 +65,7 @@
 						{...pending(g.is(`again:${r.infohash}`))}
 						onclick={() =>
 							g.run(
-								() => torrentsApi.ingest(r.source_provider, r.source_external_id, null, true),
+								() => fetchAgain(r.infohash),
 								then(r, `${r.name} is downloading again. Your watch position is kept.`),
 								`again:${r.infohash}`
 							)}

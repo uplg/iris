@@ -3,13 +3,13 @@
 	// from there, the series' episodes, starting over; and the languages the play will use. A
 	// tile whose file is not on disk gets it first, then plays it while it downloads.
 	import { createQuery } from '@tanstack/svelte-query';
-	import type { ContinueWatchingItem } from '@iris/api/client';
+	import { tmdbImage, type ContinueWatchingItem } from '@iris/api/client';
 	import { clock, duration, kindLabel, percent, prettySceneName, timeLeft } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import Progress from '#lib/components/Progress.svelte';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import Hero from './Hero.svelte';
-	import { languagesLine, secondsLeft, stillUrl, watched } from './data.ts';
+	import { languagesLine, secondsLeft, watched } from './data.ts';
 	import { read } from '#lib/queries.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import { getAndPlay, nextName, startOver, tileKey } from './continue.ts';
@@ -43,7 +43,7 @@
 	{title}
 	{meta}
 	overview={md.data?.overview}
-	art={stillUrl(md.data?.backdrop_path, 'w1280')}
+	art={tmdbImage(md.data?.backdrop_path, 'w1280')}
 >
 	{#snippet progress()}
 		{#if resuming && share !== null && left !== null}

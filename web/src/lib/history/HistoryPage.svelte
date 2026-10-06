@@ -6,9 +6,10 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { plural } from '@iris/api/format';
 	import { goto } from '$app/navigation';
-	import { me, torrents } from '@iris/api/client';
+	import { me } from '@iris/api/client';
+	import { fetchAgain } from '#lib/regrab.ts';
 	import { loadable, queryClient } from '#lib/query.ts';
-	import { KEYS, refreshLibrary } from '#lib/queries.ts';
+	import { KEYS } from '#lib/queries.ts';
 	import PageHead from '#lib/components/PageHead.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import HistoryList from './HistoryList.svelte';
@@ -25,18 +26,16 @@
 		() => queryClient
 	);
 	const value = loadable(history);
-	const titles = $derived(groupHistory(history.data ?? []).length);
+	const groups = $derived(groupHistory(history.data ?? []));
 
 	async function restore(it: Item) {
-		// a past release asked for by name: the duplicate guard does not apply
-		await torrents.ingest(it.source_provider!, it.source_external_id!, it.tmdb_id, true);
-		void refreshLibrary();
+		await fetchAgain(it.infohash);
 		await goto(`/watch/${it.infohash}/${it.file_idx}`);
 	}
 </script>
 
 <PageHead title="Watch history">
-	{#snippet sub()}{history.data?.length ? plural(titles, 'title') : 'What you watched, finished or not.'}{/snippet}
+	{#snippet sub()}{history.data?.length ? plural(groups.length, 'title') : 'What you watched, finished or not.'}{/snippet}
 </PageHead>
 <Loaded
 	{value}
@@ -44,5 +43,5 @@
 	emptyText="Nothing watched yet."
 	emptyHint="What you play shows here, with where you stopped."
 >
-	<HistoryList items={history.data ?? []} onrestore={restore} />
+	<HistoryList {groups} onrestore={restore} />
 </Loaded>

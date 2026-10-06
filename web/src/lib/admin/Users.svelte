@@ -3,7 +3,7 @@
 	// their watch history, a new display name in place, a new password (their sessions end), and
 	// removal after asking (never oneself; their grabs stay in the library, re-attributed).
 	import { createQuery } from '@tanstack/svelte-query';
-	import { plural } from '@iris/api/format';
+	import { onDay, plural } from '@iris/api/format';
 	import { admin, auth, type UserView } from '@iris/api/client';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { session } from '#lib/session.svelte.ts';
@@ -17,7 +17,6 @@
 	import Loaded from '#lib/components/Loaded.svelte';
 	import RenameField from '#lib/components/RenameField.svelte';
 	import Sheet from '#lib/components/Sheet.svelte';
-	import { onDay } from '#lib/history/words.ts';
 	import { invitationsQuery, usersQuery } from './queries.ts';
 
 	const MIN = 8;

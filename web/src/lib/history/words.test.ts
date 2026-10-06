@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { plural } from '@iris/api/format';
-import { fileName, onDay, progressWords, since, watchedShare, whatWatched } from './words.ts';
+import { fileName, onDay, plural, since } from '@iris/api/format';
+import { progressWords, watchedShare, whatWatched } from './words.ts';
 
 const now = new Date(2026, 9, 6, 15, 0).getTime();
 

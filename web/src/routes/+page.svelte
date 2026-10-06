@@ -4,7 +4,6 @@
 	// watching, the watchlist (fresh episodes first), the suggestions, the library. The search
 	// lives on its own page; moods on Discover.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { discover, me } from '@iris/api/client';
 	import { plural } from '@iris/api/format';
 	import PageHead from '#lib/components/PageHead.svelte';
 	import Shelf from '#lib/components/Shelf.svelte';
@@ -22,7 +21,7 @@
 	import CatalogCard from '#lib/home/CatalogCard.svelte';
 	import { tileKey } from '#lib/home/continue.ts';
 	import { downloadsByCollection } from '#lib/home/data.ts';
-	import { collectionsOf, KEYS, read, torrentsOf } from '#lib/queries.ts';
+	import { collectionsOf, read, torrentsOf } from '#lib/queries.ts';
 
 	const LIBRARY_ROW = 12;
 
@@ -32,7 +31,7 @@
 		// fresh episodes first (a stable sort: the server's order otherwise)
 		select: (items) => items.toSorted((a, b) => b.new_count - a.new_count)
 	}));
-	const forYou = createQuery(() => ({ queryKey: KEYS.forYou, queryFn: me.forYou, staleTime: 60_000 }));
+	const forYou = createQuery(() => read.forYou());
 	const collections = createQuery(() => ({
 		...read.collections(),
 		select: collectionsOf
@@ -48,9 +47,7 @@
 	const libraryPick = $derived(collections.data?.find((c) => !c.ghost));
 	// the tracker is asked only when there is nothing of one's own to show
 	const featured = createQuery(() => ({
-		queryKey: KEYS.featured,
-		queryFn: discover.featured,
-		staleTime: 5 * 60_000,
+		...read.featured(),
 		enabled: cw.isSuccess && collections.isSuccess && !resume && !libraryPick
 	}));
 	const featuredPick = $derived(featured.data?.movies[0] ?? featured.data?.series[0]);

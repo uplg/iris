@@ -4,7 +4,7 @@
 	// Loaded, or under a group's head), with the time it was read and a way to ask again. Not a
 	// live region: a refresh is never announced.
 	import type { Loadable } from '#lib/query.ts';
-	import { when } from '#lib/title.ts';
+	import { when } from '@iris/api/format';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import Icon from './Icon.svelte';
 

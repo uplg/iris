@@ -1,5 +1,4 @@
-// A form's draft, the one way to know it changed (a meal, a remote button, a scene, an
-// invitation): what it opened with, what it holds now, and whether they differ. Sheet reads
+// A form's draft, the one way to know it changed (recommendations, a series' languages): what it opened with, what it holds now, and whether they differ. Sheet reads
 // `dirty` to ask before a stray Escape loses it (docs/ux.md § 6).
 
 export class Draft<T> {

@@ -5,6 +5,7 @@
 	import { Popover } from 'bits-ui';
 	import { page } from '$app/state';
 	import { session } from '#lib/session.svelte.ts';
+	import { pending } from '#lib/gesture.svelte.ts';
 	import { ui, type Theme } from '#lib/ui.svelte.ts';
 	import Brand from './Brand.svelte';
 	import Icon, { type IconName } from './Icon.svelte';
@@ -59,8 +60,8 @@
 					</div>
 					<div class="row">
 						<a class="btn" href="/account" onclick={() => (open = false)}><Icon name="key" />Account</a>
-						<button class="btn" onclick={() => session.logout()}>
-							<Icon name="log-out" />Sign out
+						<button class="btn" {...pending(session.out.is('logout'))} onclick={session.logout}>
+							<Icon name="log-out" busy={session.out.is('logout')} />Sign out
 						</button>
 					</div>
 				</Popover.Content>

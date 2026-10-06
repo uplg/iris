@@ -5,6 +5,7 @@ import type { HistoryItem } from '@iris/api/client';
 import { stubApi } from '#lib/test/api.ts';
 import '../../styles/app.css';
 import HistoryList from './HistoryList.svelte';
+import { groupHistory } from './groups.ts';
 
 const item = (over: Partial<HistoryItem>): HistoryItem => ({
 	infohash: 'aa',
@@ -28,7 +29,7 @@ const items = [
 describe('HistoryList', () => {
 	it('a series under its title with its episodes; how far and when, in words', async () => {
 		stubApi({}, { poster_path: null });
-		await render(HistoryList, { items });
+		await render(HistoryList, { groups: groupHistory(items) });
 		await expect.element(page.getByRole('heading', { name: 'Severance' })).toBeVisible();
 		await expect.element(page.getByRole('link', { name: 'Severance' })).toHaveAttribute('href', '/collection/c1');
 		await expect.element(page.getByRole('link', { name: 'Play Severance, S2:E4' })).toHaveAttribute('href', '/watch/s1/0');
@@ -39,7 +40,7 @@ describe('HistoryList', () => {
 	it('what is gone from disk says so, and can be downloaded again', async () => {
 		stubApi({}, { poster_path: null });
 		const onrestore = vi.fn(async () => {});
-		await render(HistoryList, { items, onrestore });
+		await render(HistoryList, { groups: groupHistory(items), onrestore });
 		await expect.element(page.getByText('Gone from disk')).toBeVisible();
 		await expect.element(page.getByRole('link', { name: /Dune/ })).not.toBeInTheDocument();
 		await page.getByRole('button', { name: 'Download Dune again' }).click();
@@ -48,7 +49,7 @@ describe('HistoryList', () => {
 
 	it('read only: nothing to download again, titles not linked to collections', async () => {
 		stubApi({}, { poster_path: null });
-		await render(HistoryList, { items, collections: false });
+		await render(HistoryList, { groups: groupHistory(items), collections: false });
 		await expect.element(page.getByRole('button', { name: /again/ })).not.toBeInTheDocument();
 		await expect.element(page.getByRole('link', { name: 'Severance' })).not.toBeInTheDocument();
 	});
