@@ -58,6 +58,9 @@ pub enum ApiError {
     /// failed. 502 so clients can distinguish "their side" from "our side".
     #[error("upstream unavailable: {0}")]
     Upstream(String),
+    /// A live channel whose every feed is DRM-locked by its broadcaster.
+    #[error("Encrypted by the broadcaster: it can't be played here.")]
+    LiveEncrypted,
     #[error("internal: {0}")]
     Internal(#[from] anyhow::Error),
     #[error("database: {0}")]
@@ -100,6 +103,7 @@ impl IntoResponse for ApiError {
             ),
             ApiError::ProviderOff => (StatusCode::CONFLICT, "provider_off", self.to_string()),
             ApiError::Upstream(_) => (StatusCode::BAD_GATEWAY, "upstream", self.to_string()),
+            ApiError::LiveEncrypted => (StatusCode::CONFLICT, "live_encrypted", self.to_string()),
             ApiError::Db(_) | ApiError::Internal(_) => {
                 tracing::error!(error = ?self, "internal error");
                 (

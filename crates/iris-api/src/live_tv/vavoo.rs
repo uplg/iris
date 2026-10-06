@@ -247,6 +247,7 @@ impl Vavoo {
                     name,
                     attrs,
                     vlc_opts: HashMap::new(),
+                    kodi_props: HashMap::new(),
                     url: format!("{SCHEME}{id}"),
                 });
             }

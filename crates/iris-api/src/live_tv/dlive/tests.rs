@@ -123,6 +123,7 @@ fn dlive_entries_merge_into_iptv_org_channels_or_stand_alone() {
         name: name.to_string(),
         attrs: HashMap::from([("tvg-id".to_string(), tvg.to_string())]),
         vlc_opts: HashMap::new(),
+        kodi_props: HashMap::new(),
         url: url.to_string(),
     };
     let mut lists = vec![(
@@ -143,6 +144,38 @@ fn dlive_entries_merge_into_iptv_org_channels_or_stand_alone() {
     let bein = channels.iter().find(|c| c.name == "beIN SPORTS 1").unwrap();
     assert_eq!(bein.sources.len(), 2, "a dlive-only channel");
     assert_eq!(bein.categories, vec!["Sports".to_string()]);
+}
+
+#[test]
+fn rte_one_and_rte2_merge_with_free_tv() {
+    let index = Index {
+        names: HashMap::from([(364, "RTE 1".to_string()), (365, "RTE 2".to_string())]),
+    };
+    let free_tv = |tvg: &str, name: &str, url: &str| M3uEntry {
+        name: name.to_string(),
+        attrs: HashMap::from([("tvg-id".to_string(), tvg.to_string())]),
+        vlc_opts: HashMap::new(),
+        kodi_props: HashMap::new(),
+        url: url.to_string(),
+    };
+    let mut lists = vec![(
+        SourceOrigin::Extra,
+        vec![
+            free_tv("RTEOne.ie", "RTÉ One", "https://live.rte.ie/channel1.m3u8"),
+            free_tv("RTE2.ie", "RTÉ2", "https://live.rte.ie/channel2.m3u8"),
+        ],
+    )];
+    lists.extend(entries_for(&index, &[364, 365], &[1], "ie"));
+    let channels = crate::live_tv::channels::build_channels(&lists, None);
+    assert_eq!(channels.len(), 2);
+    let one = channels.iter().find(|c| c.id == "rteone").unwrap();
+    assert_eq!(one.name, "RTÉ One");
+    assert_eq!(
+        one.sources[0].url, "dlive://364/1",
+        "dlive ahead of the locked feed"
+    );
+    let two = channels.iter().find(|c| c.id == "rte2").unwrap();
+    assert_eq!(two.sources.len(), 2);
 }
 
 fn token_for(slug: &str, expiry: i64) -> String {
@@ -477,6 +510,7 @@ impl Rig {
                     referrer: None,
                     tier: classify_source(url),
                     origin: *origin,
+                    licence: None,
                 })
                 .collect(),
         };
@@ -908,4 +942,145 @@ fn an_unreadable_state_file_starts_empty() {
     dlive.persist_at(&dir);
     assert!(dlive.embed((469, 2)).is_none());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn listed(tvg: &str, name: &str, url: &str) -> M3uEntry {
+    M3uEntry {
+        name: name.to_string(),
+        attrs: HashMap::from([("tvg-id".to_string(), tvg.to_string())]),
+        vlc_opts: HashMap::new(),
+        kodi_props: HashMap::new(),
+        url: url.to_string(),
+    }
+}
+
+fn merge_index() -> Index {
+    Index {
+        names: HashMap::from([
+            (469, "TF1 France".to_string()),
+            (51, "ABC USA".to_string()),
+            (900, "Eurosport 1".to_string()),
+            (901, "Hot 18+".to_string()),
+            (902, "Nowhere TV".to_string()),
+            (116, "beIN SPORTS 1 France".to_string()),
+        ]),
+    }
+}
+
+/// `country`'s list after the merge: its own entries, the allow-list, then
+/// the rest of the dlive list by name.
+fn merged_list(country: &str, own: Vec<M3uEntry>, allowed: &[u32]) -> Vec<Channel> {
+    let index = merge_index();
+    let mut lists = vec![(SourceOrigin::IptvOrg, own)];
+    lists.extend(entries_for(&index, allowed, &[1], country));
+    lists.extend(merged_entries_for(&index, allowed, &[1], country));
+    crate::live_tv::channels::build_channels(&lists, None)
+}
+
+fn dlive_urls(ch: &Channel) -> Vec<&str> {
+    ch.sources
+        .iter()
+        .filter(|s| s.url.starts_with("dlive://"))
+        .map(|s| s.url.as_str())
+        .collect()
+}
+
+#[test]
+fn a_country_word_restricts_the_merge_to_that_country() {
+    let fr = merged_list(
+        "fr",
+        vec![listed("TF1.fr@SD", "TF1 (720p)", "http://x/tf1")],
+        &[],
+    );
+    assert_eq!(dlive_urls(&fr[0]), vec!["dlive://469/1"]);
+    let us = merged_list(
+        "us",
+        vec![
+            listed("", "TF1", "http://us/tf1"),
+            listed("ABC.us", "ABC", "http://us/abc"),
+        ],
+        &[],
+    );
+    let tf1 = us.iter().find(|c| c.id == "tf1").unwrap();
+    assert!(dlive_urls(tf1).is_empty(), "TF1 France stays out of us");
+    let abc = us.iter().find(|c| c.id == "abc").unwrap();
+    assert_eq!(dlive_urls(abc), vec!["dlive://51/1"]);
+}
+
+#[test]
+fn an_unsuffixed_name_merges_wherever_it_matches_exactly() {
+    for country in ["fr", "gb"] {
+        let list = merged_list(
+            country,
+            vec![listed("Eurosport1.fr", "Eurosport 1", "http://x/es1")],
+            &[],
+        );
+        assert_eq!(list.len(), 1, "{country}: no dlive-only channel");
+        assert_eq!(dlive_urls(&list[0]), vec!["dlive://900/1"], "{country}");
+        assert_eq!(
+            list[0].sources.last().unwrap().url,
+            "dlive://900/1",
+            "a merged source is the last fallback"
+        );
+    }
+}
+
+#[test]
+fn an_unmatched_or_adult_dlive_channel_is_not_used() {
+    let list = merged_list(
+        "fr",
+        vec![
+            listed("", "Hot 18+", "http://x/hot"),
+            listed("TF1.fr", "TF1", "http://x/tf1"),
+        ],
+        &[],
+    );
+    assert_eq!(list.len(), 2, "Nowhere TV created nowhere");
+    let hot = list.iter().find(|c| c.name == "Hot 18+").unwrap();
+    assert!(dlive_urls(hot).is_empty(), "18+ excluded");
+    assert!(
+        !list
+            .iter()
+            .flat_map(|c| &c.sources)
+            .any(|s| s.url == "dlive://902/1")
+    );
+}
+
+#[test]
+fn the_allow_list_still_creates_dlive_only_channels() {
+    let list = merged_list("fr", vec![listed("TF1.fr", "TF1", "http://x/tf1")], &[116]);
+    let bein = list.iter().find(|c| c.name == "beIN SPORTS 1").unwrap();
+    assert_eq!(dlive_urls(bein), vec!["dlive://116/1"]);
+    assert_eq!(
+        bein.sources[0].origin,
+        SourceOrigin::Dlive { rank: 0 },
+        "listed, not merged: it keeps the allow-list rank"
+    );
+    let merged = merged_entries_for(&merge_index(), &[116], &[1], "fr");
+    assert!(
+        merged[0].1.iter().all(|e| e.url != "dlive://116/1"),
+        "an allow-listed id is not offered twice"
+    );
+}
+
+#[test]
+fn the_warm_up_scrapes_the_allow_list_then_recent_zaps_only() {
+    let mut cfg = config("http://127.0.0.1:9".into()).dlive;
+    cfg.players = vec![1, 2];
+    cfg.countries = HashMap::from([("fr".to_string(), vec![469])]);
+    let dlive = Arc::new(Dlive::new(cfg, reqwest::Client::new()));
+    let index = merge_index();
+    assert_eq!(dlive.warm_next(&index), Some((469, 2)));
+    dlive
+        .embeds
+        .write()
+        .unwrap()
+        .insert((469, 2), (Embed::Absent, epoch_s()));
+    assert_eq!(dlive.warm_next(&index), None, "never the merged set");
+    dlive.opened.lock().unwrap().insert(900, Instant::now());
+    assert_eq!(
+        dlive.warm_next(&index),
+        Some((900, 2)),
+        "a channel zapped to"
+    );
 }

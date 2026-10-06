@@ -53,7 +53,7 @@ pub fn channel_list(body: &[u8]) -> Vec<ListedChannel> {
     out
 }
 
-fn is_adult(name: &str) -> bool {
+pub(super) fn is_adult(name: &str) -> bool {
     name.contains("18+")
 }
 
@@ -308,53 +308,149 @@ pub fn decode_entities(s: &str) -> String {
     out
 }
 
-/// Country words dlive appends to a channel name, per Iris country code.
-fn country_words(country: &str) -> &'static [&'static str] {
-    match country {
-        "fr" => &["france", "fr"],
-        "gb" | "uk" => &["uk", "england", "gb"],
-        "us" => &["usa", "us"],
-        "de" => &["de", "germany", "deutschland"],
-        "it" => &["italy", "it", "italia"],
-        "es" => &["spain", "es", "españa", "espana"],
-        "pt" => &["portugal", "pt"],
-        "nl" => &["nl", "netherlands", "holland"],
-        "be" => &["belgium", "be"],
-        "ca" => &["canada", "ca"],
-        "au" => &["australia", "au"],
-        "ie" => &["ireland", "ie"],
-        "pl" => &["poland", "pl"],
-        _ => &[],
+/// Country words dlive appends to a channel name (lowercase), and the Iris
+/// country code each one names. Read off the real list: the suffixes it
+/// actually carries.
+const COUNTRY_WORDS: &[(&str, &str)] = &[
+    ("france", "fr"),
+    ("fr", "fr"),
+    ("uk", "gb"),
+    ("england", "gb"),
+    ("gb", "gb"),
+    ("usa", "us"),
+    ("us", "us"),
+    ("de", "de"),
+    ("germany", "de"),
+    ("deutschland", "de"),
+    ("italy", "it"),
+    ("it", "it"),
+    ("italia", "it"),
+    ("spain", "es"),
+    ("es", "es"),
+    ("españa", "es"),
+    ("espana", "es"),
+    ("portugal", "pt"),
+    ("pt", "pt"),
+    ("nl", "nl"),
+    ("netherlands", "nl"),
+    ("netherland", "nl"),
+    ("holland", "nl"),
+    ("belgium", "be"),
+    ("be", "be"),
+    ("canada", "ca"),
+    ("ca", "ca"),
+    ("australia", "au"),
+    ("au", "au"),
+    ("ireland", "ie"),
+    ("ie", "ie"),
+    ("poland", "pl"),
+    ("pl", "pl"),
+    ("cz", "cz"),
+    ("sk", "sk"),
+    ("israel", "il"),
+    ("bulgaria", "bg"),
+    ("denmark", "dk"),
+    ("serbia", "rs"),
+    ("mexico", "mx"),
+    ("mx", "mx"),
+    ("greece", "gr"),
+    ("croatia", "hr"),
+    ("turkey", "tr"),
+    ("tr", "tr"),
+    ("brasil", "br"),
+    ("brazil", "br"),
+    ("br", "br"),
+    ("nz", "nz"),
+    ("argentina", "ar"),
+    ("ar", "ar"),
+    ("romania", "ro"),
+    ("cyprus", "cy"),
+    ("uae", "ae"),
+    ("russia", "ru"),
+    ("malaysia", "my"),
+    ("sweden", "se"),
+    ("norway", "no"),
+    ("pk", "pk"),
+    ("qatar", "qa"),
+    ("bih", "ba"),
+];
+
+/// The Iris country a lowercase word names, `uk` read as `gb`.
+fn word_country(word: &str) -> Option<&'static str> {
+    COUNTRY_WORDS
+        .iter()
+        .find(|(w, _)| *w == word)
+        .map(|(_, code)| *code)
+}
+
+fn same_country(a: &str, b: &str) -> bool {
+    fn canon(c: &str) -> &str {
+        if c == "uk" { "gb" } else { c }
     }
+    canon(a) == canon(b)
+}
+
+/// The trailing country word of a dlive name, as `(its token index, the
+/// country it names)`, past an `HD` marker. Not one after a preposition
+/// (`"Sport en France"`), nor a name's only word (`"France"`).
+fn trailing_country(tokens: &[&str]) -> Option<(usize, &'static str)> {
+    let mut end = tokens.len();
+    while end >= 2 && tokens[end - 1].eq_ignore_ascii_case("hd") {
+        end -= 1;
+    }
+    if end < 2 {
+        return None;
+    }
+    let code = word_country(&tokens[end - 1].to_lowercase())?;
+    let before = tokens[end - 2].to_lowercase();
+    if matches!(
+        before.as_str(),
+        "en" | "de" | "du" | "in" | "of" | "la" | "le"
+    ) {
+        return None;
+    }
+    Some((end - 1, code))
+}
+
+/// The country a dlive name restricts its channel to, when it ends with a
+/// country word (`"TF1 France"` → `fr`, `"RTL DE"` → `de`).
+pub fn name_country(raw: &str) -> Option<&'static str> {
+    let tokens: Vec<&str> = raw.split_whitespace().collect();
+    trailing_country(&tokens).map(|(_, code)| code)
+}
+
+/// Whether a dlive channel named `raw` may join a channel list of `country`:
+/// any, unless its trailing country word names another one.
+pub fn fits_country(raw: &str, country: &str) -> bool {
+    name_country(raw).is_none_or(|code| same_country(code, country))
 }
 
 /// Display name for a dlive channel in `country`: the trailing country word
-/// and an `HD` marker go, so `"TF1 France"` folds onto iptv-org's `TF1` and
-/// `"L'Equipe France"` onto the TNT 21 aliases. A country word after a
-/// preposition stays (`"Sport en France"`).
+/// (when it names `country`) and an `HD` marker go, so `"TF1 France"` folds
+/// onto iptv-org's `TF1` and `"L'Equipe France"` onto the TNT 21 aliases. A
+/// country word after a preposition stays (`"Sport en France"`).
 pub fn clean_name(raw: &str, country: &str) -> String {
-    let words = country_words(country);
     let mut tokens: Vec<&str> = raw.split_whitespace().collect();
-    while let Some(last) = tokens.last() {
-        let lower = last.to_lowercase();
-        let is_country = words.contains(&lower.as_str());
-        let is_hd = lower == "hd";
-        if tokens.len() < 2 || !(is_country || is_hd) {
-            break;
-        }
-        let before = tokens[tokens.len() - 2].to_lowercase();
-        if is_country
-            && matches!(
-                before.as_str(),
-                "en" | "de" | "du" | "in" | "of" | "la" | "le"
-            )
-        {
-            break;
-        }
+    if let Some((at, code)) = trailing_country(&tokens)
+        && same_country(code, country)
+    {
+        tokens.truncate(at);
+    }
+    while tokens.len() >= 2 && tokens.last().is_some_and(|t| t.eq_ignore_ascii_case("hd")) {
         tokens.pop();
     }
-    tokens.join(" ")
+    let name = tokens.join(" ");
+    let key = super::super::channels::normalize(&name);
+    NAME_ALIASES
+        .iter()
+        .find(|(from, _)| *from == key)
+        .map_or(name, |(_, to)| (*to).to_string())
 }
+
+/// dlive names whose fold differs from the iptv-org identity they carry
+/// (folded dlive name → a name folding onto that identity). `RTE One`, not
+/// `RTÉ One`: the fold drops an uppercase accented letter.
+const NAME_ALIASES: &[(&str, &str)] = &[("rte1", "RTE One")];
 
 /// Category for a dlive-only channel (no iptv-org counterpart to inherit one
 /// from): dlive mostly adds pay sports channels.
@@ -500,6 +596,17 @@ mod tests {
         assert_eq!(clean_name("France", "fr"), "France");
         assert_eq!(clean_name("Sky Cinema Hits UK", "gb"), "Sky Cinema Hits");
         assert_eq!(clean_name("TF1 France", "gb"), "TF1 France");
+        assert_eq!(clean_name("TF1 France HD", "fr"), "TF1");
+        assert_eq!(name_country("RTL DE"), Some("de"));
+        assert_eq!(name_country("RTL7 Netherland"), Some("nl"));
+        assert_eq!(name_country("Sport en France"), None);
+        assert_eq!(name_country("Eurosport 1"), None);
+        assert!(fits_country("Sky Sports UK", "uk") && fits_country("Sky Sports UK", "gb"));
+        assert!(!fits_country("TF1 France", "be"));
+        assert!(fits_country("Eurosport 1", "be"));
+        let fold = |raw: &str| crate::live_tv::channels::normalize(&clean_name(raw, "ie"));
+        assert_eq!(fold("RTE 1"), "rteone", "RTÉ One's identity (RTEOne.ie)");
+        assert_eq!(fold("RTE 2"), "rte2", "RTÉ2's identity (RTE2.ie)");
         assert_eq!(category_for("beIN SPORTS 1"), Some("Sports"));
         assert_eq!(category_for("TF1"), None);
     }

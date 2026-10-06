@@ -19,6 +19,9 @@ pub struct M3uEntry {
     /// `#EXTVLCOPT:key=value` lines attached to this entry
     /// (`http-user-agent`, `http-referrer`).
     pub vlc_opts: HashMap<String, String>,
+    /// `#KODIPROP:key=value` lines attached to this entry, before or after
+    /// its `#EXTINF` (`inputstream.adaptive.license_type`, `…license_key`).
+    pub kodi_props: HashMap<String, String>,
     /// Stream URL.
     pub url: String,
 }
@@ -40,6 +43,7 @@ pub fn parse(body: &str) -> Vec<M3uEntry> {
     let mut entries = Vec::new();
     let mut pending: Option<(String, HashMap<String, String>)> = None;
     let mut vlc_opts: HashMap<String, String> = HashMap::new();
+    let mut kodi_props: HashMap<String, String> = HashMap::new();
 
     for line in body.lines() {
         let line = line.trim();
@@ -53,6 +57,10 @@ pub fn parse(body: &str) -> Vec<M3uEntry> {
             if let Some((key, value)) = rest.split_once('=') {
                 vlc_opts.insert(key.trim().to_string(), value.trim().to_string());
             }
+        } else if let Some(rest) = line.strip_prefix("#KODIPROP:") {
+            if let Some((key, value)) = rest.split_once('=') {
+                kodi_props.insert(key.trim().to_string(), value.trim().to_string());
+            }
         } else if line.starts_with('#') {
             // #EXTM3U header, #EXTGRP, comments… — ignored.
         } else if let Some((name, attrs)) = pending.take() {
@@ -60,8 +68,11 @@ pub fn parse(body: &str) -> Vec<M3uEntry> {
                 name,
                 attrs,
                 vlc_opts: std::mem::take(&mut vlc_opts),
+                kodi_props: std::mem::take(&mut kodi_props),
                 url: line.to_string(),
             });
+        } else {
+            kodi_props.clear();
         }
     }
     entries
@@ -203,6 +214,22 @@ http://example.com/arte.m3u8
         assert_eq!(attrs.get("tvg-id").unwrap(), "X.fr");
         assert_eq!(attrs.get("tvg-logo").unwrap(), "l.png");
         assert_eq!(attrs.get("group-title").unwrap(), "G");
+    }
+
+    #[test]
+    fn kodiprops_attach_to_their_entry_on_either_side_of_extinf() {
+        let entries = parse(
+            "#KODIPROP:inputstream.adaptive.license_type=com.widevine.alpha\n#EXTINF:-1,A\n#KODIPROP:inputstream.adaptive.license_key=https://lic.example/wv\nhttp://x/a.mpd\n#EXTINF:-1,B\nhttp://x/b.m3u8\n",
+        );
+        assert_eq!(
+            entries[0].kodi_props["inputstream.adaptive.license_type"],
+            "com.widevine.alpha"
+        );
+        assert_eq!(
+            entries[0].kodi_props["inputstream.adaptive.license_key"],
+            "https://lic.example/wv"
+        );
+        assert!(entries[1].kodi_props.is_empty());
     }
 
     #[test]

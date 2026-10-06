@@ -1413,6 +1413,9 @@
           "404": {
             "description": "Unknown country / channel"
           },
+          "409": {
+            "description": "`live_encrypted`: every source is DRM-locked by its broadcaster"
+          },
           "502": {
             "description": "Every upstream source for the channel is down"
           }
@@ -6290,6 +6293,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "encrypted": {
+            "type": "boolean",
+            "description": "Every feed is DRM-locked with no licence Iris can obtain (the\nplaylists bring none): it can't be played. Sent only when true."
           },
           "geo_blocked": {
             "type": "boolean"

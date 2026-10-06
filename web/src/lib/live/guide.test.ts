@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { LiveChannel } from '@iris/api/client';
-import { channelCount, channelNotice, channelSections, findCountries, remember, TNT, usualCountries } from './guide.ts';
+import { ApiError, type LiveChannel } from '@iris/api/client';
+import {
+	channelCount,
+	channelNotice,
+	channelSections,
+	dimmed,
+	findCountries,
+	isEncryptedRefusal,
+	remember,
+	TNT,
+	usualCountries
+} from './guide.ts';
 import { COUNTRIES, FRANCE } from './fixtures.ts';
 
 const ch = (id: string, over: Partial<LiveChannel> = {}): LiveChannel => ({
@@ -59,12 +69,17 @@ describe('the Live TV guide', () => {
 		const [music] = channelSections([
 			ch('dead', { categories: ['Music'], unreachable: true }),
 			ch('blocked', { categories: ['Music'], geo_blocked: true }),
+			ch('locked', { categories: ['Music'], encrypted: true }),
 			ch('fine', { categories: ['Music'] })
 		]);
-		expect(music.channels.map((c) => c.id)).toEqual(['fine', 'dead', 'blocked']);
+		expect(music.channels.map((c) => c.id)).toEqual(['fine', 'dead', 'blocked', 'locked']);
 	});
 
 	it('says why a channel may not play', () => {
+		expect(channelNotice(ch('a', { encrypted: true, unreachable: true }))).toBe("Encrypted by the broadcaster: it can't be played here.");
+		expect(dimmed(ch('a', { encrypted: true }))).toBe(true);
+		expect(isEncryptedRefusal(new ApiError(409, 'live_encrypted', 'x'))).toBe(true);
+		expect(isEncryptedRefusal(new ApiError(502, 'upstream', 'x'))).toBe(false);
 		expect(channelNotice(ch('a', { unreachable: true, geo_blocked: true }))).toBe('Not answering right now');
 		expect(channelNotice(ch('a', { geo_blocked: true }))).toBe('May be blocked in your country');
 		expect(channelNotice(ch('a', { not_24_7: true }))).toBe('Not on air all day');

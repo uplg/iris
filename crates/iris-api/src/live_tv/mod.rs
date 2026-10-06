@@ -54,6 +54,12 @@ const SOURCE_COOLDOWN_MAX: Duration = Duration::from_hours(24);
 /// never park a source for longer than this.
 const PLAYBACK_COOLDOWN_MAX: Duration = Duration::from_mins(30);
 
+/// How long a source found DRM-locked stays out of the election. Encryption
+/// is a broadcaster's policy, not an outage: no short cooldown lifts it, a
+/// success elsewhere doesn't either, and a refresh that brings a different
+/// URL starts a fresh record anyway.
+const DRM_RECHECK: Duration = Duration::from_hours(24);
+
 /// Concurrency cap for the background health probe.
 const PROBE_CONCURRENCY: usize = 12;
 
@@ -133,6 +139,9 @@ pub enum LiveTvError {
     BadProxyRequest,
     #[error("upstream unavailable: {0}")]
     Upstream(String),
+    /// Every source of the channel is DRM-locked by its broadcaster.
+    #[error("encrypted by the broadcaster")]
+    Encrypted,
 }
 
 /// Envelope of tunerd's `/channels` response.
@@ -247,6 +256,9 @@ struct Upstream {
     url: String,
     user_agent: Option<String>,
     referrer: Option<String>,
+    /// The entry brings a DRM licence: a locked playlist is not a reason to
+    /// leave it out.
+    licensed: bool,
 }
 
 /// One election attempt on an internet source.
@@ -255,20 +267,36 @@ enum Attempt {
     /// Skipped for a reason that is not the source's (no cooldown).
     Deferred(String),
     Failed(String),
+    /// The playlist answered, DRM-locked (the scheme, for the logs).
+    Encrypted(&'static str),
 }
 
 /// A failed playlist fetch; `status` is set when the host answered.
 struct FetchFailure {
     status: Option<u16>,
     error: LiveTvError,
+    /// The playlist answered but is DRM-locked with this scheme.
+    drm: Option<&'static str>,
 }
 
 impl FetchFailure {
+    fn new(status: Option<u16>, error: LiveTvError) -> Self {
+        Self {
+            status,
+            error,
+            drm: None,
+        }
+    }
+
     /// The host answered 200 with something unusable.
     fn answered(why: &str) -> Self {
+        Self::new(Some(200), LiveTvError::Upstream(why.into()))
+    }
+
+    fn locked(scheme: &'static str) -> Self {
         Self {
-            status: Some(200),
-            error: LiveTvError::Upstream(why.into()),
+            drm: Some(scheme),
+            ..Self::answered(&format!("encrypted with {scheme}"))
         }
     }
 
@@ -314,6 +342,9 @@ pub struct SourceHealth {
     /// Consecutive failed segment/key fetches while this source is live
     /// (reset on any success). Demotes the source past a threshold.
     segment_failures: AtomicU64,
+    /// Epoch-millis until which the source counts as DRM-locked (see
+    /// [`DRM_RECHECK`]).
+    encrypted_until_ms: AtomicU64,
 }
 
 /// URI of the first variant in a master playlist, `None` when the body is
@@ -337,7 +368,7 @@ fn first_variant_uri(master: &str) -> Option<&str> {
 fn elect_seed(sources: &[Arc<SourceHealth>], now_ms: u64) -> usize {
     sources
         .iter()
-        .position(|h| !h.in_cooldown(now_ms))
+        .position(|h| h.electable(now_ms))
         .unwrap_or(0)
 }
 
@@ -383,6 +414,21 @@ fn index_source_entries(
 impl SourceHealth {
     fn in_cooldown(&self, now_ms: u64) -> bool {
         self.cooldown_until_ms.load(Ordering::Relaxed) > now_ms
+    }
+
+    fn encrypted(&self, now_ms: u64) -> bool {
+        self.encrypted_until_ms.load(Ordering::Relaxed) > now_ms
+    }
+
+    /// Neither cooling down nor DRM-locked: the election's first choice.
+    fn electable(&self, now_ms: u64) -> bool {
+        !self.in_cooldown(now_ms) && !self.encrypted(now_ms)
+    }
+
+    fn mark_encrypted(&self, now_ms: u64) {
+        let millis = u64::try_from(DRM_RECHECK.as_millis()).unwrap_or(u64::MAX);
+        self.encrypted_until_ms
+            .store(now_ms.saturating_add(millis), Ordering::Relaxed);
     }
 
     fn mark_failure(&self, now_ms: u64) {
@@ -431,12 +477,25 @@ impl CountrySnapshot {
     }
 
     /// Every feed of channel `i` failed its last check (the probe, a zap) and
-    /// is cooling down: it may come back, but it will likely not play now.
+    /// is cooling down or DRM-locked: it may come back, but it will likely
+    /// not play now. A channel wholly DRM-locked is [`Self::encrypted`]
+    /// instead.
     pub fn unreachable(&self, i: usize) -> bool {
+        let now = epoch_ms();
+        !self.encrypted(i)
+            && self
+                .health
+                .get(i)
+                .is_some_and(|h| !h.is_empty() && h.iter().all(|s| !s.electable(now)))
+    }
+
+    /// Every feed of channel `i` is DRM-locked with no licence Iris can
+    /// obtain.
+    pub fn encrypted(&self, i: usize) -> bool {
         let now = epoch_ms();
         self.health
             .get(i)
-            .is_some_and(|h| !h.is_empty() && h.iter().all(|s| s.in_cooldown(now)))
+            .is_some_and(|h| !h.is_empty() && h.iter().all(|s| s.encrypted(now)))
     }
 }
 
@@ -767,10 +826,27 @@ impl LiveTvService {
                     playlists.push((origin, entries));
                 }
             }
+            // Last: they only join the channels every list above brought.
+            playlists.extend(self.inner.dlive.merged_entries(country).await);
         }
 
         let tnt = (country == "fr").then_some(&self.inner.cfg.tnt_overrides);
         let mut built = channels::build_channels(&playlists, tnt);
+        let merged = built
+            .iter()
+            .filter(|c| {
+                c.sources
+                    .iter()
+                    .any(|s| matches!(s.origin, SourceOrigin::DliveMerged { .. }))
+            })
+            .count();
+        if merged > 0 {
+            tracing::info!(
+                country,
+                channels = merged,
+                "live tv dlive channels merged by name"
+            );
+        }
         if built.is_empty() {
             tracing::info!(country, "live tv country has no channels");
             return Ok(self.build_snapshot(built));
@@ -940,6 +1016,7 @@ impl LiveTvService {
                     user_agent: s.user_agent.filter(|v| !v.is_empty()),
                     referrer: s.referrer.filter(|v| !v.is_empty()),
                     origin: SourceOrigin::IptvOrg,
+                    licence: None,
                 });
         }
         tracing::info!(channels = map.len(), "live tv streams db loaded");
@@ -1007,7 +1084,11 @@ impl LiveTvService {
         // channel 502 for its whole cooldown. Pass 2: dlive sources skipped
         // for a reason that is not theirs (breaker open, embed not scraped
         // yet), retried only because nothing else played.
-        let mut tried = vec![false; n];
+        // A DRM-locked source counts as tried: no pass may elect it.
+        let mut tried: Vec<bool> = snap.health[idx]
+            .iter()
+            .map(|h| h.encrypted(now_ms))
+            .collect();
         let mut deferred: Vec<usize> = Vec::new();
         for pass in 0..3 {
             let order: Vec<usize> = if pass < 2 {
@@ -1041,27 +1122,14 @@ impl LiveTvService {
                 };
                 match self.attempt_source(source, last_option, pass == 2).await {
                     Attempt::Elected(body, base) => {
-                        snap.active_source[idx].store(si, Ordering::Relaxed);
-                        health.mark_success();
-                        tracing::info!(
-                            channel = %channel_key,
-                            source = si,
-                            origin = ?source.origin,
-                            tier = ?source.tier,
-                            host = %base.host_str().unwrap_or("unknown"),
-                            "live tv source elected"
-                        );
-                        return Ok(MasterPlaylist {
-                            body: proxy::rewrite_playlist(
-                                &body,
-                                &base,
-                                &channel_key,
-                                &self.inner.signer,
-                            ),
-                            source_index: si,
-                            upstream_host: base.host_str().unwrap_or("unknown").to_string(),
-                            source_count: n,
-                        });
+                        return Ok(self.internet_elected(
+                            &snap,
+                            idx,
+                            si,
+                            &channel_key,
+                            &body,
+                            &base,
+                        ));
                     }
                     Attempt::Deferred(why) => {
                         if pass < 2 {
@@ -1079,10 +1147,54 @@ impl LiveTvService {
                         );
                         last_err = e;
                     }
+                    Attempt::Encrypted(scheme) => {
+                        health.mark_encrypted(now_ms);
+                        tracing::info!(
+                            channel = %channel_key,
+                            source = si,
+                            scheme,
+                            "live tv source is DRM-locked, left out of the election"
+                        );
+                        last_err = format!("encrypted with {scheme}");
+                    }
                 }
             }
         }
+        if snap.encrypted(idx) {
+            return Err(LiveTvError::Encrypted);
+        }
         Err(LiveTvError::Upstream(last_err))
+    }
+
+    /// Finalize a successful internet election: stickiness, health, and the
+    /// playlist rewritten to the signed proxy.
+    fn internet_elected(
+        &self,
+        snap: &CountrySnapshot,
+        idx: usize,
+        si: usize,
+        channel_key: &str,
+        body: &str,
+        base: &Url,
+    ) -> MasterPlaylist {
+        let source = &snap.channels[idx].sources[si];
+        snap.active_source[idx].store(si, Ordering::Relaxed);
+        snap.health[idx][si].mark_success();
+        let host = base.host_str().unwrap_or("unknown");
+        tracing::info!(
+            channel = %channel_key,
+            source = si,
+            origin = ?source.origin,
+            tier = ?source.tier,
+            host = %host,
+            "live tv source elected"
+        );
+        MasterPlaylist {
+            body: proxy::rewrite_playlist(body, base, channel_key, &self.inner.signer),
+            source_index: si,
+            upstream_host: host.to_string(),
+            source_count: snap.channels[idx].sources.len(),
+        }
     }
 
     /// The tuner branch of an election. `Err` carries why the election moves
@@ -1182,6 +1294,9 @@ impl LiveTvService {
                 .await
             {
                 Ok((body, base)) => Attempt::Elected(body, base),
+                Err(FetchFailure {
+                    drm: Some(scheme), ..
+                }) => Attempt::Encrypted(scheme),
                 Err(f) => Attempt::Failed(f.error.to_string()),
             };
         };
@@ -1213,6 +1328,7 @@ impl LiveTvService {
                 url: resolved.url.clone(),
                 user_agent: resolved.user_agent.clone(),
                 referrer: resolved.referrer.clone(),
+                licensed: false,
             };
             match self
                 .fetch_playlist_at(&upstream, first_byte, first_byte + PLAYLIST_TIMEOUT)
@@ -1221,6 +1337,12 @@ impl LiveTvService {
                 Ok((body, base)) => {
                     dlive.note_ok();
                     return Attempt::Elected(body, base);
+                }
+                Err(FetchFailure {
+                    drm: Some(scheme), ..
+                }) => {
+                    dlive.note_ok();
+                    return Attempt::Encrypted(scheme);
                 }
                 // A signature or token that expired early: resolve afresh
                 // once, then give up on this source.
@@ -1735,7 +1857,7 @@ impl LiveTvService {
         let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
         snap.health[idx][active].mark_playback_failure(now_ms);
         // Re-elect: first source not cooling down, if any.
-        let next = (0..channel.sources.len()).find(|&si| !snap.health[idx][si].in_cooldown(now_ms));
+        let next = (0..channel.sources.len()).find(|&si| snap.health[idx][si].electable(now_ms));
         if let Some(si) = next {
             snap.active_source[idx].store(si, Ordering::Relaxed);
         }
@@ -1779,6 +1901,9 @@ impl LiveTvService {
                     if source.tier == SourceTier::Tuner {
                         continue;
                     }
+                    if snap.health[ci][si].encrypted(epoch_ms()) {
+                        continue;
+                    }
                     let svc = self.clone();
                     let source = source.clone();
                     let health = snap.health[ci][si].clone();
@@ -1787,6 +1912,9 @@ impl LiveTvService {
                         let _permit = semaphore.acquire_owned().await;
                         match svc.fetch_source_playlist(&source).await {
                             Ok(_) => health.mark_success(),
+                            Err(FetchFailure { drm: Some(_), .. }) => {
+                                health.mark_encrypted(epoch_ms());
+                            }
                             Err(_) => health.mark_failure(epoch_ms()),
                         }
                     });
@@ -1799,7 +1927,7 @@ impl LiveTvService {
             let mut alive = 0usize;
             for (ci, channel) in snap.channels.iter().enumerate() {
                 let elected =
-                    (0..channel.sources.len()).find(|&si| !snap.health[ci][si].in_cooldown(now_ms));
+                    (0..channel.sources.len()).find(|&si| snap.health[ci][si].electable(now_ms));
                 if let Some(si) = elected {
                     snap.active_source[ci].store(si, Ordering::Relaxed);
                     alive += 1;
@@ -1834,17 +1962,20 @@ impl LiveTvService {
             url,
             user_agent: source.user_agent.clone(),
             referrer: source.referrer.clone(),
+            licensed: source.licence.is_some(),
         })
     }
 
     async fn fetch_source_playlist(
         &self,
         source: &channels::StreamSource,
-    ) -> Result<(String, Url), LiveTvError> {
-        let upstream = self.resolve_upstream(source).await?;
+    ) -> Result<(String, Url), FetchFailure> {
+        let upstream = self
+            .resolve_upstream(source)
+            .await
+            .map_err(|e| FetchFailure::new(None, e))?;
         self.fetch_playlist_at(&upstream, PLAYLIST_TIMEOUT, PLAYLIST_TIMEOUT)
             .await
-            .map_err(|f| f.error)
     }
 
     /// Fetch a source's playlist: response headers within `first_byte`, the
@@ -1861,6 +1992,14 @@ impl LiveTvService {
         if !body.trim_start().starts_with("#EXTM3U") {
             return Err(FetchFailure::answered("not an HLS playlist"));
         }
+        // The variant fetched below is the media playlist that carries a
+        // segment key: a DRM-locked feed is told apart here, at no extra
+        // request.
+        if !upstream.licensed
+            && let Some(scheme) = proxy::drm_scheme(&body)
+        {
+            return Err(FetchFailure::locked(scheme));
+        }
         // A 200 master proves nothing when it came from an indirection host
         // (github-hosted relays always serve their checked-in master, even
         // when the stream behind it is geo-blocked or token-expired). Elect
@@ -1875,6 +2014,11 @@ impl LiveTvService {
                 .await?;
             if !vbody.trim_start().starts_with("#EXTM3U") {
                 return Err(FetchFailure::answered("variant is not HLS"));
+            }
+            if !upstream.licensed
+                && let Some(scheme) = proxy::drm_scheme(&vbody)
+            {
+                return Err(FetchFailure::locked(scheme));
             }
         }
         Ok((body, final_url))
@@ -1896,26 +2040,24 @@ impl LiveTvService {
         }
         let resp = tokio::time::timeout(first_byte, req.send())
             .await
-            .map_err(|_| FetchFailure {
-                status: None,
-                error: LiveTvError::Upstream("no response within the deadline".into()),
+            .map_err(|_| {
+                FetchFailure::new(
+                    None,
+                    LiveTvError::Upstream("no response within the deadline".into()),
+                )
             })?
-            .map_err(|e| FetchFailure {
-                status: None,
-                error: upstream_err(e),
-            })?;
+            .map_err(|e| FetchFailure::new(None, upstream_err(e)))?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(FetchFailure {
-                status: Some(status.as_u16()),
-                error: LiveTvError::Upstream(format!("upstream answered HTTP {}", status.as_u16())),
-            });
+            return Err(FetchFailure::new(
+                Some(status.as_u16()),
+                LiveTvError::Upstream(format!("upstream answered HTTP {}", status.as_u16())),
+            ));
         }
         let final_url = resp.url().clone();
-        let body = read_playlist(resp).await.map_err(|error| FetchFailure {
-            status: None,
-            error,
-        })?;
+        let body = read_playlist(resp)
+            .await
+            .map_err(|error| FetchFailure::new(None, error))?;
         Ok((body, final_url))
     }
 
@@ -2074,7 +2216,7 @@ impl LiveTvService {
         }
         let now_ms = epoch_ms();
         let next = (0..snap.channels[idx].sources.len())
-            .find(|&si| si != active && !snap.health[idx][si].in_cooldown(now_ms));
+            .find(|&si| si != active && snap.health[idx][si].electable(now_ms));
         if let Some(si) = next {
             snap.active_source[idx].store(si, Ordering::Relaxed);
         }
@@ -2084,6 +2226,58 @@ impl LiveTvService {
             elected = ?next,
             "live tv source demoted after repeated segment failures"
         );
+    }
+
+    /// A media playlist proxied for the channel's active source turned out
+    /// DRM-locked (a variant the election didn't read): leave that source out
+    /// and elect the next, so the player's report and reload land elsewhere.
+    /// The error is what the player gets instead of the playlist; `None` when
+    /// the source brings a licence, and the playlist is served as is.
+    pub async fn note_encrypted(
+        &self,
+        channel_key: &str,
+        scheme: &'static str,
+    ) -> Option<LiveTvError> {
+        let locked = || Some(LiveTvError::Upstream(format!("encrypted with {scheme}")));
+        let Some((country, id)) = channel_key.split_once(':') else {
+            return locked();
+        };
+        let Ok(snap) = self.channels(country).await else {
+            return locked();
+        };
+        let Some(idx) = snap.channel_index(id) else {
+            return locked();
+        };
+        let n = snap.channels[idx].sources.len().max(1);
+        let active = snap.active_source[idx].load(Ordering::Relaxed) % n;
+        if snap.channels[idx]
+            .sources
+            .get(active)
+            .is_some_and(|s| s.licence.is_some())
+        {
+            return None;
+        }
+        let now_ms = epoch_ms();
+        if let Some(health) = snap.health[idx].get(active) {
+            health.mark_encrypted(now_ms);
+        }
+        let next = (0..snap.channels[idx].sources.len())
+            .find(|&si| snap.health[idx][si].electable(now_ms));
+        if let Some(si) = next {
+            snap.active_source[idx].store(si, Ordering::Relaxed);
+        }
+        tracing::info!(
+            channel = channel_key,
+            demoted = active,
+            elected = ?next,
+            scheme,
+            "live tv media playlist is DRM-locked, source left out of the election"
+        );
+        if snap.encrypted(idx) {
+            Some(LiveTvError::Encrypted)
+        } else {
+            locked()
+        }
     }
 
     /// Headers (and dlive identity) of the channel's active source, for its
@@ -2479,12 +2673,15 @@ fn transcode_source(
     let n = channel.sources.len();
     let candidates: Vec<usize> = (0..n)
         .map(|step| (active + step) % n)
-        .filter(|&si| dlive::parse_sentinel(&channel.sources[si].url).is_none())
+        .filter(|&si| {
+            dlive::parse_sentinel(&channel.sources[si].url).is_none()
+                && !health[si].encrypted(now_ms)
+        })
         .collect();
     candidates
         .iter()
         .copied()
-        .find(|&si| !health[si].in_cooldown(now_ms))
+        .find(|&si| health[si].electable(now_ms))
         .or_else(|| candidates.first().copied())
 }
 
@@ -2602,6 +2799,7 @@ mod tests {
                     referrer: None,
                     tier: channels::classify_source(u),
                     origin: SourceOrigin::IptvOrg,
+                    licence: None,
                 })
                 .collect(),
         }
@@ -2775,6 +2973,161 @@ https://a/x.m3u8
         assert_eq!(first_variant_uri(media), None);
         let truncated = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\n";
         assert_eq!(first_variant_uri(truncated), None);
+    }
+
+    /// A fake broadcaster: `/drm/master.m3u8` is RTÉ's Apple DRM feed (a clear
+    /// master over a locked media playlist), `/clear.m3u8` plays.
+    async fn drm_rig(
+        licence: Option<channels::Licence>,
+        urls: &[&str],
+    ) -> (LiveTvService, Arc<CountrySnapshot>, Arc<AtomicUsize>) {
+        use axum::routing::get;
+        let drm_hits = Arc::new(AtomicUsize::new(0));
+        let hits = drm_hits.clone();
+        let app = axum::Router::new()
+            .route(
+                "/drm/master.m3u8",
+                get(move || {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    async {
+                        "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=347000,RESOLUTION=416x234\nv.m3u8\n"
+                    }
+                }),
+            )
+            .route(
+                "/drm/v.m3u8",
+                get(|| async {
+                    "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://df163382-1ddd-fdd5-bec9-822c1ec0f052\",KEYFORMAT=\"com.apple.streamingkeydelivery\",KEYFORMATVERSIONS=\"1\"\n#EXTINF:3.84,\ns-1.ts\n"
+                }),
+            )
+            .route(
+                "/drm/wv.m3u8",
+                get(|| async {
+                    "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"data:text/plain;base64,AAAAW3Bzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAADsIARIQ\",KEYFORMAT=\"urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed\",KEYFORMATVERSIONS=\"1\"\n#EXTINF:4,\nw-1.m4s\n"
+                }),
+            )
+            .route(
+                "/clear.m3u8",
+                get(|| async { "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nc-1.ts\n" }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let urls: Vec<String> = urls.iter().map(|p| format!("http://{addr}{p}")).collect();
+        let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+        let mut channel = channel_with(&refs);
+        for s in &mut channel.sources {
+            if s.url.contains("/drm/") {
+                s.licence.clone_from(&licence);
+            }
+        }
+        let snap = Arc::new(svc.build_snapshot(vec![channel]));
+        svc.inner
+            .snapshots
+            .write()
+            .unwrap()
+            .insert("ie".into(), snap.clone());
+        (svc, snap, drm_hits)
+    }
+
+    #[tokio::test]
+    async fn a_drm_source_is_never_elected_and_the_next_plays() {
+        let (svc, snap, drm_hits) = drm_rig(None, &["/drm/master.m3u8", "/clear.m3u8"]).await;
+        let mp = svc.master_playlist("ie", "c").await.unwrap();
+        assert_eq!(mp.source_index, 1);
+        assert!(snap.health[0][0].encrypted(epoch_ms()));
+        assert!(!snap.encrypted(0), "one feed plays");
+        assert!(!snap.unreachable(0));
+
+        // The player's report cools the clear feed down; nothing loops back
+        // to the locked one, not even the cooling-down pass.
+        svc.report_playback_failure("ie", "c").await.unwrap();
+        assert_eq!(snap.active_source[0].load(Ordering::Relaxed), 1);
+        let mp = svc.master_playlist("ie", "c").await.unwrap();
+        assert_eq!(mp.source_index, 1);
+        assert_eq!(drm_hits.load(Ordering::SeqCst), 1, "never fetched again");
+    }
+
+    #[tokio::test]
+    async fn a_channel_with_only_drm_sources_reports_encrypted() {
+        let (svc, snap, drm_hits) = drm_rig(None, &["/drm/master.m3u8"]).await;
+        assert!(matches!(
+            svc.master_playlist("ie", "c").await,
+            Err(LiveTvError::Encrypted)
+        ));
+        assert!(snap.encrypted(0));
+        assert!(!snap.unreachable(0), "said as encrypted, not as down");
+
+        svc.report_playback_failure("ie", "c").await.unwrap();
+        assert!(matches!(
+            svc.master_playlist("ie", "c").await,
+            Err(LiveTvError::Encrypted)
+        ));
+        assert_eq!(drm_hits.load(Ordering::SeqCst), 1, "no request to it again");
+
+        // Only the long recheck lifts the mark, not a success elsewhere.
+        snap.health[0][0].mark_success();
+        assert!(snap.health[0][0].encrypted(epoch_ms()));
+        let later = epoch_ms() + u64::try_from(DRM_RECHECK.as_millis()).unwrap() + 1;
+        assert!(snap.health[0][0].electable(later));
+    }
+
+    #[tokio::test]
+    async fn a_widevine_feed_stays_electable_only_with_a_licence() {
+        let entry = &m3u::parse(
+            "#EXTINF:-1 tvg-id=\"X.fr\",X\n#KODIPROP:inputstream.adaptive.license_type=com.widevine.alpha\n#KODIPROP:inputstream.adaptive.license_key=https://lic.example/wv\nhttp://x/wv.m3u8\n",
+        )[0];
+        let licence = channels::Licence::from_entry(entry);
+        assert_eq!(
+            licence,
+            Some(channels::Licence {
+                system: Some("com.widevine.alpha".into()),
+                key: "https://lic.example/wv".into(),
+            })
+        );
+
+        let (svc, snap, _) = drm_rig(licence, &["/drm/wv.m3u8", "/clear.m3u8"]).await;
+        let mp = svc.master_playlist("ie", "c").await.unwrap();
+        assert_eq!(mp.source_index, 0, "the licence keeps it in");
+        assert!(!snap.health[0][0].encrypted(epoch_ms()));
+        assert!(svc.note_encrypted("ie:c", "Widevine").await.is_none());
+        assert!(!snap.health[0][0].encrypted(epoch_ms()));
+
+        let (svc, snap, _) = drm_rig(None, &["/drm/wv.m3u8", "/clear.m3u8"]).await;
+        let mp = svc.master_playlist("ie", "c").await.unwrap();
+        assert_eq!(mp.source_index, 1, "no licence, left out");
+        assert!(snap.health[0][0].encrypted(epoch_ms()));
+    }
+
+    #[test]
+    fn a_licence_comes_from_kodiprops_or_drm_legacy() {
+        let parse = |text: &str| channels::Licence::from_entry(&m3u::parse(text)[0]);
+        assert_eq!(parse("#EXTINF:-1,X\nhttp://x/a.m3u8\n"), None);
+        assert_eq!(
+            parse(
+                "#EXTINF:-1,X\n#KODIPROP:inputstream.adaptive.drm_legacy=org.w3.clearkey|0123:4567\nhttp://x/a.mpd\n"
+            ),
+            Some(channels::Licence {
+                system: Some("org.w3.clearkey".into()),
+                key: "0123:4567".into(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_drm_media_playlist_met_in_the_proxy_rotates_away() {
+        let (svc, snap, _) = drm_rig(None, &["/clear.m3u8", "/drm/master.m3u8"]).await;
+        assert!(matches!(
+            svc.note_encrypted("ie:c", "FairPlay").await,
+            Some(LiveTvError::Upstream(_))
+        ));
+        assert!(snap.health[0][0].encrypted(epoch_ms()));
+        assert_eq!(snap.active_source[0].load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            svc.note_encrypted("ie:c", "FairPlay").await,
+            Some(LiveTvError::Encrypted)
+        ));
     }
 
     #[test]

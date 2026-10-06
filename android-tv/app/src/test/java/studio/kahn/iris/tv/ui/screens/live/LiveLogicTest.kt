@@ -4,6 +4,7 @@ import java.time.OffsetDateTime
 import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import studio.kahn.iris.tv.data.LiveChannel
 import studio.kahn.iris.tv.data.LiveCountry
@@ -52,21 +53,39 @@ class LiveLogicTest {
         assertEquals("https://cdn/logo.png", absolutize("https://iris", "https://cdn/logo.png"))
     }
 
-    private fun ch(id: String, cat: String? = null, geo: Boolean = false, dead: Boolean = false, part: Boolean = false, tnt: Int? = null) =
-        LiveChannel(categories = listOfNotNull(cat), geoBlocked = geo, id = id, name = id, not247 = part, tntNumber = tnt, unreachable = dead)
+    private fun ch(
+        id: String,
+        cat: String? = null,
+        geo: Boolean = false,
+        dead: Boolean = false,
+        part: Boolean = false,
+        tnt: Int? = null,
+        locked: Boolean? = null,
+    ) = LiveChannel(
+        categories = listOfNotNull(cat),
+        encrypted = locked,
+        geoBlocked = geo,
+        id = id,
+        name = id,
+        not247 = part,
+        tntNumber = tnt,
+        unreachable = dead,
+    )
 
     @Test
     fun categoriesByNameOtherLastAndTheUnplayableAtTheEnd() {
         val sections = channelSections(
-            listOf(ch("m6", tnt = 6), ch("x"), ch("dead", "Music", dead = true), ch("tf1", tnt = 1), ch("blocked", "Music", geo = true), ch("fine", "Music"), ch("k", "Kids")),
+            listOf(ch("m6", tnt = 6), ch("x"), ch("dead", "Music", dead = true), ch("tf1", tnt = 1), ch("blocked", "Music", geo = true), ch("locked", "Music", locked = true), ch("fine", "Music"), ch("k", "Kids")),
         )
         assertEquals(listOf(TNT_SECTION, "cat:Kids", "cat:Music", "cat:Other"), sections.map { it.key })
         assertEquals(listOf("tf1", "m6"), sections[0].channels.map { it.id })
-        assertEquals(listOf("fine", "dead", "blocked"), sections[2].channels.map { it.id })
+        assertEquals(listOf("fine", "dead", "blocked", "locked"), sections[2].channels.map { it.id })
     }
 
     @Test
     fun whyAChannelMayNotPlay() {
+        assertEquals("Encrypted by the broadcaster: it can't be played here.", channelNotice(ch("a", dead = true, locked = true)))
+        assertTrue(dimmed(ch("a", locked = true)))
         assertEquals("Not answering right now", channelNotice(ch("a", geo = true, dead = true)))
         assertEquals("May be blocked in your country", channelNotice(ch("a", geo = true)))
         assertEquals("Not on air all day", channelNotice(ch("a", part = true)))

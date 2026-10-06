@@ -160,9 +160,16 @@ pub struct DliveConfig {
     /// While open, every dlive source is skipped (unless nothing else plays).
     #[serde(default = "default_dlive_breaker_open_mins")]
     pub breaker_open_mins: u64,
-    /// Country code → dlive channel ids folded into that country's list.
+    /// Country code → dlive channel ids folded into that country's list,
+    /// created there even when nothing else carries them.
     #[serde(default = "default_dlive_countries")]
     pub countries: HashMap<String, Vec<u32>>,
+    /// Offer every other dlive channel as an extra source to a channel the
+    /// country already lists under the same name. A trailing country word in
+    /// the dlive name (`TF1 France`) restricts it to that country; no channel
+    /// is created and no country guessed for one that matches nothing.
+    #[serde(default = "default_true")]
+    pub merge_all: bool,
 }
 
 impl Default for DliveConfig {
@@ -180,6 +187,7 @@ impl Default for DliveConfig {
             breaker_failures: default_dlive_breaker_failures(),
             breaker_open_mins: default_dlive_breaker_open_mins(),
             countries: default_dlive_countries(),
+            merge_all: true,
         }
     }
 }
@@ -216,15 +224,19 @@ fn default_dlive_breaker_open_mins() -> u64 {
 }
 fn default_dlive_countries() -> HashMap<String, Vec<u32>> {
     // TNT networks, then the pay sports channels only dlive carries. C8
-    // (956) went off air in Feb 2025 and is left out.
-    HashMap::from([(
-        "fr".to_string(),
-        vec![
-            469, 950, 951, 952, 953, 470, 958, 959, 955, 957, 964, 962, 645, 963, 954, 961, 965,
-            121, 122, 463, 464, 271, 273, 116, 117, 118, 494, 495, 496, 497, 498, 499, 500, 119,
-            120, 772, 773, 960,
-        ],
-    )])
+    // (956) went off air in Feb 2025 and is left out. RTÉ One and RTÉ2: the
+    // broadcaster's own feeds are DRM-locked.
+    HashMap::from([
+        (
+            "fr".to_string(),
+            vec![
+                469, 950, 951, 952, 953, 470, 958, 959, 955, 957, 964, 962, 645, 963, 954, 961,
+                965, 121, 122, 463, 464, 271, 273, 116, 117, 118, 494, 495, 496, 497, 498, 499,
+                500, 119, 120, 772, 773, 960,
+            ],
+        ),
+        ("ie".to_string(), vec![364, 365]),
+    ])
 }
 
 /// `[live_tv.tuner]` — the tunerd network-tuner appliance. That's the whole
@@ -689,6 +701,8 @@ mod tests {
         assert!(!bare.dlive.enabled);
         assert_eq!(bare.dlive.players, vec![1, 2, 6]);
         assert!(bare.dlive.countries["fr"].contains(&469));
+        assert_eq!(bare.dlive.countries["ie"], vec![364, 365], "RTÉ One, RTÉ2");
+        assert!(bare.dlive.merge_all, "on by default");
         let on: LiveTvConfig =
             toml::from_str("[dlive]\nenabled = true\npage_budget = 8\n").unwrap();
         assert!(on.dlive.enabled);

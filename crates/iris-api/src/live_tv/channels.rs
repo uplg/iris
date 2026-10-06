@@ -42,11 +42,53 @@ pub struct StreamSource {
     pub tier: SourceTier,
     /// Who supplies the source — the first election key, ahead of the tier.
     pub origin: SourceOrigin,
+    /// DRM licence the playlist entry brings, if any. A DRM-locked feed with
+    /// one stays electable: a player given the licence can decrypt it.
+    pub licence: Option<Licence>,
+}
+
+/// A DRM licence carried by a playlist entry: Kodi's inputstream.adaptive
+/// properties (`license_type` + `license_key`, or the newer `drm_legacy`
+/// `type|key`), or the same as `#EXTINF` attributes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Licence {
+    /// `com.widevine.alpha`, `com.microsoft.playready`, `org.w3.clearkey`,
+    /// `clearkey`… as the playlist names it.
+    pub system: Option<String>,
+    /// A licence server URL, or `ClearKey` `kid:key` pairs.
+    pub key: String,
+}
+
+impl Licence {
+    pub fn from_entry(entry: &M3uEntry) -> Option<Self> {
+        let prop = |name: &str| {
+            entry
+                .kodi_props
+                .get(&format!("inputstream.adaptive.{name}"))
+                .or_else(|| entry.attrs.get(name))
+                .or_else(|| entry.attrs.get(&name.replace('_', "-")))
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| v.trim().to_string())
+        };
+        if let Some(key) = prop("license_key") {
+            return Some(Self {
+                system: prop("license_type"),
+                key,
+            });
+        }
+        let legacy = prop("drm_legacy")?;
+        let (system, key) = legacy.split_once('|')?;
+        (!key.trim().is_empty()).then(|| Self {
+            system: Some(system.trim().to_string()).filter(|s| !s.is_empty()),
+            key: key.trim().to_string(),
+        })
+    }
 }
 
 /// Which builder supplied a source. The election order across origins is
 /// Tuner → dlive's first player → Vavoo → dlive's other players → iptv-org →
-/// the extra playlists; [`SourceTier`] only orders sources inside an origin.
+/// the extra playlists → dlive channels merged by name alone; [`SourceTier`]
+/// only orders sources inside an origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceOrigin {
     Tuner,
@@ -57,6 +99,12 @@ pub enum SourceOrigin {
     },
     IptvOrg,
     Extra,
+    /// A dlive channel outside the country's allow-list, offered as an extra
+    /// source of a channel listed under the same name (`merge_all`): a last
+    /// fallback, behind every source the list itself brings.
+    DliveMerged {
+        rank: u8,
+    },
 }
 
 impl SourceOrigin {
@@ -68,12 +116,18 @@ impl SourceOrigin {
             Self::Dlive { .. } => 3,
             Self::IptvOrg => 4,
             Self::Extra => 5,
+            Self::DliveMerged { .. } => 6,
         }
+    }
+
+    /// Sources that only join a channel the list already has.
+    fn merge_only(self) -> bool {
+        matches!(self, Self::DliveMerged { .. })
     }
 
     fn player_rank(self) -> u8 {
         match self {
-            Self::Dlive { rank } => rank,
+            Self::Dlive { rank } | Self::DliveMerged { rank } => rank,
             _ => 0,
         }
     }
@@ -256,6 +310,9 @@ pub fn build_channels(
     // (`LEquipe.fr` vs `LEquipe21.fr`), which would otherwise yield two
     // channels both numbered N — one of them typically dead.
     let mut by_tnt: HashMap<u16, usize> = HashMap::new();
+    // Folded display name → index, for the merge-only origins: a listed
+    // channel whose identity is its tvg-id still matches by name.
+    let mut by_name: HashMap<String, usize> = HashMap::new();
 
     for (origin, playlist) in playlists {
         for entry in playlist {
@@ -279,15 +336,30 @@ pub fn build_channels(
                 user_agent: entry.header("http-user-agent").map(str::to_string),
                 referrer: entry.header("http-referrer").map(str::to_string),
                 origin: *origin,
+                licence: Licence::from_entry(entry),
             };
 
             let tnt_number = tnt_number_for(&identity, &normalize(&name), tnt_overrides);
+            let merge_only = origin.merge_only();
             let merge_idx = by_identity
                 .get(&identity)
                 .or_else(|| tnt_number.and_then(|n| by_tnt.get(&n)))
+                .or_else(|| by_name.get(&identity).filter(|_| merge_only))
                 .copied();
+            if merge_only {
+                let Some(idx) = merge_idx else {
+                    continue;
+                };
+                tracing::debug!(
+                    dlive = %entry.name,
+                    channel = %channels[idx].id,
+                    "dlive channel merged by name"
+                );
+            }
             if let Some(idx) = merge_idx {
-                by_identity.entry(identity).or_insert(idx);
+                if !merge_only {
+                    by_identity.entry(identity).or_insert(idx);
+                }
                 let ch = &mut channels[idx];
                 if ch.sources.iter().all(|s| s.url != source.url) {
                     ch.sources.push(source);
@@ -309,6 +381,7 @@ pub fn build_channels(
             if let Some(n) = tnt_number {
                 by_tnt.insert(n, channels.len());
             }
+            by_name.entry(normalize(&name)).or_insert(channels.len());
             by_identity.insert(identity.clone(), channels.len());
             channels.push(Channel {
                 id: identity,
@@ -319,17 +392,7 @@ pub fn build_channels(
                     .get("tvg-logo")
                     .cloned()
                     .filter(|s| !s.is_empty()),
-                categories: entry
-                    .attrs
-                    .get("group-title")
-                    .map(|g| {
-                        g.split(';')
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty() && *s != "Undefined")
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                categories: categories_of(entry),
                 geo_blocked,
                 not_24_7,
                 tnt_number,
@@ -337,14 +400,32 @@ pub fn build_channels(
             });
         }
     }
+    sort_listing(&mut channels);
+    channels
+}
 
-    for ch in &mut channels {
+/// `group-title` split on `;`, iptv-org's `Undefined` left out.
+fn categories_of(entry: &M3uEntry) -> Vec<String> {
+    entry
+        .attrs
+        .get("group-title")
+        .map(|g| {
+            g.split(';')
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && *s != "Undefined")
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Sources in election order; TNT channels first in Arcom order, then
+/// everything else grouped by first category (alphabetical), alphabetical
+/// within a group, uncategorized channels last.
+fn sort_listing(channels: &mut [Channel]) {
+    for ch in channels.iter_mut() {
         ch.sources.sort_by_key(source_order_key);
     }
-
-    // TNT channels first in Arcom order, then everything else grouped by
-    // first category (alphabetical), alphabetical within a group,
-    // uncategorized channels last.
     channels.sort_by(|a, b| {
         let key = |c: &Channel| {
             (
@@ -358,8 +439,6 @@ pub fn build_channels(
         };
         key(a).cmp(&key(b))
     });
-
-    channels
 }
 
 fn tnt_number_for(
@@ -468,6 +547,7 @@ pub fn merge_tuner_sources(channels: &mut [Channel], base_url: &str, grid: &[Tun
                 referrer: None,
                 tier: SourceTier::Tuner,
                 origin: SourceOrigin::Tuner,
+                licence: None,
             });
             ch.sources.sort_by_key(source_order_key);
         }
@@ -602,6 +682,7 @@ mod tests {
             name: name.to_string(),
             attrs,
             vlc_opts: HashMap::new(),
+            kodi_props: HashMap::new(),
             url: url.to_string(),
         }
     }
@@ -893,6 +974,7 @@ mod tests {
                     referrer: None,
                     tier: SourceTier::Community,
                     origin: SourceOrigin::IptvOrg,
+                    licence: None,
                 },
                 StreamSource {
                     url: "http://alt/M6-HD/index.m3u8".to_string(),
@@ -901,6 +983,7 @@ mod tests {
                     referrer: None,
                     tier: SourceTier::Community,
                     origin: SourceOrigin::IptvOrg,
+                    licence: None,
                 },
             ],
         );

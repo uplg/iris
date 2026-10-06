@@ -46,6 +46,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.tv.material3.Text
@@ -73,6 +74,7 @@ import studio.kahn.iris.tv.ui.components.Spinner
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.buildMediaSession
+import studio.kahn.iris.tv.ui.screens.live.ENCRYPTED_WORDS
 import studio.kahn.iris.tv.ui.screens.live.LiveWatchViewModel
 import studio.kahn.iris.tv.ui.screens.live.nextWords
 import studio.kahn.iris.tv.ui.screens.live.nowWords
@@ -166,6 +168,9 @@ fun LiveTvWatchScreen(
     val channelId by vm.channelId.collectAsStateWithLifecycle()
     val guide by vm.guide.collectAsStateWithLifecycle()
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    // Channels the master refused as DRM-locked on this visit, before the list says so.
+    var lockedHere by remember { mutableStateOf(emptySet<String>()) }
+    val encrypted = channels.firstOrNull { it.id == channelId }?.encrypted == true || channelId in lockedHere
     // STABLE state (not re-keyed) + reset per channel below: a long-lived
     // Player.Listener would otherwise capture a stale re-keyed state object
     // after a zap and count against the wrong channel.
@@ -242,11 +247,15 @@ fun LiveTvWatchScreen(
     }
 
     // (Re)load on a channel change, Retry, or a stage advance.
-    LaunchedEffect(channelId, serverUrl, retryNonce, stage) {
+    LaunchedEffect(channelId, serverUrl, retryNonce, stage, encrypted) {
         val url = serverUrl ?: return@LaunchedEffect
         errorMessage = null
         playing = false
         outputLost = false
+        if (encrypted) {
+            player.value?.stop()
+            return@LaunchedEffect
+        }
         val base = serverBase(url)
         val masterUrl = if (stage == DecodeStage.Server) {
             "${base}api/livetv/$country/channels/$channelId/transcode/master.m3u8"
@@ -277,8 +286,8 @@ fun LiveTvWatchScreen(
     // Stall escape hatch: re-armed per attempt, counted only while the screen is started and
     // the picture reaches someone (a stop is not a stall: it would persist a stage for 24 h).
     // A silent no-start walks the ladder; it never demotes the source nor burns the retry walk.
-    RepeatWhileStarted(listOf(channelId, retryNonce, serverUrl, stage, outputLost)) {
-        if (outputLost) return@RepeatWhileStarted
+    RepeatWhileStarted(listOf(channelId, retryNonce, serverUrl, stage, outputLost, encrypted)) {
+        if (outputLost || encrypted) return@RepeatWhileStarted
         delay(
             when (stage) {
                 DecodeStage.Hardware -> HW_STALL_MS
@@ -304,6 +313,10 @@ fun LiveTvWatchScreen(
         val p = player.value ?: return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
+                if (isEncryptedRefusal(error)) {
+                    lockedHere = lockedHere + channelId
+                    return
+                }
                 onFail(humanizePlaybackError(error).first)
             }
 
@@ -370,10 +383,10 @@ fun LiveTvWatchScreen(
         actionsShown = false
     }
 
-    LaunchedEffect(errorMessage, actionsShown) {
+    LaunchedEffect(errorMessage, actionsShown, encrypted) {
         runCatching {
             when {
-                errorMessage != null -> retryFocus.requestFocus()
+                errorMessage != null || encrypted -> retryFocus.requestFocus()
                 actionsShown -> actionsFocus.requestFocus()
                 else -> rootFocus.requestFocus()
             }
@@ -421,7 +434,7 @@ fun LiveTvWatchScreen(
                     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                         when {
                             swallowCentreUp -> true
-                            !actionsShown && errorMessage == null -> {
+                            !actionsShown && errorMessage == null && !encrypted -> {
                                 actionsShown = true
                                 swallowCentreUp = true
                                 true
@@ -437,7 +450,7 @@ fun LiveTvWatchScreen(
             .pointerInput(Unit) {
                 detectTapGestures {
                     overlayTick++
-                    if (errorMessage == null) actionsShown = !actionsShown
+                    if (errorMessage == null && !encrypted) actionsShown = !actionsShown
                 }
             },
     ) {
@@ -474,13 +487,22 @@ fun LiveTvWatchScreen(
             )
         }
 
-        if (errorMessage == null && !playing && !outputLost) {
+        if (errorMessage == null && !playing && !outputLost && !encrypted) {
             ConnectingNote(attempt = listOf(channelId, retryNonce, stage), stage = stage, autoRetryCount = autoRetryCount)
         }
 
         val error = errorMessage
-        if (error != null) {
+        if (encrypted) {
             LiveErrorCard(
+                title = "This channel can't be played",
+                message = ENCRYPTED_WORDS,
+                retryFocus = retryFocus,
+                onRetry = null,
+                onChannels = onBack,
+            )
+        } else if (error != null) {
+            LiveErrorCard(
+                title = "Stream unavailable",
                 message = error,
                 retryFocus = retryFocus,
                 onRetry = {
@@ -493,6 +515,11 @@ fun LiveTvWatchScreen(
         }
     }
 }
+
+/** The master answered 409: every feed of the channel is DRM-locked with no licence Iris can obtain. */
+private fun isEncryptedRefusal(error: PlaybackException): Boolean =
+    generateSequence<Throwable>(error) { it.cause }
+        .any { it is HttpDataSource.InvalidResponseCodeException && it.responseCode == 409 }
 
 /** The channel strip (the player's top bar, live): number and name, what is on now. */
 @Composable
@@ -656,9 +683,11 @@ private fun CenterNote(title: String, detail: String) {
 
 @Composable
 private fun LiveErrorCard(
+    title: String,
     message: String,
     retryFocus: FocusRequester,
-    onRetry: () -> Unit,
+    /** Null when trying again can't help: the focus goes to the way back. */
+    onRetry: (() -> Unit)?,
     onChannels: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize().background(IrisColor.overlay), contentAlignment = Alignment.Center) {
@@ -670,11 +699,15 @@ private fun LiveErrorCard(
                 .padding(IrisSpace.s8),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s4),
         ) {
-            StatusLine("Stream unavailable", tone = StatusTone.Down, style = IrisType.bodyStrong)
+            StatusLine(title, tone = StatusTone.Down, style = IrisType.bodyStrong)
             Text(message, style = IrisType.body, color = IrisColor.stageMuted)
             Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
-                ActionButton("Retry", onRetry, icon = Icons.Rounded.Refresh, modifier = Modifier.focusRequester(retryFocus))
-                ActionButton("Back to channels", onChannels, style = ActionStyle.Secondary)
+                if (onRetry != null) {
+                    ActionButton("Retry", onRetry, icon = Icons.Rounded.Refresh, modifier = Modifier.focusRequester(retryFocus))
+                    ActionButton("Back to channels", onChannels, style = ActionStyle.Secondary)
+                } else {
+                    ActionButton("Back to channels", onChannels, modifier = Modifier.focusRequester(retryFocus))
+                }
             }
         }
     }
