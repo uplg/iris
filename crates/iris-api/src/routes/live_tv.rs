@@ -493,15 +493,17 @@ pub(crate) async fn live_proxy(
     // off the window legitimately 404s — the player retries / gap-skips it).
     // Only genuine connection failures became a 502 back in `proxy_fetch`.
     // For segments, feed the outcome into source health so a persistently
-    // broken origin gets demoted and the next feed elected. A dlive segment
-    // answered with a web page is a failure too (no player can use it).
+    // broken origin gets demoted and the next feed elected: a failed status
+    // here, a streamed body once it ends. A dlive segment answered with a web
+    // page is a failure too (no player can use it).
     if !is_playlist {
         let html = from_dlive
             && upstream_ct
                 .as_deref()
                 .is_some_and(|ct| ct.to_ascii_lowercase().starts_with("text/html"));
-        svc.note_segment_result(&params.c, source, status.is_success() && !html)
-            .await;
+        if html || !status.is_success() {
+            svc.note_segment_result(&params.c, source, false).await;
+        }
         if html {
             return Err(ApiError::Upstream("dlive segment is a web page".into()));
         }
@@ -553,7 +555,7 @@ pub(crate) async fn live_proxy(
         builder = builder.header(header::CONTENT_LENGTH, len);
     }
     builder
-        .body(Body::from_stream(resp.bytes_stream()))
+        .body(svc.segment_body(&params.c, source, resp))
         .map_err(ApiError::from)
 }
 

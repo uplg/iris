@@ -2195,6 +2195,37 @@ impl LiveTvService {
         Ok(served)
     }
 
+    /// A proxied segment's body, streamed through and its outcome recorded
+    /// once it ends ([`Self::note_segment_result`]): a success when the last
+    /// byte arrived, a failure when the upstream died mid-body. A client
+    /// hanging up first records nothing — that says nothing of the source.
+    pub fn segment_body(
+        &self,
+        channel_key: &str,
+        source: Option<proxy::SourceTag>,
+        resp: reqwest::Response,
+    ) -> axum::body::Body {
+        use futures::StreamExt as _;
+        let outcome = Some((self.clone(), channel_key.to_string(), source));
+        let body = resp.bytes_stream().boxed();
+        let stream =
+            futures::stream::unfold((body, outcome), |(mut body, mut outcome)| async move {
+                let item = body.next().await;
+                let ended = match &item {
+                    Some(Ok(_)) => None,
+                    Some(Err(_)) => Some(false),
+                    None => Some(true),
+                };
+                if let Some(ok) = ended
+                    && let Some((svc, channel_key, source)) = outcome.take()
+                {
+                    svc.note_segment_result(&channel_key, source, ok).await;
+                }
+                item.map(|chunk| (chunk, (body, outcome)))
+            });
+        axum::body::Body::from_stream(stream)
+    }
+
     /// Record the outcome of a segment/key fetch for the source that minted
     /// its URL. A run of failures (broken origin that serves a valid playlist
     /// but 404s its segments) demotes the source and, when it is the elected
@@ -3214,18 +3245,42 @@ https://a/x.m3u8
         use axum::routing::get;
         let agents = Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = agents.clone();
-        let app = axum::Router::new().route(
-            "/gone.ts",
-            get(move |headers: http::HeaderMap| {
-                let ua = headers
-                    .get(http::header::USER_AGENT)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or_default()
-                    .to_string();
-                seen.lock().unwrap().push(ua);
-                async { axum::http::StatusCode::NOT_FOUND }
-            }),
-        );
+        let chunk = || Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"ts"));
+        let app = axum::Router::new()
+            .route(
+                "/gone.ts",
+                get(move |headers: http::HeaderMap| {
+                    let ua = headers
+                        .get(http::header::USER_AGENT)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string();
+                    seen.lock().unwrap().push(ua);
+                    async { axum::http::StatusCode::NOT_FOUND }
+                }),
+            )
+            .route("/full.ts", get(|| async { "a whole segment" }))
+            .route(
+                "/cut.ts",
+                get(move || async move {
+                    use futures::StreamExt as _;
+                    // The cut comes after the headers went out.
+                    let cut = futures::stream::once(async {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        Err(std::io::Error::other("cut"))
+                    });
+                    axum::body::Body::from_stream(futures::stream::iter([chunk()]).chain(cut))
+                }),
+            )
+            .route(
+                "/endless.ts",
+                get(move || async move {
+                    use futures::StreamExt as _;
+                    let endless =
+                        futures::stream::iter([chunk()]).chain(futures::stream::pending());
+                    axum::body::Body::from_stream(endless)
+                }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -3305,6 +3360,40 @@ https://a/x.m3u8
             ["UA-1"],
             "untagged: the elected feed"
         );
+    }
+
+    #[tokio::test]
+    async fn a_streamed_segment_counts_once_its_body_ends() {
+        use futures::StreamExt as _;
+        let (svc, snap, _, gone) = segment_rig().await;
+        let host = gone.trim_end_matches("/gone.ts");
+        let tag = Some(proxy::SourceTag::of(0, &snap.channels[0].sources[0].url));
+        let failures = || snap.health[0][0].segment_failures.load(Ordering::Relaxed);
+        let body = |path: &str| {
+            let svc = svc.clone();
+            let url = format!("{host}{path}");
+            async move {
+                let fetched = proxy_segment(&svc, tag, &url).await;
+                svc.segment_body("ie:c", fetched.source, fetched.resp)
+            }
+        };
+
+        let cut = body("/cut.ts").await;
+        assert_eq!(failures(), 0, "nothing counted before the body ends");
+        assert!(axum::body::to_bytes(cut, usize::MAX).await.is_err());
+        assert_eq!(failures(), 1, "a body dying mid-stream is a failure");
+
+        let mut endless = body("/endless.ts").await.into_data_stream();
+        assert!(endless.next().await.unwrap().is_ok());
+        drop(endless);
+        assert_eq!(failures(), 1, "a client hanging up says nothing");
+
+        let full = body("/full.ts").await;
+        assert_eq!(
+            &axum::body::to_bytes(full, usize::MAX).await.unwrap()[..],
+            b"a whole segment"
+        );
+        assert_eq!(failures(), 0, "a finished body is a success");
     }
 
     #[tokio::test]
