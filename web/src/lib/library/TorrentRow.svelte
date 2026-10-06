@@ -3,7 +3,7 @@
 	// words, who added it, and what can be done: play it, open its files, delete it. Delete is
 	// for an admin or whoever added it; anyone else sees it, not operable, and why.
 	import { tmdbImage, torrents, type CollectionListItem, type ContinueWatchingItem, type TorrentView } from '@iris/api/client';
-	import { formatSize, isVideo, percent, when } from '@iris/api/format';
+	import { formatSize, isVideo, percent, ago } from '@iris/api/format';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture, unavailable } from '#lib/gesture.svelte.ts';
 	import Poster from '#lib/components/Poster.svelte';
@@ -37,7 +37,7 @@
 	const facts = $derived(
 		[
 			`Added by ${t.added_by_name}`,
-			when(Date.parse(t.added_at)),
+			ago(t.added_at, 'short'),
 			t.source_provider && `from ${t.source_provider}`,
 			`${formatSize(t.uploaded_bytes_total)} sent`,
 			ratio !== null && `ratio ${ratio.toFixed(2)}`

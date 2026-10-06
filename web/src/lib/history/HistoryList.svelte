@@ -9,7 +9,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import TitlePoster from './TitlePoster.svelte';
 	import { canRestore, itemKey, type Group, type Item } from './groups.ts';
-	import { onDay } from '@iris/api/format';
+	import { ago } from '@iris/api/format';
 	import { progressWords, watchedShare, whatWatched } from './words.ts';
 	import { watchHref } from '#lib/paths.ts';
 
@@ -26,7 +26,7 @@
 
 	const label = (group: Group, it: Item) => (group.solo ? group.title : (whatWatched(it) ?? it.torrent_name));
 	const facts = (it: Item) =>
-		`${progressWords(it.position_seconds, it.duration_seconds, it.completed)} · Last watched ${onDay(it.last_watched_at)}`;
+		`${progressWords(it.position_seconds, it.duration_seconds, it.completed)} · Last watched ${ago(it.last_watched_at)}`;
 	const restore = (it: Item) => onrestore && g.run(() => onrestore(it), undefined, itemKey(it));
 </script>
 

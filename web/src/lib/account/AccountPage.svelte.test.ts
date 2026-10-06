@@ -81,7 +81,7 @@ describe('account page', () => {
 			.element(
 				keyRows()
 					.nth(1)
-					.getByText(/Last used today at/)
+					.getByText(/Last used (just now|[0-9]+ min ago|today at)/)
 			)
 			.toBeVisible();
 		await expect.element(keyRows().nth(1).getByText('Synced')).not.toBeInTheDocument();

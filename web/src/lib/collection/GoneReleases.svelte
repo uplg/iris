@@ -4,7 +4,8 @@
 	// infohash: the saved position resumes), « Hide » takes it off this page for this person only.
 	import { me, type GoneReleaseEntry } from '@iris/api/client';
 	import { fetchAgain } from '#lib/regrab.ts';
-	import { formatRecentTime, formatSize, formatTimecode, percent, plural } from '@iris/api/format';
+	import { ago, formatSize, plural } from '@iris/api/format';
+	import { progressWords } from '#lib/history/words.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { refocus } from '#lib/focus.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -19,13 +20,11 @@
 	let list = $state<HTMLElement>();
 
 	function watchLine(r: GoneReleaseEntry): string | null {
-		if (r.watched) return r.last_watched_at ? `Watched ${formatRecentTime(r.last_watched_at)}` : 'Watched';
+		if (r.watched) return r.last_watched_at ? `Watched ${ago(r.last_watched_at)}` : 'Watched';
 		const pos = r.position_seconds ?? 0;
 		if (pos <= 0) return null;
-		const share = r.duration_seconds && r.duration_seconds > 0 ? percent(Math.min(100, (pos / r.duration_seconds) * 100)) : null;
-		return ['Stopped at', formatTimecode(pos), share ? `(${share})` : null, r.last_watched_at ? formatRecentTime(r.last_watched_at) : null]
-			.filter(Boolean)
-			.join(' ');
+		const how = progressWords(pos, r.duration_seconds);
+		return r.last_watched_at ? `${how}, ${ago(r.last_watched_at)}` : how;
 	}
 
 	/** The row leaves the list: the focus goes to the next one, else the title. */
@@ -53,7 +52,7 @@
 					{#if line}<StatusLine tone={r.watched ? 'ok' : 'info'} text={line} />{/if}
 					<p class="release">{r.name}</p>
 					<p class="hint">
-						{[formatSize(r.total_size_bytes), `via ${r.source_provider}`, r.deleted_at ? `removed ${formatRecentTime(r.deleted_at)}` : null]
+						{[formatSize(r.total_size_bytes), `via ${r.source_provider}`, r.deleted_at ? `removed ${ago(r.deleted_at)}` : null]
 							.filter(Boolean)
 							.join(' · ')}
 					</p>

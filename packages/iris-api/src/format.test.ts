@@ -14,8 +14,7 @@ import {
 	plural,
 	prettySceneName,
 	timeLeft,
-	until,
-	when
+	until
 } from './format';
 
 describe('format', () => {
@@ -71,7 +70,6 @@ describe('times and names, said one way', () => {
 		const at = new Date(2026, 9, 6, 21, 5);
 		expect(clockTime(at.toISOString())).toBe('21:05');
 		expect(clockTime('not a date')).toBe('');
-		expect(when(at.getTime(), at.getTime() + 60_000)).toBe('21:05');
 	});
 
 	it('a file’s own name; nothing for no path', () => {
@@ -91,11 +89,21 @@ describe('moments in a list', () => {
 	const at = (d: number, h: number, m = 0) => new Date(2026, 9, d, h, m).getTime();
 
 	it('a recent moment to the minute, then by its day', () => {
-		expect(ago(now - 20_000, now)).toBe('just now');
-		expect(ago(now - 12 * 60_000, now)).toBe('12 min ago');
-		expect(ago(at(6, 9, 5), now)).toBe('today at 09:05');
-		expect(ago(at(5, 21, 4), now)).toBe('yesterday at 21:04');
-		expect(ago(at(1, 12), now)).toBe('on Thursday');
+		expect(ago(now - 20_000, 'sentence', now)).toBe('just now');
+		expect(ago(now - 12 * 60_000, 'sentence', now)).toBe('12 min ago');
+		expect(ago(at(6, 9, 5), 'sentence', now)).toBe('today at 09:05');
+		expect(ago(at(5, 21, 4), 'sentence', now)).toBe('yesterday at 21:04');
+		expect(ago(at(1, 12), 'sentence', now)).toBe('on Thursday');
+		expect(ago(new Date(2026, 8, 3, 12).getTime(), 'sentence', now)).toBe('on 3 Sept');
+	});
+
+	it('the short style says the same moment without « at » and « on »', () => {
+		expect(ago(now - 12 * 60_000, 'short', now)).toBe('12 min ago');
+		expect(ago(at(6, 9, 5), 'short', now)).toBe('today 09:05');
+		expect(ago(at(5, 21, 4), 'short', now)).toBe('yesterday 21:04');
+		expect(ago(at(1, 12), 'short', now)).toBe('Thursday');
+		expect(ago(new Date(2026, 8, 3, 12).getTime(), 'short', now)).toBe('3 Sept');
+		expect(ago(new Date(2025, 8, 3, 12).getTime(), 'short', now)).toBe('3 Sept 2025');
 	});
 
 	it('a day heading: today, yesterday, else the whole date', () => {

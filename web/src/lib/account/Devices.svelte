@@ -5,7 +5,7 @@
 	// refetchInterval, no timer of our own) until the new device appears, or until the code's
 	// life is over (10 min on the server), when the wait ends and says so.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { onDay, plural } from '@iris/api/format';
+	import { ago, onDay, plural } from '@iris/api/format';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -138,7 +138,7 @@
 	<Loaded {value} empty={list.data?.length === 0} emptyText="No paired devices yet.">
 		<ul class="plain-list">
 			{#each list.data ?? [] as d (d.jti)}
-				<ListRow second="Paired {onDay(d.issued_at)} · Signed in until {onDay(d.expires_at).replace(/^on /, '')}">
+				<ListRow second="Paired {ago(d.issued_at)} · Signed in until {onDay(d.expires_at).replace(/^on /, '')}">
 					<Icon name="tv" /><span>{name(d)}</span>{#if d.kind && d.label}<span class="chip">{KINDS[d.kind] ?? d.kind}</span>{/if}
 					{#snippet end()}
 						<ConfirmDialog

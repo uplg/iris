@@ -6,7 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { follows, searchDetails, tmdbImage, torrents } from '@iris/api/client';
-	import { fileName, formatRelative, formatSize, kindWord, languageLabel, plural, prettySceneName } from '@iris/api/format';
+	import { fileName, ago, formatSize, kindWord, languageLabel, plural, prettySceneName } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { KEYS, read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -104,7 +104,7 @@
 	);
 	const uploaded = $derived.by(() => {
 		const at = d?.uploaded_at ?? hit?.uploaded_at;
-		const when = at ? formatRelative(at) : d?.age ? `${d.age} ago` : null;
+		const when = at ? ago(at, 'short') : d?.age ? `${d.age} ago` : null;
 		const who = d?.uploader ?? hit?.uploader;
 		return [when, who ? `by ${who}` : null].filter(Boolean).join(' ');
 	});

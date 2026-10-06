@@ -5,7 +5,7 @@
 	// focus then on the list's title). Passkeys are optional here: the password keeps working,
 	// so the last one can go too. « Add a passkey » only where the browser can make one.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { onDay, plural } from '@iris/api/format';
+	import { ago, plural } from '@iris/api/format';
 	import { passkeys, register, supported, type PasskeyView } from '@iris/api/passkeys';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -28,7 +28,7 @@
 	let title = $state<HTMLElement>();
 	const keyName = (k: PasskeyView) => k.name || 'Unnamed passkey';
 	const facts = (k: PasskeyView) =>
-		`Added ${onDay(k.created_at)} · ${k.last_used_at ? `Last used ${onDay(k.last_used_at)}` : 'Never used yet'}`;
+		`Added ${ago(k.created_at)} · ${k.last_used_at ? `Last used ${ago(k.last_used_at)}` : 'Never used yet'}`;
 
 	async function closeRename(k: PasskeyView) {
 		renaming = null;

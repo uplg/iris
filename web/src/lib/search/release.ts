@@ -3,17 +3,7 @@
 // can deliver it. Every search surface (grid, list, details) reads these, never its own.
 
 import type { LibraryMatch, ProviderResultMeta, SearchResult } from '@iris/api/client';
-import {
-	episodeCode,
-	fileName,
-	formatRelative,
-	formatSize,
-	kindWord,
-	languageLabel,
-	plural,
-	prettySceneName,
-	timeLeft
-} from '@iris/api/format';
+import { episodeCode, fileName, ago, formatSize, kindWord, languageLabel, plural, prettySceneName, timeLeft } from '@iris/api/format';
 import { watchHref } from '#lib/paths.ts';
 import { resumeOf } from '#lib/watched.ts';
 
@@ -76,13 +66,13 @@ export function releaseChips(r: SearchResult): string[] {
 	].filter((c): c is string => !!c);
 }
 
-/** "142 seeders · 12.4 GB · torr9 · 3d ago" */
+/** « 142 seeders · 12.4 GB · torr9 · 3 Oct » */
 export function factsLine(r: SearchResult): string {
 	return [
 		seedersWords(r.seeders),
 		typeof r.size_bytes === 'number' ? formatSize(r.size_bytes) : null,
 		r.provider_id,
-		r.uploaded_at ? formatRelative(r.uploaded_at) : null
+		r.uploaded_at ? ago(r.uploaded_at, 'short') : null
 	]
 		.filter(Boolean)
 		.join(' · ');

@@ -48,7 +48,9 @@
 			{#if !play.completed}<Meter thin share={watchedShare(play.position_seconds, play.duration_seconds)} />{/if}
 		</span>
 	</div>
-	<time class="when" datetime={play.last_watched_at}>{recent ? ago(play.last_watched_at, now) : clockTime(play.last_watched_at)}</time>
+	<time class="when" datetime={play.last_watched_at}
+		>{recent ? ago(play.last_watched_at, 'sentence', now) : clockTime(play.last_watched_at)}</time
+	>
 </li>
 
 <style>

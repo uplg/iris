@@ -5,7 +5,7 @@
 	// turns on. The switch shows what the server answered, never ahead of it.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { admin, type ProviderStatus } from '@iris/api/client';
-	import { onDay } from '@iris/api/format';
+	import { ago } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { Gesture } from '#lib/gesture.svelte.ts';
 	import Group from '#lib/components/Group.svelte';
@@ -26,7 +26,7 @@
 		const s = p.last_search;
 		if (!s || !p.enabled) return null;
 		const outcome = s.error ? `failed after ${latency(s.latency_ms)}: ${s.error}` : `answered in ${latency(s.latency_ms)}`;
-		return `Last search ${onDay(s.at)}: ${outcome}`;
+		return `Last search ${ago(s.at)}: ${outcome}`;
 	};
 	const failing = (p: ProviderStatus) => p.enabled && !!p.last_search?.error;
 	const summary = $derived.by(() => {
