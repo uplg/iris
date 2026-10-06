@@ -37,13 +37,14 @@ fun LiveTvScreen(
     val guide by vm.guide.collectAsStateWithLifecycle()
     val query by vm.query.collectAsStateWithLifecycle()
     val results by vm.results.collectAsStateWithLifecycle()
+    val usual by vm.usual.collectAsStateWithLifecycle()
     // Screen-scoped: the grid remounts when results swap in and out, and a
     // grid-scoped flag stole the focus from the search field mid-typing.
     val focusedOnce = rememberSaveable { mutableStateOf(false) }
     val format = remember(context) { DateFormat.getTimeFormat(context) }
     val clock = remember(format) { { t: OffsetDateTime -> format.format(Date.from(t.toInstant())) } }
     LiveTvContent(
-        ui = LiveTvUi(countries, country, channels, guide, query, results),
+        ui = LiveTvUi(countries, country, channels, guide, query, results, usual),
         clock = clock,
         countryName = vm::countryName,
         onQueryChange = vm::onQueryChange,

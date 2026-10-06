@@ -4,10 +4,13 @@ import android.graphics.Bitmap
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.core.graphics.get
+import java.text.Normalizer
 import java.time.OffsetDateTime
 import java.util.concurrent.ConcurrentHashMap
 import studio.kahn.iris.tv.data.LiveChannel
+import studio.kahn.iris.tv.data.LiveCountry
 import studio.kahn.iris.tv.data.LiveProgramme
+import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.theme.IrisColor
 
 /** 0..1 position of [nowMs] inside a programme, null outside its window (the web's `programmeProgress`). */
@@ -31,21 +34,71 @@ fun nextWords(p: LiveProgramme, clock: (OffsetDateTime) -> String): String {
     return if (at.isNotEmpty()) "Next at $at: ${p.title}" else "Next: ${p.title}"
 }
 
-/** A country's channels, the web's order: the numbered TNT ones first, then by first category. */
+/** A section of a country's channels; [key] is the category filter's value (web `guide.ts`). */
 @Immutable
-data class ChannelSection(val title: String, val channels: List<LiveChannel>)
+data class ChannelSection(val key: String, val title: String, val channels: List<LiveChannel>)
 
+const val TNT_SECTION = "tnt"
+private const val OTHER = "Other"
+
+/**
+ * The French free-to-air channels by their number, then one section per first category
+ * (alphabetical, "Other" last). Within a category, a channel that will likely not play goes
+ * to the end; the free-to-air ones keep their numbers' order.
+ */
 fun channelSections(channels: List<LiveChannel>): List<ChannelSection> {
-    val tnt = channels.filter { it.tntNumber != null }
+    val tnt = channels.filter { it.tntNumber != null }.sortedBy { it.tntNumber }
     val byCategory = LinkedHashMap<String, MutableList<LiveChannel>>()
     channels.filter { it.tntNumber == null }.forEach { ch ->
-        byCategory.getOrPut(ch.categories.firstOrNull() ?: "Other") { mutableListOf() }.add(ch)
+        byCategory.getOrPut(ch.categories.firstOrNull() ?: OTHER) { mutableListOf() }.add(ch)
     }
+    val titles = byCategory.keys.sortedWith(compareBy<String> { it == OTHER }.thenBy { it })
     return buildList {
-        if (tnt.isNotEmpty()) add(ChannelSection("TNT", tnt))
-        byCategory.forEach { (title, list) -> add(ChannelSection(title, list)) }
+        if (tnt.isNotEmpty()) add(ChannelSection(TNT_SECTION, "Free-to-air (TNT)", tnt))
+        titles.forEach { title ->
+            add(ChannelSection("cat:$title", title, byCategory.getValue(title).sortedBy { if (dimmed(it)) 1 else 0 }))
+        }
     }
 }
+
+/** Why a channel may not play, in words; null when nothing is known against it. */
+fun channelNotice(c: LiveChannel): String? = when {
+    c.unreachable == true -> "Not answering right now"
+    c.geoBlocked -> "May be blocked in your country"
+    c.not247 -> "Not on air all day"
+    else -> null
+}
+
+/** Said less loudly: a channel that will likely not play. */
+fun dimmed(c: LiveChannel): Boolean = c.unreachable == true || c.geoBlocked
+
+/** How many picked countries the TV keeps. */
+const val RECENT_COUNTRIES = 3
+
+/** [code] picked: first of the recent ones, the oldest falling off. */
+fun rememberCountry(recent: List<String>, code: String): List<String> =
+    (listOf(code) + recent.filter { it != code }).take(RECENT_COUNTRIES)
+
+/** The household's usual countries: the server's default first, then the ones last picked (only those still offered). */
+fun usualCountries(defaultCode: String?, recent: List<String>, offered: List<LiveCountry>): List<LiveCountry> {
+    val byCode = offered.associateBy { it.code }
+    return (listOfNotNull(defaultCode) + recent).distinct().mapNotNull { byCode[it] }
+}
+
+private fun fold(s: String): String =
+    Normalizer.normalize(s, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").lowercase().trim()
+
+/** The countries a typed text names: a name starting with it first, then one containing it, or the code itself. */
+fun findCountries(countries: List<LiveCountry>, text: String): List<LiveCountry> {
+    val q = fold(text)
+    if (q.isEmpty()) return countries
+    val (starts, rest) = countries.partition { fold(it.name).startsWith(q) || it.code == q }
+    return starts + rest.filter { fold(it.name).contains(q) }
+}
+
+/** "France · 42 channels", or the name alone when the server does not know yet. */
+fun countryLabel(c: LiveCountry): String =
+    listOfNotNull("${c.flag} ${c.name}", c.channelCount?.let { plural(it, "channel") }).joinToString(" · ")
 
 /** A server-relative path (`/api/livetv/logo?…`) made absolute against the Iris base URL. */
 fun absolutize(base: String, path: String?): String? {
