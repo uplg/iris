@@ -127,6 +127,44 @@ pub async fn add(
         .ok_or(sqlx::Error::RowNotFound)
 }
 
+/// Every follow, for the boot repair of keys taken from release names.
+pub async fn list_all(pool: &SqlitePool) -> Result<Vec<FollowRow>, sqlx::Error> {
+    sqlx::query_as::<_, FollowRow>(concat!(
+        "SELECT ",
+        follow_columns!(),
+        " FROM series_follows"
+    ))
+    .fetch_all(pool)
+    .await
+}
+
+/// Give a follow its proper key and name. When the user already follows
+/// that key, the misnamed row is the duplicate and goes. Returns whether the
+/// row was re-keyed (`false`: deleted as a duplicate).
+pub async fn rekey(
+    pool: &SqlitePool,
+    row: &FollowRow,
+    normalized_name: &str,
+    name: &str,
+) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query(
+        "UPDATE OR IGNORE series_follows SET normalized_name = ?2, name = ?3 WHERE id = ?1",
+    )
+    .bind(row.id)
+    .bind(normalized_name)
+    .bind(name)
+    .execute(pool)
+    .await?;
+    if updated.rows_affected() == 1 {
+        return Ok(true);
+    }
+    sqlx::query("DELETE FROM series_follows WHERE id = ?1")
+        .bind(row.id)
+        .execute(pool)
+        .await?;
+    Ok(false)
+}
+
 pub async fn delete(pool: &SqlitePool, user_id: UserId, id: Uuid) -> Result<bool, sqlx::Error> {
     let user: Uuid = user_id.into();
     let res = sqlx::query("DELETE FROM series_follows WHERE user_id = ?1 AND id = ?2")

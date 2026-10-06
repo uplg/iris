@@ -273,6 +273,11 @@ fn spawn_background_jobs(
         });
     }
 
+    {
+        let db = app_state.db().clone();
+        tokio::spawn(async move { routes::follows::repair_release_named_follows(&db).await });
+    }
+
     // Collection assignment backfill — attaches a `collections` row to
     // every existing torrent that lacks one. Runs at boot AND every
     // 5 min after that — the engine's snapshot list isn't fully

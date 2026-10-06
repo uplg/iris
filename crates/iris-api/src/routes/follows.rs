@@ -59,6 +59,49 @@ pub(crate) struct CreateFollowRequest {
     tmdb_id: Option<i64>,
 }
 
+/// A follow's key and display name from what a client sent. A release name
+/// (`Puis.Je.Vous.Aider.S01.VOSTFR.1080p…`, or one with a season or episode
+/// marker) follows its SCENE title; a plain title stays as written, so a dot
+/// in `Mr. Robot` is never read as an extension.
+pub(crate) fn follow_identity(name: &str) -> (String, String) {
+    let release_like = |p: &iris_media::filename::Parsed| {
+        p.season.is_some() || p.episode.is_some() || !name.contains(char::is_whitespace)
+    };
+    let title = iris_media::filename::parse(&format!("{name}.mkv"))
+        .filter(release_like)
+        .map(|p| p.title)
+        .filter(|t| !series_key(t).is_empty())
+        .unwrap_or_else(|| name.to_owned());
+    (series_key(&title), title)
+}
+
+/// Boot repair: follows created from a release name (by clients before
+/// [`follow_identity`]) never met their collection, so their watchlist card
+/// showed the raw name and no trusted poster.
+pub(crate) async fn repair_release_named_follows(pool: &iris_db::SqlitePool) {
+    let rows = match iris_db::follows::list_all(pool).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "follow repair: list failed");
+            return;
+        }
+    };
+    for row in rows {
+        let (key, name) = follow_identity(&row.name);
+        // A plain name is left alone: its key may carry what the name can't
+        // say (the collection's `anime:` prefix, set by the grab path).
+        if name == row.name || key.is_empty() || key == row.normalized_name {
+            continue;
+        }
+        match iris_db::follows::rekey(pool, &row, &key, &name).await {
+            Ok(kept) => {
+                tracing::info!(from = %row.normalized_name, to = %key, kept, "follow repair: re-keyed");
+            }
+            Err(e) => tracing::warn!(error = %e, follow = %row.id, "follow repair failed"),
+        }
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/api/me/follows",
@@ -79,13 +122,12 @@ pub(crate) async fn create(
     if trimmed.is_empty() {
         return Err(ApiError::BadRequest("name is required".into()));
     }
-    let normalized = series_key(trimmed);
+    let (normalized, name) = follow_identity(trimmed);
     if normalized.is_empty() {
         return Err(ApiError::BadRequest("name does not normalise".into()));
     }
 
-    let row =
-        iris_db::follows::add(state.db(), user.id, &normalized, trimmed, body.tmdb_id).await?;
+    let row = iris_db::follows::add(state.db(), user.id, &normalized, &name, body.tmdb_id).await?;
 
     // Kick off an immediate background scan so the series page
     // shows `dispo` chips on first visit instead of waiting on the
@@ -2068,6 +2110,80 @@ async fn pick_live_singleton(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_follow_takes_the_scene_title_of_a_release_name() {
+        use super::follow_identity;
+        assert_eq!(
+            follow_identity("Puis.Je.Vous.Aider.S01.VOSTFR.1080p.WEBRip.AAC.2.0.x264-NoTag"),
+            (
+                "puis je vous aider".to_owned(),
+                "Puis Je Vous Aider".to_owned()
+            )
+        );
+        assert_eq!(
+            follow_identity("Puis Je Vous Aider S01 VOSTFR 1080p").0,
+            "puis je vous aider"
+        );
+        assert_eq!(
+            follow_identity("Mr. Robot"),
+            ("mr robot".to_owned(), "Mr. Robot".to_owned()),
+            "a plain title keeps its dot"
+        );
+        assert_eq!(follow_identity("Taxi Driver 2021").1, "Taxi Driver 2021");
+        assert_eq!(
+            follow_identity("1923"),
+            ("1923".to_owned(), "1923".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_boot_repair_rekeys_a_release_named_follow_and_drops_a_duplicate() {
+        let pool = iris_db::test_support::migrated_pool().await;
+        let user = iris_db::test_support::make_user(&pool).await;
+        let other = iris_db::test_support::make_user(&pool).await;
+        let raw = "Puis.Je.Vous.Aider.S01.VOSTFR.1080p.WEBRip.AAC.2.0.x264-NoTag";
+        let bad = "puis je vous aider s01 vostfr 1080p webrip aac 2 0 x264 notag";
+        iris_db::follows::add(&pool, user, bad, raw, Some(209_275))
+            .await
+            .unwrap();
+        iris_db::follows::add(&pool, other, bad, raw, None)
+            .await
+            .unwrap();
+        iris_db::follows::add(
+            &pool,
+            other,
+            "puis je vous aider",
+            "Puis Je Vous Aider",
+            None,
+        )
+        .await
+        .unwrap();
+        iris_db::follows::add(&pool, user, "anime:frieren", "Frieren", None)
+            .await
+            .unwrap();
+        super::repair_release_named_follows(&pool).await;
+        let mine = iris_db::follows::list_for_user(&pool, user).await.unwrap();
+        let mut keys: Vec<_> = mine
+            .iter()
+            .map(|f| (f.normalized_name.as_str(), f.name.as_str()))
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                ("anime:frieren", "Frieren"),
+                ("puis je vous aider", "Puis Je Vous Aider")
+            ]
+        );
+        assert_eq!(
+            iris_db::follows::list_for_user(&pool, other)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     use super::*;
 
     fn parsed(title: &str) -> iris_media::filename::Parsed {
