@@ -2,6 +2,7 @@ package studio.kahn.iris.tv.ui.screens.live
 
 import java.time.OffsetDateTime
 import java.util.Locale
+import androidx.media3.common.PlaybackException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -11,6 +12,13 @@ import studio.kahn.iris.tv.data.LiveCountry
 import studio.kahn.iris.tv.data.LiveProgramme
 
 class LiveLogicTest {
+    @Test
+    fun fallingBehindTheLiveEdgeRejoinsItWithoutBlamingTheFeed() {
+        assertEquals(LiveErrorStep.Rejoin, liveErrorStep(PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW, encryptedRefusal = false))
+        assertEquals(LiveErrorStep.Rotate, liveErrorStep(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS, encryptedRefusal = false))
+        assertEquals(LiveErrorStep.Locked, liveErrorStep(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS, encryptedRefusal = true))
+    }
+
     private val start = OffsetDateTime.parse("2026-10-06T20:00:00Z")
     private val stop = OffsetDateTime.parse("2026-10-06T21:00:00Z")
     private val clock = { t: OffsetDateTime -> String.format(Locale.ROOT, "%02d:%02d", t.hour, t.minute) }

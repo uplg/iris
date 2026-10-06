@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.core.graphics.get
+import androidx.media3.common.PlaybackException
 import java.text.Normalizer
 import java.time.OffsetDateTime
 import java.util.concurrent.ConcurrentHashMap
@@ -12,6 +13,23 @@ import studio.kahn.iris.tv.data.LiveCountry
 import studio.kahn.iris.tv.data.LiveProgramme
 import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.theme.IrisColor
+
+/** What a live playback error leads to. */
+enum class LiveErrorStep { Locked, Rejoin, Rotate }
+
+/**
+ * A DRM refusal locks the channel; falling behind the live window (a long rebuffer) is the
+ * player's own lag, rejoined at the live edge without blaming the feed; anything else demotes
+ * the feed and rotates to the next.
+ */
+fun liveErrorStep(errorCode: Int, encryptedRefusal: Boolean): LiveErrorStep = when {
+    encryptedRefusal -> LiveErrorStep.Locked
+    errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW -> LiveErrorStep.Rejoin
+    else -> LiveErrorStep.Rotate
+}
+
+/** A feed that played this long earned the channel its retry budget back. */
+const val RETRY_BUDGET_REFILL_MS = 30_000L
 
 /** 0..1 position of [nowMs] inside a programme, null outside its window (the web's `programmeProgress`). */
 fun programmeProgress(start: OffsetDateTime, stop: OffsetDateTime, nowMs: Long): Float? {

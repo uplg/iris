@@ -75,7 +75,10 @@ import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.buildMediaSession
 import studio.kahn.iris.tv.ui.screens.live.ENCRYPTED_WORDS
+import studio.kahn.iris.tv.ui.screens.live.LiveErrorStep
 import studio.kahn.iris.tv.ui.screens.live.LiveWatchViewModel
+import studio.kahn.iris.tv.ui.screens.live.RETRY_BUDGET_REFILL_MS
+import studio.kahn.iris.tv.ui.screens.live.liveErrorStep
 import studio.kahn.iris.tv.ui.screens.live.nextWords
 import studio.kahn.iris.tv.ui.screens.live.nowWords
 import studio.kahn.iris.tv.ui.screens.live.programmeProgress
@@ -213,7 +216,11 @@ fun LiveTvWatchScreen(
         vm.watch(id)
     }
     LaunchedEffect(playing) {
-        if (playing) persistStage(context, "$country:$channelId", playerStage.value)
+        if (!playing) return@LaunchedEffect
+        persistStage(context, "$country:$channelId", playerStage.value)
+        // Glitches hours apart are not one failing feed: a feed that plays a while refills it.
+        delay(RETRY_BUDGET_REFILL_MS)
+        autoRetryCount = 0
     }
 
     // Shared failure path (error listener + connect timeout): demote the dead
@@ -225,7 +232,8 @@ fun LiveTvWatchScreen(
             autoRetryCount++
             container.applicationScope.launch {
                 vm.reportFailure(failed)
-                retryNonce++
+                // A zap meanwhile: the new channel is not reloaded for the old one's failure.
+                if (channelId == failed) retryNonce++
             }
         } else {
             container.applicationScope.launch { vm.reportFailure(failed) }
@@ -242,7 +250,7 @@ fun LiveTvWatchScreen(
         errorMessage = null
         container.applicationScope.launch {
             vm.reportFailure(failed)
-            retryNonce++
+            if (channelId == failed) retryNonce++
         }
     }
 
@@ -313,11 +321,14 @@ fun LiveTvWatchScreen(
         val p = player.value ?: return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                if (isEncryptedRefusal(error)) {
-                    lockedHere = lockedHere + channelId
-                    return
+                when (liveErrorStep(error.errorCode, isEncryptedRefusal(error))) {
+                    LiveErrorStep.Locked -> lockedHere = lockedHere + channelId
+                    LiveErrorStep.Rejoin -> {
+                        p.seekToDefaultPosition()
+                        p.prepare()
+                    }
+                    LiveErrorStep.Rotate -> onFail(humanizePlaybackError(error).first)
                 }
-                onFail(humanizePlaybackError(error).first)
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
