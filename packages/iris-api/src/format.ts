@@ -81,3 +81,59 @@ export function formatRelative(iso: string | null | undefined): string {
   if (months < 12) return `${months}mo ago`;
   return `${Math.floor(months / 12)}y ago`;
 }
+
+/** A playback position or length as a clock: `32:10`, `1:02:03`; `--:--` when unknown. */
+export function clock(sec: number | null | undefined): string {
+  if (sec == null || !Number.isFinite(sec) || sec < 0) return "--:--";
+  return formatTimecode(sec);
+}
+
+/** A length as people say it: `55 min`, `1 h 12 min`, `45 s` under a minute. */
+export function duration(sec: number): string {
+  const total = Math.max(0, Math.round(sec));
+  if (total < 60) return `${total} s`;
+  const h = Math.floor(total / 3600);
+  const m = Math.round((total % 3600) / 60);
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
+/** What is left to watch: `23 min left`. */
+export function timeLeft(sec: number): string {
+  return `${duration(sec)} left`;
+}
+
+/** An episode's code, the way the cards write it: `S2:E4`; a season alone: `Season 2`. */
+export function episodeCode(season: number | null | undefined, episode: number | null | undefined): string | null {
+  if (season == null) return episode == null ? null : `E${episode}`;
+  if (episode == null || episode === 0) return `Season ${season}`;
+  return `S${season}:E${episode}`;
+}
+
+/** A share as people read it: `42%`. */
+export function percent(fraction0to100: number): string {
+  return `${Math.round(fraction0to100)}%`;
+}
+
+/** The search language tags (`language_tag`, server-side), said in words. `short` fits a
+ *  filter pill; the long form is for a release's facts. Tracker jargon stays in brackets so
+ *  people who know it still find it. */
+export const LANGUAGE_TAGS = [
+  { tag: "fr", short: "French (VF)", long: "French audio (VF)" },
+  { tag: "en", short: "English", long: "English audio" },
+  { tag: "multi", short: "Several (MULTI)", long: "Several audio languages (MULTI)" },
+  { tag: "vost", short: "Original with subtitles (VOSTFR)", long: "Original audio, French subtitles (VOSTFR)" },
+  { tag: "vo", short: "Original (VO)", long: "Original audio (VO)" },
+] as const;
+
+export type LanguageTag = (typeof LANGUAGE_TAGS)[number]["tag"];
+
+export function languageLabel(tag: string | null | undefined, form: "short" | "long" = "long"): string | null {
+  const known = LANGUAGE_TAGS.find((t) => t.tag === tag);
+  return known ? known[form] : null;
+}
+
+/** A transfer speed: `6.1 MB/s`. */
+export function speed(bytesPerSecond: number): string {
+  return `${formatSize(bytesPerSecond)}/s`;
+}

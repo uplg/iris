@@ -43,7 +43,13 @@ export default defineConfig({
 			{
 				// plain modules: Node
 				extends: true,
-				test: { name: 'node', environment: 'node', include: ['src/**/*.test.ts'], exclude: ['src/**/*.svelte.test.ts'] }
+				test: {
+					name: 'node',
+					environment: 'node',
+					// the shared packages' plain modules are tested here too
+					include: ['src/**/*.test.ts', '../packages/*/src/**/*.test.ts'],
+					exclude: ['src/**/*.svelte.test.ts']
+				}
 			}
 		]
 	},

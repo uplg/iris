@@ -1,0 +1,94 @@
+<script lang="ts">
+	// A title in a row or a grid: its artwork, its name (the one link), one line of facts and
+	// its state in words. A still (16:9) for what is being watched, with what is left.
+	import type { Snippet } from 'svelte';
+	import Poster from './Poster.svelte';
+	import StatusLine, { type Tone } from './StatusLine.svelte';
+
+	interface Props {
+		href: string;
+		title: string;
+		art: string | null | undefined;
+		shape?: 'poster' | 'still';
+		/** "Series · 2022", "S2:E4 · The You You Are" */
+		meta?: string;
+		status?: { tone: Tone; text: string };
+		/** Watched so far, 0 to 1: a bar, its words said in `meta`/`status`. */
+		progress?: number;
+		/** A menu beside the name (remove from the row…). */
+		actions?: Snippet;
+	}
+	let { href, title, art, shape = 'poster', meta, status, progress, actions }: Props = $props();
+</script>
+
+<li class="card {shape}">
+	<Poster src={art} {title} {shape} />
+	{#if progress !== undefined}
+		<div class="track" aria-hidden="true"><span style="width: {Math.round(Math.min(1, Math.max(0, progress)) * 100)}%"></span></div>
+	{/if}
+	<div class="text">
+		<div class="lines">
+			<a class="name" {href}>{title}</a>
+			{#if meta}<span class="meta">{meta}</span>{/if}
+			{#if status}<StatusLine tone={status.tone} text={status.text} />{/if}
+		</div>
+		{#if actions}{@render actions()}{/if}
+	</div>
+</li>
+
+<style>
+	.card {
+		display: grid;
+		gap: var(--s-2);
+		align-content: start;
+		min-width: 0;
+	}
+	.poster {
+		flex: 0 0 var(--poster-w);
+		width: var(--poster-w);
+	}
+	.still {
+		flex: 0 0 var(--still-w);
+		width: var(--still-w);
+	}
+	:global(.grid) > .card {
+		width: auto;
+	}
+	.text {
+		display: flex;
+		gap: var(--s-2);
+		align-items: flex-start;
+	}
+	.lines {
+		flex: 1;
+		min-width: 0;
+		display: grid;
+		gap: var(--s-half);
+	}
+	.name {
+		font: var(--t-body);
+		font-weight: 600;
+		color: var(--ink);
+		text-decoration: none;
+	}
+	.name:hover {
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+	.meta {
+		font: var(--t-meta);
+		font-variant-numeric: tabular-nums;
+		color: var(--ink-muted);
+	}
+	.track {
+		height: var(--track-h);
+		border-radius: var(--radius-pill);
+		background: var(--ground-raised);
+		overflow: hidden;
+	}
+	.track span {
+		display: block;
+		height: 100%;
+		background: var(--accent);
+	}
+</style>
