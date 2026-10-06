@@ -48,3 +48,12 @@ describe('a release’s state, one rule', () => {
 		expect(etaSeconds(t({ download_speed_bps: 0 }))).toBeNull();
 	});
 });
+
+describe('stalled after the grace a fresh grab gets', () => {
+	const fresh = { state: 'live', finished: false, progress_pct: 3, peers: 0, download_speed_bps: 0 } as const;
+	it('says downloading during the first two minutes, stalled after', () => {
+		const at = '2026-10-06T20:00:00Z';
+		expect(phaseOf({ ...fresh, added_at: at, fetched_at: '2026-10-06T20:01:30Z' })).toBe('downloading');
+		expect(phaseOf({ ...fresh, added_at: at, fetched_at: '2026-10-06T20:02:01Z' })).toBe('stalled');
+	});
+});

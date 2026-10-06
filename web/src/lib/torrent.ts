@@ -3,7 +3,18 @@
 
 import type { TorrentView } from '@iris/api/client';
 
-type Torrent = Pick<TorrentView, 'state' | 'finished' | 'progress_pct' | 'peers' | 'download_speed_bps'>;
+type Torrent = Pick<TorrentView, 'state' | 'finished' | 'progress_pct' | 'peers' | 'download_speed_bps'> &
+	Partial<Pick<TorrentView, 'added_at' | 'fetched_at'>>;
+
+/** How long a fresh grab may sit without peers before it counts as stalled: finding them takes a
+ * while (the TV app's STALL_GRACE). Measured between two server stamps, so this device's clock
+ * doesn't matter. */
+export const STALL_GRACE_MS = 2 * 60_000;
+
+const pastGrace = (t: Torrent): boolean => {
+	if (!t.added_at || !t.fetched_at) return true;
+	return Date.parse(t.fetched_at) - Date.parse(t.added_at) > STALL_GRACE_MS;
+};
 
 /** All its data is on disk. */
 export const isComplete = (t: Pick<TorrentView, 'finished' | 'progress_pct'>): boolean => t.finished || t.progress_pct >= 100;
@@ -23,7 +34,7 @@ export function phaseOf(t: Torrent): Phase {
 	if (t.state === 'paused') return 'paused';
 	if (isComplete(t)) return 'seeding';
 	if (t.state === 'initializing') return 'checking';
-	if (t.peers === 0 && t.download_speed_bps === 0) return 'stalled';
+	if (t.peers === 0 && t.download_speed_bps === 0 && pastGrace(t)) return 'stalled';
 	return 'downloading';
 }
 
