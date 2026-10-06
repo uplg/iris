@@ -1,6 +1,6 @@
 // Library shapes for tests, as the backend sends them; each test overrides what it is about.
 
-import type { CollectionListItem, HomeSummary, TorrentView } from '@iris/api/client';
+import type { CollectionListItem, TorrentView } from '@iris/api/client';
 
 export const collection = (over: Partial<CollectionListItem> = {}): CollectionListItem => ({
 	id: 'c-1',
@@ -41,15 +41,5 @@ export const torrent = (over: Partial<TorrentView> = {}): TorrentView => ({
 	kind: 'tv',
 	source_provider: 'c411',
 	tmdb_verified: true,
-	...over
-});
-
-export const summary = (over: Partial<HomeSummary> = {}): HomeSummary => ({
-	disk: { total_bytes: 2 * 1024 ** 4, free_bytes: 412 * 1024 ** 3 },
-	downloading: 0,
-	downloading_pct: 0,
-	downloading_eta_seconds: null,
-	seeding: 1,
-	new_episodes: 0,
 	...over
 });

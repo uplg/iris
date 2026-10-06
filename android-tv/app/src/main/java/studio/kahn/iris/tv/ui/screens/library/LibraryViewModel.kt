@@ -25,7 +25,6 @@ import studio.kahn.iris.tv.ui.state.BusyActions
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.DismissGoneRequest
-import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.WatchlistItem
@@ -158,9 +157,6 @@ class LibraryViewModel(
     private val collections = LiveRead({ _: List<CollectionListItem>? -> if (torrents.value?.items?.anyMoving() == true) 10_000L else 60_000L }) {
         container.api().libraryCollections().items
     }
-    private val summary = LiveRead({ s: HomeSummary? -> if ((s?.downloading ?: 0) > 0) FAST_MS else SLOW_MS }) {
-        container.api().homeSummary()
-    }
     private val watching = LiveRead({ _: List<ContinueWatchingItem>? -> 60_000L }) { container.api().continueWatching() }
     private val watchlist = LiveRead({ _: List<WatchlistItem>? -> 5 * 60_000L }) { container.api().watchlist() }
 
@@ -213,13 +209,12 @@ class LibraryViewModel(
         combine(controls, actions.state, ::Pair),
         collections.state,
         torrents.state,
-        combine(summary.state, watching.state, watchlist.state, ::Triple),
-    ) { (c, a), cols, tors, (sum, cw, wl) ->
+        combine(watching.state, watchlist.state, ::Pair),
+    ) { (c, a), cols, tors, (cw, wl) ->
         val torrentList = tors.valueOrNull?.items.orEmpty()
-        val counts = cols.valueOrNull?.let(::titleCounts)
         LibraryUiState(
             view = c.view,
-            facts = libraryFacts(counts, sum.valueOrNull),
+            facts = cols.valueOrNull?.let(::titleCounts),
             filters = c.filters,
             releaseQuery = c.releaseQuery,
             titles = if (c.view == LibraryView.Titles) cols.map { titlesUi(it, torrentList, wl.valueOrNull.orEmpty(), c.filters) } else Loadable.Loading,
@@ -237,13 +232,12 @@ class LibraryViewModel(
     suspend fun pollWhileStarted() = coroutineScope {
         launch { torrents.poll() }
         launch { collections.poll() }
-        launch { summary.poll() }
         launch { watching.poll() }
         launch { watchlist.poll() }
     }
 
     fun retry() {
-        listOf(torrents, collections, summary, watching, watchlist).forEach { it.poke() }
+        listOf(torrents, collections, watching, watchlist).forEach { it.poke() }
     }
 
     /** The view chosen, kept on this device for the next visit. */
@@ -260,10 +254,7 @@ class LibraryViewModel(
 
     fun hide(c: TitleCard) = act("hide:${c.id}", "${c.title} is hidden from your library. Watching it again brings it back.") {
         container.api().dismissGone(DismissGoneRequest(collectionId = java.util.UUID.fromString(c.id)))
-        coroutineScope {
-            launch { collections.refresh() }
-            launch { summary.refresh() }
-        }
+        collections.refresh()
     }
 
     fun toggleWatched(c: TitleCard) = act(watchedKey(c), markedWatchedWords(c.title, c.watched)) {
@@ -292,7 +283,6 @@ class LibraryViewModel(
     private suspend fun refreshAll() = coroutineScope {
         launch { torrents.refresh() }
         launch { collections.refresh() }
-        launch { summary.refresh() }
         launch { watching.refresh() }
     }
 

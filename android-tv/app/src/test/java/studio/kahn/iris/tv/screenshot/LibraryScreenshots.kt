@@ -39,7 +39,6 @@ import studio.kahn.iris.tv.ui.screens.library.collectionPage
 import studio.kahn.iris.tv.ui.screens.library.downloadsUi
 import studio.kahn.iris.tv.ui.screens.library.historyUi
 import studio.kahn.iris.tv.ui.screens.library.languagesUi
-import studio.kahn.iris.tv.ui.screens.library.libraryFacts
 import studio.kahn.iris.tv.ui.screens.library.releaseRow
 import studio.kahn.iris.tv.ui.screens.library.titleCounts
 import studio.kahn.iris.tv.ui.screens.library.titlesUi
@@ -67,7 +66,7 @@ class LibraryScreenshots {
 
     private fun library(view: LibraryView = LibraryView.Titles, filters: TitleFilters = TitleFilters()) = LibraryUiState(
         view = view,
-        facts = libraryFacts(titleCounts(F.titles), F.summary),
+        facts = titleCounts(F.titles),
         filters = filters,
         titles = Loadable.Ready(titlesUi(F.titles, F.torrents, emptyList(), filters)),
         downloads = Loadable.Ready(downloadsUi(Torrents(F.torrents, 120L shl 30, 96L shl 30), F.titles, F.watching, "", F.now)),

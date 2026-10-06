@@ -14,9 +14,7 @@ class LibraryModelTest {
 
     @Test
     fun countsLeaveGhostsOut() {
-        val c = titleCounts(F.titles)
-        assertEquals(13, c.total)
-        assertEquals("5 movies · 7 series · 1 anime", c.text)
+        assertEquals("13 titles · 5 movies · 7 series · 1 anime", titleCounts(F.titles))
     }
 
     @Test
@@ -93,12 +91,6 @@ class LibraryModelTest {
         assertEquals("S4", seasonOf("The.Bear.S04.1080p"))
         assertEquals("S1:E3", seasonOf("Show.S01E03.720p"))
         assertNull(seasonOf("Dune.Part.Two.2024"))
-    }
-
-    @Test
-    fun libraryFactsLine() {
-        assertEquals("13 titles · 412 GB free of 2.0 TB · 2 downloading · 3 seeding", libraryFacts(titleCounts(F.titles), F.summary))
-        assertNull(libraryFacts(null, null))
     }
 
     @Test

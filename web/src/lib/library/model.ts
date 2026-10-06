@@ -2,7 +2,7 @@
 // and sort, which group a release belongs to. Pure functions over the API shapes, so the views
 // stay markup and the rules are tested in Node.
 
-import type { CollectionListItem, ContinueWatchingItem, HomeSummary, TorrentView } from '@iris/api/client';
+import type { CollectionListItem, ContinueWatchingItem, TorrentView } from '@iris/api/client';
 import { STORAGE } from '#lib/storage.ts';
 import { duration, episodeCode, formatSize, percent, plural, prettySceneName, speed, VIDEO_RE } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
@@ -23,11 +23,11 @@ export type Kind = 'movie' | 'series' | 'anime';
 export const kindOf = (c: CollectionListItem): Kind => (c.is_anime ? 'anime' : c.kind === 'tv' ? 'series' : 'movie');
 const KIND_WORD: Record<Kind, string> = { movie: 'Movie', series: 'Series', anime: 'Anime' };
 
-/** « 22 movies · 38 series · 4 anime »: what is on disk, ghosts left out. */
-export function titleCounts(items: CollectionListItem[]): { total: number; text: string } {
+/** « 64 titles · 22 movies · 38 series · 4 anime »: what is on disk, ghosts left out. */
+export function titleCounts(items: CollectionListItem[]): string {
 	const live = items.filter((c) => !c.ghost);
 	const n = (k: Kind) => live.filter((c) => kindOf(c) === k).length;
-	return { total: live.length, text: [plural(n('movie'), 'movie'), `${n('series')} series`, `${n('anime')} anime`].join(' · ') };
+	return [plural(live.length, 'title'), plural(n('movie'), 'movie'), `${n('series')} series`, `${n('anime')} anime`].join(' · ');
 }
 
 /** What a title's releases are doing right now, from the torrents view. */
@@ -198,13 +198,4 @@ export function watchState(w: ContinueWatchingItem | undefined): { pct: number |
 
 export function releaseTitle(t: TorrentView, c: CollectionListItem | undefined): string {
 	return c?.display_title ?? (t.name ? prettySceneName(t.name) : t.infohash);
-}
-
-/** The stat tiles' words. */
-export function downloadingLine(s: HomeSummary): string {
-	if (s.downloading === 0) return 'Nothing downloading';
-	const eta = s.downloading_eta_seconds;
-	return eta !== null && eta !== undefined
-		? `${percent(s.downloading_pct)} overall · about ${duration(eta)}`
-		: `${percent(s.downloading_pct)} overall`;
 }

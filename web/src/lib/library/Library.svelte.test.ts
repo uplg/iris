@@ -4,7 +4,7 @@ import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import { stubApi } from '#lib/test/api.ts';
 import { ui } from '#lib/ui.svelte.ts';
-import { collection, summary, torrent } from './fixtures.ts';
+import { collection, torrent } from './fixtures.ts';
 import { LIBRARY_VIEW_KEY } from './model.ts';
 import LibraryHarness from './LibraryHarness.svelte';
 
@@ -42,7 +42,6 @@ function backend(over: Record<string, unknown> = {}) {
 	return stubApi({
 		[COLLECTIONS]: { view: 'collections', items },
 		[TORRENTS]: { view: 'torrents', items: releases, total_uploaded_bytes: 3 * 1024 ** 4, total_downloaded_bytes: 2 * 1024 ** 4 },
-		'/me/summary': summary({ downloading: 1, downloading_pct: 64, downloading_eta_seconds: 540, seeding: 18 }),
 		[CW]: [],
 		...over
 	});
@@ -51,15 +50,13 @@ function backend(over: Record<string, unknown> = {}) {
 beforeEach(() => localStorage.clear());
 
 describe('Library', () => {
-	it('one h1, the summary in words, the titles view first', async () => {
+	it('one h1, the title counts under it, the titles view first', async () => {
 		backend();
 		await render(LibraryHarness);
 		await expect.element(page.getByRole('heading', { level: 1, name: 'Library' })).toBeVisible();
 		expect(document.querySelectorAll('h1')).toHaveLength(1);
-		await expect.element(page.getByText('1 movie · 1 series · 1 anime')).toBeVisible();
-		await expect.element(page.getByText('64% overall · about 9 min')).toBeVisible();
-		await expect.element(page.getByText('412 GB free of 2.0 TB')).toBeVisible();
-		await expect.element(page.getByText('3.0 TB sent in all · ratio 1.50')).toBeVisible();
+		await expect.element(page.getByText('3 titles · 1 movie · 1 series · 1 anime')).toBeVisible();
+		expect(document.querySelector('dl')).toBeNull();
 		await expect.element(page.getByRole('button', { name: 'Titles' })).toHaveAttribute('aria-pressed', 'true');
 		await expect.element(page.getByRole('link', { name: 'Severance' })).toBeVisible();
 	});

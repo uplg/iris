@@ -5,7 +5,6 @@ import kotlin.math.max
 import kotlin.math.min
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
-import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
@@ -39,18 +38,12 @@ fun kindOf(c: CollectionListItem): TitleKind = when {
     else -> TitleKind.Movie
 }
 
-@Immutable
-data class TitleCounts(val total: Int, val text: String)
-
-/** `22 movies · 38 series · 4 anime`: what is on disk, ghosts left out. */
-fun titleCounts(items: List<CollectionListItem>): TitleCounts {
+/** `64 titles · 22 movies · 38 series · 4 anime`: what is on disk, ghosts left out. */
+fun titleCounts(items: List<CollectionListItem>): String {
     val live = items.filter { it.ghost != true }
     fun n(k: TitleKind) = live.count { kindOf(it) == k }
-    return TitleCounts(
-        live.size,
-        listOf(plural(n(TitleKind.Movie), "movie"), "${n(TitleKind.Series)} series", "${n(TitleKind.Anime)} anime")
-            .joinToString(" · "),
-    )
+    return listOf(plural(live.size, "title"), plural(n(TitleKind.Movie), "movie"), "${n(TitleKind.Series)} series", "${n(TitleKind.Anime)} anime")
+        .joinToString(" · ")
 }
 
 /** What a title's releases are doing now. [played] is epoch ms, 0 if never played. */
@@ -270,19 +263,6 @@ fun releaseFacts(t: TorrentView, now: java.time.Instant = java.time.Instant.now(
         "${formatSize(t.uploadedBytesTotal)} sent",
         ratio?.let { "ratio %.2f".format(java.util.Locale.ROOT, it) },
     ).joinToString(" · ")
-}
-
-/** The library's facts line: `64 titles · 412 GB free of 2 TB · 2 downloading · 5 seeding`. */
-fun libraryFacts(counts: TitleCounts?, summary: HomeSummary?): String? {
-    val parts = buildList {
-        counts?.let { add(plural(it.total, "title")) }
-        summary?.disk?.let { add("${formatSize(it.freeBytes)} free of ${formatSize(it.totalBytes)}") }
-        summary?.let {
-            if (it.downloading > 0) add("${it.downloading} downloading")
-            if (it.seeding > 0) add("${it.seeding} seeding")
-        }
-    }
-    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
 
 /** A video's state line in a file list: `1.4 GB · Watched`, `1.4 GB · 42% watched`. */
