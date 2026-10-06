@@ -52,6 +52,12 @@ import studio.kahn.iris.tv.ui.screens.search.GrabRefusal
 import studio.kahn.iris.tv.ui.screens.search.GrabUi
 import studio.kahn.iris.tv.ui.components.LoadMoreAtEnd
 import studio.kahn.iris.tv.ui.screens.search.MoreFooter
+import studio.kahn.iris.tv.ui.screens.search.LibraryMatchRow
+import studio.kahn.iris.tv.ui.screens.search.MatchTarget
+import studio.kahn.iris.tv.ui.screens.search.ReturnFocusAfterGrab
+import studio.kahn.iris.tv.ui.screens.search.matchKey
+import studio.kahn.iris.tv.ui.components.focusReturn
+import androidx.compose.foundation.lazy.items
 import studio.kahn.iris.tv.ui.components.RowList
 import studio.kahn.iris.tv.ui.screens.search.SearchKind
 import studio.kahn.iris.tv.ui.screens.search.SearchSort
@@ -77,6 +83,7 @@ import studio.kahn.iris.tv.ui.theme.IrisType
 data class TitleReleasesActions(
     val onRetry: () -> Unit = {},
     val onLoadMore: () -> Unit = {},
+    val onShowMore: () -> Unit = {},
     val onRetryMore: () -> Unit = {},
     val onLanguage: (String?) -> Unit = {},
     val onSeason: (Int?) -> Unit = {},
@@ -84,6 +91,7 @@ data class TitleReleasesActions(
     val onGrab: (SearchResult) -> Unit = {},
     val onConfirmGrab: () -> Unit = {},
     val onDismissGrab: () -> Unit = {},
+    val onMatch: (MatchTarget) -> Unit = {},
 )
 
 /** A title picked in the Titles view and its releases on the trackers (TVTitleReleases). */
@@ -96,6 +104,7 @@ fun TitleReleasesScreen(
     sort: SearchSort,
     onOpenRelease: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
+    onOpenCollection: (collectionId: String) -> Unit,
 ) {
     val vm = irisViewModel(container) { c, _ -> TitleReleasesViewModel(c, query, tmdbId, kind, sort) }
     val state by vm.state.collectAsStateWithLifecycle()
@@ -111,6 +120,7 @@ fun TitleReleasesScreen(
         TitleReleasesActions(
             onRetry = vm::retry,
             onLoadMore = vm::loadMore,
+            onShowMore = vm::showMore,
             onRetryMore = vm::retryMore,
             onLanguage = vm::setLanguage,
             onSeason = vm::setSeason,
@@ -118,6 +128,12 @@ fun TitleReleasesScreen(
             onGrab = vm::grab,
             onConfirmGrab = vm.grabber::confirm,
             onDismissGrab = vm.grabber::dismiss,
+            onMatch = { target ->
+                when (target) {
+                    is MatchTarget.Play -> onPlay(target.infohash, target.fileIdx)
+                    is MatchTarget.Open -> onOpenCollection(target.collectionId)
+                }
+            },
         )
     }
     TitleReleasesContent(state, grab, actions)
@@ -127,6 +143,7 @@ fun TitleReleasesScreen(
 fun TitleReleasesContent(state: TitleReleasesUiState, grab: GrabUi, actions: TitleReleasesActions) {
     val layout = IrisLayout.current
     val remembered = rememberFocusReturn()
+    ReturnFocusAfterGrab(grab, remembered)
     val head = state.head
     // The first release once they arrive; coming back from one, the row left.
     val first = state.shown.firstOrNull()?.let(::releaseKey)
@@ -233,8 +250,8 @@ private fun Body(
         Loadable.Loading -> LoadingState(Modifier.padding(bottom = bottom), "Asking the trackers…")
         is Loadable.Failed -> ErrorState(results.error.message, actions.onRetry, Modifier.padding(bottom = bottom), title = "The search failed")
         else -> {
-            val page = results.valueOrNull ?: return
-            if (state.shown.isEmpty()) {
+            results.valueOrNull ?: return
+            if (state.shown.isEmpty() && state.matches.isEmpty()) {
                 val language = languageLabel(state.language, long = false)
                 EmptyState(
                     if (language != null) "No release in $language among the ${state.rows.size} loaded" else "No tracker has a release of ${state.head.title}",
@@ -244,11 +261,13 @@ private fun Body(
                 return
             }
             val list = rememberLazyListState()
-            val hasNext = page.next != null
-            LoadMoreAtEnd(list, enabled = hasNext && !state.loadingMore && state.moreError == null, onLoadMore = actions.onLoadMore)
+            LoadMoreAtEnd(list, enabled = state.pages.autoLoads, onLoadMore = actions.onLoadMore)
             RowList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
+                items(state.matches, key = ::matchKey) { m ->
+                    LibraryMatchRow(m, actions.onMatch, Modifier.focusReturn(remembered, matchKey(m)))
+                }
                 releaseRows(state.shown, grab, remembered, actions.onRelease, actions.onGrab, withTitle = false)
-                item(key = "more") { MoreFooter(state.loadingMore, state.moreError, hasNext, actions.onRetryMore) }
+                item(key = "more") { MoreFooter(state.pages, actions.onRetryMore, actions.onShowMore) }
             }
         }
     }

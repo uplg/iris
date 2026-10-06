@@ -77,6 +77,13 @@ class Grabber(private val container: AppContainer, private val scope: CoroutineS
         go(key)
     }
 
+    /** Says why [key] is not grabbed, before anything downloads (a dead swarm). */
+    fun refuse(key: String, message: String) {
+        if (mutable.value is GrabUi.Busy) return
+        consent = GrabConsent()
+        mutable.value = GrabUi.Refused(key, message)
+    }
+
     /** Plays a release already on disk: nothing to grab. */
     fun playOwned(owned: OwnedFile) {
         playing.value = PlayRequest(owned.infohash, owned.fileIdx)

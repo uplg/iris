@@ -33,7 +33,8 @@ data class Notice(val text: String, val tone: StatusTone = StatusTone.Muted) {
 /**
  * The [notice] of the last action, nothing without one. Alone it is a [StatusLine] announced
  * politely. With [onClose] it is a framed banner that must be read: the notice, its [detail]
- * below, and a Close that takes the focus, announced at once.
+ * below, and a Close that takes the focus ([takeFocus]), announced at once. A banner over a
+ * scrolled list leaves the focus where it is (the list would jump to its top).
  */
 @Composable
 fun NoticeLine(
@@ -41,6 +42,7 @@ fun NoticeLine(
     modifier: Modifier = Modifier,
     detail: String? = null,
     onClose: (() -> Unit)? = null,
+    takeFocus: Boolean = true,
 ) {
     if (notice == null) return
     if (onClose == null) {
@@ -48,7 +50,7 @@ fun NoticeLine(
         return
     }
     val close = remember { FocusRequester() }
-    LaunchedEffect(notice, detail) { runCatching { close.requestFocus() } }
+    LaunchedEffect(notice, detail) { if (takeFocus) runCatching { close.requestFocus() } }
     FramedBlock(
         modifier
             .fillMaxWidth()

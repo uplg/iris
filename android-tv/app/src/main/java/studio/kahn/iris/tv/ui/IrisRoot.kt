@@ -299,6 +299,7 @@ fun IrisRoot(
                         navController.navigate(Routes.SearchDetail(providerId, externalId, tmdbId, kind))
                     },
                     onPlay = { infohash, fileIdx -> navController.navigate(Routes.Watch(infohash, fileIdx)) },
+                    onOpenCollection = { collectionId -> navController.navigate(Routes.Collection(collectionId)) },
                 )
             }
             composable<Routes.SearchDetail> { backStackEntry ->

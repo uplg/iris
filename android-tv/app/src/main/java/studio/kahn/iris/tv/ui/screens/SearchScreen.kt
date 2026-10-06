@@ -101,6 +101,8 @@ import studio.kahn.iris.tv.ui.screens.search.LibraryMatchRow
 import studio.kahn.iris.tv.ui.components.LoadMoreAtEnd
 import studio.kahn.iris.tv.ui.screens.search.MatchTarget
 import studio.kahn.iris.tv.ui.screens.search.MoreFooter
+import studio.kahn.iris.tv.ui.screens.search.ReturnFocusAfterGrab
+import studio.kahn.iris.tv.ui.screens.search.matchKey
 import studio.kahn.iris.tv.ui.screens.search.ReleaseCard
 import studio.kahn.iris.tv.ui.components.RowList
 import studio.kahn.iris.tv.ui.screens.search.SearchKeyboard
@@ -150,6 +152,7 @@ data class SearchActions(
     val onRetryTitles: () -> Unit = {},
     val onRetryRecent: () -> Unit = {},
     val onLoadMore: () -> Unit = {},
+    val onShowMore: () -> Unit = {},
     val onRetryMore: () -> Unit = {},
     val onRecent: (String) -> Unit = {},
     val onForget: (String?) -> Unit = {},
@@ -178,7 +181,7 @@ fun SearchScreen(
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
     onOpenCollection: (collectionId: String) -> Unit,
 ) {
-    val vm = irisViewModel(container) { c, _ -> SearchViewModel(c, initialQuery, autoPlay) }
+    val vm = irisViewModel(container) { c, saved -> SearchViewModel(c, initialQuery, autoPlay, saved) }
     val state by vm.state.collectAsStateWithLifecycle()
     val grab by vm.grabber.state.collectAsStateWithLifecycle()
     val play by vm.grabber.play.collectAsStateWithLifecycle()
@@ -218,6 +221,7 @@ fun SearchScreen(
             onRetryTitles = vm::retryTitles,
             onRetryRecent = vm::loadRecent,
             onLoadMore = vm::loadMore,
+            onShowMore = vm::showMore,
             onRetryMore = vm::retryMore,
             onRecent = { vm.submit(it) },
             onForget = vm::forget,
@@ -261,20 +265,24 @@ fun SearchContent(
     val field = remember { FocusRequester() }
     val remembered = rememberFocusReturn(initial = initialFocus)
     var fieldFocused by remember { mutableStateOf(false) }
+    var contentFocused by remember { mutableStateOf(false) }
     val results = state.showsResults
+    ReturnFocusAfterGrab(grab, remembered)
 
     // Coming back from a release lands on the result left; else the field.
     LaunchedEffect(results) {
         withFrameNanos { }
         if (!remembered.focusLast()) runCatching { field.requestFocus() }
     }
-    // Back comes to the field first; from the field the shell takes it (to the header).
-    BackHandler(enabled = !fieldFocused) { runCatching { field.requestFocus() } }
+    // Back comes to the field first; from the field, or with the focus in the header, the
+    // shell takes it (to the header, then Home).
+    BackHandler(enabled = contentFocused && !fieldFocused) { runCatching { field.requestFocus() } }
 
     Box(
         Modifier
             .fillMaxSize()
             .background(IrisColor.ground)
+            .onFocusChanged { contentFocused = it.hasFocus }
             .onPreviewKeyEvent { e ->
                 if (e.key == Key.Search && e.type == KeyEventType.KeyUp) {
                     actions.onEdit()
@@ -340,7 +348,12 @@ private fun hints(state: SearchUiState, results: Boolean): List<KeyHint> = when 
 private fun resultsTrailing(state: SearchUiState): String? {
     val page = state.results?.valueOrNull ?: return null
     val words = pageWords(page.pages, page.providers)
-    return if (page.next != null) "$words · next page at the end of the ${if (state.view == SearchViewMode.GRID) "grid" else "list"}" else words
+    val where = if (state.view == SearchViewMode.GRID) "grid" else "list"
+    return when {
+        page.next == null -> words
+        state.pages.waitsForViewer -> "$words · Show more at the end of the $where"
+        else -> "$words · next page at the end of the $where"
+    }
 }
 
 @Composable
@@ -525,7 +538,7 @@ private fun TitlesPanel(
     if (state.matches.isNotEmpty()) {
         Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
             SectionTitle("In your library")
-            state.matches.forEach { m -> LibraryMatchRow(m, actions.onMatch) }
+            state.matches.forEach { m -> LibraryMatchRow(m, actions.onMatch, Modifier.focusReturn(remembered, matchKey(m))) }
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
@@ -712,7 +725,7 @@ private fun ResultsBody(
         null, Loadable.Loading -> LoadingState(Modifier.padding(bottom = bottom), "Asking the trackers…")
         is Loadable.Failed -> ErrorState(results.error.message, actions.onRetry, Modifier.padding(bottom = bottom), title = "The search failed")
         else -> {
-            val page = results.valueOrNull ?: return
+            results.valueOrNull ?: return
             val shown = state.shown
             val busyKey = (grab as? GrabUi.Busy)?.key
             if (shown.isEmpty() && state.matches.isEmpty()) {
@@ -732,55 +745,48 @@ private fun ResultsBody(
                 }
                 return
             }
-            val hasNext = page.next != null
             if (state.view == SearchViewMode.GRID) {
                 val grid = rememberLazyGridState()
-                LoadMoreAtEnd(grid, enabled = hasNext && !state.loadingMore && state.moreError == null, onLoadMore = actions.onLoadMore)
-                Box(Modifier.fillMaxSize()) {
-                    PosterGrid(
-                        items = shown,
-                        key = ::releaseKey,
-                        state = grid,
-                        minCell = IrisSize.posterDenseMin,
-                        contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 6.dp, bottom = bottom),
-                        horizontalGap = 14.dp,
-                        verticalGap = IrisSpace.s6,
-                        header = {
-                            state.matches.forEach { m ->
-                                item(key = "match-${m.collectionId}", span = { GridItemSpan(maxLineSpan) }) {
-                                    LibraryMatchRow(m, actions.onMatch)
-                                }
+                LoadMoreAtEnd(grid, enabled = state.pages.autoLoads, onLoadMore = actions.onLoadMore)
+                PosterGrid(
+                    items = shown,
+                    key = ::releaseKey,
+                    state = grid,
+                    minCell = IrisSize.posterDenseMin,
+                    contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 6.dp, bottom = bottom),
+                    horizontalGap = 14.dp,
+                    verticalGap = IrisSpace.s6,
+                    header = {
+                        state.matches.forEach { m ->
+                            item(key = matchKey(m), span = { GridItemSpan(maxLineSpan) }) {
+                                LibraryMatchRow(m, actions.onMatch, Modifier.focusReturn(remembered, matchKey(m)))
                             }
-                        },
-                    ) { r ->
-                        val key = releaseKey(r)
-                        ReleaseCard(
-                            r = r,
-                            onClick = { actions.onRelease(r) },
-                            onLongClick = { actions.onGrab(r) },
-                            busy = busyKey == key,
-                            modifier = Modifier.focusReturn(remembered, key),
-                        )
-                    }
-                    if (state.loadingMore || state.moreError != null) {
-                        MoreFooter(
-                            state.loadingMore,
-                            state.moreError,
-                            hasNext,
-                            actions.onRetryMore,
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .background(IrisColor.ground),
-                        )
-                    }
+                        }
+                    },
+                    footer = {
+                        item(key = "more", span = { GridItemSpan(maxLineSpan) }) {
+                            MoreFooter(state.pages, actions.onRetryMore, actions.onShowMore)
+                        }
+                    },
+                ) { r ->
+                    val key = releaseKey(r)
+                    ReleaseCard(
+                        r = r,
+                        onClick = { actions.onRelease(r) },
+                        onLongClick = { actions.onGrab(r) },
+                        busy = busyKey == key,
+                        modifier = Modifier.focusReturn(remembered, key),
+                    )
                 }
             } else {
                 val list = rememberLazyListState()
-                LoadMoreAtEnd(list, enabled = hasNext && !state.loadingMore && state.moreError == null, onLoadMore = actions.onLoadMore)
+                LoadMoreAtEnd(list, enabled = state.pages.autoLoads, onLoadMore = actions.onLoadMore)
                 RowList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
-                    items(state.matches, key = { "match-${it.collectionId}" }) { m: LibraryMatch -> LibraryMatchRow(m, actions.onMatch) }
+                    items(state.matches, key = ::matchKey) { m: LibraryMatch ->
+                        LibraryMatchRow(m, actions.onMatch, Modifier.focusReturn(remembered, matchKey(m)))
+                    }
                     releaseRows(shown, grab, remembered, actions.onRelease, actions.onGrab)
-                    item(key = "more") { MoreFooter(state.loadingMore, state.moreError, hasNext, actions.onRetryMore) }
+                    item(key = "more") { MoreFooter(state.pages, actions.onRetryMore, actions.onShowMore) }
                 }
             }
         }

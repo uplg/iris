@@ -134,8 +134,8 @@ fun SearchDetailScreen(
     ReleaseContent(state, grab, actions)
 }
 
-/** A side panel of the release page: the notes or the NFO in full, the file to play. */
-enum class ReleasePanel { Notes, Nfo, Files }
+/** A side panel of the release page: the notes or the NFO in full, the file to play, the other files. */
+enum class ReleasePanel { Notes, Nfo, Files, Others }
 
 @Composable
 fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions, initialPanel: ReleasePanel? = null) {
@@ -144,11 +144,20 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
     val narrow = layout.width < 900.dp
     var panel by rememberSaveable { mutableStateOf(initialPanel) }
     val primary = remember { FocusRequester() }
-    val ready = state.preview is Loadable.Ready || state.preview is Loadable.Stale
+    // Each panel's opener: closing a panel brings the focus back there, not to the top.
+    val openers = remember { ReleasePanel.entries.associateWith { FocusRequester() } }
+    var opened by remember { mutableStateOf<ReleasePanel?>(null) }
+    val openPanel: (ReleasePanel) -> Unit = {
+        opened = it
+        panel = it
+    }
+    val ready = state.preview !is Loadable.Loading || sheet.owned != null
     LaunchedEffect(ready, panel) {
         if (!ready || panel != null) return@LaunchedEffect
         withFrameNanos { }
-        runCatching { primary.requestFocus() }
+        val back = opened?.let(openers::getValue)
+        opened = null
+        if (back == null || runCatching { back.requestFocus() }.isFailure) runCatching { primary.requestFocus() }
     }
 
     FooterLayout(
@@ -184,18 +193,24 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
                 verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
             ) {
                 Heading(sheet)
-                when (val preview = state.preview) {
+                val preview = state.preview
+                // A copy on disk plays without the torrent: its button never waits on the preview.
+                val owned = sheet.owned
+                if (owned != null && (preview is Loadable.Loading || preview is Loadable.Failed)) {
+                    ActionButton("Play from disk", actions.onPlayOwned, icon = Icons.Rounded.PlayArrow, size = ActionSize.Large, modifier = Modifier.focusRequester(primary))
+                }
+                when (preview) {
                     Loadable.Loading -> LoadingState(Modifier.height(80.dp), "Reading the torrent…")
                     is Loadable.Failed -> ErrorState(
                         preview.error.message,
                         actions.onRetry,
                         Modifier.height(140.dp),
                         title = "Couldn't read this release",
-                        retryFocus = primary,
+                        retryFocus = if (owned == null) primary else null,
                     )
-                    else -> Actions(state, sheet, grab, actions, primary) { panel = it }
+                    else -> Actions(state, sheet, grab, actions, primary)
                 }
-                Details(state, sheet, narrow) { panel = it }
+                Details(state, sheet, narrow, openers, openPanel)
             }
         }
         when (panel) {
@@ -208,6 +223,9 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
                 SidePanel("Technical sheet (NFO)", onDismiss = { panel = null }) {
                     PanelParagraphs(nfoChunks(nfo), IrisType.mono)
                 }
+            }
+            ReleasePanel.Others -> SidePanel("Other files (${sheet.others.size})", onDismiss = { panel = null }, footer = "Not played: subtitles, extras, the release's own files") {
+                PanelParagraphs(sheet.others.map { AnnotatedString("${it.path}\n${formatSize(it.sizeBytes)}") }, IrisType.mono)
             }
             ReleasePanel.Files -> SidePanel("File to play", onDismiss = { panel = null }) {
                 PanelOptions(
@@ -249,7 +267,6 @@ private fun Actions(
     grab: GrabUi,
     actions: ReleaseActions,
     primary: FocusRequester,
-    onPanel: (ReleasePanel) -> Unit,
 ) {
     val busy = grab is GrabUi.Busy
     Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
@@ -323,7 +340,13 @@ private fun Actions(
 }
 
 @Composable
-private fun Details(state: ReleaseUiState, sheet: ReleaseSheet, narrow: Boolean, onPanel: (ReleasePanel) -> Unit) {
+private fun Details(
+    state: ReleaseUiState,
+    sheet: ReleaseSheet,
+    narrow: Boolean,
+    openers: Map<ReleasePanel, FocusRequester>,
+    onPanel: (ReleasePanel) -> Unit,
+) {
     val facts: @Composable (Modifier) -> Unit = { modifier ->
         if (sheet.facts.isNotEmpty()) {
             Column(modifier) {
@@ -339,14 +362,26 @@ private fun Details(state: ReleaseUiState, sheet: ReleaseSheet, narrow: Boolean,
                                 icon = Icons.Rounded.VideoFile,
                                 style = ActionStyle.Secondary,
                                 size = ActionSize.Small,
+                                modifier = Modifier.focusRequester(openers.getValue(ReleasePanel.Files)),
                             )
                         }
+                    }
+                }
+                if (sheet.others.isNotEmpty()) {
+                    FactRow("Also in it") {
+                        ActionButton(
+                            "Other files (${sheet.others.size})",
+                            { onPanel(ReleasePanel.Others) },
+                            style = ActionStyle.Secondary,
+                            size = ActionSize.Small,
+                            modifier = Modifier.focusRequester(openers.getValue(ReleasePanel.Others)),
+                        )
                     }
                 }
             }
         }
     }
-    val notes: @Composable (Modifier) -> Unit = { modifier -> Notes(state, modifier, onPanel) }
+    val notes: @Composable (Modifier) -> Unit = { modifier -> Notes(state, modifier, openers, onPanel) }
     if (narrow) {
         facts(Modifier.fillMaxWidth())
         notes(Modifier.fillMaxWidth())
@@ -359,7 +394,7 @@ private fun Details(state: ReleaseUiState, sheet: ReleaseSheet, narrow: Boolean,
 }
 
 @Composable
-private fun Notes(state: ReleaseUiState, modifier: Modifier, onPanel: (ReleasePanel) -> Unit) {
+private fun Notes(state: ReleaseUiState, modifier: Modifier, openers: Map<ReleasePanel, FocusRequester>, onPanel: (ReleasePanel) -> Unit) {
     val notes = state.notes
     val nfo = state.details?.nfo?.takeIf { it.isNotBlank() }
     if (notes == null && nfo == null) return
@@ -372,8 +407,24 @@ private fun Notes(state: ReleaseUiState, modifier: Modifier, onPanel: (ReleasePa
             Text(notes, style = IrisType.reading, color = IrisColor.ink, maxLines = 10, overflow = TextOverflow.Ellipsis)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
-            if (notes != null) ActionButton("Read all", { onPanel(ReleasePanel.Notes) }, style = ActionStyle.Secondary, size = ActionSize.Small)
-            if (nfo != null) ActionButton("Technical sheet (NFO)", { onPanel(ReleasePanel.Nfo) }, style = ActionStyle.Secondary, size = ActionSize.Small)
+            if (notes != null) {
+                ActionButton(
+                    "Read all",
+                    { onPanel(ReleasePanel.Notes) },
+                    style = ActionStyle.Secondary,
+                    size = ActionSize.Small,
+                    modifier = Modifier.focusRequester(openers.getValue(ReleasePanel.Notes)),
+                )
+            }
+            if (nfo != null) {
+                ActionButton(
+                    "Technical sheet (NFO)",
+                    { onPanel(ReleasePanel.Nfo) },
+                    style = ActionStyle.Secondary,
+                    size = ActionSize.Small,
+                    modifier = Modifier.focusRequester(openers.getValue(ReleasePanel.Nfo)),
+                )
+            }
         }
     }
 }

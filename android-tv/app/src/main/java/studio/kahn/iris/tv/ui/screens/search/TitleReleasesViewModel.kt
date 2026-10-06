@@ -3,7 +3,6 @@ package studio.kahn.iris.tv.ui.screens.search
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,12 +10,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
+import studio.kahn.iris.tv.data.bestEffort
+import studio.kahn.iris.tv.data.LibraryMatch
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.TitleCard
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
-import studio.kahn.iris.tv.ui.state.load
-import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.format.kindWord
 
 /** What the title's aside shows: the card picked, else what its first release knows. */
@@ -37,31 +36,39 @@ data class TitleReleasesUiState(
     val query: String,
     val tmdbId: Long,
     val card: TitleCard? = null,
-    val results: Loadable<SearchPage> = Loadable.Loading,
-    val loadingMore: Boolean = false,
-    val moreError: UiError? = null,
+    val pages: ReleasePages = ReleasePages(results = Loadable.Loading),
     val language: String? = null,
     val season: Int? = null,
 ) {
-    val rows: List<SearchResult> get() = results.valueOrNull?.rows.orEmpty()
-    private val bySeason: List<SearchResult> get() = if (season == null) rows else rows.filter { it.parsedSeason == season }
-    val shown: List<SearchResult> get() = filterLanguage(bySeason, language)
-    val audio: List<AudioOption> get() = audioOptions(bySeason, language)
-    val seasons: List<SeasonOption> get() = seasonOptions(rows, season)
+    val results: Loadable<SearchPage> get() = pages.results ?: Loadable.Loading
+    val loadingMore: Boolean get() = pages.loadingMore
+    val moreError: UiError? get() = pages.moreError
 
-    val head: TitleHead
-        get() {
-            val match = rows.firstOrNull()?.titleMatch
-            val title = card?.title ?: match?.title ?: query
-            val meta = card?.let(::titleMeta)
-                ?: match?.let { listOfNotNull(kindWord(it.kind), it.year?.toString()).joinToString(" · ") }
-            val owned = card?.collectionId != null || rows.any { ownedFile(it) != null }
-            return TitleHead(title, meta?.ifEmpty { null }, card?.posterUrl ?: rows.firstNotNullOfOrNull { it.posterUrl }, owned)
-        }
+    val rows: List<SearchResult> by lazy { results.valueOrNull?.rows.orEmpty() }
+    private val bySeason: List<SearchResult> by lazy { bySeason(rows, season) }
+    val shown: List<SearchResult> by lazy { filterLanguage(bySeason, language) }
+    val audio: List<AudioOption> by lazy { audioOptions(bySeason, language) }
+    val seasons: List<SeasonOption> by lazy { seasonOptions(rows, season) }
 
-    val summaryLine: String?
-        get() = (results as? Loadable.Ready)?.value?.let { summary(0, shown.size, it.providers) }
+    /** What the library holds of this title (web: the search's matches narrowed to the title). */
+    val matches: List<LibraryMatch> by lazy { results.valueOrNull?.matches.orEmpty().filter { it.tmdbId == tmdbId } }
+
+    val head: TitleHead by lazy {
+        val match = rows.firstOrNull()?.titleMatch
+        val title = card?.title ?: match?.title ?: query
+        val meta = card?.let(::titleMeta)
+            ?: match?.let { listOfNotNull(kindWord(it.kind), it.year?.toString()).joinToString(" · ") }
+        val owned = card?.collectionId != null || matches.isNotEmpty() || rows.any { ownedFile(it) != null }
+        TitleHead(title, meta?.ifEmpty { null }, card?.posterUrl ?: rows.firstNotNullOfOrNull { it.posterUrl }, owned)
+    }
+
+    val summaryLine: String? by lazy {
+        (results as? Loadable.Ready)?.value?.let { summary(matches.size, shown.size, it.providers) }
+    }
 }
+
+private fun bySeason(rows: List<SearchResult>, season: Int?): List<SearchResult> =
+    if (season == null) rows else rows.filter { it.parsedSeason == season }
 
 /** "All seasons", then each season the loaded releases carry, when there are several. */
 fun seasonOptions(rows: List<SearchResult>, selected: Int?): List<SeasonOption> {
@@ -85,71 +92,53 @@ class TitleReleasesViewModel(
     private val mutable = MutableStateFlow(TitleReleasesUiState(query = query, tmdbId = tmdbId, card = SearchMemory.title(tmdbId)))
     val state: StateFlow<TitleReleasesUiState> = mutable.asStateFlow()
     val grabber = Grabber(container, viewModelScope)
-    private var searchJob: Job? = null
+    private val pager = ReleasePager(
+        viewModelScope,
+        shown = { page -> mutable.value.let { s -> filterLanguage(bySeason(page.rows, s.season), s.language).size } },
+    ) { page ->
+        container.api().search(
+            q = query,
+            page = page,
+            limit = SEARCH_PAGE_SIZE,
+            sortBy = sort.sortBy,
+            order = sort.order,
+            kind = kind.apiKind,
+            tmdbId = tmdbId,
+        )
+    }
 
     init {
         if (mutable.value.card == null) {
             viewModelScope.launch {
-                val card = runCatching { container.api().searchTitles(query) }.getOrNull()
+                val card = bestEffort { container.api().searchTitles(query) }
                     ?.also(SearchMemory::keepTitles)
                     ?.firstOrNull { it.tmdbId == tmdbId }
                 if (card != null) mutable.update { it.copy(card = card) }
             }
         }
+        viewModelScope.launch {
+            pager.state.collect { pages -> mutable.update { it.copy(pages = pages) } }
+        }
         retry()
     }
 
-    fun retry() {
-        searchJob?.cancel()
-        mutable.update { it.copy(results = Loadable.Loading, loadingMore = false, moreError = null) }
-        searchJob = viewModelScope.launch {
-            val next = load(Loadable.Loading) { SearchPage.first(fetch(1)) }
-            next.valueOrNull?.let { SearchMemory.keep(it.rows) }
-            mutable.update { it.copy(results = next) }
-        }
+    fun retry() = pager.first()
+
+    fun loadMore() = pager.more()
+
+    fun showMore() = pager.more(byViewer = true)
+
+    fun retryMore() = pager.retryMore()
+
+    fun setLanguage(tag: String?) {
+        mutable.update { it.copy(language = tag) }
+        pager.filtersChanged()
     }
 
-    fun loadMore() {
-        val s = mutable.value
-        val page = (s.results as? Loadable.Ready)?.value ?: return
-        val next = page.next ?: return
-        if (s.loadingMore || s.moreError != null) return
-        mutable.update { it.copy(loadingMore = true) }
-        viewModelScope.launch {
-            try {
-                val res = fetch(next)
-                SearchMemory.keep(res.results)
-                mutable.update { cur ->
-                    val ready = cur.results.valueOrNull ?: return@update cur.copy(loadingMore = false)
-                    cur.copy(results = Loadable.Ready(ready.plus(res)), loadingMore = false)
-                }
-            } catch (e: Exception) {
-                mutable.update { it.copy(loadingMore = false, moreError = e.toUiError()) }
-            }
-        }
+    fun setSeason(season: Int?) {
+        mutable.update { it.copy(season = season, language = null) }
+        pager.filtersChanged()
     }
 
-    fun retryMore() {
-        mutable.update { it.copy(moreError = null) }
-        loadMore()
-    }
-
-    fun setLanguage(tag: String?) = mutable.update { it.copy(language = tag) }
-
-    fun setSeason(season: Int?) = mutable.update { it.copy(season = season, language = null) }
-
-    fun grab(r: SearchResult) {
-        val owned = ownedFile(r)
-        if (owned != null) grabber.playOwned(owned) else grabber.run(releaseKey(r), r.grabTarget())
-    }
-
-    private suspend fun fetch(page: Int) = container.api().search(
-        q = mutable.value.query,
-        page = page,
-        limit = SEARCH_PAGE_SIZE,
-        sortBy = sort.sortBy,
-        order = sort.order,
-        kind = kind.apiKind,
-        tmdbId = mutable.value.tmdbId,
-    )
+    fun grab(r: SearchResult) = grabber.grabOrPlay(r)
 }

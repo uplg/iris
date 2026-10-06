@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
+import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.CreateFollowRequest
 import studio.kahn.iris.tv.data.GrabTarget
 import studio.kahn.iris.tv.data.ReleaseFile
@@ -81,6 +82,8 @@ data class ReleaseSheet(
     val archive: Boolean,
     val owned: OwnedFile?,
     val videos: List<ReleaseFile>,
+    /** The files that are not a video to play (subtitles, NFO, samples, extras), as the web lists them. */
+    val others: List<ReleaseFile>,
     val chosenFile: Int?,
     val playLabel: String,
     val facts: List<Pair<String, String>>,
@@ -88,7 +91,7 @@ data class ReleaseSheet(
     /** Why the grab cannot start, in words; null = it can. */
     val blocked: String?
         get() = when {
-            dead -> "$DEAD: this release cannot be downloaded. Try another one."
+            dead -> DEAD_GRAB
             archive -> ARCHIVE_WORDS
             else -> null
         }
@@ -116,6 +119,7 @@ fun releaseSheet(s: ReleaseUiState): ReleaseSheet {
         languageLabel(hit?.languageTag),
     ) + (d?.tags ?: hit?.tags.orEmpty()).take(6)
     val files = p?.files?.map { it.asReleaseFile() }.orEmpty()
+    val videos = playableFiles(files)
     val chosen = s.pickedFile ?: p?.let { autoFile(files) }
     val leechers = d?.leechers ?: hit?.leechers
     val swarm = listOfNotNull(
@@ -151,7 +155,8 @@ fun releaseSheet(s: ReleaseUiState): ReleaseSheet {
         dead = isDead(seeders),
         archive = p != null && !p.streamable,
         owned = d?.let(::ownedFile) ?: hit?.let(::ownedFile),
-        videos = playableFiles(files),
+        videos = videos,
+        others = files.filter { it !in videos },
         chosenFile = chosen,
         playLabel = if (p != null) playWords(files, chosen) else "Download and play",
         facts = facts,
@@ -187,7 +192,7 @@ class ReleaseViewModel(
     init {
         loadPreview()
         viewModelScope.launch {
-            val details = runCatching { container.api().torrentDetails(providerId, externalId) }.getOrNull()
+            val details = bestEffort { container.api().torrentDetails(providerId, externalId) }
             val notes = details?.description?.takeIf { it.isNotBlank() }?.let { source ->
                 withContext(Dispatchers.Default) { releaseNotes(source, details.descriptionFormat) }
             }
@@ -240,7 +245,7 @@ class ReleaseViewModel(
         val sheet = mutable.value.sheet
         if (followAsked || !sheet.isTv) return
         followAsked = true
-        val follows = runCatching { container.api().listFollows() }.getOrNull() ?: return
+        val follows = bestEffort { container.api().listFollows() } ?: return
         val following = follows.any { f ->
             (sheet.tmdbId != null && f.tmdbId == sheet.tmdbId) || f.name.equals(sheet.title, ignoreCase = true)
         }
