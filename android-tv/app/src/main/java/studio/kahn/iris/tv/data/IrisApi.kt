@@ -316,6 +316,14 @@ interface IrisApi {
     @GET("api/me/watchlist")
     suspend fun watchlist(): List<WatchlistItem>
 
+    /** The home's "Right now" facts: downloads, new episodes, disk, seeding. */
+    @GET("api/me/summary")
+    suspend fun homeSummary(): HomeSummary
+
+    /** One series' audio + subtitle choice when it has its own, else the account's. */
+    @GET("api/me/playback-preferences")
+    suspend fun seriesPlaybackPreferences(@Query("collection_id") collectionId: String): PlaybackPrefsResponse
+
     /** The account's last searches, newest first (shared with the web). */
     @GET("api/me/recent-searches")
     suspend fun recentSearches(): List<RecentSearchView>

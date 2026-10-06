@@ -1,1636 +1,472 @@
 package studio.kahn.iris.tv.ui.screens
 
-import studio.kahn.iris.tv.data.isVideoPath
-import studio.kahn.iris.tv.ui.theme.IrisColor
-import studio.kahn.iris.tv.ui.formatSpeed
-import studio.kahn.iris.tv.ui.formatSize
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.basicMarquee
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
-import androidx.compose.foundation.focusGroup
-import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.focus.FocusDirection
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusEvent
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxWidth
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
-import androidx.tv.material3.Card
-import androidx.tv.material3.CardDefaults
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import studio.kahn.iris.tv.BuildConfig
-import studio.kahn.iris.tv.data.AppUpdater
-import studio.kahn.iris.tv.data.TorrentState
-import studio.kahn.iris.tv.data.MediaKind
+import coil3.request.ImageRequest
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.CollectionListItem
-import studio.kahn.iris.tv.data.ContinueWatchingItem
-import studio.kahn.iris.tv.data.CatalogCard
-import studio.kahn.iris.tv.data.ForYou
-import studio.kahn.iris.tv.data.IrisApi
-import studio.kahn.iris.tv.data.LibraryResponse
-import studio.kahn.iris.tv.data.PreferencesResponse
-import studio.kahn.iris.tv.data.RemoveWatchlistRequest
-import studio.kahn.iris.tv.data.WatchlistItem
-import studio.kahn.iris.tv.data.MediaMetadata
-import studio.kahn.iris.tv.data.TorrentView
-import studio.kahn.iris.tv.data.tmdbPosterUrl
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.LiveTv
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.sp
-import studio.kahn.iris.tv.data.tmdbBackdropUrl
-import studio.kahn.iris.tv.ui.components.ConfirmDialog
-import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
-import studio.kahn.iris.tv.ui.components.IrisWordmark
-import studio.kahn.iris.tv.ui.components.SectionTitle
-import studio.kahn.iris.tv.ui.components.IconAction
-import studio.kahn.iris.tv.ui.components.irisPosterBorder
-import studio.kahn.iris.tv.ui.components.irisPosterGlow
-import studio.kahn.iris.tv.ui.components.irisPosterPlaceholder
-import studio.kahn.iris.tv.ui.components.irisPosterScale
-import studio.kahn.iris.tv.ui.components.irisPosterShape
-import studio.kahn.iris.tv.ui.theme.IrisColors
-import studio.kahn.iris.tv.ui.theme.LocalTvLayout
-import studio.kahn.iris.tv.ui.theme.Radius
-import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.components.touchClick
+import studio.kahn.iris.tv.ui.components.Chip
+import studio.kahn.iris.tv.ui.components.Eyebrow
+import studio.kahn.iris.tv.ui.components.KeyHint
+import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.StaleNotice
+import studio.kahn.iris.tv.ui.components.StatusLine
+import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.TopTab
+import studio.kahn.iris.tv.ui.components.TvHeader
+import studio.kahn.iris.tv.ui.screens.home.CardAction
+import studio.kahn.iris.tv.ui.screens.home.CardFocus
+import studio.kahn.iris.tv.ui.screens.home.CardMenuHost
+import studio.kahn.iris.tv.ui.screens.home.HeroAction
+import studio.kahn.iris.tv.ui.screens.home.HeroModel
+import studio.kahn.iris.tv.ui.screens.home.HomeEvent
+import studio.kahn.iris.tv.ui.screens.home.HomeRow
+import studio.kahn.iris.tv.ui.screens.home.HomeUiState
+import studio.kahn.iris.tv.ui.screens.home.HomeViewModel
+import studio.kahn.iris.tv.ui.screens.home.Notice
+import studio.kahn.iris.tv.ui.screens.home.plural
+import studio.kahn.iris.tv.ui.screens.home.rememberCardFocus
+import studio.kahn.iris.tv.ui.state.Loadable
+import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
+import studio.kahn.iris.tv.ui.state.irisViewModel
+import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.theme.IrisLayout
+import studio.kahn.iris.tv.ui.theme.IrisSpace
+import studio.kahn.iris.tv.ui.theme.IrisType
 
 /**
- * Home screen with two horizontal shelves. Selecting a card jumps to
- * `Routes.WATCH` with the appropriate `(infohash, fileIdx)`.
- *
- * `loadVersion` is a coarse re-fetch trigger — bumping it re-runs the
- * LaunchedEffect, used by the Retry button when a fetch fails.
+ * Home (TV.dc.html, web `routes/+page.svelte`): what to watch now (resume the last thing,
+ * else the library's freshest title, else the tracker's featured release), what Iris is
+ * doing right now, then the rows: Continue watching, the watchlist (fresh episodes first),
+ * the suggestions, the library. The first-run preferences sheet opens over it when due.
  */
-/** Process-level cache for the "update available" badge check, so returning
- *  to Home doesn't refetch the version sidecar every time. Best-effort: an
- *  unreachable sidecar just means no badge. */
-private var updateBadgeCheckedAtMs = 0L
-private var updateBadgeAvailable = false
-private const val UPDATE_BADGE_TTL_MS = 6L * 60 * 60 * 1_000
-
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun HomeScreen(
     container: AppContainer,
-    onPickTorrent: (infohash: String) -> Unit,
-    onPickFile: (infohash: String, fileIdx: Int) -> Unit,
-    onOpenSettings: () -> Unit,
-    /** Open the search screen. When `query` is non-null the search runs
-     *  immediately with that string pre-filled. */
-    onOpenSearch: (query: String?) -> Unit,
-    /** Open the full Library grid (search + filters + sort). The Home
-     *  shelf below is just a recent-N preview. */
-    onOpenLibrary: () -> Unit,
-    /** Route to the detail screen for a (provider, externalId) pair —
-     *  same destination as picking a search result. Used by Featured
-     *  cards so the user previews before deciding to follow / play.
-     *  `kind` lets the detail screen render the Follow button only
-     *  for TV results. */
-    onPickResult: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
-    /** Open the SeriesScreen for an existing follow. */
-    onOpenSeries: (followId: String) -> Unit,
-    /** Open the CollectionScreen for a Library collection. Lists all
-     *  torrents + episodes belonging to that collection. */
+    onPlay: (infohash: String, fileIdx: Int) -> Unit,
     onOpenCollection: (collectionId: String) -> Unit,
-    /** Open the Discover page — For You + Tonight as tabs. */
+    onOpenSearch: (query: String?) -> Unit,
+    onOpenLibrary: () -> Unit,
     onOpenDiscover: () -> Unit,
-    /** Open the Live TV channel grid. */
     onOpenLiveTv: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-    var continueWatching by remember { mutableStateOf<List<ContinueWatchingItem>>(emptyList()) }
-    // The Continue Watching tile whose manage sheet (remove / mark-watched)
-    // is open, if any.
-    var cwManageItem by remember { mutableStateOf<ContinueWatchingItem?>(null) }
-    // The grabbable Continue Watching tile whose grab-then-play round trip
-    // is in flight (drives the "Grabbing…" tile state and re-entry guard).
-    var grabbingCw by remember { mutableStateOf<ContinueWatchingItem?>(null) }
-    // The Watchlist tile the user long-pressed to remove, pending confirm.
-    var watchlistRemoveItem by remember { mutableStateOf<WatchlistItem?>(null) }
-    // "Update available" badge on the Settings icon — reads the same version
-    // sidecar as the Settings card, throttled process-wide (see the cache
-    // vars above the composable).
-    var updateAvailable by remember { mutableStateOf(updateBadgeAvailable) }
-    LaunchedEffect(Unit) {
-        if (System.currentTimeMillis() - updateBadgeCheckedAtMs > UPDATE_BADGE_TTL_MS) {
-            val latest = AppUpdater.fetchLatestVersion(container.okHttpClient)
-            val status = AppUpdater.versionStatus(BuildConfig.VERSION_NAME, latest)
-            updateBadgeAvailable = status is AppUpdater.VersionStatus.UpdateAvailable
-            updateBadgeCheckedAtMs = System.currentTimeMillis()
-        }
-        updateAvailable = updateBadgeAvailable
-    }
-    // Two separate states for the two shelves so a tick that only touches
-    // a Downloading entry's progress/speed doesn't invalidate Library —
-    // those cards stay frozen and skip recomposition entirely.
-    var downloading by remember { mutableStateOf<List<TorrentView>>(emptyList()) }
-    var library by remember { mutableStateOf<List<TorrentView>>(emptyList()) }
-    var watchlist by remember { mutableStateOf<List<WatchlistItem>>(emptyList()) }
-    var forYou by remember { mutableStateOf<ForYou?>(null) }
-    var collections by remember { mutableStateOf<List<CollectionListItem>>(emptyList()) }
-    // First-run onboarding: null until prefs load (or stays null on an
-    // older server with no endpoint). `onboardingDismissed` lets the user
-    // leave onboarding for this session without a refetch race.
-    var preferences by remember { mutableStateOf<PreferencesResponse?>(null) }
-    var onboardingDismissed by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(true) }
-    var loadVersion by remember { mutableIntStateOf(0) }
-
-    LaunchedEffect(loadVersion) {
-        loading = true
-        error = null
-        try {
-            val url = container.sessionStore.serverUrl.first()
-            if (url == null) {
-                error = "Not signed in"
-                loading = false
-                return@LaunchedEffect
+    val vm = irisViewModel(container) { c, _ -> HomeViewModel(c) }
+    val state by vm.state.collectAsStateWithLifecycle()
+    RepeatWhileStarted(Unit) { vm.refreshWhileStarted() }
+    LaunchedEffect(vm) {
+        vm.events.collect { event ->
+            when (event) {
+                is HomeEvent.Play -> onPlay(event.infohash, event.fileIdx)
+                is HomeEvent.OpenCollection -> onOpenCollection(event.id)
+                is HomeEvent.Search -> onOpenSearch(event.query)
+                HomeEvent.OpenLibrary -> onOpenLibrary()
             }
-            val api: IrisApi = container.apiFor(url)
-            // Both calls + the JSON parse run on Dispatchers.IO so the main
-            // thread stays free to render the UI even on a slow tunnel.
-            data class HomeFetch(
-                val cw: Result<List<ContinueWatchingItem>>,
-                val tor: Result<List<TorrentView>>,
-                val watchlist: Result<List<WatchlistItem>>,
-                val forYou: Result<ForYou>,
-                val collections: Result<LibraryResponse>,
-                val prefs: Result<PreferencesResponse>,
-            )
-            val fetch = withContext(Dispatchers.IO) {
-                // Discovery / watchlist / library failures shouldn't
-                // break the rest of the home — surface as empty
-                // shelves, not as the global error banner.
-                HomeFetch(
-                    cw = runCatching { api.continueWatching(includeGrabbable = true) },
-                    tor = runCatching { api.listTorrents() },
-                    // Post-0.4: per-user Watchlist sourced from the
-                    // user's series_follows rows (auto-created on
-                    // grab). Replaces the legacy `listFollows()` which
-                    // returned the same data through the C1 façade.
-                    watchlist = runCatching { api.watchlist() },
-                    forYou = runCatching { api.forYou() },
-                    collections = runCatching { api.library("collections") },
-                    // Onboarding gate. A 404 on an older server → failure
-                    // → null → onboarding simply never shows.
-                    prefs = runCatching { api.preferences() },
-                )
-            }
-            val cw = fetch.cw
-            val tor = fetch.tor
-            val wl = fetch.watchlist
-            val fy = fetch.forYou
-            val coll = fetch.collections
-            continueWatching = cw.getOrDefault(emptyList())
-            val fresh = tor.getOrDefault(emptyList())
-            val (newDl, newLib) = splitTorrents(fresh)
-            downloading = newDl
-            library = newLib
-            // Fresh-episodes-first: "what came out since last time?" is
-            // answered at the head of the row (stable sort).
-            watchlist = wl.getOrDefault(emptyList()).sortedByDescending { it.newCount }
-            forYou = fy.getOrNull()
-            collections = (coll.getOrNull() as? LibraryResponse.CollectionsWrapper)?.value?.items.orEmpty()
-            preferences = fetch.prefs.getOrNull()
-            val fail = listOfNotNull(cw.exceptionOrNull(), tor.exceptionOrNull()).firstOrNull()
-            if (fail != null && fresh.isEmpty() && continueWatching.isEmpty()) {
-                error = fail.message ?: "Failed to load library"
-            }
-        } catch (e: Exception) {
-            error = e.message ?: "Failed to load library"
-        } finally {
-            loading = false
         }
     }
-
-    // Re-fetch the live torrent state every 5s so the "Downloading" shelf's
-    // progress bars and speeds tick up without the user mashing Retry.
-    //
-    // The whole network round-trip + JSON parse + filter/sort runs on
-    // Dispatchers.IO, then we hop back to the composition thread and only
-    // assign the *one* state slice that actually changed. Result: Library
-    // cards never see a state-change event when only Downloading items
-    // moved, so Compose smart-skips them entirely.
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(5_000)
-            val url = container.sessionStore.serverUrl.first() ?: continue
-            val split = withContext(Dispatchers.IO) {
-                runCatching { container.apiFor(url).listTorrents() }
-                    .map(::splitTorrents)
-                    .getOrNull()
-            } ?: continue
-            val (newDl, newLib) = split
-            // Per-shelf diff: Library only re-emits when the *Library* subset
-            // changed (a torrent finished downloading, or was deleted, or
-            // ingested). Same for Downloading.
-            if (newDl != downloading) downloading = newDl
-            if (newLib != library) library = newLib
-        }
-    }
-
-    val layout = LocalTvLayout.current
-    // First-run gate: a freshly-onboarded server returns prefs with
-    // onboarding_completed=false → show the full-screen onboarding step in
-    // place of Home until the user saves or skips.
-    val needsOnboarding = preferences?.let { !it.onboardingCompleted } == true && !onboardingDismissed
-    Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
-        // Ambient backlight wash (web `.ambient`) — a fixed, faint violet
-        // glow behind the scrolling content. Decorative only.
-        Box(Modifier.fillMaxSize().background(IrisColor.ground))
-        if (needsOnboarding) {
-            OnboardingScreen(
-                container = container,
-                initialPrefs = preferences!!,
-                onDone = { onboardingDismissed = true },
-            )
-        } else {
-            // One launch path for every Continue Watching tile: owned tiles
-            // play directly; grabbable ones ("next episode isn't on disk")
-            // grab first — server picks the series' dominant owned language
-            // via `language=auto` — then play the returned file (librqbit
-            // streams while the download completes). On failure, fall back
-            // to the collection screen where every release is exposed.
-            val launchCw: (ContinueWatchingItem) -> Unit = { item ->
-                val cid = item.collectionId
-                val season = item.season
-                val episode = item.episode
-                if (!item.grabbable) {
-                    onPickFile(item.infohash, item.fileIdx.toInt())
-                } else if (grabbingCw == null && cid != null && season != null && episode != null) {
-                    scope.launch {
-                        grabbingCw = item
-                        try {
-                            val url = container.sessionStore.serverUrl.first() ?: return@launch
-                            runCatching {
-                                withContext(Dispatchers.IO) {
-                                    container.apiFor(url).grabCollectionEpisode(
-                                        id = cid.toString(),
-                                        season = season.toInt(),
-                                        episode = episode.toInt(),
-                                        language = "auto",
-                                    )
-                                }
-                            }.onSuccess { res ->
-                                onPickFile(res.infohash, res.fileIdx.toInt())
-                            }.onFailure {
-                                onOpenCollection(cid.toString())
-                            }
-                        } finally {
-                            grabbingCw = null
-                        }
-                    }
+    Box(Modifier.fillMaxSize()) {
+        HomeContent(
+            state = state,
+            onSelectTab = { tab ->
+                when (tab) {
+                    TopTab.Home -> Unit
+                    TopTab.Search -> onOpenSearch(null)
+                    TopTab.Discover -> onOpenDiscover()
+                    TopTab.Library -> onOpenLibrary()
+                    TopTab.LiveTv -> onOpenLiveTv()
                 }
-            }
-            HomeContent(
-                layout = layout,
-                error = error,
-                loading = loading,
-                continueWatching = continueWatching,
-                grabbingCw = grabbingCw,
-                onLaunchCw = launchCw,
-                downloading = downloading,
-                library = library,
-                watchlist = watchlist,
-                forYou = forYou,
-                collections = collections,
-                container = container,
-                onPickFile = onPickFile,
-                onPickTorrent = onPickTorrent,
-                onPickResult = onPickResult,
-                onOpenSettings = onOpenSettings,
-                onOpenSearch = onOpenSearch,
-                onOpenLibrary = onOpenLibrary,
-                onOpenCollection = onOpenCollection,
-                onOpenDiscover = onOpenDiscover,
-                onOpenLiveTv = onOpenLiveTv,
-                onRetry = { loadVersion++ },
-                onManageCw = { cwManageItem = it },
-                onManageWatchlist = { watchlistRemoveItem = it },
-                updateAvailable = updateAvailable,
-            )
-        }
-
-        // Held-select on a Watchlist tile: confirm-and-remove. The
-        // follow auto-recreates on the next grab/play.
-        watchlistRemoveItem?.let { item ->
-            ConfirmDialog(
-                eyebrow = "My Watchlist",
-                title = item.name,
-                body = "Removed from your Watchlist only. It comes back " +
-                    "automatically the next time you grab or play an episode.",
-                confirmLabel = "Remove",
-                onConfirm = {
-                    watchlistRemoveItem = null
-                    scope.launch {
-                        val url = container.sessionStore.serverUrl.first()
-                            ?: return@launch
-                        runCatching {
-                            container.apiFor(url).removeFromWatchlist(
-                                RemoveWatchlistRequest(normalizedName = item.normalizedName),
-                            )
-                        }.onSuccess {
-                            // Optimistic removal.
-                            watchlist = watchlist.filter {
-                                it.normalizedName != item.normalizedName
-                            }
-                        }
-                    }
-                },
-                onCancel = { watchlistRemoveItem = null },
-            )
-        }
-
-        // Held-select on a Continue Watching tile opens this manage sheet.
-        cwManageItem?.let { item ->
-            ContinueWatchingManageDialog(
-                item = item,
-                onDismiss = { cwManageItem = null },
-                onRemove = {
-                    cwManageItem = null
-                    scope.launch {
-                        val url = container.sessionStore.serverUrl.first()
-                        if (url != null) {
-                            runCatching {
-                                // A TV series hides its whole collection; a
-                                // movie / standalone drops its single row.
-                                val body = if (item.collectionId != null) {
-                                    studio.kahn.iris.tv.data.DismissCwRequest(
-                                        collectionId = item.collectionId,
-                                    )
-                                } else {
-                                    studio.kahn.iris.tv.data.DismissCwRequest(
-                                        infohash = item.infohash,
-                                        fileIdx = item.fileIdx,
-                                    )
-                                }
-                                container.apiFor(url).dismissContinueWatching(body)
-                            }
-                            loadVersion++
-                        }
-                    }
-                },
-                onMarkWatched = {
-                    cwManageItem = null
-                    scope.launch {
-                        val url = container.sessionStore.serverUrl.first()
-                        if (url != null) {
-                            runCatching {
-                                container.apiFor(url).markWatched(item.infohash, item.fileIdx.toInt())
-                            }
-                            loadVersion++
-                        }
-                    }
-                },
-            )
+            },
+            onAccount = onOpenSettings,
+            onHeroAction = vm::onHeroAction,
+            onCardAction = vm::onCardAction,
+            onRetry = vm::retry,
+            onOpenDiscover = onOpenDiscover,
+            onOpenLibrary = onOpenLibrary,
+            onOpenSearch = { onOpenSearch(null) },
+        )
+        state.onboarding?.let { prefs ->
+            OnboardingSheet(container, prefs, onClosed = vm::onboardingClosed)
         }
     }
-
-    @Suppress("UNUSED_EXPRESSION") scope
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun HomeContent(
-    layout: studio.kahn.iris.tv.ui.theme.TvLayout,
-    error: String?,
-    loading: Boolean,
-    continueWatching: List<ContinueWatchingItem>,
-    /** The grabbable tile whose grab round trip is in flight, if any. */
-    grabbingCw: ContinueWatchingItem?,
-    /** Play an owned tile / grab-then-play a grabbable one. */
-    onLaunchCw: (ContinueWatchingItem) -> Unit,
-    downloading: List<TorrentView>,
-    library: List<TorrentView>,
-    watchlist: List<WatchlistItem>,
-    forYou: ForYou?,
-    collections: List<CollectionListItem>,
-    container: AppContainer,
-    onPickFile: (String, Int) -> Unit,
-    onPickTorrent: (String) -> Unit,
-    onPickResult: (String, String, Long?, String?) -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenSearch: (String?) -> Unit,
-    onOpenLibrary: () -> Unit,
-    onOpenCollection: (String) -> Unit,
-    onOpenDiscover: () -> Unit,
-    onOpenLiveTv: () -> Unit,
+fun HomeContent(
+    state: HomeUiState,
+    onSelectTab: (TopTab) -> Unit,
+    onAccount: () -> Unit,
+    onHeroAction: (HeroAction) -> Unit,
+    onCardAction: (String, CardAction) -> Unit,
     onRetry: () -> Unit,
-    onManageCw: (ContinueWatchingItem) -> Unit,
-    onManageWatchlist: (WatchlistItem) -> Unit,
-    updateAvailable: Boolean,
-) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize(),
-        // No TOP inset: the hero's backdrop bleeds to the screen's top edge
-        // (the top bar rides on it). Bottom inset only. Horizontal gutter is
-        // applied per-item (shelves manage their own so a focused card can
-        // scale past the title column without clipping).
-        contentPadding = PaddingValues(bottom = layout.gutterVertical),
-        verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
-    ) {
-        // When there's a resume pick, the brand + actions ride ON the hero
-        // backdrop at the top, with the resume content pushed to the bottom of
-        // the (tall) billboard — backdrop stuck to the screen top, no seam.
-        // Otherwise the top bar is a standalone header.
-        val resumePick = continueWatching.firstOrNull()
-        val topBar: @Composable () -> Unit = {
-            HomeTopBar(
-                onOpenDiscover = onOpenDiscover,
-                onOpenSearch = onOpenSearch,
-                onOpenLibrary = onOpenLibrary,
-                onOpenLiveTv = onOpenLiveTv,
-                onOpenSettings = onOpenSettings,
-                updateAvailable = updateAvailable,
-            )
-        }
-        if (resumePick != null) {
-            item(key = "hero") {
-                ResumeHero(
-                    container = container,
-                    item = resumePick,
-                    grabbing = grabbingCw === resumePick,
-                    onResume = { onLaunchCw(resumePick) },
-                    topBar = topBar,
-                    // Explicit height, NOT fillParentMaxHeight: chaining a
-                    // heightIn floor onto fillParentMaxHeight doesn't coerce
-                    // (field-tested — the hero stayed at 78% and the Column
-                    // crushed the Resume button on a ~390dp-tall phone).
-                    // Landscape/TV: 78% of the viewport with a 380dp floor
-                    // so the bottom lockup (title + meta + overview + CTA +
-                    // progress) always fits — the hero scrolls instead of
-                    // compressing. Portrait phone: a billboard proportioned
-                    // like a poster row (45%, capped) — 78% of a tall
-                    // portrait viewport left absurd empty voids.
-                    modifier = Modifier.height(heroHeight()),
-                )
-            }
-        } else {
-            item(key = "header") {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = layout.gutterHorizontal, vertical = layout.gutterVertical),
-                ) { topBar() }
-            }
-        }
-
-        if (error != null) {
-            item(key = "error") {
-                Row(
-                    Modifier.padding(horizontal = layout.gutterHorizontal),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(error, color = MaterialTheme.colorScheme.error)
-                    Button(
-                        onClick = onRetry,
-                        modifier = Modifier.touchClick(onClick = onRetry),
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    ) {
-                        Text("Retry")
-                    }
-                }
-            }
-        } else if (loading && downloading.isEmpty() && library.isEmpty() && continueWatching.isEmpty()) {
-            item(key = "loading") {
-                Text(
-                    "Loading library…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = layout.gutterHorizontal),
-                )
-            }
-        }
-
-        if (continueWatching.isNotEmpty()) {
-            item(key = "shelf-cw") {
-                Shelf(title = "Continue Watching") {
-                    // Key on the collection when there is one: grabbable
-                    // tiles share an empty infohash, and Compose crashes on
-                    // duplicate LazyRow keys. One tile per collection is the
-                    // shelf's own invariant, so the collection id is stable.
-                    items(
-                        continueWatching,
-                        key = { it.collectionId?.let { c -> "c:$c" } ?: "${it.infohash}:${it.fileIdx}" },
-                    ) { item ->
-                        ContinueWatchingCard(
-                            container = container,
-                            item = item,
-                            grabbing = grabbingCw === item,
-                            onClick = { onLaunchCw(item) },
-                            onLongClick = { onManageCw(item) },
-                        )
-                    }
-                }
-            }
-        }
-
-        // Watchlist above Library: following tracked shows is the
-        // primary flow; the Library preview is the archive.
-        if (watchlist.isNotEmpty()) {
-            item(key = "shelf-watchlist") {
-                Shelf(title = "My Watchlist", eyebrow = "${watchlist.size} series") {
-                    items(watchlist, key = { it.id }) { w ->
-                        // Post-0.4: the Watchlist item's `id` IS
-                        // the collection id (sourced from
-                        // `/api/me/watchlist` which joins
-                        // series_follows → collections). Route
-                        // straight to the unified
-                        // CollectionScreen — SeriesScreen is the
-                        // retired surface kept only for legacy
-                        // navigation flows.
-                        WatchlistCard(
-                            container = container,
-                            item = w,
-                            onClick = { onOpenCollection(w.id.toString()) },
-                            onLongClick = { onManageWatchlist(w) },
-                        )
-                    }
-                }
-            }
-        }
-
-        if (collections.isNotEmpty()) {
-            item(key = "shelf-library") {
-                // Recent-N preview only — the full, searchable/sortable grid
-                // lives on the dedicated Library screen, opened from the
-                // "See all" action on the shelf title (↑ from the row) or the
-                // header icon. One horizontal row doesn't scale to a big lib.
-                Shelf(
-                    title = "My Library",
-                    eyebrow = "${collections.size} titles",
-                    onSeeAll = onOpenLibrary,
-                ) {
-                    items(collections.take(12), key = { it.id }) { c ->
-                        CollectionCard(
-                            container = container,
-                            collection = c,
-                            // Open the dedicated Collection screen
-                            // so the user gets the full episode /
-                            // file list (mirrors web's
-                            // `/collection/:id`). Previously this
-                            // shot straight to the representative
-                            // torrent, hiding the rest of the
-                            // collection's content.
-                            onClick = { onOpenCollection(c.id.toString()) },
-                        )
-                    }
-                }
-            }
-        }
-
-        forYou?.shelves?.forEach { shelf ->
-            if (shelf.items.isNotEmpty()) {
-                item(key = "shelf-${shelf.key}") {
-                    Shelf(
-                        title = shelf.title,
-                        onSeeAll = onOpenDiscover,
-                    ) {
-                        items(shelf.items, key = { it.catalogId }) { card ->
-                            CatalogCardTv(
-                                container = container,
-                                card = card,
-                                // Same flow as the web: follow → collection,
-                                // rolling-window card → detail/preview, lazy
-                                // recommendation → title search.
-                                onClick = {
-                                    routeCatalogClick(card, onOpenCollection, onPickResult, onOpenSearch)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        if (downloading.isNotEmpty()) {
-            item(key = "shelf-downloading") {
-                Shelf(title = "Downloading", eyebrow = "${downloading.size} active") {
-                    items(downloading, key = { it.infohash }) { t ->
-                        DownloadingCard(
-                            container = container,
-                            torrent = t,
-                            onClick = { routeTorrent(t, onPickFile, onPickTorrent) },
-                        )
-                    }
-                }
-            }
-        }
-
-    }
-}
-
-
-/**
- * Partition the raw torrent list into the two shelves the Home screen
- * renders: still-downloading (with progress < 100%) vs library
- * (fully fetched). Anything in error or paused at < 100% stays in
- * Downloading so the user can see what's broken.
- */
-private fun splitTorrents(all: List<TorrentView>): Pair<List<TorrentView>, List<TorrentView>> {
-    val dl = mutableListOf<TorrentView>()
-    val lib = mutableListOf<TorrentView>()
-    for (t in all) {
-        if (t.progressPct >= 99.9f) lib.add(t) else dl.add(t)
-    }
-    dl.sortByDescending { it.progressPct }
-    lib.sortBy { (it.name ?: it.infohash).lowercase() }
-    return dl to lib
-}
-
-/**
- * Pick the right destination when the user hits a Library/Downloading
- * card: single-video torrents go straight to play (largest video), every-
- * thing else lands on DetailScreen for episode selection.
- */
-private fun routeTorrent(
-    t: TorrentView,
-    onPickFile: (String, Int) -> Unit,
-    onPickTorrent: (String) -> Unit,
-) {
-    val videos = t.files.filter { f ->
-        isVideoPath(f.path)
-    }
-    if (videos.size <= 1) {
-        val idx = videos.maxByOrNull { f -> f.sizeBytes }?.index ?: 0
-        onPickFile(t.infohash, idx)
-    } else {
-        onPickTorrent(t.infohash)
-    }
-}
-
-/**
- * Vertical shelf with title + horizontal row of cards.
- *
- * The `bringIntoViewRequester` + `onFocusEvent` plumbing is what
- * makes the parent `LazyColumn` actually scroll on D-pad. Compose's
- * default focus handling moves focus to off-canvas items but doesn't
- * move the viewport with it on TV — without this, you'd D-pad-down
- * past the third visible row, focus would land somewhere invisible,
- * and the screen would look frozen. Whenever any descendant gains
- * focus we ask the surrounding lazy column to scroll the whole
- * shelf into view.
- */
-/**
- * Shelf hosts its own LazyRow so every shelf gets identical title
- * alignment + the same edge breathing room:
- *   * The title sits at `gutterHorizontal` from the screen edge.
- *   * The LazyRow itself extends full-width; `contentPadding`
- *     positions the first card at `gutterHorizontal` (matching the
- *     title) AND leaves room for the focus scale (~1.1×) to grow
- *     leftward without clipping at the screen edge.
- *   * Title → row gap bumped from 12.dp to 20.dp so the focused
- *     card's vertical scale doesn't crash into the title text.
- *
- * Callers pass a `LazyListScope` block — just `items(...) { … }` —
- * keeping the call sites short.
- */
-@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
-@Composable
-internal fun Shelf(
-    title: String,
-    eyebrow: String? = null,
-    /** When set, renders a focusable "See all →" action on the right of the
-     *  shelf title (web `.shelf-head` link / the design's shelf-head arrows).
-     *  Reached by pressing ↑ from the row — no walk to the end of the cards. */
-    onSeeAll: (() -> Unit)? = null,
-    content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
-) {
-    val layout = LocalTvLayout.current
-    val requester = remember { BringIntoViewRequester() }
-    val scope = rememberCoroutineScope()
-    Column(
-        modifier = Modifier
-            .bringIntoViewRequester(requester)
-            .onFocusEvent { state ->
-                if (state.hasFocus) {
-                    scope.launch { requester.bringIntoView() }
-                }
-            },
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-    ) {
-        // Eyebrow (Inter, uppercase, tracked) + display title (Cal Sans), with
-        // an optional compact "See all →" on the right (web `.shelf-head`
-        // link). Only that button is focusable — pressing ↑ from any card is
-        // redirected to it via `focusProperties` on the row, so it's reachable
-        // without a card-walk and without a heavy full-width focus border.
-        val seeAllFocus = remember { FocusRequester() }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = layout.gutterHorizontal),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                if (eyebrow != null) Eyebrow(eyebrow)
-                SectionTitle(title)
-            }
-            if (onSeeAll != null) {
-                ActionButton(
-                    "See all →",
-                    onSeeAll,
-                    style = ActionStyle.Secondary,
-                    modifier = Modifier.focusRequester(seeAllFocus),
-                )
-            }
-        }
-        LazyRow(
-            // Redirect ↑ out of the row to the "See all" button. `up` only
-            // catches the card spatially under the button (the last one); the
-            // `exit` lambda fires for ANY child leaving the group upward, so
-            // every card can reach it. Needs `focusGroup()` to take effect.
-            modifier = if (onSeeAll != null) {
-                Modifier
-                    .focusGroup()
-                    .focusProperties {
-                        onExit = {
-                            if (requestedFocusDirection == FocusDirection.Up) {
-                                seeAllFocus.requestFocus()
-                            }
-                        }
-                    }
-            } else {
-                Modifier
-            },
-            contentPadding = PaddingValues(horizontal = layout.gutterHorizontal),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            content = content,
-        )
-    }
-}
-
-/**
- * Brand wordmark + persistent action icons. Rendered either as a standalone
- * home header or overlaid on the resume hero's backdrop (see [ResumeHero]).
- */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun HomeTopBar(
     onOpenDiscover: () -> Unit,
-    onOpenSearch: (String?) -> Unit,
     onOpenLibrary: () -> Unit,
-    onOpenLiveTv: () -> Unit,
-    onOpenSettings: () -> Unit,
-    updateAvailable: Boolean,
+    onOpenSearch: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        IrisWordmark(fontSize = 34.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            IconAction(
-                icon = Icons.Filled.Search,
-                contentDescription = "Search",
-                onClick = { onOpenSearch(null) },
-            )
-            IconAction(
-                icon = Icons.Filled.Star,
-                contentDescription = "Discover",
-                onClick = onOpenDiscover,
-            )
-            IconAction(
-                icon = Icons.Filled.VideoLibrary,
-                contentDescription = "Library",
-                onClick = onOpenLibrary,
-            )
-            IconAction(
-                icon = Icons.Filled.LiveTv,
-                contentDescription = "Live TV",
-                onClick = onOpenLiveTv,
-            )
-            IconAction(
-                icon = Icons.Filled.Settings,
-                contentDescription = "Settings",
-                onClick = onOpenSettings,
-                // "An update is waiting behind this door."
-                badge = updateAvailable,
-            )
-        }
+    val layout = IrisLayout.current
+    val header = remember { FocusRequester() }
+    val heroFocus = remember { FocusRequester() }
+    val focus = rememberCardFocus()
+    var headerFocused by remember { mutableStateOf(false) }
+    var focusPlaced by remember { mutableStateOf(false) }
+
+    // The first focus: the hero's main action, else the menu once the home knows it has no hero.
+    val sheetOpen = state.onboarding != null
+    LaunchedEffect(state.hero?.key, state.heroPending, sheetOpen) {
+        if (focusPlaced || state.heroPending || sheetOpen) return@LaunchedEffect
+        val target = if (state.hero != null) heroFocus else header
+        focusPlaced = runCatching { target.requestFocus() }.isSuccess
     }
-}
+    // Back from the rows goes to the menu first; from the menu it leaves.
+    BackHandler(enabled = !headerFocused) { runCatching { header.requestFocus() } }
 
-/**
- * Full-bleed resume billboard — the latest Continue-Watching pick.
- * Port of the web `ResumeHero` (`web/src/pages/HomePage.tsx`): backdrop
- * at 50% opacity under bottom + left scrims, display title, dotted meta,
- * overview, a Resume CTA, and a thin progress bar with "Xh Ym left" (the
- * web's "Continue tonight · Resume" eyebrow is dropped here — redundant
- * with the CTA on a 10-foot UI). TMDB art is only pulled once the server
- * has *verified* the match — a wrong backdrop on the giant hero is worse
- * than the bare release name.
- */
-/** See the rationale at the [ResumeHero] call site. `LocalConfiguration`
- *  recomposes on rotation, so the hero re-sizes live. */
-@Composable
-private fun heroHeight(): Dp {
-    val config = LocalConfiguration.current
-    val h = config.screenHeightDp.dp
-    val portrait = config.screenHeightDp > config.screenWidthDp
-    return if (portrait) (h * 0.45f).coerceAtMost(480.dp) else (h * 0.78f).coerceAtLeast(380.dp)
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun ResumeHero(
-    container: AppContainer,
-    item: ContinueWatchingItem,
-    grabbing: Boolean,
-    onResume: () -> Unit,
-    topBar: @Composable () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val layout = LocalTvLayout.current
-    // Trust the server's tmdb_id (ignore the runtime-verified flag) — the same
-    // pattern the Continue-Watching shelf cards and Detail use. Gating on
-    // tmdb_verified left the hero backdrop blank almost every time, since the
-    // flag is usually false even when the id is good (it's COALESCEd from the
-    // parent collection's resolved id).
-    var meta by remember(item.tmdbId) { mutableStateOf<MediaMetadata?>(null) }
-    LaunchedEffect(item.tmdbId, item.kind) {
-        if (item.tmdbId == null) return@LaunchedEffect
-        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
-        meta = runCatching { container.apiFor(url).tmdbMetadata(item.tmdbId, item.kind?.value) }.getOrNull()
-    }
-    val backdrop = tmdbBackdropUrl(meta?.backdropPath, "w1280")
-    val title = meta?.title
-        ?: prettifyFilename(item.filePath?.substringAfterLast('/') ?: item.torrentName)
-    val progress = item.durationSeconds?.takeIf { it > 0 }
-        ?.let { (item.positionSeconds / it).toFloat().coerceIn(0f, 1f) } ?: 0f
-    val remaining = item.durationSeconds?.takeIf { it > 0 }
-        ?.let { (it - item.positionSeconds).coerceAtLeast(0.0) } ?: 0.0
-    val metaParts = listOfNotNull(
-        episodeTag(item)?.let { if (item.nextUp) "Up next · $it" else it },
-        meta?.year?.toString(),
-        if (item.kind == MediaKind.tv) "Series" else "Movie",
-        meta?.numberOfSeasons?.let { "$it seasons" },
-    )
-
-    // The backdrop fills the whole hero (stuck to the screen's top edge). The
-    // top bar rides at the very top; a `Spacer(weight)` pushes the resume
-    // content to the BOTTOM so it never collides with the branding/nav.
-    Box(modifier.fillMaxWidth()) {
-        if (backdrop != null) {
-            AsyncImage(
-                model = backdrop,
-                contentDescription = title,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-                alpha = 0.5f,
-            )
-        } else {
-            Box(Modifier.fillMaxSize().background(irisPosterPlaceholder()))
-        }
-        // Top fade (keeps the overlaid top bar legible), bottom fade (grounds
-        // the content), left fade (web hero gradients).
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    0.0f to IrisColors.Background.copy(alpha = 0.65f),
-                    0.25f to Color.Transparent,
-                    0.55f to Color.Transparent,
-                    1.0f to IrisColors.Background,
-                ),
-            ),
-        )
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.horizontalGradient(0f to IrisColors.Background, 0.7f to Color.Transparent),
-            ),
-        )
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(
-                    start = layout.gutterHorizontal,
-                    end = layout.gutterHorizontal,
-                    top = layout.gutterVertical,
-                    bottom = layout.gutterVertical,
-                ),
-        ) {
-            topBar()
-            Spacer(Modifier.weight(1f))
-            // 62% keeps the lockup off the backdrop's focal area on a wide
-            // screen; portrait has no width to spare — go full width.
-            val portraitLockup =
-                LocalConfiguration.current.screenHeightDp > LocalConfiguration.current.screenWidthDp
-            Column(
-                Modifier.fillMaxWidth(if (portraitLockup) 1f else 0.62f),
-                verticalArrangement = Arrangement.spacedBy(Spacing.md),
-            ) {
-                // The "Continue tonight · Resume" eyebrow said nothing the
-                // Resume CTA doesn't — dropped, but its slot height is kept
-                // so the bottom-anchored hero lockup doesn't shift.
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    title,
-                    style = MaterialTheme.typography.displaySmall,
-                    color = IrisColors.Foreground,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (metaParts.isNotEmpty()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        metaParts.forEachIndexed { i, m ->
-                            if (i > 0) androidx.tv.material3.Text("·", color = IrisColor.inkMuted)
-                            Text(m, style = MaterialTheme.typography.bodyMedium, color = IrisColors.MutedForeground)
-                        }
-                    }
-                }
-                meta?.overview?.takeIf { it.isNotBlank() }?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = IrisColors.MutedForeground,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                ActionButton(
-                    when {
-                        grabbing -> "Grabbing…"
-                        item.grabbable -> "Grab & play"
-                        else -> "Resume"
-                    },
-                    onResume,
-                    icon = Icons.Filled.PlayArrow,
-                )
-                if (progress > 0f) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        Box(
-                            Modifier
-                                .width(220.dp)
-                                .height(4.dp)
-                                .background(IrisColors.Elev2, RoundedCornerShape(Radius.pill)),
-                        ) {
-                            Box(
-                                Modifier
-                                    .fillMaxWidth(progress)
-                                    .height(4.dp)
-                                    .background(IrisColors.Brand, RoundedCornerShape(Radius.pill)),
-                            )
-                        }
-                        if (remaining > 0) {
-                            Text(
-                                fmtLeft(remaining),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = IrisColors.FgDim,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun fmtLeft(seconds: Double): String {
-    val total = seconds.toLong()
-    val h = total / 3600
-    val m = (total % 3600) / 60
-    val s = total % 60
-    return if (h > 0) {
-        "${h}h ${m.toString().padStart(2, '0')}m left"
-    } else {
-        "$m:${s.toString().padStart(2, '0')} left"
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun ContinueWatchingCard(
-    container: AppContainer,
-    item: ContinueWatchingItem,
-    grabbing: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-) {
-    val rawTitle = item.filePath?.substringAfterLast('/') ?: item.torrentName
-    val pct = item.durationSeconds?.takeIf { it > 0 }
-        ?.let { ((item.positionSeconds / it).toFloat()).coerceIn(0f, 1f) }
-    val tag = episodeTag(item)
-    PosterCard(
-        onLongClick = onLongClick,
-        container = container,
-        tmdbId = item.tmdbId,
-        // Trust the server's tmdb_id — `playback::continue_watching`
-        // already COALESCEs from the parent collection's value
-        // (which the SCENE backfill resolved). The runtime-verified
-        // flag is irrelevant for poster display.
-        tmdbVerified = item.tmdbId != null,
-        kindHint = item.kind?.value,
-        // Original release / file name verbatim. We don't strip
-        // tokens — episode numbers (SxxExx) and quality markers stay
-        // visible; the marquee scroll on PosterCard handles long
-        // strings without truncating the SxxExx out of view.
-        title = rawTitle,
-        marqueeTitle = true,
-        subtitle = when {
-            grabbing -> "Grabbing…"
-            item.grabbable -> "Up next · ${tag ?: "next episode"} · Not downloaded"
-            item.nextUp -> tag?.let { "Up next · $it" } ?: "Up next"
-            pct != null -> "${(pct * 100).toInt()}% watched"
-            else -> "Just started"
-        },
-        progress = pct,
-        progressColor = null, // primary = watch progress
-        onClick = onClick,
-    )
-}
-
-/** "S08E08" when the tile carries both parts, null otherwise. */
-private fun episodeTag(item: ContinueWatchingItem): String? {
-    val s = item.season ?: return null
-    val e = item.episode ?: return null
-    return "S%02dE%02d".format(s, e)
-}
-
-/** Manage sheet for a Continue Watching tile — focusable overlay with
- *  "Mark as watched" / "Remove from Continue Watching". tv-material has no
- *  built-in dialog, so it's a scrim + centered card; Back or the scrim
- *  dismisses, and the first button grabs focus on open. */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun ContinueWatchingManageDialog(
-    item: ContinueWatchingItem,
-    onDismiss: () -> Unit,
-    onRemove: () -> Unit,
-    onMarkWatched: () -> Unit,
-) {
-    BackHandler(enabled = true, onBack = onDismiss)
-    val title = item.filePath?.substringAfterLast('/') ?: item.torrentName
-    val firstFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
-    Box(
+    Column(
         Modifier
             .fillMaxSize()
-            .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.7f))
-            .clickable(
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss,
-            ),
-        contentAlignment = Alignment.Center,
+            .background(IrisColor.ground),
     ) {
-        Column(
+        LazyColumn(
             Modifier
-                .widthIn(max = 460.dp)
-                .background(IrisColors.Elev2, RoundedCornerShape(Radius.lg))
-                .padding(Spacing.xl),
-            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                .weight(1f)
+                .fillMaxWidth(),
+            state = rememberLazyListState(),
+            contentPadding = PaddingValues(bottom = IrisSpace.s7),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s7),
         ) {
-            Eyebrow("Continue Watching")
-            androidx.tv.material3.Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                color = IrisColors.Foreground,
-                maxLines = 2,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            )
-            // A grabbable tile has no file on disk to mark watched — its
-            // only managing action is removal.
-            if (!item.grabbable) {
-                ActionButton(
-                    if (item.nextUp) "Mark watched & skip" else "Mark as watched",
-                    onMarkWatched,
-                    modifier = Modifier.fillMaxWidth().focusRequester(firstFocus),
+            item(key = "top", contentType = "top") {
+                Top(
+                    state = state,
+                    header = header,
+                    heroFocus = heroFocus,
+                    onHeaderFocus = { headerFocused = it },
+                    onSelectTab = onSelectTab,
+                    onAccount = onAccount,
+                    onHeroAction = onHeroAction,
                 )
             }
-            ActionButton(
-                "Remove from Continue Watching",
-                onRemove,
-                style = ActionStyle.Secondary,
-                modifier = Modifier.fillMaxWidth().let {
-                    if (item.grabbable) it.focusRequester(firstFocus) else it
-                },
-            )
-            ActionButton(
-                "Cancel",
-                onDismiss,
-                style = ActionStyle.Secondary,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun WatchlistCard(
-    container: AppContainer,
-    item: WatchlistItem,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-) {
-    // Post-0.4 Watchlist tile — server-provided poster (tmdb_verified
-    // gating handled server-side), `new_count` shows episodes the
-    // indexer surfaced since this user's last visit.
-    val subtitle = if (item.newCount > 0) "${item.newCount} new" else "In your library"
-    PosterCard(
-        container = container,
-        tmdbId = item.tmdbId,
-        tmdbVerified = item.posterPath != null,
-        title = item.name,
-        subtitle = subtitle,
-        progress = null,
-        progressColor = null,
-        onClick = onClick,
-        onLongClick = onLongClick,
-        posterUrlOverride = tmdbPosterUrl(item.posterPath, "w342"),
-        topBadge = if (item.newCount > 0) {
-            {
-                androidx.tv.material3.Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    colors = androidx.tv.material3.SurfaceDefaults.colors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                    ),
+            item(key = "cw", contentType = "row") {
+                HomeRow(
+                    title = "Continue watching",
+                    cards = state.continueWatching,
+                    focus = focus,
+                    still = true,
+                    onCardAction = onCardAction,
+                    onRetry = onRetry,
+                    emptyText = "Nothing to resume yet. What you start watching waits for you here.",
+                )
+            }
+            item(key = "now", contentType = "now") { RightNow(state.rightNow) }
+            item(key = "watchlist", contentType = "row") {
+                HomeRow(
+                    title = "Your watchlist",
+                    meta = state.watchlistCount.takeIf { it > 0 }?.let { plural(it.toLong(), "series", "series") },
+                    cards = state.watchlist,
+                    focus = focus,
+                    still = false,
+                    onCardAction = onCardAction,
+                    onRetry = onRetry,
+                    emptyText = "No series followed yet.",
+                    emptyHint = "Find a series in Search: getting an episode follows it.",
+                    emptyActionLabel = "Search",
+                    onEmptyAction = onOpenSearch,
+                )
+            }
+            items(state.forYou, key = { it.key }, contentType = { "row" }) { shelf ->
+                HomeRow(
+                    title = shelf.title,
+                    cards = Loadable.Ready(shelf.cards),
+                    focus = focus,
+                    still = false,
+                    onCardAction = onCardAction,
+                    onRetry = onRetry,
+                    onSeeAll = onOpenDiscover,
+                    hideEmpty = true,
+                )
+            }
+            item(key = "library", contentType = "row") {
+                HomeRow(
+                    title = "Your library",
+                    meta = state.libraryCount.takeIf { it > 0 }?.let { plural(it.toLong(), "title") },
+                    cards = state.library,
+                    focus = focus,
+                    still = false,
+                    onCardAction = onCardAction,
+                    onRetry = onRetry,
+                    onSeeAll = onOpenLibrary,
+                    emptyText = "Nothing in the library yet.",
+                    emptyHint = "Start a search to add your first title.",
+                    emptyActionLabel = "Search",
+                    onEmptyAction = onOpenSearch,
+                )
+            }
+            item(key = "tonight", contentType = "tonight") {
+                Row(
+                    Modifier.padding(horizontal = layout.safeHorizontal),
+                    horizontalArrangement = Arrangement.spacedBy(IrisSpace.s4),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        "${item.newCount} new",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
+                    Text("Not sure what to watch tonight?", style = IrisType.body, color = IrisColor.inkMuted)
+                    ActionButton("Pick a mood in Discover", onOpenDiscover, style = ActionStyle.Secondary, size = ActionSize.Small)
                 }
-            }
-        } else null,
-    )
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-internal fun CatalogCardTv(
-    container: AppContainer,
-    card: CatalogCard,
-    onClick: () -> Unit,
-) {
-    val newCount = 0 // backend CatalogCard exposes no new_count
-    // Always say what it is — Movie / Series, prefixed with "Anime" for the
-    // anime catalogue (which mixes movies and series). Solves "can't tell a
-    // series from a film" on the blended shelves.
-    val kindLabel = if (card.kind == MediaKind.tv) "Series" else "Movie"
-    val typeLabel = if (card.isAnime) "Anime · $kindLabel" else kindLabel
-    val subtitle = listOfNotNull(typeLabel, card.year?.toString()).joinToString(" · ")
-    PosterCard(
-        container = container,
-        tmdbId = card.tmdbId,
-        // Posters are pre-resolved server-side (TMDB CDN / AniList cover);
-        // only fall back to a kind-safe TMDB lookup when the URL is missing.
-        tmdbVerified = card.posterUrl == null && card.tmdbId != null,
-        title = card.title,
-        subtitle = subtitle,
-        note = card.reason,
-        progress = null,
-        progressColor = null,
-        onClick = onClick,
-        kindHint = card.kind.value,
-        posterUrlOverride = card.posterUrl,
-        topBadge = when {
-            newCount > 0 -> {
-                {
-                    androidx.tv.material3.Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        colors = androidx.tv.material3.SurfaceDefaults.colors(
-                            containerColor = IrisColors.Brand.copy(alpha = 0.9f),
-                        ),
-                    ) {
-                        Text(
-                            "$newCount new",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = IrisColors.OnBrand,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                        )
-                    }
-                }
-            }
-            // Discreet seeder count for rolling-window cards (1 seeder is fine
-            // — we never warn, only block 0 at grab). Mirrors the web card.
-            (card.seeders ?: 0) > 0 -> {
-                {
-                    androidx.tv.material3.Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        colors = androidx.tv.material3.SurfaceDefaults.colors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                        ),
-                    ) {
-                        Text(
-                            "${card.seeders}↑",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                        )
-                    }
-                }
-            }
-            else -> null
-        },
-    )
-}
-
-/**
- * Route a "For You" card click, identically on the home shelf and the
- * organized For-You page. A followed series with new episodes opens its
- * collection; a rolling-window card (with a recommended-best release) opens
- * the same detail/preview screen as a search hit so the user sees it before
- * downloading; a lazy recommendation (no resolved release) falls back to a
- * title search.
- */
-internal fun routeCatalogClick(
-    card: CatalogCard,
-    onOpenCollection: (String) -> Unit,
-    onPickResult: (String, String, Long?, String?) -> Unit,
-    onOpenSearch: (String) -> Unit,
-) {
-    val collectionId: String? = null // backend CatalogCard exposes no collection_id
-    val providerId = card.providerId
-    val externalId = card.externalId
-    when {
-        collectionId != null -> onOpenCollection(collectionId)
-        card.availability == "available" && providerId != null && externalId != null ->
-            onPickResult(providerId, externalId, card.tmdbId, card.kind.value)
-        else -> onOpenSearch(card.title)
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun CollectionCard(
-    container: AppContainer,
-    collection: CollectionListItem,
-    onClick: () -> Unit,
-) {
-    val subtitle = buildString {
-        if (collection.kind == MediaKind.tv && collection.episodeCount > 0) {
-            append("${collection.episodeCount} ep")
-        } else {
-            append(formatSize(collection.totalSizeBytes))
-        }
-        if (collection.torrentCount > 1) {
-            append(" · ${collection.torrentCount} torrents")
-        }
-    }
-    PosterCard(
-        container = container,
-        tmdbId = collection.tmdbId,
-        tmdbVerified = collection.tmdbId != null,
-        // Pass the collection's kind so the server's lookup hits the
-        // right TMDB namespace. Without this, an id collision between
-        // `/movie/X` and `/tv/X` flipped the poster to an unrelated
-        // entry.
-        kindHint = collection.kind.value,
-        title = prettifyFilename(collection.displayTitle),
-        subtitle = subtitle,
-        progress = null,
-        progressColor = null,
-        onClick = onClick,
-    )
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun TorrentCard(
-    container: AppContainer,
-    torrent: TorrentView,
-    onClick: () -> Unit,
-) {
-    PosterCard(
-        container = container,
-        tmdbId = torrent.tmdbId,
-        tmdbVerified = torrent.tmdbVerified,
-        kindHint = torrent.kind?.value,
-        title = prettifyFilename(torrent.name ?: torrent.infohash.take(12)),
-        subtitle = formatSize(torrent.totalSizeBytes),
-        progress = null,
-        progressColor = null,
-        onClick = onClick,
-    )
-}
-
-/**
- * In-progress torrent card. Shows a download-themed (blue) progress bar
- * across the bottom of the poster and live "X% · 12 MB/s" telemetry as
- * the subtitle. Polls upstream every 3s via [HomeScreen]'s LaunchedEffect.
- */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun DownloadingCard(
-    container: AppContainer,
-    torrent: TorrentView,
-    onClick: () -> Unit,
-) {
-    val pct = (torrent.progressPct.toFloat() / 100f).coerceIn(0f, 1f)
-    val speed = torrent.downloadSpeedBps
-    val subtitle = if (torrent.error != null) {
-        "Error"
-    } else if (torrent.state == TorrentState.paused) {
-        "Paused · ${torrent.progressPct.toInt()}%"
-    } else if (speed > 0) {
-        "${torrent.progressPct.toInt()}% · ${formatSpeed(speed)}"
-    } else {
-        "${torrent.progressPct.toInt()}% · waiting…"
-    }
-    PosterCard(
-        container = container,
-        tmdbId = torrent.tmdbId,
-        tmdbVerified = torrent.tmdbVerified,
-        kindHint = torrent.kind?.value,
-        title = prettifyFilename(torrent.name ?: torrent.infohash.take(12)),
-        subtitle = subtitle,
-        progress = pct,
-        progressColor = IrisColor.accent,
-        onClick = onClick,
-    )
-}
-
-
-
-/**
- * Strip the file extension and turn the dot/underscore-separated tokens of a
- * release name into something human: `Silicon.Valley.S01E01.1080p.mkv` →
- * `Silicon Valley S01E01 1080p`. We don't try to be too clever — TMDB
- * metadata replaces this once the poster lookup completes anyway.
- */
-private fun prettifyFilename(raw: String): String {
-    val noExt = raw.substringBeforeLast('.', raw)
-    return noExt.replace('.', ' ').replace('_', ' ').trim()
-}
-
-/** Hold duration (ms) that turns a DPAD-center press into a "long press". */
-private const val LONG_PRESS_MS = 400L
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun PosterCard(
-    container: AppContainer,
-    tmdbId: Long?,
-    /** Server-validated `(tmdb_id, runtime ≈ probed duration)`. Until this
-     *  is true we never call TMDB — wrong posters / titles were the bigger
-     *  UX hit than no posters. */
-    tmdbVerified: Boolean,
-    title: String,
-    subtitle: String,
-    /** 0..1 — when non-null, draws a thin progress bar across the bottom of the poster. */
-    progress: Float?,
-    /** When `null`, defaults to the Material primary (good for watch progress); pass a
-     *  custom color (e.g. blue) to differentiate download from watch. */
-    progressColor: androidx.compose.ui.graphics.Color?,
-    onClick: () -> Unit,
-    /** `"movie"` / `"tv"` — disambiguates TMDB's separate id namespaces.
-     *  Without it, a `/movie/X` lookup wins arbitrarily over `/tv/X` on
-     *  the server and we end up showing a stranger's poster. */
-    kindHint: String? = null,
-    /** Pre-resolved poster URL — skips the TMDB metadata roundtrip. Used by
-     *  the Watchlist shelf where /api/me/follows already returns the poster
-     *  path inline. When `null`, falls back to the regular TMDB lookup. */
-    posterUrlOverride: String? = null,
-    /** When true, the title scrolls horizontally on a single line if it
-     *  overflows (Compose `basicMarquee`). Used by Continue Watching
-     *  cards where we want the full episode filename visible without
-     *  truncation. */
-    marqueeTitle: Boolean = false,
-    /** Optional top-right overlay (e.g., "X new" badge). Renders on
-     *  top of the poster. */
-    topBadge: (@Composable () -> Unit)? = null,
-    /** Tiny brand-accent line under the subtitle — a recommendation "why"
-     *  ("Matches your taste"). Mirrors the web card's `note`. Omitted when
-     *  null/blank. */
-    note: String? = null,
-    /** Held-select ("long press") on the focused card — opens a manage menu
-     *  (Continue Watching uses it for remove / mark-watched). Null = no menu. */
-    onLongClick: (() -> Unit)? = null,
-) {
-    var meta by remember(tmdbId, tmdbVerified) { mutableStateOf<MediaMetadata?>(null) }
-    LaunchedEffect(tmdbId, tmdbVerified, posterUrlOverride, kindHint) {
-        if (posterUrlOverride != null) return@LaunchedEffect
-        if (!tmdbVerified || tmdbId == null) return@LaunchedEffect
-        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
-        meta = runCatching {
-            container.apiFor(url).tmdbMetadata(tmdbId, kindHint)
-        }.getOrNull()
-    }
-    val posterUrl = posterUrlOverride ?: tmdbPosterUrl(meta?.posterPath, "w342")
-    // Filename always wins for the title — see the rationale on
-    // `tmdbVerified`. Even with a verified match the filename is what
-    // the user dropped on disk and is most likely to recognise.
-    val displayTitle = title
-    val barColor = progressColor ?: MaterialTheme.colorScheme.primary
-
-    val layout = LocalTvLayout.current
-    val posterShape = RoundedCornerShape(Radius.poster)
-    // Held-select ("long press") detection. We measure the DPAD_CENTER
-    // down→up hold duration rather than relying on key-repeat events — most TV
-    // remotes / the emulator DON'T repeat a held center, which is why the old
-    // repeatCount approach never fired. `onPreviewKeyEvent` runs in the tunnel
-    // phase, BEFORE the Card's own click handling, so consuming the key-up on a
-    // long hold suppresses the click. We fire on RELEASE (not while held) so
-    // the same press can't also activate the menu that just opened.
-    var centerDownAt by remember { mutableStateOf(0L) }
-    val longPressMod = if (onLongClick != null) {
-        Modifier.onPreviewKeyEvent { ev ->
-            val ne = ev.nativeKeyEvent
-            val isSelect = ne.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
-                ne.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
-                ne.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
-            if (!isSelect) return@onPreviewKeyEvent false
-            when (ne.action) {
-                android.view.KeyEvent.ACTION_DOWN -> {
-                    if (ne.repeatCount == 0) centerDownAt = ne.eventTime
-                    false
-                }
-                android.view.KeyEvent.ACTION_UP -> {
-                    val held = if (centerDownAt > 0L) ne.eventTime - centerDownAt else 0L
-                    centerDownAt = 0L
-                    if (held >= LONG_PRESS_MS) {
-                        onLongClick()
-                        true // consume the up → the Card's onClick won't fire
-                    } else {
-                        false
-                    }
-                }
-                else -> false
             }
         }
-    } else {
-        Modifier
+        Footer(state.notice, state.updateAvailable)
     }
-    Card(
-        onClick = onClick,
-        modifier = Modifier
-            .width(layout.shelfPosterWidth)
-            .then(longPressMod)
-            .touchClick(onLongClick = onLongClick, onClick = onClick),
-        shape = irisPosterShape(posterShape),
-        scale = irisPosterScale(),
-        border = irisPosterBorder(posterShape),
-        glow = irisPosterGlow(),
-        colors = CardDefaults.colors(containerColor = IrisColors.Card),
+    CardMenuHost(
+        focus = focus,
+        busy = state.busy,
+        present = { key -> state.hasCard(key) },
+        fallback = header,
+        onCardAction = onCardAction,
+    )
+}
+
+private fun HomeUiState.hasCard(key: String): Boolean =
+    sequenceOf(continueWatching.valueOrNull, watchlist.valueOrNull, library.valueOrNull)
+        .plus(forYou.asSequence().map { it.cards })
+        .any { list -> list?.any { it.key == key } == true }
+
+@Composable
+private fun Top(
+    state: HomeUiState,
+    header: FocusRequester,
+    heroFocus: FocusRequester,
+    onHeaderFocus: (Boolean) -> Unit,
+    onSelectTab: (TopTab) -> Unit,
+    onAccount: () -> Unit,
+    onHeroAction: (HeroAction) -> Unit,
+) {
+    val layout = IrisLayout.current
+    val hero = state.hero
+    Box(Modifier.fillMaxWidth()) {
+        if (hero != null) {
+            HeroArt(
+                hero.art,
+                width = layout.width * HERO_ART_WIDTH,
+                height = layout.height * HERO_ART_HEIGHT,
+                modifier = Modifier.align(Alignment.TopEnd),
+            )
+        }
+        Column(
+            Modifier.padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s7),
+        ) {
+            TvHeader(
+                current = TopTab.Home,
+                onSelect = onSelectTab,
+                accountName = state.account,
+                onAccount = onAccount,
+                modifier = Modifier
+                    .focusRequester(header)
+                    .onFocusChanged { onHeaderFocus(it.hasFocus) },
+            )
+            if (hero != null) Hero(hero, state.busy, heroFocus, onHeroAction)
+        }
+    }
+}
+
+// The board's hero still: 1100 x 620 of 1920 x 1080, in the top right corner.
+private const val HERO_ART_WIDTH = 1100f / 1920f
+private const val HERO_ART_HEIGHT = 620f / 1080f
+
+/**
+ * The hero's still, fading into the ground towards the words (left) and the rows (bottom).
+ * It takes no height of its own: the first row may slide under its faded end, as on the board.
+ */
+@Composable
+private fun HeroArt(url: String?, width: Dp, height: Dp, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .layout { measurable, _ ->
+                val art = measurable.measure(Constraints.fixed(width.roundToPx(), height.roundToPx()))
+                layout(art.width, 0) { art.place(0, 0) }
+            }
+            .background(IrisColor.art)
+            .clearAndSetSemantics {},
     ) {
-        Column {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(2f / 3f),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (posterUrl != null) {
-                    AsyncImage(
-                        model = posterUrl,
-                        contentDescription = displayTitle,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    // No-poster placeholder (web `.poster .fallback`): a
-                    // brand-tinted diagonal wash with the title typeset in the
-                    // Cal Sans display face along the lower edge, so the card's
-                    // identity is the *title*, not a monogram.
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(irisPosterPlaceholder()),
-                    )
-                    Box(
-                        Modifier.fillMaxSize().padding(14.dp),
-                        contentAlignment = Alignment.BottomStart,
-                    ) {
-                        Text(
-                            displayTitle,
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.92f),
-                            maxLines = 3,
-                        )
-                    }
-                }
-                progress?.let { p ->
-                    androidx.compose.foundation.layout.Box(
-                        Modifier
-                            .align(Alignment.BottomStart)
-                            .fillMaxWidth()
-                            .height(4.dp)
-                            .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.5f)),
-                    )
-                    androidx.compose.foundation.layout.Box(
-                        Modifier
-                            .align(Alignment.BottomStart)
-                            .fillMaxWidth(p)
-                            .height(4.dp)
-                            .background(barColor),
-                    )
-                }
-                if (topBadge != null) {
-                    Box(
-                        Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(6.dp),
-                    ) {
-                        topBadge()
-                    }
+        if (!url.isNullOrBlank()) {
+            val context = LocalContext.current
+            val density = LocalDensity.current
+            val request = remember(url, width, height, density) {
+                with(density) {
+                    ImageRequest.Builder(context).data(url).size(width.roundToPx(), height.roundToPx()).build()
                 }
             }
-            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (marqueeTitle) {
-                    // Single-line marquee scroll for filenames like
-                    // `Show.S01E04.1080p.MULTI.x264-XYZ.mkv` where
-                    // truncating to 2 lines hid the SxxExx part.
-                    Text(
-                        displayTitle,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        modifier = Modifier.basicMarquee(
-                            iterations = Int.MAX_VALUE,
-                            initialDelayMillis = 1500,
-                            repeatDelayMillis = 1500,
-                        ),
-                    )
-                } else {
-                    Text(
-                        displayTitle,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 2,
-                    )
-                }
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = studio.kahn.iris.tv.ui.theme.FontMono,
-                    ),
-                    color = IrisColors.FgDim,
+            AsyncImage(
+                model = request,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize(),
+            )
+        }
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(Brush.horizontalGradient(0f to IrisColor.ground, FADE_LEFT to IrisColor.ground.copy(alpha = 0f))),
+        )
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(Brush.verticalGradient(FADE_BOTTOM to IrisColor.ground.copy(alpha = 0f), 1f to IrisColor.ground)),
+        )
+    }
+}
+
+private const val FADE_LEFT = 0.45f
+private const val FADE_BOTTOM = 0.6f
+
+@Composable
+private fun Hero(hero: HeroModel, busy: String?, primaryFocus: FocusRequester, onAction: (HeroAction) -> Unit) {
+    val layout = IrisLayout.current
+    val compact = layout.height < COMPACT_HEIGHT
+    Column(
+        Modifier
+            .widthIn(max = 430.dp)
+            .padding(top = if (compact) 0.dp else IrisSpace.s5),
+        verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+    ) {
+        Eyebrow(hero.eyebrow)
+        Text(
+            hero.title,
+            style = if (compact) IrisType.title else IrisType.hero,
+            color = IrisColor.ink,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (hero.meta != null) Text(hero.meta, style = IrisType.metaLarge, color = IrisColor.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (hero.overview != null) {
+            Text(
+                hero.overview,
+                style = IrisType.body,
+                color = IrisColor.inkMuted,
+                maxLines = if (compact) 2 else 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 380.dp),
+            )
+        }
+        Row(
+            Modifier
+                .padding(top = IrisSpace.s1)
+                .focusRestorer(primaryFocus)
+                .focusGroup(),
+            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+        ) {
+            hero.actions.forEachIndexed { i, button ->
+                ActionButton(
+                    button.label,
+                    onClick = { onAction(button.action) },
+                    style = if (i == 0) ActionStyle.Primary else ActionStyle.Secondary,
+                    icon = if (i == 0) Icons.Rounded.PlayArrow else null,
+                    busy = button.busyKey != null && button.busyKey == busy,
+                    busyText = button.busyLabel,
+                    modifier = if (i == 0) Modifier.focusRequester(primaryFocus) else Modifier,
                 )
-                if (!note.isNullOrBlank()) {
-                    Text(
-                        note,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = IrisColors.Brand,
-                        maxLines = 1,
-                    )
-                }
             }
+        }
+        if (hero.languages != null) Text(hero.languages, style = IrisType.meta, color = IrisColor.inkMuted)
+    }
+}
+
+private val COMPACT_HEIGHT = 480.dp
+
+/** "Right now": what the house's Iris is doing, in a few words. Nothing while nothing is known. */
+@Composable
+private fun RightNow(facts: Loadable<List<String>>) {
+    val list = facts.valueOrNull
+    val failed = facts as? Loadable.Failed
+    if (list.isNullOrEmpty() && failed == null) return
+    Column(
+        Modifier
+            .padding(horizontal = IrisLayout.current.safeHorizontal)
+            .semantics { liveRegion = LiveRegionMode.Polite },
+        verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+    ) {
+        Eyebrow("Right now")
+        if (failed != null) {
+            StatusLine("Couldn't read what Iris is doing: ${failed.error.message}", tone = StatusTone.Down)
+        } else {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2),
+                verticalArrangement = Arrangement.spacedBy(IrisSpace.s2),
+            ) {
+                list.orEmpty().forEach { Chip(it) }
+            }
+            facts.errorOrNull?.let { StaleNotice(it) }
         }
     }
 }
+
+@Composable
+private fun Footer(notice: Notice?, updateAvailable: Boolean) {
+    val layout = IrisLayout.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = IrisSpace.s2, bottom = FOOTER_BOTTOM),
+        verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+    ) {
+        if (notice != null) {
+            StatusLine(notice.text, tone = notice.tone, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+        }
+        KeyHints(
+            hints = HOME_HINTS,
+            trailing = if (updateAvailable) "An app update is waiting in Settings" else null,
+        )
+    }
+}
+
+private val FOOTER_BOTTOM = 15.dp
+
+private val HOME_HINTS = listOf(
+    KeyHint(Keys.OK, "Play"),
+    KeyHint(Keys.HOLD_OK, "Remove, mark watched"),
+    KeyHint(Keys.BACK, "To the menu"),
+)

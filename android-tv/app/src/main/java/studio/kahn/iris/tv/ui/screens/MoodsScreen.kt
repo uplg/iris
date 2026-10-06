@@ -1,235 +1,204 @@
 package studio.kahn.iris.tv.ui.screens
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Card
-import androidx.tv.material3.CardDefaults
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
-import coil3.compose.AsyncImage
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withContext
-import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.MoodResults
-import androidx.compose.ui.text.style.TextOverflow
-import studio.kahn.iris.tv.data.MoodTile
+import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
+import studio.kahn.iris.tv.ui.components.PillChoice
 import studio.kahn.iris.tv.ui.components.SectionTitle
-import studio.kahn.iris.tv.ui.theme.IrisColors
-import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.components.touchClick
+import studio.kahn.iris.tv.ui.components.StaleNotice
+import studio.kahn.iris.tv.ui.components.StillCard
+import studio.kahn.iris.tv.ui.screens.home.CardAction
+import studio.kahn.iris.tv.ui.screens.home.CardFocus
+import studio.kahn.iris.tv.ui.screens.home.HomeCard
+import studio.kahn.iris.tv.ui.screens.home.MoodModel
+import studio.kahn.iris.tv.ui.screens.home.MoodResultsModel
+import studio.kahn.iris.tv.ui.screens.home.RowState
+import studio.kahn.iris.tv.ui.state.Loadable
+import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.theme.IrisLayout
+import studio.kahn.iris.tv.ui.theme.IrisSize
+import studio.kahn.iris.tv.ui.theme.IrisSpace
+import studio.kahn.iris.tv.ui.theme.IrisType
 
-/**
- * The mood board ("Tonight"): a grid of curated mood tiles (taste-ordered, each
- * with its title of the moment) + a Film/Series toggle. Picking a mood shows
- * its grabbable titles. Board ↔ results is internal state. Mirrors the web
- * Discover → Tonight tab.
+/*
+ * Tonight's moods, the first section of Discover: the heading with the kind (movies or
+ * series), then the board of moods or one mood's titles. Lazy-list sections, so the whole
+ * Discover page scrolls as one list.
  */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-fun MoodsScreen(
-    container: AppContainer,
-    onOpenCollection: (String) -> Unit,
-    onPickResult: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
-    onOpenSearch: (String) -> Unit,
-) {
-    var board by remember { mutableStateOf<List<MoodTile>>(emptyList()) }
-    var kind by remember { mutableStateOf("movie") }
-    var selected by remember { mutableStateOf<MoodTile?>(null) }
-    var results by remember { mutableStateOf<MoodResults?>(null) }
-    var loadingResults by remember { mutableStateOf(false) }
-    // Board ↔ results is internal state — without this, Back from a
-    // mood's results pops the whole route instead of the board.
-    androidx.activity.compose.BackHandler(enabled = selected != null) { selected = null }
 
-    // The board's genres depend on the kind, so re-fetch when it toggles.
-    LaunchedEffect(kind) {
-        val url = container.sessionStore.serverUrl.first()
-        if (url != null) {
-            board = withContext(Dispatchers.IO) {
-                runCatching { container.apiFor(url).moodBoard(kind).moods }.getOrNull().orEmpty()
-            }
-        }
-    }
+private val KINDS = listOf(MediaKind.movie, MediaKind.tv)
+private fun kindWords(kind: MediaKind) = if (kind == MediaKind.tv) "Series" else "Movies"
 
-    LaunchedEffect(selected, kind) {
-        val mood = selected
-        if (mood == null) {
-            results = null
-            return@LaunchedEffect
-        }
-        loadingResults = true
-        val url = container.sessionStore.serverUrl.first()
-        results = if (url != null) {
-            withContext(Dispatchers.IO) {
-                runCatching { container.apiFor(url).moodResults(mood.id, kind) }.getOrNull()
-            }
-        } else {
-            null
-        }
-        loadingResults = false
-    }
+/** The narrowest mood tile: 4 columns on a TV, 3 on a phone. */
+private val MOOD_TILE_MIN = 200.dp
 
-    // No background here — DiscoverScreen paints the Background +
-    // ambient once for the whole page (an opaque repaint under the
-    // tab strip rendered as a flat black band).
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = Spacing.xxl),
-        verticalArrangement = Arrangement.spacedBy(Spacing.xxl),
-    ) {
-        item(key = "header") {
-            Column(
-                modifier = Modifier.padding(horizontal = Spacing.gutter),
-                verticalArrangement = Arrangement.spacedBy(Spacing.md),
-            ) {
-                SectionTitle(selected?.label ?: "What are you in the mood for?")
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    ActionButton(
-                        text = "Films",
-                        onClick = { kind = "movie" },
-                        style =
-                            if (kind == "movie") ActionStyle.Primary else ActionStyle.Secondary,
-                    )
-                    ActionButton(
-                        text = "Series",
-                        onClick = { kind = "tv" },
-                        style =
-                            if (kind == "tv") ActionStyle.Primary else ActionStyle.Secondary,
-                    )
-                    if (selected != null) {
-                        ActionButton(
-                            text = "← Back",
-                            onClick = { selected = null },
-                            style = ActionStyle.Secondary,
-                        )
-                    }
-                }
-            }
-        }
-
-        if (selected == null) {
-            board.chunked(3).forEachIndexed { rowIdx, rowTiles ->
-                item(key = "mood-row-$rowIdx") {
-                    Row(
-                        modifier = Modifier.padding(horizontal = Spacing.gutter),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-                    ) {
-                        rowTiles.forEach { tile ->
-                            MoodTileCard(tile = tile, onClick = { selected = tile })
-                        }
-                    }
-                }
-            }
-        } else if (loadingResults) {
-            item(key = "loading") {
-                Text(
-                    "Finding something good…",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = IrisColors.FgDim,
-                    modifier = Modifier.padding(horizontal = Spacing.gutter),
-                )
-            }
-        } else {
-            val items = results?.items.orEmpty()
-            if (items.isEmpty()) {
-                item(key = "empty") {
-                    Text(
-                        "Nothing grabbable for this mood right now.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = IrisColors.FgDim,
-                        modifier = Modifier.padding(horizontal = Spacing.gutter),
-                    )
-                }
-            } else {
-                item(key = "results") {
-                    Shelf(title = selected?.label ?: "Mood") {
-                        items(items, key = { it.catalogId }) { card ->
-                            CatalogCardTv(
-                                container = container,
-                                card = card,
-                                onClick = {
-                                    routeCatalogClick(card, onOpenCollection, onPickResult, onOpenSearch)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
+/** The heading of the moods and the movies / series choice. */
+fun LazyListScope.moodsHead(kind: MediaKind, onKind: (MediaKind) -> Unit, kindFocus: FocusRequester) {
+    item(key = "moods-head", contentType = "head") {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = IrisLayout.current.safeHorizontal),
+            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s6),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SectionTitle("What are you in the mood for?", style = IrisType.panel)
+            PillChoice(
+                options = KINDS,
+                selected = kind,
+                onSelect = onKind,
+                label = ::kindWords,
+                modifier = Modifier.focusRequester(kindFocus),
+            )
         }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun MoodTileCard(tile: MoodTile, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier
-            .width(300.dp)
-            .aspectRatio(16f / 10f)
-            .touchClick(onClick = onClick),
-        colors = CardDefaults.colors(containerColor = IrisColors.Card),
-    ) {
-        Box(Modifier.fillMaxSize()) {
-            val url = tile.backdropUrl
-            if (url != null) {
-                AsyncImage(
-                    model = url,
-                    contentDescription = tile.label,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            // Legibility scrim under the label.
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)))
-            Box(
-                Modifier.fillMaxSize().padding(Spacing.md),
-                contentAlignment = Alignment.BottomStart,
-            ) {
-                Column {
-                    Text(
-                        tile.label,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    tile.featuredTitle?.let {
-                        Text(
-                            "Now: $it",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.75f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+/**
+ * The curated moods for the kind, the account's genres first: each a tile with the
+ * backdrop of its top title, its name, and that title in words.
+ */
+fun LazyListScope.moodBoard(
+    board: Loadable<List<MoodModel>>,
+    onOpen: (MoodModel) -> Unit,
+    onRetry: () -> Unit,
+    tileFocus: (String) -> FocusRequester,
+    columns: Int,
+) {
+    val moods = board.valueOrNull
+    when {
+        moods == null -> item(key = "moods-state") { SectionState(board, onRetry) }
+        moods.isEmpty() -> item(key = "moods-empty") {
+            Empty("No mood has anything to get right now.", "Moods fill in as your trackers carry new releases.")
+        }
+        else -> {
+            moods.chunked(columns).forEachIndexed { row, tiles ->
+                item(key = "moods-row-$row-${tiles.first().id}", contentType = "mood-row") {
+                    GridRow(columns, tiles) { mood ->
+                        StillCard(
+                            title = mood.label,
+                            imageUrl = mood.art,
+                            onClick = { onOpen(mood) },
+                            width = null,
+                            meta = mood.now,
+                            modifier = Modifier.focusRequester(tileFocus(mood.id)),
                         )
                     }
                 }
             }
+            board.errorOrNull?.let { error -> item(key = "moods-stale") { Stale(error) } }
         }
+    }
+}
+
+/** One mood's titles for the kind: what the trackers carry, recent first, tuned to the account. */
+fun LazyListScope.moodResults(
+    mood: MoodResultsModel,
+    focus: CardFocus,
+    onBackToMoods: () -> Unit,
+    onCardAction: (String, CardAction) -> Unit,
+    onRetry: () -> Unit,
+    columns: Int,
+) {
+    item(key = "mood-title", contentType = "head") {
+        Column(
+            Modifier.padding(horizontal = IrisLayout.current.safeHorizontal),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+        ) {
+            ActionButton(
+                "All moods",
+                onBackToMoods,
+                icon = Icons.AutoMirrored.Rounded.ArrowBack,
+                style = ActionStyle.Secondary,
+                size = ActionSize.Small,
+            )
+            SectionTitle(mood.label, meta = mood.count)
+        }
+    }
+    val cards = mood.cards.valueOrNull
+    when {
+        cards == null -> item(key = "mood-state") { SectionState(mood.cards, onRetry) }
+        cards.isEmpty() -> item(key = "mood-empty") {
+            Empty("Nothing to get for this mood right now.", "Try another mood, or the other kind.")
+        }
+        else -> {
+            cards.chunked(columns).forEachIndexed { row, chunk ->
+                item(key = "mood-row-$row-${chunk.first().key}", contentType = "poster-row") {
+                    GridRow(columns, chunk) { card ->
+                        HomeCard(
+                            card = card,
+                            still = false,
+                            focus = focus,
+                            onAction = onCardAction,
+                            onMenu = { focus.open(card, mood.label, cards) },
+                            fillCell = true,
+                        )
+                    }
+                }
+            }
+            mood.cards.errorOrNull?.let { error -> item(key = "mood-stale") { Stale(error) } }
+        }
+    }
+}
+
+/** How many mood tiles, or posters, fit a row. */
+@Composable
+fun moodColumns(): Int = IrisLayout.current.columns(MOOD_TILE_MIN, IrisSpace.s6)
+
+@Composable
+fun posterColumns(): Int = IrisLayout.current.columns(IrisSize.posterGridMin, IrisSpace.s6)
+
+/** A grid line inside the page's list: [columns] equal cells, the last line's gaps left empty. */
+@Composable
+private fun <T> GridRow(columns: Int, items: List<T>, gap: Dp = IrisSpace.s6, cell: @Composable (T) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = IrisLayout.current.safeHorizontal)
+            .focusGroup(),
+        horizontalArrangement = Arrangement.spacedBy(gap),
+    ) {
+        items.forEach { item -> Column(Modifier.weight(1f)) { cell(item) } }
+        repeat(columns - items.size) { Spacer(Modifier.weight(1f)) }
+    }
+}
+
+@Composable
+private fun SectionState(state: Loadable<*>, onRetry: () -> Unit) {
+    RowState(state, onRetry, Modifier.padding(horizontal = IrisLayout.current.safeHorizontal))
+}
+
+@Composable
+private fun Stale(error: studio.kahn.iris.tv.ui.state.UiError) {
+    StaleNotice(error, Modifier.padding(horizontal = IrisLayout.current.safeHorizontal))
+}
+
+@Composable
+internal fun Empty(text: String, hint: String) {
+    Column(
+        Modifier.padding(horizontal = IrisLayout.current.safeHorizontal),
+        verticalArrangement = Arrangement.spacedBy(IrisSpace.s2),
+    ) {
+        Text(text, style = IrisType.body, color = IrisColor.ink)
+        Text(hint, style = IrisType.meta, color = IrisColor.inkMuted)
     }
 }

@@ -182,14 +182,11 @@ fun IrisRoot(
             composable(Routes.HOME) {
                 HomeScreen(
                     container = container,
-                    onPickTorrent = { infohash ->
-                        navController.navigate(Routes.detail(infohash))
-                    },
-                    onPickFile = { infohash, fileIdx ->
+                    onPlay = { infohash, fileIdx ->
                         navController.navigate(Routes.watch(infohash, fileIdx))
                     },
-                    onOpenSettings = {
-                        navController.navigate(Routes.SETTINGS)
+                    onOpenCollection = { collectionId ->
+                        navController.navigate(Routes.collection(collectionId))
                     },
                     onOpenSearch = { query ->
                         navController.navigate(Routes.search(query))
@@ -197,22 +194,14 @@ fun IrisRoot(
                     onOpenLibrary = {
                         navController.navigate(Routes.LIBRARY)
                     },
-                    onPickResult = { providerId, externalId, tmdbId, kind ->
-                        navController.navigate(
-                            Routes.searchDetail(providerId, externalId, tmdbId, kind),
-                        )
-                    },
-                    onOpenSeries = { followId ->
-                        navController.navigate(Routes.series(followId))
-                    },
-                    onOpenCollection = { collectionId ->
-                        navController.navigate(Routes.collection(collectionId))
-                    },
                     onOpenDiscover = {
                         navController.navigate(Routes.DISCOVER)
                     },
                     onOpenLiveTv = {
                         navController.navigate(Routes.LIVE_TV)
+                    },
+                    onOpenSettings = {
+                        navController.navigate(Routes.SETTINGS)
                     },
                 )
             }
@@ -246,18 +235,21 @@ fun IrisRoot(
             composable(Routes.DISCOVER) {
                 DiscoverScreen(
                     container = container,
-                    onOpenCollection = { collectionId ->
-                        navController.navigate(Routes.collection(collectionId))
-                    },
-                    onPickResult = { providerId, externalId, tmdbId, kind ->
-                        navController.navigate(
-                            Routes.searchDetail(providerId, externalId, tmdbId, kind),
-                        )
+                    onSelectTab = { tab ->
+                        when (tab) {
+                            studio.kahn.iris.tv.ui.components.TopTab.Home -> navController.popBackStack(Routes.HOME, inclusive = false)
+                            studio.kahn.iris.tv.ui.components.TopTab.Search -> navController.navigate(Routes.search())
+                            studio.kahn.iris.tv.ui.components.TopTab.Discover -> Unit
+                            studio.kahn.iris.tv.ui.components.TopTab.Library -> navController.navigate(Routes.LIBRARY)
+                            studio.kahn.iris.tv.ui.components.TopTab.LiveTv -> navController.navigate(Routes.LIVE_TV)
+                        }
                     },
                     onOpenSearch = { query ->
                         navController.navigate(Routes.search(query))
                     },
-                    onBack = { navController.popBackStack() },
+                    onOpenSettings = {
+                        navController.navigate(Routes.SETTINGS)
+                    },
                 )
             }
             composable(Routes.LIBRARY) {
