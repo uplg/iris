@@ -52,12 +52,20 @@ use crate::util::{DEFAULT_USER_AGENT, base_url, extract_year, field_or_env, join
 /// Featured shelves are editorial — refreshes are slow. 30 min keeps
 /// the home page cheap without going stale on c411's daily cadence.
 const FEATURED_TTL: Duration = Duration::from_mins(30);
+/// After a failed `/api/homepage`, how long callers get the stale shelf (or
+/// the error) without a new attempt: discover asks for movies then series on
+/// every page load, each attempt costing the 15 s client timeout while c411
+/// is down.
+const FEATURED_RETRY_AFTER: Duration = Duration::from_mins(5);
 pub struct C411 {
     id: String,
     base_url: Url,
     http: Client,
     torznab: Arc<TorznabProvider>,
     featured_cache: Mutex<Option<CachedFeatured>>,
+    /// Held across a homepage refresh so concurrent callers share one
+    /// fetch; holds the time of the last failed one.
+    featured_refresh: Mutex<Option<Instant>>,
     /// `infohash` -> `TorrentDetails` from c411's JSON API. Survives
     /// short windows of UI navigation without re-hitting the indexer.
     details_cache: DetailsCache,
@@ -108,6 +116,7 @@ impl C411 {
             http,
             torznab,
             featured_cache: Mutex::new(None),
+            featured_refresh: Mutex::new(None),
             details_cache: DetailsCache::new(),
         }))
     }
@@ -167,13 +176,53 @@ impl C411 {
         Ok(Some(details))
     }
 
+    async fn featured_fresh(&self) -> bool {
+        self.featured_cache
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|c| c.fetched_at.elapsed() < FEATURED_TTL)
+    }
+
     async fn refresh_featured_if_stale(&self) -> Result<()> {
-        if let Some(c) = self.featured_cache.lock().await.as_ref()
-            && c.fetched_at.elapsed() < FEATURED_TTL
-        {
+        if self.featured_fresh().await {
             return Ok(());
         }
+        let mut last_failure = self.featured_refresh.lock().await;
+        if self.featured_fresh().await {
+            return Ok(());
+        }
+        let has_stale = self.featured_cache.lock().await.is_some();
+        if let Some(at) = *last_failure
+            && at.elapsed() < FEATURED_RETRY_AFTER
+        {
+            return if has_stale {
+                Ok(())
+            } else {
+                Err(Error::Provider(
+                    "c411 homepage unavailable, retried in a few minutes".into(),
+                ))
+            };
+        }
+        match self.fetch_featured().await {
+            Ok(featured) => {
+                *self.featured_cache.lock().await = Some(featured);
+                *last_failure = None;
+                Ok(())
+            }
+            Err(e) => {
+                *last_failure = Some(Instant::now());
+                if has_stale {
+                    tracing::warn!(provider = %self.id, error = %e, "c411 featured refresh failed, serving the previous shelf");
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
 
+    async fn fetch_featured(&self) -> Result<CachedFeatured> {
         let url = self
             .base_url
             .join("/api/homepage")
@@ -264,12 +313,11 @@ impl C411 {
             "c411 featured refreshed",
         );
 
-        *self.featured_cache.lock().await = Some(CachedFeatured {
+        Ok(CachedFeatured {
             movies,
             series,
             fetched_at: Instant::now(),
-        });
-        Ok(())
+        })
     }
 
     /// Look up a featured item's release title (the `name` we got from
@@ -592,6 +640,33 @@ fn build_category(top: Option<&RawNamed>, meta: Option<&TorrentMetadata>) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A homepage that drops every connection: the first call fails, and
+    /// the next ones (concurrent or sequential) must not dial again.
+    #[tokio::test]
+    async fn a_failed_homepage_is_fetched_once_per_retry_window() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let dials = Arc::new(AtomicUsize::new(0));
+        let counted = dials.clone();
+        tokio::spawn(async move {
+            while let Ok((sock, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+                drop(sock);
+            }
+        });
+        let entry: ProviderEntry = toml::from_str(&format!(
+            "id = \"c411\"\nkind = \"c411\"\nbase_url = \"http://{addr}\"\napi_key = \"k\"\n"
+        ))
+        .unwrap();
+        let c411 = C411::from_config(&entry).unwrap();
+        let (a, b) = tokio::join!(c411.featured_movies(), c411.featured_series());
+        assert!(a.is_err() && b.is_err());
+        assert!(c411.featured_movies().await.is_err());
+        assert_eq!(dials.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn classifies_titles() {
