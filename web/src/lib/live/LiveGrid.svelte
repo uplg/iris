@@ -9,6 +9,7 @@
 	import { livetv, type LiveChannel, type LiveNowNext } from '@iris/api/client';
 	import PageHead from '#lib/components/PageHead.svelte';
 	import Tabs from '#lib/components/Tabs.svelte';
+	import { read } from '#lib/queries.ts';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import { loadable } from '#lib/query.ts';
 	import ChannelTile from './ChannelTile.svelte';
@@ -16,11 +17,7 @@
 	/** The guide changes on programme boundaries: a minute keeps the bars honest. */
 	const EPG_REFETCH_MS = 60_000;
 
-	const countriesQ = createQuery(() => ({
-		queryKey: ['livetv', 'countries'],
-		queryFn: () => livetv.countries(),
-		staleTime: 24 * 3600_000
-	}));
+	const countriesQ = createQuery(() => read.liveCountries());
 	let picked = $state<string | null>(untrack(() => page.url.searchParams.get('country')));
 	const country = $derived(picked ?? countriesQ.data?.default_country ?? 'fr');
 
@@ -31,16 +28,8 @@
 		replaceState(url, {});
 	}
 
-	const channelsQ = createQuery(() => ({
-		queryKey: ['livetv', 'channels', country],
-		queryFn: () => livetv.channels(country),
-		staleTime: 10 * 60_000
-	}));
-	const epgQ = createQuery(() => ({
-		queryKey: ['livetv', 'epg-now', country],
-		queryFn: () => livetv.epgNow(country),
-		refetchInterval: EPG_REFETCH_MS
-	}));
+	const channelsQ = createQuery(() => read.liveChannels(country));
+	const epgQ = createQuery(() => ({ ...read.liveEpg(country), refetchInterval: EPG_REFETCH_MS }));
 	const epg = $derived(new Map<string, LiveNowNext>((epgQ.data?.entries ?? []).map((e) => [e.channel_id, e])));
 	// « now » for the bars: when the guide was last read (it moves with each refetch)
 	const at = $derived(epgQ.dataUpdatedAt || Date.now());

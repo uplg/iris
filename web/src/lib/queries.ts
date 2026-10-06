@@ -7,7 +7,8 @@ import {
 	discover,
 	follows,
 	library,
-	me,
+	livetv,
+	me as meApi,
 	metadata,
 	progress,
 	torrents,
@@ -45,7 +46,10 @@ export const KEYS = {
 	languages: ['languages'],
 	playbackPrefsAll: ['playback-prefs'],
 	playbackPrefs: (collectionId: string | null) => ['playback-prefs', collectionId] as const,
-	tmdb: (id: number | null, kind: MediaKind | null) => ['tmdb', id, kind] as const
+	tmdb: (id: number | null, kind: MediaKind | null) => ['tmdb', id, kind] as const,
+	liveCountries: ['livetv', 'countries'],
+	liveChannels: (country: string) => ['livetv', 'channels', country] as const,
+	liveEpg: (country: string) => ['livetv', 'epg-now', country] as const
 } as const;
 
 /** Live progress: quick while something moves, slow otherwise. */
@@ -76,7 +80,7 @@ export const read = {
 	}),
 	summary: () => ({
 		queryKey: KEYS.summary,
-		queryFn: me.summary,
+		queryFn: meApi.summary,
 		refetchInterval: (q: { state: { data?: { downloading: number } } }) => ((q.state.data?.downloading ?? 0) > 0 ? FAST : SLOW)
 	}),
 	/** The person's positions in a release's files. Read once per release (episode rows of one
@@ -100,17 +104,34 @@ export const read = {
 		queryFn: () => follows.episodeContext(infohash, fileIdx),
 		staleTime: 5 * 60_000
 	}),
-	continueWatching: () => ({ queryKey: KEYS.continueWatching, queryFn: me.continueWatching }),
-	watchlist: () => ({ queryKey: KEYS.watchlist, queryFn: me.watchlist, staleTime: 60_000 }),
+	continueWatching: () => ({ queryKey: KEYS.continueWatching, queryFn: meApi.continueWatching }),
+	watchlist: () => ({ queryKey: KEYS.watchlist, queryFn: meApi.watchlist, staleTime: 60_000 }),
 	follows: () => ({ queryKey: KEYS.follows, queryFn: () => follows.list(), staleTime: 60_000 }),
-	recentSearches: () => ({ queryKey: KEYS.recentSearches, queryFn: () => me.recentSearches(), staleTime: 60_000 }),
-	preferences: () => ({ queryKey: KEYS.preferences, queryFn: me.preferences, staleTime: 5 * 60_000 }),
+	recentSearches: () => ({ queryKey: KEYS.recentSearches, queryFn: () => meApi.recentSearches(), staleTime: 60_000 }),
+	forYou: () => ({ queryKey: KEYS.forYou, queryFn: meApi.forYou, staleTime: 60_000 }),
+	forYouPage: () => ({ queryKey: KEYS.forYouPage, queryFn: meApi.forYouPage, staleTime: 60_000 }),
+	/** The tracker's own picks: asked only when there is nothing of one's own to show. */
+	featured: () => ({ queryKey: KEYS.featured, queryFn: discover.featured, staleTime: 5 * 60_000 }),
+	moodBoard: (kind: MediaKind) => ({ queryKey: KEYS.moodBoard(kind), queryFn: () => meApi.moodBoard(kind) }),
+	moodResults: (mood: string, kind: MediaKind) => ({
+		queryKey: [...KEYS.moodResults, mood, kind],
+		queryFn: () => meApi.moodResults(mood, kind)
+	}),
+	liveCountries: () => ({ queryKey: KEYS.liveCountries, queryFn: () => livetv.countries(), staleTime: DAY }),
+	liveChannels: (country: string) => ({
+		queryKey: KEYS.liveChannels(country),
+		queryFn: () => livetv.channels(country),
+		staleTime: 10 * 60_000
+	}),
+	/** The guide's now and next; each view polls it at its own pace (`refetchInterval`). */
+	liveEpg: (country: string) => ({ queryKey: KEYS.liveEpg(country), queryFn: () => livetv.epgNow(country) }),
+	preferences: () => ({ queryKey: KEYS.preferences, queryFn: meApi.preferences, staleTime: 5 * 60_000 }),
 	genres: () => ({ queryKey: KEYS.genres, queryFn: discover.genres, staleTime: DAY }),
 	languages: () => ({ queryKey: KEYS.languages, queryFn: discover.languages, staleTime: DAY }),
 	/** The account's audio and subtitle choice, or a series' own when it has one. */
 	playbackPrefs: (collectionId: string | null) => ({
 		queryKey: KEYS.playbackPrefs(collectionId),
-		queryFn: () => (collectionId ? me.seriesPlaybackPreferences(collectionId) : me.playbackPreferences()),
+		queryFn: () => (collectionId ? meApi.seriesPlaybackPreferences(collectionId) : meApi.playbackPreferences()),
 		staleTime: 5 * 60_000
 	}),
 	/** A title's TMDB metadata; ask only when the match is trusted (a wrong name is worse than none). */

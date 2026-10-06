@@ -2,15 +2,14 @@
 	// Every suggestion shelf (the home shows a few): what is trending, checked against the
 	// trackers. Then where the trends come from, as TMDB's terms ask.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { me } from '@iris/api/client';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Shelf from '#lib/components/Shelf.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import { loadable } from '#lib/query.ts';
 	import CatalogCard from '#lib/home/CatalogCard.svelte';
-	import { KEYS } from '#lib/queries.ts';
+	import { read } from '#lib/queries.ts';
 
-	const page = createQuery(() => ({ queryKey: KEYS.forYouPage, queryFn: me.forYouPage, staleTime: 60_000 }));
+	const page = createQuery(() => read.forYouPage());
 	const shelves = $derived((page.data?.shelves ?? []).filter((s) => s.items.length > 0));
 </script>
 

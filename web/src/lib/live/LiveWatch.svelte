@@ -8,6 +8,7 @@
 	import { timeLeft } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import { pageTitle } from '#lib/title.ts';
+	import { read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import StageTopBar from '#lib/player/StageTopBar.svelte';
 	import LivePlayer from './LivePlayer.svelte';
@@ -18,16 +19,8 @@
 	/** Faster than the grid: the page shows a live progress bar. */
 	const EPG_REFETCH_MS = 30_000;
 
-	const channelsQ = createQuery(() => ({
-		queryKey: ['livetv', 'channels', country],
-		queryFn: () => livetv.channels(country),
-		staleTime: 10 * 60_000
-	}));
-	const epgQ = createQuery(() => ({
-		queryKey: ['livetv', 'epg-now', country],
-		queryFn: () => livetv.epgNow(country),
-		refetchInterval: EPG_REFETCH_MS
-	}));
+	const channelsQ = createQuery(() => read.liveChannels(country));
+	const epgQ = createQuery(() => ({ ...read.liveEpg(country), refetchInterval: EPG_REFETCH_MS }));
 
 	const channel = $derived(channelsQ.data?.channels.find((c) => c.id === channelId));
 	const name = $derived(channel?.name ?? channelId);
