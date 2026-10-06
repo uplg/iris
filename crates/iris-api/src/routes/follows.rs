@@ -1277,20 +1277,13 @@ pub(crate) async fn grab_episode_core(
     )
     .await?;
 
-    iris_db::torrents::upsert(
-        state.db(),
-        iris_db::torrents::NewTorrent {
-            infohash: result.snapshot.infohash.clone(),
-            name: result
-                .snapshot
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("{display_title} S{season:02}E{episode:02}")),
-            total_size_bytes: result.snapshot.total_size_bytes,
-            source_provider: Some(pick.indexer_provider.clone()),
-            source_external_id: Some(pick.indexer_torrent_id.clone()),
-            added_by: user_id,
-        },
+    super::torrents::record_ingest(
+        state,
+        &result.snapshot,
+        || format!("{display_title} S{season:02}E{episode:02}"),
+        pick.indexer_provider.clone(),
+        pick.indexer_torrent_id.clone(),
+        user_id,
     )
     .await?;
 
@@ -1377,9 +1370,7 @@ async fn finalise_grabbed_episode(
         // Mirror the parser's SxxExx absolute rule: a fleuve grab
         // arrives as `season=1, episode=<absolute>`, so a high
         // episode under season 1 carries the absolute number.
-        let absolute_episode = (season == 1
-            && episode > i64::from(iris_media::filename::ABSOLUTE_EPISODE_THRESHOLD))
-        .then_some(episode);
+        let absolute_episode = fleuve_absolute(season, episode);
         let _ = iris_db::episode_files::upsert(
             state.db(),
             iris_db::episode_files::UpsertEpisodeFile {
@@ -1481,13 +1472,18 @@ async fn verify_owned_claim(
             infohash: row.infohash.clone(),
             file_idx: idx,
             derived_from: iris_db::episode_files::DerivedFrom::SceneParse,
-            absolute_episode: (season == 1
-                && episode > i64::from(iris_media::filename::ABSOLUTE_EPISODE_THRESHOLD))
-            .then_some(episode),
+            absolute_episode: fleuve_absolute(season, episode),
         },
     )
     .await;
     Some((row.infohash, idx))
+}
+
+/// The absolute number of a fleuve episode stored under season 1
+/// (`S01E1156`); `None` for ordinary seasonal numbering.
+fn fleuve_absolute(season: i64, episode: i64) -> Option<i64> {
+    (season == 1 && episode > i64::from(iris_media::filename::ABSOLUTE_EPISODE_THRESHOLD))
+        .then_some(episode)
 }
 
 struct PickedAvailability {
@@ -1524,34 +1520,48 @@ async fn best_available(
     sel: &LangSel,
     profile: &GrabProfile,
 ) -> Result<Option<PickedAvailability>, sqlx::Error> {
-    let mut rows = iris_db::available_episodes::list_offers_for_episode(
+    let rows = iris_db::available_episodes::list_offers_for_episode(
         pool,
         normalized_name,
         season,
         episode,
     )
     .await?;
-    // Rank the full candidate set profile-aware (sane → format match →
-    // codec match → smallest size / seeders). Best-first order means the
-    // language walk's "first match per language" is also best-in-language.
     // `Exact` never substitutes another language (a clicked FR badge that
     // has no FR offer 404s rather than grabbing EN); `Prefer` walks the
     // continuation order sane-first, then accepts anything available.
-    rows.sort_by(|a, b| offer_cmp(a, b, profile));
+    Ok(pick_offer(rows, sel, profile).map(PickedAvailability::from))
+}
+
+/// The offer to grab: ranked profile-aware (sane → format match → codec
+/// match → smallest size / seeders) so the language walk's "first match per
+/// language" is also best-in-language, then selected by `sel`.
+fn pick_offer(
+    mut offers: Vec<iris_db::available_episodes::AvailableEpisodeRow>,
+    sel: &LangSel,
+    profile: &GrabProfile,
+) -> Option<iris_db::available_episodes::AvailableEpisodeRow> {
+    offers.sort_by(|a, b| offer_cmp(a, b, profile));
     let tagged: Vec<(
         Language,
         bool,
         iris_db::available_episodes::AvailableEpisodeRow,
-    )> = rows
+    )> = offers
         .into_iter()
         .map(|r| (offer_language(&r), offer_candidate(&r).sane(), r))
         .collect();
-    Ok(select_by_lang(&tagged, sel).map(|r| PickedAvailability {
-        magnet: r.magnet,
-        indexer_provider: r.indexer_provider,
-        indexer_torrent_id: r.indexer_torrent_id,
-        download_url: r.download_url,
-    }))
+    select_by_lang(&tagged, sel)
+}
+
+impl From<iris_db::available_episodes::AvailableEpisodeRow> for PickedAvailability {
+    fn from(r: iris_db::available_episodes::AvailableEpisodeRow) -> Self {
+        Self {
+            magnet: r.magnet,
+            indexer_provider: r.indexer_provider,
+            indexer_torrent_id: r.indexer_torrent_id,
+            download_url: r.download_url,
+        }
+    }
 }
 
 /// Resolve a `PickedAvailability` (magnet or provider-hosted
@@ -1723,29 +1733,12 @@ async fn find_pack_offer(
     sel: &LangSel,
     profile: &GrabProfile,
 ) -> Result<Option<(PickedAvailability, bool)>, sqlx::Error> {
-    let mut packs =
+    let packs =
         iris_db::available_episodes::list_pack_offers_for_season(pool, normalized_name, season)
             .await?;
-    packs.sort_by(|a, b| offer_cmp(a, b, profile));
-    let tagged: Vec<(
-        Language,
-        bool,
-        iris_db::available_episodes::AvailableEpisodeRow,
-    )> = packs
-        .into_iter()
-        .map(|p| (offer_language(&p), offer_candidate(&p).sane(), p))
-        .collect();
-    Ok(select_by_lang(&tagged, sel).map(|p| {
+    Ok(pick_offer(packs, sel, profile).map(|p| {
         let sane = offer_candidate(&p).sane();
-        (
-            PickedAvailability {
-                magnet: p.magnet,
-                indexer_provider: p.indexer_provider,
-                indexer_torrent_id: p.indexer_torrent_id,
-                download_url: p.download_url,
-            },
-            sane,
-        )
+        (PickedAvailability::from(p), sane)
     }))
 }
 
@@ -1806,20 +1799,13 @@ async fn ingest_pack_and_pick_episode(
             ApiError::NotFound
         })?;
 
-    iris_db::torrents::upsert(
-        state.db(),
-        iris_db::torrents::NewTorrent {
-            infohash: result.snapshot.infohash.clone(),
-            name: result
-                .snapshot
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("{display_title} S{season:02} pack")),
-            total_size_bytes: result.snapshot.total_size_bytes,
-            source_provider: Some(pack.indexer_provider.clone()),
-            source_external_id: Some(pack.indexer_torrent_id.clone()),
-            added_by: user_id,
-        },
+    super::torrents::record_ingest(
+        state,
+        &result.snapshot,
+        || format!("{display_title} S{season:02} pack"),
+        pack.indexer_provider.clone(),
+        pack.indexer_torrent_id.clone(),
+        user_id,
     )
     .await?;
 

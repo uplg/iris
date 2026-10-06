@@ -126,6 +126,15 @@ impl AppState {
     pub fn providers(&self) -> &ProviderRegistry {
         &self.inner.providers
     }
+    /// The configured provider `id`, or a `400` naming it.
+    pub fn provider(
+        &self,
+        id: &str,
+    ) -> Result<std::sync::Arc<dyn iris_providers::SearchProvider>, crate::error::ApiError> {
+        self.providers()
+            .get(id)
+            .ok_or_else(|| crate::error::ApiError::BadRequest(format!("unknown provider `{id}`")))
+    }
     pub fn jwt(&self) -> &Issuer {
         &self.inner.jwt
     }

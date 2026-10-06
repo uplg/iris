@@ -449,10 +449,7 @@ pub(crate) async fn details(
     _user: AuthUser,
     Query(params): Query<DetailsParams>,
 ) -> ApiResult<Json<ReleaseDetails>> {
-    let provider = state
-        .providers()
-        .get(&params.provider)
-        .ok_or_else(|| ApiError::BadRequest(format!("unknown provider `{}`", params.provider)))?;
+    let provider = state.provider(&params.provider)?;
     match provider.details(&params.id).await {
         Ok(Some(mut d)) => {
             // Same server-authored warning as the search cards, plus an

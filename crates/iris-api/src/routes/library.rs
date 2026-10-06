@@ -589,9 +589,7 @@ pub(crate) async fn collection_detail(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<CollectionDetail>> {
-    let collection = iris_db::collections::get(state.db(), id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let collection = collection_or_404(&state, id).await?;
 
     let torrents: Vec<TorrentView> = iris_db::torrents::list_in_collection(state.db(), id)
         .await?
@@ -1163,9 +1161,7 @@ pub(crate) async fn grab_collection_episode(
     Path((id, season, episode)): Path<(Uuid, i64, i64)>,
     Query(q): Query<GrabQuery>,
 ) -> ApiResult<Json<crate::routes::follows::GrabResponse>> {
-    let collection = iris_db::collections::get(state.db(), id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let collection = collection_or_404(&state, id).await?;
     if !collection.is_tv() {
         return Err(ApiError::BadRequest(
             "grab only valid for TV collections".into(),
@@ -1234,9 +1230,7 @@ pub(crate) async fn mark_title_watched(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<axum::http::StatusCode> {
-    iris_db::collections::get(state.db(), id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    collection_or_404(&state, id).await?;
     let files = title_files(&state, id).await?;
     iris_db::playback::mark_completed_many(state.db(), user.id, &files).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
@@ -1257,9 +1251,17 @@ pub(crate) async fn mark_title_unwatched(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<axum::http::StatusCode> {
-    iris_db::collections::get(state.db(), id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    collection_or_404(&state, id).await?;
     iris_db::playback::delete_for_collection(state.db(), user.id, id).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// The collection `id`, or 404.
+async fn collection_or_404(
+    state: &AppState,
+    id: Uuid,
+) -> ApiResult<iris_db::collections::CollectionRow> {
+    iris_db::collections::get(state.db(), id)
+        .await?
+        .ok_or(ApiError::NotFound)
 }

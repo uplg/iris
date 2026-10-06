@@ -382,10 +382,7 @@ pub(crate) async fn preview(
     _user: AuthUser,
     Json(body): Json<ResolveBody>,
 ) -> ApiResult<Json<TorrentPreview>> {
-    let provider = state
-        .providers()
-        .get(&body.provider_id)
-        .ok_or_else(|| ApiError::BadRequest(format!("unknown provider `{}`", body.provider_id)))?;
+    let provider = state.provider(&body.provider_id)?;
     // The preview needs the `.torrent` too, so a full slot breaks the dialog
     // exactly like it breaks the grab — same guard, same message.
     check_leech_slots(&state, &body.provider_id).await?;
@@ -631,10 +628,7 @@ pub(crate) async fn ingest_core(
     external_id: String,
     allow_duplicate: bool,
 ) -> ApiResult<IngestResponse> {
-    let provider = state
-        .providers()
-        .get(&provider_id)
-        .ok_or_else(|| ApiError::BadRequest(format!("unknown provider `{provider_id}`")))?;
+    let provider = state.provider(&provider_id)?;
 
     // Dead-torrent guard: a 0-seeder release can never assemble all its
     // pieces. Block only a confirmed-0 (see `is_dead`).
@@ -654,20 +648,13 @@ pub(crate) async fn ingest_core(
     // No torrent-level tmdb resolution: the collection's id is the single
     // source of truth, resolved from the collection's SCENE identity in
     // `collection_assign::resolve_collection_tmdb` once the torrent is assigned.
-    let row = iris_db::torrents::upsert(
-        state.db(),
-        iris_db::torrents::NewTorrent {
-            infohash: result.snapshot.infohash.clone(),
-            name: result
-                .snapshot
-                .name
-                .clone()
-                .unwrap_or_else(|| "<unnamed>".into()),
-            total_size_bytes: result.snapshot.total_size_bytes,
-            source_provider: Some(provider_id),
-            source_external_id: Some(external_id),
-            added_by: user_id,
-        },
+    let row = super::torrents::record_ingest(
+        state,
+        &result.snapshot,
+        || "<unnamed>".into(),
+        provider_id,
+        external_id,
+        user_id,
     )
     .await?;
 
@@ -2547,6 +2534,30 @@ fn torrent_finished(state: &AppState, row: &iris_db::torrents::TorrentRow) -> bo
             .engine()
             .get_by_infohash(&row.infohash)
             .is_some_and(|s| s.finished)
+}
+
+/// Record a torrent the engine just added, `fallback_name` standing in
+/// until its metadata names it.
+pub(crate) async fn record_ingest(
+    state: &AppState,
+    snapshot: &iris_torrent::TorrentSnapshot,
+    fallback_name: impl FnOnce() -> String,
+    source_provider: String,
+    source_external_id: String,
+    added_by: iris_core::ids::UserId,
+) -> Result<iris_db::torrents::TorrentRow, sqlx::Error> {
+    iris_db::torrents::upsert(
+        state.db(),
+        iris_db::torrents::NewTorrent {
+            infohash: snapshot.infohash.clone(),
+            name: snapshot.name.clone().unwrap_or_else(fallback_name),
+            total_size_bytes: snapshot.total_size_bytes,
+            source_provider: Some(source_provider),
+            source_external_id: Some(source_external_id),
+            added_by,
+        },
+    )
+    .await
 }
 
 /// The torrent row for an (already lowercased) infohash, or 404.
