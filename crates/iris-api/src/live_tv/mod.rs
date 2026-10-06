@@ -684,6 +684,11 @@ impl LiveTvService {
         })
     }
 
+    /// How long a country's playlists and iptv-org's databases are kept.
+    fn playlist_ttl(&self) -> Duration {
+        Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1))
+    }
+
     pub fn default_country(&self) -> &str {
         &self.inner.cfg.default_country
     }
@@ -1008,7 +1013,7 @@ impl LiveTvService {
     /// iptv-org stream database, cached with the playlist TTL. Best-effort:
     /// `None` disables the merge, never fails a channel load.
     async fn streams_db(&self) -> Option<Arc<StreamsDb>> {
-        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
+        let ttl = self.playlist_ttl();
         self.inner
             .streams_db
             .get(ttl, FAILED_LOAD_RETRY, || self.load_streams_db())
@@ -1588,7 +1593,7 @@ impl LiveTvService {
     /// feeds that carry no logo — chiefly Vavoo. Cached; best-effort (`None`
     /// on any fetch/parse failure just skips the back-fill).
     async fn name_logo_index(&self) -> Option<Arc<NameLogos>> {
-        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
+        let ttl = self.playlist_ttl();
         self.inner
             .name_logos
             .get(ttl, FAILED_LOAD_RETRY, || self.load_name_logo_index())
@@ -2297,14 +2302,22 @@ impl LiveTvService {
     /// [`Self::epg_index`], reloading a guide older than `ttl`.
     async fn epg_index_within(&self, country: &str, ttl: Duration) -> Option<Arc<epg::EpgIndex>> {
         let url = self.inner.cfg.epg_urls.get(country)?;
-        let cell = self
+        let known = self
             .inner
             .epg
-            .write()
+            .read()
             .expect("poisoned")
-            .entry(country.to_string())
-            .or_default()
-            .clone();
+            .get(country)
+            .cloned();
+        let cell = known.unwrap_or_else(|| {
+            self.inner
+                .epg
+                .write()
+                .expect("poisoned")
+                .entry(country.to_string())
+                .or_default()
+                .clone()
+        });
         cell.get(ttl, FAILED_LOAD_RETRY, || async {
             self.fetch_epg(url)
                 .await
@@ -2390,7 +2403,7 @@ impl LiveTvService {
     /// Background refresh: re-fetch loaded playlists / guides past their
     /// TTL. Runs forever; spawn once at boot.
     pub fn spawn_refresh_loop(self) {
-        let playlist_ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
+        let playlist_ttl = self.playlist_ttl();
         let epg_ttl = Duration::from_hours(self.inner.cfg.epg_refresh_hours.max(1));
         // Transcode idle reaper: its 60 s idle window needs a much faster
         // cadence than the 15 min refresh ticker below.
@@ -2711,7 +2724,7 @@ async fn read_json<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&bytes).map_err(|e| LiveTvError::Upstream(format!("bad json: {e}")))
 }
 
-fn epoch_ms() -> u64 {
+pub(crate) fn epoch_ms() -> u64 {
     u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
 

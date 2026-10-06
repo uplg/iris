@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use super::LiveTvError;
+use super::{LiveTvError, epoch_ms};
 
 /// Runaway backstop, NOT a service limit. Sessions are per-CHANNEL (every
 /// viewer of a channel shares one ffmpeg) and only spawn after a client
@@ -70,15 +70,6 @@ const HLS_LIST_SIZE: u32 = 6;
 /// the web engine's mount works from a playlist snapshot for several
 /// seconds and must never race the deletion window).
 const HLS_DELETE_THRESHOLD: u32 = 12;
-
-fn epoch_ms() -> u64 {
-    u64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis()),
-    )
-    .unwrap_or(0)
-}
 
 /// What ffmpeg does to the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
