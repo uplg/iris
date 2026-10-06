@@ -551,7 +551,7 @@ internal fun LiveTopBar(
     ) {
         val number = channel?.tntNumber
         if (number != null) {
-            Text(number.toString(), style = IrisType.stageTitle, color = IrisColor.stageMuted, modifier = Modifier.alignByBaseline())
+            Text(number.toString(), style = IrisType.stageFigure, color = IrisColor.stageMuted, modifier = Modifier.alignByBaseline())
         }
         Text(
             channel?.name ?: fallbackName,
