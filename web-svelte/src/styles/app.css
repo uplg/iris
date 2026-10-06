@@ -163,6 +163,15 @@ a {
 .btn:hover {
 	border-color: var(--accent-soft);
 }
+/* the one big action of a screen (sign in, play): 52 px */
+.btn.big {
+	min-height: var(--control-h-l);
+	justify-content: center;
+	gap: var(--s-2);
+	font: var(--t-body);
+	font-weight: 500;
+	border-radius: var(--radius-xl);
+}
 .btn.primary {
 	background: var(--accent);
 	border-color: var(--accent);

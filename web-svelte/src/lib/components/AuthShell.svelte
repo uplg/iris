@@ -96,14 +96,6 @@
 		font: var(--t-body);
 		color: var(--ink-muted);
 	}
-	.content :global(.big) {
-		min-height: var(--control-h-l);
-		justify-content: center;
-		gap: var(--s-2);
-		font: var(--t-body);
-		font-weight: 500;
-		border-radius: var(--radius-xl);
-	}
 	.content :global(.aside) {
 		padding-top: var(--s-4);
 		border-top: 1px solid var(--line);
