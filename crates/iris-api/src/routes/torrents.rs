@@ -1197,9 +1197,11 @@ pub(crate) async fn resume(
         .engine()
         .get_by_infohash(&row.infohash)
         .is_some_and(|s| !s.finished);
-    if unfinished && let Some(provider) = row.source_provider.as_deref() {
-        check_leech_slots(&state, provider).await?;
-    }
+    // Held through the resume, as a grab holds it through its add.
+    let _slot = match row.source_provider.as_deref() {
+        Some(provider) if unfinished => take_leech_slot(&state, provider).await?,
+        _ => None,
+    };
     state
         .engine()
         .resume_by_infohash(&row.infohash)
