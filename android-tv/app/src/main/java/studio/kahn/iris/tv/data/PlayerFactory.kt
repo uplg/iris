@@ -14,6 +14,7 @@ import androidx.media3.common.DataReader
 import androidx.media3.common.Format
 import androidx.media3.common.util.ParsableByteArray
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
@@ -33,15 +34,12 @@ import studio.kahn.iris.tv.BuildConfig
 
 /**
  * Text tracks whose `forced` flag [ForcedVisibleExtractorsFactory] stripped,
- * by `Format.id` (the container track id), so the settings menu can still
- * label them. Process-wide because the app drives one player at a time;
- * [buildPlayer] resets it, and ids only mean something for the file that
- * player is on.
+ * by `Format.id` (the container track id), so the track menu can still label
+ * them. One per player: ids only mean something for the file that player is
+ * on. Marked from the loader's thread, read from the main one.
  */
-object ForcedTextTracks {
+class ForcedTextTracks {
     private val ids = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-
-    fun reset() = ids.clear()
 
     fun mark(id: String) {
         ids.add(id)
@@ -67,7 +65,7 @@ object ForcedTextTracks {
  * here, TV-side. What the flag meant for playback is not lost: our track
  * selection never leans on Media3's forced auto-show (text is either
  * disabled outright or pinned by [SubtitlePick]), and the "Forced" label
- * in the player's own track menu reads [ForcedTextTracks] instead.
+ * in the player's own track menu reads [forced] instead.
  *
  * Stripping at the extractor keeps `Format`/`TrackGroup` identity
  * consistent everywhere (menu labels, `TrackSelectionOverride` keying,
@@ -77,22 +75,22 @@ object ForcedTextTracks {
  * from the server manifest, not from this factory.
  */
 @UnstableApi
-private class ForcedVisibleExtractorsFactory : ExtractorsFactory {
+private class ForcedVisibleExtractorsFactory(private val forced: ForcedTextTracks) : ExtractorsFactory {
     private val delegate = DefaultExtractorsFactory()
 
     override fun createExtractors(): Array<Extractor> =
-        delegate.createExtractors().map { StrippingExtractor(it) }.toTypedArray()
+        delegate.createExtractors().map { StrippingExtractor(it, forced) }.toTypedArray()
 
     override fun createExtractors(
         uri: Uri,
         responseHeaders: MutableMap<String, MutableList<String>>,
     ): Array<Extractor> =
-        delegate.createExtractors(uri, responseHeaders).map { StrippingExtractor(it) }.toTypedArray()
+        delegate.createExtractors(uri, responseHeaders).map { StrippingExtractor(it, forced) }.toTypedArray()
 
-    private class StrippingExtractor(private val delegate: Extractor) : Extractor {
+    private class StrippingExtractor(private val delegate: Extractor, private val forced: ForcedTextTracks) : Extractor {
         override fun sniff(input: ExtractorInput): Boolean = delegate.sniff(input)
 
-        override fun init(output: ExtractorOutput) = delegate.init(StrippingOutput(output))
+        override fun init(output: ExtractorOutput) = delegate.init(StrippingOutput(output, forced))
 
         override fun read(input: ExtractorInput, seekPosition: PositionHolder): Int =
             delegate.read(input, seekPosition)
@@ -102,12 +100,12 @@ private class ForcedVisibleExtractorsFactory : ExtractorsFactory {
         override fun release() = delegate.release()
     }
 
-    private class StrippingOutput(private val delegate: ExtractorOutput) : ExtractorOutput {
+    private class StrippingOutput(private val delegate: ExtractorOutput, private val forced: ForcedTextTracks) : ExtractorOutput {
         override fun track(id: Int, type: Int): TrackOutput {
             val real = delegate.track(id, type)
             return when (type) {
-                C.TRACK_TYPE_AUDIO -> StrippingTrackOutput(real, remember = false)
-                C.TRACK_TYPE_TEXT -> StrippingTrackOutput(real, remember = true)
+                C.TRACK_TYPE_AUDIO -> StrippingTrackOutput(real, remember = null)
+                C.TRACK_TYPE_TEXT -> StrippingTrackOutput(real, remember = forced)
                 else -> real
             }
         }
@@ -119,11 +117,12 @@ private class ForcedVisibleExtractorsFactory : ExtractorsFactory {
 
     private class StrippingTrackOutput(
         private val delegate: TrackOutput,
-        private val remember: Boolean,
+        /** Where a stripped text track is noted; null for audio. */
+        private val remember: ForcedTextTracks?,
     ) : TrackOutput {
         override fun format(format: Format) {
             val stripped = if (format.selectionFlags and C.SELECTION_FLAG_FORCED != 0) {
-                if (remember) format.id?.let(ForcedTextTracks::mark)
+                if (remember != null) format.id?.let(remember::mark)
                 format.buildUpon()
                     .setSelectionFlags(format.selectionFlags and C.SELECTION_FLAG_FORCED.inv())
                     .build()
@@ -182,10 +181,11 @@ fun buildPlayer(
      *  false: non-AV1 formats are hardware-decoded either way (dav1d only
      *  claims AV1), so callers without a probe (live TV) lose nothing. */
     preferPlatformAv1: Boolean = false,
+    /** Where this player notes the text tracks it unflagged (its track menu reads it). */
+    forcedText: ForcedTextTracks = ForcedTextTracks(),
 ): ExoPlayer {
     val dataSourceFactory = OkHttpDataSource.Factory(mediaOkHttp).setUserAgent(userAgent)
-    ForcedTextTracks.reset()
-    val mediaSourceFactory = DefaultMediaSourceFactory(context, ForcedVisibleExtractorsFactory())
+    val mediaSourceFactory = DefaultMediaSourceFactory(context, ForcedVisibleExtractorsFactory(forcedText))
         .setDataSourceFactory(dataSourceFactory)
 
     // Renderers factory. The FFmpeg decoder extension is built and
@@ -281,6 +281,7 @@ fun buildPlayer(
 
     return ExoPlayer.Builder(context)
         .setRenderersFactory(renderersFactory)
+        .setLoadControl(boundedLoadControl())
         .setMediaSourceFactory(mediaSourceFactory)
         .setSeekBackIncrementMs(10_000)
         .setSeekForwardIncrementMs(30_000)
@@ -306,6 +307,26 @@ fun buildPlayer(
             // and route passthrough correctly.
         }
 }
+
+/**
+ * Bytes the player may hold ahead of (and just behind) the playhead. Media3's default sizes the
+ * target from the renderers: some 130 MB for a video track, more than a 2 GB box can spare next
+ * to the decoder's own surfaces and the app (and once the target fills, the 50 s duration goal
+ * no longer counts: the size is the real bound). 48 MB still keeps about 5 s of a UHD remux at
+ * its 80 Mbit/s peaks and 15 to 25 s of a typical 4K web release (15 to 25 Mbit/s), which the
+ * home network refills faster than real time from the Iris server.
+ */
+const val PLAYER_BUFFER_BYTES = 48 * 1024 * 1024
+
+/** Kept behind the playhead (inside [PLAYER_BUFFER_BYTES]): a 10 s rewind replays without a new request. */
+const val PLAYER_BACK_BUFFER_MS = 10_000
+
+@UnstableApi
+private fun boundedLoadControl(): DefaultLoadControl = DefaultLoadControl.Builder()
+    .setTargetBufferBytes(PLAYER_BUFFER_BYTES)
+    .setPrioritizeTimeOverSizeThresholds(false)
+    .setBackBuffer(PLAYER_BACK_BUFFER_MS, true)
+    .build()
 
 /**
  * Translates a Media3 [PlaybackException] into a (user-readable

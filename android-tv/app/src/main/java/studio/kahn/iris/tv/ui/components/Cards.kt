@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.components
 
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -29,7 +30,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -77,7 +77,7 @@ fun PosterCard(
 ) {
     ArtCard(
         aspect = POSTER_ASPECT,
-        fallbackTitle = IrisType.artTitle.copy(fontSize = 12.sp, lineHeight = 14.sp),
+        fallbackTitle = IrisType.artTitleSmall,
         title = title,
         imageUrl = imageUrl,
         onClick = onClick,
@@ -114,7 +114,7 @@ fun StillCard(
 ) {
     ArtCard(
         aspect = STILL_ASPECT,
-        fallbackTitle = IrisType.artTitle.copy(fontSize = 15.sp, lineHeight = 17.sp),
+        fallbackTitle = IrisType.artTitleStill,
         title = title,
         imageUrl = imageUrl,
         onClick = onClick,
@@ -184,7 +184,7 @@ private fun ArtCard(
 }
 
 /**
- * Artwork with its fallback: the fill and the [title] in Fraunces ([IrisType.artTitle]) are drawn
+ * Artwork with its fallback: the fill and the [title] ([IrisType.artTitle]) are drawn
  * first, the image on top once decoded. Use it directly for a non-focusable
  * poster (a page's aside, the getting-ready screen); [width] lets Coil
  * decode at that size. [showTitle] false for a mini poster beside a row.
@@ -255,7 +255,7 @@ fun Artwork(
         if (badge != null) {
             Text(
                 badge,
-                style = IrisType.metaSmall.copy(fontSize = 9.sp),
+                style = IrisType.metaSmall,
                 color = IrisColor.ink,
                 maxLines = 1,
                 modifier = Modifier
@@ -320,4 +320,26 @@ fun FramedBlock(
         verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
         content = content,
     )
+}
+
+/**
+ * The one poster aside of a page (a title, a release, a title's releases): a line above it
+ * ([above], an eyebrow), the poster with its title in Cal Sans when the art is missing, then
+ * [below]. [compact] on a short or narrow screen: the smaller poster.
+ */
+@Composable
+fun PosterAside(
+    above: String,
+    title: String,
+    imageUrl: String?,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+    below: @Composable ColumnScope.() -> Unit = {},
+) {
+    val poster = if (compact) IrisSize.posterAsideCompact else IrisSize.posterAside
+    Column(modifier.widthIn(min = poster), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
+        Eyebrow(above)
+        Artwork(title = title, imageUrl = imageUrl, width = poster, titleStyle = IrisType.group)
+        below()
+    }
 }

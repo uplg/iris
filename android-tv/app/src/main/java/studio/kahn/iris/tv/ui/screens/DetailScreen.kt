@@ -1,15 +1,14 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.components.PosterAside
+import studio.kahn.iris.tv.ui.screens.library.DeleteReleaseDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
@@ -24,19 +23,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.ui.components.Artwork
-import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.ErrorState
-import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.KeyHint
 import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
@@ -57,7 +51,6 @@ import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
 import studio.kahn.iris.tv.ui.state.irisViewModel
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
-import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 import studio.kahn.iris.tv.ui.format.plural
@@ -135,17 +128,14 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
                     }
                     runCatching { firstFile.requestFocus() }
                 }
-                val compact = layout.height < 500.dp
+                val compact = layout.short
                 Row(
                     Modifier
                         .fillMaxSize()
                         .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical),
                     horizontalArrangement = Arrangement.spacedBy(if (compact) IrisSpace.s7 else IrisSpace.s9),
                 ) {
-                    Column(Modifier.width(if (compact) 96.dp else IrisSize.posterAside), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
-                        Eyebrow("${p.kind} · release")
-                        Artwork(p.title, p.posterUrl, width = if (compact) 96.dp else IrisSize.posterAside, titleStyle = IrisType.group)
-                    }
+                    PosterAside(above = "${p.kind} · release", title = p.title, imageUrl = p.posterUrl, compact = compact)
                     LazyColumn(
                         Modifier
                             .weight(1f)
@@ -156,7 +146,7 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
                     ) {
                         item(key = "title") {
                             Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
-                                Text(p.title, style = IrisType.title, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(p.title, style = IrisType.titleFor(p.title, IrisType.title), color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 page.errorOrNull?.let { StaleNotice(it) }
                             }
                         }
@@ -200,11 +190,8 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
             }
         }
         deleting?.let { row ->
-            ConfirmDialog(
-                eyebrow = "Delete a release",
-                title = "Delete ${row.release}?",
-                body = row.deleteBody,
-                confirmLabel = "Delete release",
+            DeleteReleaseDialog(
+                row = row,
                 onConfirm = {
                     deleting = null
                     actions.onRelease.onDelete(row)

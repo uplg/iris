@@ -18,7 +18,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.ui.components.FocusColors
 import studio.kahn.iris.tv.ui.components.FocusSurface
@@ -120,7 +119,7 @@ private fun Key(key: KeySpec, onClick: () -> Unit) {
         Box {
             Text(
                 key.label,
-                style = if (key.span > 1) IrisType.controlSmall else IrisType.action.copy(fontSize = 13.sp),
+                style = if (key.span > 1) IrisType.controlSmall else IrisType.action,
                 maxLines = 1,
             )
         }

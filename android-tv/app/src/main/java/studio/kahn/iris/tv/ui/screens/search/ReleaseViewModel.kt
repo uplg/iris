@@ -1,5 +1,9 @@
 package studio.kahn.iris.tv.ui.screens.search
 
+import studio.kahn.iris.tv.ui.format.AgoStyle
+import studio.kahn.iris.tv.ui.format.ago
+import studio.kahn.iris.tv.ui.format.leechersWords
+import studio.kahn.iris.tv.ui.format.seedersWords
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.ViewModel
@@ -31,7 +35,6 @@ import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
 import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.toUiError
-import studio.kahn.iris.tv.ui.format.formatRelative
 import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.languageLabel
 import studio.kahn.iris.tv.ui.format.kindWord
@@ -124,13 +127,13 @@ fun releaseSheet(s: ReleaseUiState): ReleaseSheet {
     val leechers = d?.leechers ?: hit?.leechers
     val swarm = listOfNotNull(
         seedersWords(seeders),
-        leechers?.let { "$it leechers" },
+        leechersWords(leechers),
         d?.timesCompleted?.let { "${String.format(java.util.Locale.ENGLISH, "%,d", it)} downloads" },
     ).joinToString(" · ")
     val uploadedAt = d?.uploadedAt ?: hit?.uploadedAt
     val uploader = d?.uploader ?: hit?.uploader
     val uploaded = listOfNotNull(
-        uploadedAt?.let { formatRelative(it) } ?: d?.age?.let { "$it ago" },
+        uploadedAt?.let { ago(it, AgoStyle.Short) } ?: d?.age?.let { "$it ago" },
         uploader?.let { "by $it" },
     ).joinToString(" ")
     val filesFact = p?.let { "${plural(it.files.size, "file")} · ${formatSize(it.totalSizeBytes)}" }

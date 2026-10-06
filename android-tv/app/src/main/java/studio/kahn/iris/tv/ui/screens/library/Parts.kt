@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.components.ConfirmDialog
+import studio.kahn.iris.tv.ui.components.bottomHairline
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -8,28 +10,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.List
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Downloading
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.Stable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
@@ -38,7 +29,6 @@ import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.Artwork
 import studio.kahn.iris.tv.ui.components.Meter
-import studio.kahn.iris.tv.ui.components.PanelOption
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.touchClick
@@ -94,10 +84,7 @@ fun ReleaseItem(
     Row(
         modifier
             .fillMaxWidth()
-            .drawBehind {
-                val y = size.height - 0.5.dp.toPx()
-                drawLine(IrisColor.line, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
-            }
+            .bottomHairline()
             .padding(vertical = IrisSpace.s5),
         horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
     ) {
@@ -182,4 +169,20 @@ private fun ReleaseButtons(row: ReleaseRow, actions: ReleaseActions, busy: Set<S
         )
         if (!row.canDelete) Text(row.noDeleteReason, style = IrisType.meta, color = IrisColor.inkMuted)
     }
+}
+
+/**
+ * The one confirmation before a release leaves the disk (the library, a title, a release's
+ * files): which release, what goes with it, and that the watch history stays.
+ */
+@Composable
+fun DeleteReleaseDialog(row: ReleaseRow, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    ConfirmDialog(
+        eyebrow = "Delete a release of ${row.title}",
+        title = "Delete ${row.release}?",
+        body = "${row.deleteBody} Watch history is kept.",
+        confirmLabel = "Delete release",
+        onConfirm = onConfirm,
+        onCancel = onCancel,
+    )
 }

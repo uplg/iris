@@ -203,12 +203,7 @@ fun resumeHero(item: ContinueWatchingItem, md: MediaMetadata?, prefs: PlaybackPr
     val resuming = isResuming(item)
     val length = if (resuming && left != null) timeLeft(left) else item.durationSeconds?.takeIf { it > 0 }?.let(::duration)
     val meta = if (item.kind == MediaKind.tv && item.season != null) {
-        listOf(
-            "Season ${item.season}",
-            item.episode?.let { "Episode $it" },
-            item.episodeName,
-            length,
-        )
+        listOf(episodeCode(item.season, item.episode, long = true), item.episodeName, length)
     } else {
         listOf(md?.year?.toString(), kindLabel(item.kind), length)
     }

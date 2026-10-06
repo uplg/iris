@@ -52,7 +52,7 @@ class ChannelsService(private val context: Context) {
             if (session == null || session.cookies.isEmpty()) return@withContext
             val url = session.serverUrl
             val api: IrisApi = container.apiFor(url)
-            val library = async { bestEffort { api.listTorrents() }.orEmpty() }
+            val library = async { bestEffort { api.libraryTorrents().items }.orEmpty() }
             val cw = async { bestEffort { api.continueWatching() }.orEmpty() }
             // Pass the kind: TMDB's movie/tv id namespaces overlap, so an id-only lookup can
             // resolve to an unrelated entry and paint the wrong poster on the launcher channel.
@@ -72,10 +72,7 @@ class ChannelsService(private val context: Context) {
             val owned = library.await().take(15).map { t ->
                 async {
                     val meta = t.tmdbId?.let { TmdbMetadataCache.get(api, it, t.kind?.value) }
-                    val idx = t.files
-                        .filter { f -> isVideoPath(f.path) }
-                        .maxByOrNull { f -> f.sizeBytes }
-                        ?.index ?: 0
+                    val idx = playFileOf(t) ?: 0
                     Program(
                         title = meta?.title ?: t.name ?: t.infohash.take(12),
                         description = meta?.overview,

@@ -3,7 +3,7 @@ package studio.kahn.iris.tv.ui.screens.player
 import studio.kahn.iris.tv.data.AudioStream
 import studio.kahn.iris.tv.data.MediaProbe
 import studio.kahn.iris.tv.data.SubtitleStream
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.OFF
 
 /**
  * The probed streams in the order the player's track groups come on [route]. The direct
@@ -38,7 +38,7 @@ data class RouteTracks(val audio: List<AudioStream>, val subtitles: List<Subtitl
     /** The language kept for the series: "off" when turned off. */
     fun subtitleLanguage(index: Int?): String? = when (index) {
         null -> null
-        -1 -> NO_SUBTITLES
+        -1 -> OFF
         else -> subtitles.firstOrNull { it.index == index }?.language
     }
 

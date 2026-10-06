@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
@@ -335,7 +337,13 @@ fun IrisRoot(
                     },
                 )
             }
-            composable<Routes.Watch> { backStackEntry ->
+            // One file to the next (the next episode, the episodes panel): no crossfade, so the
+            // leaving player is gone before the next one is built (two decoders and buffers
+            // overflow a 2 GB box).
+            composable<Routes.Watch>(
+                enterTransition = { if (initialState.destination.hasRoute<Routes.Watch>()) EnterTransition.None else null },
+                exitTransition = { if (targetState.destination.hasRoute<Routes.Watch>()) ExitTransition.None else null },
+            ) { backStackEntry ->
                 val route = backStackEntry.toRoute<Routes.Watch>()
                 WatchScreen(
                     container = container,

@@ -46,9 +46,8 @@ fun buildOkHttpClient(
     onOutdated: () -> Unit,
 ): OkHttpClient {
     val authenticator = IrisAuthenticator(sessionStore)
-    // Cache the Iris-Caps header value once. Build.VERSION fields don't
-    // change at runtime, so re-computing per request would be wasted work.
-    val capsHeaderValue = IrisCaps.headerValue()
+    // Once, on the first request's thread (never the main one): the value scans MediaCodecList.
+    val capsHeaderValue by lazy { IrisCaps.headerValue() }
     val clientHeaderValue = "tv/${BuildConfig.VERSION_NAME}"
     val client = OkHttpClient.Builder()
         .cookieJar(SessionCookieJar(sessionStore))

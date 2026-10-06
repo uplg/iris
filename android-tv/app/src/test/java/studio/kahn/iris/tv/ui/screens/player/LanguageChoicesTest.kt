@@ -6,7 +6,7 @@ import org.junit.Test
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.UpdatePlaybackPrefs
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.OFF
 
 class LanguageChoicesTest {
     private val avatar = UUID.randomUUID()
@@ -15,13 +15,13 @@ class LanguageChoicesTest {
     fun `a pick under a title never copies the account default into it`() {
         // The title owns nothing yet: these are the account's.
         val account = PlaybackPrefsResponse(audioLanguage = "kor", subtitleLanguage = "fre", forCollection = false)
-        val off = LanguageChoices.of(account, avatar).subtitlePicked(NO_SUBTITLES)
-        assertEquals(UpdatePlaybackPrefs(audioLanguage = null, subtitleLanguage = NO_SUBTITLES, collectionId = avatar), off.body())
+        val off = LanguageChoices.of(account, avatar).subtitlePicked(OFF)
+        assertEquals(UpdatePlaybackPrefs(audioLanguage = null, subtitleLanguage = OFF, collectionId = avatar), off.body())
 
         // It owns its subtitles only: the audio still inherits the account's.
         val read = PlaybackPrefsResponse(
             audioLanguage = "kor",
-            subtitleLanguage = NO_SUBTITLES,
+            subtitleLanguage = OFF,
             forCollection = true,
             audioForCollection = false,
             subtitleForCollection = true,

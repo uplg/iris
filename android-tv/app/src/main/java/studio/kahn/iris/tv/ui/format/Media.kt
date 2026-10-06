@@ -4,13 +4,15 @@ import java.util.Locale
 import studio.kahn.iris.tv.data.MediaKind
 
 /** An episode's code, the way the cards write it: `S2:E4`; a season alone: `Season 2`; an episode alone: `E19`. */
-fun episodeCode(season: Long?, episode: Long?): String? = when {
-    season == null -> episode?.let { "E$it" }
+fun episodeCode(season: Long?, episode: Long?, long: Boolean = false): String? = when {
+    season == null -> episode?.let { if (long) "Episode $it" else "E$it" }
     episode == null || episode == 0L -> "Season $season"
+    long -> "Season $season · Episode $episode"
     else -> "S$season:E$episode"
 }
 
-fun episodeCode(season: Int?, episode: Int?): String? = episodeCode(season?.toLong(), episode?.toLong())
+fun episodeCode(season: Int?, episode: Int?, long: Boolean = false): String? =
+    episodeCode(season?.toLong(), episode?.toLong(), long)
 
 /** `Series`, `Movie`, or null when the kind is not known. */
 fun kindWord(kind: String?): String? = when (kind) {
@@ -93,6 +95,23 @@ val LANGUAGE_TAGS = listOf(
 fun languageLabel(tag: String?, long: Boolean = true): String? =
     LANGUAGE_TAGS.firstOrNull { it.tag == tag }?.let { if (long) it.long else it.short }
 
+// A library release's language (`french`, `english`, `multi`, `vostfr`), web `collection/merge.ts`.
+private val RELEASE_LANGUAGE = mapOf(
+    "french" to "French",
+    "english" to "English",
+    "multi" to "several languages",
+    "vostfr" to "original with French subtitles",
+)
+
+/** A release language inside a sentence: `Play in French`, `in several languages`. */
+fun languageWord(lang: String?): String? = lang?.lowercase()?.let(RELEASE_LANGUAGE::get)
+
+/** The same on its own (a chip, a list line): `Several languages`; a tag Iris does not know, as written. */
+fun languageChipWords(lang: String?): String? = when (lang?.lowercase()) {
+    null, "", "unknown" -> null
+    else -> languageWord(lang)?.replaceFirstChar { it.uppercase() } ?: lang.uppercase()
+}
+
 // ISO 639-2 codes (bibliographic and terminology) the tracks and the trackers carry.
 private val ISO_639_2_TO_1 = mapOf(
     "fre" to "fr", "fra" to "fr", "eng" to "en", "ger" to "de", "deu" to "de",
@@ -121,17 +140,46 @@ fun normalizeLanguage(code: String?): String? {
     return ISO_639_2_TO_1[base] ?: if (base.length == 3) ISO3[base] ?: base else base
 }
 
-/** The saved subtitle language meaning "no subtitles" (`playback_preferences.subtitle_language`). */
-const val NO_SUBTITLES = "off"
+/** The subtitle preference that turns them off (`playback_preferences.subtitle_language` on the wire). */
+const val OFF = "off"
 
-/** A saved audio language in words (Settings, a series' languages): none saved plays the file's own. */
-fun audioChoiceWords(choice: String?): String = choice?.let { languageName(it) ?: it } ?: "The file’s own"
+/** The off choice, in every picker (web `SUBTITLES_OFF`). */
+const val SUBTITLES_OFF = "Subtitles off"
 
-/** A saved subtitle language in words: none saved keeps the file's own, [NO_SUBTITLES] none at all. */
+/** A file that carries no subtitles at all, not the off choice. */
+const val NO_SUBTITLES = "No subtitles"
+
+/** No language chosen: the file decides. */
+const val FILE_OWN = "The file’s own"
+
+/** A saved audio language in words: `French`, or [FILE_OWN]. */
+fun audioChoiceWords(choice: String?): String = choice?.let { languageName(it) ?: it } ?: FILE_OWN
+
+/** A saved subtitle language in words: [SUBTITLES_OFF], `French`, or [FILE_OWN]. */
 fun subtitleChoiceWords(choice: String?): String = when (choice) {
-    null -> "The file’s own"
-    NO_SUBTITLES -> "No subtitles"
+    null -> FILE_OWN
+    OFF -> SUBTITLES_OFF
     else -> languageName(choice) ?: choice
+}
+
+/**
+ * The languages a play uses, as a phrase (web `languagesPhrase`): `audio in French, subtitles
+ * off`. A choice left open is left out, or with [usual] said as `your usual audio`; null when
+ * there is nothing to say.
+ */
+fun languagesPhrase(audio: String?, subtitles: String?, usual: Boolean = false): String? {
+    val parts = buildList {
+        when {
+            !audio.isNullOrBlank() -> add("audio in ${languageName(audio) ?: audio}")
+            usual -> add("your usual audio")
+        }
+        when {
+            subtitles == OFF -> add("subtitles off")
+            !subtitles.isNullOrBlank() -> add("subtitles in ${languageName(subtitles) ?: subtitles}")
+            usual -> add("your usual subtitles")
+        }
+    }
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(", ")
 }
 
 /** `fr`, `fre`, `fr-FR` → "French", always in English; an unknown code in capitals; absent → null. */

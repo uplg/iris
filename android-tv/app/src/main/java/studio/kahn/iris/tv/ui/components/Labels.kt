@@ -178,10 +178,7 @@ fun FactRow(
     Row(
         modifier
             .fillMaxWidth()
-            .drawBehind {
-                val y = size.height - 0.5.dp.toPx()
-                drawLine(IrisColor.line, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
-            }
+            .bottomHairline()
             .padding(vertical = IrisSpace.s3),
         horizontalArrangement = Arrangement.spacedBy(IrisSpace.s4),
     ) {

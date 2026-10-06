@@ -1,9 +1,8 @@
 package studio.kahn.iris.tv.ui.screens.player
 
+import studio.kahn.iris.tv.ui.screens.library.stalled
 import androidx.compose.runtime.Immutable
-import java.time.Duration
 import java.util.Locale
-import kotlin.math.roundToInt
 import studio.kahn.iris.tv.data.PlayStatus
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
@@ -55,22 +54,9 @@ data class ReadyInput(
 
 private val deadSwarmError = Regex("""no seeders|^stalled:""", RegexOption.IGNORE_CASE)
 
-/**
- * Nobody is sharing it: the probe said so, or the snapshot shows a swarm that
- * died (no peers, no throughput, not finished, more than two minutes after
- * the add). Both timestamps are the server's, so the clock here does not
- * matter. The web's rule.
- */
-fun isDeadSwarm(t: TorrentView, probeError: String?): Boolean {
-    if (probeError != null && deadSwarmError.containsMatchIn(probeError)) return true
-    val age = Duration.between(t.addedAt, t.fetchedAt)
-    return t.state != TorrentState.initializing &&
-        !t.finished &&
-        t.peers == 0 &&
-        t.downloadSpeedBps == 0L &&
-        t.progressPct.coerceIn(0.0, 100.0) < 100.0 &&
-        age > Duration.ofMinutes(2)
-}
+/** Nobody is sharing it: the probe said so, or the swarm is [stalled] (the library's rule). */
+fun isDeadSwarm(t: TorrentView, probeError: String?): Boolean =
+    (probeError != null && deadSwarmError.containsMatchIn(probeError)) || stalled(t)
 
 
 

@@ -1,14 +1,12 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.components.PosterAside
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -35,7 +33,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,7 +41,6 @@ import androidx.tv.material3.Text
 import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
-import studio.kahn.iris.tv.ui.components.Artwork
 import studio.kahn.iris.tv.ui.components.Chip
 import studio.kahn.iris.tv.ui.components.ChipTone
 import studio.kahn.iris.tv.ui.components.ErrorState
@@ -60,7 +56,6 @@ import studio.kahn.iris.tv.ui.components.PanelParagraphs
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
-import studio.kahn.iris.tv.ui.components.focusRing
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.screens.search.FollowState
 import studio.kahn.iris.tv.ui.screens.search.GrabAsk
@@ -72,10 +67,7 @@ import studio.kahn.iris.tv.ui.screens.search.ReleaseViewModel
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.irisViewModel
 import studio.kahn.iris.tv.ui.theme.IrisColor
-import studio.kahn.iris.tv.ui.theme.IrisFocus
 import studio.kahn.iris.tv.ui.theme.IrisLayout
-import studio.kahn.iris.tv.ui.theme.IrisShape
-import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 import studio.kahn.iris.tv.ui.format.formatSize
@@ -141,7 +133,7 @@ enum class ReleasePanel { Notes, Nfo, Files, Others }
 fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions, initialPanel: ReleasePanel? = null) {
     val layout = IrisLayout.current
     val sheet = remember(state) { state.sheet }
-    val narrow = layout.width < 900.dp
+    val narrow = layout.narrow
     var panel by rememberSaveable { mutableStateOf(initialPanel) }
     val primary = remember { FocusRequester() }
     // Each panel's opener: closing a panel brings the focus back there, not to the top.
@@ -180,9 +172,7 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
                 .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = footer),
             horizontalArrangement = Arrangement.spacedBy(if (narrow) IrisSpace.s8 else IrisSpace.s9),
         ) {
-            Column(Modifier.width(if (narrow) 110.dp else IrisSize.posterAside), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
-                Text("${sheet.title} · releases", style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Artwork(title = sheet.title, imageUrl = sheet.posterUrl, width = if (narrow) 110.dp else IrisSize.posterAside)
+            PosterAside(above = "${sheet.title} · releases", title = sheet.title, imageUrl = sheet.posterUrl, compact = narrow) {
                 sheet.kindLine?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
             }
             Column(
@@ -249,7 +239,7 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
 @Composable
 private fun Heading(sheet: ReleaseSheet) {
     Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
-        Text(sheet.heading, style = IrisType.title, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(sheet.heading, style = IrisType.titleFor(sheet.heading, IrisType.title), color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (sheet.name.isNotEmpty()) Text(sheet.name, style = IrisType.mono, color = IrisColor.inkMuted)
         if (sheet.chips.isNotEmpty()) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {

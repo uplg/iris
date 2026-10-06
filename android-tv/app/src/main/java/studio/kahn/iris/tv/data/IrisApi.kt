@@ -109,9 +109,6 @@ interface IrisApi {
     @PUT("api/me/playback-preferences")
     suspend fun savePlaybackPreferences(@Body body: UpdatePlaybackPrefs)
 
-    @GET("api/torrents")
-    suspend fun listTorrents(): List<TorrentView>
-
     @GET("api/torrents/{infohash}")
     suspend fun getTorrent(@Path("infohash") infohash: String): TorrentView
 

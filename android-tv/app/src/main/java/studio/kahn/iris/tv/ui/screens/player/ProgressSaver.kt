@@ -2,6 +2,9 @@ package studio.kahn.iris.tv.ui.screens.player
 
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.ProgressUpdate
 
 /** A heartbeat every 7 s of position moved (web `watch/progress.ts`). */
@@ -66,5 +69,29 @@ class ProgressSaver(
             playing = playing,
         )
         send(body) { if (seek) seekUnsent.set(true) }
+    }
+}
+
+/**
+ * Posts what it is [send] in that order, one at a time, from a single coroutine of [scope]:
+ * a slow heartbeat can't be overtaken by the save that follows it, nor land after it. [post]
+ * answers whether the server took it; on false, that item's failure callback runs. [close]
+ * once the last item is sent: what is queued still goes out.
+ */
+class SerialPoster<T>(scope: CoroutineScope, private val post: suspend (T) -> Boolean) {
+    private val queue = Channel<Pair<T, () -> Unit>>(Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            for ((item, failed) in queue) if (!post(item)) failed()
+        }
+    }
+
+    fun send(item: T, failed: () -> Unit) {
+        queue.trySend(item to failed)
+    }
+
+    fun close() {
+        queue.close()
     }
 }

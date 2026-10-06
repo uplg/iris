@@ -25,8 +25,26 @@ fun formatSize(bytes: Long): String {
 /** A transfer speed: `6.1 MB/s`. */
 fun formatSpeed(bytesPerSecond: Long): String = "${formatSize(bytesPerSecond)}/s"
 
-/** A count with its noun: `1 download`, `3 downloads`. */
-fun plural(n: Number, one: String, many: String = "${one}s"): String = "$n ${if (n.toLong() == 1L) one else many}"
+/** A count with its noun, thousands grouped (web `plural`): `1 download`, `1,204 seeders`. */
+fun plural(n: Number, one: String, many: String = "${one}s"): String {
+    val shown = when (n) {
+        is Int, is Long, is Short, is Byte -> String.format(Locale.ENGLISH, "%,d", n.toLong())
+        else -> n.toString()
+    }
+    return "$shown ${if (n.toLong() == 1L) one else many}"
+}
+
+/** `1 seeder`, `142 seeders`; null when the tracker did not say. */
+fun seedersWords(n: Number?): String? = n?.let { plural(it, "seeder") }
+
+/** `3 leechers`; null when the tracker did not say. */
+fun leechersWords(n: Number?): String? = n?.let { plural(it, "leecher") }
+
+/** A release's share ratio: `ratio 1.42`. */
+fun ratioWords(ratio: Double): String = String.format(Locale.ROOT, "ratio %.2f", ratio)
+
+/** Where a release came from: `from torr9`. */
+fun fromProvider(provider: String): String = "from $provider"
 
 /** A share 0 to 100 as people read it: `42%`. */
 fun percent(fraction0to100: Double): String = "${Math.round(fraction0to100)}%"

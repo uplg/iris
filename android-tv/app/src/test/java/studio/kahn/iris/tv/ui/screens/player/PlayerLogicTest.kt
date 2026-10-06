@@ -72,8 +72,8 @@ class PlayerWordsTest {
     @Test
     fun episodeCodesAndNames() {
         assertEquals("S2:E4", episodeCode(2, 4))
-        assertEquals("S2:E4 · Woe's Hollow", episodeLine(point(EpisodeStatus.downloaded, name = "Woe's Hollow", episode = 4)))
-        assertEquals("S2:E4", episodeLine(point(EpisodeStatus.downloaded, name = " ", episode = 4)))
+        assertEquals("Season 2 · Episode 4 · Woe's Hollow", episodeLine(point(EpisodeStatus.downloaded, name = "Woe's Hollow", episode = 4)))
+        assertEquals("Season 2 · Episode 4", episodeLine(point(EpisodeStatus.downloaded, name = " ", episode = 4)))
         assertNull(episodeLine(null))
     }
 

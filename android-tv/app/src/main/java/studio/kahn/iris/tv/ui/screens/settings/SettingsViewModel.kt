@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.settings
 
+import studio.kahn.iris.tv.ui.format.languagesPhrase
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -269,18 +270,17 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     /** [choice] null = the file's own. Sends both languages, as the endpoint wants. */
-    fun saveAudio(choice: String?) = savePlayback(Busy.AUDIO, "Audio language saved.") { it.copy(audioLanguage = choice) }
+    fun saveAudio(choice: String?) = savePlayback(Busy.AUDIO) { it.copy(audioLanguage = choice) }
 
-    fun saveSubtitles(choice: String?) = savePlayback(Busy.SUBTITLES, "Subtitle language saved.") { it.copy(subtitleLanguage = choice) }
+    fun saveSubtitles(choice: String?) = savePlayback(Busy.SUBTITLES) { it.copy(subtitleLanguage = choice) }
 
-    private fun savePlayback(key: String, said: String, change: (UpdatePlaybackPrefs) -> UpdatePlaybackPrefs) {
+    private fun savePlayback(key: String, change: (UpdatePlaybackPrefs) -> UpdatePlaybackPrefs) {
         val current = mutable.value.playback.valueOrNull ?: return
         act(key, SettingsSection.Playback, inDialog = true) { api ->
-            api.savePlaybackPreferences(
-                change(UpdatePlaybackPrefs(audioLanguage = current.audioLanguage, subtitleLanguage = current.subtitleLanguage)),
-            )
+            val body = change(UpdatePlaybackPrefs(audioLanguage = current.audioLanguage, subtitleLanguage = current.subtitleLanguage))
+            api.savePlaybackPreferences(body)
             mutable.update { it.copy(playback = Loadable.Ready(api.playbackPreferences())) }
-            said
+            "Saved: ${languagesPhrase(body.audioLanguage, body.subtitleLanguage, usual = true)}."
         }
     }
 
@@ -354,7 +354,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         waitFor = null
         if (signedIn) {
             mutable.update {
-                it.copy(waitingForDevice = false, outcome = Outcome(SettingsSection.Devices, "The other TV is paired and signed in."))
+                it.copy(waitingForDevice = false, outcome = Outcome(SettingsSection.Devices, "A new device is in the list."))
             }
             return
         }

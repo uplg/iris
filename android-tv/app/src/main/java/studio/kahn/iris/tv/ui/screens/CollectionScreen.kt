@@ -1,5 +1,8 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.components.PosterAside
+import studio.kahn.iris.tv.ui.screens.library.DeleteReleaseDialog
+import studio.kahn.iris.tv.ui.components.bottomHairline
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -10,10 +13,8 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -42,9 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -52,7 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.OFF
 import studio.kahn.iris.tv.ui.format.audioChoiceWords
 import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
 import studio.kahn.iris.tv.data.AppContainer
@@ -60,12 +59,9 @@ import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionSheet
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
-import studio.kahn.iris.tv.ui.components.Artwork
 import studio.kahn.iris.tv.ui.components.Chip
 import studio.kahn.iris.tv.ui.components.ChipTone
-import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.ErrorState
-import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.FactRow
 import studio.kahn.iris.tv.ui.components.FramedBlock
 import studio.kahn.iris.tv.ui.components.KeyHint
@@ -107,7 +103,6 @@ import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
-import studio.kahn.iris.tv.ui.format.languageName
 import studio.kahn.iris.tv.ui.format.markWatchedLabel
 import studio.kahn.iris.tv.ui.screens.library.WATCHED_KEY
 import studio.kahn.iris.tv.ui.format.plural
@@ -293,14 +288,24 @@ private fun TitlePage(
         }
     }
 
-    val compact = layout.height < 500.dp
+    val compact = layout.short
     Row(
         Modifier
             .fillMaxSize()
             .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical),
         horizontalArrangement = Arrangement.spacedBy(if (compact) IrisSpace.s7 else IrisSpace.s9),
     ) {
-        Aside(p, compact, Modifier.width(if (compact) 120.dp else 210.dp))
+        PosterAside(
+            above = "Library · ${if (p.series) "Series" else "Movie"}",
+            title = p.title,
+            imageUrl = p.posterUrl,
+            compact = compact,
+            modifier = Modifier.width(if (compact) IrisSize.posterAsideCompact else IrisSize.asideColumn),
+        ) {
+            if (!compact) {
+                Text(p.eyebrow, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
         LazyColumn(
             state = list,
             modifier = Modifier
@@ -407,11 +412,8 @@ private fun TitlePage(
         }
     }
     deleting?.let { row ->
-        ConfirmDialog(
-            eyebrow = "Delete a release of ${p.title}",
-            title = "Delete ${row.release}?",
-            body = "${row.deleteBody} Watch history is kept.",
-            confirmLabel = "Delete release",
+        DeleteReleaseDialog(
+            row = row,
             onConfirm = {
                 deleting = null
                 actions.onRelease.onDelete(row)
@@ -427,22 +429,6 @@ private fun TitlePage(
 
 private const val EPISODES_FIRST = 2
 private const val LANGUAGES_KEY = "languages"
-
-@Composable
-private fun Aside(p: CollectionPage, compact: Boolean, modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
-        Eyebrow("Library · ${if (p.series) "Series" else "Movie"}")
-        Artwork(
-            title = p.title,
-            imageUrl = p.posterUrl,
-            width = if (compact) 96.dp else IrisSize.posterAside,
-            titleStyle = IrisType.group,
-        )
-        if (!compact) {
-            Text(p.eyebrow, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -462,7 +448,7 @@ private fun Head(
         .onFocusChanged { onPlayFocused(it.hasFocus) }
     val languagesModifier = Modifier.focusRequester(languagesFocus)
     Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
-        Text(p.title, style = IrisType.title, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(p.title, style = IrisType.titleFor(p.title, IrisType.title), color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(p.facts, style = IrisType.metaLarge, color = IrisColor.inkMuted)
         if (p.chips.isNotEmpty() || p.fresh > 0) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
@@ -620,10 +606,7 @@ private fun GoneRow(g: GoneUi, busy: Set<String>, actions: CollectionActions) {
     Row(
         Modifier
             .fillMaxWidth()
-            .drawBehind {
-                val y = size.height - 0.5.dp.toPx()
-                drawLine(IrisColor.line, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
-            }
+            .bottomHairline()
             .padding(vertical = IrisSpace.s4),
         horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
         verticalAlignment = Alignment.CenterVertically,
@@ -719,15 +702,15 @@ internal fun LanguagesPanel(
             options = listOf("") + langs.audioOptions,
             selected = audio,
             onSelect = { audio = it },
-            label = { if (it.isEmpty()) "Your usual choice" else audioChoiceWords(it) },
+            label = { if (it.isEmpty()) "Your usual audio" else audioChoiceWords(it) },
             selectedFocus = first,
         )
         PanelLabel("Subtitles")
         PanelOptions(
-            options = listOf("", NO_SUBTITLES) + langs.subtitleOptions,
+            options = listOf("", OFF) + langs.subtitleOptions,
             selected = subs,
             onSelect = { subs = it },
-            label = { if (it.isEmpty()) "Your usual choice" else subtitleChoiceWords(it) },
+            label = { if (it.isEmpty()) "Your usual subtitles" else subtitleChoiceWords(it) },
         )
         Row(
             Modifier.padding(horizontal = IrisSpace.s4, vertical = IrisSpace.s4),

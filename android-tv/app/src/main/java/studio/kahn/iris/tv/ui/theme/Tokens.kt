@@ -117,12 +117,28 @@ object IrisSize {
     val posterMini = 36.dp
     /** 300 px: the poster in a page's aside. */
     val posterAside = 150.dp
+    /** The aside's poster on a short or narrow screen (a landscape phone). */
+    val posterAsideCompact = 104.dp
+    /** 420 px: a page's aside when it carries words beside the poster. */
+    val asideColumn = 210.dp
+    /** 920 px: a centered dialog or a card over the stage. */
+    val dialog = 460.dp
     /** 680 px: a side panel. */
     val sidePanel = 340.dp
     /** 200 px: a fact's label column. */
     val factLabel = 100.dp
     /** 44 px: a step's icon column. */
     val stepIcon = 22.dp
+}
+
+/** The bars over the picture (the player's, a channel's: TVPlayer). */
+object IrisStageBar {
+    /** 28 px: between a bar's lines, and under the top bar's. */
+    val gap = 14.dp
+    /** 32 px: above the bottom bar's first line. */
+    val top = 16.dp
+    /** 46 px: under the bottom bar's key hints. */
+    val bottom = 23.dp
 }
 
 /**
@@ -143,12 +159,19 @@ data class IrisLayout(val width: Dp, val height: Dp) {
     /** Width between the safe margins. */
     val contentWidth: Dp get() = width - safeHorizontal * 2
 
+    /** A landscape phone's width: an aside and its content stack tighter. */
+    val narrow: Boolean get() = width < NARROW_BELOW
+    /** A landscape phone's height: a page drops what does not fit in a short screen. */
+    val short: Boolean get() = height < SHORT_BELOW
+
     /** How many cells at least [minCell] wide fit [available] with [gap] between them. */
     fun columns(minCell: Dp, gap: Dp, available: Dp = contentWidth): Int =
         columnsFor(available.value, minCell.value, gap.value)
 
     companion object {
         const val SAFE_FRACTION = 0.05f
+        val NARROW_BELOW = 900.dp
+        val SHORT_BELOW = 500.dp
         /** A 1080p or 720p TV: both are 960x540 dp. */
         val Tv = IrisLayout(960.dp, 540.dp)
 

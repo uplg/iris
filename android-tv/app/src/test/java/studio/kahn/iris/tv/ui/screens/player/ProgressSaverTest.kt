@@ -1,11 +1,16 @@
 package studio.kahn.iris.tv.ui.screens.player
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import studio.kahn.iris.tv.data.ProgressUpdate
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ProgressSaverTest {
     private val sent = mutableListOf<ProgressUpdate>()
     private var fail = false
@@ -92,5 +97,33 @@ class ProgressSaverTest {
         assertEquals(3_600.0, body.durationSeconds!!, 0.0)
         saver.save(3_500_000L, null, playing = true)
         assertFalse(sent.last().completed == true)
+    }
+
+    @Test
+    fun aSlowHeartbeatCannotLandAfterTheLastSave() = runTest {
+        val landed = mutableListOf<Double>()
+        val posts = SerialPoster<ProgressUpdate>(this) { body ->
+            // The heartbeat's post is the slow one.
+            delay(if (body.playing == true) 5_000 else 10)
+            landed += body.positionSeconds
+            true
+        }
+        val saver = ProgressSaver(0L, posts::send)
+        saver.tick(7_000L, dur, playing = true)
+        saver.save(8_000L, dur, playing = false)
+        posts.close()
+        advanceUntilIdle()
+        assertEquals(listOf(7.0, 8.0), landed)
+    }
+
+    @Test
+    fun aRefusedPostCallsItsFailure() = runTest {
+        val failures = mutableListOf<String>()
+        val posts = SerialPoster<String>(this) { it != "refused" }
+        posts.send("taken") { failures += "taken" }
+        posts.send("refused") { failures += "refused" }
+        posts.close()
+        advanceUntilIdle()
+        assertEquals(listOf("refused"), failures)
     }
 }

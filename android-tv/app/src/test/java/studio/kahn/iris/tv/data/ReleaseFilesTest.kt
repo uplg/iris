@@ -14,6 +14,10 @@ class ReleaseFilesTest {
         assertEquals(SceneMark(1, 2), sceneMark("dir/Show.S01.E02.mkv"))
         assertEquals(SceneMark(2, 0), sceneMark("Show.S02.MULTi"))
         assertNull(sceneMark("Movie.2006.1080p"))
+        assertEquals("underscores are boundaries", SceneMark(1, 2), sceneMark("Show_S01E02_1080p.mkv"))
+        assertEquals("a long anime run", SceneMark(1, 1156), sceneMark("One.Piece.S01E1156.mkv"))
+        assertNull("no three-digit season", sceneMark("Show.S123E01.mkv"))
+        assertNull("not inside a word", sceneMark("Seasons02.mkv"))
     }
 
     @Test

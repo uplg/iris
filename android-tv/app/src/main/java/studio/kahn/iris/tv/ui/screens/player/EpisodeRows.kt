@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens.player
 
 import androidx.compose.runtime.Immutable
+import studio.kahn.iris.tv.ui.format.isResumable
 import studio.kahn.iris.tv.data.AvailableEpisodeEntry
 import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.FileEntry
@@ -27,8 +28,10 @@ data class SideRow(
     val grab: GrabTarget? = null,
     val season: Long? = null,
     val episode: Long? = null,
+    /** Where it stopped, when it was started. */
+    val positionSeconds: Double? = null,
 ) {
-    val started: Boolean get() = !watched && watchedPct != null && watchedPct > 0
+    val started: Boolean get() = isResumable(positionSeconds, watched)
 }
 
 @Immutable
@@ -86,6 +89,7 @@ fun sideRows(i: SideInput): List<SideRow> {
                 mono = true,
                 watched = prog?.completed == true,
                 watchedPct = watchedPctOf(prog),
+                positionSeconds = prog?.positionSeconds,
                 active = f.index == i.fileIdx,
             )
         }
@@ -112,6 +116,7 @@ fun sideRows(i: SideInput): List<SideRow> {
             mono = false,
             watched = e.watched || prog?.completed == true,
             watchedPct = watchedPctOf(prog),
+            positionSeconds = prog?.positionSeconds,
             active = e.infohash == i.infohash && e.fileIdx.toInt() == i.fileIdx,
             season = e.season,
             episode = e.episode,

@@ -1,5 +1,8 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.format.ratioWords
+import studio.kahn.iris.tv.data.asReleaseFile
+import studio.kahn.iris.tv.data.playableFiles
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -374,7 +377,7 @@ fun downloadsUi(
         "${formatSpeed(up)} up",
         "${t.items.size} active",
         "${formatSize(t.uploaded)} sent in all",
-        ratio?.let { "ratio %.2f".format(java.util.Locale.ROOT, it) },
+        ratio?.let(::ratioWords),
     ).joinToString(" · ")
     val count = if (shown.size == t.items.size) plural(t.items.size, "release") else "Showing ${shown.size} of ${t.items.size} releases"
     return DownloadsUi(groups, t.items.size, count, totals)
@@ -388,7 +391,8 @@ fun releaseRow(
     now: Instant,
 ): ReleaseRow {
     val videos = t.files.filter { isVideoPath(it.path) }
-    val single = videos.singleOrNull()
+    // Played straight from its row when one file is worth playing ([autoFile]'s pool).
+    val single = playableFiles(t.files.map { it.asReleaseFile() }).singleOrNull()
     val pct = t.progressPct.coerceIn(0.0, 100.0)
     val bar = !t.finished && pct < 100
     return ReleaseRow(

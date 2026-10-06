@@ -15,8 +15,9 @@ import studio.kahn.iris.tv.R
  * Fraunces (web `--font-display`), one static cut per optical size: Compose can't drive the
  * variable `opsz` axis below API 26, and the web lets the browser pick it from the size (a
  * board px is 1/2 sp). The high-contrast 72 for the hero, the sturdier 48 for page and
- * title names. Below 20 sp a serif reads poorly from the couch, worse in a sentence with
- * figures (a dialog title), so those headings are set in Cal Sans 2 instead: see [heading].
+ * title names. Fraunces sets short titles at 20 sp and up, nothing else: below 20 sp a serif
+ * reads poorly from the couch, and a sentence or figures (a year, a season, an infohash, a
+ * dialog title) read better in Cal Sans 2 at any size: see [heading] and [IrisType.titleFor].
  */
 private val FrauncesDisplay = FontFamily(Font(R.font.fraunces_opsz72_medium, FontWeight.Medium))
 private val FrauncesTitle = FontFamily(Font(R.font.fraunces_opsz48_medium, FontWeight.Medium))
@@ -85,8 +86,12 @@ object IrisType {
     val page = display(24.sp, 28.sp)
     /** 40 px: the title in the player's top bar. */
     val stageTitle = display(20.sp, 22.sp)
-    /** A title drawn in place of missing artwork (the fallback tile): Fraunces, like a poster's lettering. */
-    val artTitle = display(18.sp, 21.sp)
+    /** 36 px: a title drawn in place of missing artwork (a page's poster). */
+    val artTitle = heading(18.sp, 21.sp)
+    /** 30 px: the same on a still in a row (continue watching). */
+    val artTitleStill = heading(15.sp, 17.sp)
+    /** 24 px: the same on a poster in a row or a grid. */
+    val artTitleSmall = heading(12.sp, 14.sp)
     /** 36 px: a side panel's or a section's large heading. */
     val panel = heading(18.sp, 22.sp)
     /** 32 px: a row or section heading. */
@@ -106,6 +111,12 @@ object IrisType {
     val control = text(12.sp, 12.sp, FontWeight.Medium)
     /** 22 px medium: a pill, a small action. */
     val controlSmall = text(11.sp, 11.sp, FontWeight.Medium)
+    /** 28/34 px medium: a recent search's words. */
+    val controlLarge = text(14.sp, 17.sp, FontWeight.Medium)
+    /** 32/40 px medium: what is typed in a field. */
+    val input = text(16.sp, 20.sp, FontWeight.Medium)
+    /** 28 px medium: a field's label while it is empty. */
+    val inputHint = text(14.sp, 20.sp, FontWeight.Medium)
     /** 22/28 px medium, tabular: the muted meta line everywhere (`.tm`). */
     val meta = text(11.sp, 14.sp, FontWeight.Medium, tabular = true)
     /** 26/34 px medium, tabular: the larger meta line under a hero title. */
@@ -126,27 +137,46 @@ object IrisType {
     val mono = TextStyle(fontFamily = FontMono, fontSize = 10.sp, lineHeight = 13.sp)
     /** 34 px Borel: the "Iris" wordmark. */
     val brand = TextStyle(fontFamily = Borel, fontSize = 17.sp, lineHeight = 17.sp)
+    /** 52 px Borel: the wordmark on a page of its own (pairing, setup). */
+    val brandLarge = brand.copy(fontSize = 26.sp, lineHeight = 26.sp)
+
+    /**
+     * [display] (a Fraunces title style) for [text] when it is a short title, without a figure;
+     * else the same size in Cal Sans: a year, a season, a raw name, a sentence.
+     */
+    fun titleFor(text: String, display: TextStyle): TextStyle =
+        if (text.length <= SHORT_TITLE && text.none(Char::isDigit)) {
+            display
+        } else {
+            display.copy(fontFamily = CalSans, fontWeight = FontWeight.SemiBold, letterSpacing = TextUnit.Unspecified)
+        }
+
+    /** Longer reads as a sentence, not a title. */
+    private const val SHORT_TITLE = 48
 }
 
 /**
  * tv-material's [androidx.tv.material3.MaterialTheme.typography], mapped onto
  * [IrisType] so a legacy `MaterialTheme.typography.x` already reads in the
- * new faces. New code uses [IrisType] directly.
+ * new faces. New code uses [IrisType] directly. Lazy: [IrisType] is built from this file's
+ * fonts, so reading it while this file initializes would see it half built.
  */
-val IrisTvTypography = TvTypography(
-    displayLarge = IrisType.hero,
-    displayMedium = IrisType.title,
-    displaySmall = IrisType.page,
-    headlineLarge = IrisType.stageTitle,
-    headlineMedium = IrisType.panel,
-    headlineSmall = IrisType.section,
-    titleLarge = IrisType.group,
-    titleMedium = IrisType.bodyStrong.copy(fontSize = 13.sp, lineHeight = 17.sp),
-    titleSmall = IrisType.control,
-    bodyLarge = IrisType.metaLarge.copy(fontWeight = FontWeight.Normal, fontFeatureSettings = null),
-    bodyMedium = IrisType.body,
-    bodySmall = IrisType.meta,
-    labelLarge = IrisType.controlSmall,
-    labelMedium = IrisType.eyebrow,
-    labelSmall = IrisType.key,
-)
+val IrisTvTypography: TvTypography by lazy {
+    TvTypography(
+        displayLarge = IrisType.hero,
+        displayMedium = IrisType.title,
+        displaySmall = IrisType.page,
+        headlineLarge = IrisType.stageTitle,
+        headlineMedium = IrisType.panel,
+        headlineSmall = IrisType.section,
+        titleLarge = IrisType.group,
+        titleMedium = IrisType.bodyStrong.copy(fontSize = 13.sp, lineHeight = 17.sp),
+        titleSmall = IrisType.control,
+        bodyLarge = IrisType.metaLarge.copy(fontWeight = FontWeight.Normal, fontFeatureSettings = null),
+        bodyMedium = IrisType.body,
+        bodySmall = IrisType.meta,
+        labelLarge = IrisType.controlSmall,
+        labelMedium = IrisType.eyebrow,
+        labelSmall = IrisType.key,
+    )
+}

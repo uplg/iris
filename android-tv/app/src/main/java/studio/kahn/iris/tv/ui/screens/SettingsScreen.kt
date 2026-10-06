@@ -49,14 +49,13 @@ import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.KeyHint
 import studio.kahn.iris.tv.ui.components.KeyHints
 import studio.kahn.iris.tv.ui.components.Keys
-import studio.kahn.iris.tv.ui.components.PanelOption
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.TextInput
 import studio.kahn.iris.tv.ui.screens.settings.Busy
 import studio.kahn.iris.tv.ui.screens.settings.DialogField
-import studio.kahn.iris.tv.ui.screens.settings.FormDialog
+import studio.kahn.iris.tv.ui.components.FormDialog
 import studio.kahn.iris.tv.ui.screens.settings.PASSWORD_MIN
 import studio.kahn.iris.tv.ui.screens.settings.RailItem
 import studio.kahn.iris.tv.ui.screens.settings.SettingsActions
@@ -70,7 +69,7 @@ import studio.kahn.iris.tv.data.UpdateState
 import studio.kahn.iris.tv.ui.update.actions
 import studio.kahn.iris.tv.ui.format.audioChoiceWords
 import studio.kahn.iris.tv.ui.screens.settings.languageChoice
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.OFF
 import studio.kahn.iris.tv.ui.screens.settings.languageOptions
 import studio.kahn.iris.tv.ui.screens.settings.name
 import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
@@ -432,7 +431,7 @@ private fun LanguagePanel(
 ) {
     val options: List<String?> = buildList {
         add(null)
-        if (withOff) add(NO_SUBTITLES)
+        if (withOff) add(OFF)
         addAll(languageOptions(current))
     }
     SidePanel(title = title, onDismiss = onDismiss, footer = "Saved for every device at once.") {

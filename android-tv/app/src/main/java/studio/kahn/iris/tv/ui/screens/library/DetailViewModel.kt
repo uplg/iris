@@ -56,6 +56,7 @@ data class DetailUiState(
 private fun FileProgressEntry.toWatch() = WatchState(
     pct = if (completed) 100.0 else durationSeconds?.takeIf { it > 0 }?.let { minOf(100.0, positionSeconds / it * 100) },
     done = completed,
+    positionSeconds = positionSeconds,
 )
 
 /**
@@ -126,7 +127,8 @@ class DetailViewModel(private val container: AppContainer, private val infohash:
 
 private fun page(t: TorrentView, progress: List<FileProgressEntry>, m: MediaMetadata?): ReleasePage {
     val byIdx = progress.associateBy { it.fileIdx.toInt() }
-    val title = t.name?.let(::prettySceneName) ?: t.infohash
+    // Never the bare infohash as a page title: the release has no name yet (a magnet resolving).
+    val title = t.name?.let(::prettySceneName) ?: UNNAMED_RELEASE
     return ReleasePage(
         title = title,
         kind = if (t.kind == studio.kahn.iris.tv.data.MediaKind.tv) "Series" else "Movie",
@@ -138,3 +140,5 @@ private fun page(t: TorrentView, progress: List<FileProgressEntry>, m: MediaMeta
         },
     )
 }
+
+const val UNNAMED_RELEASE = "Unnamed release"

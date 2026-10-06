@@ -42,8 +42,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.ForcedTextTracks
 import studio.kahn.iris.tv.data.IrisCaps
 import studio.kahn.iris.tv.data.PlayStatus
+import studio.kahn.iris.tv.data.ProgressUpdate
 import studio.kahn.iris.tv.data.SeekHint
 import studio.kahn.iris.tv.data.SubtitlePick
 import studio.kahn.iris.tv.data.bestEffort
@@ -54,7 +56,8 @@ import studio.kahn.iris.tv.data.isRemuxableError
 import studio.kahn.iris.tv.data.serverBase
 import studio.kahn.iris.tv.data.webVttSubtitle
 import studio.kahn.iris.tv.ui.components.buildMediaSession
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.OFF
+import studio.kahn.iris.tv.ui.state.Owned
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
 
 /**
@@ -64,6 +67,9 @@ import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
 @Stable
 class VodPlayback {
     var player: ExoPlayer? by mutableStateOf(null)
+        internal set
+    /** The text tracks [player] unflagged as forced (the track menu still says "Forced"). */
+    var forcedText: ForcedTextTracks? by mutableStateOf(null)
         internal set
     var route by mutableStateOf(PlayRoute.Direct)
         internal set
@@ -243,22 +249,32 @@ fun VodEngine(
 
     // `preferPlatformAv1` only matters on the direct path: the server streams
     // carry H.264/HEVC, hardware-decoded under either renderer order.
+    val forcedText = remember(playUrl, av1HardwareFits) { ForcedTextTracks() }
     val player = remember(playUrl, av1HardwareFits) {
-        buildPlayer(
-            context,
-            container.mediaOkHttpClient,
-            preferPlatformAv1 = av1HardwareFits,
+        Owned(
+            buildPlayer(
+                context,
+                container.mediaOkHttpClient,
+                preferPlatformAv1 = av1HardwareFits,
+                forcedText = forcedText,
+            ),
+            ExoPlayer::release,
         )
-    }
+    }.value
 
     // The one way progress reaches the server; it outlives a rebuilt player (the remux fallback).
+    // Its saves go out one after the other, so a heartbeat can't land after the last save; the
+    // queue closes once that last save is in it (it is forgotten after the effects below).
+    val posts = remember(infohash, fileIdx) {
+        Owned(
+            SerialPoster<ProgressUpdate>(container.applicationScope) { body ->
+                bestEffort { container.apiFor(serverUrl).saveProgress(infohash = infohash, idx = fileIdx, body = body) } != null
+            },
+            SerialPoster<ProgressUpdate>::close,
+        )
+    }.value
     val saver = remember(infohash, fileIdx) {
-        ProgressSaver(lastPositionMs.get()) { body, failed ->
-            container.applicationScope.launch {
-                bestEffort { container.apiFor(serverUrl).saveProgress(infohash = infohash, idx = fileIdx, body = body) }
-                    ?: failed()
-            }
-        }.apply {
+        ProgressSaver(lastPositionMs.get(), posts::send).apply {
             audioIdx = setup.savedAudioIdx
             subtitleIdx = setup.savedSubIdx
         }
@@ -283,7 +299,7 @@ fun VodEngine(
     // No per-file pick: the track the preferred language maps to (non-forced
     // before forced, plain before SDH: `SubtitlePick`).
     val preferredSubOrdinal: Int? = remember(player, routeTracks, prefSubLang) {
-        if (pinSubIdx != null || prefSubLang == NO_SUBTITLES) null
+        if (pinSubIdx != null || prefSubLang == OFF) null
         else SubtitlePick.preferredOrdinal(routeTracks.subtitles, prefSubLang)
     }
 
@@ -305,7 +321,7 @@ fun VodEngine(
                 params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             }
             pinSubIdx == -1 -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-            prefSubLang == NO_SUBTITLES -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            prefSubLang == OFF -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             // Enable only when the preferred language is present: never force a
             // different language onto the viewer.
             preferredSubOrdinal != null -> {
@@ -572,7 +588,6 @@ fun VodEngine(
             }
             saver.save(pos, durationOf(), playing = false)
             session.release()
-            player.release()
         }
     }
 
@@ -605,6 +620,7 @@ fun VodEngine(
 
     SideEffect {
         out.player = player
+        out.forcedText = forcedText
         out.route = route
         out.serverPrep = gateOnServerBuild
         out.serverReady = portionReady

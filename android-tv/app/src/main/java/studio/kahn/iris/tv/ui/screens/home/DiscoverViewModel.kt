@@ -8,7 +8,9 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -17,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.state.BusyActions
+import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.CatalogCard
 import studio.kahn.iris.tv.data.DismissRequest
@@ -24,11 +27,9 @@ import studio.kahn.iris.tv.data.ForYou
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MoodBoard
 import studio.kahn.iris.tv.data.MoodResults
-import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.map
-import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.components.Notice
 
@@ -104,7 +105,8 @@ class DiscoverViewModel(
         ),
     )
     val state: StateFlow<DiscoverUiState> = data.map(::discoverUi)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, discoverUi(data.value))
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), discoverUi(data.value))
     private val actions = BusyActions(viewModelScope, oneAtATime = true)
 
     init {

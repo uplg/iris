@@ -1,19 +1,25 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.format.AgoStyle
+import studio.kahn.iris.tv.ui.format.ago
+import studio.kahn.iris.tv.ui.format.languageWord
+import studio.kahn.iris.tv.ui.format.etaWords
+import studio.kahn.iris.tv.ui.format.fromProvider
+import studio.kahn.iris.tv.ui.format.seedersWords
+import studio.kahn.iris.tv.data.playFileOf
 import androidx.compose.runtime.Immutable
 import kotlin.math.max
+import studio.kahn.iris.tv.ui.format.isResumable
 import studio.kahn.iris.tv.data.AvailableEpisodeEntry
 import studio.kahn.iris.tv.data.CollectionDetail
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.EpisodeInfo
-import studio.kahn.iris.tv.data.FileEntry
 import studio.kahn.iris.tv.data.GoneEpisodeEntry
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.SeasonPackEntry
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
-import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.ui.format.clock
 import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.episodeCode
@@ -21,7 +27,6 @@ import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.languageLabel
 import studio.kahn.iris.tv.ui.format.percent
 import studio.kahn.iris.tv.ui.format.plural
-import studio.kahn.iris.tv.ui.format.recentTime
 import studio.kahn.iris.tv.ui.format.timeLeft
 import studio.kahn.iris.tv.ui.components.StatusTone
 
@@ -210,23 +215,14 @@ fun episodeTitle(ep: Episode): String {
     return if (name != null) "${episodeName(ep)} · $name" else episodeName(ep)
 }
 
-private val WORD = mapOf(
-    "french" to "French",
-    "english" to "English",
-    "multi" to "several languages",
-    "vostfr" to "original with French subtitles",
-)
 // A release's language tag in the library's words, mapped to the search's tag for its label.
 private val SEARCH_TAG = mapOf("french" to "fr", "english" to "en", "multi" to "multi", "vostfr" to "vost", "vo" to "vo")
 private val ISO = mapOf("french" to "fr", "english" to "en")
 
-/** A release language inside a sentence: `Play in French`. */
-fun languageWord(lang: String?): String? = lang?.let { WORD[it] }
-
 /** `English audio (original)`, `French audio (VF)`. [original] is TMDB's ISO 639-1. */
 fun audioChip(lang: String, original: String? = null): String? {
     val label = languageLabel(SEARCH_TAG[lang]) ?: return null
-    if (original != null && ISO[lang] == original) return "${WORD[lang]} audio (original)"
+    if (original != null && ISO[lang] == original) return "${languageWord(lang)} audio (original)"
     return label
 }
 
@@ -265,9 +261,6 @@ fun qualityWords(name: String): String? {
     return listOfNotNull(res, codec, hdr).takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
 
-/** The file a release plays: its biggest video. */
-fun mainVideo(t: TorrentView): FileEntry? = t.files.filter { isVideoPath(it.path) }.maxByOrNull { it.sizeBytes }
-
 @Immutable
 data class PlayTarget(val infohash: String, val fileIdx: Int, val season: Long? = null, val episode: Long? = null, val absolute: Long? = null)
 
@@ -276,8 +269,8 @@ fun firstPlayable(c: CollectionDetail): PlayTarget? {
     val owned = c.episodes.filter { it.episode > 0 }.minWithOrNull(compareBy({ it.season }, { it.episode }))
     if (owned != null) return PlayTarget(owned.infohash, owned.fileIdx.toInt(), owned.season, owned.episode, owned.absoluteEpisode)
     for (t in c.torrents) {
-        val f = t.files.firstOrNull { isVideoPath(it.path) } ?: continue
-        return PlayTarget(t.infohash, f.index)
+        val f = playFileOf(t) ?: continue
+        return PlayTarget(t.infohash, f)
     }
     return null
 }
@@ -294,7 +287,7 @@ fun resumeOf(c: CollectionDetail, items: List<ContinueWatchingItem>?): ContinueW
 fun playLabel(c: CollectionDetail, resume: ContinueWatchingItem?): String {
     if (resume != null) {
         val code = episodeCode(resume.season, resume.episode)
-        if (resume.nextUp || resume.positionSeconds <= 0) return if (code != null) "Play $code" else "Play"
+        if (resume.nextUp || !isResumable(resume.positionSeconds)) return if (code != null) "Play $code" else "Play"
         val at = clock(resume.positionSeconds)
         return if (code != null) "Resume $code at $at" else "Resume at $at"
     }
@@ -313,7 +306,7 @@ fun playLabel(c: CollectionDetail, resume: ContinueWatchingItem?): String {
 fun straightToPlayer(c: CollectionDetail): PlayTarget? {
     if (c.kind != MediaKind.movie || c.torrents.size != 1) return null
     val t = c.torrents[0]
-    return mainVideo(t)?.let { PlayTarget(t.infohash, it.index) }
+    return playFileOf(t)?.let { PlayTarget(t.infohash, it) }
 }
 
 /** The facts under the title: `2 seasons · 18 episodes · TMDB 8.4 · 3 releases on disk`. */
@@ -342,13 +335,12 @@ fun heroChips(c: CollectionDetail, originalLanguage: String?): List<String> {
 /** `Downloading · 42% · done in about 6 min`, or why it is not moving. */
 fun eta(t: TorrentView): String {
     if (t.state == TorrentState.paused) return "paused"
-    if (t.state == TorrentState.error) return t.error?.let { "stopped: $it" } ?: "stopped by an error"
+    if (t.state == TorrentState.error) return t.error?.let { "stopped with an error: $it" } ?: "stopped with an error"
     val left = max(0L, t.totalSizeBytes - t.progressBytes)
     if (t.downloadSpeedBps <= 0) return if (t.peers > 0) "starting" else "waiting for peers"
-    return "done in about ${duration(left.toDouble() / t.downloadSpeedBps)}"
+    return etaWords(left.toDouble() / t.downloadSpeedBps)
 }
 
-fun downloading(t: TorrentView?): Boolean = t != null && !t.finished
 
 /** What the row's first downloaded release does when pressed. */
 enum class Verb(val words: String) {
@@ -375,7 +367,7 @@ fun rowState(
         val t = torrent(first.infohash)
         val length = first.durationSeconds?.takeIf { it > 0 } ?: runtime
         val at = first.positionSeconds ?: 0.0
-        if (t != null && downloading(t)) {
+        if (t != null && isFetching(t)) {
             return RowState(
                 if (t.state == TorrentState.error) StatusTone.Warn else StatusTone.Busy,
                 "Downloading · ${percent(t.progressPct)} · ${eta(t)}",
@@ -385,7 +377,7 @@ fun rowState(
         if (first.watched) {
             return RowState(StatusTone.Ok, if (length != null) "Watched · ${duration(length)}" else "Watched", verb = Verb.WatchAgain)
         }
-        if (at > 0) {
+        if (isResumable(at)) {
             val left = length?.let { " · ${timeLeft(it - at)}" }.orEmpty()
             return RowState(StatusTone.Info, "In progress$left", length?.let { (at / it).toFloat() }, Verb.Resume)
         }
@@ -410,7 +402,7 @@ fun offersByLanguage(ep: Episode): List<Variant.Available> =
 fun offerFacts(o: Variant.Available): String = listOfNotNull(
     languageWord(o.language) ?: "Unknown language",
     o.quality,
-    o.seeders?.let { "$it seeders" },
+    seedersWords(o.seeders),
     o.sizeBytes?.let(::formatSize),
 ).joinToString(" · ")
 
@@ -444,7 +436,7 @@ fun episodeActions(ep: Episode, state: RowState, torrent: (String) -> TorrentVie
     disk.forEachIndexed { i, v ->
         val verb = when {
             i == 0 && state.verb != null -> state.verb
-            downloading(torrent(v.infohash)) -> Verb.PlayWhileDownloading
+            isFetching(torrent(v.infohash)) -> Verb.PlayWhileDownloading
             v.watched -> Verb.WatchAgain
             else -> Verb.Play
         }
@@ -475,9 +467,9 @@ fun goneFacts(g: Variant.Gone): String = listOfNotNull(
 fun packFacts(p: SeasonPackEntry): String = listOfNotNull(
     p.language?.let { audioChip(it) },
     p.quality,
-    p.seeders?.let { "$it seeders" },
+    seedersWords(p.seeders),
     p.sizeBytes?.let(::formatSize),
-    "via ${p.indexerProvider}",
+    fromProvider(p.indexerProvider),
 ).joinToString(" · ")
 
 /** The gone releases the episode list cannot show in place (a movie, a pack never split). */
@@ -511,7 +503,7 @@ fun openingIndex(items: List<Episode>, lead: Int = 1): Int {
     return if (at <= lead) 0 else at - lead
 }
 
-/** The watch line of a gone release: `Watched 2d ago`, `Stopped at 32:10 (42%) 3d ago`. */
+/** The watch line of a gone release: `Watched on Monday`, `Stopped at 32:10 (42%) yesterday at 21:04`. */
 fun goneWatchLine(
     watched: Boolean?,
     position: Double?,
@@ -519,9 +511,9 @@ fun goneWatchLine(
     lastWatched: java.time.OffsetDateTime?,
     now: java.time.Instant = java.time.Instant.now(),
 ): String? {
-    if (watched == true) return lastWatched?.let { "Watched ${recentTime(it, now)}" } ?: "Watched"
+    if (watched == true) return lastWatched?.let { "Watched ${ago(it, AgoStyle.Sentence, now)}" } ?: "Watched"
     val pos = position ?: 0.0
-    if (pos <= 0) return null
+    if (!isResumable(pos)) return null
     val share = duration?.takeIf { it > 0 }?.let { percent(minOf(100.0, pos / it * 100)) }
-    return listOfNotNull("Stopped at", clock(pos), share?.let { "($it)" }, lastWatched?.let { recentTime(it, now) }).joinToString(" ")
+    return listOfNotNull("Stopped at", clock(pos), share?.let { "($it)" }, lastWatched?.let { ago(it, AgoStyle.Sentence, now) }).joinToString(" ")
 }

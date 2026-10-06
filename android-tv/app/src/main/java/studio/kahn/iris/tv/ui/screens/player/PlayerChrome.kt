@@ -2,7 +2,9 @@
 
 package studio.kahn.iris.tv.ui.screens.player
 
-import android.text.format.DateFormat
+import studio.kahn.iris.tv.ui.components.StageErrorCard
+import studio.kahn.iris.tv.ui.format.clockTime
+import java.time.Instant
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -32,7 +34,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -43,7 +44,6 @@ import androidx.media3.common.util.Util
 import androidx.media3.ui.compose.state.rememberPlayPauseButtonState
 import androidx.media3.ui.compose.state.rememberProgressStateWithTickInterval
 import androidx.tv.material3.Text
-import java.util.Date
 import kotlinx.coroutines.delay
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.PlayerKeyRouter
@@ -125,7 +125,8 @@ fun PlayerChrome(
     val offersNext = NextEpisodeRule.offersNext(next, header.isMovie, playback.nearEnd, playback.ended)
     val tracks = playback.tracks
     val route = playback.route
-    val menu = remember(tracks, probe, route) { trackMenu(tracks, probe, route) }
+    val forced = playback.forcedText
+    val menu = remember(tracks, probe, route, forced) { trackMenu(tracks, probe, route, forced) }
     var prepareAsked by remember { mutableStateOf(false) }
     var prepareOpen by remember { mutableStateOf(false) }
     LaunchedEffect(playback.nearEnd, playback.ended, episodeContext) {
@@ -225,12 +226,15 @@ fun PlayerChrome(
             PlayerControls(
                 title = PlayerTitle(header.title, header.episode, factsWithRoute(facts, playback.route)),
                 clock = clock,
-                scrub = ScrubPosition(
-                    positionMs = progress.currentPositionMs,
-                    bufferedMs = progress.bufferedPositionMs,
-                    durationMs = durationOf(),
-                    previewMs = chrome.previewMs,
-                ),
+                // Read by the scrub bar alone: the 1 s tick recomposes nothing else.
+                scrub = {
+                    ScrubPosition(
+                        positionMs = progress.currentPositionMs,
+                        bufferedMs = progress.bufferedPositionMs,
+                        durationMs = durationOf(),
+                        previewMs = chrome.previewMs,
+                    )
+                },
                 buttons = PlayerButtons(
                     playing = !playPause.showPlay,
                     showTracks = !menu.isEmpty,
@@ -286,7 +290,7 @@ fun PlayerChrome(
 
         val error = playback.error
         if (error != null) {
-            PlayerErrorNotice(error, onRetry = playback::retry, onBack = onBack)
+            StageErrorCard("The player stopped", error, onRetry = playback::retry, backLabel = "Back", onBack = onBack)
         }
         if (prepareOpen && next != null) {
             ConfirmDialog(
@@ -320,14 +324,12 @@ private fun factsWithRoute(facts: String, route: PlayRoute): String {
     return listOfNotNull(facts.ifBlank { null }, how).joinToString(" · ")
 }
 
-/** The wall clock for the top bar, in the device's 12/24 h setting, refreshed each minute while shown. */
+/** The wall clock for the top bar ([clockTime]), refreshed each minute while shown. */
 @Composable
-private fun produceClock() = LocalContext.current.let { context ->
-    produceState(initialValue = DateFormat.getTimeFormat(context).format(Date())) {
-        while (true) {
-            value = DateFormat.getTimeFormat(context).format(Date())
-            delay(60_000L - System.currentTimeMillis() % 60_000L)
-        }
+private fun produceClock() = produceState(initialValue = clockTime(Instant.now())) {
+    while (true) {
+        value = clockTime(Instant.now())
+        delay(60_000L - System.currentTimeMillis() % 60_000L)
     }
 }
 

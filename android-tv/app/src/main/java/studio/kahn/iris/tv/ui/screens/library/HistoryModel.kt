@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.format.AgoStyle
+import studio.kahn.iris.tv.ui.format.ago
 import androidx.compose.runtime.Immutable
 import java.time.Instant
 import java.time.ZoneId
@@ -8,7 +10,6 @@ import kotlin.math.min
 import studio.kahn.iris.tv.data.HistoryItem
 import studio.kahn.iris.tv.ui.format.clock
 import studio.kahn.iris.tv.ui.format.episodeCode
-import studio.kahn.iris.tv.ui.format.onDay
 import studio.kahn.iris.tv.ui.format.percent
 
 // A watch history grouped by what was watched (web `lib/history/groups.ts` and `words.ts`):
@@ -66,9 +67,9 @@ fun watchedShare(position: Double, total: Double?, completed: Boolean): Float = 
     else -> 0f
 }
 
-/** What exactly was watched: `Episode 1156`, `S2:E4`, `Season 2`, else the file's name. */
+/** What exactly was watched: `E1156`, `S2:E4`, `Season 2`, else the file's name. */
 fun whatWatched(it: HistoryItem): String? = when {
-    it.absoluteEpisode != null -> "Episode ${it.absoluteEpisode}"
+    it.absoluteEpisode != null -> episodeCode(null, it.absoluteEpisode)
     it.season != null -> episodeCode(it.season, it.episode)
     else -> fileName(it.filePath)
 }
@@ -78,4 +79,4 @@ fun historyLabel(group: HistoryGroup, it: HistoryItem): String =
     if (group.solo) group.title else whatWatched(it) ?: it.torrentName
 
 fun historyFacts(it: HistoryItem, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String =
-    "${progressWords(it.positionSeconds, it.durationSeconds, it.completed)} · Last watched ${onDay(it.lastWatchedAt, now.atZone(zone))}"
+    "${progressWords(it.positionSeconds, it.durationSeconds, it.completed)} · Last watched ${ago(it.lastWatchedAt, AgoStyle.Sentence, now, zone)}"

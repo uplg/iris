@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.theme.IrisSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,8 +32,6 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.data.AppContainer
@@ -108,12 +107,12 @@ fun SetupContent(
         ) {
             Column(
                 Modifier
-                    .widthIn(max = 460.dp)
+                    .widthIn(max = IrisSize.dialog)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
             ) {
-                IrisWordmark(fontSize = 26.sp)
+                IrisWordmark(fontSize = IrisType.brandLarge.fontSize)
                 Text("Sign in with email and password", style = IrisType.panel, color = IrisColor.ink)
                 Text(
                     "The password is typed on the TV. Pairing with a code shown here avoids it.",

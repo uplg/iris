@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.components
 
+import studio.kahn.iris.tv.ui.format.languageChipWords
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -151,20 +152,9 @@ fun Chip(
     }
 }
 
-/** A release's language tag (`french`, `english`, `multi`…) said in words. */
-object LanguageWords {
-    fun of(language: String?): String? = when (language?.lowercase()) {
-        null, "", "unknown" -> null
-        "french" -> "French"
-        "english" -> "English"
-        "multi" -> "Multi-language"
-        else -> language.uppercase()
-    }
-}
-
 /** [Chip] for a release language; nothing when the tag is unknown. */
 @Composable
 fun LanguageChip(language: String?, modifier: Modifier = Modifier, size: ChipSize = ChipSize.Small) {
-    val words = LanguageWords.of(language) ?: return
+    val words = languageChipWords(language) ?: return
     Chip(words, modifier, size = size)
 }
