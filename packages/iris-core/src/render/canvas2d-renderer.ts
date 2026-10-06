@@ -1,16 +1,17 @@
 /**
  * Canvas2D-based `VideoFrame` renderer for Tier C/D.
  *
- * Phase 2b alpha: `drawImage(VideoFrame, ...)` is universally
- * supported, single-line, and "fast enough" for 1080p on any 2020+
- * laptop. WebGPU's `importExternalTexture` zero-copy path lands in
- * Phase 2b-beta when we wire HDR.
+ * `drawImage(VideoFrame, ...)` is universally supported, single-line, and
+ * "fast enough" for 1080p on any 2020+ laptop. The WebGPU renderer takes
+ * over where available (zero-copy import, HDR tone-mapping).
  *
- * The renderer maintains a small frame queue and a `requestAnimationFrame`
- * loop that picks the right frame to draw based on the AV-sync clock
- * (audio is the master). Late frames are dropped; early frames stay in
- * the queue until their wall-clock time arrives.
+ * Frames wait in the shared `FrameQueue` and a `requestAnimationFrame` loop
+ * (running only while frames are queued) draws the one the AV-sync clock has
+ * reached (audio is the master). Late frames are dropped; early frames stay
+ * in the queue until their time arrives.
  */
+
+import { drawLoop, FrameQueue } from './frame-queue';
 
 export type Canvas2dRenderer = {
 	/** Push a decoded frame. The renderer takes ownership and will
@@ -18,6 +19,8 @@ export type Canvas2dRenderer = {
 	enqueue: (frame: VideoFrame) => void;
 	/** How many frames are sitting in the wait-to-render queue. */
 	queueDepth: () => number;
+	/** Drops every queued frame. */
+	clear: () => void;
 	/** Timestamp (seconds) of the last frame actually drawn — ground
 	 *  truth for "what the viewer's eye is seeing right now". */
 	lastDrawnTs: () => number;
@@ -44,11 +47,26 @@ export function createCanvas2dRenderer(opts: Canvas2dRendererOptions): Canvas2dR
 	if (!ctx) {
 		throw new Error('Canvas2D context unavailable');
 	}
-	const queue: VideoFrame[] = [];
+	const queue = new FrameQueue<VideoFrame>({ lateMs: opts.lateMs ?? 80 });
 	let intrinsic: { width: number; height: number } | null = null;
 	let disposed = false;
 	let lastDrawn = 0;
-	const lateMs = opts.lateMs ?? 80;
+
+	// one draw per animation frame; the next one picks the next frame
+	const loop = drawLoop(() => {
+		const frame = queue.take(opts.clockSeconds());
+		if (frame) {
+			try {
+				ctx.drawImage(frame, 0, 0, opts.canvas.width, opts.canvas.height);
+				lastDrawn = frame.timestamp / 1_000_000;
+			} catch (e) {
+				opts.onError?.(e instanceof Error ? e : new Error(String(e)));
+			} finally {
+				frame.close();
+			}
+		}
+		return queue.depth > 0;
+	});
 
 	const enqueue = (frame: VideoFrame): void => {
 		if (disposed) {
@@ -61,62 +79,20 @@ export function createCanvas2dRenderer(opts: Canvas2dRendererOptions): Canvas2dR
 			opts.canvas.height = intrinsic.height;
 		}
 		queue.push(frame);
-		// Keep the queue bounded — anything beyond 32 frames suggests the
-		// renderer is starved and the decoder is over-producing. Drop the
-		// oldest excess to bound memory.
-		while (queue.length > 32) {
-			const dropped = queue.shift();
-			dropped?.close();
-		}
+		loop.kick();
 	};
-
-	const tick = (): void => {
-		if (disposed) return;
-		const now = opts.clockSeconds();
-		while (queue.length > 0) {
-			const head = queue[0];
-			if (!head) break;
-			const headTs = head.timestamp / 1_000_000;
-			if (headTs > now + 0.001) {
-				// Too early — wait for the clock to catch up.
-				break;
-			}
-			// Drop heavily-late frames (clock passed them by more than lateMs)
-			// unless this is the only frame we've got.
-			const lateBy = (now - headTs) * 1000;
-			if (lateBy > lateMs && queue.length > 1) {
-				const dropped = queue.shift();
-				dropped?.close();
-				continue;
-			}
-			// Draw this frame and consume it.
-			const drawn = queue.shift();
-			if (!drawn) break;
-			try {
-				ctx.drawImage(drawn, 0, 0, opts.canvas.width, opts.canvas.height);
-				lastDrawn = drawn.timestamp / 1_000_000;
-			} catch (e) {
-				opts.onError?.(e instanceof Error ? e : new Error(String(e)));
-			} finally {
-				drawn.close();
-			}
-			// Only one draw per rAF tick — the next rAF will pick the next frame.
-			break;
-		}
-		if (!disposed) requestAnimationFrame(tick);
-	};
-	requestAnimationFrame(tick);
 
 	const dispose = (): void => {
 		if (disposed) return;
 		disposed = true;
-		for (const f of queue) f.close();
-		queue.length = 0;
+		loop.stop();
+		queue.clear();
 	};
 
 	return {
 		enqueue,
-		queueDepth: () => queue.length,
+		queueDepth: () => queue.depth,
+		clear: () => queue.clear(),
 		lastDrawnTs: () => lastDrawn,
 		intrinsicSize: () => intrinsic,
 		dispose

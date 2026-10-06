@@ -9,12 +9,18 @@
  *
  * Backpressure: the pipeline awaits `decoder.decodeQueueSize <= 8`
  * between decode calls so the worker thread doesn't grow an unbounded
- * frame queue.
+ * frame queue, and `canDecode` paces it on the playback clock: decoded
+ * frames are the expensive buffer, so only a short lead is decoded ahead.
  */
 
 import { EncodedPacketSink, type InputVideoTrack } from 'mediabunny';
 
 import { configWithFreshDescription } from './webcodecs-probe';
+
+/** Poll interval while the decoder's own queue is full (engine-internal timer). */
+export const DECODE_QUEUE_POLL_MS = 4;
+/** Poll interval while the pacing holds a packet back (paused, or far enough ahead). */
+export const PACING_POLL_MS = 25;
 
 export type VideoPipelineOptions = {
 	track: InputVideoTrack;
@@ -25,6 +31,8 @@ export type VideoPipelineOptions = {
 	onError: (err: Error) => void;
 	/** Fired when the input track is fully decoded (after `flush()`). */
 	onEnd?: () => void;
+	/** Whether the packet at this timestamp (seconds) may be decoded now. */
+	canDecode?: (timestampSeconds: number) => boolean;
 };
 
 export type VideoPipelineHandle = {
@@ -86,7 +94,10 @@ export function startVideoPipeline(opts: VideoPipelineOptions): VideoPipelineHan
 				// without bound. 8 outstanding packets keeps Chrome's GPU sched
 				// pipelined without burning RAM.
 				while (decoder.decodeQueueSize > 8 && !stopped) {
-					await new Promise<void>((r) => setTimeout(r, 4));
+					await new Promise<void>((r) => setTimeout(r, DECODE_QUEUE_POLL_MS));
+				}
+				while (opts.canDecode && !opts.canDecode(packet.timestamp) && !stopped) {
+					await new Promise<void>((r) => setTimeout(r, PACING_POLL_MS));
 				}
 				if (stopped) break;
 				decoder.decode(packet.toEncodedVideoChunk());
