@@ -18,8 +18,9 @@
 	import Languages from './Languages.svelte';
 	import OnDisk from './OnDisk.svelte';
 	import RawFiles from './RawFiles.svelte';
-	import { mainVideo, resumeOf, watchHref } from './merge.ts';
+	import { mainVideo, resumeOf } from './merge.ts';
 	import { releaseCodes } from './lang.ts';
+	import { watchHref } from '#lib/paths.ts';
 
 	let { id }: { id: string } = $props();
 

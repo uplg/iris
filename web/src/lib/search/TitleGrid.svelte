@@ -5,7 +5,7 @@
 	import type { TitleCard } from '@iris/api/client';
 	import PosterCard from '#lib/components/PosterCard.svelte';
 	import type { Tone } from '#lib/components/StatusLine.svelte';
-	import { kindWord } from './release.ts';
+	import { kindWord } from '@iris/api/format';
 
 	interface Props {
 		titles: readonly TitleCard[];

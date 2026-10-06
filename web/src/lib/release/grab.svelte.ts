@@ -5,8 +5,8 @@
 
 import { ApiError, torrents, type TorrentPreview } from '@iris/api/client';
 import { Gesture } from '#lib/gesture.svelte.ts';
-import { watchHref } from '#lib/search/release.ts';
 import { autoFile } from './files.ts';
+import { watchHref } from '#lib/paths.ts';
 
 /** Above this a grab asks twice: complete-series packs fill the shared disk, and everyone's
  * library is cleaned up sooner. */

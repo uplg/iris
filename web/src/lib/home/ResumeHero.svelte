@@ -4,15 +4,16 @@
 	// tile whose file is not on disk gets it first, then plays it while it downloads.
 	import { createQuery } from '@tanstack/svelte-query';
 	import type { ContinueWatchingItem } from '@iris/api/client';
-	import { clock, duration, percent, prettySceneName, timeLeft } from '@iris/api/format';
+	import { clock, duration, kindLabel, percent, prettySceneName, timeLeft } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import Progress from '#lib/components/Progress.svelte';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import Hero from './Hero.svelte';
-	import { kindLabel, languagesLine, secondsLeft, stillUrl, watched } from './data.ts';
+	import { languagesLine, secondsLeft, stillUrl, watched } from './data.ts';
 	import { read } from '#lib/queries.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
-	import { getAndPlay, nextName, startOver, tileKey, watchHref } from './continue.ts';
+	import { getAndPlay, nextName, startOver, tileKey } from './continue.ts';
+	import { watchHref } from '#lib/paths.ts';
 
 	let { item }: { item: ContinueWatchingItem } = $props();
 	const md = tmdbMeta(() => ({ id: item.tmdb_id, kind: item.kind, trusted: item.tmdb_verified }));
@@ -57,9 +58,11 @@
 				<Icon name="play" busy={getting} />{getting ? `Getting ${nextName(item)}…` : `Play ${nextName(item)}`}
 			</button>
 		{:else if resuming}
-			<a class="btn primary" href={watchHref(item)}><Icon name="play" />Resume at {clock(item.position_seconds)}</a>
+			<a class="btn primary" href={watchHref(item.infohash, item.file_idx)}><Icon name="play" />Resume at {clock(item.position_seconds)}</a>
 		{:else}
-			<a class="btn primary" href={watchHref(item)}><Icon name="play" />{item.kind === 'tv' ? `Play ${nextName(item)}` : 'Play'}</a>
+			<a class="btn primary" href={watchHref(item.infohash, item.file_idx)}
+				><Icon name="play" />{item.kind === 'tv' ? `Play ${nextName(item)}` : 'Play'}</a
+			>
 		{/if}
 		{#if item.collection_id}
 			<a class="btn" href="/collection/{item.collection_id}"><Icon name="list" />All episodes</a>

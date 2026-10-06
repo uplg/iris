@@ -3,13 +3,13 @@
 	// trusts the match), the episode, what is left. A tile whose file is not on disk (the next
 	// episode never downloaded, or reclaimed) leads to its series and offers to get it and play.
 	import type { ContinueWatchingItem } from '@iris/api/client';
-	import { episodeCode, prettySceneName, timeLeft } from '@iris/api/format';
+	import { episodeCode, kindLabel, prettySceneName, timeLeft } from '@iris/api/format';
 	import PosterCard from '#lib/components/PosterCard.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { sectionHeading } from '#lib/focus.ts';
 	import CardMenu, { type MenuItem } from './CardMenu.svelte';
-	import { kindLabel, secondsLeft, stillUrl, watched } from './data.ts';
+	import { secondsLeft, stillUrl, watched } from './data.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import { getAndPlay, markWatched, nextName, removeTile, tileHref, tileKey } from './continue.ts';
 

@@ -3,7 +3,7 @@
 	// words, who added it, and what can be done: play it, open its files, delete it. Delete is
 	// for an admin or whoever added it; anyone else sees it, not operable, and why.
 	import { tmdbImage, torrents, type CollectionListItem, type ContinueWatchingItem, type TorrentView } from '@iris/api/client';
-	import { formatSize, percent } from '@iris/api/format';
+	import { formatSize, isVideo, percent } from '@iris/api/format';
 	import { when } from '#lib/title.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture, unavailable } from '#lib/gesture.svelte.ts';
@@ -13,7 +13,7 @@
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import Disclosure from '#lib/components/Disclosure.svelte';
 	import Icon from '#lib/components/Icon.svelte';
-	import { deleteDescription, isVideo, ratioOf, releaseName, releaseStatus, watchState } from './model.ts';
+	import { deleteDescription, ratioOf, releaseName, releaseStatus, watchState } from './model.ts';
 	import { refreshLibrary } from '#lib/queries.ts';
 	import FileList from './FileList.svelte';
 

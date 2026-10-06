@@ -110,6 +110,22 @@ export function episodeCode(season: number | null | undefined, episode: number |
 	return `S${season}:E${episode}`;
 }
 
+/** The file extensions a player can open. */
+export const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
+
+export const isVideo = (path: string): boolean => VIDEO_RE.test(path);
+
+/** `Series`, `Movie`, or null when the kind is not known. */
+export function kindWord(kind: string | null | undefined): string | null {
+	return kind === 'tv' ? 'Series' : kind === 'movie' ? 'Movie' : null;
+}
+
+/** `Movie`, `Series`, `Anime · Series` (a title with no kind reads as a movie). */
+export function kindLabel(kind: string | null | undefined, anime = false): string {
+	const k = kindWord(kind) ?? 'Movie';
+	return anime ? `Anime · ${k}` : k;
+}
+
 /** A count with its noun: `1 download`, `3 downloads`. */
 export function plural(n: number, one: string, many = `${one}s`): string {
 	return `${n} ${n === 1 ? one : many}`;

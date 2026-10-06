@@ -2,8 +2,9 @@
 // name), what part of it (a season, an episode), how it sounds and looks, and whether the swarm
 // can deliver it. Every search surface (grid, list, details) reads these, never its own.
 
-import type { LibraryMatch, MediaKind, ProviderResultMeta, SearchResult } from '@iris/api/client';
-import { episodeCode, formatRelative, formatSize, languageLabel, plural, prettySceneName } from '@iris/api/format';
+import type { LibraryMatch, ProviderResultMeta, SearchResult } from '@iris/api/client';
+import { episodeCode, formatRelative, formatSize, kindWord, languageLabel, plural, prettySceneName } from '@iris/api/format';
+import { watchHref } from '#lib/paths.ts';
 
 /** A season or an episode as people say it; episode 0 is the parser's whole-season mark. */
 export function partWords(season: number | null | undefined, episode: number | null | undefined, name = ''): string | null {
@@ -19,10 +20,6 @@ export function sceneMark(name: string): { season: number; episode: number } | n
 	if (se) return { season: Number(se[1]), episode: Number(se[2]) };
 	const s = /\bS(\d{1,2})\b/i.exec(base);
 	return s ? { season: Number(s[1]), episode: 0 } : null;
-}
-
-export function kindWord(kind: MediaKind | string | null | undefined): string | null {
-	return kind === 'tv' ? 'Series' : kind === 'movie' ? 'Movie' : null;
 }
 
 /** The title a release belongs to, as a card names it. */
@@ -85,8 +82,6 @@ export const releaseKey = (r: Pick<SearchResult, 'provider_id' | 'external_id'>)
 
 export const releaseHref = (r: Pick<SearchResult, 'provider_id' | 'external_id'>) =>
 	`/release/${encodeURIComponent(r.provider_id)}/${encodeURIComponent(r.external_id)}`;
-
-export const watchHref = (infohash: string, idx: number) => `/watch/${infohash}/${idx}`;
 
 /** Already on disk, with the file to play: the release plays from there. */
 export function ownedFile(r: SearchResult): { infohash: string; idx: number } | null {

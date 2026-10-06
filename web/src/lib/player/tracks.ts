@@ -5,6 +5,7 @@ import type { NativeSubtitleTrack } from '@iris/core/engine';
 import type { AudioTrack, Manifest, SubtitleTrack } from '@iris/core/manifest-client';
 import { nativeSubtitleUrl } from '@iris/core/manifest-client';
 import { normalizeLang, pickPreferredSubtitle } from '@iris/core/subs/pick-subtitle';
+import { languageName } from '#lib/language.ts';
 
 export type SubtitleOverlayKind = 'none' | 'native' | 'ass' | 'pgs';
 
@@ -79,26 +80,6 @@ export function initialSubtitle(
 		manifest.subtitles[0] ??
 		null
 	);
-}
-
-const names = (() => {
-	try {
-		return new Intl.DisplayNames(['en'], { type: 'language' });
-	} catch {
-		return null;
-	}
-})();
-
-/** A language tag in words: `fr` → "French"; unknown or absent → null. */
-export function languageName(tag: string | null | undefined): string | null {
-	const code = normalizeLang(tag);
-	if (!code) return null;
-	try {
-		const name = names?.of(code);
-		return name && name !== code ? name : code.toUpperCase();
-	} catch {
-		return code.toUpperCase();
-	}
 }
 
 const SDH = /\b(sdh|cc|hi|hearing|malentendants?|sourds?)\b/i;

@@ -1,10 +1,10 @@
 <script lang="ts">
 	// Nothing to resume: the freshest title of the library (its own verified name and art).
 	import type { CollectionListItem } from '@iris/api/client';
-	import { formatSize } from '@iris/api/format';
+	import { formatSize, kindLabel } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import Hero from './Hero.svelte';
-	import { kindLabel, stillUrl } from './data.ts';
+	import { stillUrl } from './data.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 
 	let { item }: { item: CollectionListItem } = $props();

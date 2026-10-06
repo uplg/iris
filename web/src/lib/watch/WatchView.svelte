@@ -12,7 +12,7 @@
 	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { ApiError, follows, library, me, progress as progressApi, torrents, type TorrentView } from '@iris/api/client';
-	import { duration as lengthWords, episodeCode, formatSize, percent, prettySceneName, speed } from '@iris/api/format';
+	import { duration as lengthWords, episodeCode, formatSize, isVideo, percent, prettySceneName, speed } from '@iris/api/format';
 	import { hevcMseNeedsIdrStart } from '@iris/core/caps';
 	import { fetchManifest, ManifestNotReadyError, pickTier, postSeekHint, rawStreamUrl, type DecodeTier } from '@iris/core/manifest-client';
 	import Icon from '#lib/components/Icon.svelte';
@@ -28,7 +28,7 @@
 	import { readStoredVolume, writeStoredVolume } from '#lib/player/browser.ts';
 	import EpisodesPanel from './EpisodesPanel.svelte';
 	import GettingReady from './GettingReady.svelte';
-	import { listsEpisodes, retrySearchQuery, sideRows, VIDEO_RE, type SideRow } from './episodes.ts';
+	import { listsEpisodes, retrySearchQuery, sideRows, type SideRow } from './episodes.ts';
 	import { factsLine } from './facts.ts';
 	import { keptForText, PlaybackChoices } from './prefs.ts';
 	import { ProgressSaver } from './progress.ts';
@@ -77,7 +77,7 @@
 	}));
 	const data = $derived(torrentQ.data);
 	const file = $derived(data?.files.find((f) => f.index === fileIdx));
-	const videoFiles = $derived((data?.files ?? []).filter((f) => VIDEO_RE.test(f.path)));
+	const videoFiles = $derived((data?.files ?? []).filter((f) => isVideo(f.path)));
 	const fileName = $derived(file?.path.split('/').pop() ?? data?.name ?? 'Iris');
 	const collectionId = $derived(data?.collection_id ?? null);
 	const isTv = $derived(!!collectionId && data?.kind === 'tv');

@@ -9,7 +9,8 @@
 	import Poster from '#lib/components/Poster.svelte';
 	import { Grab, type GrabTarget } from '#lib/release/grab.svelte.ts';
 	import GrabNotice from '#lib/release/GrabNotice.svelte';
-	import { DEAD, factsLine, isDead, ownedFile, releaseChips, releaseHref, titleLine, titleOf, watchHref } from './release.ts';
+	import { DEAD, factsLine, isDead, ownedFile, releaseChips, releaseHref, titleLine, titleOf } from './release.ts';
+	import { watchHref } from '#lib/paths.ts';
 
 	let { r }: { r: SearchResult } = $props();
 	const id = $props.id();

@@ -11,16 +11,8 @@
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
-	import {
-		audioChip,
-		firstPlayable,
-		mergeEpisodes,
-		mergeEpisodesAbsolute,
-		nameLanguage,
-		playLabel,
-		qualityWords,
-		watchHref
-	} from './merge.ts';
+	import { audioChip, firstPlayable, mergeEpisodes, mergeEpisodesAbsolute, nameLanguage, playLabel, qualityWords } from './merge.ts';
+	import { watchHref } from '#lib/paths.ts';
 
 	interface Props {
 		collection: CollectionDetail;

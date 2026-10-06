@@ -11,11 +11,7 @@ import type {
 	SeasonPackEntry,
 	TorrentView
 } from '@iris/api/client';
-import { episodeCode, languageLabel } from '@iris/api/format';
-
-const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
-
-export const isVideo = (path: string) => VIDEO_RE.test(path);
+import { episodeCode, isVideo, languageLabel } from '@iris/api/format';
 
 export type Downloaded = { status: 'downloaded'; language: string | null; infohash: string; file_idx: number; watched: boolean };
 export type Available = {
@@ -239,8 +235,6 @@ export function qualityWords(name: string): string | null {
 export function mainVideo(t: TorrentView) {
 	return t.files.filter((f) => isVideo(f.path)).toSorted((a, b) => b.size_bytes - a.size_bytes)[0];
 }
-
-export const watchHref = (infohash: string, idx: number) => `/watch/${infohash}/${idx}`;
 
 /** Where « Play » starts with no resume point: the first episode on disk by (season, episode),
  * never `files[0]` (a pack's sample); a movie, or a pack never split: its first video. */

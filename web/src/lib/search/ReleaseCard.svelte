@@ -6,7 +6,8 @@
 	import { languageLabel } from '@iris/api/format';
 	import Poster from '#lib/components/Poster.svelte';
 	import StatusLine from '#lib/components/StatusLine.svelte';
-	import { DEAD, isDead, ownedFile, partWords, releaseHref, resolution, seedersWords, titleOf, watchHref } from './release.ts';
+	import { DEAD, isDead, ownedFile, partWords, releaseHref, resolution, seedersWords, titleOf } from './release.ts';
+	import { watchHref } from '#lib/paths.ts';
 
 	let { r }: { r: SearchResult } = $props();
 	const owned = $derived(ownedFile(r));

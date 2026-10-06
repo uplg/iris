@@ -2,9 +2,8 @@
 	// A title of the library: its poster (the server's), what it is, and whether it is on disk,
 	// still downloading, or reclaimed (its history kept, its files gone).
 	import { tmdbImage, type CollectionListItem } from '@iris/api/client';
-	import { formatSize, percent, plural } from '@iris/api/format';
+	import { formatSize, kindLabel, percent, plural } from '@iris/api/format';
 	import PosterCard from '#lib/components/PosterCard.svelte';
-	import { kindLabel } from './data.ts';
 
 	let { item, downloading }: { item: CollectionListItem; downloading?: number } = $props();
 

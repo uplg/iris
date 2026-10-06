@@ -1,8 +1,9 @@
 // The words the home and discover screens say about what they read: the "Right now" facts,
 // the downloads per collection, a title's kind and the playback languages, said once.
 
-import type { ContinueWatchingItem, HomeSummary, MediaKind, PlaybackPrefs, TorrentView } from '@iris/api/client';
+import type { ContinueWatchingItem, HomeSummary, PlaybackPrefs, TorrentView } from '@iris/api/client';
 import { formatSize, percent, plural, timeLeft } from '@iris/api/format';
+import { languageName } from '#lib/language.ts';
 
 const known = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
 
@@ -32,12 +33,6 @@ export function downloadsByCollection(list: readonly TorrentView[]): Map<string,
 	return new Map([...sums].map(([id, s]) => [id, s.total > 0 ? (s.done / s.total) * 100 : 0]));
 }
 
-/** `Movie`, `Series`, `Anime · Series`. */
-export function kindLabel(kind: MediaKind | null | undefined, anime = false): string {
-	const k = kind === 'tv' ? 'Series' : 'Movie';
-	return anime ? `Anime · ${k}` : k;
-}
-
 /** Seconds left to watch, when the length is known. */
 export function secondsLeft(it: Pick<ContinueWatchingItem, 'duration_seconds' | 'position_seconds'>): number | null {
 	return known(it.duration_seconds) && it.duration_seconds > 0 ? Math.max(0, it.duration_seconds - it.position_seconds) : null;
@@ -48,21 +43,13 @@ export function watched(it: Pick<ContinueWatchingItem, 'duration_seconds' | 'pos
 	return known(it.duration_seconds) && it.duration_seconds > 0 ? Math.min(1, it.position_seconds / it.duration_seconds) : null;
 }
 
-function languageName(code: string): string {
-	try {
-		return new Intl.DisplayNames(['en'], { type: 'language' }).of(code) ?? code;
-	} catch {
-		return code;
-	}
-}
-
 /** The languages a play will use, when the account (or the series) chose them. */
 export function languagesLine(p: PlaybackPrefs | undefined): string | null {
 	if (!p) return null;
 	const parts: string[] = [];
-	if (p.audio_language) parts.push(`audio in ${languageName(p.audio_language)}`);
+	if (p.audio_language) parts.push(`audio in ${languageName(p.audio_language) ?? p.audio_language}`);
 	if (p.subtitle_language === 'off') parts.push('subtitles off');
-	else if (p.subtitle_language) parts.push(`subtitles in ${languageName(p.subtitle_language)}`);
+	else if (p.subtitle_language) parts.push(`subtitles in ${languageName(p.subtitle_language) ?? p.subtitle_language}`);
 	if (parts.length === 0) return null;
 	return `Plays with ${parts.join(', ')}${p.for_collection ? ', as chosen for this series' : ''}.`;
 }

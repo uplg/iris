@@ -13,15 +13,14 @@ import { FAILURE, haptic } from '#lib/haptics.ts';
 import { refocus } from '#lib/focus.ts';
 import type { Gesture } from '#lib/gesture.svelte.ts';
 import { KEYS } from '#lib/queries.ts';
+import { watchHref } from '#lib/paths.ts';
 
 /** A tile's identity: tiles not on disk all carry an empty infohash, their series tells them apart. */
 export const tileKey = (it: ContinueWatchingItem) => (it.collection_id ? `c:${it.collection_id}` : `${it.infohash}:${it.file_idx}`);
 
-export const watchHref = (it: Pick<ContinueWatchingItem, 'infohash' | 'file_idx'>) => `/watch/${it.infohash}/${it.file_idx}`;
-
 /** Where the tile's name leads: the player, or the series when there is nothing to play yet. */
 export const tileHref = (it: ContinueWatchingItem) =>
-	it.grabbable ? (it.collection_id ? `/collection/${it.collection_id}` : '/library') : watchHref(it);
+	it.grabbable ? (it.collection_id ? `/collection/${it.collection_id}` : '/library') : watchHref(it.infohash, it.file_idx);
 
 /** `S2:E5`, or "the next episode" when the server does not know which. */
 export const nextName = (it: ContinueWatchingItem) => episodeCode(it.season, it.episode) ?? 'the next episode';
@@ -41,7 +40,7 @@ export function getAndPlay(g: Gesture, it: ContinueWatchingItem) {
 		() => library.grabCollectionEpisode(cid, season, episode, 'auto'),
 		async (got) => {
 			void reread();
-			await goto(watchHref(got));
+			await goto(watchHref(got.infohash, got.file_idx));
 		},
 		`get:${tileKey(it)}`,
 		{
@@ -90,7 +89,7 @@ export function startOver(g: Gesture, it: ContinueWatchingItem) {
 		() => progress.put(it.infohash, it.file_idx, { position_seconds: 0, duration_seconds: it.duration_seconds ?? null, seek: true }),
 		async () => {
 			void reread();
-			await goto(watchHref(it));
+			await goto(watchHref(it.infohash, it.file_idx));
 		},
 		`over:${tileKey(it)}`
 	);

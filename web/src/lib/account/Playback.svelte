@@ -12,18 +12,12 @@
 	import Group from '#lib/components/Group.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Select from '#lib/components/Select.svelte';
+	import { languageName } from '#lib/language.ts';
 
 	const NONE = 'none';
 	const OFF = 'off';
 	const COMMON = ['fr', 'en', 'es', 'de', 'it', 'pt', 'ja', 'ko'];
-	const names = new Intl.DisplayNames(['en'], { type: 'language' });
-	const langName = (code: string) => {
-		try {
-			return names.of(code) ?? code;
-		} catch {
-			return code;
-		}
-	};
+	const langName = (code: string) => languageName(code) ?? code;
 
 	const prefs = createQuery(
 		() => read.playbackPrefs(null),

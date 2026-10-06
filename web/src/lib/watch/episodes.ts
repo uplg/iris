@@ -5,8 +5,6 @@
 import type { AvailableEpisodeEntry, CollectionEpisodeEntry, FileEntry, FileProgressEntry } from '@iris/api/client';
 import { episodeCode, formatSize, prettySceneName } from '@iris/api/format';
 
-export const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
-
 export interface SideRow {
 	key: string;
 	infohash: string;

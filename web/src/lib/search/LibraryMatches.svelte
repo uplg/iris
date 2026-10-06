@@ -4,7 +4,8 @@
 	import { tmdbImage, type LibraryMatch } from '@iris/api/client';
 	import Icon from '#lib/components/Icon.svelte';
 	import Poster from '#lib/components/Poster.svelte';
-	import { kindWord, matchTarget } from './release.ts';
+	import { matchTarget } from './release.ts';
+	import { kindWord } from '@iris/api/format';
 
 	let { matches }: { matches: readonly LibraryMatch[] } = $props();
 	const id = $props.id();

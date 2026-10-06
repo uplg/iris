@@ -10,7 +10,8 @@
 	import { refocus, sectionHeading } from '#lib/focus.ts';
 	import Icon from '#lib/components/Icon.svelte';
 	import { refetchCollection } from './actions.ts';
-	import { audioChip, seasonName, watchHref } from './merge.ts';
+	import { audioChip, seasonName } from './merge.ts';
+	import { watchHref } from '#lib/paths.ts';
 
 	let { collectionId, pack }: { collectionId: string; pack: SeasonPackEntry } = $props();
 	const g = new Gesture();

@@ -13,8 +13,8 @@
 	import Sheet from '#lib/components/Sheet.svelte';
 	import StatusRow from '#lib/components/StatusRow.svelte';
 	import PillChoice from '#lib/components/PillChoice.svelte';
-	import { languageName } from './lang.ts';
 	import { KEYS, read } from '#lib/queries.ts';
+	import { languageName } from '#lib/language.ts';
 
 	interface Props {
 		collectionId: string;
@@ -55,8 +55,8 @@
 		void refocus(opener);
 	}
 
-	const audioWords = (v: string | null) => (v ? languageName(v) : 'Each file’s own default');
-	const subWords = (v: string | null) => (v === 'off' ? 'Off' : v ? languageName(v) : 'Each file’s own default');
+	const audioWords = (v: string | null) => (v ? (languageName(v) ?? v) : 'Each file’s own default');
+	const subWords = (v: string | null) => (v === 'off' ? 'Off' : v ? (languageName(v) ?? v) : 'Each file’s own default');
 
 	function save(e: SubmitEvent) {
 		e.preventDefault();
@@ -106,7 +106,7 @@
 			legend="Audio"
 			options={[
 				{ value: '', label: 'Each file’s own default' },
-				...audioOptions.map((code) => ({ value: code, label: languageName(code) }))
+				...audioOptions.map((code) => ({ value: code, label: languageName(code) ?? code }))
 			]}
 			value={draft.current.audio}
 			onchange={(v) => (draft.current.audio = v)}
@@ -116,7 +116,7 @@
 			options={[
 				{ value: '', label: 'Each file’s own default' },
 				{ value: 'off', label: 'Off' },
-				...subOptions.map((code) => ({ value: code, label: languageName(code) }))
+				...subOptions.map((code) => ({ value: code, label: languageName(code) ?? code }))
 			]}
 			value={draft.current.subs}
 			onchange={(v) => (draft.current.subs = v)}

@@ -3,9 +3,9 @@
 	// identity, a pack the parser never split, a movie copy with no clear main file. The server
 	// already orders them (SCENE-aware), so they are listed as they come.
 	import type { CollectionDetail } from '@iris/api/client';
-	import { formatSize } from '@iris/api/format';
+	import { formatSize, isVideo } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
-	import { isVideo, watchHref } from './merge.ts';
+	import { watchHref } from '#lib/paths.ts';
 
 	let { collection: c }: { collection: CollectionDetail } = $props();
 	const id = $props.id();

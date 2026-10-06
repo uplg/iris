@@ -11,8 +11,9 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import { refetchCollection } from './actions.ts';
-	import { mainVideo, qualityWords, watchHref } from './merge.ts';
+	import { mainVideo, qualityWords } from './merge.ts';
 	import { downloading, eta } from './status.ts';
+	import { watchHref } from '#lib/paths.ts';
 
 	let { collection: c }: { collection: CollectionDetail } = $props();
 	const id = $props.id();

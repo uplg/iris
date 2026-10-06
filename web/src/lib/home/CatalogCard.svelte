@@ -9,9 +9,8 @@
 	import { queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { refocus, sectionHeading } from '#lib/focus.ts';
-	import { kindLabel } from './data.ts';
 	import { KEYS } from '#lib/queries.ts';
-	import { plural } from '@iris/api/format';
+	import { kindLabel, plural } from '@iris/api/format';
 
 	let { card }: { card: CatalogCard } = $props();
 	const g = new Gesture();

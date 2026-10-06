@@ -6,8 +6,8 @@
 	import { metadata, tmdbImage, type TmdbSuggestion } from '@iris/api/client';
 	import { queryClient } from '#lib/query.ts';
 	import Icon from '#lib/components/Icon.svelte';
-	import { kindWord } from './release.ts';
 	import { Settled } from './typeahead.svelte.ts';
+	import { kindWord } from '@iris/api/format';
 
 	interface Props {
 		value: string;

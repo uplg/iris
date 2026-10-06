@@ -15,8 +15,9 @@
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import { refetchCollection } from './actions.ts';
 	import { KEYS } from '#lib/queries.ts';
-	import { episodeName, episodeWords, languageWord, watchHref, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
+	import { episodeName, episodeWords, languageWord, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
 	import { downloading, offersByLanguage, rowState, type Verb } from './status.ts';
+	import { watchHref } from '#lib/paths.ts';
 
 	interface Props {
 		collectionId: string;

@@ -10,6 +10,7 @@
 	import TitlePoster from './TitlePoster.svelte';
 	import { canRestore, groupHistory, itemKey, type Group, type Item } from './groups.ts';
 	import { onDay, progressWords, watchedShare, whatWatched } from './words.ts';
+	import { watchHref } from '#lib/paths.ts';
 
 	interface Props {
 		items: readonly Item[];
@@ -22,7 +23,6 @@
 	const groups = $derived(groupHistory(items));
 	const g = new Gesture();
 
-	const watchHref = (it: Item) => `/watch/${it.infohash}/${it.file_idx}`;
 	const label = (group: Group, it: Item) => (group.solo ? group.title : (whatWatched(it) ?? it.torrent_name));
 	const facts = (it: Item) =>
 		`${progressWords(it.position_seconds, it.duration_seconds, it.completed)} · Last watched ${onDay(it.last_watched_at)}`;
@@ -35,7 +35,7 @@
 		<div class="text">
 			<span class="name">
 				{#if !it.deleted}
-					<a href={watchHref(it)} aria-label="Play {group.solo ? name : `${group.title}, ${name}`}">{name}</a>
+					<a href={watchHref(it.infohash, it.file_idx)} aria-label="Play {group.solo ? name : `${group.title}, ${name}`}">{name}</a>
 				{:else if group.solo && collections && group.collectionId}
 					<a href="/collection/{group.collectionId}">{name}</a>
 				{:else}
