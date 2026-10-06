@@ -8,7 +8,6 @@ import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.EpisodeInfo
 import studio.kahn.iris.tv.data.FileEntry
-import studio.kahn.iris.tv.data.FileProgressEntry
 import studio.kahn.iris.tv.data.GoneEpisodeEntry
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.SeasonPackEntry
@@ -33,7 +32,15 @@ import studio.kahn.iris.tv.ui.components.StatusTone
 sealed interface Variant {
     val language: String?
 
-    data class Downloaded(override val language: String?, val infohash: String, val fileIdx: Int, val watched: Boolean) : Variant
+    /** [positionSeconds] and [durationSeconds]: the person's place in it, as the server last saved it (null: not started). */
+    data class Downloaded(
+        override val language: String?,
+        val infohash: String,
+        val fileIdx: Int,
+        val watched: Boolean,
+        val positionSeconds: Double? = null,
+        val durationSeconds: Double? = null,
+    ) : Variant
 
     data class Available(
         override val language: String?,
@@ -69,7 +76,8 @@ data class Episode(
     val key: String get() = absolute?.let { "a$it" } ?: "$season-$episode"
 }
 
-private fun downloaded(d: EpisodeEntry) = Variant.Downloaded(d.language, d.infohash, d.fileIdx.toInt(), d.watched)
+private fun downloaded(d: EpisodeEntry) =
+    Variant.Downloaded(d.language, d.infohash, d.fileIdx.toInt(), d.watched, d.positionSeconds, d.durationSeconds)
 
 private fun gone(g: GoneEpisodeEntry) = Variant.Gone(
     language = g.language,
@@ -341,7 +349,6 @@ data class RowState(val tone: StatusTone, val text: String, val progress: Float?
 fun rowState(
     ep: Episode,
     torrent: (String) -> TorrentView?,
-    progress: (String, Int) -> FileProgressEntry?,
 ): RowState {
     val disk = ep.variants.filterIsInstance<Variant.Downloaded>()
     val offers = ep.variants.filterIsInstance<Variant.Available>()
@@ -350,8 +357,8 @@ fun rowState(
     if (disk.isNotEmpty()) {
         val first = disk[0]
         val t = torrent(first.infohash)
-        val p = progress(first.infohash, first.fileIdx)
-        val length = p?.durationSeconds?.takeIf { it > 0 } ?: runtime
+        val length = first.durationSeconds?.takeIf { it > 0 } ?: runtime
+        val at = first.positionSeconds ?: 0.0
         if (t != null && downloading(t)) {
             return RowState(
                 if (t.state == TorrentState.error) StatusTone.Warn else StatusTone.Busy,
@@ -359,12 +366,12 @@ fun rowState(
                 verb = Verb.PlayWhileDownloading,
             )
         }
-        if (first.watched || p?.completed == true) {
+        if (first.watched) {
             return RowState(StatusTone.Ok, if (length != null) "Watched · ${duration(length)}" else "Watched", verb = Verb.WatchAgain)
         }
-        if (p != null && p.positionSeconds > 0) {
-            val left = length?.let { " · ${timeLeft(it - p.positionSeconds)}" }.orEmpty()
-            return RowState(StatusTone.Info, "In progress$left", length?.let { (p.positionSeconds / it).toFloat() }, Verb.Resume)
+        if (at > 0) {
+            val left = length?.let { " · ${timeLeft(it - at)}" }.orEmpty()
+            return RowState(StatusTone.Info, "In progress$left", length?.let { (at / it).toFloat() }, Verb.Resume)
         }
         return RowState(StatusTone.Ok, if (length != null) "On disk · ${duration(length)}" else "On disk", verb = Verb.Play)
     }

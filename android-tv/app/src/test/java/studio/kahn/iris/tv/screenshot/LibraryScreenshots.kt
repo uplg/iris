@@ -118,7 +118,7 @@ class LibraryScreenshots {
     }
 
     private fun series() = CollectionUiState(
-        page = Loadable.Ready(collectionPage(F.series, null, emptyList(), emptyMap(), 2L, F.now)),
+        page = Loadable.Ready(collectionPage(F.series, null, emptyList(), 2L, F.now)),
         languages = Loadable.Ready(languagesUi(PlaybackPrefsResponse(audioLanguage = "en", subtitleLanguage = "off", forCollection = true), F.series, null)),
     )
 
@@ -127,7 +127,7 @@ class LibraryScreenshots {
 
     @Test
     fun collectionMovie() = shots.snap("collection_movie") {
-        CollectionContent(CollectionUiState(page = Loadable.Ready(collectionPage(F.movie, null, emptyList(), emptyMap(), null, F.now))), CollectionActions(onRelease = releaseActions.copy(onOpenTitle = null)))
+        CollectionContent(CollectionUiState(page = Loadable.Ready(collectionPage(F.movie, null, emptyList(), null, F.now))), CollectionActions(onRelease = releaseActions.copy(onOpenTitle = null)))
     }
 
     @Test

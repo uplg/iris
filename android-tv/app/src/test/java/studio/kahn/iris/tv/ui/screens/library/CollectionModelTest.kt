@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import studio.kahn.iris.tv.data.AvailableEpisodeEntry
 import studio.kahn.iris.tv.data.EpisodeEntry
-import studio.kahn.iris.tv.data.FileProgressEntry
 import studio.kahn.iris.tv.data.GoneEpisodeEntry
 import studio.kahn.iris.tv.screenshot.LibraryFixtures as F
 import studio.kahn.iris.tv.ui.components.StatusTone
@@ -58,12 +57,12 @@ class CollectionModelTest {
 
     @Test
     fun seasonsComeFromEpisodesAndPacks() {
-        val page = collectionPage(F.series, null, emptyList(), emptyMap(), null, F.now)
+        val page = collectionPage(F.series, null, emptyList(), null, F.now)
         assertEquals(listOf(1L, 2L), page.seasons.map { it.season })
         assertEquals(1L, page.season)
         assertEquals("Season 1 · watched", page.seasons[0].label)
         assertTrue(page.packs.isEmpty())
-        val two = collectionPage(F.series, null, emptyList(), emptyMap(), 2L, F.now)
+        val two = collectionPage(F.series, null, emptyList(), 2L, F.now)
         assertEquals(1, two.packs.size)
         assertEquals("9 episodes · 6 on disk", two.seasonFact)
         assertEquals("Hello, Ms. Cobel", two.episodes.first().heading)
@@ -72,13 +71,14 @@ class CollectionModelTest {
     @Test
     fun rowStateSaysWhatToDo() {
         val rows = mergeEpisodes(F.series.episodes, F.series.availableEpisodes.orEmpty(), F.series.goneEpisodes.orEmpty(), F.series.episodeInfo)
-        fun state(e: Long, progress: FileProgressEntry? = null) =
-            rowState(rows.first { it.season == 2L && it.episode == e }, { null }, { _, _ -> progress })
+        fun row(e: Long) = rows.first { it.season == 2L && it.episode == e }
+        fun state(e: Long) = rowState(row(e), { null })
         assertEquals(RowState(StatusTone.Ok, "Watched · 50 min", verb = Verb.WatchAgain), state(1))
         assertEquals(RowState(StatusTone.Ok, "On disk", verb = Verb.Play), state(5))
-        val half = FileProgressEntry(completed = false, fileIdx = 5, lastWatchedAt = F.at, positionSeconds = 600.0, durationSeconds = 1_800.0)
-        assertEquals("In progress · 20 min left", state(5, half).text)
-        assertEquals(Verb.Resume, state(5, half).verb)
+        // the place comes with the episode, no progress read per release
+        val started = F.series.episodes.map { if (it.season == 2L && it.episode == 5L) it.copy(positionSeconds = 600.0, durationSeconds = 1_800.0) else it }
+        val five = mergeEpisodes(started, emptyList(), emptyList()).first { it.season == 2L && it.episode == 5L }
+        assertEquals(RowState(StatusTone.Info, "In progress · 20 min left", 600f / 1_800f, Verb.Resume), rowState(five, { null }))
         assertEquals("Available · 2 releases · English, French audio", state(7).text)
         assertEquals("Removed from disk to free space", state(9).text)
     }
@@ -87,10 +87,10 @@ class CollectionModelTest {
     fun episodeActionsNameTheLanguage() {
         val rows = mergeEpisodes(F.series.episodes, F.series.availableEpisodes.orEmpty(), F.series.goneEpisodes.orEmpty())
         val seven = rows.first { it.season == 2L && it.episode == 7L }
-        val labels = episodeActions(seven, rowState(seven, { null }, { _, _ -> null }), { null }).map { it.label }
+        val labels = episodeActions(seven, rowState(seven, { null }), { null }).map { it.label }
         assertEquals(listOf("Grab and play in English", "Grab and play in French"), labels)
         val five = rows.first { it.season == 2L && it.episode == 5L }
-        val fiveActions = episodeActions(five, rowState(five, { null }, { _, _ -> null }), { null })
+        val fiveActions = episodeActions(five, rowState(five, { null }), { null })
         assertEquals(listOf("Play", "Mark as watched"), fiveActions.map { it.label })
     }
 
