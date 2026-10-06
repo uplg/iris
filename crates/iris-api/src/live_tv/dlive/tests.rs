@@ -230,7 +230,7 @@ fn recorded_playlists_rewrite_and_refresh_as_expected() {
     let signer = crate::live_tv::proxy::Signer::new("s");
     let proxied = |body: &str, base: &str| {
         let base = Url::parse(base).unwrap();
-        crate::live_tv::proxy::rewrite_playlist(body, &base, "fr:tf1", &signer)
+        crate::live_tv::proxy::rewrite_playlist(body, &base, "fr:tf1", None, &signer)
     };
     let p1 = include_str!("fixtures/p1.m3u8");
     assert_eq!(
@@ -240,13 +240,17 @@ fn recorded_playlists_rewrite_and_refresh_as_expected() {
     );
     let seg = Url::parse(p1.lines().find(|l| l.starts_with("https://p16")).unwrap()).unwrap();
     let out = proxied(p1, "https://edge.example/premium950/index.m3u8");
-    assert!(out.contains(&crate::live_tv::proxy::proxied_url("fr:tf1", &seg, &signer)));
+    assert!(out.contains(&crate::live_tv::proxy::proxied_url(
+        "fr:tf1", None, &seg, &signer
+    )));
 
     // Player 2 segments are relative and must lose the playlist's s/e.
     let p2_url = "https://e8975o.example:8443/hls/pq1gxvz9ymj74.m3u8?s=VG6&e=1791327573";
     let seg = Url::parse("https://e8975o.example:8443/hls/pq1gxvz9ymj74-1751469570.ts").unwrap();
     let out = proxied(include_str!("fixtures/p2.m3u8"), p2_url);
-    assert!(out.contains(&crate::live_tv::proxy::proxied_url("fr:tf1", &seg, &signer)));
+    assert!(out.contains(&crate::live_tv::proxy::proxied_url(
+        "fr:tf1", None, &seg, &signer
+    )));
 
     // Player 6: every URI carries the token; a renewed one is swapped in.
     let master = include_str!("fixtures/p6-master.m3u8");
@@ -660,8 +664,8 @@ async fn a_dlive_only_channel_scrapes_its_embed_inline() {
     assert_eq!(hits(&rig.fake.site_pages), 1);
 }
 
-/// The first proxied URI of a rewritten playlist, as `(c, u, s)`.
-fn first_proxied(body: &str) -> (String, String, String) {
+/// The first proxied URI of a rewritten playlist, as `(c, src, u, s)`.
+fn first_proxied(body: &str) -> (String, Option<String>, String, String) {
     let line = body
         .lines()
         .find(|l| l.starts_with("/api/livetv/proxy?"))
@@ -671,19 +675,30 @@ fn first_proxied(body: &str) -> (String, String, String) {
         url.query_pairs()
             .find(|(key, _)| key == k)
             .map(|(_, v)| v.into_owned())
-            .unwrap()
     };
-    (get("c"), get("u"), get("s"))
+    (
+        get("c").unwrap(),
+        get("src"),
+        get("u").unwrap(),
+        get("s").unwrap(),
+    )
 }
 
 async fn proxy_wrapped(
     rig: &Rig,
     body: &str,
 ) -> Result<(Vec<u8>, String), crate::live_tv::LiveTvError> {
-    let (c, u, s) = first_proxied(body);
+    let (c, src, u, s) = first_proxied(body);
     let ProxiedResponse {
-        resp, from_dlive, ..
-    } = rig.svc.proxy_fetch(&c, &u, &s).await.unwrap();
+        resp,
+        from_dlive,
+        source,
+        ..
+    } = rig
+        .svc
+        .proxy_fetch(&c, src.as_deref(), &u, &s)
+        .await
+        .unwrap();
     assert!(from_dlive);
     let ct = resp
         .headers()
@@ -691,7 +706,9 @@ async fn proxy_wrapped(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
     assert_eq!(ct.as_deref(), Some("image/png"));
-    rig.svc.wrapped_segment(&c, resp, ct, from_dlive).await
+    rig.svc
+        .wrapped_segment(&c, source, resp, ct, from_dlive)
+        .await
 }
 
 #[tokio::test]

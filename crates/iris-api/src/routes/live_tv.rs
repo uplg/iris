@@ -151,6 +151,10 @@ impl From<crate::live_tv::epg::Programme> for LiveProgramme {
 pub(crate) struct LiveProxyParams {
     /// Channel key (`country:id`) the URL was minted for.
     pub c: String,
+    /// Source of the channel the URL was minted for (`{index}-{hash}`),
+    /// covered by the signature. Absent on URLs minted before it existed.
+    #[serde(default)]
+    pub src: Option<String>,
     /// base64url-encoded upstream URL.
     pub u: String,
     /// HMAC signature over channel key + URL.
@@ -455,7 +459,10 @@ pub(crate) async fn live_proxy(
         resp,
         final_url,
         from_dlive,
-    } = svc.proxy_fetch(&params.c, &params.u, &params.s).await?;
+        source,
+    } = svc
+        .proxy_fetch(&params.c, params.src.as_deref(), &params.u, &params.s)
+        .await?;
     let status = resp.status();
     let upstream_ct = resp
         .headers()
@@ -472,7 +479,7 @@ pub(crate) async fn live_proxy(
             .is_some_and(|ct| ct.to_ascii_lowercase().starts_with("image/"))
     {
         let (body, content_type) = svc
-            .wrapped_segment(&params.c, resp, upstream_ct, from_dlive)
+            .wrapped_segment(&params.c, source, resp, upstream_ct, from_dlive)
             .await?;
         return Response::builder()
             .header(header::CONTENT_TYPE, content_type)
@@ -493,7 +500,7 @@ pub(crate) async fn live_proxy(
             && upstream_ct
                 .as_deref()
                 .is_some_and(|ct| ct.to_ascii_lowercase().starts_with("text/html"));
-        svc.note_segment_result(&params.c, status.is_success() && !html)
+        svc.note_segment_result(&params.c, source, status.is_success() && !html)
             .await;
         if html {
             return Err(ApiError::Upstream("dlive segment is a web page".into()));
@@ -512,11 +519,11 @@ pub(crate) async fn live_proxy(
     if is_playlist {
         let body = crate::live_tv::read_playlist(resp).await?;
         if let Some(scheme) = proxy::drm_scheme(&body)
-            && let Some(locked) = svc.note_encrypted(&params.c, scheme).await
+            && let Some(locked) = svc.note_encrypted(&params.c, source, scheme).await
         {
             return Err(locked.into());
         }
-        let rewritten = proxy::rewrite_playlist(&body, &final_url, &params.c, svc.signer());
+        let rewritten = proxy::rewrite_playlist(&body, &final_url, &params.c, source, svc.signer());
         return playlist_response(rewritten);
     }
 

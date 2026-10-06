@@ -322,16 +322,19 @@ impl FetchFailure {
     }
 }
 
-/// A proxied upstream response. `from_dlive`: the channel's active source is
-/// a dlive one, whose segments must unwrap to TS or count as failures.
+/// A proxied upstream response. `from_dlive`: the source it was fetched for
+/// is a dlive one, whose segments must unwrap to TS or count as failures.
+/// `source`: the source the URL names, carried into nested playlists.
 pub struct ProxiedResponse {
     pub resp: reqwest::Response,
     pub final_url: Url,
     pub from_dlive: bool,
+    pub source: Option<proxy::SourceTag>,
 }
 
+/// Headers (and dlive identity) a proxied fetch is sent with.
 #[derive(Default)]
-struct ActiveUpstream {
+struct SourceUpstream {
     user_agent: Option<String>,
     referrer: Option<String>,
     dlive: Option<(u32, u8)>,
@@ -491,6 +494,21 @@ pub struct CountrySnapshot {
 impl CountrySnapshot {
     fn channel_index(&self, id: &str) -> Option<usize> {
         self.by_id.get(id).copied()
+    }
+
+    /// The source of channel `i` a proxy tag names: at its minting index when
+    /// it is still there, wherever a refresh moved it otherwise.
+    fn source_index(&self, i: usize, tag: proxy::SourceTag) -> Option<usize> {
+        let sources = &self.channels.get(i)?.sources;
+        if sources
+            .get(tag.index)
+            .is_some_and(|s| proxy::source_key(&s.url) == tag.key)
+        {
+            return Some(tag.index);
+        }
+        sources
+            .iter()
+            .position(|s| proxy::source_key(&s.url) == tag.key)
     }
 
     /// The elected source of channel `i`.
@@ -1245,8 +1263,9 @@ impl LiveTvService {
             host = %host,
             "live tv source elected"
         );
+        let tag = proxy::SourceTag::of(si, &source.url);
         MasterPlaylist {
-            body: proxy::rewrite_playlist(body, base, channel_key, &self.inner.signer),
+            body: proxy::rewrite_playlist(body, base, channel_key, Some(tag), &self.inner.signer),
             source_index: si,
             upstream_host: host.to_string(),
             source_count: snap.channels[idx].sources.len(),
@@ -1727,7 +1746,7 @@ impl LiveTvService {
         if !self
             .inner
             .signer
-            .verify(proxy::LOGO_KEY, upstream.as_str(), sig)
+            .verify(proxy::LOGO_KEY, None, upstream.as_str(), sig)
         {
             return Err(LiveTvError::BadProxyRequest);
         }
@@ -2039,25 +2058,31 @@ impl LiveTvService {
 
     /// Verify + fetch a signed proxy URL. Returns the upstream response for
     /// the route layer to stream through (or re-rewrite when it's a nested
-    /// playlist). `channel_key` is `country:id` as minted by the rewriter.
+    /// playlist). `channel_key` is `country:id` and `source` the source tag,
+    /// as minted by the rewriter (no tag on a URL minted before tags).
     pub async fn proxy_fetch(
         &self,
         channel_key: &str,
+        source: Option<&str>,
         encoded_url: &str,
         sig: &str,
     ) -> Result<ProxiedResponse, LiveTvError> {
         let upstream = proxy::decode_upstream(encoded_url).ok_or(LiveTvError::BadProxyRequest)?;
+        let tag = match source {
+            Some(src) => Some(proxy::SourceTag::parse(src).ok_or(LiveTvError::BadProxyRequest)?),
+            None => None,
+        };
         if !self
             .inner
             .signer
-            .verify(channel_key, upstream.as_str(), sig)
+            .verify(channel_key, source, upstream.as_str(), sig)
         {
             return Err(LiveTvError::BadProxyRequest);
         }
-        // Recover the channel's pinned headers; a channel that vanished in a
-        // playlist refresh still streams with defaults (sig proves we minted
-        // the URL).
-        let active = self.active_upstream(channel_key).await;
+        // Recover the minting source's pinned headers; a channel or source
+        // that vanished in a playlist refresh still streams with defaults
+        // (sig proves we minted the URL).
+        let active = self.source_upstream(channel_key, tag).await;
         let dlive = &self.inner.dlive;
         let mut target = upstream.clone();
         if let Some((id, player)) = active.dlive
@@ -2108,6 +2133,7 @@ impl LiveTvService {
             resp,
             final_url,
             from_dlive: active.dlive.is_some(),
+            source: tag,
         })
     }
 
@@ -2118,6 +2144,7 @@ impl LiveTvService {
     pub async fn wrapped_segment(
         &self,
         channel_key: &str,
+        source: Option<proxy::SourceTag>,
         resp: reqwest::Response,
         content_type: Option<String>,
         from_dlive: bool,
@@ -2138,35 +2165,36 @@ impl LiveTvService {
                 content_type.unwrap_or_else(|| "application/octet-stream".into()),
             ),
             _ => {
-                self.note_segment_result(channel_key, false).await;
+                self.note_segment_result(channel_key, source, false).await;
                 return Err(LiveTvError::Upstream(
                     "no TS inside the wrapped segment".into(),
                 ));
             }
         };
-        self.note_segment_result(channel_key, true).await;
+        self.note_segment_result(channel_key, source, true).await;
         Ok(served)
     }
 
-    /// Record the outcome of a segment/key fetch for the channel's active
-    /// source. A run of failures (broken origin that serves a valid playlist
-    /// but 404s its segments) demotes the source and re-elects, so the
-    /// client's next master reload lands on a working feed — the automatic
-    /// "sanity check → fallback" the household expects.
-    pub async fn note_segment_result(&self, channel_key: &str, ok: bool) {
-        let Some((snap, idx)) = self.locate(channel_key).await else {
+    /// Record the outcome of a segment/key fetch for the source that minted
+    /// its URL. A run of failures (broken origin that serves a valid playlist
+    /// but 404s its segments) demotes the source and, when it is the elected
+    /// one, re-elects, so the client's next master reload lands on a working
+    /// feed — the automatic "sanity check → fallback" the household expects.
+    pub async fn note_segment_result(
+        &self,
+        channel_key: &str,
+        source: Option<proxy::SourceTag>,
+        ok: bool,
+    ) {
+        let Some((snap, idx, si)) = self.locate_source(channel_key, source).await else {
             return;
         };
-        let active = snap.active(idx);
-        let health = &snap.health[idx][active];
+        let health = &snap.health[idx][si];
         if ok {
             health.segment_failures.store(0, Ordering::Relaxed);
             return;
         }
-        let is_dlive = snap.channels[idx]
-            .sources
-            .get(active)
-            .is_some_and(|s| dlive::parse_sentinel(&s.url).is_some());
+        let is_dlive = dlive::parse_sentinel(&snap.channels[idx].sources[si].url).is_some();
         let threshold = if is_dlive {
             DLIVE_SEGMENT_FAIL_THRESHOLD
         } else {
@@ -2183,45 +2211,44 @@ impl LiveTvService {
         if is_dlive {
             self.inner.dlive.note_outage();
         }
-        let next = snap.reelect(idx, epoch_ms());
+        let next = (snap.active(idx) == si)
+            .then(|| snap.reelect(idx, epoch_ms()))
+            .flatten();
         tracing::info!(
             channel = channel_key,
-            demoted = active,
+            demoted = si,
             elected = ?next,
             "live tv source demoted after repeated segment failures"
         );
     }
 
-    /// A media playlist proxied for the channel's active source turned out
-    /// DRM-locked (a variant the election didn't read): leave that source out
-    /// and elect the next, so the player's report and reload land elsewhere.
-    /// The error is what the player gets instead of the playlist; `None` when
-    /// the source brings a licence, and the playlist is served as is.
+    /// A media playlist proxied for a source turned out DRM-locked (a variant
+    /// the election didn't read): leave that source out and, when it is the
+    /// elected one, elect the next, so the player's report and reload land
+    /// elsewhere. The error is what the player gets instead of the playlist;
+    /// `None` when the source brings a licence, and the playlist is served as
+    /// is.
     pub async fn note_encrypted(
         &self,
         channel_key: &str,
+        source: Option<proxy::SourceTag>,
         scheme: &'static str,
     ) -> Option<LiveTvError> {
         let locked = || Some(LiveTvError::Upstream(format!("encrypted with {scheme}")));
-        let Some((snap, idx)) = self.locate(channel_key).await else {
+        let Some((snap, idx, si)) = self.locate_source(channel_key, source).await else {
             return locked();
         };
-        let active = snap.active(idx);
-        if snap.channels[idx]
-            .sources
-            .get(active)
-            .is_some_and(|s| s.licence.is_some())
-        {
+        if snap.channels[idx].sources[si].licence.is_some() {
             return None;
         }
         let now_ms = epoch_ms();
-        if let Some(health) = snap.health[idx].get(active) {
-            health.mark_encrypted(now_ms);
-        }
-        let next = snap.reelect(idx, now_ms);
+        snap.health[idx][si].mark_encrypted(now_ms);
+        let next = (snap.active(idx) == si)
+            .then(|| snap.reelect(idx, now_ms))
+            .flatten();
         tracing::info!(
             channel = channel_key,
-            demoted = active,
+            demoted = si,
             elected = ?next,
             scheme,
             "live tv media playlist is DRM-locked, source left out of the election"
@@ -2242,30 +2269,48 @@ impl LiveTvService {
         Some((snap, idx))
     }
 
-    /// Headers (and dlive identity) of the channel's active source, for its
-    /// proxied requests. A dlive source's headers come from its resolution.
-    async fn active_upstream(&self, channel_key: &str) -> ActiveUpstream {
-        let Some((snap, idx)) = self.locate(channel_key).await else {
-            return ActiveUpstream::default();
+    /// [`Self::locate`] plus the source a proxied URL belongs to: the one its
+    /// tag names (`None` once that source left the list), the elected one for
+    /// a URL minted before tags.
+    async fn locate_source(
+        &self,
+        channel_key: &str,
+        source: Option<proxy::SourceTag>,
+    ) -> Option<(Arc<CountrySnapshot>, usize, usize)> {
+        let (snap, idx) = self.locate(channel_key).await?;
+        let si = match source {
+            Some(tag) => snap.source_index(idx, tag)?,
+            None => snap.active(idx),
         };
-        let Some(source) = snap.channels[idx].sources.get(snap.active(idx)) else {
-            return ActiveUpstream::default();
+        snap.channels[idx].sources.get(si)?;
+        Some((snap, idx, si))
+    }
+
+    /// Headers (and dlive identity) of the source a proxied URL belongs to,
+    /// for its requests. A dlive source's headers come from its resolution.
+    async fn source_upstream(
+        &self,
+        channel_key: &str,
+        source: Option<proxy::SourceTag>,
+    ) -> SourceUpstream {
+        let Some((snap, idx, si)) = self.locate_source(channel_key, source).await else {
+            return SourceUpstream::default();
         };
+        let source = &snap.channels[idx].sources[si];
         if let Some((id, player)) = dlive::parse_sentinel(&source.url) {
             let (user_agent, referrer) = self.inner.dlive.cached_headers(id, player);
-            return ActiveUpstream {
+            return SourceUpstream {
                 user_agent,
                 referrer,
                 dlive: Some((id, player)),
             };
         }
-        ActiveUpstream {
+        SourceUpstream {
             user_agent: source.user_agent.clone(),
             referrer: source.referrer.clone(),
             dlive: None,
         }
     }
-
     /// Now/next for every channel of a country that has a guide match.
     pub async fn epg_now(&self, country: &str) -> Result<Vec<NowNext>, LiveTvError> {
         let country = validate_country(country)?;
@@ -3051,7 +3096,7 @@ https://a/x.m3u8
         let mp = svc.master_playlist("ie", "c").await.unwrap();
         assert_eq!(mp.source_index, 0, "the licence keeps it in");
         assert!(!snap.health[0][0].encrypted(epoch_ms()));
-        assert!(svc.note_encrypted("ie:c", "Widevine").await.is_none());
+        assert!(svc.note_encrypted("ie:c", None, "Widevine").await.is_none());
         assert!(!snap.health[0][0].encrypted(epoch_ms()));
 
         let (svc, snap, _) = drm_rig(None, &["/drm/wv.m3u8", "/clear.m3u8"]).await;
@@ -3079,15 +3124,138 @@ https://a/x.m3u8
     async fn a_drm_media_playlist_met_in_the_proxy_rotates_away() {
         let (svc, snap, _) = drm_rig(None, &["/clear.m3u8", "/drm/master.m3u8"]).await;
         assert!(matches!(
-            svc.note_encrypted("ie:c", "FairPlay").await,
+            svc.note_encrypted("ie:c", None, "FairPlay").await,
             Some(LiveTvError::Upstream(_))
         ));
         assert!(snap.health[0][0].encrypted(epoch_ms()));
         assert_eq!(snap.active_source[0].load(Ordering::Relaxed), 1);
         assert!(matches!(
-            svc.note_encrypted("ie:c", "FairPlay").await,
+            svc.note_encrypted("ie:c", None, "FairPlay").await,
             Some(LiveTvError::Encrypted)
         ));
+    }
+
+    /// A two-feed channel whose segments 404, served by a host that records
+    /// the User-Agent of every request.
+    async fn segment_rig() -> (
+        LiveTvService,
+        Arc<CountrySnapshot>,
+        Arc<std::sync::Mutex<Vec<String>>>,
+        String,
+    ) {
+        use axum::routing::get;
+        let agents = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = agents.clone();
+        let app = axum::Router::new().route(
+            "/gone.ts",
+            get(move |headers: http::HeaderMap| {
+                let ua = headers
+                    .get(http::header::USER_AGENT)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                seen.lock().unwrap().push(ua);
+                async { axum::http::StatusCode::NOT_FOUND }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let mut channel = channel_with(&["http://feed/0.m3u8", "http://feed/1.m3u8"]);
+        for (i, s) in channel.sources.iter_mut().enumerate() {
+            s.user_agent = Some(format!("UA-{i}"));
+        }
+        let snap = Arc::new(svc.build_snapshot(vec![channel]));
+        svc.inner
+            .snapshots
+            .write()
+            .unwrap()
+            .insert("ie".into(), snap.clone());
+        (svc, snap, agents, format!("http://{addr}/gone.ts"))
+    }
+
+    /// Fetch `segment` through a proxy URL minted for `source` (`None`: a URL
+    /// minted before source tags).
+    async fn proxy_segment(
+        svc: &LiveTvService,
+        source: Option<proxy::SourceTag>,
+        segment: &str,
+    ) -> ProxiedResponse {
+        let minted =
+            proxy::proxied_url("ie:c", source, &Url::parse(segment).unwrap(), svc.signer());
+        let query = Url::parse(&format!("http://iris{minted}")).unwrap();
+        let param = |k: &str| {
+            query
+                .query_pairs()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.into_owned())
+        };
+        let src = param("src");
+        svc.proxy_fetch(
+            "ie:c",
+            src.as_deref(),
+            &param("u").unwrap(),
+            &param("s").unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_old_source_segment_is_fetched_and_charged_as_that_source() {
+        let (svc, snap, agents, segment) = segment_rig().await;
+        let old = proxy::SourceTag::of(0, &snap.channels[0].sources[0].url);
+        snap.active_source[0].store(1, Ordering::Relaxed);
+
+        for _ in 0..SEGMENT_FAIL_THRESHOLD {
+            let fetched = proxy_segment(&svc, Some(old), &segment).await;
+            assert_eq!(fetched.source, Some(old));
+            svc.note_segment_result("ie:c", fetched.source, fetched.resp.status().is_success())
+                .await;
+        }
+        assert!(
+            agents.lock().unwrap().iter().all(|ua| ua == "UA-0"),
+            "the minting source's headers"
+        );
+        let now = epoch_ms();
+        assert!(
+            snap.health[0][0].in_cooldown(now),
+            "charged to the old feed"
+        );
+        assert!(
+            !snap.health[0][1].in_cooldown(now),
+            "the new feed untouched"
+        );
+        assert_eq!(snap.active(0), 1, "the election stays");
+
+        agents.lock().unwrap().clear();
+        let legacy = proxy_segment(&svc, None, &segment).await;
+        assert_eq!(legacy.source, None);
+        assert_eq!(
+            agents.lock().unwrap().as_slice(),
+            ["UA-1"],
+            "untagged: the elected feed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_source_tag_follows_its_feed_across_a_refresh() {
+        let (svc, snap, _, _) = segment_rig().await;
+        let second = proxy::SourceTag::of(1, &snap.channels[0].sources[1].url);
+        let refreshed = svc.build_snapshot(vec![channel_with(&[
+            "http://feed/1.m3u8",
+            "http://feed/new.m3u8",
+        ])]);
+        assert_eq!(refreshed.source_index(0, second), Some(0), "moved up");
+        let gone = proxy::SourceTag::of(0, &snap.channels[0].sources[0].url);
+        assert_eq!(refreshed.source_index(0, gone), None, "left the list");
+        let forged = proxy::SourceTag { index: 1, ..gone };
+        assert_eq!(
+            refreshed.source_index(0, forged),
+            None,
+            "an index alone is not enough"
+        );
     }
 
     #[tokio::test]
