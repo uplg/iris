@@ -269,22 +269,68 @@ pub async fn reconcile_uploaded(
     session_now: u64,
 ) -> Result<(), sqlx::Error> {
     let now = i64::try_from(session_now).unwrap_or(i64::MAX);
-    // Single UPDATE so the read of the previous value and the write of the
-    // new total can't interleave with a delete or another reconcile pass.
-    sqlx::query(
-        "UPDATE torrents SET \
-           uploaded_bytes_total = uploaded_bytes_total + \
-             CASE WHEN ?1 >= uploaded_bytes_session_seen \
-                  THEN ?1 - uploaded_bytes_session_seen \
-                  ELSE ?1 END, \
-           uploaded_bytes_session_seen = ?1 \
-         WHERE infohash = ?2",
-    )
-    .bind(now)
-    .bind(infohash)
-    .execute(pool)
-    .await?;
+    sqlx::query(RECONCILE_UPLOADED)
+        .bind(now)
+        .bind(infohash)
+        .execute(pool)
+        .await?;
     Ok(())
+}
+
+/// Single UPDATE so the read of the previous value and the write of the new
+/// total can't interleave with a delete or another reconcile pass. An
+/// unchanged session counter writes nothing.
+const RECONCILE_UPLOADED: &str = "UPDATE torrents SET \
+       uploaded_bytes_total = uploaded_bytes_total + \
+         CASE WHEN ?1 >= uploaded_bytes_session_seen \
+              THEN ?1 - uploaded_bytes_session_seen \
+              ELSE ?1 END, \
+       uploaded_bytes_session_seen = ?1 \
+     WHERE infohash = ?2 AND uploaded_bytes_session_seen IS NOT ?1";
+
+const RECONCILE_DOWNLOADED: &str = "UPDATE torrents SET downloaded_bytes_total = ?1 \
+     WHERE infohash = ?2 AND downloaded_bytes_total < ?1";
+
+const MARK_FINISHED: &str = "UPDATE torrents SET finished_at = ?1 \
+     WHERE infohash = ?2 AND finished_at IS NULL AND deleted_at IS NULL";
+
+/// One engine snapshot's counters, for [`reconcile_snapshots`].
+pub struct SnapshotCounters<'a> {
+    pub infohash: &'a str,
+    pub uploaded_bytes: u64,
+    pub progress_bytes: u64,
+    pub finished: bool,
+}
+
+/// [`reconcile_uploaded`], [`reconcile_downloaded`] and [`mark_finished`]
+/// for every live torrent in one transaction: one write-lock acquisition
+/// per tick instead of up to three per torrent.
+pub async fn reconcile_snapshots(
+    pool: &SqlitePool,
+    snapshots: &[SnapshotCounters<'_>],
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now();
+    let mut tx = pool.begin().await?;
+    for s in snapshots {
+        sqlx::query(RECONCILE_UPLOADED)
+            .bind(i64::try_from(s.uploaded_bytes).unwrap_or(i64::MAX))
+            .bind(s.infohash)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(RECONCILE_DOWNLOADED)
+            .bind(i64::try_from(s.progress_bytes).unwrap_or(i64::MAX))
+            .bind(s.infohash)
+            .execute(&mut *tx)
+            .await?;
+        if s.finished {
+            sqlx::query(MARK_FINISHED)
+                .bind(now)
+                .bind(s.infohash)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await
 }
 
 /// Reconcile the lifetime download counter from a live snapshot's
@@ -299,14 +345,11 @@ pub async fn reconcile_downloaded(
     progress_now: u64,
 ) -> Result<(), sqlx::Error> {
     let now = i64::try_from(progress_now).unwrap_or(i64::MAX);
-    sqlx::query(
-        "UPDATE torrents SET downloaded_bytes_total = MAX(downloaded_bytes_total, ?1) \
-         WHERE infohash = ?2",
-    )
-    .bind(now)
-    .bind(infohash)
-    .execute(pool)
-    .await?;
+    sqlx::query(RECONCILE_DOWNLOADED)
+        .bind(now)
+        .bind(infohash)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -353,14 +396,11 @@ pub async fn lifetime_bytes(pool: &SqlitePool) -> Result<(u64, u64), sqlx::Error
 /// already in place when a later deploy puts the restored session
 /// through its `initializing` re-check.
 pub async fn mark_finished(pool: &SqlitePool, infohash: &str) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE torrents SET finished_at = ?1 \
-         WHERE infohash = ?2 AND finished_at IS NULL AND deleted_at IS NULL",
-    )
-    .bind(Utc::now())
-    .bind(infohash)
-    .execute(pool)
-    .await?;
+    sqlx::query(MARK_FINISHED)
+        .bind(Utc::now())
+        .bind(infohash)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -595,6 +635,48 @@ mod tests {
         assert_eq!(back.added_by, Uuid::from(second));
         assert_eq!(back.source_provider.as_deref(), Some("seedpool"));
         assert_eq!(back.source_external_id.as_deref(), Some("seedpool-1"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_reconcile_counts_deltas_once_and_stamps_finished() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let row = upsert(
+            &pool,
+            NewTorrent {
+                infohash: "ee".repeat(20),
+                name: "Seeded".into(),
+                total_size_bytes: 100,
+                source_provider: None,
+                source_external_id: None,
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        let tick = |uploaded, progress, finished| SnapshotCounters {
+            infohash: &row.infohash,
+            uploaded_bytes: uploaded,
+            progress_bytes: progress,
+            finished,
+        };
+        reconcile_snapshots(&pool, &[tick(100, 50, false)])
+            .await
+            .unwrap();
+        reconcile_snapshots(&pool, &[tick(100, 40, true)])
+            .await
+            .unwrap();
+        // A restart resets the session counter: 30 is a fresh delta.
+        reconcile_snapshots(&pool, &[tick(30, 100, true)])
+            .await
+            .unwrap();
+        let got = find_by_infohash(&pool, &row.infohash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.uploaded_bytes_total, 130);
+        assert_eq!(got.downloaded_bytes_total, 100);
+        assert!(got.finished_at.is_some());
     }
 
     #[tokio::test]
