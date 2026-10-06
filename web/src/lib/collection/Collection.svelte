@@ -10,7 +10,8 @@
 	import { pageTitle } from '#lib/title.ts';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Poster from '#lib/components/Poster.svelte';
-	import { FAST, moving, read } from '#lib/queries.ts';
+	import { FAST, read } from '#lib/queries.ts';
+	import { isMoving } from '#lib/torrent.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import Episodes from './Episodes.svelte';
 	import GoneReleases from './GoneReleases.svelte';
@@ -27,7 +28,7 @@
 	const q = createQuery(
 		() => ({
 			...read.collection(id),
-			refetchInterval: (query: { state: { data?: CollectionDetail } }) => (query.state.data?.torrents.some(moving) ? FAST : false)
+			refetchInterval: (query: { state: { data?: CollectionDetail } }) => (query.state.data?.torrents.some(isMoving) ? FAST : false)
 		}),
 		() => queryClient
 	);

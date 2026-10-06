@@ -12,7 +12,8 @@
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import { refetchCollection } from './actions.ts';
 	import { mainVideo, qualityWords } from './merge.ts';
-	import { downloading, eta } from './status.ts';
+	import { eta } from './status.ts';
+	import { isFetching } from '#lib/torrent.ts';
 	import { watchHref } from '#lib/paths.ts';
 
 	let { collection: c }: { collection: CollectionDetail } = $props();
@@ -54,7 +55,7 @@
 				<li data-infohash={t.infohash}>
 					<p class="release">{nameOf(t)}</p>
 					<p class="hint">{facts(t)}</p>
-					{#if downloading(t)}
+					{#if isFetching(t)}
 						<StatusLine tone={t.state === 'error' ? 'warn' : 'busy'} text="Downloading · {percent(t.progress_pct)} · {eta(t)}" />
 					{/if}
 					<div class="actions">

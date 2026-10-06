@@ -7,6 +7,7 @@ import { STORAGE } from '#lib/storage.ts';
 import { duration, episodeCode, fileName, formatSize, percent, plural, prettySceneName, speed, VIDEO_RE } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
 import { watchWords } from '#lib/watched.ts';
+import { etaSeconds, isComplete, PHASE_WORDS, phaseOf } from '#lib/torrent.ts';
 
 /** The page's views, remembered per browser. */
 export type View = 'titles' | 'downloads';
@@ -135,21 +136,12 @@ export const GROUPS: readonly { id: Group; title: string }[] = [
 	{ id: 'seeding', title: 'Seeding' }
 ];
 
-const done = (t: TorrentView) => t.finished || t.progress_pct >= 100;
-
 /** Where a release goes: fetching, needing a hand (an error, no peers, stopped, or paused by
  * its tracker's policy), or sharing what it has. */
 export function groupOf(t: TorrentView): Group {
-	if (t.state === 'error' || t.state === 'paused') return 'attention';
-	if (done(t)) return 'seeding';
-	if (t.state === 'live' && t.peers === 0 && t.download_speed_bps === 0) return 'attention';
-	return 'downloading';
-}
-
-/** Seconds until a release finishes at its current speed; null when nothing moves. */
-export function etaSeconds(t: TorrentView): number | null {
-	if (t.download_speed_bps <= 0) return null;
-	return Math.max(0, t.total_size_bytes - t.progress_bytes) / t.download_speed_bps;
+	const phase = phaseOf(t);
+	if (phase === 'error' || phase === 'paused' || phase === 'stalled') return 'attention';
+	return phase === 'seeding' ? 'seeding' : 'downloading';
 }
 
 export function ratioOf(sent: number, received: number | undefined): number | null {
@@ -159,24 +151,32 @@ export function ratioOf(sent: number, received: number | undefined): number | nu
 /** A release's state line, in words. */
 export function releaseStatus(t: TorrentView): { tone: Tone; text: string } {
 	const pct = percent(Math.min(100, Math.max(0, t.progress_pct)));
-	if (t.state === 'error') return { tone: 'warn', text: t.error ? `Error · ${t.error}` : 'Error · the engine stopped this release' };
-	if (t.state === 'paused') {
-		if (done(t)) {
-			const from = t.source_provider ? `${t.source_provider} releases never seed` : 'its tracker does not seed';
-			return { tone: 'info', text: `Paused after download · ${from}` };
+	const phase = phaseOf(t);
+	const word = PHASE_WORDS[phase];
+	switch (phase) {
+		case 'error':
+			return { tone: 'warn', text: t.error ? `${word} · ${t.error}` : word };
+		case 'paused':
+			if (isComplete(t)) {
+				const from = t.source_provider ? `${t.source_provider} releases never seed` : 'its tracker does not seed';
+				return { tone: 'info', text: `${word} after download · ${from}` };
+			}
+			return { tone: 'warn', text: `${word} · ${pct}` };
+		case 'seeding': {
+			const who = t.peers === 0 ? 'nobody downloading now' : `${plural(t.peers, 'peer')} downloading`;
+			return { tone: 'ok', text: `${word} · ${who} · ${speed(t.upload_speed_bps)} up` };
 		}
-		return { tone: 'warn', text: `Paused · ${pct}` };
+		case 'checking':
+			return { tone: 'busy', text: `${word} · ${pct}` };
+		case 'stalled':
+			return { tone: 'warn', text: `${word} · no peers · ${pct}` };
+		case 'downloading': {
+			const eta = etaSeconds(t);
+			const parts = [`${word} · ${pct}`, speed(t.download_speed_bps), plural(t.peers, 'peer')];
+			if (eta !== null) parts.push(`done in about ${duration(eta)}`);
+			return { tone: 'busy', text: parts.join(' · ') };
+		}
 	}
-	if (done(t)) {
-		const who = t.peers === 0 ? 'nobody downloading now' : `${plural(t.peers, 'peer')} downloading`;
-		return { tone: 'ok', text: `Seeding · ${who} · ${speed(t.upload_speed_bps)} up` };
-	}
-	if (t.state === 'initializing') return { tone: 'busy', text: `Checking files · ${pct}` };
-	if (groupOf(t) === 'attention') return { tone: 'warn', text: `Stalled · no peers · ${pct}` };
-	const eta = etaSeconds(t);
-	const parts = [`Downloading · ${pct}`, speed(t.download_speed_bps), plural(t.peers, 'peer')];
-	if (eta !== null) parts.push(`about ${duration(eta)}`);
-	return { tone: 'busy', text: parts.join(' · ') };
 }
 
 /** What a release's delete removes, named: its files, the first few by name. */

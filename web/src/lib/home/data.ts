@@ -4,6 +4,7 @@
 import type { ContinueWatchingItem, HomeSummary, MediaKind, PlaybackPrefs, TorrentView } from '@iris/api/client';
 import { formatSize, percent, plural, thisTitle, timeLeft } from '@iris/api/format';
 import { languageName } from '#lib/language.ts';
+import { isFetching } from '#lib/torrent.ts';
 
 const known = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
 
@@ -24,7 +25,7 @@ export function rightNow(s: HomeSummary): string[] {
 export function downloadsByCollection(list: readonly TorrentView[]): Map<string, number> {
 	const sums = new Map<string, { done: number; total: number }>();
 	for (const t of list) {
-		if (t.finished || !t.collection_id) continue;
+		if (!isFetching(t) || !t.collection_id) continue;
 		const s = sums.get(t.collection_id) ?? { done: 0, total: 0 };
 		s.done += t.progress_bytes;
 		s.total += t.total_size_bytes;

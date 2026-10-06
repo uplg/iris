@@ -11,7 +11,7 @@
 	import { Dialog } from 'bits-ui';
 	import { untrack } from 'svelte';
 	import { afterNavigate, goto } from '$app/navigation';
-	import { follows, library, progress as progressApi, torrents, type TorrentView } from '@iris/api/client';
+	import { follows, library, progress as progressApi, torrents } from '@iris/api/client';
 	import {
 		duration as lengthWords,
 		episodeCode,
@@ -33,6 +33,7 @@
 	import { stored, text as words } from '#lib/stored.ts';
 	import { pageTitle } from '#lib/title.ts';
 	import { KEYS, read, refreshLibrary } from '#lib/queries.ts';
+	import { stateWord } from '#lib/torrent.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import IrisPlayer from '#lib/player/IrisPlayer.svelte';
 	import StageTopBar from '#lib/player/StageTopBar.svelte';
@@ -393,14 +394,6 @@
 	);
 	const notice = $derived(outage ? 'Iris is not answering. Reconnecting…' : playerError ? `The player stopped: ${playerError}` : null);
 	const gone = $derived(isGone(torrentQ.error));
-
-	const STATE_WORDS: Record<TorrentView['state'], string> = {
-		initializing: 'Starting',
-		live: 'Downloading',
-		paused: 'Paused',
-		error: 'Stopped with an error'
-	};
-	const stateWords = (t: TorrentView) => (t.state === 'live' && t.finished ? 'Sharing' : STATE_WORDS[t.state]);
 </script>
 
 <svelte:head><title>{pageTitle(data ? heading : 'Watch')}</title></svelte:head>
@@ -514,7 +507,7 @@
 				<section class="torrent" aria-labelledby="torrent-title">
 					<h2 id="torrent-title" class="sr-only">The torrent</h2>
 					<p class="state">
-						<strong>{stateWords(data)}</strong>
+						<strong>{stateWord(data)}</strong>
 						<span>{formatSize(data.progress_bytes)} of {formatSize(data.total_size_bytes)}</span>
 					</p>
 					<Progress

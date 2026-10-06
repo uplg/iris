@@ -4,6 +4,7 @@
 import type { PlayStatus, TorrentView } from '@iris/api/client';
 import { percent, plural, speed } from '@iris/api/format';
 import { notOnDisk } from './tier.ts';
+import { isFetching } from '#lib/torrent.ts';
 
 export type StepState = 'done' | 'current' | 'waiting';
 export interface ReadyStep {
@@ -50,14 +51,7 @@ const peers = (n: number) => plural(n, 'peer');
 export function isDeadSwarm(t: TorrentView, probeError: unknown): boolean {
 	if (probeError instanceof Error && /no seeders|^stalled:/i.test(probeError.message)) return true;
 	const ageMinutes = (new Date(t.fetched_at).getTime() - new Date(t.added_at).getTime()) / 60_000;
-	return (
-		t.state !== 'initializing' &&
-		!t.finished &&
-		t.peers === 0 &&
-		t.download_speed_bps === 0 &&
-		clamp(t.progress_pct) < 100 &&
-		ageMinutes > 2
-	);
+	return t.state !== 'initializing' && isFetching(t) && t.peers === 0 && t.download_speed_bps === 0 && ageMinutes > 2;
 }
 
 export function readiness(i: ReadyInput): Readiness {

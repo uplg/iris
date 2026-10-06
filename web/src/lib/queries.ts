@@ -18,6 +18,7 @@ import {
 	type TorrentView
 } from '@iris/api/client';
 import { queryClient } from '#lib/query.ts';
+import { isMoving } from '#lib/torrent.ts';
 
 export const KEYS = {
 	library: ['library'],
@@ -65,10 +66,7 @@ const DAY = 24 * 60 * 60_000;
 export const collectionsOf = (d: LibraryResponse | undefined): CollectionListItem[] => (d?.view === 'collections' ? d.items : []);
 export const torrentsOf = (d: LibraryResponse | undefined): TorrentView[] => (d?.view === 'torrents' ? d.items : []);
 
-/** A release still fetching data (not finished, not stopped). */
-export const moving = (t: TorrentView) => !t.finished && t.progress_pct < 100 && (t.state === 'live' || t.state === 'initializing');
-
-const somethingMoves = (d: LibraryResponse | undefined) => torrentsOf(d).some(moving);
+const somethingMoves = (d: LibraryResponse | undefined) => torrentsOf(d).some(isMoving);
 
 export const read = {
 	collections: () => ({
@@ -101,7 +99,7 @@ export const read = {
 	torrent: (infohash: string) => ({
 		queryKey: KEYS.torrent(infohash),
 		queryFn: () => torrents.get(infohash),
-		refetchInterval: (q: { state: { data?: TorrentView } }) => (q.state.data && !moving(q.state.data) ? SLOW : FAST)
+		refetchInterval: (q: { state: { data?: TorrentView } }) => (q.state.data && !isMoving(q.state.data) ? SLOW : FAST)
 	}),
 	/** Where a file sits in its series, and the next episode's state (re-read when it may have changed). */
 	episodeContext: (infohash: string, fileIdx: number) => ({

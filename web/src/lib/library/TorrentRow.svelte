@@ -13,6 +13,7 @@
 	import Disclosure from '#lib/components/Disclosure.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import { deleteDescription, ratioOf, releaseName, releaseStatus, watchState } from './model.ts';
+	import { isFetching } from '#lib/torrent.ts';
 	import { refreshLibrary } from '#lib/queries.ts';
 	import FileList from './FileList.svelte';
 
@@ -32,7 +33,7 @@
 	const videos = $derived(t.files.filter((f) => isVideo(f.path)));
 	const status = $derived(releaseStatus(t));
 	const pct = $derived(Math.min(100, Math.max(0, t.progress_pct)));
-	const showBar = $derived(!t.finished && pct < 100);
+	const showBar = $derived(isFetching(t));
 	const ratio = $derived(ratioOf(t.uploaded_bytes_total, t.downloaded_bytes_total));
 	const facts = $derived(
 		[

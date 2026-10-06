@@ -41,12 +41,12 @@ describe('releases', () => {
 	});
 
 	it('say their state in words', () => {
-		expect(releaseStatus(downloading).text).toBe('Downloading · 42% · 6.1 MB/s · 24 peers · about 2 min');
+		expect(releaseStatus(downloading).text).toBe('Downloading · 42% · 6.1 MB/s · 24 peers · done in about 2 min');
 		expect(releaseStatus(torrent({ state: 'paused', source_provider: 'nyaa' })).text).toBe(
 			'Paused after download · nyaa releases never seed'
 		);
 		expect(releaseStatus(torrent({ finished: false, progress_pct: 10 })).text).toBe('Stalled · no peers · 10%');
-		expect(releaseStatus(torrent({ state: 'error', error: 'disk full' })).text).toBe('Error · disk full');
+		expect(releaseStatus(torrent({ state: 'error', error: 'disk full' })).text).toBe('Stopped with an error · disk full');
 		expect(releaseStatus(torrent({ peers: 3, upload_speed_bps: MB })).text).toBe('Seeding · 3 peers downloading · 1.0 MB/s up');
 		expect(releaseStatus(torrent()).text).toBe('Seeding · nobody downloading now · 0 B/s up');
 	});
