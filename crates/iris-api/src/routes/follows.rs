@@ -1572,6 +1572,16 @@ async fn ingest_picked(
     pick: &PickedAvailability,
     reprime: ReprimeHint<'_>,
 ) -> ApiResult<iris_torrent::IngestResult> {
+    let result = add_picked(state, pick, reprime).await?;
+    super::torrents::reject_unstreamable(state, &result).await?;
+    Ok(result)
+}
+
+async fn add_picked(
+    state: &AppState,
+    pick: &PickedAvailability,
+    reprime: ReprimeHint<'_>,
+) -> ApiResult<iris_torrent::IngestResult> {
     // Resolution order:
     //   1. Magnet — pre-resolved magnet URI, hand straight to librqbit.
     //   2. Persisted download_url — scheduler stashed a pre-signed
@@ -1593,7 +1603,7 @@ async fn ingest_picked(
             .engine()
             .add_from_magnet(&pick.magnet)
             .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")));
+            .map_err(super::torrents::map_engine_err);
     }
     if let Some(url) = pick.download_url.as_deref()
         && let Some(provider) = state.providers().get(&pick.indexer_provider)
@@ -1605,7 +1615,7 @@ async fn ingest_picked(
                     .engine()
                     .add_from_bytes(bytes.to_vec())
                     .await
-                    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")));
+                    .map_err(super::torrents::map_engine_err);
             }
             Err(e) => {
                 tracing::warn!(
@@ -1664,7 +1674,7 @@ async fn ingest_picked(
             state.engine().add_from_bytes(b).await
         }
     }
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))
+    .map_err(super::torrents::map_engine_err)
 }
 
 /// Hard gate shared by every grab that has `.torrent` bytes in hand:

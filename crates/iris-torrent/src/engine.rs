@@ -33,12 +33,16 @@ type Handle = Arc<ManagedTorrent>;
 pub trait Streamable: AsyncRead + AsyncSeek + Unpin + Send {}
 impl<T: AsyncRead + AsyncSeek + Unpin + Send + ?Sized> Streamable for T {}
 
+const MAGNET_METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("torrent not found")]
     NotFound,
     #[error("file index out of range")]
     FileOutOfRange,
+    #[error("no peer sent the magnet's metadata in time")]
+    MetadataTimeout,
     #[error("librqbit: {0}")]
     Librqbit(#[from] anyhow::Error),
 }
@@ -278,17 +282,20 @@ impl Engine {
         self.wrap(res)
     }
 
+    /// librqbit waits for a peer to send a magnet's metadata until its peer
+    /// stream closes, and the DHT stream never does: a magnet nobody seeds
+    /// would hold the grab request forever.
     pub async fn add_from_magnet(&self, magnet: &str) -> Result<IngestResult, EngineError> {
-        let res = self
-            .session
-            .add_torrent(
-                AddTorrent::Url(magnet.into()),
-                Some(AddTorrentOptions {
-                    overwrite: true,
-                    ..Default::default()
-                }),
-            )
-            .await?;
+        let add = self.session.add_torrent(
+            AddTorrent::Url(magnet.into()),
+            Some(AddTorrentOptions {
+                overwrite: true,
+                ..Default::default()
+            }),
+        );
+        let res = tokio::time::timeout(MAGNET_METADATA_TIMEOUT, add)
+            .await
+            .map_err(|_| EngineError::MetadataTimeout)??;
         self.wrap(res)
     }
 
@@ -481,23 +488,17 @@ impl Engine {
                 m.file_infos
                     .get(file_idx)
                     .map(|fi| fi.relative_filename.clone())
-                    .ok_or_else(|| anyhow::anyhow!("file index out of range"))
-            })
-            .map_err(EngineError::Librqbit)??;
+            })?
+            .ok_or(EngineError::FileOutOfRange)?;
         let direct = self.download_dir.join(&rel);
         if direct.exists() {
             return Ok(direct);
         }
         // Multi-file torrents: librqbit nests files inside a folder named
         // after the torrent's `info.name`.
-        if let Some(name) = handle.name() {
-            let nested = self.download_dir.join(name).join(&rel);
-            if nested.exists() {
-                return Ok(nested);
-            }
-            return Ok(nested);
-        }
-        Ok(direct)
+        Ok(handle
+            .name()
+            .map_or(direct, |name| self.download_dir.join(name).join(&rel)))
     }
 
     /// Open a streaming reader for one file. The returned reader implements
@@ -510,13 +511,8 @@ impl Engine {
     ) -> Result<StreamHandle, EngineError> {
         let handle = self.handle_by_infohash(infohash)?;
         let file_size = handle
-            .with_metadata(|m| {
-                m.file_infos
-                    .get(file_idx)
-                    .map(|fi| fi.len)
-                    .ok_or_else(|| anyhow::anyhow!("file index out of range"))
-            })
-            .map_err(EngineError::Librqbit)??;
+            .with_metadata(|m| m.file_infos.get(file_idx).map(|fi| fi.len))?
+            .ok_or(EngineError::FileOutOfRange)?;
         // librqbit 9.x made `stream()` async (it now awaits the underlying
         // FileStream construction). Bubble up via `.await?` instead of the
         // old sync `?`.

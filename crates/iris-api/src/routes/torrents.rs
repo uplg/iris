@@ -643,7 +643,8 @@ pub(crate) async fn ingest_core(
         TorrentSource::TorrentFile(bytes) => state.engine().add_from_bytes(bytes).await,
         TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,
     }
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
+    .map_err(map_engine_err)?;
+    reject_unstreamable(state, &result).await?;
 
     // No torrent-level tmdb resolution: the collection's id is the single
     // source of truth, resolved from the collection's SCENE identity in
@@ -1416,12 +1417,13 @@ fn map_probe_err(e: &iris_media::ProbeError, torrent_finished: bool) -> ApiError
     }
 }
 
-fn map_engine_err(e: iris_torrent::EngineError) -> ApiError {
+pub(crate) fn map_engine_err(e: iris_torrent::EngineError) -> ApiError {
     match e {
         iris_torrent::EngineError::NotFound => ApiError::NotFound,
         iris_torrent::EngineError::FileOutOfRange => {
             ApiError::BadRequest("file index out of range".into())
         }
+        iris_torrent::EngineError::MetadataTimeout => ApiError::Upstream(e.to_string()),
         iris_torrent::EngineError::Librqbit(e) => ApiError::Internal(e),
     }
 }
@@ -2596,6 +2598,19 @@ pub(crate) async fn discard_unrecorded(state: &AppState, result: &iris_torrent::
     }
 }
 
+/// The archive gate for a torrent the engine just added: `.torrent` bytes
+/// were checked before the add, a magnet only gets its file list now.
+pub(crate) async fn reject_unstreamable(
+    state: &AppState,
+    result: &iris_torrent::IngestResult,
+) -> ApiResult<()> {
+    if iris_torrent::is_streamable(&result.snapshot.files) {
+        return Ok(());
+    }
+    discard_unrecorded(state, result).await;
+    Err(ApiError::ArchiveOnly)
+}
+
 /// The torrent row for an (already lowercased) infohash, or 404.
 pub(crate) async fn torrent_or_404(
     state: &AppState,
@@ -2604,6 +2619,29 @@ pub(crate) async fn torrent_or_404(
     iris_db::torrents::find_by_infohash(state.db(), infohash)
         .await?
         .ok_or(ApiError::NotFound)
+}
+
+#[cfg(test)]
+mod engine_err_tests {
+    use super::map_engine_err;
+    use crate::error::ApiError;
+    use iris_torrent::EngineError;
+
+    #[test]
+    fn engine_refusals_are_not_server_errors() {
+        assert!(matches!(
+            map_engine_err(EngineError::FileOutOfRange),
+            ApiError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_engine_err(EngineError::MetadataTimeout),
+            ApiError::Upstream(_)
+        ));
+        assert!(matches!(
+            map_engine_err(EngineError::NotFound),
+            ApiError::NotFound
+        ));
+    }
 }
 
 #[cfg(test)]
