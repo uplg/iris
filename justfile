@@ -54,6 +54,9 @@ rehearsal db mode="local":
     repo=$PWD
     vol=iris-rehearsal-data
     port=18080
+    # a rehearsal-only config (a tracker turned off, say) wins over the repo's
+    cfg="$repo/config"
+    [ -d ~/iris-prod-rehearsal/config ] && cfg=~/iris-prod-rehearsal/config
     if [ "$mode" = lan ]; then
       ip=$(ipconfig getifaddr en0 || ipconfig getifaddr en1)
       bind=0.0.0.0
@@ -92,7 +95,7 @@ rehearsal db mode="local":
       -e IRIS_STORAGE__DOWNLOAD_DIR=/data/downloads \
       -e IRIS_AUTH__JWT_SECRET="$(cat "$secret_file")" \
       -e RUST_LOG=info,iris_api=debug,tower_http=info,html5ever=error \
-      -v "$repo/config:/srv/iris/config:ro" \
+      -v "$cfg:/srv/iris/config:ro" \
       -v $vol:/data \
       -p "$bind:$port:8080" \
       iris:rehearsal >/dev/null
