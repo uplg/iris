@@ -92,7 +92,7 @@ fun failedTrackers(meta: List<ProviderResultMeta>): List<ProviderResultMeta> = m
 fun summary(matches: Int, releases: Int, meta: List<ProviderResultMeta>): String {
     val answered = meta.count { it.error == null }
     val parts = mutableListOf<String>()
-    if (matches > 0) parts += "$matches ${if (matches == 1) "match" else "matches"} in your library"
+    if (matches > 0) parts += "${plural(matches, "match", "matches")} in your library"
     val rel = plural(releases, "release")
     parts += if (answered > 0) "$rel from ${plural(answered, "tracker")}" else rel
     val failed = failedTrackers(meta).map { it.id }

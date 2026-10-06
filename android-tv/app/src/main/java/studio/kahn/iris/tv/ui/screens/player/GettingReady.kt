@@ -12,6 +12,7 @@ import studio.kahn.iris.tv.ui.components.StepState
 import studio.kahn.iris.tv.ui.format.codecWord
 import studio.kahn.iris.tv.ui.format.formatSpeed
 import studio.kahn.iris.tv.ui.format.percent
+import studio.kahn.iris.tv.ui.format.plural
 
 /** Where reading the file (`/probe`) stands. */
 @Immutable
@@ -72,7 +73,6 @@ fun isDeadSwarm(t: TorrentView, probeError: String?): Boolean {
 }
 
 
-private fun peers(n: Int): String = if (n == 1) "1 peer" else "$n peers"
 
 /**
  * The getting-ready checklist (TVPlayerStarting): each step in words with
@@ -116,7 +116,7 @@ fun readiness(i: ReadyInput): Readiness {
         add(
             Raw(
                 "Connected to peers", "Connecting to peers", "Connect to peers",
-                detail = t?.takeIf { connected }?.let { peers(it.peers) },
+                detail = t?.takeIf { connected }?.let { plural(it.peers, "peer") },
                 progress = null,
                 met = connected,
             ),
