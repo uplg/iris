@@ -16,10 +16,10 @@
 	<ul class="plain-list">
 		{#each matches as m (m.collection_id)}
 			{@const t = matchTarget(m)}
-			<li class="match">
+			<li class="match whole-card">
 				<div class="mini"><Poster src={tmdbImage(m.poster_path, 'w342')} title={m.display_title} /></div>
 				<div class="body">
-					<a class="name" href="/collection/{m.collection_id}">{m.display_title}</a>
+					<a class="name card-link" href="/collection/{m.collection_id}">{m.display_title}</a>
 					<span class="meta">{[kindWord(m.kind), t.facts].filter(Boolean).join(' · ')}</span>
 				</div>
 				<a class="btn primary act" href={t.href} aria-label="{t.action}: {m.display_title}">

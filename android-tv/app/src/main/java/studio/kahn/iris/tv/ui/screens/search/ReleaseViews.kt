@@ -63,6 +63,7 @@ import studio.kahn.iris.tv.ui.components.RowCard
 import studio.kahn.iris.tv.ui.components.Spinner
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.touchClick
 import studio.kahn.iris.tv.ui.state.UiError
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisSize
@@ -165,7 +166,8 @@ fun LibraryMatchRow(
     modifier: Modifier = Modifier,
 ) {
     val target = matchTarget(m)
-    FramedBlock(modifier.fillMaxWidth()) {
+    // A tap anywhere but its button opens the title (the web card opens from its poster too).
+    FramedBlock(modifier.fillMaxWidth().touchClick { onGo(MatchTarget.Open(m.collectionId, target.facts)) }) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
             verticalAlignment = Alignment.CenterVertically,

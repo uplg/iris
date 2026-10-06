@@ -20,10 +20,10 @@
 	const target = $derived<GrabTarget>({ provider: r.provider_id, id: r.external_id, tmdbId: r.title_match?.tmdb_id ?? r.tmdb_id });
 </script>
 
-<li class="row">
+<li class="row whole-card">
 	<div class="mini"><Poster src={r.poster_url} title={titleOf(r)} /></div>
 	<div class="body">
-		<a class="name" href={releaseHref(r)}>{titleLine(r)}</a>
+		<a class="name card-link" href={releaseHref(r)}>{titleLine(r)}</a>
 		<span class="release">{r.title}</span>
 		<span class="chips">
 			{#if owned}<span class="chip accent"><Icon name="circle-check" size={14} />In your library</span>{/if}

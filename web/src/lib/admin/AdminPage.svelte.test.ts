@@ -5,6 +5,7 @@ import { session } from '#lib/session.svelte.ts';
 import { ui } from '#lib/ui.svelte.ts';
 import { stubApi } from '#lib/test/api.ts';
 import '../../styles/app.css';
+import { controlAt } from '#lib/test/hit.ts';
 import { alex, leonard, noContent } from '../account/testing.ts';
 import AdminGate from './AdminGate.svelte';
 import AdminPage from './AdminPage.svelte';
@@ -80,6 +81,8 @@ describe('admin page', () => {
 		await expect
 			.element(region('Now watching').getByText(/20% watched, stopped at 10:00 · On the TV app 1.5.0 · for 12 min/))
 			.toBeVisible();
+		const watching = region('Now watching').getByRole('link').first();
+		expect(controlAt(watching.element().closest('li')!.querySelector('.mini'))).toBe(watching.element());
 		await expect.element(region('Storage').getByText('Past the clean-up line: the next clean-up frees space')).toBeVisible();
 		await expect.element(region('Audit log').getByText(/Léonard set a new password/)).toBeVisible();
 		await expect.element(region('Invitations').getByText(/Used .* by Alex/)).toBeVisible();

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { CollectionListItem, ContinueWatchingItem, WatchlistItem } from '@iris/api/client';
+import '../styles/app.css';
 import { stubApi } from '#lib/test/api.ts';
 import { ui } from '#lib/ui.svelte.ts';
 import Provided from '#lib/home/test/Provided.svelte';
@@ -249,7 +250,7 @@ describe('home', () => {
 		await expect.element(watch.getByRole('button', { name: 'Try again' })).toBeVisible();
 	});
 
-	it('suggestion shelves: a card leads to a search for its title; "Not interested" asks the server, then rereads', async () => {
+	it('suggestion shelves come after the library: a card leads to a search for its title; "Not interested" asks the server, then rereads', async () => {
 		let shelves = [
 			{
 				key: 'trending',
@@ -279,6 +280,8 @@ describe('home', () => {
 		const row = shelf('Trending this week');
 		await expect.element(row.getByRole('link', { name: 'Arcane' })).toHaveAttribute('href', '/search?q=Arcane');
 		await expect.element(row.getByText('1.8k watching today')).toBeVisible();
+		const order = [...document.querySelectorAll('.home h2')].map((h) => h.textContent);
+		expect(order).toEqual(['Continue watching', 'Your watchlist', 'Your library', 'Trending this week']);
 		await row.getByRole('button', { name: 'Not interested in Arcane' }).click();
 		await expect.element(shelf('Trending this week')).not.toBeInTheDocument();
 		expect(api.sent('POST', '/me/for-you/dismiss')[0].body).toEqual({ catalog_id: 'k1' });

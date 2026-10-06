@@ -2,9 +2,11 @@ import axe from 'axe-core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
+import '../../styles/app.css';
+import { controlAt } from '#lib/test/hit.ts';
 import { stubApi } from '#lib/test/api.ts';
 import { ui } from '#lib/ui.svelte.ts';
-import { collection, summary, torrent } from './fixtures.ts';
+import { collection, torrent } from './fixtures.ts';
 import { LIBRARY_VIEW_KEY } from './model.ts';
 import LibraryHarness from './LibraryHarness.svelte';
 
@@ -42,7 +44,6 @@ function backend(over: Record<string, unknown> = {}) {
 	return stubApi({
 		[COLLECTIONS]: { view: 'collections', items },
 		[TORRENTS]: { view: 'torrents', items: releases, total_uploaded_bytes: 3 * 1024 ** 4, total_downloaded_bytes: 2 * 1024 ** 4 },
-		'/me/summary': summary({ downloading: 1, downloading_pct: 64, downloading_eta_seconds: 540, seeding: 18 }),
 		[CW]: [],
 		...over
 	});
@@ -51,15 +52,13 @@ function backend(over: Record<string, unknown> = {}) {
 beforeEach(() => localStorage.clear());
 
 describe('Library', () => {
-	it('one h1, the summary in words, the titles view first', async () => {
+	it('one h1, the title counts under it, the titles view first', async () => {
 		backend();
 		await render(LibraryHarness);
 		await expect.element(page.getByRole('heading', { level: 1, name: 'Library' })).toBeVisible();
 		expect(document.querySelectorAll('h1')).toHaveLength(1);
-		await expect.element(page.getByText('1 movie · 1 series · 1 anime')).toBeVisible();
-		await expect.element(page.getByText('64% overall · about 9 min')).toBeVisible();
-		await expect.element(page.getByText('412 GB free of 2.0 TB')).toBeVisible();
-		await expect.element(page.getByText('3.0 TB sent in all · ratio 1.50')).toBeVisible();
+		await expect.element(page.getByText('3 titles · 1 movie · 1 series · 1 anime')).toBeVisible();
+		expect(document.querySelector('dl')).toBeNull();
 		await expect.element(page.getByRole('button', { name: 'Titles' })).toHaveAttribute('aria-pressed', 'true');
 		await expect.element(page.getByRole('link', { name: 'Severance' })).toBeVisible();
 	});
@@ -122,6 +121,21 @@ describe('Library', () => {
 		const attention = page.getByRole('region', { name: 'Needs attention' });
 		await expect.element(attention.getByText('Paused after download · nyaa releases never seed')).toBeVisible();
 		await expect.element(page.getByRole('region', { name: 'Seeding' }).getByRole('link', { name: 'Severance' })).toBeVisible();
+	});
+
+	it('a title or a release opens from its poster; a release keeps its own buttons', async () => {
+		backend();
+		await render(LibraryHarness);
+		const card = page.getByRole('link', { name: 'Arrival' });
+		await expect.element(card).toBeVisible();
+		expect(controlAt(card.element().closest('li')!.querySelector('.art'))).toBe(card.element());
+		await page.getByRole('button', { name: 'Downloads and seeding' }).click();
+		const seeding = page.getByRole('region', { name: 'Seeding' });
+		const title = seeding.getByRole('link', { name: 'Severance' });
+		await expect.element(title).toBeVisible();
+		const row = title.element().closest('li')!;
+		expect(controlAt(row.querySelector('.thumb'))).toBe(title.element());
+		for (const control of row.querySelectorAll('.actions a, .actions button')) expect(controlAt(control)).toBe(control);
 	});
 
 	it('delete is not operable without the right, and says why', async () => {

@@ -4,6 +4,7 @@ import { page } from 'vitest/browser';
 import type { HistoryItem } from '@iris/api/client';
 import { stubApi } from '#lib/test/api.ts';
 import '../../styles/app.css';
+import { controlAt } from '#lib/test/hit.ts';
 import HistoryList from './HistoryList.svelte';
 import { groupHistory } from './groups.ts';
 
@@ -52,5 +53,20 @@ describe('HistoryList', () => {
 		await render(HistoryList, { groups: groupHistory(items), collections: false });
 		await expect.element(page.getByRole('button', { name: /again/ })).not.toBeInTheDocument();
 		await expect.element(page.getByRole('link', { name: 'Severance' })).not.toBeInTheDocument();
+	});
+
+	it('a row opens from its poster: a film plays, a series opens; its episodes and buttons stay their own', async () => {
+		stubApi({}, { poster_path: null });
+		const film = item({ infohash: 'f1', torrent_name: 'Arrival', collection_id: 'c2', collection_title: 'Arrival' });
+		const { container } = await render(HistoryList, { groups: groupHistory([...items, film]), onrestore: async () => {} });
+		const rows = [...container.querySelectorAll('.title-row')];
+		const poster = (title: string) => rows.find((r) => r.textContent?.includes(title))!.querySelector('.mini');
+		await expect.element(page.getByRole('link', { name: 'Severance' })).toBeVisible();
+		expect(controlAt(poster('Severance'))).toBe(page.getByRole('link', { name: 'Severance' }).element());
+		expect(controlAt(poster('Arrival'))).toBe(page.getByRole('link', { name: /^Play Arrival/ }).element());
+		const episode = page.getByRole('link', { name: 'Play Severance, S2:E4' }).element();
+		expect(controlAt(episode)).toBe(episode);
+		const again = page.getByRole('button', { name: 'Download Dune again' }).element();
+		expect(controlAt(again)).toBe(again);
 	});
 });

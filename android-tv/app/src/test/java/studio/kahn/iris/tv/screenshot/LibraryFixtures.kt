@@ -8,14 +8,12 @@ import studio.kahn.iris.tv.data.AvailableEpisodeEntry
 import studio.kahn.iris.tv.data.CollectionDetail
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
-import studio.kahn.iris.tv.data.DiskSpace
 import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.EpisodeInfo
 import studio.kahn.iris.tv.data.FileEntry
 import studio.kahn.iris.tv.data.GoneEpisodeEntry
 import studio.kahn.iris.tv.data.GoneReleaseEntry
 import studio.kahn.iris.tv.data.HistoryItem
-import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.SeasonPackEntry
 import studio.kahn.iris.tv.data.TitleWatch
@@ -159,15 +157,6 @@ object LibraryFixtures {
             collectionId = id(5),
             durationSeconds = 7_400.0,
         ),
-    )
-
-    val summary = HomeSummary(
-        downloading = 2,
-        downloadingPct = 48.0,
-        newEpisodes = 2,
-        seeding = 3,
-        disk = DiskSpace(freeBytes = 412 * GB, totalBytes = 2_000 * GB),
-        downloadingEtaSeconds = 780,
     )
 
     private fun ep(s: Long, e: Long, ih: String, watched: Boolean = false, lang: String? = "multi") =

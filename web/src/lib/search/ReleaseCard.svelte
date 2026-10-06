@@ -1,7 +1,8 @@
 <script lang="ts">
 	// One release in the Grid view: its poster with the tracker on it, the title it belongs to
-	// (the one link: its details, or straight to the player when it is already on disk), what
-	// part and which audio, the picture and the swarm, then its state in words.
+	// (the one link, from anywhere on the card: its details, or straight to the player when it
+	// is already on disk), what part and which audio, the picture and the swarm, then its state
+	// in words.
 	import type { SearchResult } from '@iris/api/client';
 	import { languageLabel } from '@iris/api/format';
 	import Poster from '#lib/components/Poster.svelte';
@@ -18,13 +19,13 @@
 	const how = $derived([resolution(r.title), seedersWords(r.seeders)].filter(Boolean).join(' · '));
 </script>
 
-<li class="card">
+<li class="card whole-card">
 	<div class="art">
 		<Poster src={r.poster_url} {title} />
 		<span class="chip tracker">{r.provider_id}</span>
 	</div>
 	<div class="lines">
-		<a class="name" href={owned ? watchHref(owned.infohash, owned.idx) : releaseHref(r)}>{title}</a>
+		<a class="name card-link" href={owned ? watchHref(owned.infohash, owned.idx) : releaseHref(r)}>{title}</a>
 		<span class="release" title={r.title}>{r.title}</span>
 		{#if what}<span class="meta">{what}</span>{/if}
 		{#if how}<span class="meta">{how}</span>{/if}
@@ -39,6 +40,7 @@
 <style>
 	.card {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: var(--s-2);
 		align-content: start;
 		min-width: 0;
@@ -64,6 +66,7 @@
 		font-weight: 600;
 		color: var(--ink);
 		text-decoration: none;
+		overflow-wrap: anywhere;
 	}
 	.name:hover {
 		text-decoration: underline;

@@ -324,6 +324,29 @@ kbd {
 		grid-template-columns: repeat(auto-fill, minmax(var(--poster-w), 1fr));
 	}
 }
+/* a card or a row that opens from anywhere on it (its art too) with still ONE link: the
+   `.card-link`'s ::after covers the `.whole-card`; every other control in it sits above that
+   cover. `:where` keeps a component's own positioning ahead of this one. */
+.whole-card {
+	position: relative;
+}
+.whole-card .card-link::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+}
+.whole-card :where(a:not(.card-link), button, input, select, textarea, [role='button']) {
+	position: relative;
+	z-index: 1;
+}
+.whole-card:has(.card-link:focus-visible) {
+	outline: var(--focus-ring);
+	outline-offset: var(--focus-offset);
+	border-radius: var(--radius-m);
+}
+.whole-card .card-link:focus-visible {
+	outline: none;
+}
 /* a secondary line: a hint, a fact under a title */
 .hint,
 .page-head .sub {

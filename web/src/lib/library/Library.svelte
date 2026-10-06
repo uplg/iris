@@ -3,13 +3,16 @@
 	// (downloading, needing a hand, seeding). The view is remembered per browser.
 	import PageHead from '#lib/components/PageHead.svelte';
 	import { stored, text } from '#lib/stored.ts';
-	import { LIBRARY_VIEW_KEY, VIEWS, type View } from './model.ts';
-	import LibraryStats from './LibraryStats.svelte';
+	import { createQuery } from '@tanstack/svelte-query';
+	import { collectionsOf, read } from '#lib/queries.ts';
+	import { LIBRARY_VIEW_KEY, titleCounts, VIEWS, type View } from './model.ts';
 	import TitlesView from './TitlesView.svelte';
 	import DownloadsView from './DownloadsView.svelte';
 
 	const kept = stored<View>(LIBRARY_VIEW_KEY, 'titles', text(VIEWS));
 	let view = $state<View>(kept.get());
+	const collections = createQuery(() => read.collections());
+	const counts = $derived(collections.data ? titleCounts(collectionsOf(collections.data)) : null);
 
 	function choose(next: View) {
 		view = next;
@@ -18,7 +21,7 @@
 </script>
 
 <PageHead title="Library">
-	{#snippet sub()}Everything on this server{/snippet}
+	{#snippet sub()}{counts ?? 'Everything on this server'}{/snippet}
 	{#snippet end()}
 		<div class="views" role="group" aria-label="View">
 			<button class="btn" aria-pressed={view === 'titles'} onclick={() => choose('titles')}>Titles</button>
@@ -26,8 +29,6 @@
 		</div>
 	{/snippet}
 </PageHead>
-
-<LibraryStats />
 
 {#if view === 'titles'}
 	<TitlesView />

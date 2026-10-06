@@ -61,11 +61,11 @@
 	}
 </script>
 
-<li class="row">
+<li class="row whole-card">
 	<div class="thumb"><Poster src={tmdbImage(collection?.poster_path, 'w154')} {title} /></div>
 	<div class="body">
 		<h3 class="name">
-			{#if t.collection_id}<a href="/collection/{t.collection_id}">{title}</a>{:else}{title}{/if}
+			{#if t.collection_id}<a class="card-link" href="/collection/{t.collection_id}">{title}</a>{:else}{title}{/if}
 		</h3>
 		<p class="release" title={t.name ?? undefined}>{t.name ? releaseName(t.name) : t.infohash}</p>
 		{#if showBar}

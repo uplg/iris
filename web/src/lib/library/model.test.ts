@@ -66,7 +66,7 @@ describe('titles', () => {
 	const f = (over: Partial<TitleFilters> = {}): TitleFilters => ({ query: '', type: 'all', show: 'all', sort: 'recent', ...over });
 
 	it('are counted by type, ghosts left out', () => {
-		expect(titleCounts(all)).toEqual({ total: 3, text: '1 movie · 1 series · 1 anime' });
+		expect(titleCounts(all)).toBe('3 titles · 1 movie · 1 series · 1 anime');
 	});
 
 	it('say their state in words', () => {

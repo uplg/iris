@@ -89,13 +89,17 @@
 	.grow {
 		flex: 1;
 	}
+	/* room around the cards for a focused card's ring, which the scroller would clip; the
+	   negative margins keep the cards aligned with the head (the rail reaches into the page
+	   margin) */
 	.rail {
 		display: flex;
 		gap: var(--s-4);
 		overflow-x: auto;
 		list-style: none;
-		margin: 0;
-		padding: 0 0 var(--s-2);
+		margin: calc(-1 * var(--s-2)) calc(-1 * var(--s-2)) 0;
+		padding: var(--s-2);
+		scroll-padding-inline: var(--s-2);
 		scroll-snap-type: x proximity;
 		scrollbar-width: thin;
 	}
