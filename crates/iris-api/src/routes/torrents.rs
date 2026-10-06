@@ -5,7 +5,6 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::{get, post};
-use iris_core::ids::TorrentId;
 use iris_core::search::{MediaKind, TorrentSource};
 use iris_torrent::{TorrentPreview, TorrentSnapshot};
 use serde::{Deserialize, Serialize};
@@ -1236,20 +1235,11 @@ pub(crate) async fn remove(
     Path(infohash): Path<Infohash>,
 ) -> ApiResult<StatusCode> {
     let row = owned_row(&state, &user, &infohash).await?;
-    // Capture the final upload delta before the engine drops the torrent —
-    // otherwise the bytes uploaded since the last 30 s reconcile tick are
-    // lost forever.
-    if let Some(snap) = state.engine().get_by_infohash(&row.infohash) {
-        let _ =
-            iris_db::torrents::reconcile_uploaded(state.db(), &row.infohash, snap.uploaded_bytes)
-                .await;
-    }
-    match state.engine().delete_by_infohash(&row.infohash, true).await {
-        // Not in the engine (it failed to restore after a restart): the row
-        // must still be removable.
-        Ok(()) | Err(iris_torrent::EngineError::NotFound) => {}
-        Err(e) => return Err(ApiError::Internal(anyhow::anyhow!("engine delete: {e}"))),
-    }
+    // Not in the engine (it failed to restore after a restart): the row is
+    // still removed. Files the same release from another tracker reads stay.
+    iris_torrent::removal::remove_torrent(state.engine(), state.db(), &row)
+        .await
+        .map_err(ApiError::Internal)?;
     // Cascade the removal into `episode_files`. Soft-deleting the torrent
     // row + dropping the handle + wiping files would otherwise leave the
     // (collection, season, episode) → infohash mappings behind, and the
@@ -1269,7 +1259,6 @@ pub(crate) async fn remove(
         &row.infohash,
     )
     .await;
-    iris_db::torrents::soft_delete(state.db(), TorrentId::from(row.id)).await?;
     super::audit(
         &state,
         user.id,
@@ -2633,9 +2622,17 @@ pub(crate) async fn discard_unrecorded(state: &AppState, result: &iris_torrent::
     if result.already_managed {
         return;
     }
+    let infohash = &result.snapshot.infohash;
+    let own;
+    let held = if let Some(held) = result.lock() {
+        held
+    } else {
+        own = state.engine().lock(infohash).await;
+        &own
+    };
     if let Err(e) = state
         .engine()
-        .delete_by_infohash(&result.snapshot.infohash, true)
+        .delete_by_infohash(infohash, held, false)
         .await
     {
         tracing::warn!(

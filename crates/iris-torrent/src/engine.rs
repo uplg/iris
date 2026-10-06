@@ -4,8 +4,8 @@
 //! holds an `Arc<Engine>` in app state and never touches `librqbit` types
 //! directly.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -75,6 +75,25 @@ fn client_ua() -> String {
         // — this arm only fires if upstream ever changes that contract.
         // Don't panic in production; fall back to the raw value.
         None => raw.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod magnet_tests {
+    use super::magnet_infohash;
+
+    #[test]
+    fn a_magnet_names_its_infohash_in_hex_or_base32() {
+        let hex = "98259ba623eec5f33167c083b51b30122c7fa068";
+        assert_eq!(
+            magnet_infohash(&format!("magnet:?xt=urn:btih:{}&dn=x", hex.to_uppercase())).as_deref(),
+            Some(hex)
+        );
+        assert_eq!(
+            magnet_infohash("magnet:?dn=x&xt=urn:btih:TASZXJRD53C7GMLHYCB3KGZQCIWH7IDI").as_deref(),
+            Some(hex)
+        );
+        assert_eq!(magnet_infohash("magnet:?dn=x"), None);
     }
 }
 
@@ -162,6 +181,50 @@ pub struct TorrentSnapshot {
 pub struct IngestResult {
     pub already_managed: bool,
     pub snapshot: TorrentSnapshot,
+    /// The infohash's lock, taken before the add: keep the result alive until
+    /// the torrent's row is written (or the add taken back).
+    #[serde(skip)]
+    hold: Option<Arc<crate::InfohashLock>>,
+}
+
+impl IngestResult {
+    /// The lock the add took, when its infohash was known up front.
+    #[must_use]
+    pub fn lock(&self) -> Option<&crate::InfohashLock> {
+        self.hold.as_deref()
+    }
+}
+
+/// The 40-hex infohash a magnet names (`xt=urn:btih:`, hex or base32).
+fn magnet_infohash(magnet: &str) -> Option<String> {
+    let btih = magnet
+        .split(['?', '&'])
+        .find_map(|kv| kv.strip_prefix("xt=urn:btih:"))?;
+    match btih.len() {
+        40 if btih.bytes().all(|b| b.is_ascii_hexdigit()) => Some(btih.to_ascii_lowercase()),
+        32 => base32_to_hex(btih),
+        _ => None,
+    }
+}
+
+fn base32_to_hex(s: &str) -> Option<String> {
+    let mut bits: u64 = 0;
+    let mut nbits = 0u32;
+    let mut out = Vec::with_capacity(20);
+    for c in s.bytes() {
+        let v = match c.to_ascii_uppercase() {
+            b @ b'A'..=b'Z' => b - b'A',
+            b @ b'2'..=b'7' => b - b'2' + 26,
+            _ => return None,
+        };
+        bits = (bits << 5) | u64::from(v);
+        nbits += 5;
+        if nbits >= 8 {
+            nbits -= 8;
+            out.push(u8::try_from((bits >> nbits) & 0xff).ok()?);
+        }
+    }
+    (out.len() == 20).then(|| hex::encode(out))
 }
 
 pub struct Engine {
@@ -176,6 +239,7 @@ pub struct Engine {
     /// every filename, so snapshots reuse the sorted list instead of
     /// rebuilding it on every lookup.
     files: Mutex<HashMap<[u8; 20], Arc<[FileEntry]>>>,
+    locks: crate::locks::InfohashLocks,
 }
 
 impl Engine {
@@ -227,7 +291,7 @@ impl Engine {
     ///
     /// # Errors
     /// When the download dir can't be created or the session fails to start.
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn offline(download_dir: PathBuf) -> anyhow::Result<Arc<Self>> {
         std::fs::create_dir_all(&download_dir)?;
         let opts = SessionOptions {
@@ -264,6 +328,7 @@ impl Engine {
             listen_port,
             http,
             files: Mutex::new(HashMap::new()),
+            locks: crate::locks::InfohashLocks::default(),
         }))
     }
 
@@ -293,7 +358,16 @@ impl Engine {
         &self.download_dir
     }
 
+    /// Wait for, then hold, an infohash's lock (see [`crate::InfohashLock`]).
+    pub async fn lock(&self, infohash: &str) -> crate::InfohashLock {
+        self.locks.lock(infohash).await
+    }
+
     pub async fn add_from_bytes(&self, bytes: Vec<u8>) -> Result<IngestResult, EngineError> {
+        let hold = match crate::parse_preview(&bytes) {
+            Ok(p) => Some(Arc::new(self.lock(&p.infohash).await)),
+            Err(_) => None,
+        };
         let res = self
             .session
             .add_torrent(
@@ -304,13 +378,17 @@ impl Engine {
                 }),
             )
             .await?;
-        self.wrap(res)
+        self.wrap(res, hold)
     }
 
     /// librqbit waits for a peer to send a magnet's metadata until its peer
     /// stream closes, and the DHT stream never does: a magnet nobody seeds
     /// would hold the grab request forever.
     pub async fn add_from_magnet(&self, magnet: &str) -> Result<IngestResult, EngineError> {
+        let hold = match magnet_infohash(magnet) {
+            Some(infohash) => Some(Arc::new(self.lock(&infohash).await)),
+            None => None,
+        };
         let add = self.session.add_torrent(
             AddTorrent::Url(magnet.into()),
             Some(AddTorrentOptions {
@@ -321,18 +399,24 @@ impl Engine {
         let res = tokio::time::timeout(MAGNET_METADATA_TIMEOUT, add)
             .await
             .map_err(|_| EngineError::MetadataTimeout)??;
-        self.wrap(res)
+        self.wrap(res, hold)
     }
 
-    fn wrap(&self, res: AddTorrentResponse) -> Result<IngestResult, EngineError> {
+    fn wrap(
+        &self,
+        res: AddTorrentResponse,
+        hold: Option<Arc<crate::InfohashLock>>,
+    ) -> Result<IngestResult, EngineError> {
         match res {
             AddTorrentResponse::Added(_, h) => Ok(IngestResult {
                 already_managed: false,
                 snapshot: self.snapshot_of(&h),
+                hold,
             }),
             AddTorrentResponse::AlreadyManaged(_, h) => Ok(IngestResult {
                 already_managed: true,
                 snapshot: self.snapshot_of(&h),
+                hold,
             }),
             AddTorrentResponse::ListOnly(_) => Err(EngineError::Librqbit(anyhow::anyhow!(
                 "unexpected list-only response"
@@ -486,21 +570,109 @@ impl Engine {
         Ok(())
     }
 
+    /// Drop a torrent from the session and delete its files, except those
+    /// another managed torrent also reads: the same release grabbed from two
+    /// trackers shares one copy on disk (`overwrite: true`), and that copy
+    /// stays while either is in the library. `keep_files` leaves every file.
+    /// Returns the bytes freed on disk.
     pub async fn delete_by_infohash(
         &self,
         infohash: &str,
-        delete_files: bool,
-    ) -> Result<(), EngineError> {
+        _held: &crate::InfohashLock,
+        keep_files: bool,
+    ) -> Result<u64, EngineError> {
         let handle = self.handle_by_infohash(infohash)?;
+        let own = Self::disk_files(&handle);
+        let shared: HashSet<PathBuf> = self.session.with_torrents(|iter| {
+            iter.filter(|(_, h)| h.info_hash() != handle.info_hash())
+                .flat_map(|(_, h)| Self::disk_files(h))
+                .collect()
+        });
         self.announce_stopped(&handle).await;
-        self.session
-            .delete(handle.id().into(), delete_files)
-            .await?;
+        self.session.delete(handle.id().into(), false).await?;
         self.files
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&handle.info_hash().0);
-        Ok(())
+        if keep_files {
+            return Ok(0);
+        }
+        let mut freed = 0u64;
+        let mut kept = 0usize;
+        for path in &own {
+            if shared.contains(path) {
+                kept += 1;
+                continue;
+            }
+            let Ok(meta) = tokio::fs::metadata(path).await else {
+                continue;
+            };
+            match tokio::fs::remove_file(path).await {
+                Ok(()) => freed = freed.saturating_add(meta.len()),
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %path.display(), "delete: file removal failed");
+                }
+            }
+        }
+        self.remove_empty_dirs(handle.output_folder(), &own).await;
+        if kept > 0 {
+            tracing::info!(
+                infohash,
+                kept,
+                "delete: files another torrent shares were kept"
+            );
+        }
+        Ok(freed)
+    }
+
+    /// Every file a torrent reads, as absolute paths. Empty while a magnet's
+    /// metadata is still on its way.
+    fn disk_files(handle: &Handle) -> Vec<PathBuf> {
+        let folder = handle.output_folder().to_path_buf();
+        handle
+            .with_metadata(|m| {
+                m.file_infos
+                    .iter()
+                    .map(|fi| folder.join(&fi.relative_filename))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The paths every managed torrent reads (see [`Self::disk_files`]).
+    pub fn referenced_files(&self) -> HashSet<PathBuf> {
+        self.session
+            .with_torrents(|iter| iter.flat_map(|(_, h)| Self::disk_files(h)).collect())
+    }
+
+    /// Whether every managed torrent's file list is known: until then a
+    /// file on disk can't be told an orphan.
+    pub fn file_lists_known(&self) -> bool {
+        self.session.with_torrents(|iter| {
+            for (_, h) in iter {
+                if h.with_metadata(|_| ()).is_err() {
+                    return false;
+                }
+            }
+            true
+        })
+    }
+
+    /// The now-empty directories the deleted files sat in, bottom-up, never
+    /// above the torrent's output folder nor the download dir itself.
+    async fn remove_empty_dirs(&self, output_folder: &Path, files: &[PathBuf]) {
+        let mut dirs: Vec<&Path> = files
+            .iter()
+            .filter_map(|f| f.parent())
+            .flat_map(Path::ancestors)
+            .filter(|d| d.starts_with(output_folder) && *d != self.download_dir.as_path())
+            .collect();
+        dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+        dirs.dedup();
+        for dir in dirs {
+            // Fails, harmlessly, on a directory something else still fills.
+            let _ = tokio::fs::remove_dir(dir).await;
+        }
     }
 
     /// Resolve the absolute on-disk path librqbit writes to for a given

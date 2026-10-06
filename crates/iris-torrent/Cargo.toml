@@ -34,3 +34,7 @@ reqwest = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 webpki-root-certs = { workspace = true }
+
+[dev-dependencies]
+iris-db = { workspace = true, features = ["test-support"] }
+uuid = { workspace = true }

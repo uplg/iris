@@ -18,7 +18,6 @@ use std::time::Duration;
 use chrono::Utc;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use iris_core::ids::TorrentId;
 use sqlx::SqlitePool;
 use tokio::time::MissedTickBehavior;
 
@@ -239,47 +238,24 @@ impl Gc {
                 size = row.total_size_bytes,
                 "gc: evicting torrent"
             );
-            // Final upload reconcile so the bytes seeded since the last
-            // 30 s tick aren't lost when librqbit drops the torrent.
-            if let Some(snap) = self.inner.engine.get_by_infohash(&row.infohash) {
-                let _ = iris_db::torrents::reconcile_uploaded(
-                    &self.inner.pool,
-                    &row.infohash,
-                    snap.uploaded_bytes,
-                )
-                .await;
-            }
-            let files_deleted = match self
-                .inner
-                .engine
-                .delete_by_infohash(&row.infohash, true)
-                .await
+            let removed = match crate::removal::remove_torrent(
+                &self.inner.engine,
+                &self.inner.pool,
+                &fresh,
+            )
+            .await
             {
-                Ok(()) => true,
-                // Not in the engine: nothing left to delete there, and the
-                // row must not stay "active" for every later pass to retry.
-                // Its files (if any) were not touched, so nothing is freed.
-                Err(crate::EngineError::NotFound) => false,
+                Ok(r) => r,
                 Err(e) => {
-                    tracing::warn!(error = %e, "gc: engine delete failed, skipping");
+                    tracing::warn!(error = %e, infohash = %row.infohash, "gc: eviction failed, skipping");
                     continue;
                 }
             };
             (self.inner.on_evict)(&row.infohash);
-            let row_was_live = match iris_db::torrents::soft_delete(
-                &self.inner.pool,
-                TorrentId::from(row.id),
-            )
-            .await
-            {
-                Ok(live) => live,
-                Err(e) => {
-                    tracing::warn!(error = %e, infohash = %row.infohash, "gc: soft delete failed");
-                    true
-                }
-            };
-            let freed = if files_deleted && row_was_live {
-                u64::try_from(row.total_size_bytes).unwrap_or(0)
+            // Only what came off the disk counts: files another torrent still
+            // reads stayed, and a torrent the engine no longer had freed nothing.
+            let freed = if removed.row_was_live {
+                removed.freed_bytes
             } else {
                 0
             };
