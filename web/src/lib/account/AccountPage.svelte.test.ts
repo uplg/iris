@@ -255,7 +255,7 @@ describe('account page', () => {
 		const api = site({ 'PUT /me/playback-preferences': noContent() });
 		await render(AccountPage);
 		await expect.element(region('Playback').getByText('French')).toBeVisible();
-		await expect.element(region('Playback').getByText('No subtitles')).toBeVisible();
+		await expect.element(region('Playback').getByText('Subtitles off')).toBeVisible();
 		await region('Playback')
 			.getByRole('button', { name: /^Audio/ })
 			.click();

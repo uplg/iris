@@ -5,7 +5,7 @@ import type { NativeSubtitleTrack } from '@iris/core/engine';
 import type { AudioTrack, Manifest, SubtitleTrack } from '@iris/core/manifest-client';
 import { nativeSubtitleUrl } from '@iris/core/manifest-client';
 import { normalizeLang, pickPreferredSubtitle } from '@iris/core/subs/pick-subtitle';
-import { languageName } from '#lib/language.ts';
+import { languageName, OFF } from '#lib/language.ts';
 
 export type SubtitleOverlayKind = 'none' | 'native' | 'ass' | 'pgs';
 
@@ -72,7 +72,7 @@ export function initialSubtitle(
 		if (match) return match;
 	}
 	const pref = preferredLang?.trim().toLowerCase();
-	if (pref === 'off') return null;
+	if (pref === OFF) return null;
 	if (pref) return pickPreferredSubtitle(manifest.subtitles, pref);
 	return (
 		manifest.subtitles.find((s) => s.default) ??
