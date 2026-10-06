@@ -332,7 +332,9 @@ pub async fn set_seeders(pool: &SqlitePool, id: Uuid, seeders: i64) -> Result<()
 /// Distinct episodes found after `since` — the "X new" Watchlist
 /// badge. `since` = the user's last engagement (max of page visit and
 /// watch). No engagement → 0, NOT "everything": counting the whole
-/// offer cache produced "48 new" badges.
+/// offer cache produced "48 new" badges. Only grabbable episodes the
+/// household doesn't own count: no season packs (episode 0), no dead
+/// offers, and a new release of an owned episode is not a new episode.
 pub async fn count_new_for_series(
     pool: &SqlitePool,
     normalized_name: &str,
@@ -342,8 +344,15 @@ pub async fn count_new_for_series(
         return Ok(0);
     };
     let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(DISTINCT season || '-' || episode) FROM available_episodes \
-         WHERE normalized_name = ?1 AND found_at > ?2",
+        "SELECT COUNT(DISTINCT ae.season || '-' || ae.episode) FROM available_episodes ae \
+         WHERE ae.normalized_name = ?1 AND ae.found_at > ?2 \
+           AND ae.episode > 0 AND ae.seeders IS NOT 0 \
+           AND NOT EXISTS ( \
+               SELECT 1 FROM episode_files ef \
+               JOIN collections c ON c.id = ef.collection_id \
+               JOIN torrents t ON t.infohash = ef.infohash AND t.deleted_at IS NULL \
+               WHERE c.parsed_title_normalized = ?1 AND c.kind = 'tv' \
+                 AND ef.season = ae.season AND ef.episode = ae.episode)",
     )
     .bind(normalized_name)
     .bind(cutoff)
@@ -524,4 +533,86 @@ pub async fn delete_for_provider(pool: &SqlitePool, provider: &str) -> Result<u6
         .execute(pool)
         .await?;
     Ok(res.rows_affected())
+}
+
+#[cfg(test)]
+mod count_new_tests {
+    use super::*;
+    use crate::test_support::{make_user, migrated_pool};
+
+    fn offer(season: i64, episode: i64, id: &str, seeders: Option<i64>) -> UpsertAvailableEpisode {
+        UpsertAvailableEpisode {
+            normalized_name: "severance".into(),
+            season,
+            episode,
+            indexer_provider: "c411".into(),
+            indexer_torrent_id: id.into(),
+            magnet: String::new(),
+            quality: None,
+            seeders,
+            size_bytes: None,
+            language: None,
+            download_url: None,
+            absolute_episode: None,
+            codec: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn new_count_skips_packs_dead_offers_and_owned_episodes() {
+        let pool = migrated_pool().await;
+        let since = Utc::now() - chrono::TimeDelta::hours(1);
+        for o in [
+            offer(2, 1, "owned", Some(10)),
+            offer(2, 2, "fresh", Some(10)),
+            offer(2, 2, "fresh-again", None),
+            offer(2, 3, "dead", Some(0)),
+            offer(2, 0, "pack", Some(10)),
+        ] {
+            upsert(&pool, o).await.unwrap();
+        }
+        let user = make_user(&pool).await;
+        let show = crate::collections::find_or_create(
+            &pool,
+            "severance",
+            "Severance",
+            crate::collections::Kind::Tv,
+            false,
+        )
+        .await
+        .unwrap();
+        let infohash = "a".repeat(40);
+        crate::torrents::upsert(
+            &pool,
+            crate::torrents::NewTorrent {
+                infohash: infohash.clone(),
+                name: "Severance.S02E01".into(),
+                total_size_bytes: 1,
+                source_provider: None,
+                source_external_id: None,
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        crate::episode_files::upsert(
+            &pool,
+            crate::episode_files::UpsertEpisodeFile {
+                collection_id: show.id,
+                season: 2,
+                episode: 1,
+                infohash,
+                file_idx: 0,
+                derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                absolute_episode: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let n = count_new_for_series(&pool, "severance", Some(since))
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "only S02E02 is new and grabbable");
+    }
 }
