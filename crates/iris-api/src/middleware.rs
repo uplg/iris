@@ -105,10 +105,6 @@ async fn log_caps(
     }
 }
 
-/// Parse an api torrents path into `(infohash, file_idx, route_kind)`.
-///
-/// `/api/torrents/<hash>/files/<idx>/manifest.json` → `(Some(hash), Some(idx), Some("manifest.json"))`
-/// Anything else → leading components present, trailing `None`.
 /// Whether a request is worth one telemetry row: the clients send `Iris-Caps`
 /// on every request, and a row per HLS segment or per stream range would be
 /// one write per few seconds per viewer. Segments are skipped (their master
@@ -123,6 +119,10 @@ fn starts_playback(path: &str, range: Option<&str>) -> bool {
     }
 }
 
+/// Parse an api torrents path into `(infohash, file_idx, route_kind)`.
+///
+/// `/api/torrents/<hash>/files/<idx>/manifest.json` → `(Some(hash), Some(idx), Some("manifest.json"))`
+/// Anything else → leading components present, trailing `None`.
 fn parse_torrent_path(path: &str) -> (Option<String>, Option<i64>, Option<String>) {
     let mut segs = path.split('/').filter(|s| !s.is_empty());
     if segs.next() != Some("api") || segs.next() != Some("torrents") {
