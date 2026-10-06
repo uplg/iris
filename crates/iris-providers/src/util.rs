@@ -1,5 +1,14 @@
 use iris_config::ProviderEntry;
 use iris_core::Error;
+use iris_core::search::{MediaKind, SearchQuery};
+
+/// Browser user agent sent by the scraping/JSON providers (some trackers
+/// sit behind a WAF that refuses non-browser agents).
+pub(crate) const DEFAULT_USER_AGENT: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
+
+/// First byte of a valid `.torrent` file (bencoded dictionary).
+pub(crate) const BENCODE_DICT_MARKER: u8 = b'd';
 
 /// Extract a string field from a provider entry, or fall back to the env var
 /// named by `<key>_env` if present. Useful for secrets that should not live
@@ -39,6 +48,12 @@ pub(crate) fn optional_field_or_env(
     }
 }
 
+/// The entry's required `base_url`, parsed; `provider` names it in errors.
+pub(crate) fn base_url(entry: &ProviderEntry, provider: &str) -> Result<url::Url, Error> {
+    url::Url::parse(field_str(entry, "base_url")?)
+        .map_err(|e| Error::Provider(format!("{provider} base_url invalid: {e}")))
+}
+
 pub(crate) fn field_str<'a>(entry: &'a ProviderEntry, key: &str) -> Result<&'a str, Error> {
     entry
         .fields
@@ -50,6 +65,64 @@ pub(crate) fn field_str<'a>(entry: &'a ProviderEntry, key: &str) -> Result<&'a s
                 entry.id
             ))
         })
+}
+
+/// The search text sent to a tracker's substring filter. When the SCENE
+/// parser extracted a title + season (+ episode) from the raw query, rebuild
+/// the canonical SCENE form trackers match verbatim (`Classroom of the Elite
+/// S04E11`); otherwise the raw `q` — including a parsed title without S/E,
+/// which keeps any year / qualifier the parsed title alone would lose.
+pub(crate) fn scene_query(q: &SearchQuery) -> String {
+    match (q.parsed_title.as_deref(), q.season, q.episode) {
+        (Some(t), Some(s), Some(e)) if !t.is_empty() && e > 0 => format!("{t} S{s:02}E{e:02}"),
+        (Some(t), Some(s), _) if !t.is_empty() => format!("{t} S{s:02}"),
+        _ => q.q.clone(),
+    }
+}
+
+/// A scraped tracker's movie / TV category ids.
+pub(crate) struct KindCategories {
+    pub movie: &'static [u32],
+    pub tv: &'static [u32],
+}
+
+impl KindCategories {
+    pub(crate) fn kind_of(&self, id: u32) -> Option<MediaKind> {
+        if self.movie.contains(&id) {
+            Some(MediaKind::Movie)
+        } else if self.tv.contains(&id) {
+            Some(MediaKind::Tv)
+        } else {
+            None
+        }
+    }
+
+    /// The ids a search sends: the kind's own, both lists without one.
+    pub(crate) fn for_kind(&self, kind: Option<MediaKind>) -> Vec<u32> {
+        match kind {
+            Some(MediaKind::Movie) => self.movie.to_vec(),
+            Some(MediaKind::Tv) => self.tv.to_vec(),
+            None => [self.movie, self.tv].concat(),
+        }
+    }
+}
+
+/// `"{parent} / {sub}"`, or whichever of the two a tracker filled (the
+/// subcategory alone when it repeats the parent).
+pub(crate) fn join_category(parent: Option<String>, sub: Option<String>) -> Option<String> {
+    match (parent, sub) {
+        (Some(p), Some(s)) if p != s => Some(format!("{p} / {s}")),
+        (Some(p), _) => Some(p),
+        (None, s) => s,
+    }
+}
+
+/// An RSS `<pubDate>` (RFC 2822). Feeds drift (missing weekday, `GMT`
+/// instead of `+0000`); `None` is benign, the UI shows "unknown date".
+pub(crate) fn parse_rfc2822(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc2822(s.trim())
+        .ok()
+        .map(|d| d.with_timezone(&chrono::Utc))
 }
 
 /// Best-effort year extraction from a release title: take the first 4-digit
@@ -115,7 +188,61 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::extract_year;
+    use iris_core::search::SearchQuery;
+
+    use super::{extract_year, join_category, scene_query};
+
+    fn parsed(title: Option<&str>, season: Option<u32>, episode: Option<u32>) -> SearchQuery {
+        SearchQuery {
+            q: "raw query 2017".into(),
+            parsed_title: title.map(str::to_owned),
+            season,
+            episode,
+            ..SearchQuery::default()
+        }
+    }
+
+    #[test]
+    fn scene_query_rebuilds_the_scene_form_only_with_a_season() {
+        let t = Some("Classroom of the Elite");
+        assert_eq!(
+            scene_query(&parsed(t, Some(4), Some(11))),
+            "Classroom of the Elite S04E11"
+        );
+        assert_eq!(
+            scene_query(&parsed(t, Some(4), None)),
+            "Classroom of the Elite S04"
+        );
+        assert_eq!(
+            scene_query(&parsed(t, Some(4), Some(0))),
+            "Classroom of the Elite S04"
+        );
+        assert_eq!(scene_query(&parsed(t, None, None)), "raw query 2017");
+        assert_eq!(
+            scene_query(&parsed(Some(""), Some(1), Some(2))),
+            "raw query 2017"
+        );
+        assert_eq!(
+            scene_query(&parsed(None, Some(1), Some(2))),
+            "raw query 2017"
+        );
+    }
+
+    #[test]
+    fn category_joins_parent_and_distinct_sub() {
+        let s = |v: &str| Some(v.to_owned());
+        assert_eq!(
+            join_category(s("Films"), s("WEB")).as_deref(),
+            Some("Films / WEB")
+        );
+        assert_eq!(
+            join_category(s("Films"), s("Films")).as_deref(),
+            Some("Films")
+        );
+        assert_eq!(join_category(s("Films"), None).as_deref(), Some("Films"));
+        assert_eq!(join_category(None, s("WEB")).as_deref(), Some("WEB"));
+        assert_eq!(join_category(None, None), None);
+    }
 
     #[test]
     fn finds_year() {

@@ -26,7 +26,6 @@
 //! # user_agent = "…"
 //! ```
 
-use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,18 +44,13 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::cache::FifoCache;
 use crate::nfo;
-use crate::util::{extract_year, field_or_env, field_str};
+use crate::util::{
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, base_url, extract_year, field_or_env, scene_query,
+};
 
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
 const DEFAULT_API_PATH: &str = "/api";
-/// First byte of a valid `.torrent` file (bencoded dictionary).
-const BENCODE_DICT_MARKER: u8 = b'd';
-/// FIFO cap on the `(external_id -> download_link)` map — see
-/// `LinkCache` for the eviction logic.
-const LINK_CACHE_CAP: usize = 4096;
-
 pub struct Unit3dProvider {
     id: String,
     base_url: Url,
@@ -74,41 +68,12 @@ pub struct Unit3dProvider {
     /// Torrent id (UNIT3D's numeric `id`) -> direct `.torrent` URL,
     /// captured from `attributes.download_link` in search responses.
     /// `resolve()` looks the URL up here and fetches the bytes.
-    link_cache: Mutex<LinkCache>,
-}
-
-struct LinkCache {
-    map: HashMap<String, String>,
-    order: VecDeque<String>,
-}
-
-impl LinkCache {
-    fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-    fn put(&mut self, key: String, value: String) {
-        if self.map.insert(key.clone(), value).is_none() {
-            self.order.push_back(key);
-            while self.order.len() > LINK_CACHE_CAP {
-                if let Some(old) = self.order.pop_front() {
-                    self.map.remove(&old);
-                }
-            }
-        }
-    }
-    fn get(&self, key: &str) -> Option<String> {
-        self.map.get(key).cloned()
-    }
+    link_cache: Mutex<FifoCache<String>>,
 }
 
 impl Unit3dProvider {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("unit3d base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "unit3d")?;
         // UNIT3D names the auth parameter `api_token` in their JSON
         // API; we keep the config field name `api_key` for symmetry
         // with the Torznab / c411 providers — the value is the same
@@ -170,7 +135,7 @@ impl Unit3dProvider {
             movie_category_id,
             tv_category_id,
             http,
-            link_cache: Mutex::new(LinkCache::new()),
+            link_cache: Mutex::new(FifoCache::new()),
         }))
     }
 
@@ -348,7 +313,7 @@ impl SearchProvider for Unit3dProvider {
         // still works (UNIT3D matches the whole string) but typing
         // just "Classroom of the Elite" used to drown S04E11 in
         // season packs because the only filter was raw `q`.
-        let name_filter = build_unit3d_name_filter(q);
+        let name_filter = scene_query(q);
 
         // `/api/torrents/filter` parameter names per the official docs
         // (camelCase across the board). Anything UNIT3D doesn't
@@ -586,27 +551,6 @@ struct TorrentAttributes {
 /// value can't poison downstream identity comparisons.
 ///
 /// Two encodings observed in the wild:
-/// Build the `name=` substring filter sent to UNIT3D's
-/// `/api/torrents/filter`. When the SCENE parser extracted a usable
-/// title + season (+ optional episode) from the raw query, rebuild a
-/// canonical SCENE-form string the indexer matches verbatim
-/// (`Classroom.of.the.Elite S04E11`). Without a parser hit we pass
-/// the raw `q` straight through — no regression for free-text searches.
-fn build_unit3d_name_filter(q: &SearchQuery) -> String {
-    let parsed = match q.parsed_title.as_deref() {
-        Some(t) if !t.is_empty() => t,
-        _ => return q.q.clone(),
-    };
-    match (q.season, q.episode) {
-        (Some(s), Some(e)) if e > 0 => format!("{parsed} S{s:02}E{e:02}"),
-        (Some(s), _) => format!("{parsed} S{s:02}"),
-        // Parser recognised a title but no S/E — keep the raw q in
-        // case it contained year / qualifier info we'd lose by
-        // collapsing to the parsed title alone.
-        _ => q.q.clone(),
-    }
-}
-
 ///   * 40 hex chars — the canonical form (`/api/torrents/{id}`,
 ///     mainline `UNIT3D` search rows). Pass-through.
 ///   * 80 hex chars — `/api/torrents/filter` ships the infohash
@@ -616,7 +560,7 @@ fn build_unit3d_name_filter(q: &SearchQuery) -> String {
 ///     a clean 40-char hex string.
 fn normalize_infohash(raw: &str) -> Option<String> {
     let s = raw.trim().to_ascii_lowercase();
-    if s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if iris_core::ids::is_infohash_hex(&s) {
         return Some(s);
     }
     if s.len() == 80 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -1522,15 +1466,5 @@ mod tests {
         assert_eq!(d.category.as_deref(), Some("Films / WEB"));
         assert_eq!(d.times_completed, Some(3));
         assert!(d.uploaded_at.is_some());
-    }
-
-    #[test]
-    fn link_cache_evicts_fifo() {
-        let mut c = LinkCache::new();
-        for i in 0..(LINK_CACHE_CAP + 10) {
-            c.put(format!("k{i}"), format!("v{i}"));
-        }
-        assert!(c.get("k0").is_none());
-        assert!(c.get(&format!("k{}", LINK_CACHE_CAP + 9)).is_some());
     }
 }

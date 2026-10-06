@@ -55,6 +55,12 @@ pub enum ApiError {
     Db(#[from] sqlx::Error),
 }
 
+impl From<axum::http::Error> for ApiError {
+    fn from(e: axum::http::Error) -> Self {
+        Self::Internal(e.into())
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code, msg) = match &self {

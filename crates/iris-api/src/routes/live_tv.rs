@@ -412,7 +412,7 @@ pub(crate) async fn live_transcode_segment(
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(bytes))
-        .map_err(|e| ApiError::Internal(e.into()))
+        .map_err(ApiError::from)
 }
 
 #[utoipa::path(
@@ -456,7 +456,7 @@ pub(crate) async fn live_proxy(
             .status(status.as_u16())
             .header(header::CACHE_CONTROL, "no-store")
             .body(Body::empty())
-            .map_err(|e| ApiError::Internal(e.into()));
+            .map_err(ApiError::from);
     }
 
     // Nested playlists (media playlists reached through the master) get the
@@ -500,7 +500,7 @@ pub(crate) async fn live_proxy(
     }
     builder
         .body(Body::from_stream(resp.bytes_stream()))
-        .map_err(|e| ApiError::Internal(e.into()))
+        .map_err(ApiError::from)
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -555,21 +555,21 @@ pub(crate) async fn live_logo(
                 .header(header::LOCATION, orig.as_str())
                 .header(header::CACHE_CONTROL, max_age)
                 .body(Body::empty())
-                .map_err(|e| ApiError::Internal(e.into()));
+                .map_err(ApiError::from);
         }
         // http original (mixed-content on web) or undecodable → letter tile.
         return Response::builder()
             .status(axum::http::StatusCode::NOT_FOUND)
             .header(header::CACHE_CONTROL, max_age)
             .body(Body::empty())
-            .map_err(|e| ApiError::Internal(e.into()));
+            .map_err(ApiError::from);
     }
     Response::builder()
         .header(header::CONTENT_TYPE, logo.content_type)
         // Logos are effectively static — let clients cache for a day.
         .header(header::CACHE_CONTROL, "public, max-age=86400")
         .body(Body::from(logo.bytes))
-        .map_err(|e| ApiError::Internal(e.into()))
+        .map_err(ApiError::from)
 }
 
 #[utoipa::path(
@@ -601,5 +601,5 @@ fn playlist_response(body: String) -> ApiResult<Response> {
         .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(body))
-        .map_err(|e| ApiError::Internal(e.into()))
+        .map_err(ApiError::from)
 }

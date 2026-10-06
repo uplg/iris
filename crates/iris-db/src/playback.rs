@@ -813,32 +813,7 @@ pub async fn delete_for_collection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
-
-    async fn migrated_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
-    }
-
-    async fn make_user(pool: &SqlitePool) -> UserId {
-        let id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO users (id, email, password_hash, display_name, is_admin, created_at) \
-             VALUES (?1, ?2, '', 'T', 0, ?3)",
-        )
-        .bind(id)
-        .bind(format!("{id}@t.test"))
-        .bind(Utc::now())
-        .execute(pool)
-        .await
-        .expect("insert user");
-        UserId::from(id)
-    }
+    use crate::test_support::{make_user, migrated_pool};
 
     async fn make_torrent(
         pool: &SqlitePool,

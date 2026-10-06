@@ -38,7 +38,6 @@
 //! # tvsearch_q = false
 //! ```
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -62,21 +61,14 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
-use crate::util::{extract_year, field_or_env, field_str};
+use crate::cache::FifoCache;
+use crate::util::{
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, base_url, extract_year, field_or_env, parse_rfc2822,
+};
 
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
 const DEFAULT_API_PATH: &str = "/api";
 const DEFAULT_MOVIE_CATEGORIES: &str = "2000";
 const DEFAULT_TV_CATEGORIES: &str = "5000";
-/// First byte of a valid `.torrent` file (bencoded dictionary).
-const BENCODE_DICT_MARKER: u8 = b'd';
-/// Keep the last N search-result links around so `resolve()` can find
-/// the download URL the indexer signed for us. Older entries are
-/// evicted FIFO. 4096 covers a heavy browsing session without
-/// unbounded growth.
-const LINK_CACHE_CAP: usize = 4096;
-
 pub struct TorznabProvider {
     id: String,
     base_url: Url,
@@ -92,38 +84,6 @@ pub struct TorznabProvider {
     link_cache: Mutex<FifoCache<String>>,
     /// `external_id` -> feed-item detail snapshot for `details()`.
     details_cache: Mutex<FifoCache<CachedDetails>>,
-}
-
-/// Tiny FIFO cache keyed by `external_id`. Two instances: download URLs
-/// (so `resolve()` can find the indexer-signed link from a previous
-/// search) and per-item detail snapshots (so `details()` can answer
-/// without a second network scheme — most generic Torznab indexers have
-/// no detail endpoint we could hit anyway).
-struct FifoCache<V> {
-    map: HashMap<String, V>,
-    order: std::collections::VecDeque<String>,
-}
-
-impl<V: Clone> FifoCache<V> {
-    fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-            order: std::collections::VecDeque::new(),
-        }
-    }
-    fn put(&mut self, key: String, value: V) {
-        if self.map.insert(key.clone(), value).is_none() {
-            self.order.push_back(key);
-            while self.order.len() > LINK_CACHE_CAP {
-                if let Some(old) = self.order.pop_front() {
-                    self.map.remove(&old);
-                }
-            }
-        }
-    }
-    fn get(&self, key: &str) -> Option<V> {
-        self.map.get(key).cloned()
-    }
 }
 
 /// Detail fields captured from a feed item at search/latest time —
@@ -220,9 +180,7 @@ fn plan_search(
 
 impl TorznabProvider {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("torznab base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "torznab")?;
         let api_key = field_or_env(entry, "api_key")?;
         let api_path = entry
             .fields
@@ -723,7 +681,7 @@ impl RawItem {
     fn into_search_result(self, provider_id: &str) -> SearchResult {
         let year = extract_year(&self.title).or(self.year_attr);
         let kind = derive_kind_from_categories(&self.categories);
-        let uploaded_at = self.pub_date.as_deref().and_then(parse_rfc2822_lenient);
+        let uploaded_at = self.pub_date.as_deref().and_then(parse_rfc2822);
         let leechers = self.leechers.or(match (self.seeders, self.peers) {
             (Some(s), Some(p)) if p >= s => Some(p - s),
             _ => None,
@@ -1082,23 +1040,13 @@ fn resolve_general_ref(r: &BytesRef<'_>) -> Option<char> {
 /// Attribute value with XML entities unescaped; an unescape failure falls
 /// through to the raw string (Torznab attrs almost never carry escapable
 /// chars).
-fn attr_value(attr: &Attribute) -> String {
+pub(crate) fn attr_value(attr: &Attribute) -> String {
     let raw: &str = &attr.value;
     xml_unescape(raw).map_or_else(|_| raw.to_string(), std::borrow::Cow::into_owned)
 }
 
-fn text_value(t: &BytesText) -> String {
+pub(crate) fn text_value(t: &BytesText) -> String {
     xml_unescape(t).map_or_else(|_| t.to_string(), std::borrow::Cow::into_owned)
-}
-
-/// Best-effort RFC 2822 parse — Torznab `<pubDate>` follows RSS, but
-/// indexers sometimes drift (missing weekday, `GMT` instead of `+0000`,
-/// etc.). Returning `None` is benign; the UI just falls back to
-/// "unknown date".
-fn parse_rfc2822_lenient(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc2822(s)
-        .ok()
-        .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
 #[cfg(test)]
@@ -1396,17 +1344,6 @@ mod tests {
             p.items[0].download_url.as_deref(),
             Some("https://site/torrent/1.torrent?apikey=K"),
         );
-    }
-
-    #[test]
-    fn link_cache_evicts_fifo() {
-        let mut c = FifoCache::new();
-        for i in 0..(LINK_CACHE_CAP + 10) {
-            c.put(format!("k{i}"), format!("v{i}"));
-        }
-        assert!(c.get("k0").is_none(), "oldest should be evicted");
-        assert!(c.get(&format!("k{}", LINK_CACHE_CAP + 9)).is_some());
-        assert_eq!(c.map.len(), LINK_CACHE_CAP);
     }
 
     #[test]

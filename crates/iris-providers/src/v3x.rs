@@ -29,9 +29,8 @@
 //! password_env = "V3X_PASSWORD"
 //! ```
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use iris_config::ProviderEntry;
@@ -48,13 +47,11 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::torznab::TorznabProvider;
-use crate::util::{field_or_env, field_str, optional_field_or_env};
+use crate::util::{base_url, field_or_env, optional_field_or_env};
 
-/// Same rationale as tr4ker: the user bounces between releases in the
-/// preview; a minute spares the tracker without letting seeders go stale.
-const DETAILS_TTL: Duration = Duration::from_mins(1);
 const SITE: &str = "https://v3x.club";
 
 pub struct V3x {
@@ -75,13 +72,12 @@ struct Session {
     password: String,
     http: Client,
     logged_in: Mutex<bool>,
-    cache: Mutex<HashMap<String, (TorrentDetails, Instant)>>,
+    cache: DetailsCache,
 }
 
 impl V3x {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url = Url::parse(field_str(entry, "base_url")?)
-            .map_err(|e| Error::Provider(format!("v3x base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "v3x")?;
         let download_endpoint = base_url
             .join("/torznab/download")
             .map_err(|e| Error::Provider(format!("v3x download endpoint: {e}")))?;
@@ -131,7 +127,7 @@ impl Session {
             password,
             http,
             logged_in: Mutex::new(false),
-            cache: Mutex::new(HashMap::new()),
+            cache: DetailsCache::new(),
         })
     }
 
@@ -174,10 +170,8 @@ impl Session {
     }
 
     async fn details(&self, provider_id: &str, id: &str) -> Result<TorrentDetails> {
-        if let Some((d, at)) = self.cache.lock().await.get(id)
-            && at.elapsed() < DETAILS_TTL
-        {
-            return Ok(d.clone());
+        if let Some(d) = self.cache.get(id).await {
+            return Ok(d);
         }
         let url = self
             .base_url
@@ -209,10 +203,7 @@ impl Session {
                 .map_err(|e| Error::Provider(format!("v3x details body: {e}")))?;
         };
         let d = raw.into_details(provider_id, id);
-        self.cache
-            .lock()
-            .await
-            .insert(id.to_string(), (d.clone(), Instant::now()));
+        self.cache.put(id.to_string(), d.clone()).await;
         Ok(d)
     }
 }
@@ -499,14 +490,8 @@ mod tests {
             .search(&SearchQuery {
                 q: "dune".into(),
                 page: Some(1),
-                limit: None,
-                sort_by: None,
-                order: None,
                 kind: Some(MediaKind::Movie),
-                parsed_title: None,
-                season: None,
-                episode: None,
-                year: None,
+                ..SearchQuery::default()
             })
             .await
             .expect("search succeeds");

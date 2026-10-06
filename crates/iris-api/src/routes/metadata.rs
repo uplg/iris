@@ -140,12 +140,5 @@ pub(crate) async fn tmdb_resolve(
     let resolved =
         crate::tmdb_resolve::resolve_release_name(state.db(), client, &params.title, kind_hint)
             .await;
-    Ok(Json(resolved.map(|r| TmdbSuggestion {
-        kind: r.kind,
-        tmdb_id: r.tmdb_id,
-        title: r.title,
-        year: r.year,
-        overview: r.overview,
-        poster_path: r.poster_path,
-    })))
+    Ok(Json(resolved))
 }

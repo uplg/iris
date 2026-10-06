@@ -9,6 +9,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
+use crate::routes::PageQuery;
 use crate::routes::extract::AuthUser;
 use crate::routes::library;
 use crate::state::AppState;
@@ -303,10 +304,7 @@ async fn watchlist_item(
         iris_db::playback::last_watched_in_collection(state.db(), user_id, collection_id)
             .await
             .unwrap_or(None);
-    let engaged_at = match (f.last_visited_at, last_watched) {
-        (Some(v), Some(w)) => Some(v.max(w)),
-        (v, w) => v.or(w),
-    };
+    let engaged_at = library::engaged_at(f.last_visited_at, last_watched);
     let new_count = iris_db::available_episodes::count_new_for_series(
         state.db(),
         &f.normalized_name,
@@ -909,64 +907,55 @@ pub(crate) async fn dismiss_gone(
 /// show "no longer available" rather than a dead resume link.
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct HistoryItem {
-    infohash: String,
-    torrent_name: String,
-    tmdb_id: Option<i64>,
-    tmdb_verified: bool,
-    kind: Option<MediaKind>,
-    file_idx: i64,
-    file_path: Option<String>,
-    position_seconds: f64,
-    duration_seconds: Option<f64>,
-    last_watched_at: chrono::DateTime<chrono::Utc>,
-    completed: bool,
-    deleted: bool,
+    pub(crate) infohash: String,
+    pub(crate) torrent_name: String,
+    pub(crate) tmdb_id: Option<i64>,
+    pub(crate) tmdb_verified: bool,
+    pub(crate) kind: Option<MediaKind>,
+    pub(crate) file_idx: i64,
+    pub(crate) file_path: Option<String>,
+    pub(crate) position_seconds: f64,
+    pub(crate) duration_seconds: Option<f64>,
+    pub(crate) last_watched_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) completed: bool,
+    pub(crate) deleted: bool,
     /// Parent collection — survives GC (collections are never dropped),
     /// so clients group history under the show/movie and can route to
     /// the collection page even when every torrent was reclaimed (the
     /// "ghost collection" resume path). Additive — old clients ignore it.
     #[serde(default)]
-    collection_id: Option<uuid::Uuid>,
+    pub(crate) collection_id: Option<uuid::Uuid>,
     /// The collection's clean display title — the readable label to
     /// render instead of the raw SCENE torrent name.
     #[serde(default)]
-    collection_title: Option<String>,
+    pub(crate) collection_title: Option<String>,
     /// SCENE-derived episode coordinates of the exact file watched
     /// (`S01E03`). Survive GC; a manual per-torrent remove drops them.
     #[serde(default)]
-    season: Option<i64>,
+    pub(crate) season: Option<i64>,
     #[serde(default)]
-    episode: Option<i64>,
+    pub(crate) episode: Option<i64>,
     /// Absolute episode number for fleuve anime (render "Episode N").
     #[serde(default)]
-    absolute_episode: Option<i64>,
+    pub(crate) absolute_episode: Option<i64>,
     /// Source-torrent provenance: with both set, clients can offer
     /// "Download again" on a deleted row — re-resolving the same
     /// release yields the same infohash, so the stored resume
     /// position applies untouched.
     #[serde(default)]
-    source_provider: Option<String>,
+    pub(crate) source_provider: Option<String>,
     #[serde(default)]
-    source_external_id: Option<String>,
+    pub(crate) source_external_id: Option<String>,
     /// TMDB poster path once `tmdb_verified`. Additive.
     #[serde(default)]
-    poster_path: Option<String>,
-}
-
-#[derive(Debug, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub(crate) struct HistoryQuery {
-    /// Max rows to return (clamped 1..=200, defaults to 50).
-    limit: Option<i64>,
-    /// Pagination offset (defaults to 0).
-    offset: Option<i64>,
+    pub(crate) poster_path: Option<String>,
 }
 
 #[utoipa::path(
     get,
     path = "/api/me/history",
     operation_id = "list_my_history",
-    params(HistoryQuery),
+    params(PageQuery),
     responses(
         (status = 200, description = "Caller's full watch history, including deleted-source items", body = [HistoryItem]),
         (status = 401, description = "Not authenticated"),
@@ -976,13 +965,21 @@ pub(crate) struct HistoryQuery {
 pub(crate) async fn history(
     State(state): State<AppState>,
     user: AuthUser,
-    axum::extract::Query(q): axum::extract::Query<HistoryQuery>,
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
 ) -> ApiResult<Json<Vec<HistoryItem>>> {
-    let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let offset = q.offset.unwrap_or(0).max(0);
-    let rows = iris_db::playback::user_history(state.db(), user.id, limit, offset).await?;
-    let state = &state;
-    let out = crate::fanout::map_ordered(rows, |r| async move {
+    Ok(Json(history_items(&state, user.id, &page).await?))
+}
+
+/// One user's history page, rendered — the caller's own (`/me/history`) and
+/// the admin drill-down (`/admin/users/{id}/history`) share it.
+pub(crate) async fn history_items(
+    state: &AppState,
+    user_id: iris_core::ids::UserId,
+    page: &PageQuery,
+) -> ApiResult<Vec<HistoryItem>> {
+    let rows =
+        iris_db::playback::user_history(state.db(), user_id, page.limit(), page.offset()).await?;
+    Ok(crate::fanout::map_ordered(rows, |r| async move {
         let poster_path =
             library::verified_poster(state, r.tmdb_id, r.tmdb_verified, r.kind.as_deref()).await;
         let file_path = state.engine().file_name(&r.infohash, r.file_idx);
@@ -1009,8 +1006,7 @@ pub(crate) async fn history(
             poster_path,
         }
     })
-    .await;
-    Ok(Json(out))
+    .await)
 }
 
 #[cfg(test)]

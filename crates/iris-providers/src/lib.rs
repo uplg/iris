@@ -11,6 +11,7 @@
 //! reimplementing the wire format (see [`c411`] for an example).
 
 pub mod c411;
+mod cache;
 pub mod hdtorrents;
 pub mod nyaa;
 pub mod registry;
@@ -60,10 +61,7 @@ pub trait SearchProvider: Send + Sync {
             sort_by: Some(SortField::Uploaded),
             order: Some(SortOrder::Desc),
             kind,
-            parsed_title: None,
-            season: None,
-            episode: None,
-            year: None,
+            ..SearchQuery::default()
         })
         .await
     }

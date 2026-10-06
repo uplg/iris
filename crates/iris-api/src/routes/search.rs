@@ -224,7 +224,7 @@ async fn match_titles(state: &AppState, results: &mut [iris_core::search::Search
     }
 }
 
-fn title_match_of(m: crate::tmdb_resolve::ResolvedTitle) -> iris_core::search::TitleMatch {
+fn title_match_of(m: crate::tmdb::TmdbSuggestion) -> iris_core::search::TitleMatch {
     iris_core::search::TitleMatch {
         tmdb_id: m.tmdb_id,
         kind: m.kind.into(),
@@ -325,11 +325,9 @@ async fn library_matches_for(
             return Vec::new();
         }
     };
-    let wanted = summaries.into_iter().filter(|c| match q.kind {
-        Some(MediaKind::Movie) => c.kind == "movie",
-        Some(MediaKind::Tv) => c.kind == "tv",
-        None => true,
-    });
+    let wanted = summaries
+        .into_iter()
+        .filter(|c| q.kind.is_none_or(|k| c.kind == k.as_wire()));
     crate::fanout::map_ordered(wanted, |c| library_match(state, q, c, user_id))
         .await
         .into_iter()
@@ -451,10 +449,7 @@ pub(crate) async fn details(
     _user: AuthUser,
     Query(params): Query<DetailsParams>,
 ) -> ApiResult<Json<ReleaseDetails>> {
-    let provider = state
-        .providers()
-        .get(&params.provider)
-        .ok_or_else(|| ApiError::BadRequest(format!("unknown provider `{}`", params.provider)))?;
+    let provider = state.provider(&params.provider)?;
     match provider.details(&params.id).await {
         Ok(Some(mut d)) => {
             // Same server-authored warning as the search cards, plus an

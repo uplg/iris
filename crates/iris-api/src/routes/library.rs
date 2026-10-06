@@ -230,12 +230,10 @@ pub(crate) async fn list_library(
             .into_iter()
             .filter_map(|row| TorrentView::live(&state, &user, row))
             .collect();
-        let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
-            .await
-            .unwrap_or(0);
-        let total_downloaded_bytes = iris_db::torrents::total_downloaded_bytes(state.db())
-            .await
-            .unwrap_or(0);
+        let (total_uploaded_bytes, total_downloaded_bytes) =
+            iris_db::torrents::lifetime_bytes(state.db())
+                .await
+                .unwrap_or((0, 0));
         return Ok(Json(LibraryResponse::Torrents {
             items: out,
             total_uploaded_bytes,
@@ -589,9 +587,7 @@ pub(crate) async fn collection_detail(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<CollectionDetail>> {
-    let collection = iris_db::collections::get(state.db(), id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let collection = collection_or_404(&state, id).await?;
 
     let torrents: Vec<TorrentView> = iris_db::torrents::list_in_collection(state.db(), id)
         .await?
@@ -634,13 +630,10 @@ pub(crate) async fn collection_detail(
     // visit, last watch in the collection). Never engaged → None →
     // the badge counts nothing.
     let user_last_visited = follow.as_ref().and_then(|f| f.last_visited_at);
-    let user_engaged_at = match (user_last_visited, user_last_watched) {
-        (Some(v), Some(w)) => Some(v.max(w)),
-        (v, w) => v.or(w),
-    };
+    let user_engaged_at = engaged_at(user_last_visited, user_last_watched);
 
     let (episodes, available_episodes, season_packs, has_new_since_last_visit) =
-        if collection.kind == "tv" {
+        if collection.is_tv() {
             build_tv_episode_view(
                 &state,
                 &collection,
@@ -1163,10 +1156,8 @@ pub(crate) async fn grab_collection_episode(
     Path((id, season, episode)): Path<(Uuid, i64, i64)>,
     Query(q): Query<GrabQuery>,
 ) -> ApiResult<Json<crate::routes::follows::GrabResponse>> {
-    let collection = iris_db::collections::get(state.db(), id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    if collection.kind != "tv" {
+    let collection = collection_or_404(&state, id).await?;
+    if !collection.is_tv() {
         return Err(ApiError::BadRequest(
             "grab only valid for TV collections".into(),
         ));
@@ -1234,9 +1225,7 @@ pub(crate) async fn mark_title_watched(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<axum::http::StatusCode> {
-    iris_db::collections::get(state.db(), id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    collection_or_404(&state, id).await?;
     let files = title_files(&state, id).await?;
     iris_db::playback::mark_completed_many(state.db(), user.id, &files).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
@@ -1257,9 +1246,45 @@ pub(crate) async fn mark_title_unwatched(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<axum::http::StatusCode> {
-    iris_db::collections::get(state.db(), id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    collection_or_404(&state, id).await?;
     iris_db::playback::delete_for_collection(state.db(), user.id, id).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// When a user last engaged with a series — the later of their last visit
+/// and their last watch; `None` when they never did. The "new" badge
+/// counts episodes found after it.
+pub(crate) fn engaged_at(
+    last_visited: Option<chrono::DateTime<chrono::Utc>>,
+    last_watched: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    last_visited.max(last_watched)
+}
+
+/// The collection `id`, or 404.
+async fn collection_or_404(
+    state: &AppState,
+    id: Uuid,
+) -> ApiResult<iris_db::collections::CollectionRow> {
+    iris_db::collections::get(state.db(), id)
+        .await?
+        .ok_or(ApiError::NotFound)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, Utc};
+
+    use super::engaged_at;
+
+    #[test]
+    fn engaged_at_is_the_later_of_visit_and_watch() {
+        let visit = Utc::now();
+        let watch = visit + Duration::hours(1);
+        assert_eq!(engaged_at(Some(visit), Some(watch)), Some(watch));
+        assert_eq!(engaged_at(Some(watch), Some(visit)), Some(watch));
+        assert_eq!(engaged_at(Some(visit), None), Some(visit));
+        assert_eq!(engaged_at(None, Some(watch)), Some(watch));
+        assert_eq!(engaged_at(None, None), None);
+    }
 }

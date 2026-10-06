@@ -16,6 +16,17 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+/// `AvailableEpisodeRow` column list, shared so the reads can't drift from the
+/// struct. A macro so it stays a literal inside `concat!` (sqlx 0.9 only
+/// takes `&'static str`).
+macro_rules! available_episode_columns {
+    () => {
+        "id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
+         magnet, quality, seeders, size_bytes, found_at, language, download_url, \
+         absolute_episode, codec"
+    };
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct AvailableEpisodeRow {
     pub id: Uuid,
@@ -106,14 +117,13 @@ pub async fn list_best_for_series(
     // SQL, while every value (`normalized_name`) goes through
     // `push_bind`. No user data ever reaches the raw SQL, so there's no
     // `AssertSqlSafe` audit hatch to rot if this query is edited later.
-    let mut qb = sqlx::QueryBuilder::new(
-        "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url, \
-                absolute_episode, codec \
-         FROM (SELECT *, ROW_NUMBER() OVER ( \
+    let mut qb = sqlx::QueryBuilder::new(concat!(
+        "SELECT ",
+        available_episode_columns!(),
+        " FROM (SELECT *, ROW_NUMBER() OVER ( \
                    PARTITION BY season, episode, COALESCE(language, '') \
-                   ORDER BY ",
-    );
+                   ORDER BY "
+    ));
     qb.push(recommended_order_sql());
     qb.push(
         ") AS _rn \
@@ -176,14 +186,13 @@ pub async fn list_season_packs_for_series(
     normalized_name: &str,
     owned_coverage: &HashMap<i64, HashSet<String>>,
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
-    let mut qb = sqlx::QueryBuilder::new(
-        "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url, \
-                absolute_episode, codec \
-         FROM (SELECT *, ROW_NUMBER() OVER ( \
+    let mut qb = sqlx::QueryBuilder::new(concat!(
+        "SELECT ",
+        available_episode_columns!(),
+        " FROM (SELECT *, ROW_NUMBER() OVER ( \
                    PARTITION BY season, COALESCE(language, '') \
-                   ORDER BY ",
-    );
+                   ORDER BY "
+    ));
     qb.push(recommended_order_sql());
     qb.push(
         ") AS _rn \
@@ -238,13 +247,12 @@ pub async fn find_pack_for_season(
     // `language_pref` is bound twice (the original `?3` appeared twice as
     // `?3 IS NULL OR language = ?3`); QueryBuilder placeholders are
     // positional, so each `push_bind` emits its own `?`.
-    let mut qb = sqlx::QueryBuilder::new(
-        "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url, \
-                absolute_episode, codec \
-         FROM available_episodes \
-         WHERE normalized_name = ",
-    );
+    let mut qb = sqlx::QueryBuilder::new(concat!(
+        "SELECT ",
+        available_episode_columns!(),
+        " FROM available_episodes \
+         WHERE normalized_name = "
+    ));
     qb.push_bind(normalized_name);
     qb.push(" AND episode = 0 AND season = ");
     qb.push_bind(season);
@@ -273,14 +281,13 @@ pub async fn list_offers_for_episode(
     season: i64,
     episode: i64,
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
-    sqlx::query_as(
-        "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url, \
-                absolute_episode, codec \
-         FROM available_episodes \
+    sqlx::query_as(concat!(
+        "SELECT ",
+        available_episode_columns!(),
+        " FROM available_episodes \
          WHERE normalized_name = ?1 AND season = ?2 AND episode = ?3 \
-           AND episode > 0 AND seeders IS NOT 0",
-    )
+           AND episode > 0 AND seeders IS NOT 0"
+    ))
     .bind(normalized_name)
     .bind(season)
     .bind(episode)
@@ -296,13 +303,12 @@ pub async fn list_pack_offers_for_season(
     normalized_name: &str,
     season: i64,
 ) -> Result<Vec<AvailableEpisodeRow>, sqlx::Error> {
-    sqlx::query_as(
-        "SELECT id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
-                magnet, quality, seeders, size_bytes, found_at, language, download_url, \
-                absolute_episode, codec \
-         FROM available_episodes \
-         WHERE normalized_name = ?1 AND season = ?2 AND episode = 0 AND seeders IS NOT 0",
-    )
+    sqlx::query_as(concat!(
+        "SELECT ",
+        available_episode_columns!(),
+        " FROM available_episodes \
+         WHERE normalized_name = ?1 AND season = ?2 AND episode = 0 AND seeders IS NOT 0"
+    ))
     .bind(normalized_name)
     .bind(season)
     .fetch_all(pool)

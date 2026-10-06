@@ -9,6 +9,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# In-memory pool + user fixture for other crates' tests.
+test-support = []
+
 [dependencies]
 iris-core = { workspace = true }
 sqlx = { workspace = true }

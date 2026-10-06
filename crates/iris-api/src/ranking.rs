@@ -111,7 +111,7 @@ fn infohash_from_magnet(magnet: &str) -> Option<String> {
     let lower = magnet.to_ascii_lowercase();
     let start = lower.find("xt=urn:btih:")? + "xt=urn:btih:".len();
     let hash: String = lower[start..].chars().take_while(|c| *c != '&').collect();
-    (hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit())).then_some(hash)
+    iris_core::ids::is_infohash_hex(&hash).then_some(hash)
 }
 
 /// Project the parsed-query summary the frontend renders as a banner
@@ -454,11 +454,6 @@ mod tests {
     fn mk_query(q: &str, season: Option<u32>, episode: Option<u32>) -> SearchQuery {
         SearchQuery {
             q: q.into(),
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
             parsed_title: Some(series_key(
                 q.split_whitespace()
                     .take(4)
@@ -468,7 +463,7 @@ mod tests {
             )),
             season,
             episode,
-            year: None,
+            ..SearchQuery::default()
         }
     }
 
@@ -477,15 +472,10 @@ mod tests {
         // Episode user typed: classroom S04E11.
         let q = SearchQuery {
             q: "classroom of the elite S04E11".into(),
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
             parsed_title: Some(series_key("classroom of the elite")),
             season: Some(4),
             episode: Some(11),
-            year: None,
+            ..SearchQuery::default()
         };
         // S04 pack: massive seeders, huge size.
         let pack = mk_result(
@@ -633,15 +623,9 @@ mod tests {
         // and a fresh S04E12 — a torrent we don't own — wins #1.
         let q = SearchQuery {
             q: "classroom of the elite S04".into(),
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
             parsed_title: Some(series_key("classroom of the elite")),
             season: Some(4),
-            episode: None,
-            year: None,
+            ..SearchQuery::default()
         };
         let owned_e11 = with_infohash(
             mk_result(
@@ -700,15 +684,10 @@ mod tests {
         // the exact bug the infohash-only dedup fixes.
         let q = SearchQuery {
             q: "classroom S04E11".into(),
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
             parsed_title: Some(series_key("classroom of the elite")),
             season: Some(4),
             episode: Some(11),
-            year: None,
+            ..SearchQuery::default()
         };
         let owned = with_infohash(
             mk_result(
@@ -836,15 +815,8 @@ mod tests {
     fn parsed_query_summary_is_silent_for_bare_titles() {
         let q = SearchQuery {
             q: "classroom of the elite".into(),
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
             parsed_title: Some(series_key("classroom of the elite")),
-            season: None,
-            episode: None,
-            year: None,
+            ..SearchQuery::default()
         };
         assert!(parsed_query_summary(&q).is_none());
     }
@@ -853,15 +825,10 @@ mod tests {
     fn parsed_query_summary_surfaces_se() {
         let q = SearchQuery {
             q: "classroom S04E11".into(),
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
             parsed_title: Some("classroom".into()),
             season: Some(4),
             episode: Some(11),
-            year: None,
+            ..SearchQuery::default()
         };
         let s = parsed_query_summary(&q).unwrap();
         assert_eq!(s.title, "classroom");

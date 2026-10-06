@@ -508,7 +508,7 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, deps: EnrichDeps<'_>, in
     let Ok(Some(collection)) = iris_db::collections::get(pool, collection_id).await else {
         return;
     };
-    if collection.kind != "tv" {
+    if !collection.is_tv() {
         return;
     }
     let siblings = iris_db::torrents::list_in_collection(pool, collection_id)
@@ -645,7 +645,7 @@ async fn heal_anime_collection_identity(
     let Ok(Some(collection)) = collections::get(pool, collection_id).await else {
         return;
     };
-    if collection.kind != "tv" {
+    if !collection.is_tv() {
         return;
     }
     let Some(parsed) = filename::parse(&torrent.name) else {
@@ -902,7 +902,7 @@ async fn heal_anime_batch_metadata(
     let Ok(Some(collection)) = collections::get(pool, collection_id).await else {
         return;
     };
-    if collection.kind != "tv" || !collection.is_anime {
+    if !collection.is_tv() || !collection.is_anime {
         return;
     }
     let Some(parsed) = filename::parse(&torrent.name) else {
@@ -999,7 +999,7 @@ async fn heal_bracketed_display_titles(pool: &SqlitePool, deps: EnrichDeps<'_>) 
         let Some(parsed) = filename::parse(&c.display_title) else {
             continue;
         };
-        let is_tv = c.kind == "tv";
+        let is_tv = c.is_tv();
         let kind = if is_tv { Kind::Tv } else { Kind::Movie };
         let new_display = parsed.display_with_year(is_tv);
         if new_display.is_empty() || new_display == c.display_title {
@@ -1082,7 +1082,7 @@ async fn try_merge_twin(
     providers: Option<&iris_providers::ProviderRegistry>,
     col: &CollectionRow,
 ) {
-    if col.kind != "tv" {
+    if !col.is_tv() {
         return;
     }
     let Some(tmdb) = col.tmdb_id else { return };

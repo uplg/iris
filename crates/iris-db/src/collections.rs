@@ -21,6 +21,16 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+/// `CollectionRow` column list, shared so the reads can't drift from the
+/// struct. A macro so it stays a literal inside `concat!` (sqlx 0.9 only
+/// takes `&'static str`).
+macro_rules! collection_columns {
+    () => {
+        "id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
+         last_indexer_scan_at, last_visited_at, is_anime, anilist_id"
+    };
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct CollectionRow {
     pub id: Uuid,
@@ -54,18 +64,12 @@ pub struct CollectionRow {
     pub anilist_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    Tv,
-    Movie,
-}
+/// A collection's kind; the `kind` column holds its wire form.
+pub use iris_core::search::MediaKind as Kind;
 
-impl Kind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Kind::Tv => "tv",
-            Kind::Movie => "movie",
-        }
+impl CollectionRow {
+    pub fn is_tv(&self) -> bool {
+        self.kind == Kind::Tv.as_wire()
     }
 }
 
@@ -78,11 +82,11 @@ pub async fn list_by_tmdb(
     pool: &SqlitePool,
     tmdb_id: i64,
 ) -> Result<Vec<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
-         FROM collections WHERE tmdb_id = ?1 ORDER BY created_at",
-    )
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections WHERE tmdb_id = ?1 ORDER BY created_at"
+    ))
     .bind(tmdb_id)
     .fetch_all(pool)
     .await
@@ -93,14 +97,14 @@ pub async fn find_by_parsed_title(
     normalized: &str,
     kind: Kind,
 ) -> Result<Option<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
-         FROM collections \
-         WHERE parsed_title_normalized = ?1 AND kind = ?2",
-    )
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections \
+         WHERE parsed_title_normalized = ?1 AND kind = ?2"
+    ))
     .bind(normalized)
-    .bind(kind.as_str())
+    .bind(kind.as_wire())
     .fetch_optional(pool)
     .await
 }
@@ -110,22 +114,22 @@ pub async fn find_by_parsed_title(
 /// rather than re-deriving the title from individual member torrents
 /// (one of which could be poorly named and resolve to garbage).
 pub async fn list_all(pool: &SqlitePool) -> Result<Vec<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
-         FROM collections \
-         ORDER BY created_at",
-    )
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections \
+         ORDER BY created_at"
+    ))
     .fetch_all(pool)
     .await
 }
 
 pub async fn get(pool: &SqlitePool, id: Uuid) -> Result<Option<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
-         FROM collections WHERE id = ?1",
-    )
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections WHERE id = ?1"
+    ))
     .bind(id)
     .fetch_optional(pool)
     .await
@@ -159,7 +163,7 @@ pub async fn find_or_create(
     .bind(id)
     .bind(normalized)
     .bind(display_title)
-    .bind(kind.as_str())
+    .bind(kind.as_wire())
     .bind(now)
     .bind(is_anime)
     .execute(pool)
@@ -232,7 +236,7 @@ pub async fn clear_tmdb_id(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Erro
 /// TV-row in the library.
 pub async fn set_kind(pool: &SqlitePool, id: Uuid, kind: Kind) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE collections SET kind = ?1 WHERE id = ?2")
-        .bind(kind.as_str())
+        .bind(kind.as_wire())
         .bind(id)
         .execute(pool)
         .await?;
@@ -325,7 +329,7 @@ pub async fn create_standalone(
     )
     .bind(id)
     .bind(display_title)
-    .bind(kind.as_str())
+    .bind(kind.as_wire())
     .bind(now)
     .execute(pool)
     .await?;
@@ -386,16 +390,16 @@ pub async fn list_due_for_scan(
     pool: &SqlitePool,
     cooldown_seconds: i64,
 ) -> Result<Vec<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
-         FROM collections \
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections \
          WHERE kind = 'tv' \
            AND parsed_title_normalized IS NOT NULL \
            AND (last_indexer_scan_at IS NULL \
                 OR last_indexer_scan_at < datetime('now', '-' || ?1 || ' seconds')) \
-         ORDER BY last_indexer_scan_at IS NOT NULL, last_indexer_scan_at",
-    )
+         ORDER BY last_indexer_scan_at IS NOT NULL, last_indexer_scan_at"
+    ))
     .bind(cooldown_seconds)
     .fetch_all(pool)
     .await
@@ -571,17 +575,7 @@ pub async fn dismiss_ghost(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
-
-    async fn migrated_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
-    }
+    use crate::test_support::{make_user, migrated_pool};
 
     async fn ef_count(pool: &SqlitePool, cid: Uuid) -> i64 {
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM episode_files WHERE collection_id = ?1")
@@ -635,21 +629,6 @@ mod tests {
         assert!(get(&pool, plain.id).await.unwrap().is_none());
         // The survivor keeps the moved episode file (no cascade wipe).
         assert_eq!(ef_count(&pool, anime.id).await, 1);
-    }
-
-    async fn make_user(pool: &SqlitePool) -> iris_core::ids::UserId {
-        let id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO users (id, email, password_hash, display_name, is_admin, created_at) \
-             VALUES (?1, ?2, '', 'T', 0, ?3)",
-        )
-        .bind(id)
-        .bind(format!("{id}@t.test"))
-        .bind(Utc::now())
-        .execute(pool)
-        .await
-        .expect("insert user");
-        iris_core::ids::UserId::from(id)
     }
 
     /// Ghosts are scoped to the user who watched them: a fully-GC'd

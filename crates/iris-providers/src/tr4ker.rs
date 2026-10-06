@@ -22,9 +22,8 @@
 //! api_key_header = "X-Api-Key"   # forwarded to the Torznab layer too
 //! ```
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use iris_config::ProviderEntry;
@@ -38,20 +37,13 @@ use reqwest::Client;
 use reqwest::StatusCode;
 use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
-use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::torznab::TorznabProvider;
-use crate::util::{field_or_env, field_str};
-
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
-/// Same rationale as c411: the user shopping the preview dialog bounces
-/// between torrents; 60 s spares the indexer without letting the
-/// seeder counts go meaningfully stale.
-const DETAILS_TTL: Duration = Duration::from_mins(1);
+use crate::util::{DEFAULT_USER_AGENT, base_url, field_or_env, join_category};
 
 pub struct Tr4ker {
     id: String,
@@ -59,19 +51,12 @@ pub struct Tr4ker {
     http: Client,
     torznab: Arc<TorznabProvider>,
     /// `slug` -> details from the JSON API.
-    details_cache: Mutex<HashMap<String, CachedDetails>>,
-}
-
-struct CachedDetails {
-    details: TorrentDetails,
-    fetched_at: Instant,
+    details_cache: DetailsCache,
 }
 
 impl Tr4ker {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("tr4ker base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "tr4ker")?;
         let api_key = field_or_env(entry, "api_key")?;
         // The REST detail route only authenticates via header (the
         // `apikey=` query param is a Torznab-endpoint-only affordance).
@@ -105,7 +90,7 @@ impl Tr4ker {
             base_url,
             http,
             torznab,
-            details_cache: Mutex::new(HashMap::new()),
+            details_cache: DetailsCache::new(),
         }))
     }
 
@@ -115,13 +100,8 @@ impl Tr4ker {
             // a separator would rewrite the endpoint path.
             return Ok(None);
         }
-        {
-            let cache = self.details_cache.lock().await;
-            if let Some(c) = cache.get(slug)
-                && c.fetched_at.elapsed() < DETAILS_TTL
-            {
-                return Ok(Some(c.details.clone()));
-            }
+        if let Some(d) = self.details_cache.get(slug).await {
+            return Ok(Some(d));
         }
 
         let url = self
@@ -161,13 +141,9 @@ impl Tr4ker {
         })?;
 
         let details = raw.into_torrent_details(&self.id, slug);
-        self.details_cache.lock().await.insert(
-            slug.to_string(),
-            CachedDetails {
-                details: details.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
+        self.details_cache
+            .put(slug.to_string(), details.clone())
+            .await;
         Ok(Some(details))
     }
 }
@@ -298,11 +274,7 @@ impl TorrentDetailRaw {
 
         let nfo = non_empty(self.nfo);
         let media_info = nfo.as_deref().and_then(nfo::parse);
-        let category = match (self.cat_name, self.sub_cat_name) {
-            (Some(p), Some(s)) if p != s => Some(format!("{p} / {s}")),
-            (Some(p), _) => Some(p),
-            (None, s) => s,
-        };
+        let category = join_category(self.cat_name, self.sub_cat_name);
 
         TorrentDetails {
             provider_id: provider_id.to_string(),

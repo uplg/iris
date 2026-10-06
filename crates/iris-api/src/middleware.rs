@@ -25,6 +25,18 @@ pub const IRIS_CAPS_HEADER: &str = "iris-caps";
 #[derive(Debug, Clone)]
 pub struct IrisCaps(pub ClientCapabilities);
 
+impl IrisCaps {
+    /// The request's parsed caps, default (no transcode) when the header
+    /// was absent: a required `Extension` extractor would 500 every
+    /// header-less request instead.
+    pub fn of<B>(req: &Request<B>) -> ClientCapabilities {
+        req.extensions()
+            .get::<Self>()
+            .map(|c| c.0.clone())
+            .unwrap_or_default()
+    }
+}
+
 /// Middleware that parses the `Iris-Caps` header, attaches a typed
 /// [`IrisCaps`] to the request, and fires a fire-and-forget INSERT into
 /// `playback_caps_log`. Always continues the chain; never fails the request.

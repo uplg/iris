@@ -22,7 +22,6 @@
 //! # tv_categories    = "5000,5030,5040,5045,5070"
 //! ```
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -30,6 +29,7 @@ use async_trait::async_trait;
 use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::Result;
+use iris_core::ids::is_infohash_hex;
 use iris_core::search::{
     DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
     TorrentDetails, TorrentSource,
@@ -44,21 +44,14 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::torznab::TorznabProvider;
-use crate::util::{extract_year, field_or_env, field_str};
+use crate::util::{DEFAULT_USER_AGENT, base_url, extract_year, field_or_env, join_category};
 
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
 /// Featured shelves are editorial — refreshes are slow. 30 min keeps
 /// the home page cheap without going stale on c411's daily cadence.
 const FEATURED_TTL: Duration = Duration::from_mins(30);
-/// `details()` reads the same payload while the user shops around the
-/// preview dialog. 60 s avoids hammering c411 when the user bounces
-/// between 5 torrents in 30 seconds, but stays fresh enough for
-/// seeders/leechers to be representative.
-const DETAILS_TTL: Duration = Duration::from_mins(1);
-
 pub struct C411 {
     id: String,
     base_url: Url,
@@ -67,7 +60,7 @@ pub struct C411 {
     featured_cache: Mutex<Option<CachedFeatured>>,
     /// `infohash` -> `TorrentDetails` from c411's JSON API. Survives
     /// short windows of UI navigation without re-hitting the indexer.
-    details_cache: Mutex<HashMap<String, CachedDetails>>,
+    details_cache: DetailsCache,
 }
 
 struct CachedFeatured {
@@ -76,16 +69,9 @@ struct CachedFeatured {
     fetched_at: Instant,
 }
 
-struct CachedDetails {
-    details: TorrentDetails,
-    fetched_at: Instant,
-}
-
 impl C411 {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("c411 base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "c411")?;
         // Same key c411 uses for the Torznab endpoint also authenticates
         // the JSON `/api/*` routes when sent as a Bearer token — that's
         // how the SPA wires through to authenticated users without
@@ -122,25 +108,20 @@ impl C411 {
             http,
             torznab,
             featured_cache: Mutex::new(None),
-            details_cache: Mutex::new(HashMap::new()),
+            details_cache: DetailsCache::new(),
         }))
     }
 
     async fn fetch_details(&self, infohash: &str) -> Result<Option<TorrentDetails>> {
-        if !is_infohash(infohash) {
+        if !is_infohash_hex(infohash) {
             // Featured items expose the infohash as `external_id`; if a
             // caller hands us something else (e.g. a numeric Torznab guid
             // from another indexer mistakenly routed here), the c411 API
             // would 404 — surface as "no details" instead of an error.
             return Ok(None);
         }
-        {
-            let cache = self.details_cache.lock().await;
-            if let Some(c) = cache.get(infohash)
-                && c.fetched_at.elapsed() < DETAILS_TTL
-            {
-                return Ok(Some(c.details.clone()));
-            }
+        if let Some(d) = self.details_cache.get(infohash).await {
+            return Ok(Some(d));
         }
 
         let url = self
@@ -180,13 +161,9 @@ impl C411 {
         })?;
 
         let details = raw.into_torrent_details(&self.id, infohash);
-        self.details_cache.lock().await.insert(
-            infohash.to_string(),
-            CachedDetails {
-                details: details.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
+        self.details_cache
+            .put(infohash.to_string(), details.clone())
+            .await;
         Ok(Some(details))
     }
 
@@ -354,7 +331,7 @@ impl SearchProvider for C411 {
         // we cached at homepage-fetch time. The search side-effects
         // the link cache, then resolve() finishes through the normal
         // path.
-        if is_infohash(external_id)
+        if is_infohash_hex(external_id)
             && let Some(title) = self.featured_title_for(external_id).await
         {
             tracing::debug!(
@@ -367,15 +344,9 @@ impl SearchProvider for C411 {
                 q: title,
                 page: Some(1),
                 limit: Some(25),
-                sort_by: None,
-                order: None,
-                kind: None,
                 // Priming a featured-link lookup — no need to push
                 // structured hints down to the underlying Torznab.
-                parsed_title: None,
-                season: None,
-                episode: None,
-                year: None,
+                ..SearchQuery::default()
             };
             // Best-effort: if the search fails (network, indexer
             // 5xx), we fall through to the explicit error below
@@ -475,13 +446,6 @@ struct HomepageItem {
     tmdb_id: Option<u64>,
     #[serde(default, rename = "uploaderUsername")]
     uploader_username: String,
-}
-
-/// Cheap check: c411 indexes torrents by their 40-char hex SHA-1
-/// infohash. Anything else is wrong-API or a stale id from another
-/// indexer that got mistakenly routed to us — skip the HTTP call.
-fn is_infohash(s: &str) -> bool {
-    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 // /api/torrents/{infohash} response
@@ -616,12 +580,7 @@ fn build_category(top: Option<&RawNamed>, meta: Option<&TorrentMetadata>) -> Opt
         .and_then(|c| c.name.clone())
         .or_else(|| meta.and_then(|m| m.category.as_ref().and_then(|c| c.name.clone())));
     let sub = meta.and_then(|m| m.subcategory.as_ref().and_then(|c| c.name.clone()));
-    match (parent, sub) {
-        (Some(p), Some(s)) if p != s => Some(format!("{p} / {s}")),
-        (Some(p), _) => Some(p),
-        (None, Some(s)) => Some(s),
-        (None, None) => None,
-    }
+    join_category(parent, sub)
 }
 
 #[cfg(test)]
@@ -649,19 +608,6 @@ mod tests {
             classify_title("Un.simple.accident.2025.MULTi.AD"),
             MediaKind::Movie,
         );
-    }
-
-    #[test]
-    fn validates_infohash() {
-        assert!(is_infohash("98259ba623eec5f33167c083b51b30122c7fa068"));
-        assert!(is_infohash("ABCDEF0123456789abcdef0123456789ABCDEF01"));
-        // Wrong length.
-        assert!(!is_infohash("98259ba6"));
-        assert!(!is_infohash(""));
-        // Non-hex char.
-        assert!(!is_infohash("98259ba623eec5f33167c083b51b30122c7fa06z"));
-        // Numeric guid (e.g. UNIT3D torrent id) — not an infohash.
-        assert!(!is_infohash("12345"));
     }
 
     #[test]

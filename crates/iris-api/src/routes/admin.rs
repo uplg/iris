@@ -13,6 +13,8 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use crate::routes::extract::AdminUser;
 use crate::routes::library::verified_poster;
+use crate::routes::me::{HistoryItem, history_items};
+use crate::routes::{PageQuery, page_limit};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -179,8 +181,7 @@ pub(crate) async fn watch_history(
     _admin: AdminUser,
     axum::extract::Query(q): axum::extract::Query<WatchHistoryQuery>,
 ) -> ApiResult<Json<Vec<WatchHistoryView>>> {
-    let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let rows = iris_db::playback::recent_activity(state.db(), limit).await?;
+    let rows = iris_db::playback::recent_activity(state.db(), page_limit(q.limit)).await?;
     let state = &state;
     Ok(Json(
         crate::fanout::map_ordered(rows, |r| async move {
@@ -246,22 +247,13 @@ pub(crate) struct UserHistoryView {
     poster_path: Option<String>,
 }
 
-#[derive(Debug, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub(crate) struct UserHistoryQuery {
-    /// Max rows to return (clamped 1..=200, defaults to 50).
-    limit: Option<i64>,
-    /// Pagination offset (defaults to 0).
-    offset: Option<i64>,
-}
-
 #[utoipa::path(
     get,
     path = "/api/admin/users/{id}/history",
     operation_id = "list_user_history",
     params(
         ("id" = Uuid, Path, description = "Target user id"),
-        UserHistoryQuery,
+        PageQuery,
     ),
     responses(
         (status = 200, description = "Full watch history for one user, including deleted-source items", body = [UserHistoryView]),
@@ -273,46 +265,37 @@ pub(crate) async fn user_history(
     State(state): State<AppState>,
     _admin: AdminUser,
     Path(id): Path<Uuid>,
-    axum::extract::Query(q): axum::extract::Query<UserHistoryQuery>,
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
 ) -> ApiResult<Json<Vec<UserHistoryView>>> {
-    let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let offset = q.offset.unwrap_or(0).max(0);
-    let rows = iris_db::playback::user_history(
-        state.db(),
-        iris_core::ids::UserId::from(id),
-        limit,
-        offset,
-    )
-    .await?;
-    let state = &state;
-    Ok(Json(
-        crate::fanout::map_ordered(rows, |r| async move {
-            UserHistoryView {
-                poster_path: verified_poster(state, r.tmdb_id, r.tmdb_verified, r.kind.as_deref())
-                    .await,
-                file_path: state.engine().file_name(&r.infohash, r.file_idx),
-                infohash: r.infohash,
-                torrent_name: r.torrent_name,
-                tmdb_id: r.tmdb_id,
-                tmdb_verified: r.tmdb_verified,
-                kind: r.kind.as_deref().and_then(MediaKind::from_wire),
-                file_idx: r.file_idx,
-                position_seconds: r.position_seconds,
-                duration_seconds: r.duration_seconds,
-                completed: r.completed,
-                last_watched_at: r.last_watched_at,
-                deleted: r.deleted,
-                collection_id: r.collection_id,
-                collection_title: r.collection_title,
-                season: r.season,
-                episode: r.episode,
-                absolute_episode: r.absolute_episode,
-                source_provider: r.source_provider,
-                source_external_id: r.source_external_id,
-            }
-        })
-        .await,
-    ))
+    let items = history_items(&state, iris_core::ids::UserId::from(id), &page).await?;
+    Ok(Json(items.into_iter().map(UserHistoryView::from).collect()))
+}
+
+impl From<HistoryItem> for UserHistoryView {
+    fn from(h: HistoryItem) -> Self {
+        Self {
+            infohash: h.infohash,
+            torrent_name: h.torrent_name,
+            file_path: h.file_path,
+            tmdb_id: h.tmdb_id,
+            tmdb_verified: h.tmdb_verified,
+            kind: h.kind,
+            file_idx: h.file_idx,
+            position_seconds: h.position_seconds,
+            duration_seconds: h.duration_seconds,
+            completed: h.completed,
+            last_watched_at: h.last_watched_at,
+            deleted: h.deleted,
+            collection_id: h.collection_id,
+            collection_title: h.collection_title,
+            season: h.season,
+            episode: h.episode,
+            absolute_episode: h.absolute_episode,
+            source_provider: h.source_provider,
+            source_external_id: h.source_external_id,
+            poster_path: h.poster_path,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -565,7 +548,7 @@ pub(crate) async fn storage_stats(
     _admin: AdminUser,
 ) -> ApiResult<Json<StorageStats>> {
     let cfg = &state.cfg().storage;
-    let max = cfg.max_storage_gb.saturating_mul(1_073_741_824);
+    let max = cfg.max_storage_bytes();
     let used = iris_torrent::gc::dir_size(&cfg.download_dir)
         .await
         .unwrap_or(0);
@@ -573,12 +556,10 @@ pub(crate) async fn storage_stats(
         .fetch_one(state.db())
         .await
         .unwrap_or((0,));
-    let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
-        .await
-        .unwrap_or(0);
-    let total_downloaded_bytes = iris_db::torrents::total_downloaded_bytes(state.db())
-        .await
-        .unwrap_or(0);
+    let (total_uploaded_bytes, total_downloaded_bytes) =
+        iris_db::torrents::lifetime_bytes(state.db())
+            .await
+            .unwrap_or((0, 0));
     Ok(Json(StorageStats {
         used_bytes: used,
         max_storage_bytes: max,
@@ -816,6 +797,18 @@ pub(crate) struct TmdbDiagnoseSuggestion {
     poster_path: Option<String>,
 }
 
+impl From<crate::tmdb::TmdbSuggestion> for TmdbDiagnoseSuggestion {
+    fn from(s: crate::tmdb::TmdbSuggestion) -> Self {
+        Self {
+            kind: s.kind.as_wire().to_owned(),
+            tmdb_id: s.tmdb_id,
+            title: s.title,
+            year: s.year,
+            poster_path: s.poster_path,
+        }
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/api/admin/tmdb/diagnose/{infohash}",
@@ -834,9 +827,7 @@ pub(crate) async fn diagnose_tmdb(
     Path(infohash): Path<String>,
 ) -> ApiResult<Json<TmdbDiagnose>> {
     let infohash = infohash.to_ascii_lowercase();
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let row = crate::routes::torrents::torrent_or_404(&state, &infohash).await?;
 
     let collection_tmdb_id = match row.collection_id {
         Some(cid) => iris_db::collections::get(state.db(), cid)
@@ -858,39 +849,18 @@ pub(crate) async fn diagnose_tmdb(
         && cleaned.len() >= 2
     {
         let raw = tmdb.multi_search(&cleaned).await.unwrap_or_default();
-        for s in &raw {
-            suggestions.push(TmdbDiagnoseSuggestion {
-                kind: format!("{:?}", s.kind).to_ascii_lowercase(),
-                tmdb_id: s.tmdb_id,
-                title: s.title.clone(),
-                year: s.year,
-                poster_path: s.poster_path.clone(),
-            });
-        }
+        suggestions.extend(raw.into_iter().map(TmdbDiagnoseSuggestion::from));
         // Re-run resolution end-to-end so the dump reflects what the
         // backfill / ingestion path would actually pick today.
-        let kind_hint = if p.is_tv() {
-            Some(crate::tmdb::TmdbKind::Tv)
-        } else {
-            Some(crate::tmdb::TmdbKind::Movie)
-        };
-        if let Some(r) = crate::tmdb_resolve::resolve_cleaned(
+        picked = crate::tmdb_resolve::resolve_cleaned(
             state.db(),
             tmdb,
             &cleaned,
-            kind_hint,
+            Some(crate::tmdb_resolve::parsed_kind(p)),
             p.year.map(u32::from),
         )
         .await
-        {
-            picked = Some(TmdbDiagnoseSuggestion {
-                kind: format!("{:?}", r.kind).to_ascii_lowercase(),
-                tmdb_id: r.tmdb_id,
-                title: r.title,
-                year: r.year,
-                poster_path: r.poster_path,
-            });
-        }
+        .map(TmdbDiagnoseSuggestion::from);
     }
 
     Ok(Json(TmdbDiagnose {
@@ -967,20 +937,11 @@ pub(crate) struct AuditLogView {
     created_at: chrono::DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub(crate) struct AuditLogQuery {
-    /// Max rows to return (clamped 1..=200, defaults to 50).
-    limit: Option<i64>,
-    /// Pagination offset (defaults to 0).
-    offset: Option<i64>,
-}
-
 #[utoipa::path(
     get,
     path = "/api/admin/audit-log",
     operation_id = "list_audit_log",
-    params(AuditLogQuery),
+    params(PageQuery),
     responses(
         (status = 200, description = "Audited actions, newest first", body = [AuditLogView]),
         (status = 403, description = "Caller is not an admin"),
@@ -990,11 +951,9 @@ pub(crate) struct AuditLogQuery {
 pub(crate) async fn audit_log(
     State(state): State<AppState>,
     _admin: AdminUser,
-    axum::extract::Query(q): axum::extract::Query<AuditLogQuery>,
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
 ) -> ApiResult<Json<Vec<AuditLogView>>> {
-    let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let offset = q.offset.unwrap_or(0).max(0);
-    let rows = iris_db::audit::list(state.db(), limit, offset).await?;
+    let rows = iris_db::audit::list(state.db(), page.limit(), page.offset()).await?;
     Ok(Json(
         rows.into_iter()
             .map(|r| AuditLogView {

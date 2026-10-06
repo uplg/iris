@@ -4,6 +4,22 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+/// `SELECT … FROM … JOIN` prefix for every `TorrentRow` read, so the column
+/// list and its joins can't drift from the struct's `FromRow` fields. A macro
+/// so it stays a literal inside `concat!` (sqlx 0.9 only takes `&'static str`).
+macro_rules! select_torrent_rows {
+    () => {
+        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, \
+         t.source_external_id, t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, \
+         u.display_name AS added_by_name, t.added_at, t.finished_at, t.last_played_at, \
+         t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         t.downloaded_bytes_total, c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
+         FROM torrents t \
+         JOIN users u ON u.id = t.added_by \
+         LEFT JOIN collections c ON c.id = t.collection_id"
+    };
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct TorrentRow {
     pub id: Uuid,
@@ -143,19 +159,10 @@ pub async fn find_by_infohash(
     pool: &SqlitePool,
     infohash: &str,
 ) -> Result<Option<TorrentRow>, sqlx::Error> {
-    sqlx::query_as::<_, TorrentRow>(
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
-         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.infohash = ?1",
-    )
-    .bind(infohash)
-    .fetch_optional(pool)
-    .await
+    sqlx::query_as::<_, TorrentRow>(concat!(select_torrent_rows!(), " WHERE t.infohash = ?1"))
+        .bind(infohash)
+        .fetch_optional(pool)
+        .await
 }
 
 /// The live torrent grabbed from this tracker release, when one is on disk:
@@ -165,17 +172,11 @@ pub async fn find_live_by_source(
     provider: &str,
     external_id: &str,
 ) -> Result<Option<TorrentRow>, sqlx::Error> {
-    sqlx::query_as::<_, TorrentRow>(
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
-         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.source_provider = ?1 AND t.source_external_id = ?2 AND t.deleted_at IS NULL \
-         ORDER BY t.added_at DESC LIMIT 1",
-    )
+    sqlx::query_as::<_, TorrentRow>(concat!(
+        select_torrent_rows!(),
+        " WHERE t.source_provider = ?1 AND t.source_external_id = ?2 AND t.deleted_at IS NULL \
+         ORDER BY t.added_at DESC LIMIT 1"
+    ))
     .bind(provider)
     .bind(external_id)
     .fetch_optional(pool)
@@ -183,16 +184,10 @@ pub async fn find_live_by_source(
 }
 
 pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Error> {
-    sqlx::query_as::<_, TorrentRow>(
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
-         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.deleted_at IS NULL ORDER BY t.added_at DESC",
-    )
+    sqlx::query_as::<_, TorrentRow>(concat!(
+        select_torrent_rows!(),
+        " WHERE t.deleted_at IS NULL ORDER BY t.added_at DESC"
+    ))
     .fetch_all(pool)
     .await
 }
@@ -332,25 +327,18 @@ pub async fn clamp_uploaded_ratios(pool: &SqlitePool, max_ratio: u32) -> Result<
     Ok(res.rows_affected())
 }
 
-/// Sum of `downloaded_bytes_total` across every torrent ever ingested,
-/// including soft-deleted ones — the "since the beginning" denominator
-/// matching [`total_uploaded_bytes`], so the global ratio compares two
+/// Lifetime `(uploaded, downloaded)` byte totals across every torrent ever
+/// ingested, soft-deleted ones included: an evicted torrent still represents
+/// work the seedbox did for the swarm, and the global ratio must compare two
 /// lifetime quantities instead of lifetime upload vs current disk.
-pub async fn total_downloaded_bytes(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
-    let row: (Option<i64>,) = sqlx::query_as("SELECT SUM(downloaded_bytes_total) FROM torrents")
-        .fetch_one(pool)
-        .await?;
-    Ok(u64::try_from(row.0.unwrap_or(0)).unwrap_or(0))
-}
-
-/// Sum of `uploaded_bytes_total` across every torrent ever ingested,
-/// including soft-deleted ones (a torrent we've already evicted still
-/// represents work the seedbox did for the swarm).
-pub async fn total_uploaded_bytes(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
-    let row: (Option<i64>,) = sqlx::query_as("SELECT SUM(uploaded_bytes_total) FROM torrents")
-        .fetch_one(pool)
-        .await?;
-    Ok(u64::try_from(row.0.unwrap_or(0)).unwrap_or(0))
+pub async fn lifetime_bytes(pool: &SqlitePool) -> Result<(u64, u64), sqlx::Error> {
+    let (up, down): (Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT SUM(uploaded_bytes_total), SUM(downloaded_bytes_total) FROM torrents",
+    )
+    .fetch_one(pool)
+    .await?;
+    let bytes = |v: Option<i64>| u64::try_from(v.unwrap_or(0)).unwrap_or(0);
+    Ok((bytes(up), bytes(down)))
 }
 
 /// Stamp `finished_at` (idempotent — only fills a NULL slot; `upsert`
@@ -420,17 +408,11 @@ pub async fn list_in_collection(
     pool: &SqlitePool,
     collection_id: Uuid,
 ) -> Result<Vec<TorrentRow>, sqlx::Error> {
-    sqlx::query_as::<_, TorrentRow>(
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
-         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.collection_id = ?1 AND t.deleted_at IS NULL \
-         ORDER BY t.added_at",
-    )
+    sqlx::query_as::<_, TorrentRow>(concat!(
+        select_torrent_rows!(),
+        " WHERE t.collection_id = ?1 AND t.deleted_at IS NULL \
+         ORDER BY t.added_at"
+    ))
     .bind(collection_id)
     .fetch_all(pool)
     .await
@@ -448,22 +430,16 @@ pub async fn list_deleted_in_collection(
     user_id: UserId,
 ) -> Result<Vec<TorrentRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
-    sqlx::query_as::<_, TorrentRow>(
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
-         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.collection_id = ?1 AND t.deleted_at IS NOT NULL \
+    sqlx::query_as::<_, TorrentRow>(concat!(
+        select_torrent_rows!(),
+        " WHERE t.collection_id = ?1 AND t.deleted_at IS NOT NULL \
            AND EXISTS (SELECT 1 FROM playback_progress pe \
                        WHERE pe.user_id = ?2 AND pe.infohash = t.infohash) \
            AND NOT EXISTS (SELECT 1 FROM gone_release_dismissed gd \
                            WHERE gd.user_id = ?2 AND gd.infohash = t.infohash \
                              AND gd.dismissed_at >= t.deleted_at) \
-         ORDER BY t.deleted_at DESC",
-    )
+         ORDER BY t.deleted_at DESC"
+    ))
     .bind(collection_id)
     .bind(user)
     .fetch_all(pool)
@@ -494,17 +470,36 @@ pub async fn dismiss_gone_release(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
+    use crate::test_support::{make_user, migrated_pool};
 
-    /// Single-connection in-memory pool, migrated through the latest schema.
-    async fn migrated_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
+    #[tokio::test]
+    async fn lifetime_bytes_sum_deleted_torrents_too() {
+        let pool = migrated_pool().await;
+        assert_eq!(lifetime_bytes(&pool).await.unwrap(), (0, 0));
+        let user = make_user(&pool).await;
+        for (hash, up, down) in [("aa", 300, 100), ("bb", 50, 200)] {
+            let row = upsert(
+                &pool,
+                NewTorrent {
+                    infohash: hash.repeat(20),
+                    name: hash.into(),
+                    total_size_bytes: 1024,
+                    source_provider: None,
+                    source_external_id: None,
+                    added_by: user,
+                },
+            )
             .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
+            .unwrap();
+            reconcile_uploaded(&pool, &row.infohash, up).await.unwrap();
+            reconcile_downloaded(&pool, &row.infohash, down)
+                .await
+                .unwrap();
+            if hash == "bb" {
+                soft_delete(&pool, TorrentId(row.id)).await.unwrap();
+            }
+        }
+        assert_eq!(lifetime_bytes(&pool).await.unwrap(), (350, 300));
     }
 
     /// Re-grabbing an evicted torrent must reset `finished_at`: the payload
@@ -515,17 +510,7 @@ mod tests {
     #[tokio::test]
     async fn regrab_resets_finished_at() {
         let pool = migrated_pool().await;
-        let user = crate::users::create(
-            &pool,
-            crate::users::NewUser {
-                email: "t@example.com".into(),
-                password_hash: "x".into(),
-                is_admin: false,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let user = crate::test_support::make_user(&pool).await;
 
         let new = NewTorrent {
             infohash: "aa".repeat(20),
@@ -561,17 +546,7 @@ mod tests {
     #[tokio::test]
     async fn duplicate_grab_of_live_torrent_keeps_finished_at() {
         let pool = migrated_pool().await;
-        let user = crate::users::create(
-            &pool,
-            crate::users::NewUser {
-                email: "t2@example.com".into(),
-                password_hash: "x".into(),
-                is_admin: false,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let user = crate::test_support::make_user(&pool).await;
 
         let new = NewTorrent {
             infohash: "bb".repeat(20),
@@ -630,17 +605,7 @@ mod tests {
     #[tokio::test]
     async fn clamp_uploaded_ratios_repairs_only_outliers() {
         let pool = migrated_pool().await;
-        let user = crate::users::create(
-            &pool,
-            crate::users::NewUser {
-                email: "t3@example.com".into(),
-                password_hash: "x".into(),
-                is_admin: false,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let user = crate::test_support::make_user(&pool).await;
 
         let wild = set_counters(&pool, user, &"cc".repeat(20), 4_411_000, 1_000).await;
         let sane = set_counters(&pool, user, &"dd".repeat(20), 5_000, 1_000).await;

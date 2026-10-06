@@ -35,6 +35,27 @@ pub struct TorrentFilePreview {
     pub is_archive: bool,
 }
 
+impl TorrentFilePreview {
+    fn classify(index: usize, path: String, size_bytes: u64) -> Self {
+        let extension = std::path::Path::new(&path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_lowercase);
+        let is_video = extension
+            .as_deref()
+            .is_some_and(|e| VIDEO_EXTS.contains(&e));
+        let is_archive = extension.as_deref().is_some_and(is_archive_ext);
+        Self {
+            index,
+            path,
+            size_bytes,
+            extension,
+            is_video,
+            is_archive,
+        }
+    }
+}
+
 const VIDEO_EXTS: &[&str] = &[
     "mkv", "mp4", "m4v", "avi", "mov", "webm", "ts", "mts", "m2ts", "wmv",
 ];
@@ -131,24 +152,8 @@ pub fn parse_preview(bytes: &[u8]) -> anyhow::Result<TorrentPreview> {
     for (idx, fd) in info.iter_file_details().enumerate() {
         let size: u64 = fd.len;
         total += size;
-        let path_buf = fd.filename.to_pathbuf();
-        let path = path_buf.to_string_lossy().to_string();
-        let extension = path_buf
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_lowercase);
-        let is_video = extension
-            .as_deref()
-            .is_some_and(|e| VIDEO_EXTS.contains(&e));
-        let is_archive = extension.as_deref().is_some_and(is_archive_ext);
-        files.push(TorrentFilePreview {
-            index: idx,
-            path,
-            size_bytes: size,
-            extension,
-            is_video,
-            is_archive,
-        });
+        let path = fd.filename.to_pathbuf().to_string_lossy().to_string();
+        files.push(TorrentFilePreview::classify(idx, path, size));
     }
 
     let streamable = compute_streamable(&files);
@@ -170,22 +175,7 @@ mod tests {
     use super::*;
 
     fn file(path: &str, size: u64) -> TorrentFilePreview {
-        let extension = std::path::Path::new(path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_lowercase);
-        let is_video = extension
-            .as_deref()
-            .is_some_and(|e| VIDEO_EXTS.contains(&e));
-        let is_archive = extension.as_deref().is_some_and(is_archive_ext);
-        TorrentFilePreview {
-            index: 0,
-            path: path.into(),
-            size_bytes: size,
-            extension,
-            is_video,
-            is_archive,
-        }
+        TorrentFilePreview::classify(0, path.into(), size)
     }
 
     #[test]

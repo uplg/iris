@@ -247,6 +247,8 @@ impl TmdbClient {
 /// Poster width for cards (search, library): sharp at TV distance, light
 /// on phones.
 pub const POSTER_SIZE: &str = "w342";
+/// Backdrop width for hero banners and wide cards.
+pub const BACKDROP_SIZE: &str = "w780";
 const IMAGE_BASE: &str = "https://image.tmdb.org/t/p/";
 
 /// Full URL of a TMDB image path (`/abc.jpg`) at `size`.
@@ -806,10 +808,7 @@ struct TmdbEpisodeRaw {
 
 impl std::fmt::Debug for TmdbKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TmdbKind::Movie => f.write_str("movie"),
-            TmdbKind::Tv => f.write_str("tv"),
-        }
+        f.write_str(self.as_wire())
     }
 }
 

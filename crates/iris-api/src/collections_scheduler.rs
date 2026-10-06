@@ -136,7 +136,7 @@ pub async fn scan_collection(
     let Some(collection) = iris_db::collections::get(pool, collection_id).await? else {
         return Ok(());
     };
-    if collection.kind != "tv" {
+    if !collection.is_tv() {
         return Ok(());
     }
     check_one(pool, providers, &collection).await?;
@@ -189,13 +189,9 @@ async fn check_one(
         limit: Some(100),
         sort_by: Some(SortField::Seeders),
         order: Some(SortOrder::Desc),
-        kind: None,
         // Scheduler intentionally queries by show name only — providers
         // shouldn't narrow to a specific S/E here.
-        parsed_title: None,
-        season: None,
-        episode: None,
-        year: None,
+        ..SearchQuery::default()
     };
     let agg = providers.search_all(&q).await;
     if agg.results.is_empty() {

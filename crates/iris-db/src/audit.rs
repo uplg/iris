@@ -81,38 +81,12 @@ pub async fn list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
-
-    async fn migrated_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
-    }
-
-    async fn make_user(pool: &SqlitePool, display_name: &str) -> UserId {
-        let id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO users (id, email, password_hash, display_name, is_admin, created_at) \
-             VALUES (?1, ?2, '', ?3, 1, ?4)",
-        )
-        .bind(id)
-        .bind(format!("{id}@t.test"))
-        .bind(display_name)
-        .bind(Utc::now())
-        .execute(pool)
-        .await
-        .expect("insert user");
-        UserId::from(id)
-    }
+    use crate::test_support::{make_named_user, migrated_pool};
 
     #[tokio::test]
     async fn record_then_list_newest_first() {
         let pool = migrated_pool().await;
-        let actor = make_user(&pool, "Léonard").await;
+        let actor = make_named_user(&pool, "Léonard").await;
 
         record(
             &pool,
@@ -148,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn list_is_paginated() {
         let pool = migrated_pool().await;
-        let actor = make_user(&pool, "Admin").await;
+        let actor = make_named_user(&pool, "Admin").await;
         for i in 0..5 {
             record(
                 &pool,

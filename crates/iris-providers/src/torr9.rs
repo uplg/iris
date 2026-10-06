@@ -25,9 +25,13 @@ use iris_core::search::{
     SortField, SortOrder, TorrentDetails, TorrentSource,
 };
 
+use crate::cache::DetailsCache;
 use crate::nfo;
+use crate::util::{
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, base_url, extract_year, field_or_env, join_category,
+    parse_rfc2822, scene_query,
+};
 use quick_xml::Reader;
-use quick_xml::escape::unescape as xml_unescape;
 use quick_xml::events::Event;
 use reqwest::header::{
     ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, HeaderMap, HeaderValue, ORIGIN, REFERER, USER_AGENT,
@@ -38,26 +42,16 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
-use crate::util::{extract_year, field_or_env, field_str};
+use crate::torznab::{attr_value, text_value};
 
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
 const DEFAULT_REFERER: &str = "https://torr9.net/";
 const DEFAULT_ORIGIN: &str = "https://torr9.net";
 /// Token TTL is 30 days; refresh proactively well before that.
 const TOKEN_REFRESH_AFTER: Duration = Duration::from_hours(600);
-/// Bencoded torrent files start with a dictionary marker.
-const BENCODE_DICT_MARKER: u8 = b'd';
 /// Featured carousels are curated server-side and refresh slowly. Caching
 /// 30 min keeps the discovery home cheap without going stale on the
 /// daily-ish editorial cadence.
 const FEATURED_TTL: Duration = Duration::from_mins(30);
-/// Torrent details get re-opened when the user shops around the search
-/// results. 60s avoids hammering the indexer when they bounce between
-/// 5 torrents in 30 seconds, but stays fresh enough for seeders/leechers
-/// to be representative.
-const DETAILS_TTL: Duration = Duration::from_mins(1);
-
 pub struct Torr9 {
     id: String,
     base_url: Url,
@@ -71,7 +65,7 @@ pub struct Torr9 {
     token: Mutex<Option<CachedToken>>,
     featured_movies_cache: Mutex<Option<CachedFeatured>>,
     featured_series_cache: Mutex<Option<CachedFeatured>>,
-    details_cache: Mutex<std::collections::HashMap<String, CachedDetails>>,
+    details_cache: DetailsCache,
 }
 
 struct CachedToken {
@@ -84,16 +78,9 @@ struct CachedFeatured {
     fetched_at: Instant,
 }
 
-struct CachedDetails {
-    details: TorrentDetails,
-    fetched_at: Instant,
-}
-
 impl Torr9 {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("torr9 base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "torr9")?;
         let username = field_or_env(entry, "username")?;
         let password = field_or_env(entry, "password")?;
         // Optional: only the RSS rolling-window feeds need it. Any failure
@@ -141,7 +128,7 @@ impl Torr9 {
             token: Mutex::new(None),
             featured_movies_cache: Mutex::new(None),
             featured_series_cache: Mutex::new(None),
-            details_cache: Mutex::new(std::collections::HashMap::new()),
+            details_cache: DetailsCache::new(),
         }))
     }
 
@@ -319,7 +306,7 @@ impl SearchProvider for Torr9 {
         // pulled a clean title + season/episode out of the raw query
         // we rebuild a SCENE-form filter so the indexer narrows
         // exactly to the requested release line.
-        let q_param = build_torr9_q(q);
+        let q_param = scene_query(q);
 
         let mut qs: Vec<(&'static str, String)> = vec![
             ("q", q_param),
@@ -456,13 +443,8 @@ impl SearchProvider for Torr9 {
         }
 
         // Cache hit?
-        {
-            let cache = self.details_cache.lock().await;
-            if let Some(c) = cache.get(external_id)
-                && c.fetched_at.elapsed() < DETAILS_TTL
-            {
-                return Ok(Some(c.details.clone()));
-            }
+        if let Some(d) = self.details_cache.get(external_id).await {
+            return Ok(Some(d));
         }
 
         let url = self
@@ -476,12 +458,7 @@ impl SearchProvider for Torr9 {
             .await
             .map_err(|e| Error::Provider(format!("torr9 details decode: {e}")))?;
 
-        let category = match (raw.category_name.clone(), raw.parent_category_name.clone()) {
-            (Some(c), Some(p)) if c != p => Some(format!("{p} / {c}")),
-            (Some(c), _) => Some(c),
-            (None, Some(p)) => Some(p),
-            (None, None) => None,
-        };
+        let category = join_category(raw.parent_category_name.clone(), raw.category_name.clone());
 
         let media_info = raw.nfo.as_deref().and_then(nfo::parse);
 
@@ -509,13 +486,9 @@ impl SearchProvider for Torr9 {
         };
 
         // Store in cache for the next click.
-        self.details_cache.lock().await.insert(
-            external_id.to_string(),
-            CachedDetails {
-                details: details.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
+        self.details_cache
+            .put(external_id.to_string(), details.clone())
+            .await;
 
         Ok(Some(details))
     }
@@ -714,21 +687,6 @@ fn torr9_sort_field(f: SortField) -> &'static str {
     }
 }
 
-/// Compose torr9's `q=` substring filter from the parsed query
-/// hints. SCENE-form `<title> SxxExx` when both are known; otherwise
-/// fall through to the raw user input — no regression for free text.
-fn build_torr9_q(q: &SearchQuery) -> String {
-    let parsed = match q.parsed_title.as_deref() {
-        Some(t) if !t.is_empty() => t,
-        _ => return q.q.clone(),
-    };
-    match (q.season, q.episode) {
-        (Some(s), Some(e)) if e > 0 => format!("{parsed} S{s:02}E{e:02}"),
-        (Some(s), _) => format!("{parsed} S{s:02}"),
-        _ => q.q.clone(),
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct Torrent {
     id: u64,
@@ -757,15 +715,10 @@ struct Torrent {
 
 impl Torrent {
     fn into_search_result(self, provider_id: &str) -> SearchResult {
-        let category = match (
-            self.category_name.clone(),
+        let category = join_category(
             self.parent_category_name.clone(),
-        ) {
-            (Some(c), Some(p)) if c != p => Some(format!("{p} / {c}")),
-            (Some(c), _) => Some(c),
-            (None, Some(p)) => Some(p),
-            (None, None) => None,
-        };
+            self.category_name.clone(),
+        );
         let year = extract_year(&self.title);
         let kind = derive_kind(
             self.parent_category_name.as_deref(),
@@ -871,11 +824,7 @@ impl RssItem {
         let external_id = self.page_url.as_deref().and_then(torr9_id_from_url)?;
         let title = self.title.filter(|s| !s.is_empty())?;
         let year = extract_year(&title);
-        let uploaded_at = self
-            .pub_date
-            .as_deref()
-            .and_then(|s| chrono::DateTime::parse_from_rfc2822(s).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
+        let uploaded_at = self.pub_date.as_deref().and_then(parse_rfc2822);
         Some(SearchResult {
             provider_id: provider_id.to_string(),
             external_id,
@@ -934,9 +883,7 @@ fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<Search
 
     let read_enclosure = |e: &quick_xml::events::BytesStart, item: &mut RssItem| {
         for attr in e.attributes().flatten() {
-            let raw: &str = &attr.value;
-            let val =
-                xml_unescape(raw).map_or_else(|_| raw.to_string(), std::borrow::Cow::into_owned);
+            let val = attr_value(&attr);
             match attr.key.as_ref() {
                 "url" => item.enclosure_url = Some(val),
                 "length" => item.length = val.parse().ok(),
@@ -970,8 +917,7 @@ fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<Search
             }
             Ok(Event::Text(t)) => {
                 if let (Some(item), Some(tg)) = (cur.as_mut(), tag) {
-                    let text = xml_unescape(&t)
-                        .map_or_else(|_| t.to_string(), std::borrow::Cow::into_owned);
+                    let text = text_value(&t);
                     let text = text.trim().to_string();
                     if !text.is_empty() {
                         match tg {

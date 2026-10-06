@@ -31,16 +31,15 @@
 //! default_language = "english"
 //! ```
 
-use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::Result;
 use iris_core::search::{
-    DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
+    DescriptionFormat, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
     TorrentDetails, TorrentSource,
 };
 use reqwest::Client;
@@ -50,14 +49,12 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::cache::{DetailsCache, FifoCache};
 use crate::nfo;
-use crate::util::{extract_year, field_or_env, field_str, parse_size};
-
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
-
-/// First byte of a valid `.torrent` file (bencoded dictionary).
-const BENCODE_DICT_MARKER: u8 = b'd';
+use crate::util::{
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, KindCategories, base_url, extract_year, field_or_env,
+    parse_size, scene_query,
+};
 
 /// Body marker of an expired/absent session — the site answers 200 with
 /// this string instead of a 401 (Prowlarr's `CheckIfLoginNeeded`).
@@ -67,21 +64,14 @@ const NOT_AUTHORIZED_MARKER: &str = "Error:You're not authorized";
 /// refresh page). Its absence means we're still on the login form.
 const LOGIN_OK_MARKER: &str = "if your browser doesn't have javascript enabled";
 
-/// Same cap as the Torznab / UNIT3D link caches.
-const LINK_CACHE_CAP: usize = 4096;
-
-/// Same rationale as tr4ker/c411: the user shopping the preview dialog
-/// bounces between torrents; 60 s spares the tracker without letting
-/// the peer counts go meaningfully stale.
-const DETAILS_TTL: Duration = Duration::from_mins(1);
-
-/// Movie category ids (UHD Blu-ray, Blu-ray, UHD Remux, Remux, 1080p/i,
-/// 720p, 2160p). Deliberately excludes 63 "Movie/Audio Track".
-const MOVIE_CATS: [u32; 7] = [70, 1, 71, 2, 5, 3, 64];
-/// TV category ids (same quality ladder as movies).
-const TV_CATS: [u32; 7] = [72, 59, 73, 60, 30, 38, 65];
-/// `MOVIE_CATS` ++ `TV_CATS`, for un-filtered searches.
-const ALL_CATS: [u32; 14] = [70, 1, 71, 2, 5, 3, 64, 72, 59, 73, 60, 30, 38, 65];
+/// Category ids per kind; a search without a kind sends both lists.
+const CATEGORIES: KindCategories = KindCategories {
+    // Movie category ids (UHD Blu-ray, Blu-ray, UHD Remux, Remux, 1080p/i,
+    // 720p, 2160p). Deliberately excludes 63 "Movie/Audio Track".
+    movie: &[70, 1, 71, 2, 5, 3, 64],
+    // TV category ids (same quality ladder as movies).
+    tv: &[72, 59, 73, 60, 30, 38, 65],
+};
 
 fn category_label(id: u32) -> Option<&'static str> {
     Some(match id {
@@ -115,43 +105,6 @@ fn category_label(id: u32) -> Option<&'static str> {
     })
 }
 
-fn category_kind(id: u32) -> Option<MediaKind> {
-    if MOVIE_CATS.contains(&id) {
-        Some(MediaKind::Movie)
-    } else if TV_CATS.contains(&id) {
-        Some(MediaKind::Tv)
-    } else {
-        None
-    }
-}
-
-struct LinkCache {
-    map: HashMap<String, String>,
-    order: VecDeque<String>,
-}
-
-impl LinkCache {
-    fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-    fn put(&mut self, key: String, value: String) {
-        if self.map.insert(key.clone(), value).is_none() {
-            self.order.push_back(key);
-            while self.order.len() > LINK_CACHE_CAP {
-                if let Some(old) = self.order.pop_front() {
-                    self.map.remove(&old);
-                }
-            }
-        }
-    }
-    fn get(&self, key: &str) -> Option<String> {
-        self.map.get(key).cloned()
-    }
-}
-
 pub struct HdTorrents {
     id: String,
     base_url: Url,
@@ -166,21 +119,14 @@ pub struct HdTorrents {
     logged_in: Mutex<bool>,
     /// Torrent id -> absolute `download.php` URL captured from search
     /// rows (carries the `f=<name>.torrent` filename parameter).
-    link_cache: Mutex<LinkCache>,
+    link_cache: Mutex<FifoCache<String>>,
     /// Infohash -> scraped `details.php` view.
-    details_cache: Mutex<HashMap<String, CachedDetails>>,
-}
-
-struct CachedDetails {
-    details: TorrentDetails,
-    fetched_at: Instant,
+    details_cache: DetailsCache,
 }
 
 impl HdTorrents {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let mut base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("hdtorrents base_url invalid: {e}")))?;
+        let mut base_url = base_url(entry, "hdtorrents")?;
         // Relative joins below assume a trailing slash ("login.php" vs
         // replacing the last path segment).
         if !base_url.path().ends_with('/') {
@@ -206,8 +152,8 @@ impl HdTorrents {
             password,
             http,
             logged_in: Mutex::new(false),
-            link_cache: Mutex::new(LinkCache::new()),
-            details_cache: Mutex::new(HashMap::new()),
+            link_cache: Mutex::new(FifoCache::new()),
+            details_cache: DetailsCache::new(),
         }))
     }
 
@@ -330,13 +276,8 @@ impl HdTorrents {
         if external_id.is_empty() || !external_id.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Ok(None);
         }
-        {
-            let cache = self.details_cache.lock().await;
-            if let Some(c) = cache.get(external_id)
-                && c.fetched_at.elapsed() < DETAILS_TTL
-            {
-                return Ok(Some(c.details.clone()));
-            }
+        if let Some(d) = self.details_cache.get(external_id).await {
+            return Ok(Some(d));
         }
 
         let url = self
@@ -365,13 +306,9 @@ impl HdTorrents {
                 .await
                 .put(external_id.to_string(), dl.clone());
         }
-        self.details_cache.lock().await.insert(
-            external_id.to_string(),
-            CachedDetails {
-                details: parsed.details.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
+        self.details_cache
+            .put(external_id.to_string(), parsed.details.clone())
+            .await;
         Ok(Some(parsed.details))
     }
 
@@ -380,11 +317,7 @@ impl HdTorrents {
             .base_url
             .join("torrents.php")
             .map_err(|e| Error::Provider(format!("hdtorrents join search url: {e}")))?;
-        let cats: &[u32] = match q.kind {
-            Some(MediaKind::Movie) => &MOVIE_CATS,
-            Some(MediaKind::Tv) => &TV_CATS,
-            None => &ALL_CATS,
-        };
+        let cats = CATEGORIES.for_kind(q.kind);
         {
             let mut qp = url.query_pairs_mut();
             for c in cats {
@@ -511,16 +444,9 @@ impl SearchProvider for HdTorrents {
 
 /// The site's search box treats `.` as a separator and rejects raw
 /// parentheses ("hacking" detection — the form encoder takes care of
-/// those). SCENE-parsed title + S/E is rebuilt like the UNIT3D filter.
+/// those). Starts from the shared [`scene_query`].
 fn build_search_term(q: &SearchQuery) -> String {
-    let base = match q.parsed_title.as_deref() {
-        Some(t) if !t.is_empty() => match (q.season, q.episode) {
-            (Some(s), Some(e)) if e > 0 => format!("{t} S{s:02}E{e:02}"),
-            (Some(s), _) => format!("{t} S{s:02}"),
-            _ => q.q.clone(),
-        },
-        _ => q.q.clone(),
-    };
+    let base = scene_query(q);
     base.replace('.', " ")
 }
 
@@ -848,9 +774,8 @@ fn parse_search_page(provider_id: &str, base_url: &Url, html: &str) -> Vec<Searc
         // The site keys everything on the torrent's infohash: details.php,
         // download.php and peers.php all take the 40-hex hash as `id`.
         // Surfacing it enables the infohash-only "In library" matching.
-        let infohash = (external_id.len() == 40
-            && external_id.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then(|| external_id.to_ascii_lowercase());
+        let infohash =
+            iris_core::ids::is_infohash_hex(&external_id).then(|| external_id.to_ascii_lowercase());
 
         let download_url = tds[4]
             .select(&a_sel)
@@ -897,7 +822,7 @@ fn parse_search_page(provider_id: &str, base_url: &Url, html: &str) -> Vec<Searc
             uploader: None,
             uploaded_at,
             tmdb_id: None,
-            kind: category_id.and_then(category_kind),
+            kind: category_id.and_then(|id| CATEGORIES.kind_of(id)),
             poster_url: None,
             title_match: None,
             already_in_library: false,
@@ -917,6 +842,7 @@ fn parse_search_page(provider_id: &str, base_url: &Url, html: &str) -> Vec<Searc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iris_core::search::MediaKind;
 
     /// One well-formed member-view row + the header row, shaped after the
     /// markup Prowlarr's selectors expect (12 columns: category, icon,
@@ -1030,29 +956,16 @@ mod tests {
     fn search_term_rebuilds_scene_form_and_strips_dots() {
         let q = SearchQuery {
             q: "Classroom.of.the.Elite S04E11 1080p".into(),
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
             parsed_title: Some("Classroom of the Elite".into()),
             season: Some(4),
             episode: Some(11),
-            year: None,
+            ..SearchQuery::default()
         };
         assert_eq!(build_search_term(&q), "Classroom of the Elite S04E11");
 
         let raw = SearchQuery {
             q: "The.Movie.2023".into(),
-            parsed_title: None,
-            season: None,
-            episode: None,
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
-            year: None,
+            ..SearchQuery::default()
         };
         assert_eq!(build_search_term(&raw), "The Movie 2023");
     }
@@ -1082,12 +995,9 @@ mod tests {
         }
     }
 
-    /// Scratch harness: the full login + search + parse path against the
-    /// live site, i.e. exactly what the app does.
-    /// `HDT_USERNAME=… HDT_PASSWORD=… cargo test -- --ignored debug_live --nocapture`
-    #[tokio::test]
-    #[ignore = "hits the live site; needs HDT_USERNAME/HDT_PASSWORD"]
-    async fn debug_live_search() {
+    /// The live-site provider of the ignored harnesses, credentials from
+    /// `HDT_USERNAME` / `HDT_PASSWORD`.
+    fn live_provider() -> Arc<HdTorrents> {
         let mut fields = std::collections::HashMap::new();
         fields.insert(
             "base_url".to_string(),
@@ -1107,19 +1017,20 @@ mod tests {
             enabled: true,
             fields,
         };
-        let p = HdTorrents::from_config(&entry).expect("construct");
+        HdTorrents::from_config(&entry).expect("construct")
+    }
+
+    /// Scratch harness: the full login + search + parse path against the
+    /// live site, i.e. exactly what the app does.
+    /// `HDT_USERNAME=… HDT_PASSWORD=… cargo test -- --ignored debug_live --nocapture`
+    #[tokio::test]
+    #[ignore = "hits the live site; needs HDT_USERNAME/HDT_PASSWORD"]
+    async fn debug_live_search() {
+        let p = live_provider();
         let page = p
             .search(&SearchQuery {
                 q: std::env::var("HDT_QUERY").unwrap_or_else(|_| "dune".into()),
-                page: None,
-                limit: None,
-                sort_by: None,
-                order: None,
-                kind: None,
-                parsed_title: None,
-                season: None,
-                episode: None,
-                year: None,
+                ..SearchQuery::default()
             })
             .await
             .expect("live search");
@@ -1213,26 +1124,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "hits the live site; needs HDT_USERNAME/HDT_PASSWORD/HDT_ID"]
     async fn debug_live_details() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "base_url".to_string(),
-            toml::Value::String("https://hd-torrents.org".into()),
-        );
-        fields.insert(
-            "username_env".to_string(),
-            toml::Value::String("HDT_USERNAME".into()),
-        );
-        fields.insert(
-            "password_env".to_string(),
-            toml::Value::String("HDT_PASSWORD".into()),
-        );
-        let entry = ProviderEntry {
-            id: "hdt".into(),
-            kind: "hdtorrents".into(),
-            enabled: true,
-            fields,
-        };
-        let p = HdTorrents::from_config(&entry).expect("construct");
+        let p = live_provider();
         let id = std::env::var("HDT_ID").expect("set HDT_ID to a torrent infohash");
         let d = p
             .details(&id)

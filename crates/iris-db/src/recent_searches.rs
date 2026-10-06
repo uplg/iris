@@ -88,23 +88,8 @@ mod tests {
     use super::{KEEP, forget, list, record};
 
     async fn pool_with_user() -> (sqlx::SqlitePool, iris_core::ids::UserId) {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        crate::migrate::run(&pool).await.unwrap();
-        let user = crate::users::create(
-            &pool,
-            crate::users::NewUser {
-                email: "s@example.com".into(),
-                password_hash: "x".into(),
-                is_admin: false,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let pool = crate::test_support::migrated_pool().await;
+        let user = crate::test_support::make_user(&pool).await;
         (pool, user)
     }
 

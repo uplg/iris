@@ -247,11 +247,7 @@ async fn affinity(
         iris_db::catalog::recent_watched_titles(state.db(), user_id, HISTORY_TITLES).await?;
     let lookups = watched.iter().filter_map(|w| {
         let id = u64::try_from(w.tmdb_id).ok()?;
-        let kind = if w.kind == "tv" {
-            TmdbKind::Tv
-        } else {
-            TmdbKind::Movie
-        };
+        let kind = TmdbKind::from_wire(&w.kind).unwrap_or(TmdbKind::Movie);
         Some(tmdb.lookup_with_kind(id, Some(kind)))
     });
     let metas = futures::future::join_all(lookups).await;
@@ -576,11 +572,12 @@ pub async fn mood_board(
         let featured = titles
             .iter()
             .find(|r| {
-                image_url(r.backdrop_path.as_deref(), "w780")
+                image_url(r.backdrop_path.as_deref(), crate::tmdb::BACKDROP_SIZE)
                     .is_some_and(|u| !used_backdrops.contains(&u))
             })
             .or(titles.first());
-        let backdrop = featured.and_then(|r| image_url(r.backdrop_path.as_deref(), "w780"));
+        let backdrop = featured
+            .and_then(|r| image_url(r.backdrop_path.as_deref(), crate::tmdb::BACKDROP_SIZE));
         if let Some(b) = &backdrop {
             used_backdrops.insert(b.clone());
         }
@@ -705,7 +702,7 @@ fn image_url(path: Option<&str>, size: &str) -> Option<String> {
     } else if p.starts_with("http") {
         Some(p.to_string())
     } else {
-        Some(format!("https://image.tmdb.org/t/p/{size}{p}"))
+        Some(crate::tmdb::image_url(p, size))
     }
 }
 
@@ -725,8 +722,8 @@ fn card(row: &CatalogItem) -> CatalogCard {
         // `catalog_items.kind` is CHECK-constrained to 'movie'/'tv'.
         kind: MediaKind::from_wire(&row.kind).unwrap_or(MediaKind::Tv),
         title: row.title.clone(),
-        poster_url: image_url(row.poster_path.as_deref(), "w342"),
-        backdrop_url: image_url(row.backdrop_path.as_deref(), "w780"),
+        poster_url: image_url(row.poster_path.as_deref(), crate::tmdb::POSTER_SIZE),
+        backdrop_url: image_url(row.backdrop_path.as_deref(), crate::tmdb::BACKDROP_SIZE),
         overview: row.overview.clone(),
         is_anime: row.is_anime,
         availability: row.availability.clone(),

@@ -937,49 +937,7 @@ async fn run_ffmpeg(
             ten_bit,
             tonemap,
         } => {
-            cmd.args(["-vf", &transcode_video_filter(tonemap)]);
-            // Force a keyframe every 2 s (fps-independent) so shaka can cut
-            // self-contained HLS segments from the re-encoded stream.
-            cmd.args(["-force_key_frames", "expr:gte(t,n_forced*2)"]);
-            let crf = encode.crf.to_string();
-            match codec {
-                VideoCodec::H264 => {
-                    cmd.args([
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        encode.preset.as_str(),
-                        "-crf",
-                        crf.as_str(),
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-profile:v",
-                        "high",
-                        "-level:v",
-                        "4.1",
-                    ]);
-                }
-                VideoCodec::Hevc => {
-                    let pix_fmt = if ten_bit { "yuv420p10le" } else { "yuv420p" };
-                    cmd.args([
-                        "-c:v",
-                        "libx265",
-                        "-preset",
-                        encode.preset.as_str(),
-                        "-crf",
-                        crf.as_str(),
-                        "-pix_fmt",
-                        pix_fmt,
-                        // hvc1 brand + clean hvcC (see the copy path note).
-                        "-tag:v",
-                        "hvc1",
-                        // Closed-GOP IDR keyframes so each HLS segment is
-                        // self-contained (x265 defaults to open-GOP CRA).
-                        "-x265-params",
-                        "open-gop=0",
-                    ]);
-                }
-            }
+            transcode_video_args(&mut cmd, codec, ten_bit, tonemap, encode);
         }
     }
     // `negative_cts_offsets` lets ffmpeg express B-frame composition
@@ -1037,29 +995,7 @@ async fn run_ffmpeg(
         "remuxer: spawning ffmpeg",
     );
 
-    let mut child = cmd.spawn()?;
-    if let Some(stderr) = child.stderr.take() {
-        let log = log_path.to_path_buf();
-        tokio::spawn(async move { drain_stderr_to_log(stderr, log).await });
-    }
-    if let Some(stdout) = child.stdout.take() {
-        let job = job.clone();
-        tokio::spawn(async move { drain_progress_into_job(stdout, job).await });
-    }
-    let status = child.wait().await?;
-    if !status.success() {
-        return Err(RemuxError::Failed(
-            status.code().unwrap_or(-1),
-            log_path.display().to_string(),
-        ));
-    }
-    // ffmpeg done — pin progress at 100 % so the API returns a clean
-    // `1.0` until the shaka stage flips ready.
-    let total = job.total_ms.load(Ordering::Acquire);
-    if total > 0 {
-        job.encoded_ms.store(total, Ordering::Release);
-    }
-    Ok(())
+    run_ffmpeg_child(cmd, log_path, &job).await
 }
 
 /// Streaming transcode: ONE ffmpeg pass that re-encodes the video (per
@@ -1098,47 +1034,8 @@ async fn run_ffmpeg_hls(
         .arg("-i")
         .arg(source);
 
-    // Video: 1080p-capped re-encode, optional HDR → SDR tonemap, keyframe
-    // every 2 s so HLS segments are self-contained.
     cmd.args(["-map", "0:V:0"]);
-    cmd.args(["-vf", &transcode_video_filter(tonemap)]);
-    cmd.args(["-force_key_frames", "expr:gte(t,n_forced*2)"]);
-    let crf = encode.crf.to_string();
-    match codec {
-        VideoCodec::H264 => {
-            cmd.args([
-                "-c:v",
-                "libx264",
-                "-preset",
-                encode.preset.as_str(),
-                "-crf",
-                crf.as_str(),
-                "-pix_fmt",
-                "yuv420p",
-                "-profile:v",
-                "high",
-                "-level:v",
-                "4.1",
-            ]);
-        }
-        VideoCodec::Hevc => {
-            let pix_fmt = if ten_bit { "yuv420p10le" } else { "yuv420p" };
-            cmd.args([
-                "-c:v",
-                "libx265",
-                "-preset",
-                encode.preset.as_str(),
-                "-crf",
-                crf.as_str(),
-                "-pix_fmt",
-                pix_fmt,
-                "-tag:v",
-                "hvc1",
-                "-x265-params",
-                "open-gop=0",
-            ]);
-        }
-    }
+    transcode_video_args(&mut cmd, codec, ten_bit, tonemap, encode);
 
     // Audio: one rendition per plan entry — copied (browser/TV-native) or
     // transcoded to AAC stereo. Per-stream codec specifiers (`-c:a:<n>`)
@@ -1192,6 +1089,17 @@ async fn run_ffmpeg_hls(
         "remuxer: spawning streaming transcode",
     );
 
+    run_ffmpeg_child(cmd, log_path, &job).await
+}
+
+/// Run a built ffmpeg command to completion: stderr into the job log,
+/// `-progress` into `job`. On success progress is pinned at 100 % so the API
+/// returns a clean `1.0` until the output flips ready.
+async fn run_ffmpeg_child(
+    mut cmd: Command,
+    log_path: &Path,
+    job: &Arc<JobState>,
+) -> Result<(), RemuxError> {
     let mut child = cmd.spawn()?;
     if let Some(stderr) = child.stderr.take() {
         let log = log_path.to_path_buf();
@@ -1390,6 +1298,60 @@ fn transcode_video_filter(tonemap: bool) -> String {
         );
     }
     scale
+}
+
+/// The `VideoMode::Transcode` encoder args, shared by the per-stream MP4
+/// and the streaming HLS paths.
+fn transcode_video_args(
+    cmd: &mut Command,
+    codec: VideoCodec,
+    ten_bit: bool,
+    tonemap: bool,
+    encode: &EncodeConfig,
+) {
+    cmd.args(["-vf", &transcode_video_filter(tonemap)]);
+    // A keyframe every 2 s (fps-independent) so HLS segments cut from the
+    // re-encoded stream are self-contained.
+    cmd.args(["-force_key_frames", "expr:gte(t,n_forced*2)"]);
+    let crf = encode.crf.to_string();
+    match codec {
+        VideoCodec::H264 => {
+            cmd.args([
+                "-c:v",
+                "libx264",
+                "-preset",
+                encode.preset.as_str(),
+                "-crf",
+                crf.as_str(),
+                "-pix_fmt",
+                "yuv420p",
+                "-profile:v",
+                "high",
+                "-level:v",
+                "4.1",
+            ]);
+        }
+        VideoCodec::Hevc => {
+            let pix_fmt = if ten_bit { "yuv420p10le" } else { "yuv420p" };
+            cmd.args([
+                "-c:v",
+                "libx265",
+                "-preset",
+                encode.preset.as_str(),
+                "-crf",
+                crf.as_str(),
+                "-pix_fmt",
+                pix_fmt,
+                // hvc1 brand + clean hvcC (see the copy path note).
+                "-tag:v",
+                "hvc1",
+                // Closed-GOP IDR keyframes so each HLS segment is
+                // self-contained (x265 defaults to open-GOP CRA).
+                "-x265-params",
+                "open-gop=0",
+            ]);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -225,22 +225,7 @@ pub async fn update_display_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    async fn migrated_pool() -> SqlitePool {
-        // foreign_keys ON to mirror prod (`pool::connect`) — the whole point
-        // of `delete` is steering what the cascades do.
-        let opts =
-            <sqlx::sqlite::SqliteConnectOptions as std::str::FromStr>::from_str("sqlite::memory:")
-                .expect("parse sqlite url")
-                .foreign_keys(true);
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
-    }
+    use crate::test_support::migrated_pool;
 
     async fn make_user(pool: &SqlitePool, email: &str) -> UserId {
         create(
