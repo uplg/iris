@@ -179,7 +179,6 @@ fun IrisRoot(
                     onOpenChannel = { country, channelId ->
                         navController.navigate(Routes.LiveTvWatch(country, channelId))
                     },
-                    onBack = { navController.popBackStack() },
                 )
             }
             composable<Routes.LiveTvWatch> { backStackEntry ->
@@ -349,6 +348,11 @@ fun IrisRoot(
                         // stacking — Back from the next episode should
                         // skip the one we just finished watching.
                         navController.navigate(Routes.Watch(nextInfohash, nextFileIdx)) {
+                            popUpTo<Routes.Watch> { inclusive = true }
+                        }
+                    },
+                    onPickAnother = { query ->
+                        navController.navigate(Routes.Search(q = query)) {
                             popUpTo<Routes.Watch> { inclusive = true }
                         }
                     },

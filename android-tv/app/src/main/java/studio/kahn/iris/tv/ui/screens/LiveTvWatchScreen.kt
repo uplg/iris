@@ -1,13 +1,15 @@
-// File-level opt-in: PlayerView / MediaItem / buildPlayer are all
-// @UnstableApi; `@OptIn` doesn't propagate into AndroidView lambdas.
+// buildPlayer / MediaItem are `@UnstableApi` (androidx RequiresOptIn).
 @file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 
 package studio.kahn.iris.tv.ui.screens
 
+import android.content.Context
+import android.text.format.DateFormat
 import android.view.KeyEvent
-import android.view.ViewGroup
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,12 +17,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -28,18 +34,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.edit
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
+import androidx.media3.session.MediaSession
 import androidx.tv.material3.Text
+import java.time.OffsetDateTime
+import java.util.Date
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -50,42 +61,53 @@ import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
 import studio.kahn.iris.tv.data.humanizePlaybackError
 import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
+import studio.kahn.iris.tv.ui.components.KeyHint
+import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.LockLandscape
+import studio.kahn.iris.tv.ui.components.Meter
 import studio.kahn.iris.tv.ui.components.OnOutputLost
-import studio.kahn.iris.tv.ui.theme.IrisColors
-import studio.kahn.iris.tv.ui.theme.Radius
-import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.components.PlayerStage
+import studio.kahn.iris.tv.ui.components.Spinner
+import studio.kahn.iris.tv.ui.components.StatusLine
+import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.buildMediaSession
+import studio.kahn.iris.tv.ui.screens.live.nextWords
+import studio.kahn.iris.tv.ui.screens.live.nowWords
+import studio.kahn.iris.tv.ui.screens.live.programmeProgress
+import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.theme.IrisLayout
+import studio.kahn.iris.tv.ui.theme.IrisShape
+import studio.kahn.iris.tv.ui.theme.IrisSpace
+import studio.kahn.iris.tv.ui.theme.IrisType
 
 /** Now/next refresh cadence while watching (drives the overlay). */
 private const val EPG_REFRESH_MS = 30_000L
 
-/** How long the channel-name strip stays up after it (re)appears. */
+/** How long the channel strip stays up after it (re)appears. */
 private const val OVERLAY_VISIBLE_MS = 4_000L
 
 /** Automatic reconnect attempts on a playback error before giving up to the
  *  Retry UI. Each attempt first tells the backend to demote the dead source,
- *  then reloads — so the retries walk through a channel's fallback feeds.
+ *  then reloads, so the retries walk through a channel's fallback feeds.
  *
  *  Must therefore EXCEED the largest realistic fallback count, or the last
- *  feeds are unreachable: M6 has no official CDN left (the group DMCA'd its
- *  restreams) and is carried by four Vavoo feeds alone, which a budget of 3
- *  could never walk to the end of. */
+ *  feeds are unreachable: M6 has no official CDN left and is carried by four
+ *  Vavoo feeds alone, which a budget of 3 could never walk to the end of. */
 private const val MAX_AUTO_RETRIES = 6
 
 /** Decode escalation ladder for a silent no-start. ExoPlayer can sit in
  *  BUFFERING forever WITHOUT raising `onPlayerError` (hardware decoders wedge
- *  on interlaced/corrupt H.264 restreams) — without an escape hatch, such a
- *  channel is an eternal "Connecting…" with no retry and no error.
+ *  on interlaced/corrupt H.264 restreams).
  *
  *  HARDWARE → [HW_STALL_MS] → SOFTWARE (same source) → [SW_STALL_MS] →
- *  SERVER (the backend deinterlaces + re-encodes; verified necessary
- *  on-device: M6's only living feed defeats BOTH local decoders) →
- *  [SRV_STALL_MS] → error card.
+ *  SERVER (the backend deinterlaces + re-encodes; M6's only living feed
+ *  defeats BOTH local decoders) → [SRV_STALL_MS] → error card.
  *
- *  The windows are deliberately TIGHT: advancing a stage never demotes a
- *  source (a stall is a local decode problem), so a false positive on a
- *  slow-starting healthy feed only costs efficiency — the next stage plays
- *  it anyway. A wrongly-demoted source was the historical regression; a
- *  wrongly-escalated decode stage is harmless. */
+ *  Advancing a stage never demotes a source (a stall is a local decode
+ *  problem): a false positive only costs efficiency. A wrongly-demoted
+ *  source was the historical regression. */
 private enum class DecodeStage { Hardware, Software, Server }
 
 private const val HW_STALL_MS = 12_000L
@@ -95,15 +117,13 @@ private const val SW_STALL_MS = 18_000L
 private const val SRV_STALL_MS = 40_000L
 
 /** Persisted per-channel decode stage, so a channel that needed the ladder
- *  starts DIRECTLY at its working stage on later opens — across app
- *  restarts. Entries expire after [STAGE_TTL_MS]: these restreams vary with
- *  programming (interlaced tonight, clean tomorrow), so once a day the
- *  channel gets a fresh shot at plain hardware playback. */
+ *  starts at its working stage on later opens, across restarts. Entries
+ *  expire after [STAGE_TTL_MS]: these restreams vary with programming. */
 private const val STAGE_PREFS = "livetv_decode_stage"
 private const val STAGE_TTL_MS = 24L * 60 * 60 * 1_000
 
-private fun recallStage(context: android.content.Context, key: String): DecodeStage {
-    val raw = context.getSharedPreferences(STAGE_PREFS, android.content.Context.MODE_PRIVATE)
+private fun recallStage(context: Context, key: String): DecodeStage {
+    val raw = context.getSharedPreferences(STAGE_PREFS, Context.MODE_PRIVATE)
         .getString(key, null) ?: return DecodeStage.Hardware
     val (name, ts) = raw.split(':', limit = 2).let {
         (it.getOrNull(0) ?: "") to (it.getOrNull(1)?.toLongOrNull() ?: 0L)
@@ -112,27 +132,23 @@ private fun recallStage(context: android.content.Context, key: String): DecodeSt
     return runCatching { DecodeStage.valueOf(name) }.getOrDefault(DecodeStage.Hardware)
 }
 
-private fun persistStage(context: android.content.Context, key: String, stage: DecodeStage) {
-    context.getSharedPreferences(STAGE_PREFS, android.content.Context.MODE_PRIVATE)
-        .edit()
-        .putString(key, "${stage.name}:${System.currentTimeMillis()}")
-        .apply()
+private fun persistStage(context: Context, key: String, stage: DecodeStage) {
+    context.getSharedPreferences(STAGE_PREFS, Context.MODE_PRIVATE).edit {
+        putString(key, "${stage.name}:${System.currentTimeMillis()}")
+    }
 }
 
 /**
- * Live channel playback. Deliberately NOT [WatchScreen] — that one is
- * torrent-coupled (probe, /play/status gating, saved progress, episode
- * nav). Live TV is a plain HLS stream from the backend proxy:
- * [buildMediaItem] routes the `.m3u8` URL to `HlsMediaSource`, and
- * [AppContainer.mediaOkHttpClient] brings cookie auth + transparent 401
- * refresh.
+ * Live channel playback. Deliberately NOT [WatchScreen] (torrent-coupled):
+ * Live TV is a plain HLS stream from the backend proxy; [buildMediaItem]
+ * routes the `.m3u8` to `HlsMediaSource` and the media OkHttp client brings
+ * cookie auth and the transparent 401 refresh.
  *
- * DPAD up/down zaps to the previous/next channel of the country's list.
- * On a playback error the screen re-prepares once automatically — the
- * backend rotates to the channel's next upstream source on that reload —
- * then surfaces the error with a Retry button.
+ * ↑/↓ (and the channel keys) zap through the country's list; OK opens the
+ * actions (Try another source, Channels); Back closes them, then leaves. On a
+ * playback error the backend demotes the source and the screen reloads, up
+ * to [MAX_AUTO_RETRIES]; a silent stall walks the decode ladder.
  */
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun LiveTvWatchScreen(
     container: AppContainer,
@@ -140,44 +156,35 @@ fun LiveTvWatchScreen(
     initialChannelId: String,
     onBack: () -> Unit,
 ) {
-    // Playback is landscape-only on phones; browsing rotates freely.
-    studio.kahn.iris.tv.ui.components.LockLandscape()
-    val context = androidx.compose.ui.platform.LocalContext.current
+    LockLandscape()
+    val context = LocalContext.current
 
     var serverUrl by remember { mutableStateOf<String?>(null) }
     var channels by remember { mutableStateOf<List<LiveChannel>>(emptyList()) }
     var channelId by remember { mutableStateOf(initialChannelId) }
     var epg by remember { mutableStateOf<Map<String, LiveNowNext>>(emptyMap()) }
+    var epgReadAtMs by remember { mutableLongStateOf(0L) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    // Automatic reconnects used up on THIS channel. STABLE state (not re-keyed)
-    // + reset via the LaunchedEffect below — a long-lived Player.Listener would
-    // otherwise capture a stale re-keyed state object after a zap and count
-    // against the wrong channel.
-    var autoRetryCount by remember { mutableStateOf(0) }
-    // Bumped to force a re-prepare of the current channel (Retry button + the
-    // post-demotion auto-reconnect).
-    var retryNonce by remember { mutableStateOf(0) }
-    // Has the current attempt actually started playing? Drives the "Connecting…"
-    // placeholder AND cancels the connect timeout. Stable state + reset in the
-    // (re)load effect (same stale-capture reasoning as `autoRetryCount`).
+    // STABLE state (not re-keyed) + reset per channel below: a long-lived
+    // Player.Listener would otherwise capture a stale re-keyed state object
+    // after a zap and count against the wrong channel.
+    var autoRetryCount by remember { mutableIntStateOf(0) }
+    // Bumped to re-prepare the current channel (Retry, the post-demotion reconnect).
+    var retryNonce by remember { mutableIntStateOf(0) }
+    // Has the current attempt started playing? Drives "Connecting…" and the stall ladder.
     var playing by remember { mutableStateOf(false) }
-    // Picture gone while the activity stayed started (TV switched off over
-    // infrared, dongle awake — see `OnOutputLost`). Nothing tells us when it
-    // is back, so the next remote key reloads (key handler below) and an
-    // overlay says so meanwhile. Cleared by the (re)load effect.
+    // Picture gone while the activity stayed started (`OnOutputLost`): the
+    // next remote key reloads at the live edge.
     var outputLost by remember { mutableStateOf(false) }
-    // Compose owns focus + input on this screen (the PlayerView is pure
-    // display). `rootFocus` holds focus during playback so DPAD zapping works;
-    // `retryFocus` takes it when the error card appears so its buttons are
-    // reachable — the exact bug where "Back to channels" couldn't be focused.
+    var actionsShown by remember { mutableStateOf(false) }
+    var swallowCentreUp by remember { mutableStateOf(false) }
+    // Compose owns focus + input here (the stage is pure display).
     val rootFocus = remember { FocusRequester() }
     val retryFocus = remember { FocusRequester() }
+    val actionsFocus = remember { FocusRequester() }
 
-    // Channel-name/now-next strip auto-hides a few seconds after it appears —
-    // it must not sit persistently over the picture. `overlayTick` is bumped
-    // to (re)show it: on a zap (channelId change) and on any remote key.
     var overlayVisible by remember { mutableStateOf(true) }
-    var overlayTick by remember { mutableStateOf(0) }
+    var overlayTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(channelId, overlayTick) {
         overlayVisible = true
         delay(OVERLAY_VISIBLE_MS)
@@ -194,38 +201,35 @@ fun LiveTvWatchScreen(
         val url = serverUrl ?: return@LaunchedEffect
         while (true) {
             runCatching { container.apiFor(url).liveTvEpgNow(country) }
-                .onSuccess { res -> epg = res.propertyEntries.associateBy { it.channelId } }
+                .onSuccess { res ->
+                    epg = res.propertyEntries.associateBy { it.channelId }
+                    epgReadAtMs = System.currentTimeMillis()
+                }
             delay(EPG_REFRESH_MS)
         }
     }
 
     val player = remember { mutableStateOf<ExoPlayer?>(null) }
+    val session = remember { mutableStateOf<MediaSession?>(null) }
 
-    // Decode escalation stage (see DecodeStage). Advances on silent stalls;
-    // primed per channel from what worked earlier this session.
     var stage by remember { mutableStateOf(DecodeStage.Hardware) }
-    // Which stage the CURRENT ExoPlayer instance was built for — a stage
-    // switch needs a rebuild (renderers are fixed at construction).
+    // The stage the CURRENT player was built for: renderers are fixed at construction.
     val playerStage = remember { mutableStateOf(DecodeStage.Hardware) }
 
     // New channel ⇒ fresh retry budget; stage primed from what this channel
-    // needed on previous plays (persisted — skip the doomed stages on a
-    // known-bad feed even across app restarts). Keyed on channelId only (NOT
-    // retryNonce) so a reconnect doesn't reset the count it's incrementing.
+    // needed before. Keyed on channelId only, so a reconnect doesn't reset the
+    // count it is incrementing.
     LaunchedEffect(channelId) {
         autoRetryCount = 0
         stage = recallStage(context, "$country:$channelId")
     }
-    // Once an attempt actually plays, remember which stage did it.
     LaunchedEffect(playing) {
         if (playing) persistStage(context, "$country:$channelId", playerStage.value)
     }
 
-    // Shared failure path, used by BOTH the error listener and the connect
-    // timeout: demote the dead source, WAIT for that POST to land, then bump
-    // `retryNonce` to reload the newly elected feed. (The old code re-prepared
-    // immediately, racing the async demote → same dead source back, why M6
-    // never recovered.) After MAX_AUTO_RETRIES, surface the Retry card.
+    // Shared failure path (error listener + connect timeout): demote the dead
+    // source, WAIT for that POST, then reload the newly elected feed. Past the
+    // budget, the Retry card.
     val onFail: (String) -> Unit = onFail@{ message ->
         val url = serverUrl ?: return@onFail
         if (autoRetryCount < MAX_AUTO_RETRIES) {
@@ -242,25 +246,35 @@ fun LiveTvWatchScreen(
         }
     }
 
-    // (Re)load the stream whenever the channel changes, Retry is pressed, or
-    // the escalation stage advances.
+    // "Try another source" (the web's escape hatch for a feed that plays
+    // badly): report it, then start again on the next one with a fresh budget.
+    val anotherSource: () -> Unit = another@{
+        val url = serverUrl ?: return@another
+        actionsShown = false
+        autoRetryCount = 0
+        errorMessage = null
+        container.applicationScope.launch {
+            runCatching { container.apiFor(url).liveTvPlaybackError(country, channelId) }
+            retryNonce++
+        }
+    }
+
+    // (Re)load on a channel change, Retry, or a stage advance.
     LaunchedEffect(channelId, serverUrl, retryNonce, stage) {
         val url = serverUrl ?: return@LaunchedEffect
         errorMessage = null
         playing = false
         outputLost = false
         val base = if (url.endsWith("/")) url else "$url/"
-        // SERVER stage plays the backend's deinterlaced/re-encoded variant;
-        // the earlier stages play the plain proxied original.
         val masterUrl = if (stage == DecodeStage.Server) {
             "${base}api/livetv/$country/channels/$channelId/transcode/master.m3u8"
         } else {
             "${base}api/livetv/$country/channels/$channelId/master.m3u8"
         }
         val name = channels.firstOrNull { it.id == channelId }?.name ?: channelId
-        // Renderers are fixed at construction — a stage switch needs a fresh
-        // ExoPlayer (Server output is clean progressive H.264 → hardware).
         if (player.value != null && playerStage.value != stage) {
+            session.value?.release()
+            session.value = null
             player.value?.release()
             player.value = null
         }
@@ -271,18 +285,15 @@ fun LiveTvWatchScreen(
         ).also {
             player.value = it
             playerStage.value = stage
+            session.value = buildMediaSession(context, it, "live")
         }
         p.setMediaItem(buildMediaItem(masterUrl, name))
         p.prepare()
         p.playWhenReady = true
     }
 
-    // Stall escape hatch (see DecodeStage): re-armed per attempt, implicitly
-    // cancelled by the effect restarting on zap/retry/stage switch. A silent
-    // no-start walks the ladder — hardware → software (same source, no
-    // demote) → server transcode → error card. A stall is a LOCAL decode
-    // problem (web plays these feeds), so unlike onPlayerError it never
-    // demotes the source nor burns the retry walk.
+    // Stall escape hatch: re-armed per attempt. A silent no-start walks the
+    // ladder; it never demotes the source nor burns the retry walk.
     LaunchedEffect(channelId, retryNonce, serverUrl, stage) {
         delay(
             when (stage) {
@@ -302,11 +313,9 @@ fun LiveTvWatchScreen(
         }
     }
 
-    // Player listener: errors go through the shared failure path; "Connecting…"
-    // clears on ANY "we're past connecting" signal — first rendered frame,
-    // isPlaying, or reaching STATE_READY. We ALSO sync from the current state
-    // right after attaching, because on a fast channel playback can start
-    // before this effect runs and we'd otherwise miss the event and hang.
+    // "Connecting…" clears on ANY sign of life (first frame, isPlaying,
+    // STATE_READY), synced right after attaching: a fast channel can start
+    // before this effect runs.
     DisposableEffect(player.value) {
         val p = player.value ?: return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
@@ -333,36 +342,33 @@ fun LiveTvWatchScreen(
 
     DisposableEffect(Unit) {
         onDispose {
+            session.value?.release()
+            session.value = null
             player.value?.release()
             player.value = null
         }
     }
 
-    // Cut the stream when the user leaves via Home (`ON_STOP`) — the same
-    // hole we plugged for VOD in WatchScreen: without this, live segments
-    // keep downloading in the background indefinitely. Unlike VOD (which
-    // deliberately does NOT auto-resume), a live CHANNEL resumes by itself
-    // on return (`ON_START`): a paused live stream would fall behind the
-    // window anyway, so we reload at the live edge via a `retryNonce` bump,
-    // which also re-arms the stall ladder.
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    // Home (`ON_STOP`) cuts the stream; unlike VOD, a live channel resumes
+    // by itself on return (`ON_START`), at the live edge.
+    val lifecycleOwner = LocalLifecycleOwner.current
     val stoppedByLifecycle = remember { mutableStateOf(false) }
     DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+        val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                Lifecycle.Event.ON_STOP -> {
                     if (player.value != null) {
                         stoppedByLifecycle.value = true
                         player.value?.stop()
                     }
                 }
-                androidx.lifecycle.Lifecycle.Event.ON_START -> {
+                Lifecycle.Event.ON_START -> {
                     if (stoppedByLifecycle.value) {
                         stoppedByLifecycle.value = false
                         retryNonce++
                     }
                 }
-                else -> {}
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -378,38 +384,48 @@ fun LiveTvWatchScreen(
     val zap: (Int) -> Unit = zap@{ delta ->
         if (channels.isEmpty()) return@zap
         val idx = channels.indexOfFirst { it.id == channelId }.coerceAtLeast(0)
-        val next = channels[(idx + delta + channels.size) % channels.size]
-        channelId = next.id
+        channelId = channels[(idx + delta + channels.size) % channels.size].id
+        actionsShown = false
     }
 
-    // Focus routing: the error card's buttons take focus when it appears (so
-    // "Back to channels" is reachable), and focus returns to the root — which
-    // handles zapping — the rest of the time.
-    LaunchedEffect(errorMessage) {
+    LaunchedEffect(errorMessage, actionsShown) {
         runCatching {
-            if (errorMessage != null) retryFocus.requestFocus() else rootFocus.requestFocus()
+            when {
+                errorMessage != null -> retryFocus.requestFocus()
+                actionsShown -> actionsFocus.requestFocus()
+                else -> rootFocus.requestFocus()
+            }
         }
     }
+    BackHandler(enabled = actionsShown && errorMessage == null) { actionsShown = false }
+
+    val format = remember(context) { DateFormat.getTimeFormat(context) }
+    val clock = remember(format) { { t: OffsetDateTime -> format.format(Date.from(t.toInstant())) } }
 
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(IrisColor.stage)
             .onPreviewKeyEvent { event ->
+                val code = event.nativeKeyEvent.keyCode
+                val centre = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER ||
+                    code == KeyEvent.KEYCODE_NUMPAD_ENTER
                 if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN) {
+                    // The press that opened the actions must not click the button it focused.
+                    if (centre && swallowCentreUp) {
+                        swallowCentreUp = false
+                        return@onPreviewKeyEvent true
+                    }
                     return@onPreviewKeyEvent false
                 }
-                // Any remote press brings the channel strip back for a beat.
                 overlayTick++
-                // First key once the picture is back: rejoin the live edge.
-                // Back still leaves the screen.
+                // First key once the picture is back: rejoin the live edge. Back still leaves.
                 if (outputLost && event.nativeKeyEvent.keyCode != KeyEvent.KEYCODE_BACK) {
                     retryNonce++
                     return@onPreviewKeyEvent true
                 }
-                // Preview phase: DPAD/CHANNEL up-down zap even while the error
-                // card's buttons hold focus (letting the viewer escape a dead
-                // channel); left/right/center fall through to those buttons.
+                // Up/down zap even while the error card's or the actions' buttons
+                // hold focus; left/right/centre fall through to them.
                 when (event.nativeKeyEvent.keyCode) {
                     KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_DPAD_UP -> {
                         zap(-1)
@@ -419,219 +435,249 @@ fun LiveTvWatchScreen(
                         zap(1)
                         true
                     }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                        when {
+                            swallowCentreUp -> true
+                            !actionsShown && errorMessage == null -> {
+                                actionsShown = true
+                                swallowCentreUp = true
+                                true
+                            }
+                            else -> false
+                        }
+                    }
                     else -> false
                 }
             }
             .focusRequester(rootFocus)
-            .focusable(),
-    ) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    this.player = player.value
-                    // Pure display — Compose owns focus + input. Leaving the
-                    // controller focusable is what trapped D-pad focus on the
-                    // dead player and stranded the error card.
-                    useController = false
-                    isFocusable = false
-                    descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
-                    keepScreenOn = true
-                    layoutParams = android.widget.FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
+            .focusable()
+            .pointerInput(Unit) {
+                detectTapGestures {
+                    overlayTick++
+                    if (errorMessage == null) actionsShown = !actionsShown
                 }
             },
-            update = { it.player = player.value },
-        )
+    ) {
+        PlayerStage(player.value, liftCues = overlayVisible || actionsShown)
 
-        // Connection overlay until the attempt actually starts playing, so a
-        // (re)connect isn't a silent black screen. DIAGNOSTIC by design: no
-        // adb on the household TVs, so the stage line + elapsed seconds ARE
-        // the debugging story ("which step is it stuck on?"). Cleared by the
-        // player listener (or the stall ladder flips to the error card).
+        val channel = channels.firstOrNull { it.id == channelId }
+        val nowNext = epg[channelId]
+        if ((overlayVisible || actionsShown) && !outputLost) {
+            LiveTopBar(
+                channel = channel,
+                fallbackName = channelId,
+                nowNext = nowNext,
+                clock = clock,
+                modifier = Modifier.align(Alignment.TopStart),
+            )
+            LiveBottomBar(
+                nowNext = nowNext,
+                nowMs = epgReadAtMs,
+                clock = clock,
+                actionsShown = actionsShown,
+                actionsFocus = actionsFocus,
+                onAnotherSource = anotherSource,
+                onChannels = onBack,
+                modifier = Modifier.align(Alignment.BottomStart),
+            )
+        }
+
         if (outputLost) {
-            Box(
-                Modifier.fillMaxSize().background(Color.Black),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "The picture went away, so the live stream was stopped.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = IrisColors.MutedForeground,
-                    )
-                    Text(
-                        "Press any button to rejoin the live edge.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = IrisColors.MutedForeground,
-                    )
-                }
-            }
+            CenterNote(
+                title = "The picture went away, so the live stream was stopped.",
+                detail = "Press any button to rejoin the live edge.",
+            )
         }
 
         if (errorMessage == null && !playing && !outputLost) {
-            // Per-attempt elapsed ticker (Android timers are fine — the
-            // no-timer rule is web-only).
-            var elapsedS by remember(channelId, retryNonce, stage) {
-                mutableStateOf(0)
-            }
+            // Diagnostic by design: no adb on the household TVs, so the stage
+            // and the elapsed seconds are the debugging story.
+            var elapsedS by remember(channelId, retryNonce, stage) { mutableIntStateOf(0) }
             LaunchedEffect(channelId, retryNonce, stage) {
                 while (true) {
                     delay(1_000)
                     elapsedS++
                 }
             }
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
+            ConnectingNote(
+                title = when (stage) {
+                    DecodeStage.Hardware -> "Connecting…"
+                    DecodeStage.Software -> "Slow start, retrying with the software decoder…"
+                    DecodeStage.Server -> "Preparing a compatible stream on the server…"
+                },
+                detail = buildString {
+                    append("${elapsedS}s")
+                    if (autoRetryCount > 0) append(" · source attempt ${autoRetryCount + 1}")
+                    append(
                         when (stage) {
-                            DecodeStage.Hardware -> "Connecting…"
-                            DecodeStage.Software -> "Slow start, retrying with the software decoder…"
-                            DecodeStage.Server -> "Preparing a compatible stream on the server…"
+                            DecodeStage.Hardware -> " · hw"
+                            DecodeStage.Software -> " · sw"
+                            DecodeStage.Server -> " · srv"
                         },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = IrisColors.MutedForeground,
                     )
-                    Text(
-                        buildString {
-                            append("${elapsedS}s")
-                            if (autoRetryCount > 0) append(" · source attempt ${autoRetryCount + 1}")
-                            append(
-                                when (stage) {
-                                    DecodeStage.Hardware -> " · hw"
-                                    DecodeStage.Software -> " · sw"
-                                    DecodeStage.Server -> " · srv"
-                                },
-                            )
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = IrisColors.FgDim,
-                    )
-                }
-            }
-        }
-
-        // Channel name + now/next strip: shown on entry / zap / any key, then
-        // auto-hidden so it doesn't sit persistently over the picture.
-        if (overlayVisible) {
-            ChannelOverlay(
-                channel = channels.firstOrNull { it.id == channelId },
-                fallbackName = channelId,
-                nowNext = epg[channelId],
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(Spacing.xl),
+                },
             )
         }
 
-        if (errorMessage != null) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.75f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(
-                    // Bounded + centered so a long diagnostic message wraps
-                    // instead of overflowing the screen edge.
-                    modifier = Modifier
-                        .widthIn(max = 560.dp)
-                        .padding(horizontal = Spacing.xl),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(Spacing.md),
-                ) {
-                    Text(
-                        "Stream unavailable",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = IrisColors.Foreground,
-                    )
-                    Text(
-                        errorMessage ?: "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = IrisColors.MutedForeground,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                        ActionButton(
-                            "Retry",
-                            onClick = {
-                                autoRetryCount = 0
-                                errorMessage = null
-                                retryNonce++
-                            },
-                            modifier = Modifier.focusRequester(retryFocus),
-                        )
-                        ActionButton(
-                            "Back to channels",
-                            onClick = onBack,
-                            style = studio.kahn.iris.tv.ui.components.ActionStyle.Secondary,
-                        )
-                    }
-                }
-            }
+        val error = errorMessage
+        if (error != null) {
+            LiveErrorCard(
+                message = error,
+                retryFocus = retryFocus,
+                onRetry = {
+                    autoRetryCount = 0
+                    errorMessage = null
+                    retryNonce++
+                },
+                onChannels = onBack,
+            )
         }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+/** The channel strip (the player's top bar, live): number and name, what is on now. */
 @Composable
-private fun ChannelOverlay(
+internal fun LiveTopBar(
     channel: LiveChannel?,
     fallbackName: String,
     nowNext: LiveNowNext?,
+    clock: (OffsetDateTime) -> String,
     modifier: Modifier = Modifier,
 ) {
-    val now = nowNext?.now
+    val layout = IrisLayout.current
+    Row(
+        modifier
+            .fillMaxWidth()
+            .background(IrisColor.stageScrim)
+            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
+    ) {
+        val number = channel?.tntNumber
+        if (number != null) {
+            Text(number.toString(), style = IrisType.stageTitle, color = IrisColor.stageMuted, modifier = Modifier.alignByBaseline())
+        }
+        Text(
+            channel?.name ?: fallbackName,
+            style = IrisType.stageTitle,
+            color = IrisColor.stageInk,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.alignByBaseline().weight(1f, fill = false),
+        )
+        nowNext?.now?.let { now ->
+            Text(
+                nowWords(now, clock),
+                style = IrisType.metaLarge,
+                color = IrisColor.stageMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.alignByBaseline().weight(1f, fill = false),
+            )
+        }
+        if (channel?.geoBlocked == true) {
+            Text("May be blocked in your country", style = IrisType.meta, color = IrisColor.stageMuted, modifier = Modifier.alignByBaseline())
+        }
+    }
+}
+
+/** How far into the programme, what is next, the keys; OK adds the actions. */
+@Composable
+internal fun LiveBottomBar(
+    nowNext: LiveNowNext?,
+    nowMs: Long,
+    clock: (OffsetDateTime) -> String,
+    actionsShown: Boolean,
+    actionsFocus: FocusRequester,
+    onAnotherSource: () -> Unit,
+    onChannels: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val layout = IrisLayout.current
     Column(
         modifier
-            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(Radius.lg))
-            .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            .fillMaxWidth()
+            .background(IrisColor.stageScrim)
+            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = 16.dp, bottom = 23.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-        ) {
-            val badge = channel?.tntNumber?.toString()
-            if (badge != null) {
-                Text(
-                    badge,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = IrisColors.MutedForeground,
-                )
-            }
-            Text(
-                channel?.name ?: fallbackName,
-                style = MaterialTheme.typography.titleMedium,
-                color = IrisColors.Foreground,
-            )
-        }
+        val now = nowNext?.now
+        val progress = now?.let { programmeProgress(it.start, it.stop, nowMs) }
         if (now != null) {
-            Text(
-                now.title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = IrisColors.MutedForeground,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Box(Modifier.fillMaxWidth(0.4f)) {
-                ProgrammeProgressBar(
-                    startEpochMs = now.start.toInstant().toEpochMilli(),
-                    stopEpochMs = now.stop.toInstant().toEpochMilli(),
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(clock(now.start), style = IrisType.figure, color = IrisColor.stageInk)
+                Meter(progress ?: 0f, Modifier.weight(1f), track = IrisColor.stageLine, height = 5.dp)
+                Text(clock(now.stop), style = IrisType.figure, color = IrisColor.stageMuted)
             }
         }
-        val next = nowNext?.next
-        if (next != null) {
-            Text(
-                "Up next · ${next.title}",
-                style = MaterialTheme.typography.bodySmall,
-                color = IrisColors.FgDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        nowNext?.next?.let { next ->
+            Text(nextWords(next, clock), style = IrisType.meta, color = IrisColor.stageMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (actionsShown) {
+            Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+                ActionButton(
+                    "Try another source",
+                    onAnotherSource,
+                    style = ActionStyle.Quiet,
+                    icon = Icons.Rounded.Refresh,
+                    modifier = Modifier.focusRequester(actionsFocus),
+                )
+                ActionButton("Channels", onChannels, style = ActionStyle.Quiet)
+            }
+        }
+        KeyHints(
+            listOf(
+                KeyHint("${Keys.UP} ${Keys.DOWN}", "Change channel"),
+                if (actionsShown) KeyHint(Keys.BACK, "Hide these buttons") else KeyHint(Keys.OK, "Another source, channels"),
+                if (actionsShown) KeyHint(Keys.OK, "Choose") else KeyHint(Keys.BACK, "Channels"),
+            ),
+            onStage = true,
+        )
+    }
+}
+
+@Composable
+private fun ConnectingNote(title: String, detail: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+            Spinner(Modifier.size(22.dp), color = IrisColor.accent)
+            Text(title, style = IrisType.body, color = IrisColor.stageInk, textAlign = TextAlign.Center)
+            Text(detail, style = IrisType.meta, color = IrisColor.stageMuted)
+        }
+    }
+}
+
+@Composable
+private fun CenterNote(title: String, detail: String) {
+    Box(Modifier.fillMaxSize().background(IrisColor.stage), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
+            Text(title, style = IrisType.body, color = IrisColor.stageInk, textAlign = TextAlign.Center)
+            Text(detail, style = IrisType.meta, color = IrisColor.stageMuted, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun LiveErrorCard(
+    message: String,
+    retryFocus: FocusRequester,
+    onRetry: () -> Unit,
+    onChannels: () -> Unit,
+) {
+    Box(Modifier.fillMaxSize().background(IrisColor.overlay), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier
+                .widthIn(max = 460.dp)
+                .padding(horizontal = IrisSpace.s8)
+                .background(IrisColor.stageScrim, IrisShape.panel)
+                .padding(IrisSpace.s8),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s4),
+        ) {
+            StatusLine("Stream unavailable", tone = StatusTone.Down, style = IrisType.bodyStrong)
+            Text(message, style = IrisType.body, color = IrisColor.stageMuted)
+            Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+                ActionButton("Retry", onRetry, icon = Icons.Rounded.Refresh, modifier = Modifier.focusRequester(retryFocus))
+                ActionButton("Back to channels", onChannels, style = ActionStyle.Secondary)
+            }
         }
     }
 }
