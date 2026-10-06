@@ -998,12 +998,9 @@ mod tests {
         }
     }
 
-    /// Scratch harness: the full login + search + parse path against the
-    /// live site, i.e. exactly what the app does.
-    /// `HDT_USERNAME=… HDT_PASSWORD=… cargo test -- --ignored debug_live --nocapture`
-    #[tokio::test]
-    #[ignore = "hits the live site; needs HDT_USERNAME/HDT_PASSWORD"]
-    async fn debug_live_search() {
+    /// The live-site provider of the ignored harnesses, credentials from
+    /// `HDT_USERNAME` / `HDT_PASSWORD`.
+    fn live_provider() -> Arc<HdTorrents> {
         let mut fields = std::collections::HashMap::new();
         fields.insert(
             "base_url".to_string(),
@@ -1023,7 +1020,16 @@ mod tests {
             enabled: true,
             fields,
         };
-        let p = HdTorrents::from_config(&entry).expect("construct");
+        HdTorrents::from_config(&entry).expect("construct")
+    }
+
+    /// Scratch harness: the full login + search + parse path against the
+    /// live site, i.e. exactly what the app does.
+    /// `HDT_USERNAME=… HDT_PASSWORD=… cargo test -- --ignored debug_live --nocapture`
+    #[tokio::test]
+    #[ignore = "hits the live site; needs HDT_USERNAME/HDT_PASSWORD"]
+    async fn debug_live_search() {
+        let p = live_provider();
         let page = p
             .search(&SearchQuery {
                 q: std::env::var("HDT_QUERY").unwrap_or_else(|_| "dune".into()),
@@ -1121,26 +1127,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "hits the live site; needs HDT_USERNAME/HDT_PASSWORD/HDT_ID"]
     async fn debug_live_details() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "base_url".to_string(),
-            toml::Value::String("https://hd-torrents.org".into()),
-        );
-        fields.insert(
-            "username_env".to_string(),
-            toml::Value::String("HDT_USERNAME".into()),
-        );
-        fields.insert(
-            "password_env".to_string(),
-            toml::Value::String("HDT_PASSWORD".into()),
-        );
-        let entry = ProviderEntry {
-            id: "hdt".into(),
-            kind: "hdtorrents".into(),
-            enabled: true,
-            fields,
-        };
-        let p = HdTorrents::from_config(&entry).expect("construct");
+        let p = live_provider();
         let id = std::env::var("HDT_ID").expect("set HDT_ID to a torrent infohash");
         let d = p
             .details(&id)

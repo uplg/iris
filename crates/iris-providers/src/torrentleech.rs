@@ -1236,12 +1236,9 @@ mod tests {
         assert_eq!(extract_login_error("<html><body>ok</body></html>"), None);
     }
 
-    /// Scratch harness: the full login + search + parse path against the
-    /// live site, i.e. exactly what the app does.
-    /// `TL_USERNAME=… TL_PASSWORD=… TL_RSS_KEY=… cargo test -p iris-providers -- --ignored debug_live_search --nocapture`
-    #[tokio::test]
-    #[ignore = "hits the live site; needs TL_USERNAME/TL_PASSWORD/TL_RSS_KEY"]
-    async fn debug_live_search() {
+    /// The live-site provider of the ignored harnesses, credentials from
+    /// `TL_USERNAME` / `TL_PASSWORD` / `TL_RSS_KEY`.
+    fn live_provider() -> Arc<TorrentLeech> {
         let mut fields = HashMap::new();
         let base =
             std::env::var("TL_BASE_URL").unwrap_or_else(|_| "https://www.torrentleech.org".into());
@@ -1264,7 +1261,16 @@ mod tests {
             enabled: true,
             fields,
         };
-        let p = TorrentLeech::from_config(&entry).expect("construct");
+        TorrentLeech::from_config(&entry).expect("construct")
+    }
+
+    /// Scratch harness: the full login + search + parse path against the
+    /// live site, i.e. exactly what the app does.
+    /// `TL_USERNAME=… TL_PASSWORD=… TL_RSS_KEY=… cargo test -p iris-providers -- --ignored debug_live_search --nocapture`
+    #[tokio::test]
+    #[ignore = "hits the live site; needs TL_USERNAME/TL_PASSWORD/TL_RSS_KEY"]
+    async fn debug_live_search() {
+        let p = live_provider();
         let page = p
             .search(&query(
                 &std::env::var("TL_QUERY").unwrap_or_else(|_| "dune".into()),
@@ -1299,29 +1305,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "hits the live site; needs TL_USERNAME/TL_PASSWORD/TL_RSS_KEY/TL_FID"]
     async fn debug_live_resolve() {
-        let mut fields = HashMap::new();
-        let base =
-            std::env::var("TL_BASE_URL").unwrap_or_else(|_| "https://www.torrentleech.org".into());
-        fields.insert("base_url".to_string(), toml::Value::String(base));
-        fields.insert(
-            "username_env".to_string(),
-            toml::Value::String("TL_USERNAME".into()),
-        );
-        fields.insert(
-            "password_env".to_string(),
-            toml::Value::String("TL_PASSWORD".into()),
-        );
-        fields.insert(
-            "rss_key_env".to_string(),
-            toml::Value::String("TL_RSS_KEY".into()),
-        );
-        let entry = ProviderEntry {
-            id: "tl".into(),
-            kind: "torrentleech".into(),
-            enabled: true,
-            fields,
-        };
-        let p = TorrentLeech::from_config(&entry).expect("construct");
+        let p = live_provider();
         let fid = std::env::var("TL_FID").expect("set TL_FID to a torrent id");
         match p.resolve(&fid).await.expect("resolve") {
             TorrentSource::TorrentFile(bytes) => {
@@ -1453,29 +1437,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "hits the live site; needs TL_USERNAME/TL_PASSWORD/TL_RSS_KEY/TL_FID"]
     async fn debug_live_details() {
-        let mut fields = HashMap::new();
-        let base =
-            std::env::var("TL_BASE_URL").unwrap_or_else(|_| "https://www.torrentleech.org".into());
-        fields.insert("base_url".to_string(), toml::Value::String(base));
-        fields.insert(
-            "username_env".to_string(),
-            toml::Value::String("TL_USERNAME".into()),
-        );
-        fields.insert(
-            "password_env".to_string(),
-            toml::Value::String("TL_PASSWORD".into()),
-        );
-        fields.insert(
-            "rss_key_env".to_string(),
-            toml::Value::String("TL_RSS_KEY".into()),
-        );
-        let entry = ProviderEntry {
-            id: "tl".into(),
-            kind: "torrentleech".into(),
-            enabled: true,
-            fields,
-        };
-        let p = TorrentLeech::from_config(&entry).expect("construct");
+        let p = live_provider();
         let fid = std::env::var("TL_FID").expect("set TL_FID to a torrent id");
         let d = p.details(&fid).await.expect("details").expect("some");
         println!(
