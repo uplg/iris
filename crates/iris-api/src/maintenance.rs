@@ -49,3 +49,61 @@ async fn run_once(pool: &SqlitePool) {
         ),
     }
 }
+
+/// `VACUUM` the database at `db` (and fold its WAL back in), answering its
+/// size before and after. For an operator after a big prune: never run by the
+/// server, since it holds the write lock for as long as the rebuild takes.
+///
+/// # Errors
+/// The database can't be opened, or SQLite refuses the vacuum (another
+/// writer holds the lock past the busy timeout).
+pub async fn vacuum(db: &std::path::Path) -> anyhow::Result<(u64, u64)> {
+    anyhow::ensure!(db.exists(), "database {} not found", db.display());
+    let size = || {
+        ["", "-wal"]
+            .iter()
+            .filter_map(|suffix| {
+                let mut p = db.as_os_str().to_owned();
+                p.push(suffix);
+                std::fs::metadata(p).ok()
+            })
+            .map(|m| m.len())
+            .sum::<u64>()
+    };
+    let before = size();
+    let pool = iris_db::connect(db).await?;
+    sqlx::query("VACUUM").execute(&pool).await?;
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await?;
+    pool.close().await;
+    Ok((before, size()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn vacuum_hands_back_the_space_a_prune_freed() {
+        let dir = std::env::temp_dir().join(format!("iris-vacuum-{}", uuid::Uuid::new_v4()));
+        let db = dir.join("iris.db");
+        let pool = iris_db::connect(&db).await.unwrap();
+        sqlx::query("CREATE TABLE junk (blob BLOB)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for _ in 0..64 {
+            sqlx::query("INSERT INTO junk VALUES (zeroblob(65536))")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("DELETE FROM junk")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        let (before, after) = super::vacuum(&db).await.unwrap();
+        assert!(after < before / 2, "{before} -> {after}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
