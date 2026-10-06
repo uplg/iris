@@ -266,10 +266,7 @@ pub(crate) async fn put_progress(
     // could lose the cache — or the whole torrent — mid-play. The heartbeat
     // is the proof someone still has the player open (paused included).
     let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
-    state
-        .remuxer()
-        .touch_played(&format!("{infohash}_{idx}"))
-        .await;
+    state.remuxer().touch_played_file(&infohash, idx).await;
 
     // "Moved on to the next episode" ⇒ the one before it is done. Skipping the
     // credits and jumping to the next episode otherwise leaves the prior one
@@ -1128,7 +1125,7 @@ pub(crate) async fn pause(
         .engine()
         .pause_by_infohash(&row.infohash)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine pause: {e}")))?;
+        .map_err(map_engine_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1163,7 +1160,7 @@ pub(crate) async fn resume(
         .engine()
         .resume_by_infohash(&row.infohash)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine resume: {e}")))?;
+        .map_err(map_engine_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1175,6 +1172,9 @@ async fn owned_row(
     infohash: &Infohash,
 ) -> ApiResult<iris_db::torrents::TorrentRow> {
     let row = torrent_or_404(state, infohash).await?;
+    if row.deleted_at.is_some() {
+        return Err(ApiError::NotFound);
+    }
     if !may_delete(user, row.added_by) {
         return Err(ApiError::Forbidden);
     }
@@ -1206,11 +1206,12 @@ pub(crate) async fn remove(
             iris_db::torrents::reconcile_uploaded(state.db(), &row.infohash, snap.uploaded_bytes)
                 .await;
     }
-    state
-        .engine()
-        .delete_by_infohash(&row.infohash, true)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine delete: {e}")))?;
+    match state.engine().delete_by_infohash(&row.infohash, true).await {
+        // Not in the engine (it failed to restore after a restart): the row
+        // must still be removable.
+        Ok(()) | Err(iris_torrent::EngineError::NotFound) => {}
+        Err(e) => return Err(ApiError::Internal(anyhow::anyhow!("engine delete: {e}"))),
+    }
     // Cascade the removal into `episode_files`. Soft-deleting the torrent
     // row + dropping the handle + wiping files would otherwise leave the
     // (collection, season, episode) → infohash mappings behind, and the
@@ -1224,11 +1225,12 @@ pub(crate) async fn remove(
         // user-visible regression. Log and continue with the soft-delete.
         tracing::warn!(error = %e, infohash = %row.infohash, "episode_files cascade delete failed");
     }
-    // Drop every cached fragmented MP4 for this torrent. We don't know the
-    // file count from here without going back to the engine snapshot — the
-    // GC callback wired up in `iris-api::lib` already does this prefix
-    // sweep on the cache dir, so it's enough to soft-delete the row and
-    // let the next eviction tick clean up the leftovers.
+    wipe_derived(
+        state.remuxer(),
+        &subtitle_cache_dir(state.cfg()),
+        &row.infohash,
+    )
+    .await;
     iris_db::torrents::soft_delete(state.db(), TorrentId::from(row.id)).await?;
     super::audit(
         &state,
@@ -1697,14 +1699,16 @@ pub(crate) async fn play_status(
     // transcode), exactly like `play_asset` does. We never break a client.
     let caps = crate::middleware::IrisCaps::of(&req);
     let infohash = infohash.into_inner();
-    torrent_or_404(&state, &infohash).await?;
+    let row = torrent_or_404(&state, &infohash).await?;
     let path = state
         .engine()
         .file_path(&infohash, idx)
         .map_err(map_engine_err)?;
 
+    // The DB stamp first: during the post-deploy re-check the snapshot says
+    // unfinished for minutes about a file `play_asset` already serves.
     if let Some(snap) = state.engine().get_by_infohash(&infohash)
-        && !snap.finished
+        && !torrent_finished(&state, &row)
     {
         return Ok(Json(PlayStatus {
             ready: false,
@@ -1829,6 +1833,16 @@ pub(crate) async fn play_status(
             error: Some(msg),
         }));
     }
+    // A copy remux writes the master only once the whole file is remuxed: a
+    // job in flight is not ready yet.
+    if state.remuxer().is_in_flight(&key).await {
+        return Ok(Json(PlayStatus {
+            ready: false,
+            reason: Some("remuxing".into()),
+            progress: state.remuxer().progress(&key).await,
+            error: None,
+        }));
+    }
     Ok(Json(PlayStatus {
         ready: true,
         reason: None,
@@ -1947,7 +1961,7 @@ async fn serve_subtitle(
     // extracted subtitle may be promoted to the permanent cache.
     let torrent_finished = torrent_finished(state, &row);
 
-    let cache_dir = state.cfg().storage.data_dir.join("subs");
+    let cache_dir = subtitle_cache_dir(state.cfg());
     let cache_path = iris_media::subtitle_cache_path(&cache_dir, infohash, idx, stream_idx, format);
     let marker_path = cache_path.with_extension(format!("{}.ok", format.extension()));
 
@@ -1975,7 +1989,6 @@ async fn serve_subtitle(
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, format.mime())
         .header(header::CACHE_CONTROL, "no-store")
-        .header(header::TRANSFER_ENCODING, "chunked")
         .body(Body::from_stream(stream))
         .unwrap())
 }
@@ -2596,6 +2609,21 @@ pub(crate) async fn discard_unrecorded(state: &AppState, result: &iris_torrent::
             "grab: could not remove the torrent of a failed grab"
         );
     }
+}
+
+pub(crate) fn subtitle_cache_dir(cfg: &iris_config::AppConfig) -> std::path::PathBuf {
+    cfg.storage.data_dir.join("subs")
+}
+
+/// Drop everything derived from a torrent's files: remux variants and
+/// extracted subtitle tracks.
+pub(crate) async fn wipe_derived(
+    remuxer: &iris_media::RemuxManager,
+    subs_dir: &std::path::Path,
+    infohash: &str,
+) {
+    remuxer.wipe_torrent(infohash).await;
+    iris_media::subtitles::wipe_torrent(subs_dir, infohash).await;
 }
 
 /// The archive gate for a torrent the engine just added: `.torrent` bytes

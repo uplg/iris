@@ -319,6 +319,23 @@ async fn pump(
     if failed { Pump::Failed } else { Pump::Complete }
 }
 
+/// Remove every cached track (and its marker / leftover tmp files) of a
+/// torrent from `base_dir`.
+pub async fn wipe_torrent(base_dir: &Path, infohash: &str) {
+    let prefix = format!("{infohash}_");
+    let Ok(mut rd) = tokio::fs::read_dir(base_dir).await else {
+        return;
+    };
+    while let Ok(Some(e)) = rd.next_entry().await {
+        if e.file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with(&prefix))
+        {
+            let _ = tokio::fs::remove_file(e.path()).await;
+        }
+    }
+}
+
 /// Computed cache path for a given (`infohash`, `file_idx`, `sub_idx`,
 /// format). Files of different formats coexist (e.g., a track can be
 /// served as both `WebVTT` and ASS).

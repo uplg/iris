@@ -93,29 +93,17 @@ fn setup_gc(
         }
     };
 
-    // Wipe matching remux cache dirs (one per file index, named
-    // `{infohash}_{idx}`) after a torrent is evicted, so derived state
-    // doesn't outlive its source.
+    // Derived state (remux variants, extracted subtitles) doesn't outlive
+    // its source.
     let on_evict = {
         let remuxer = remuxer.clone();
+        let subs_dir = routes::torrents::subtitle_cache_dir(cfg);
         move |infohash: &str| {
             let remuxer = remuxer.clone();
+            let subs_dir = subs_dir.clone();
             let h = infohash.to_string();
             tokio::spawn(async move {
-                let cache_dir = remuxer.base_dir().to_path_buf();
-                let prefix = format!("{h}_");
-                if let Ok(mut rd) = tokio::fs::read_dir(&cache_dir).await {
-                    while let Ok(Some(e)) = rd.next_entry().await {
-                        if let Some(name) = e.file_name().to_str()
-                            && name.starts_with(&prefix)
-                        {
-                            // Cache entries are directories — remove_file
-                            // fails silently on them and the orphaned
-                            // cache then inflates the remux dir forever.
-                            let _ = tokio::fs::remove_dir_all(e.path()).await;
-                        }
-                    }
-                }
+                routes::torrents::wipe_derived(&remuxer, &subs_dir, &h).await;
             });
         }
     };

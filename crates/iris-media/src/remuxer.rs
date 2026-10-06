@@ -212,6 +212,9 @@ pub enum VideoMode {
     },
 }
 
+/// Every value [`RemuxPlan::cache_suffix`] can take.
+const VARIANT_SUFFIXES: [&str; 4] = ["", "_h264", "_hevc", "_hevc10"];
+
 impl RemuxPlan {
     /// Cache-dir discriminator. `Copy` keeps the bare `infohash_idx`
     /// key so every pre-existing cache entry (and the caps-unaware
@@ -406,6 +409,10 @@ impl RemuxManager {
         Some(progress_fraction(encoded, total))
     }
 
+    pub async fn is_in_flight(&self, key: &str) -> bool {
+        self.inner.jobs.lock().await.contains_key(key)
+    }
+
     /// Returns the recorded error message for `key` if a recent ffmpeg
     /// run failed and the cooldown hasn't elapsed.
     pub async fn recent_failure(&self, key: &str) -> Option<String> {
@@ -487,6 +494,41 @@ impl RemuxManager {
         // it so the next play attempt actually re-runs ffmpeg.
         self.inner.failures.lock().await.remove(key);
         Ok(freed)
+    }
+
+    /// Drop every cache of a torrent (each file, each variant), returning
+    /// the freed bytes. A job still running for one of them fails on its
+    /// next segment write.
+    pub async fn wipe_torrent(&self, infohash: &str) -> u64 {
+        let prefix = format!("{infohash}_");
+        let mut freed = 0;
+        let Ok(mut rd) = tokio::fs::read_dir(&self.inner.base_dir).await else {
+            return 0;
+        };
+        while let Ok(Some(e)) = rd.next_entry().await {
+            if let Some(name) = e.file_name().to_str()
+                && name.starts_with(&prefix)
+            {
+                freed += dir_size(&e.path()).await.unwrap_or(0);
+                let _ = tokio::fs::remove_dir_all(e.path()).await;
+            }
+        }
+        self.inner
+            .failures
+            .lock()
+            .await
+            .retain(|key, _| !key.starts_with(&prefix));
+        freed
+    }
+
+    /// [`Self::touch_played`] for every variant of one file: the playback
+    /// heartbeat doesn't know which one the player is on, and a finished
+    /// transcode left unbumped would be evicted mid-film.
+    pub async fn touch_played_file(&self, infohash: &str, file_idx: usize) {
+        for suffix in VARIANT_SUFFIXES {
+            self.touch_played(&format!("{infohash}_{file_idx}{suffix}"))
+                .await;
+        }
     }
 
     /// Bump the "last played" timestamp for [`key`] so LRU eviction
@@ -785,6 +827,9 @@ async fn dir_size(path: &Path) -> std::io::Result<u64> {
 /// Asset names accepted by `/play/{*asset}`. Matches every file ffmpeg
 /// produces under the cache dir, rejects everything else (path traversal
 /// segments like `..`, absolute paths, control characters).
+/// Only what the players fetch: playlists, init segments and media
+/// segments. `ffmpeg.log` (server paths, ffmpeg errors) and `.last_played`
+/// live in the same directory.
 fn is_safe_asset_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() < 128
@@ -792,6 +837,10 @@ fn is_safe_asset_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && std::path::Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e, "m3u8" | "mp4" | "m4s"))
 }
 
 /// Two-stage HLS-CMAF pipeline: ffmpeg encodes per-stream MP4 outputs
@@ -1339,6 +1388,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_player_assets_are_served() {
+        for ok in ["master.m3u8", "video_init.mp4", "fre_12.m4s", "v_3.m4s"] {
+            assert!(is_safe_asset_name(ok), "{ok}");
+        }
+        for refused in [
+            "ffmpeg.log",
+            ".last_played",
+            "../master.m3u8",
+            "a/b.m4s",
+            "",
+        ] {
+            assert!(!is_safe_asset_name(refused), "{refused}");
+        }
+    }
+
+    #[test]
     fn transcode_filter_never_needs_zimg() {
         for tonemap in [false, true] {
             let vf = transcode_video_filter(tonemap);
@@ -1365,6 +1430,31 @@ mod tests {
             .open(&sentinel)
             .unwrap();
         f.set_modified(SystemTime::now() - age).unwrap();
+    }
+
+    #[tokio::test]
+    async fn torrent_wide_wipe_and_touch_cover_every_variant() {
+        let base =
+            std::env::temp_dir().join(format!("iris-remux-wipe-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for key in ["abc_0", "abc_0_h264", "abc_1", "abd_0"] {
+            std::fs::create_dir_all(base.join(key)).unwrap();
+            std::fs::write(base.join(key).join("v.m4s"), vec![0u8; 10]).unwrap();
+        }
+        let mgr = RemuxManager::new(base.clone());
+
+        mgr.touch_played_file("abc", 0).await;
+        assert!(base.join("abc_0").join(LAST_PLAYED_SENTINEL).exists());
+        assert!(base.join("abc_0_h264").join(LAST_PLAYED_SENTINEL).exists());
+        assert!(!base.join("abc_1").join(LAST_PLAYED_SENTINEL).exists());
+
+        assert!(mgr.wipe_torrent("abc").await >= 30);
+        assert!(!base.join("abc_0").exists());
+        assert!(!base.join("abc_0_h264").exists());
+        assert!(!base.join("abc_1").exists());
+        assert!(base.join("abd_0").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]
