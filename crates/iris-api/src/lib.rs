@@ -286,7 +286,10 @@ fn spawn_background_jobs(
 
     {
         let db = app_state.db().clone();
-        tokio::spawn(async move { routes::follows::repair_release_named_follows(&db).await });
+        tokio::spawn(async move {
+            routes::follows::repair_release_named_follows(&db).await;
+            routes::follows::repair_stranded_follows(&db).await;
+        });
     }
 
     // Collection assignment backfill — attaches a `collections` row to

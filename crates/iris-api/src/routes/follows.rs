@@ -102,6 +102,99 @@ pub(crate) async fn repair_release_named_follows(pool: &iris_db::SqlitePool) {
     }
 }
 
+/// The TV collection a stranded follow (its key joins no collection, left
+/// behind by a collection rename before renames carried follows) belongs to,
+/// when exactly one is certain: the follow's own name keyed the SCENE way
+/// (`anime:` twin included), else a trusted TMDB id. Both pointing at
+/// different collections, or several matching, is no answer.
+fn stranded_follow_home<'a>(
+    follow: &iris_db::follows::FollowRow,
+    tv: &'a [iris_db::collections::CollectionRow],
+) -> Option<&'a iris_db::collections::CollectionRow> {
+    let unique = |mut it: Vec<&'a iris_db::collections::CollectionRow>| {
+        it.dedup_by_key(|c| c.id);
+        (it.len() == 1).then(|| it[0])
+    };
+    let key = follow_identity(&follow.name).0;
+    let by_key = (!key.is_empty())
+        .then(|| {
+            let anime = format!("anime:{key}");
+            unique(
+                tv.iter()
+                    .filter(|c| {
+                        c.parsed_title_normalized
+                            .as_deref()
+                            .is_some_and(|k| k == key || k == anime)
+                    })
+                    .collect(),
+            )
+        })
+        .flatten();
+    let by_tmdb = follow.tmdb_id.and_then(|id| {
+        unique(
+            tv.iter()
+                .filter(|c| {
+                    c.tmdb_id == Some(id)
+                        && crate::tmdb_trust::is_identity_trust(c.tmdb_trust.as_deref())
+                })
+                .collect(),
+        )
+    });
+    match (by_key, by_tmdb) {
+        (Some(a), Some(b)) if a.id != b.id => None,
+        (Some(c), _) | (None, Some(c)) => Some(c),
+        (None, None) => None,
+    }
+}
+
+/// Boot repair: follows a past collection rename stranded on a key no
+/// collection holds go to the collection they certainly belong to (see
+/// [`stranded_follow_home`]); the others are left as they are.
+pub(crate) async fn repair_stranded_follows(pool: &iris_db::SqlitePool) {
+    let (follows, collections) = match (
+        iris_db::follows::list_all(pool).await,
+        iris_db::collections::list_all(pool).await,
+    ) {
+        (Ok(f), Ok(c)) => (f, c),
+        (f, c) => {
+            tracing::warn!(follows = ?f.err(), collections = ?c.err(), "stranded follow repair: list failed");
+            return;
+        }
+    };
+    let tv: Vec<_> = collections
+        .into_iter()
+        .filter(iris_db::collections::CollectionRow::is_tv)
+        .collect();
+    let keys: std::collections::HashSet<&str> = tv
+        .iter()
+        .filter_map(|c| c.parsed_title_normalized.as_deref())
+        .collect();
+    for follow in &follows {
+        if keys.contains(follow.normalized_name.as_str()) {
+            continue;
+        }
+        let Some(home) = stranded_follow_home(follow, &tv) else {
+            continue;
+        };
+        let Some(key) = home.parsed_title_normalized.as_deref() else {
+            continue;
+        };
+        match iris_db::follows::rekey(pool, follow, key, &home.display_title).await {
+            Ok(kept) => tracing::info!(
+                follow = %follow.id,
+                from = %follow.normalized_name,
+                to = %key,
+                collection = %home.id,
+                kept,
+                "stranded follow re-keyed to its collection",
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, follow = %follow.id, "stranded follow repair failed");
+            }
+        }
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/api/me/follows",
@@ -2109,6 +2202,71 @@ async fn pick_live_singleton(
         indexer_torrent_id: best.external_id,
         download_url: best.download_url,
     })
+}
+
+#[cfg(test)]
+mod stranded_tests {
+    use iris_db::collections::Kind;
+
+    #[tokio::test]
+    async fn a_stranded_follow_goes_home_only_when_certain() {
+        let pool = iris_db::test_support::migrated_pool().await;
+        let ana = iris_db::test_support::make_user(&pool).await;
+        let dr =
+            iris_db::collections::find_or_create(&pool, "dr stone", "Dr Stone", Kind::Tv, false)
+                .await
+                .unwrap();
+        sqlx::query("UPDATE collections SET tmdb_id = 86031, tmdb_trust = 'scene' WHERE id = ?1")
+            .bind(dr.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let weak = iris_db::collections::find_or_create(&pool, "goblin", "Goblin", Kind::Tv, false)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE collections SET tmdb_id = 67915, tmdb_trust = 'tracker' WHERE id = ?1")
+            .bind(weak.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        iris_db::collections::find_or_create(&pool, "one piece", "One Piece", Kind::Tv, false)
+            .await
+            .unwrap();
+        iris_db::collections::find_or_create(&pool, "anime:one piece", "One Piece", Kind::Tv, true)
+            .await
+            .unwrap();
+        // Stranded by an old rename: key "dr", name "Dr", TMDB id trusted on the collection.
+        iris_db::follows::add(&pool, ana, "dr", "Dr", Some(86031))
+            .await
+            .unwrap();
+        // Its name keys straight to an existing collection.
+        iris_db::follows::add(&pool, ana, "dr stone old", "Dr. Stone", None)
+            .await
+            .unwrap();
+        // Only a weak id: left alone.
+        iris_db::follows::add(&pool, ana, "dokkaebi", "Dokkaebi", Some(67915))
+            .await
+            .unwrap();
+        // Two collections take its name: never guessed.
+        iris_db::follows::add(&pool, ana, "op", "One Piece", None)
+            .await
+            .unwrap();
+        // Not stranded.
+        iris_db::follows::add(&pool, ana, "goblin", "Goblin", None)
+            .await
+            .unwrap();
+
+        super::repair_stranded_follows(&pool).await;
+
+        let mut keys: Vec<String> = iris_db::follows::list_for_user(&pool, ana)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|f| f.normalized_name)
+            .collect();
+        keys.sort();
+        assert_eq!(keys, ["dokkaebi", "dr stone", "goblin", "op"]);
+    }
 }
 
 #[cfg(test)]
