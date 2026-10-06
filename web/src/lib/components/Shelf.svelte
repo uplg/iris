@@ -27,14 +27,20 @@
 	}
 
 	$effect(() => {
-		if (!rail) return;
+		const el = rail;
+		if (!el) return;
 		measure();
+		// the rail's box, and its cards: one added later moves the end
 		const ro = new ResizeObserver(measure);
-		ro.observe(rail);
-		rail.addEventListener('scroll', measure, { passive: true });
+		const watch = () => [el, ...el.children].forEach((c) => ro.observe(c));
+		watch();
+		const mo = new MutationObserver(watch);
+		mo.observe(el, { childList: true });
+		el.addEventListener('scroll', measure, { passive: true });
 		return () => {
 			ro.disconnect();
-			rail?.removeEventListener('scroll', measure);
+			mo.disconnect();
+			el.removeEventListener('scroll', measure);
 		};
 	});
 
