@@ -39,6 +39,9 @@ export const CLIENT_OUTDATED_EVENT = 'iris:client-outdated';
  *  `vite.config.ts`. Used in the `X-Iris-Client` header. */
 export const IRIS_WEB_VERSION: string = __IRIS_WEB_VERSION__;
 
+/** A route parameter as one path segment: a crafted id never reaches another API path. */
+const seg = encodeURIComponent;
+
 const NO_RETRY_PATHS = new Set(['/auth/refresh', '/auth/login', '/auth/register', '/auth/logout']);
 
 /** Bound on the session bootstrap/rotation fetches. Browser fetch has no
@@ -230,24 +233,24 @@ export type AuditLogEntry = components['schemas']['AuditLogView'];
 export const admin = {
 	listInvitations: () => api.get<Invitation[]>('/admin/invitations'),
 	createInvitation: (ttl_secs?: number) => api.post<CreatedInvitation>('/admin/invitations', { ttl_secs }),
-	revokeInvitation: (id: string) => api.delete<void>(`/admin/invitations/${id}`),
+	revokeInvitation: (id: string) => api.delete<void>(`/admin/invitations/${seg(id)}`),
 	storage: () => api.get<StorageStats>('/admin/storage'),
 	triggerGc: () => api.post<GcReport>('/admin/gc'),
 	listUsers: () => api.get<UserView[]>('/admin/users'),
-	resetPassword: (userId: string, new_password: string) => api.post<void>(`/admin/users/${userId}/password`, { new_password }),
-	setDisplayName: (userId: string, display_name: string) => api.post<void>(`/admin/users/${userId}/display-name`, { display_name }),
+	resetPassword: (userId: string, new_password: string) => api.post<void>(`/admin/users/${seg(userId)}/password`, { new_password }),
+	setDisplayName: (userId: string, display_name: string) => api.post<void>(`/admin/users/${seg(userId)}/display-name`, { display_name }),
 	/** Permanently remove an account. Their grabs stay in the shared
 	 *  library (re-attributed to the caller); everything personal goes. */
-	deleteUser: (userId: string) => api.delete<void>(`/admin/users/${userId}`),
+	deleteUser: (userId: string) => api.delete<void>(`/admin/users/${seg(userId)}`),
 	listRemux: () => api.get<RemuxJobView[]>('/admin/remux'),
-	wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${key}`),
+	wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${seg(key)}`),
 	activeSessions: () => api.get<ActiveSession[]>('/admin/active-sessions'),
 	watchHistory: (limit?: number) => api.get<WatchHistoryEntry[]>(`/admin/watch-history${limit ? `?limit=${limit}` : ''}`),
 	/** Full watch history for one user — admin drill-down equivalent of
 	 *  `me.history()`. */
 	userHistory: (userId: string, limit?: number, offset?: number) =>
 		api.get<UserHistoryItem[]>(
-			`/admin/users/${userId}/history?${new URLSearchParams({
+			`/admin/users/${seg(userId)}/history?${new URLSearchParams({
 				...(limit ? { limit: String(limit) } : {}),
 				...(offset ? { offset: String(offset) } : {})
 			}).toString()}`
@@ -268,7 +271,7 @@ export type DeviceView = components['schemas']['DeviceView'];
 export const devices = {
 	list: () => api.get<DeviceView[]>('/me/devices'),
 	link: (code: string, label?: string) => api.post<void>('/me/devices', { code, label }),
-	revoke: (jti: string) => api.delete<void>(`/me/devices/${jti}`)
+	revoke: (jti: string) => api.delete<void>(`/me/devices/${seg(jti)}`)
 };
 
 export type SearchResult = components['schemas']['SearchResult'];
@@ -409,18 +412,18 @@ export type ProgressBody = {
 };
 
 export const progress = {
-	get: (infohash: string, idx: number) => api.get<ProgressView | null>(`/torrents/${infohash}/files/${idx}/progress`),
-	forTorrent: (infohash: string) => api.get<FileProgressEntry[]>(`/torrents/${infohash}/progress`),
-	put: (infohash: string, idx: number, body: ProgressBody) => api.put<void>(`/torrents/${infohash}/files/${idx}/progress`, body),
+	get: (infohash: string, idx: number) => api.get<ProgressView | null>(`/torrents/${seg(infohash)}/files/${idx}/progress`),
+	forTorrent: (infohash: string) => api.get<FileProgressEntry[]>(`/torrents/${seg(infohash)}/progress`),
+	put: (infohash: string, idx: number, body: ProgressBody) => api.put<void>(`/torrents/${seg(infohash)}/files/${idx}/progress`, body),
 	/** The same save, sent as the page goes away (where `sendBeacon` is missing). */
 	putOnLeave: (infohash: string, idx: number, body: ProgressBody) =>
-		request<void>('PUT', `/torrents/${infohash}/files/${idx}/progress`, body, { keepalive: true }),
+		request<void>('PUT', `/torrents/${seg(infohash)}/files/${idx}/progress`, body, { keepalive: true }),
 	/** Where the page-leave beacon goes (`navigator.sendBeacon` POSTs this). */
-	beaconUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/progress`,
+	beaconUrl: (infohash: string, idx: number) => `/api/torrents/${seg(infohash)}/files/${idx}/progress`,
 	/** Remove this file from the caller's Continue Watching + history. */
-	remove: (infohash: string, idx: number) => api.delete<void>(`/torrents/${infohash}/files/${idx}/progress`),
+	remove: (infohash: string, idx: number) => api.delete<void>(`/torrents/${seg(infohash)}/files/${idx}/progress`),
 	/** Mark this file watched for the caller (also skips a "next up" tile). */
-	markWatched: (infohash: string, idx: number) => api.post<void>(`/torrents/${infohash}/files/${idx}/progress/complete`)
+	markWatched: (infohash: string, idx: number) => api.post<void>(`/torrents/${seg(infohash)}/files/${idx}/progress/complete`)
 };
 
 /** Per-user recommendation preferences (Slice 1 of "For You"). The
@@ -527,17 +530,16 @@ export const torrents = {
 			allow_duplicate: allow_duplicate ?? false
 		}),
 	list: () => api.get<TorrentView[]>('/torrents'),
-	get: (infohash: string) => api.get<TorrentView>(`/torrents/${infohash}`),
+	get: (infohash: string) => api.get<TorrentView>(`/torrents/${seg(infohash)}`),
 	/** Re-ingest a GC-reclaimed release from its recorded provenance —
 	 *  same release, same infohash, saved positions apply again. */
-	regrab: (infohash: string) => api.post<IngestResponse>(`/torrents/${infohash}/regrab`),
+	regrab: (infohash: string) => api.post<IngestResponse>(`/torrents/${seg(infohash)}/regrab`),
 	/** An engine failed on this file: the server logs it (and counts the demotion). */
 	reportPlaybackError: (infohash: string, idx: number, body: PlaybackErrorBody) =>
-		request<PlaybackErrorResponse>('POST', `/torrents/${infohash}/files/${idx}/playback-error`, body, { keepalive: true }),
-	remove: (infohash: string) => api.delete<void>(`/torrents/${infohash}`),
+		request<PlaybackErrorResponse>('POST', `/torrents/${seg(infohash)}/files/${idx}/playback-error`, body, { keepalive: true }),
+	remove: (infohash: string) => api.delete<void>(`/torrents/${seg(infohash)}`),
 	/** Raw source download (range-supported). Browser saves to disk. */
-	downloadUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
-	streamUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
+	downloadUrl: (infohash: string, idx: number) => `/api/torrents/${seg(infohash)}/files/${idx}/stream`,
 	/**
 	 * Universal playback URL — returns the HLS-CMAF master playlist.
 	 * Both web (Vidstack via hls.js) and Android (Media3 HlsMediaSource)
@@ -546,12 +548,13 @@ export const torrents = {
 	 * until ffmpeg has built enough of the cache; later asset fetches
 	 * hit static files via byte-range.
 	 */
-	playUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/play/master.m3u8`,
+	playUrl: (infohash: string, idx: number) => `/api/torrents/${seg(infohash)}/files/${idx}/play/master.m3u8`,
 	/** Polled by the player UI before mounting `<video>`, surfaces the
 	 *  download / remux progress so we can render a meaningful loader. */
-	playStatus: (infohash: string, idx: number) => api.get<PlayStatus>(`/torrents/${infohash}/files/${idx}/play/status`),
-	probe: (infohash: string, idx: number) => api.get<MediaProbe>(`/torrents/${infohash}/files/${idx}/probe`),
-	subtitleUrl: (infohash: string, idx: number, streamIdx: number) => `/api/torrents/${infohash}/files/${idx}/sub/${streamIdx}/track.vtt`
+	playStatus: (infohash: string, idx: number) => api.get<PlayStatus>(`/torrents/${seg(infohash)}/files/${idx}/play/status`),
+	probe: (infohash: string, idx: number) => api.get<MediaProbe>(`/torrents/${seg(infohash)}/files/${idx}/probe`),
+	subtitleUrl: (infohash: string, idx: number, streamIdx: number) =>
+		`/api/torrents/${seg(infohash)}/files/${idx}/sub/${streamIdx}/track.vtt`
 };
 
 export type MediaProbe = components['schemas']['MediaProbe'];
@@ -606,10 +609,10 @@ export type CollectionDetail = components['schemas']['CollectionDetail'];
 
 export const library = {
 	list: (view: 'collections' | 'torrents' = 'collections') => api.get<LibraryResponse>(`/library?view=${view}`),
-	collection: (id: string) => api.get<CollectionDetail>(`/library/collections/${id}`),
+	collection: (id: string) => api.get<CollectionDetail>(`/library/collections/${seg(id)}`),
 	/** Every file of the title watched, or the person's progress on it forgotten. */
-	markWatched: (id: string) => api.post<void>(`/library/collections/${id}/watched`),
-	markUnwatched: (id: string) => api.delete<void>(`/library/collections/${id}/watched`),
+	markWatched: (id: string) => api.post<void>(`/library/collections/${seg(id)}/watched`),
+	markUnwatched: (id: string) => api.delete<void>(`/library/collections/${seg(id)}/watched`),
 	/** Grab a specific (season, episode) for a TV collection. Idempotent —
 	 *  returns `already_grabbed: true` if the episode is already on disk
 	 *  under any infohash. When `language` is set, the server picks
@@ -617,7 +620,7 @@ export const library = {
 	 *  fallback) — used when the user clicked an FR / EN badge. */
 	grabCollectionEpisode: (id: string, season: number, episode: number, language?: string | null) => {
 		const qs = language ? `?language=${encodeURIComponent(language)}` : '';
-		return api.post<GrabEpisodeResponse>(`/library/collections/${id}/grab/${season}/${episode}${qs}`, {});
+		return api.post<GrabEpisodeResponse>(`/library/collections/${seg(id)}/grab/${season}/${episode}${qs}`, {});
 	}
 };
 
@@ -647,14 +650,14 @@ export type GrabEpisodeResponse = components['schemas']['GrabResponse'];
 export const follows = {
 	list: () => api.get<FollowSummary[]>('/me/follows'),
 	add: (name: string, tmdb_id?: number | null) => api.post<FollowSummary>('/me/follows', { name, tmdb_id: tmdb_id ?? null }),
-	remove: (id: string) => api.delete<void>(`/me/follows/${id}`),
+	remove: (id: string) => api.delete<void>(`/me/follows/${seg(id)}`),
 	/** Pass `season` to filter; omit for the full set. */
 	episodes: (id: string, season?: number) =>
 		api.get<EpisodesResponse>(
-			season !== null && season !== undefined ? `/me/follows/${id}/episodes?season=${season}` : `/me/follows/${id}/episodes`
+			season !== null && season !== undefined ? `/me/follows/${seg(id)}/episodes?season=${season}` : `/me/follows/${seg(id)}/episodes`
 		),
 	grabEpisode: (id: string, season: number, episode: number) =>
-		api.post<GrabEpisodeResponse>(`/me/follows/${id}/episodes/${season}/${episode}/grab`),
+		api.post<GrabEpisodeResponse>(`/me/follows/${seg(id)}/episodes/${season}/${episode}/grab`),
 	/** Fetch context for the file currently playing — drives the
 	 *  "Watch next?" modal at episode end. */
 	episodeContext: (infohash: string, file_idx: number) =>

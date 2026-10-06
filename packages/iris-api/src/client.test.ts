@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { livetv, torrents } from './client';
+import { library, livetv, torrents } from './client';
 
 type Call = { url: string; init?: RequestInit };
 
@@ -49,5 +49,11 @@ describe('calls outside JSON still go through the client', () => {
 		expect(calls[0].url).toBe('/api/torrents/ih/files/2/playback-error');
 		expect(calls[0].init).toMatchObject({ method: 'POST', keepalive: true });
 		expect(header(calls[0])).toMatch(/^web\//);
+	});
+
+	it('a route parameter stays one path segment', async () => {
+		const calls = script(new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }));
+		await library.collection('x/../../admin/users');
+		expect(calls[0].url).toBe('/api/library/collections/x%2F..%2F..%2Fadmin%2Fusers');
 	});
 });
