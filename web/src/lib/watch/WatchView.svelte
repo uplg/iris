@@ -619,19 +619,28 @@
 		gap: var(--s-4);
 		min-width: 0;
 	}
-	/* the stage keeps 16:9; in theater it spans the page, its height capped to the window (the
-	   picture letterboxes inside) */
+	/* the stage keeps 16:9 and narrows until it fits the window with the title line under it in
+	   sight; in theater it spans the page and fills the window's height (the picture letterboxes
+	   inside) */
 	.screen {
 		color-scheme: dark;
 		position: relative;
-		width: 100%;
+		justify-self: center;
+		width: min(100%, calc((100svh - var(--header-h) - 9rem) * 16 / 9));
 		aspect-ratio: 16 / 9;
 		overflow: hidden;
 		border-radius: var(--radius-xl);
 		background: var(--stage);
 	}
 	.theater .screen {
-		max-height: calc(100svh - var(--header-h) - 8rem);
+		width: 100%;
+		max-height: calc(100svh - var(--header-h) - var(--s-4) * 2);
+	}
+	/* a phone on its side: the title line can't fit beside a usable picture, the stage wins */
+	@media (max-height: 540px) {
+		.screen {
+			width: 100%;
+		}
 	}
 	.getting-ready {
 		position: absolute;
