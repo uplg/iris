@@ -32,7 +32,6 @@ use crate::util::{
     parse_rfc2822, scene_query,
 };
 use quick_xml::Reader;
-use quick_xml::escape::unescape as xml_unescape;
 use quick_xml::events::Event;
 use reqwest::header::{
     ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, HeaderMap, HeaderValue, ORIGIN, REFERER, USER_AGENT,
@@ -43,6 +42,7 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::torznab::{attr_value, text_value};
 
 const DEFAULT_REFERER: &str = "https://torr9.net/";
 const DEFAULT_ORIGIN: &str = "https://torr9.net";
@@ -885,9 +885,7 @@ fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<Search
 
     let read_enclosure = |e: &quick_xml::events::BytesStart, item: &mut RssItem| {
         for attr in e.attributes().flatten() {
-            let raw: &str = &attr.value;
-            let val =
-                xml_unescape(raw).map_or_else(|_| raw.to_string(), std::borrow::Cow::into_owned);
+            let val = attr_value(&attr);
             match attr.key.as_ref() {
                 "url" => item.enclosure_url = Some(val),
                 "length" => item.length = val.parse().ok(),
@@ -921,8 +919,7 @@ fn parse_torr9_rss(body: &str, provider_id: &str, kind: MediaKind) -> Vec<Search
             }
             Ok(Event::Text(t)) => {
                 if let (Some(item), Some(tg)) = (cur.as_mut(), tag) {
-                    let text = xml_unescape(&t)
-                        .map_or_else(|_| t.to_string(), std::borrow::Cow::into_owned);
+                    let text = text_value(&t);
                     let text = text.trim().to_string();
                     if !text.is_empty() {
                         match tg {

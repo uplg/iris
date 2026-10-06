@@ -1042,12 +1042,12 @@ fn resolve_general_ref(r: &BytesRef<'_>) -> Option<char> {
 /// Attribute value with XML entities unescaped; an unescape failure falls
 /// through to the raw string (Torznab attrs almost never carry escapable
 /// chars).
-fn attr_value(attr: &Attribute) -> String {
+pub(crate) fn attr_value(attr: &Attribute) -> String {
     let raw: &str = &attr.value;
     xml_unescape(raw).map_or_else(|_| raw.to_string(), std::borrow::Cow::into_owned)
 }
 
-fn text_value(t: &BytesText) -> String {
+pub(crate) fn text_value(t: &BytesText) -> String {
     xml_unescape(t).map_or_else(|_| t.to_string(), std::borrow::Cow::into_owned)
 }
 
