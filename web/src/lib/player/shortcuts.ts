@@ -95,7 +95,12 @@ export function shortcutList(live: boolean): { keys: string[]; does: string }[] 
 		{ keys: ['C'], does: 'Audio and subtitles' },
 		{ keys: ['F'], does: 'Full screen' },
 		{ keys: ['P'], does: 'Picture in picture' },
-		...(live ? [] : [{ keys: ['<', '>'], does: 'Slower or faster' }]),
+		...(live
+			? []
+			: [
+					{ keys: ['<', '>'], does: 'Slower or faster' },
+					{ keys: ['T'], does: 'Theater mode' }
+				]),
 		{ keys: ['?'], does: 'This list' },
 		{ keys: ['Esc'], does: 'Close a panel' }
 	];
