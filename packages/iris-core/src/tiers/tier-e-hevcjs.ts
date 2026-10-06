@@ -359,6 +359,8 @@ export const mountTierE: EngineMount = async (opts) => {
 		}
 	};
 
+	const onTranscodeError = () => fail(new Error('Tier E: hevc.js failed to transcode a segment (see the [hevc.js] log)'));
+
 	const makeLane = (ms: MediaSource, name: 'video' | 'audio', mime: string): Lane => {
 		const sb = ms.addSourceBuffer(mime);
 		sb.mode = 'segments';
@@ -397,6 +399,11 @@ export const mountTierE: EngineMount = async (opts) => {
 			reported: false
 		};
 		lane.queue.attach(sb);
+		// The proxy reports a failed transcode only as an `error` event on the buffer (its
+		// message goes to the `[hevc.js]` log), then takes the next append as if nothing
+		// happened: a dead H.264 encoder (Firefox with no OpenH264) fails every segment
+		// ("Encoder must be configured first") while the player holds forever. The tier is done.
+		if (name === 'video') sb.addEventListener('error', onTranscodeError);
 		return lane;
 	};
 
@@ -481,6 +488,16 @@ export const mountTierE: EngineMount = async (opts) => {
 			input?.dispose();
 		} catch {
 			/* idempotent */
+		}
+		if (videoLane) {
+			videoLane.sb.removeEventListener('error', onTranscodeError);
+			// the proxy's own abort empties its queue and resets its worker: no segment left
+			// to fail over and over once the tier is gone
+			try {
+				videoLane.sb.abort();
+			} catch {
+				/* a closed MediaSource refuses; the proxy has cleared its queue by then */
+			}
 		}
 		endStream(mediaSource);
 		videoLane?.queue.detach();

@@ -8,8 +8,15 @@ import { expect, openWatch, pauseButton, playButton, stage, test, videoState } f
 /** hevc.js re-encodes to H.264 with WebCodecs in a worker: probed there with its own config
  * (a real encode, `isConfigSupported` alone says yes on builds that then refuse to configure). */
 async function needsH264Encoder(page: Page) {
+	test.skip(
+		!(await h264EncoderWorks(page)),
+		'no working H.264 VideoEncoder in this browser build (Playwright Firefox ships no OpenH264); manual on Zen'
+	);
+}
+
+async function h264EncoderWorks(page: Page): Promise<boolean> {
 	await page.goto('/');
-	const ok = await page.evaluate(
+	return page.evaluate(
 		() =>
 			new Promise<boolean>((resolve) => {
 				const src = `
@@ -25,7 +32,6 @@ async function needsH264Encoder(page: Page) {
 				w.onerror = () => resolve(false);
 			})
 	);
-	test.skip(!ok, 'no working H.264 VideoEncoder in this browser build (Playwright Firefox ships no OpenH264); manual on Zen');
 }
 
 /** The page's MediaSource as it was before any script ran, to tell a leaked intercept. */
@@ -67,6 +73,36 @@ test(
 		console.log(`[measure] tier E ${info.project.name}: ${rate.toFixed(2)}x over 15 s`);
 		expect(rate).toBeGreaterThan(0.85);
 		expect(logs.matching(/tier E → /)).toEqual([]);
+	}
+);
+
+test(
+	'no working H.264 encoder: tier E fails through the error path and Tier F plays',
+	{ tag: ['@firefox', '@chrome'] },
+	async ({ page, state, logs }) => {
+		test.skip(await h264EncoderWorks(page), 'this browser encodes H.264: the encoder failure is not reachable here');
+		await page.addInitScript(rememberNativeMse);
+		await openWatch(page, state, 'hevcAac', { tier: 'E' });
+		const t0 = Date.now();
+		await stage(page).hover();
+		if (await playButton(page).isVisible()) await playButton(page).click();
+		await expect.poll(() => logs.has(/tier E → F/), { timeout: 30_000, message: 'no demotion to F' }).toBe(true);
+		console.log(`[measure] tier E encoder failure → F after ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+		await stage(page).hover();
+		if (await playButton(page).isVisible()) await playButton(page).click();
+		await expect.poll(async () => (await videoState(page))?.currentTime ?? 0, { timeout: 90_000 }).toBeGreaterThan(3);
+		const a = (await videoState(page))!.currentTime;
+		await page.waitForTimeout(4000);
+		expect((await videoState(page))!.currentTime).toBeGreaterThan(a + 2);
+		// the failed proxy stops: no error loop after the demotion
+		const errors = logs.matching(/Encoder must be configured|Transcoding error/).length;
+		await page.waitForTimeout(3000);
+		expect(logs.matching(/Encoder must be configured|Transcoding error/).length, 'hevc.js kept failing after dispose').toBe(errors);
+		const leak = await page.evaluate(() => {
+			const w = window as unknown as Record<string, unknown>;
+			return { addSourceBuffer: MediaSource.prototype.addSourceBuffer === w.__benchNativeAddSourceBuffer };
+		});
+		expect(leak).toEqual({ addSourceBuffer: true });
 	}
 );
 
