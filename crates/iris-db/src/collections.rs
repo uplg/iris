@@ -446,7 +446,8 @@ pub struct CollectionSummary {
 /// by a still-present torrent. Powers the post-0.4 Watchlist surface
 /// (`GET /api/me/watchlist` + the legacy `/api/me/follows` façade):
 /// "every TV show the household has actually started watching".
-/// Newest activity first via `last_visited_at` then `created_at`.
+/// What the household watched last comes first (anyone's latest play in the
+/// series; opening a page doesn't count), then the newest series.
 pub async fn list_tv_with_episodes(pool: &SqlitePool) -> Result<Vec<CollectionRow>, sqlx::Error> {
     sqlx::query_as::<_, CollectionRow>(
         "SELECT c.id, c.tmdb_id, c.parsed_title_normalized, c.display_title, c.kind, \
@@ -459,7 +460,11 @@ pub async fn list_tv_with_episodes(pool: &SqlitePool) -> Result<Vec<CollectionRo
              JOIN torrents t ON t.infohash = ef.infohash \
              WHERE ef.collection_id = c.id AND t.deleted_at IS NULL \
            ) \
-         ORDER BY COALESCE(c.last_visited_at, c.created_at) DESC, c.created_at DESC",
+         ORDER BY COALESCE( \
+             (SELECT MAX(p.last_watched_at) FROM playback_progress p \
+              JOIN torrents t ON t.infohash = p.infohash \
+              WHERE t.collection_id = c.id), \
+             c.created_at) DESC, c.created_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -930,5 +935,68 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(due(pool.clone()).await, vec![show.id], "cooldown elapsed");
+    }
+
+    #[tokio::test]
+    async fn the_watchlist_puts_what_the_household_watched_last_first() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let mut shows = Vec::new();
+        for (i, name) in ["older", "watched"].into_iter().enumerate() {
+            let c = find_or_create(&pool, name, name, Kind::Tv, false)
+                .await
+                .unwrap();
+            let ih = format!("{i:040}");
+            crate::torrents::upsert(
+                &pool,
+                crate::torrents::NewTorrent {
+                    infohash: ih.clone(),
+                    name: name.into(),
+                    total_size_bytes: 1,
+                    source_provider: None,
+                    source_external_id: None,
+                    added_by: user,
+                },
+            )
+            .await
+            .unwrap();
+            crate::torrents::set_collection(&pool, &ih, Some(c.id))
+                .await
+                .unwrap();
+            crate::episode_files::upsert(
+                &pool,
+                crate::episode_files::UpsertEpisodeFile {
+                    collection_id: c.id,
+                    season: 1,
+                    episode: 1,
+                    infohash: ih.clone(),
+                    file_idx: 0,
+                    derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                    absolute_episode: None,
+                },
+            )
+            .await
+            .unwrap();
+            shows.push((c.id, ih));
+        }
+        // Nobody has watched yet: the newest series ("watched") leads.
+        let order = |rows: Vec<CollectionRow>| rows.into_iter().map(|c| c.id).collect::<Vec<_>>();
+        assert_eq!(
+            order(list_tv_with_episodes(&pool).await.unwrap()),
+            vec![shows[1].0, shows[0].0]
+        );
+        // Opening a page no longer reorders the list.
+        touch_visited(&pool, shows[0].0).await.unwrap();
+        assert_eq!(
+            order(list_tv_with_episodes(&pool).await.unwrap())[0],
+            shows[1].0
+        );
+        crate::playback::mark_completed(&pool, user, &shows[0].1, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            order(list_tv_with_episodes(&pool).await.unwrap())[0],
+            shows[0].0
+        );
     }
 }

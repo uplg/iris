@@ -14,6 +14,8 @@ pub struct DeviceCode {
     pub claimed_by: Option<Uuid>,
     pub label: Option<String>,
     pub kind: String,
+    /// The refresh session the last poll handed out (migration 0044).
+    pub session_jti: Option<Uuid>,
 }
 
 pub async fn create(
@@ -44,7 +46,18 @@ pub async fn create(
         claimed_by: None,
         label: None,
         kind: kind.to_string(),
+        session_jti: None,
     })
+}
+
+/// Remember the session a poll handed the device.
+pub async fn set_session(pool: &SqlitePool, device_id: Uuid, jti: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE device_codes SET session_jti = ?1 WHERE device_id = ?2")
+        .bind(jti)
+        .bind(device_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn find_by_device_id(
@@ -52,7 +65,7 @@ pub async fn find_by_device_id(
     device_id: Uuid,
 ) -> Result<Option<DeviceCode>, sqlx::Error> {
     sqlx::query_as::<_, DeviceCode>(
-        "SELECT code, device_id, created_at, expires_at, claimed_at, claimed_by, label, kind \
+        "SELECT code, device_id, created_at, expires_at, claimed_at, claimed_by, label, kind, session_jti \
          FROM device_codes WHERE device_id = ?1",
     )
     .bind(device_id)
@@ -65,7 +78,7 @@ pub async fn find_active_by_code(
     code: &str,
 ) -> Result<Option<DeviceCode>, sqlx::Error> {
     sqlx::query_as::<_, DeviceCode>(
-        "SELECT code, device_id, created_at, expires_at, claimed_at, claimed_by, label, kind \
+        "SELECT code, device_id, created_at, expires_at, claimed_at, claimed_by, label, kind, session_jti \
          FROM device_codes \
          WHERE code = ?1 AND claimed_at IS NULL AND expires_at > ?2",
     )
@@ -109,4 +122,42 @@ pub async fn cleanup_expired(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{make_user, migrated_pool};
+
+    #[tokio::test]
+    async fn a_claimed_code_remembers_the_session_it_handed_out() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let code = create(
+            &pool,
+            "ABCD2345",
+            Utc::now() + chrono::TimeDelta::minutes(10),
+            "android-tv",
+        )
+        .await
+        .unwrap();
+        assert!(
+            claim(&pool, "ABCD2345", user, Some("Living room"))
+                .await
+                .unwrap()
+        );
+        let fresh = find_by_device_id(&pool, code.device_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fresh.session_jti, None);
+
+        let jti = Uuid::new_v4();
+        set_session(&pool, code.device_id, jti).await.unwrap();
+        let polled = find_by_device_id(&pool, code.device_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(polled.session_jti, Some(jti));
+    }
 }

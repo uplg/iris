@@ -22,7 +22,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::auth::issue_session_for_kind;
+use crate::routes::auth::issue_device_session;
 use crate::routes::extract::{AuthUser, Path};
 use crate::state::AppState;
 
@@ -125,11 +125,10 @@ pub(crate) async fn poll(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    // Expiry bounds session issuance even after the code is CLAIMED. A claimed
-    // code re-issues a session on every poll, so without checking expiry here a
-    // client that never stops polling (an old/misbehaving APK) would mint an
-    // unbounded number of refresh-token rows. The 10-min code TTL caps that;
-    // past it the device must re-pair.
+    // Expiry bounds session issuance even after the code is CLAIMED; past the
+    // 10-min code TTL the device must re-pair. Within it, each poll replaces the
+    // session the previous one handed out (a lost response, a retry, an old APK
+    // that keeps polling), so a code never leaves more than one device row.
     if row.expires_at < Utc::now() {
         return Ok((jar, Json(PollResponse::Expired)));
     }
@@ -145,7 +144,10 @@ pub(crate) async fn poll(
     // Hand the device back a real session via the same cookie path the web
     // login uses, with a longer refresh TTL and labelled with the device
     // kind so the user can revoke it in their account UI.
-    let jar = issue_session_for_kind(
+    if let Some(previous) = row.session_jti {
+        iris_db::refresh_tokens::revoke(state.db(), previous).await?;
+    }
+    let (jar, jti) = issue_device_session(
         &state,
         &jar,
         user.id,
@@ -155,6 +157,7 @@ pub(crate) async fn poll(
         Some(&row.kind),
     )
     .await?;
+    iris_db::device_codes::set_session(state.db(), row.device_id, jti).await?;
 
     Ok((
         jar,

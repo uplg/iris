@@ -319,6 +319,29 @@ pub async fn issue_session_for_kind(
     device_label: Option<&str>,
     device_kind: Option<&str>,
 ) -> ApiResult<CookieJar> {
+    issue_device_session(
+        state,
+        jar,
+        user_id,
+        is_admin,
+        refresh_ttl_override_secs,
+        device_label,
+        device_kind,
+    )
+    .await
+    .map(|(jar, _)| jar)
+}
+
+/// [`issue_session_for_kind`], also answering the new refresh session's id.
+pub async fn issue_device_session(
+    state: &AppState,
+    jar: &CookieJar,
+    user_id: UserId,
+    is_admin: bool,
+    refresh_ttl_override_secs: Option<i64>,
+    device_label: Option<&str>,
+    device_kind: Option<&str>,
+) -> ApiResult<(CookieJar, Uuid)> {
     let access = state
         .jwt()
         .issue_access(user_id, is_admin)
@@ -358,7 +381,7 @@ pub async fn issue_session_for_kind(
         secure,
     );
 
-    Ok(jar.clone().add(access_cookie).add(refresh_cookie))
+    Ok((jar.clone().add(access_cookie).add(refresh_cookie), jti))
 }
 
 fn build_cookie(
