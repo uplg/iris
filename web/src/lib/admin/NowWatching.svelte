@@ -2,6 +2,7 @@
 	// Who is watching what right now (an admin's): the presence registry the playback heartbeat
 	// feeds, read every 10 s (the query's refetchInterval). Each person: what plays, playing or
 	// paused in words and by its icon, how far, on which app, for how long.
+	import Meter from '#lib/components/Meter.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { plural } from '@iris/api/format';
 	import type { ActiveSession } from '@iris/api/client';
@@ -39,9 +40,7 @@
 						</span>
 						<a class="what" href="/watch/{s.infohash}/{s.file_idx}">{what(s)}</a>
 						<span class="meta">{progressWords(s.position_seconds, s.duration_seconds)} · {app(s)} · {since(s.started_at)}</span>
-						<span class="bar" aria-hidden="true"
-							><span style:width="{Math.round(watchedShare(s.position_seconds, s.duration_seconds) * 100)}%"></span></span
-						>
+						<Meter share={watchedShare(s.position_seconds, s.duration_seconds)} --meter-max="16rem" />
 					</div>
 				</li>
 			{/each}
@@ -79,17 +78,5 @@
 	.meta {
 		font: var(--t-meta);
 		color: var(--ink-muted);
-	}
-	.bar {
-		height: var(--track-h);
-		max-width: 16rem;
-		border-radius: var(--radius-pill);
-		background: var(--ground-raised);
-		overflow: hidden;
-	}
-	.bar span {
-		display: block;
-		height: 100%;
-		background: var(--accent);
 	}
 </style>

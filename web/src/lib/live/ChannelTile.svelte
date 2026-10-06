@@ -1,6 +1,7 @@
 <script lang="ts">
 	// One channel: its logo on a plate that suits it, its name, and what is on now and next, in
 	// words (a bar shows how far the programme is; the words say it too).
+	import Meter from '#lib/components/Meter.svelte';
 	import type { LiveChannel, LiveNowNext } from '@iris/api/client';
 	import { timeLeft } from '@iris/api/format';
 	import { logoTone, type LogoTone } from './logo-tone.ts';
@@ -60,7 +61,7 @@
 		<span class="line"
 			>{nowWords(now)}{#if left != null && progress != null}<span class="muted">, {timeLeft(left)}</span>{/if}</span
 		>
-		{#if progress != null}<span class="bar" aria-hidden="true"><span style:width="{progress}%"></span></span>{/if}
+		{#if progress != null}<Meter share={progress / 100} thin --meter-ground="var(--line)" />{/if}
 		{#if next}<span class="line muted">{nextWords(next)}</span>{/if}
 	{:else}
 		<span class="line muted"
@@ -146,17 +147,5 @@
 	.line {
 		font: var(--t-meta);
 		overflow-wrap: anywhere;
-	}
-	.bar {
-		display: block;
-		height: var(--s-1);
-		border-radius: var(--radius-pill);
-		background: var(--line);
-		overflow: hidden;
-	}
-	.bar span {
-		display: block;
-		height: 100%;
-		background: var(--accent);
 	}
 </style>

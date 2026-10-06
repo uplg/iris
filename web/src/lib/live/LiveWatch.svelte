@@ -2,6 +2,7 @@
 	// One channel, live: the player, what is on now (how far, what it is about) and next, and an
 	// escape hatch when it plays badly (garbled sound, artifacts) that the player cannot notice
 	// by itself: report this feed and start again on the next one.
+	import Meter from '#lib/components/Meter.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { livetv } from '@iris/api/client';
 	import { timeLeft } from '@iris/api/format';
@@ -78,7 +79,7 @@
 								)}{/if}</span
 						>
 					</p>
-					{#if progress != null}<span class="bar" aria-hidden="true"><span style:width="{progress}%"></span></span>{/if}
+					{#if progress != null}<Meter share={progress / 100} thin --meter-ground="var(--line)" />{/if}
 					{#if now.description}<p class="hint desc">{now.description}</p>{/if}
 				</div>
 			{/if}
@@ -118,17 +119,5 @@
 		line-clamp: 3;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
-	}
-	.bar {
-		display: block;
-		height: var(--s-1);
-		border-radius: var(--radius-pill);
-		background: var(--line);
-		overflow: hidden;
-	}
-	.bar span {
-		display: block;
-		height: 100%;
-		background: var(--accent);
 	}
 </style>

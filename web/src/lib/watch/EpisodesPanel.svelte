@@ -2,6 +2,7 @@
 	// The season's episodes (or the torrent's other files) beside the player: what is watched,
 	// where one stopped, the one playing now, and the way to each (play, download, or grab one
 	// that is only discovered).
+	import Meter from '#lib/components/Meter.svelte';
 	import { torrents } from '@iris/api/client';
 	import { percent } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
@@ -35,7 +36,7 @@
 						{#if row.grab}<span>Not downloaded yet</span>{/if}
 					</span>
 					{#if started}
-						<span class="bar" aria-hidden="true"><span style:width="{row.watchedPct}%"></span></span>
+						<Meter share={(row.watchedPct ?? 0) / 100} thin --meter-ground="var(--line)" />
 					{/if}
 				</div>
 				<div class="actions">
@@ -126,18 +127,6 @@
 		align-items: center;
 		gap: var(--s-1);
 		color: var(--accent);
-	}
-	.bar {
-		display: block;
-		height: var(--s-half);
-		border-radius: var(--radius-pill);
-		background: var(--line);
-		overflow: hidden;
-	}
-	.bar span {
-		display: block;
-		height: 100%;
-		background: var(--accent);
 	}
 	.actions {
 		display: flex;

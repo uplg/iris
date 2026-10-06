@@ -4,6 +4,7 @@
 	// in words. What is gone from disk says so and, when its release is known, can be
 	// downloaded again (`onrestore`). Long histories stay light: rows out of view are not laid
 	// out (content-visibility), yet all are in the page for find-in-page and screen readers.
+	import Meter from '#lib/components/Meter.svelte';
 	import { pending, Gesture } from '#lib/gesture.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
 	import TitlePoster from './TitlePoster.svelte';
@@ -43,9 +44,7 @@
 				{#if it.deleted}<span class="chip"><Icon name="ban" size={12} />Gone from disk</span>{/if}
 			</span>
 			<span class="meta">{facts(it)}</span>
-			<span class="bar" aria-hidden="true"
-				><span style:width="{Math.round(watchedShare(it.position_seconds, it.duration_seconds, it.completed) * 100)}%"></span></span
-			>
+			<Meter share={watchedShare(it.position_seconds, it.duration_seconds, it.completed)} --meter-max="16rem" />
 		</div>
 		{#if onrestore && canRestore(it)}
 			<button
@@ -159,18 +158,6 @@
 		font: var(--t-meta);
 		color: var(--ink-muted);
 		font-variant-numeric: tabular-nums;
-	}
-	.bar {
-		height: var(--track-h);
-		max-width: 16rem;
-		border-radius: var(--radius-pill);
-		background: var(--ground-raised);
-		overflow: hidden;
-	}
-	.bar span {
-		display: block;
-		height: 100%;
-		background: var(--accent);
 	}
 	.line .btn {
 		min-height: var(--control-h);

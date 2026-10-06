@@ -1,6 +1,7 @@
 <script lang="ts">
 	// The stage before the picture: each step in words (done, in progress, waiting), how far the
 	// current one is, and a problem said plainly with what can be done about it.
+	import Meter from '#lib/components/Meter.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import { percent } from '@iris/api/format';
 	import { stepStateText, type Readiness } from './ready.ts';
@@ -55,15 +56,7 @@
 						{#if s.state === 'current' && s.detail}<span class="detail">{s.detail}</span>{/if}
 						{#if s.state === 'current' && s.pct != null}
 							<!-- the label already says the percentage: a bar of its own, named by it -->
-							<span
-								class="bar"
-								role="progressbar"
-								aria-label={s.label}
-								aria-valuemin={0}
-								aria-valuemax={100}
-								aria-valuenow={Math.round(s.pct)}
-								aria-valuetext={percent(s.pct)}><span style:width="{s.pct}%"></span></span
-							>
+							<Meter share={s.pct / 100} label={s.label} --meter-ground="var(--stage-line)" />
 						{/if}
 					</span>
 				</li>
@@ -132,18 +125,6 @@
 		font: var(--t-secondary);
 		color: var(--stage-muted);
 		overflow-wrap: anywhere;
-	}
-	.bar {
-		display: block;
-		height: var(--track-h);
-		border-radius: var(--radius-pill);
-		background: var(--stage-line);
-		overflow: hidden;
-	}
-	.bar span {
-		display: block;
-		height: 100%;
-		background: var(--accent);
 	}
 	.detail.warn {
 		color: var(--warn-text);

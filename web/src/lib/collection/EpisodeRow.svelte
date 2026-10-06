@@ -2,6 +2,7 @@
 	// One episode: its number, its name (a link when it plays), its state in words, and one
 	// action per release: play what is on disk, grab and play an offer in its language, download
 	// again what was reclaimed (or hide it). Every action is named with the episode.
+	import Meter from '#lib/components/Meter.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { library, me, progress as progressApi, torrents as torrentsApi, type TorrentView } from '@iris/api/client';
@@ -124,7 +125,7 @@
 		</h3>
 		<StatusLine tone={now.tone} text={now.text} />
 		{#if now.progress !== undefined}
-			<div class="track" aria-hidden="true"><span style:width="{Math.round(Math.min(1, Math.max(0, now.progress)) * 100)}%"></span></div>
+			<Meter share={now.progress} --meter-max="var(--pane)" />
 		{/if}
 		{#if offers.length}
 			<p class="hint">{offers.map((o) => offerFacts(o[0])).join('; ')}</p>
@@ -230,17 +231,5 @@
 	}
 	.actions .btn {
 		min-height: var(--control-h);
-	}
-	.track {
-		height: var(--track-h);
-		max-width: var(--pane);
-		border-radius: var(--radius-pill);
-		background: var(--ground-raised);
-		overflow: hidden;
-	}
-	.track span {
-		display: block;
-		height: 100%;
-		background: var(--accent);
 	}
 </style>
