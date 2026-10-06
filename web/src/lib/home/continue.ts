@@ -12,7 +12,7 @@ import { errorText } from '#lib/errors.ts';
 import { FAILURE, haptic } from '#lib/haptics.ts';
 import { refocus } from '#lib/focus.ts';
 import type { Gesture } from '#lib/gesture.svelte.ts';
-import { KEYS } from '#lib/queries.ts';
+import { KEYS, refreshLibrary } from '#lib/queries.ts';
 import { watchHref } from '#lib/paths.ts';
 
 /** A tile's identity: tiles not on disk all carry an empty infohash, their series tells them apart. */
@@ -39,7 +39,7 @@ export function getAndPlay(g: Gesture, it: ContinueWatchingItem) {
 	return g.run(
 		() => library.grabCollectionEpisode(cid, season, episode, 'auto'),
 		async (got) => {
-			void reread();
+			void refreshLibrary();
 			await goto(watchHref(got.infohash, got.file_idx));
 		},
 		`get:${tileKey(it)}`,
@@ -75,7 +75,7 @@ export function markWatched(g: Gesture, it: ContinueWatchingItem, title: string,
 	return g.run(
 		() => progress.markWatched(it.infohash, it.file_idx),
 		async () => {
-			await reread();
+			await refreshLibrary();
 			ui.say(`${title} marked as watched`);
 			await refocus(heading, 'main h1');
 		},

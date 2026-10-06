@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { TorrentView } from '@iris/api/client';
 import { refetchCollection } from '#lib/collection/actions.ts';
 import { queryClient } from '#lib/query.ts';
-import { FAST, KEYS, playbackPrefsSaved, read, SLOW } from './queries.ts';
+import { FAST, KEYS, playbackPrefsSaved, read, refreshLibrary, SLOW } from './queries.ts';
 
 const prefs = { audio_language: 'fr', subtitle_language: null };
 const invalidated = (key: readonly unknown[]) => queryClient.getQueryState(key)?.isInvalidated;
@@ -50,5 +50,19 @@ describe('a release’s positions', () => {
 		queryClient.setQueryData(KEYS.progress('ih'), []);
 		await refetchCollection('c1');
 		expect(invalidated(KEYS.progress('ih'))).toBe(true);
+	});
+});
+
+describe('a release deleted, paused or grabbed', () => {
+	afterEach(() => queryClient.clear());
+
+	it('reads its title page and its own page again, not only the library', async () => {
+		queryClient.setQueryData(KEYS.collection('c1'), {});
+		queryClient.setQueryData(KEYS.torrent('ih'), {});
+		queryClient.setQueryData(KEYS.torrents, {});
+		await refreshLibrary();
+		expect(invalidated(KEYS.collection('c1'))).toBe(true);
+		expect(invalidated(KEYS.torrent('ih'))).toBe(true);
+		expect(invalidated(KEYS.torrents)).toBe(true);
 	});
 });

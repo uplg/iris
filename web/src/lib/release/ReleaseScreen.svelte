@@ -91,11 +91,12 @@
 		].filter((c): c is string => !!c)
 	);
 
+	const leechers = $derived(d?.leechers ?? hit?.leechers);
 	const swarm = $derived(
 		[
 			seedersWords(seeders),
-			typeof (d?.leechers ?? hit?.leechers) === 'number' ? `${d?.leechers ?? hit?.leechers} leechers` : null,
-			typeof d?.times_completed === 'number' ? `${d.times_completed.toLocaleString('en')} downloads` : null
+			typeof leechers === 'number' ? plural(leechers, 'leecher') : null,
+			typeof d?.times_completed === 'number' ? plural(d.times_completed, 'download') : null
 		]
 			.filter(Boolean)
 			.join(' · ')
@@ -122,7 +123,7 @@
 		return follow.run(
 			() => follows.add(title, tmdbId),
 			async () => {
-				await queryClient.invalidateQueries({ queryKey: KEYS.follows });
+				await Promise.all([KEYS.follows, KEYS.watchlist, KEYS.summary].map((queryKey) => queryClient.invalidateQueries({ queryKey })));
 				ui.toast(`You follow ${title}. New episodes show on your home page.`);
 			}
 		);

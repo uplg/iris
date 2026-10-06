@@ -23,9 +23,11 @@ export const KEYS = {
 	library: ['library'],
 	collections: ['library', 'collections'],
 	torrents: ['library', 'torrents'],
+	collectionAll: ['collection'],
 	collection: (id: string) => ['collection', id] as const,
 	progressAll: ['torrent-progress'],
 	progress: (infohash: string) => ['torrent-progress', infohash] as const,
+	torrentAll: ['torrent'],
 	torrent: (infohash: string) => ['torrent', infohash] as const,
 	episodeContext: (infohash: string, fileIdx: number) => ['episode-context', infohash, fileIdx] as const,
 	summary: ['me', 'summary'],
@@ -147,10 +149,11 @@ export const read = {
 	}
 };
 
-/** After a release is deleted, paused or a title hidden: what shows it is read again. */
+/** After a release is deleted, paused, grabbed or a title hidden: what shows it is read again,
+ * its title's page and its own included (only what is on screen is asked at once). */
 export const refreshLibrary = () =>
 	Promise.all(
-		[KEYS.library, KEYS.summary, KEYS.continueWatching, KEYS.history, KEYS.watchlist].map((queryKey) =>
+		[KEYS.library, KEYS.collectionAll, KEYS.torrentAll, KEYS.summary, KEYS.continueWatching, KEYS.history, KEYS.watchlist].map((queryKey) =>
 			queryClient.invalidateQueries({ queryKey })
 		)
 	);
