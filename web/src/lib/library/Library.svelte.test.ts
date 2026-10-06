@@ -115,7 +115,7 @@ describe('Library', () => {
 		backend();
 		await render(LibraryHarness);
 		const dl = page.getByRole('region', { name: 'Downloading' });
-		await expect.element(dl.getByText('Downloading · 42% · 6.1 MB/s · 24 peers · about 2 min')).toBeVisible();
+		await expect.element(dl.getByText('Downloading · 42% · 6.1 MB/s · 24 peers · done in about 2 min')).toBeVisible();
 		await expect.element(dl.getByText('Frieren.S01E05.1080p', { exact: true })).toBeVisible();
 		await expect.element(dl.getByRole('progressbar')).toHaveAttribute('aria-valuetext', '42%');
 		const attention = page.getByRole('region', { name: 'Needs attention' });

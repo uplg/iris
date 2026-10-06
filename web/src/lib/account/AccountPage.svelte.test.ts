@@ -81,7 +81,7 @@ describe('account page', () => {
 			.element(
 				keyRows()
 					.nth(1)
-					.getByText(/Last used today at/)
+					.getByText(/Last used (just now|[0-9]+ min ago|today at)/)
 			)
 			.toBeVisible();
 		await expect.element(keyRows().nth(1).getByText('Synced')).not.toBeInTheDocument();
@@ -204,24 +204,30 @@ describe('account page', () => {
 		await page.getByLabelText('Device name (optional)').fill('Living room');
 		await page.getByRole('button', { name: 'Pair the TV' }).click();
 		expect(api.sent('POST', '/me/devices')[0].body).toEqual({ code: 'WX7K-ABCD', label: 'Living room' });
-		// accepted, the TV not in yet: the wait is said, with a way out
+		// the claim of the code says « paired »; the TV not in the list yet, the wait has a way out
+		await expect
+			.poll(() => ui.toasts.map((t) => t.text))
+			.toContain('Your TV is paired to your account. It signs in by itself in a few seconds.');
 		await expect.element(page.getByRole('button', { name: 'Stop waiting' })).toBeVisible();
-		await expect.poll(() => ui.toasts.map((t) => t.text), { timeout: 6000 }).toContain('Your TV is paired and signed in.');
-		await expect.element(region('Devices').getByText('Living room')).toBeVisible();
+		await expect.element(region('Devices').getByText('Living room', { exact: true }), { timeout: 6000 }).toBeVisible();
 		await expect.element(region('Devices').getByText('Android TV')).toBeVisible();
 		// the wait ends with the TV's arrival, not with a clock
 		await expect.element(page.getByRole('button', { name: 'Stop waiting' })).not.toBeInTheDocument();
 	});
 
-	it('a re-paired TV is seen arriving although the count of devices stays the same', async () => {
+	it('« paired » comes from the claim of the code, never from a row that changed in the list', async () => {
 		let reads = 0;
-		// the TV's old row is replaced by its new one
-		const again = { ...tv, jti: 'j2' };
-		site({ 'GET /me/devices': () => (reads++ >= 2 ? [again] : [tv]), 'POST /me/devices': noContent() });
+		// another device's session renewed meanwhile: a new row, nothing to do with this code
+		const renewed = { ...tv, jti: 'j2' };
+		site({
+			'GET /me/devices': () => (reads++ >= 1 ? [renewed] : [tv]),
+			'POST /me/devices': json({ error: 'conflict', message: 'code already claimed or expired' }, 409)
+		});
 		await render(AccountPage);
 		await page.getByLabelText('Pairing code').fill('wx7k-abcd');
 		await page.getByRole('button', { name: 'Pair the TV' }).click();
-		await expect.poll(() => ui.toasts.map((t) => t.text), { timeout: 6000 }).toContain('Your TV is paired and signed in.');
+		await expect.element(page.getByText('code already claimed or expired')).toBeVisible();
+		expect(ui.toasts.map((t) => t.text)).not.toContain('Your TV is paired to your account. It signs in by itself in a few seconds.');
 	});
 
 	it('a refused code is said under the code field', async () => {
@@ -255,7 +261,7 @@ describe('account page', () => {
 		const api = site({ 'PUT /me/playback-preferences': noContent() });
 		await render(AccountPage);
 		await expect.element(region('Playback').getByText('French')).toBeVisible();
-		await expect.element(region('Playback').getByText('No subtitles')).toBeVisible();
+		await expect.element(region('Playback').getByText('Subtitles off')).toBeVisible();
 		await region('Playback')
 			.getByRole('button', { name: /^Audio/ })
 			.click();

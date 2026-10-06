@@ -3,17 +3,7 @@
 // can deliver it. Every search surface (grid, list, details) reads these, never its own.
 
 import type { LibraryMatch, ProviderResultMeta, SearchResult } from '@iris/api/client';
-import {
-	episodeCode,
-	fileName,
-	formatRelative,
-	formatSize,
-	kindWord,
-	languageLabel,
-	plural,
-	prettySceneName,
-	timeLeft
-} from '@iris/api/format';
+import { ago, episodeCode, formatSize, kindWord, languageLabel, plural, prettySceneName, timeLeft } from '@iris/api/format';
 import { watchHref } from '#lib/paths.ts';
 import { resumeOf } from '#lib/watched.ts';
 
@@ -22,15 +12,6 @@ export function partWords(season: number | null | undefined, episode: number | n
 	if (typeof season !== 'number') return /\b(complete|integrale|int[ée]grale)\b/i.test(name) ? 'Complete series' : null;
 	if (!episode) return `Season ${season}, complete`;
 	return episodeCode(season, episode);
-}
-
-/** `S01E02`, `S1E2`, `S01.E02` in a release or file name; a season alone (`S02`) is episode 0. */
-export function sceneMark(name: string): { season: number; episode: number } | null {
-	const base = fileName(name);
-	const se = /\bS(\d{1,4})[._ -]*E(\d{1,4})\b/i.exec(base);
-	if (se) return { season: Number(se[1]), episode: Number(se[2]) };
-	const s = /\bS(\d{1,2})\b/i.exec(base);
-	return s ? { season: Number(s[1]), episode: 0 } : null;
 }
 
 /** The title a release belongs to, as a card names it. */
@@ -76,13 +57,13 @@ export function releaseChips(r: SearchResult): string[] {
 	].filter((c): c is string => !!c);
 }
 
-/** "142 seeders · 12.4 GB · torr9 · 3d ago" */
+/** « 142 seeders · 12.4 GB · torr9 · 3 Oct » */
 export function factsLine(r: SearchResult): string {
 	return [
 		seedersWords(r.seeders),
 		typeof r.size_bytes === 'number' ? formatSize(r.size_bytes) : null,
 		r.provider_id,
-		r.uploaded_at ? formatRelative(r.uploaded_at) : null
+		r.uploaded_at ? ago(r.uploaded_at, 'short') : null
 	]
 		.filter(Boolean)
 		.join(' · ');

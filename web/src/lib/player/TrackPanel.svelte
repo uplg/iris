@@ -5,6 +5,7 @@
 	import type { AudioTrack, SubtitleTrack } from '@iris/core/manifest-client';
 	import Icon from '#lib/components/Icon.svelte';
 	import { audioLabels, subtitleLabels } from './tracks.ts';
+	import { NO_SUBTITLES, SUBTITLES_OFF } from '#lib/language.ts';
 
 	interface Props {
 		audio: AudioTrack[];
@@ -66,7 +67,7 @@
 				<legend>Subtitles</legend>
 				<label class="choice">
 					<input type="radio" name="{id}-subs" checked={activeSubtitle === null} onchange={() => onsubtitle(null)} />
-					<span>Off</span>
+					<span>{SUBTITLES_OFF}</span>
 				</label>
 				{#each subtitles as s, i (s.stream_idx)}
 					<label class="choice">
@@ -75,6 +76,8 @@
 					</label>
 				{/each}
 			</fieldset>
+		{:else}
+			<p class="none">{NO_SUBTITLES}</p>
 		{/if}
 	</div>
 	{#if keptFor || styleHref}
@@ -137,6 +140,10 @@
 		font: var(--t-field-label);
 		color: var(--stage-muted);
 		padding: 0 0 var(--s-1);
+	}
+	.none {
+		margin: 0;
+		color: var(--stage-muted);
 	}
 	.choice {
 		display: flex;

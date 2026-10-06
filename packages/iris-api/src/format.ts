@@ -8,19 +8,6 @@ export function formatTimecode(sec: number): string {
 	return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-/** Short "2m ago" / "just now" relative time for recent (sub-day) activity —
- *  finer-grained than {@link formatRelative}, which only resolves to whole
- *  days. Recompute on each render (e.g. driven by a query's
- *  `refetchInterval`) rather than with a timer of your own. */
-export function formatRecentTime(iso: string): string {
-	const secs = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-	if (secs < 10) return 'just now';
-	if (secs < 60) return `${Math.floor(secs)}s ago`;
-	if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-	if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-	return `${Math.floor(secs / 86400)}d ago`;
-}
-
 export function formatSize(bytes: number | null | undefined): string {
 	if (bytes === null || bytes === undefined) return '—';
 	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -74,17 +61,6 @@ export function prettySceneName(raw: string): string {
 	return year ? `${name} (${year})` : name;
 }
 
-export function formatRelative(iso: string | null | undefined): string {
-	if (!iso) return '';
-	const then = new Date(iso).getTime();
-	const days = Math.floor((Date.now() - then) / 86_400_000);
-	if (days < 1) return 'today';
-	if (days < 30) return `${days}d ago`;
-	const months = Math.floor(days / 30);
-	if (months < 12) return `${months}mo ago`;
-	return `${Math.floor(months / 12)}y ago`;
-}
-
 /** A playback position or length as a clock: `32:10`, `1:02:03`; `--:--` when unknown. */
 export function clock(sec: number | null | undefined): string {
 	if (sec === null || sec === undefined || !Number.isFinite(sec) || sec < 0) return '--:--';
@@ -108,11 +84,29 @@ export function timeLeft(sec: number): string {
 	return `${duration(sec)} left`;
 }
 
-/** An episode's code, the way the cards write it: `S2:E4`; a season alone: `Season 2`. */
-export function episodeCode(season: number | null | undefined, episode: number | null | undefined): string | null {
-	if (season === null || season === undefined) return episode === null || episode === undefined ? null : `E${episode}`;
-	if (episode === null || episode === undefined || episode === 0) return `Season ${season}`;
-	return `S${season}:E${episode}`;
+/** An episode, two ways: `short` in rows, cards and lists (`S2:E4`, `E19`), `long` only in a
+ * hero or a page heading (`Season 2 · Episode 4`, `Episode 19`). A season alone (episode 0 is
+ * the parsers' whole-season mark) is `Season 2` either way. */
+export function episodeCode(
+	season: number | null | undefined,
+	episode: number | null | undefined,
+	style: 'short' | 'long' = 'short'
+): string | null {
+	const hasEpisode = episode !== null && episode !== undefined;
+	if (season === null || season === undefined) {
+		if (!hasEpisode) return null;
+		return style === 'long' ? `Episode ${episode}` : `E${episode}`;
+	}
+	if (!hasEpisode || episode === 0) return `Season ${season}`;
+	return style === 'long' ? `Season ${season} · Episode ${episode}` : `S${season}:E${episode}`;
+}
+
+/** The season and episode a release or file name carries: `S01E02`, `S1E2`, `S01.E02`,
+ * `Show_S01E02_1080p`; a season alone (`S02`) is episode 0. Seasons take 1 or 2 digits,
+ * episodes up to 4 (long anime runs); the mark stands apart from letters and digits. */
+export function sceneEpisode(name: string | null | undefined): { season: number; episode: number } | null {
+	const m = /(?:^|[^a-z0-9])s(\d{1,2})(?:[._ -]*e(\d{1,4}))?(?![a-z0-9])/i.exec(fileName(name) ?? '');
+	return m ? { season: Number(m[1]), episode: m[2] ? Number(m[2]) : 0 } : null;
 }
 
 /** The file extensions a player can open. */
@@ -178,35 +172,39 @@ export function clockTime(at: string | number | Date): string {
 	return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
-/** A time as people say it: a clock time today, a weekday this week, else a date. */
-export function when(ms: number, now = Date.now()): string {
-	const d = new Date(ms);
-	const days = Math.floor((now - ms) / DAY_MS);
-	if (days < 1 && new Date(now).getDate() === d.getDate()) return clockTime(d);
-	if (days < 6) return d.toLocaleDateString('en-GB', { weekday: 'long' });
-	return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-}
-
-/** A moment as people say it, past or future: « today at 21:04 », « yesterday at 09:12 »,
- * « tomorrow at 08:00 », « on Monday », « on 2 Oct », « on 2 Oct 2025 ». */
-export function onDay(iso: string | number, now = Date.now()): string {
-	const d = new Date(iso);
+/** The words for a moment's day, past or future: « today at 21:04 », « yesterday at 09:12 »,
+ * « tomorrow at 08:00 », « on Monday », « on 2 Oct », « on 2 Oct 2025 »; `short` drops the
+ * « at » and « on » (« yesterday 21:04 », « Monday », « 2 Oct »). */
+function dayWords(at: string | number, now: number, short: boolean): string {
+	const d = new Date(at);
 	const days = Math.round((midnight(d.getTime()) - midnight(now)) / DAY_MS);
-	if (days === 0) return `today at ${clockTime(d)}`;
-	if (days === -1) return `yesterday at ${clockTime(d)}`;
-	if (days === 1) return `tomorrow at ${clockTime(d)}`;
-	if (Math.abs(days) < 7) return `on ${d.toLocaleDateString('en-GB', { weekday: 'long' })}`;
+	const time = short ? ` ${clockTime(d)}` : ` at ${clockTime(d)}`;
+	const on = short ? '' : 'on ';
+	if (days === 0) return `today${time}`;
+	if (days === -1) return `yesterday${time}`;
+	if (days === 1) return `tomorrow${time}`;
+	if (Math.abs(days) < 7) return `${on}${d.toLocaleDateString('en-GB', { weekday: 'long' })}`;
 	const sameYear = d.getFullYear() === new Date(now).getFullYear();
-	return `on ${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })}`;
+	return `${on}${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })}`;
 }
 
-/** A recent moment to the minute, older ones by their day: « just now », « 12 min ago »,
- * then as {@link onDay} (« yesterday at 21:04 », « on Monday »). */
-export function ago(iso: string | number, now = Date.now()): string {
-	const secs = (now - new Date(iso).getTime()) / 1000;
+/** A moment in a sentence, mostly an upcoming one: « Signed in until tomorrow at 08:00 »
+ * (see `dayWords`). A past moment is {@link ago}. */
+export function onDay(at: string | number, now = Date.now()): string {
+	return dayWords(at, now, false);
+}
+
+export type AgoStyle = 'sentence' | 'short';
+
+/** A past moment, the one way the app says it: to the minute within the hour (« just now »,
+ * « 12 min ago »), then by its day. `sentence` follows a verb (« Added yesterday at 21:04 »,
+ * « Joined on 3 Oct »); `short` stands alone in a line of facts (« yesterday 21:04 »,
+ * « 3 Oct »). The same moment reads the same everywhere. */
+export function ago(at: string | number, style: AgoStyle = 'sentence', now = Date.now()): string {
+	const secs = (now - new Date(at).getTime()) / 1000;
 	if (secs >= 0 && secs < 60) return 'just now';
 	if (secs >= 0 && secs < 3600) return `${Math.floor(secs / 60)} min ago`;
-	return onDay(iso, now);
+	return dayWords(at, now, style === 'short');
 }
 
 /** A day's heading in a list by day: « Today », « Yesterday », « Saturday 4 October »

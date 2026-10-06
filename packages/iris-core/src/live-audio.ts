@@ -56,8 +56,9 @@ export interface LiveAudioHandle {
  * audio track. Never throws into the caller — audio is best-effort; a
  * failure just leaves the video silent.
  */
-export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUrl: string): Promise<LiveAudioHandle> {
+export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUrl: string, signal: AbortSignal): Promise<LiveAudioHandle> {
 	ensureLibavAudioDecoderRegistered();
+	if (signal.aborted) return { dispose: () => {} };
 
 	if (hls.latestLevelDetails && !hls.latestLevelDetails.hasProgramDateTime) {
 		console.warn('[live-audio] playlist carries no EXT-X-PROGRAM-DATE-TIME — cannot sync a sidecar, staying silent');
@@ -97,7 +98,12 @@ export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUr
 		video.removeEventListener('pause', onStall);
 		video.removeEventListener('waiting', onStall);
 		video.removeEventListener('volumechange', applyVolume);
+		signal.removeEventListener('abort', dispose);
 	};
+	// The engine can be torn down while this mount still awaits the tracks or the
+	// first PDT, before it has handed out its handle: the signal is how it hears.
+	signal.addEventListener('abort', dispose);
+	const aborted = new Promise<null>((resolve) => signal.addEventListener('abort', () => resolve(null), { once: true }));
 
 	// AudioContext often starts "suspended" without a user gesture. The
 	// channel navigation IS a gesture, so resume works; if not, resume on the
@@ -129,7 +135,7 @@ export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUr
 	video.addEventListener('pause', onStall);
 	video.addEventListener('waiting', onStall);
 
-	const audioTrack = (await input.getAudioTracks())[0] ?? null;
+	const audioTrack = (await Promise.race([input.getAudioTracks(), aborted]))?.[0] ?? null;
 	if (!audioTrack || disposed) {
 		if (disposed) dispose();
 		return { dispose };
@@ -174,7 +180,7 @@ export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUr
 	 *  edge) rather than timestamp 0: starting at 0 would decode from the
 	 *  oldest segment in the window, hammering already-expired segments (a
 	 *  404 storm) and running permanently behind the video. */
-	const firstVideoPdt = await new Promise<number | null>((resolve) => {
+	const firstPdt = new Promise<number | null>((resolve) => {
 		const p = videoPdt();
 		if (p !== null) {
 			resolve(p);
@@ -211,7 +217,9 @@ export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUr
 		};
 		video.addEventListener('timeupdate', onTick);
 		video.addEventListener('playing', onTick);
+		signal.addEventListener('abort', cleanup, { once: true });
 	});
+	const firstVideoPdt = await Promise.race([firstPdt, aborted]);
 	if (disposed || firstVideoPdt === null) {
 		dispose();
 		return { dispose };

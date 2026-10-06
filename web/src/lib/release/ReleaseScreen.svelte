@@ -4,9 +4,10 @@
 	// say, the file to play, and the tracker's own notes. The details answer carries the title,
 	// poster and copy on disk, so the page stands alone; a search hit (cache.ts) fills in first.
 	import { goto } from '$app/navigation';
+	import BackLink from '#lib/components/BackLink.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { follows, searchDetails, tmdbImage, torrents } from '@iris/api/client';
-	import { fileName, formatRelative, formatSize, kindWord, languageLabel, plural, prettySceneName } from '@iris/api/format';
+	import { ago, fileName, formatSize, kindWord, languageLabel, plural, prettySceneName, sceneEpisode } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { KEYS, read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -19,7 +20,7 @@
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import StatusRow from '#lib/components/StatusRow.svelte';
 	import { backToResults, findRelease } from '#lib/search/cache.ts';
-	import { DEAD, isDead, ownedFile, partWords, sceneMark, seedersWords } from '#lib/search/release.ts';
+	import { DEAD, isDead, ownedFile, partWords, seedersWords } from '#lib/search/release.ts';
 	import Description from './Description.svelte';
 	import { isSample, playWords, sortFiles, autoFile } from './files.ts';
 	import { Grab, type GrabTarget } from './grab.svelte.ts';
@@ -34,13 +35,13 @@
 	const back = backToResults();
 
 	const preview = createQuery(
-		() => ({ queryKey: ['torrent-preview', provider, id], queryFn: () => torrents.preview(provider, id), staleTime: 5 * 60_000 }),
+		() => ({ queryKey: KEYS.torrentPreview(provider, id), queryFn: () => torrents.preview(provider, id), staleTime: 5 * 60_000 }),
 		() => queryClient
 	);
 	// best-effort: some trackers have no details, and the release can still be grabbed
 	const details = createQuery(
 		() => ({
-			queryKey: ['search-details', provider, id],
+			queryKey: KEYS.searchDetails(provider, id),
 			queryFn: () => searchDetails.get(provider, id).catch(() => null),
 			staleTime: 5 * 60_000
 		}),
@@ -50,7 +51,7 @@
 	const p = $derived(preview.data ?? null);
 	const d = $derived(details.data ?? null);
 	const name = $derived(p?.name ?? d?.title ?? hit?.title ?? '');
-	const mark = $derived(sceneMark(name));
+	const mark = $derived(sceneEpisode(name));
 	const matched = $derived(d?.title_match ?? hit?.title_match ?? null);
 	const title = $derived(matched?.title ?? (name ? prettySceneName(name) : 'Release'));
 	const tmdbId = $derived(matched?.tmdb_id ?? hit?.tmdb_id ?? null);
@@ -104,7 +105,7 @@
 	);
 	const uploaded = $derived.by(() => {
 		const at = d?.uploaded_at ?? hit?.uploaded_at;
-		const when = at ? formatRelative(at) : d?.age ? `${d.age} ago` : null;
+		const when = at ? ago(at, 'short') : d?.age ? `${d.age} ago` : null;
 		const who = d?.uploader ?? hit?.uploader;
 		return [when, who ? `by ${who}` : null].filter(Boolean).join(' ');
 	});
@@ -136,7 +137,7 @@
 	}
 </script>
 
-<a class="link-btn quiet back" href={back}><Icon name="arrow-left" />Back to results</a>
+<BackLink href={back} label="Back to results" />
 
 <article class="release" aria-labelledby="{uid}-h">
 	<div class="art"><Poster src={poster} {title} eager /></div>
@@ -251,13 +252,6 @@
 </article>
 
 <style>
-	.back {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--s-2);
-		min-height: var(--control-h);
-		margin-top: var(--s-3);
-	}
 	.release {
 		display: grid;
 		gap: var(--s-5);

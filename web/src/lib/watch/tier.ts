@@ -4,6 +4,7 @@
 import { hlsUrl, rawStreamUrl, type DecodeTier, type Manifest } from '@iris/core/manifest-client';
 import { isHevc } from '@iris/core/codec';
 import type { PlayStatus, ProgressView, TorrentView } from '@iris/api/client';
+import { isResumable } from '#lib/watched.ts';
 
 /** `?tier=F` (A to F) pins the engine: a debug override for one code path. */
 export function forcedTier(search: string): DecodeTier | null {
@@ -96,10 +97,10 @@ export function subtitleVersion(t: TorrentView | undefined): string {
 	return Math.floor(t.progress_pct / 5).toString();
 }
 
-/** Where playback starts: the saved position past 5 s, unless the file was finished. */
+/** Where playback starts: the saved position once resumable, unless the file was finished. */
 export function resumeFrom(p: ProgressView | null | undefined): number {
 	if (!p || p.completed) return 0;
-	return p.position_seconds > 5 ? p.position_seconds : 0;
+	return isResumable(p.position_seconds) ? p.position_seconds : 0;
 }
 
 /** Watched once past 90 % (the credits), for movies and episodes alike (the TV player's rule). */
@@ -111,7 +112,4 @@ export const isWatched = (t: number, dur: number | null): boolean => dur !== nul
 export const isNearEnd = (t: number, dur: number | null): boolean => dur !== null && dur > 0 && t / dur >= NEXT_EPISODE_FRACTION;
 
 /** A position worth saving: past the opening seconds, and 7 s away from the last save, either way (a seek back counts). */
-export const heartbeatDue = (t: number, lastSaved: number): boolean => t > 5 && Math.abs(t - lastSaved) > 7;
-
-/** The probe and manifest polls: the « not on disk yet » answer means try again. */
-export const notOnDisk = (e: unknown): boolean => e instanceof Error && e.message.includes('not yet on disk');
+export const heartbeatDue = (t: number, lastSaved: number): boolean => isResumable(t) && Math.abs(t - lastSaved) > 7;

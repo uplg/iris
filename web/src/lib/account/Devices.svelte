@@ -1,11 +1,13 @@
 <script lang="ts">
 	// My paired devices (a TV signs in with a code it shows: /account?pair=CODE fills it in),
-	// each signed out after asking (it needs a new code to come back). Once a code is accepted,
-	// the TV still has to fetch its session: the list is read again every 2 s (the query's
-	// refetchInterval, no timer of our own) until the new device appears, or until the code's
-	// life is over (10 min on the server), when the wait ends and says so.
+	// each signed out after asking (it needs a new code to come back). « Paired » is said from
+	// the claim of that code alone (the server's answer to it), never guessed from the list: a
+	// row that shows up may be another device whose session was renewed. The TV then fetches its
+	// session by itself; the list is read again every 2 s (the query's refetchInterval, no timer
+	// of our own) until a new row appears or the code's life is over (10 min on the server).
 	import { createQuery } from '@tanstack/svelte-query';
-	import { onDay, plural } from '@iris/api/format';
+	import { KEYS } from '#lib/queries.ts';
+	import { ago, onDay, plural } from '@iris/api/format';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -28,7 +30,7 @@
 	let waiting = $state<{ since: number; had: Set<string> } | null>(null);
 	const list = createQuery(
 		() => ({
-			queryKey: ['devices'],
+			queryKey: KEYS.devices,
 			queryFn: devices.list,
 			refetchInterval: waiting ? 2_000 : (false as const)
 		}),
@@ -50,18 +52,11 @@
 		void goto(url, { state: page.state, shallow: true, replace: true });
 	});
 
-	// every read of the list answers the wait: the TV is in, or the code is over
+	// the list is only read again for its new row, which says nothing about this code
 	$effect(() => {
 		if (!waiting || !list.data) return;
 		void list.dataUpdatedAt;
-		// a device not listed before: a re-paired TV replaces its row, a revoke may land meanwhile
-		if (list.data.some((d) => !waiting?.had.has(d.jti))) {
-			waiting = null;
-			ui.toast('Your TV is paired and signed in.');
-		} else if (Date.now() - waiting.since > CODE_LIFE_MS) {
-			waiting = null;
-			ui.toast('The TV did not sign in in time. Show a new code on the TV and enter it here.', { warn: true });
-		}
+		if (list.data.some((d) => !waiting?.had.has(d.jti)) || Date.now() - waiting.since > CODE_LIFE_MS) waiting = null;
 	});
 
 	const name = (d: DeviceView) => d.label || (d.kind ? (KINDS[d.kind] ?? d.kind) : 'Unnamed device');
@@ -79,7 +74,7 @@
 			async () => {
 				waiting = { since: Date.now(), had: new Set((list.data ?? []).map((d) => d.jti)) };
 				code = label = '';
-				ui.say('Code accepted. Waiting for the TV to sign in.');
+				ui.toast('Your TV is paired to your account. It signs in by itself in a few seconds.');
 				await list.refetch();
 			},
 			'pair',
@@ -138,7 +133,7 @@
 	<Loaded {value} empty={list.data?.length === 0} emptyText="No paired devices yet.">
 		<ul class="plain-list">
 			{#each list.data ?? [] as d (d.jti)}
-				<ListRow second="Paired {onDay(d.issued_at)} · Signed in until {onDay(d.expires_at).replace(/^on /, '')}">
+				<ListRow second="Paired {ago(d.issued_at)} · Signed in until {onDay(d.expires_at).replace(/^on /, '')}">
 					<Icon name="tv" /><span>{name(d)}</span>{#if d.kind && d.label}<span class="chip">{KINDS[d.kind] ?? d.kind}</span>{/if}
 					{#snippet end()}
 						<ConfirmDialog

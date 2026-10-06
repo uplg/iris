@@ -4,8 +4,16 @@
 import type { TitleWatch } from '@iris/api/client';
 import { episodeCode, timeLeft } from '@iris/api/format';
 
-/** A position past the opening seconds, not finished: worth resuming. */
-const RESUMABLE_SECONDS = 5;
+/** A position past the opening seconds: worth resuming from, worth saving (the TV app's rule too). */
+export const RESUME_MIN_SECONDS = 5;
+
+export const isResumable = (position: number): boolean => position >= RESUME_MIN_SECONDS;
+
+/** The share watched, 0 to 1: a finished watch is 1, an unknown length null. */
+export function watchedShare(position: number, total: number | null | undefined, completed = false): number | null {
+	if (completed) return 1;
+	return typeof total === 'number' && total > 0 ? Math.min(1, Math.max(0, position / total)) : null;
+}
 
 export interface Resume {
 	infohash: string;
@@ -20,14 +28,14 @@ export interface Resume {
 
 /** The file to resume, when the last one watched was left mid-way. */
 export function resumeOf(w: TitleWatch | null | undefined): Resume | null {
-	if (!w || w.completed || w.position_seconds < RESUMABLE_SECONDS) return null;
+	if (!w || w.completed || !isResumable(w.position_seconds)) return null;
 	const length = typeof w.duration_seconds === 'number' && w.duration_seconds > 0 ? w.duration_seconds : null;
 	return {
 		infohash: w.infohash,
 		fileIdx: w.file_idx,
 		code: episodeCode(w.season, w.episode),
 		left: length === null ? null : Math.max(0, length - w.position_seconds),
-		share: length === null ? null : Math.min(1, w.position_seconds / length)
+		share: watchedShare(w.position_seconds, length)
 	};
 }
 

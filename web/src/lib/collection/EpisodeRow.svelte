@@ -15,7 +15,8 @@
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import { refetchCollection } from './actions.ts';
 	import { episodeName, episodeWords, languageWord, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
-	import { downloading, offersByLanguage, rowState, type Verb } from './status.ts';
+	import { offersByLanguage, rowState, type Verb } from './status.ts';
+	import { isFetching } from '#lib/torrent.ts';
 	import { watchHref } from '#lib/paths.ts';
 
 	interface Props {
@@ -44,7 +45,7 @@
 	};
 	function verbOf(v: Downloaded, i: number): Verb {
 		if (i === 0 && now.verb) return now.verb;
-		if (downloading(torrents.get(v.infohash))) return 'Play while downloading';
+		if (isFetching(torrents.get(v.infohash))) return 'Play while downloading';
 		return v.watched ? 'Watch again' : 'Play';
 	}
 	const offerFacts = (o: Available) =>

@@ -16,7 +16,7 @@
 	import StatusRow from '#lib/components/StatusRow.svelte';
 	import PillChoice from '#lib/components/PillChoice.svelte';
 	import { playbackPrefsSaved, read } from '#lib/queries.ts';
-	import { languageName } from '#lib/language.ts';
+	import { audioWords, languageName, languagesPhrase, OFF, SUBTITLES_OFF, subtitleWords } from '#lib/language.ts';
 	import { ownChoices } from '#lib/watch/prefs.ts';
 
 	interface Props {
@@ -44,7 +44,7 @@
 	let opener = $state<HTMLElement>();
 
 	const options = (current: string | null, extra: string[] = []) => [
-		...new Set([...known, 'en', 'fr', ...(current && current !== 'off' ? [current] : []), ...extra])
+		...new Set([...known, 'en', 'fr', ...(current && current !== OFF ? [current] : []), ...extra])
 	];
 	const audioOptions = $derived(options(audio));
 	const subOptions = $derived(options(subs));
@@ -59,12 +59,6 @@
 		void refocus(opener);
 	}
 
-	const audioWords = (v: string | null) => (v ? (languageName(v) ?? v) : 'Each file’s own default');
-	const subWords = (v: string | null) => (v === 'off' ? 'Off' : v ? (languageName(v) ?? v) : 'Each file’s own default');
-
-	const USUAL = 'your usual choice';
-	const chosenWords = (v: string, words: (v: string | null) => string) => (v ? words(v) : USUAL);
-
 	function save(e: SubmitEvent) {
 		e.preventDefault();
 		const next = draft.current;
@@ -78,7 +72,7 @@
 			async () => {
 				await playbackPrefsSaved(collectionId);
 				draft.reset(next);
-				ui.toast(`Saved for ${title}: audio ${chosenWords(next.audio, audioWords)}, subtitles ${chosenWords(next.subs, subWords)}.`);
+				ui.toast(`Saved for ${title}: ${languagesPhrase({ audio_language: next.audio, subtitle_language: next.subs }, true)}.`);
 				close();
 			},
 			'save',
@@ -94,7 +88,7 @@
 	{:else}
 		<dl class="facts">
 			<StatusRow icon="volume-2" label="Audio" value={audioWords(audio)} />
-			<StatusRow icon="captions" label="Subtitles" value={subWords(subs)} />
+			<StatusRow icon="captions" label="Subtitles" value={subtitleWords(subs)} />
 		</dl>
 		<p class="hint">{prefs.data?.for_collection ? 'Chosen for this series.' : 'Your usual choice, from your account.'}</p>
 	{/if}
@@ -122,7 +116,7 @@
 			legend="Subtitles"
 			options={[
 				{ value: '', label: 'Your usual choice' },
-				{ value: 'off', label: 'Off' },
+				{ value: OFF, label: SUBTITLES_OFF },
 				...subOptions.map((code) => ({ value: code, label: languageName(code) ?? code }))
 			]}
 			value={draft.current.subs}

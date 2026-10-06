@@ -2,10 +2,10 @@
 // file a grab plays when nobody chose (episode 1 of a pack, else the biggest video).
 
 import type { FilePreview } from '@iris/api/client';
-import { sceneMark } from '#lib/search/release.ts';
+import { sceneEpisode } from '@iris/api/format';
 
 const episodeOf = (path: string) => {
-	const m = sceneMark(path);
+	const m = sceneEpisode(path);
 	return m && m.episode > 0 ? m : null;
 };
 

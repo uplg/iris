@@ -3,9 +3,9 @@
 	// recent first, tuned to the account. Its name comes from the board (cached from the tiles,
 	// read on a deep link).
 	import { createQuery } from '@tanstack/svelte-query';
+	import BackLink from '#lib/components/BackLink.svelte';
 	import type { MediaKind } from '@iris/api/client';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import Icon from '#lib/components/Icon.svelte';
 	import { loadable } from '#lib/query.ts';
 	import CatalogCard from '#lib/home/CatalogCard.svelte';
 	import { read } from '#lib/queries.ts';
@@ -20,7 +20,7 @@
 </script>
 
 <section class="results" aria-labelledby="{id}-title">
-	<a class="link-btn back" href="/discover?kind={kind}"><Icon name="arrow-left" />All moods</a>
+	<BackLink href="/discover?kind={kind}" label="All moods" />
 	<div class="head">
 		<h2 id="{id}-title" class="group-title">{label}</h2>
 		{#if results.data}<span class="hint"
@@ -43,13 +43,6 @@
 	.results {
 		display: grid;
 		gap: var(--s-3);
-	}
-	.back {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--s-2);
-		justify-self: start;
-		min-height: var(--control-h);
 	}
 	.head {
 		display: flex;

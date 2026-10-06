@@ -5,12 +5,13 @@
 	// downloads.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { tmdbImage, type ContinueWatchingItem } from '@iris/api/client';
-	import { clock, duration, kindLabel, percent, prettySceneName, timeLeft } from '@iris/api/format';
+	import { clock, duration, episodeCode, kindLabel, percent, prettySceneName, timeLeft } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import Progress from '#lib/components/Progress.svelte';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import Hero from './Hero.svelte';
-	import { languagesLine, secondsLeft, watched } from './data.ts';
+	import { languagesLine, secondsLeft } from './data.ts';
+	import { isResumable, watchedShare } from '#lib/watched.ts';
 	import { read } from '#lib/queries.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import { getAndPlay, nextName, startOver, tileKey } from './continue.ts';
@@ -23,16 +24,12 @@
 
 	const title = $derived(md.data?.title ?? prettySceneName(item.torrent_name));
 	const left = $derived(secondsLeft(item));
-	const share = $derived(watched(item));
+	const share = $derived(watchedShare(item.position_seconds, item.duration_seconds));
 	// a resume, not a fresh start: there is a position worth keeping
-	const resuming = $derived(!item.grabbable && !item.next_up && item.position_seconds >= 5);
+	const resuming = $derived(!item.grabbable && !item.next_up && isResumable(item.position_seconds));
 	const meta = $derived(
 		item.kind === 'tv' && item.season !== null && item.season !== undefined
-			? [
-					`Season ${item.season}`,
-					item.episode !== null && item.episode !== undefined ? `Episode ${item.episode}` : null,
-					item.duration_seconds ? duration(item.duration_seconds) : null
-				]
+			? [episodeCode(item.season, item.episode, 'long'), item.duration_seconds ? duration(item.duration_seconds) : null]
 			: [md.data?.year ? String(md.data.year) : null, kindLabel(item.kind), item.duration_seconds ? duration(item.duration_seconds) : null]
 	);
 	const getting = $derived(g.is(`get:${tileKey(item)}`));

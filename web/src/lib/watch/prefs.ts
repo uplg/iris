@@ -8,6 +8,7 @@ import { me, type MediaKind, type PlaybackPrefs } from '@iris/api/client';
 import { thisTitle } from '@iris/api/format';
 import type { Manifest } from '@iris/core/manifest-client';
 import { playbackPrefsSaved } from '#lib/queries.ts';
+import { OFF } from '#lib/language.ts';
 
 type Save = typeof me.savePlaybackPreferences;
 type Langs = { audio_language: string | null; subtitle_language: string | null };
@@ -57,7 +58,7 @@ export class PlaybackChoices {
 
 	/** A subtitle picked (`null`: off, kept as "off"). */
 	subtitlePicked(manifest: Manifest, streamIdx: number | null): Promise<void> | null {
-		const lang = streamIdx === null ? 'off' : (manifest.subtitles.find((s) => s.stream_idx === streamIdx)?.lang ?? null);
+		const lang = streamIdx === null ? OFF : (manifest.subtitles.find((s) => s.stream_idx === streamIdx)?.lang ?? null);
 		if (!lang) return null;
 		this.#own = { ...this.#own, subtitle_language: lang };
 		return this.#send();

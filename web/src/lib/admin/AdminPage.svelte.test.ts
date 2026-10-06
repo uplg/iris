@@ -86,7 +86,7 @@ describe('admin page', () => {
 		await expect.element(now.getByText('S2:E4 · Woe’s Hollow')).toBeVisible();
 		await expect.element(now.getByText('42:14 of 52:00')).toBeVisible();
 		await expect.element(now.getByText('10 min left')).toBeVisible();
-		await expect.element(now.getByText('Film · 2024')).toBeVisible();
+		await expect.element(now.getByText('Movie · 2024')).toBeVisible();
 		await expect.element(now.getByText('1:02:14 of 2:46:00')).toBeVisible();
 		for (const state of ['Playing', 'Paused', 'Buffering']) await expect.element(now.getByText(state, { exact: true })).toBeVisible();
 		await expect.element(now.getByText('Web 1.5.0 · Firefox · macOS')).toBeVisible();
@@ -130,9 +130,9 @@ describe('admin page', () => {
 		const api = household();
 		await render(AdminHarness);
 		await expect.poll(() => playRows().length).toBe(20);
-		await page.getByRole('radio', { name: 'Films' }).click();
+		await page.getByRole('radio', { name: 'Movies' }).click();
 		await expect.poll(() => historyCalls(api).at(-1)?.path).toBe('/admin/watch-history?kind=movie&limit=20');
-		await expect.poll(() => [...playRows()].every((r) => r.textContent?.includes('Film'))).toBe(true);
+		await expect.poll(() => [...playRows()].every((r) => r.textContent?.includes('Movie'))).toBe(true);
 
 		await page.getByRole('button', { name: /^Person/ }).click();
 		await page.getByRole('option', { name: 'Tom' }).click();

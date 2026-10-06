@@ -4,10 +4,11 @@
 	// and narrowed to an audio language among what is loaded. The address carries the search
 	// (params.ts): a reload or a shared link replays it.
 	import { replaceState } from '$app/navigation';
+	import BackLink from '#lib/components/BackLink.svelte';
 	import { page } from '$app/state';
 	import { createInfiniteQuery, createQuery } from '@tanstack/svelte-query';
 	import { me, search, type AggregatedResults, type MediaKind, type SearchResult, type TmdbSuggestion } from '@iris/api/client';
-	import { LANGUAGE_TAGS, languageLabel, plural, type LanguageTag } from '@iris/api/format';
+	import { episodeCode, LANGUAGE_TAGS, languageLabel, plural, type LanguageTag } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { refocus } from '#lib/focus.ts';
@@ -71,7 +72,7 @@
 		() => {
 			const asked = { ...s, lang: null };
 			return {
-				queryKey: [...KEYS.search, asked.q, asked.kind, asked.sort, asked.title],
+				queryKey: KEYS.searchResults(asked.q, asked.kind, asked.sort, asked.title),
 				// a newer search aborts this one (its signal): the tracker fan-out stops server-side
 				queryFn: ({ pageParam, signal }: { pageParam: number; signal: AbortSignal }) =>
 					search.query(asked.q, searchOpts(asked, pageParam, PAGE_SIZE), signal),
@@ -92,7 +93,7 @@
 		() => {
 			const q = s.q;
 			return {
-				queryKey: ['search-titles', q],
+				queryKey: KEYS.searchTitles(q),
 				queryFn: ({ signal }: { signal: AbortSignal }) => search.titles(q, signal),
 				enabled: q.length >= 2 && (effective === 'titles' || s.title !== null),
 				staleTime: 5 * 60_000
@@ -207,9 +208,11 @@
 	{#if tooShort}<p class="form-error">Type at least 2 characters.</p>{/if}
 	{#if parsed && s.q}
 		<p class="hint" id="{id}-parsed">
-			Showing results for <strong>{parsed.title}</strong>{#if typeof parsed.season === 'number'}{' · '}{parsed.episode
-					? `Season ${parsed.season}, episode ${parsed.episode}`
-					: `Season ${parsed.season}`}{/if}{#if typeof parsed.year === 'number'}{' · '}{parsed.year}{/if}.
+			Showing results for <strong>{parsed.title}</strong>{#if typeof parsed.season === 'number'}{' · '}{episodeCode(
+					parsed.season,
+					parsed.episode,
+					'long'
+				)}{/if}{#if typeof parsed.year === 'number'}{' · '}{parsed.year}{/if}.
 		</p>
 	{/if}
 
@@ -245,7 +248,7 @@
 					<ToggleGroup type="single" label="Show as" hideLabel options={VIEWS} value={effective} onchange={setView} />
 				</div>
 				{#if s.title !== null}
-					<a class="link-btn back" href={searchHref({ ...s, lang: null, title: null })}><Icon name="arrow-left" size={16} />All titles</a>
+					<BackLink href={searchHref({ ...s, lang: null, title: null })} label="All titles" />
 				{/if}
 
 				{#if effective === 'titles'}
@@ -276,11 +279,11 @@
 						{/if}
 					</div>
 				{:else if effective === 'grid'}
-					<ul class="poster-grid">
+					<ul class="poster-grid releases">
 						{#each shown as r (releaseKey(r))}<ReleaseCard {r} />{/each}
 					</ul>
 				{:else}
-					<ul class="plain-list">
+					<ul class="plain-list releases">
 						{#each shown as r (releaseKey(r))}<ReleaseRow {r} />{/each}
 					</ul>
 				{/if}
@@ -328,15 +331,24 @@
 	.results-head :global(.choices) {
 		min-width: min(18rem, 100%);
 	}
-	.back {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--s-1);
-		min-height: var(--control-h);
-		justify-self: start;
-	}
 	.more {
 		justify-self: center;
 		min-height: var(--control-h);
+	}
+	/* pages of results add up: cards and rows out of view are neither laid out nor painted,
+	   their place kept (as in the library). The containment clips paint to the item, so its
+	   padding holds the art's outline and the margin gives the room back */
+	.releases > :global(li) {
+		content-visibility: auto;
+	}
+	.poster-grid.releases > :global(li) {
+		contain-intrinsic-size: auto 22rem;
+		padding: var(--s-2);
+		margin: calc(var(--s-2) * -1);
+	}
+	.plain-list.releases > :global(li) {
+		contain-intrinsic-size: auto 8rem;
+		padding-inline: var(--s-2);
+		margin-inline: calc(var(--s-2) * -1);
 	}
 </style>

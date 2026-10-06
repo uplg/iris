@@ -11,7 +11,7 @@
 	import { Dialog } from 'bits-ui';
 	import { untrack } from 'svelte';
 	import { afterNavigate, goto } from '$app/navigation';
-	import { follows, library, progress as progressApi, torrents, type TorrentView } from '@iris/api/client';
+	import { follows, library, progress as progressApi, torrents } from '@iris/api/client';
 	import {
 		duration as lengthWords,
 		episodeCode,
@@ -33,6 +33,8 @@
 	import { stored, text as words } from '#lib/stored.ts';
 	import { pageTitle } from '#lib/title.ts';
 	import { KEYS, read, refreshLibrary } from '#lib/queries.ts';
+	import { stateWord } from '#lib/torrent.ts';
+	import { isNotOnDisk } from '@iris/api/refusals';
 	import { ui } from '#lib/ui.svelte.ts';
 	import IrisPlayer from '#lib/player/IrisPlayer.svelte';
 	import StageTopBar from '#lib/player/StageTopBar.svelte';
@@ -53,7 +55,6 @@
 		forcedTier,
 		isNearEnd,
 		nextDemotionTarget,
-		notOnDisk,
 		playSource,
 		playStatusInterval,
 		resumeFrom,
@@ -107,14 +108,14 @@
 	const probeQ = createQuery(() => ({
 		queryKey: KEYS.probe(infohash, fileIdx),
 		queryFn: () => torrents.probe(infohash, fileIdx),
-		retry: (count: number, e: Error) => notOnDisk(e) && count < 30,
+		retry: (count: number, e: Error) => isNotOnDisk(e) && count < 30,
 		retryDelay: 2000,
-		refetchInterval: (q) => (q.state.data ? false : notOnDisk(q.state.error) ? 2000 : false),
+		refetchInterval: (q) => (q.state.data ? false : isNotOnDisk(q.state.error) ? 2000 : false),
 		// a file's streams never change under it (a regrab invalidates them)
 		staleTime: Infinity
 	}));
 	const manifestQ = createQuery(() => ({
-		queryKey: ['manifest', infohash, fileIdx],
+		queryKey: KEYS.manifest(infohash, fileIdx),
 		queryFn: () => fetchManifest(infohash, fileIdx),
 		retry: (count: number, e: Error) => e instanceof ManifestNotReadyError && count < 30,
 		retryDelay: 2000,
@@ -125,7 +126,7 @@
 
 	// a fresh read on every visit: a cached position would replay as if nothing was watched since
 	const progressQ = createQuery(() => ({
-		queryKey: ['progress', infohash, fileIdx],
+		queryKey: KEYS.fileProgress(infohash, fileIdx),
 		queryFn: () => progressApi.get(infohash, fileIdx),
 		staleTime: 0,
 		gcTime: 0
@@ -208,7 +209,7 @@
 
 	// while the server is away, ask every 2 s; once it answers, remount on the same tier
 	const recoveryQ = createQuery(() => ({
-		queryKey: ['backend-recovery', infohash, fileIdx, nonce],
+		queryKey: KEYS.backendRecovery(infohash, fileIdx, nonce),
 		queryFn: backendReachable,
 		enabled: outage,
 		refetchInterval: (q) => (q.state.data === true ? false : 2000),
@@ -339,7 +340,7 @@
 	const episodeTitle = $derived(episodeContextQ.data?.current?.name ?? null);
 	const subheading = $derived(
 		currentEpisode
-			? [episodeCode(currentEpisode.season, currentEpisode.episode), episodeTitle].filter(Boolean).join(' · ')
+			? [episodeCode(currentEpisode.season, currentEpisode.episode, 'long'), episodeTitle].filter(Boolean).join(' · ')
 			: isTv
 				? null
 				: name !== heading
@@ -393,14 +394,6 @@
 	);
 	const notice = $derived(outage ? 'Iris is not answering. Reconnecting…' : playerError ? `The player stopped: ${playerError}` : null);
 	const gone = $derived(isGone(torrentQ.error));
-
-	const STATE_WORDS: Record<TorrentView['state'], string> = {
-		initializing: 'Starting',
-		live: 'Downloading',
-		paused: 'Paused',
-		error: 'Stopped with an error'
-	};
-	const stateWords = (t: TorrentView) => (t.state === 'live' && t.finished ? 'Sharing' : STATE_WORDS[t.state]);
 </script>
 
 <svelte:head><title>{pageTitle(data ? heading : 'Watch')}</title></svelte:head>
@@ -514,7 +507,7 @@
 				<section class="torrent" aria-labelledby="torrent-title">
 					<h2 id="torrent-title" class="sr-only">The torrent</h2>
 					<p class="state">
-						<strong>{stateWords(data)}</strong>
+						<strong>{stateWord(data)}</strong>
 						<span>{formatSize(data.progress_bytes)} of {formatSize(data.total_size_bytes)}</span>
 					</p>
 					<Progress

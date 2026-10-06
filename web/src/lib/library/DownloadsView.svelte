@@ -2,6 +2,7 @@
 	// Every release on the server, by what it is doing: downloading, needing a hand (stalled, an
 	// error, paused by its tracker's policy), seeding. Found by name, hash or who added it.
 	import type { CollectionListItem, ContinueWatchingItem, TorrentView } from '@iris/api/client';
+	import FindField from '#lib/components/FindField.svelte';
 	import { plural, speed } from '@iris/api/format';
 	import { loadable } from '#lib/query.ts';
 	import { refocus } from '#lib/focus.ts';
@@ -71,21 +72,7 @@
 		<p class="totals hint">{`Right now ${speed(down)} down · ${speed(up)} up · ${all.length} active`}</p>
 
 		<div class="filter">
-			<div class="field">
-				<label for="{id}-filter">Find a release</label>
-				<div class="search-row">
-					<input
-						id="{id}-filter"
-						type="search"
-						bind:value={query}
-						autocomplete="off"
-						spellcheck="false"
-						aria-describedby="{id}-filter-hint"
-					/>
-					{#if query}<button class="btn ghost" onclick={() => ((query = ''), void refocus(`#${id}-filter`))}>Clear</button>{/if}
-				</div>
-				<span id="{id}-filter-hint" class="hint">By title, release name, hash or who added it</span>
-			</div>
+			<FindField id="{id}-filter" label="Find a release" bind:value={query} hint="By title, release name, hash or who added it" />
 			<p role="status" class="hint count">
 				{shown.length === all.length ? plural(all.length, 'release') : `Showing ${shown.length} of ${all.length} releases`}
 			</p>
@@ -130,20 +117,6 @@
 		align-items: flex-end;
 		gap: var(--s-2) var(--s-4);
 		margin-bottom: var(--s-4);
-	}
-	.filter .field {
-		flex: 1 1 18rem;
-	}
-	.search-row {
-		display: flex;
-		gap: var(--s-2);
-	}
-	.search-row input {
-		flex: 1;
-		min-width: 0;
-	}
-	.search-row .btn {
-		min-height: var(--control-h);
 	}
 	.count {
 		font-variant-numeric: tabular-nums;

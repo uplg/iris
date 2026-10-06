@@ -3,6 +3,7 @@
 // « ghost »): its title, its poster, how far one got, and the way back to it.
 
 import type { HistoryItem, UserHistoryItem } from '@iris/api/client';
+import { prettySceneName } from '@iris/api/format';
 
 export type Item = HistoryItem | UserHistoryItem;
 
@@ -32,7 +33,7 @@ export function groupHistory(items: readonly Item[]): Group[] {
 			g = {
 				key,
 				collectionId: it.collection_id ?? null,
-				title: it.collection_title ?? it.torrent_name,
+				title: it.collection_title ?? prettySceneName(it.torrent_name),
 				posterPath: null,
 				ghost: true,
 				solo: false,

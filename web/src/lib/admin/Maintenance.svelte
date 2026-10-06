@@ -6,7 +6,7 @@
 	// first, its first few until asked for all.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { admin, type GcReport, type RemuxJobView } from '@iris/api/client';
-	import { formatSize, onDay, plural } from '@iris/api/format';
+	import { ago, formatSize, plural } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
@@ -110,7 +110,7 @@
 				{#each shown as j (j.key)}
 					<ListRow
 						second="{stage(j)}{j.size_bytes > 0 ? ` · ${formatSize(j.size_bytes)}` : ''}{j.mtime
-							? ` · Updated ${onDay(j.mtime * 1000)}`
+							? ` · Updated ${ago(j.mtime * 1000)}`
 							: ''}"
 					>
 						<span class="name">{name(j)}</span>

@@ -34,7 +34,9 @@ describe('HistoryList', () => {
 		await expect.element(page.getByRole('heading', { name: 'Severance' })).toBeVisible();
 		await expect.element(page.getByRole('link', { name: 'Severance' })).toHaveAttribute('href', '/collection/c1');
 		await expect.element(page.getByRole('link', { name: 'Play Severance, S2:E4' })).toHaveAttribute('href', '/watch/s1/0');
-		await expect.element(page.getByText(/58% watched, stopped at 32:10 · Last watched today at/).first()).toBeVisible();
+		await expect
+			.element(page.getByText(/58% watched, stopped at 32:10 · Last watched (just now|[0-9]+ min ago|today at)/).first())
+			.toBeVisible();
 		await expect.element(page.getByText(/Watched to the end/)).toBeVisible();
 	});
 

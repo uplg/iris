@@ -194,6 +194,9 @@ describe('SearchScreen', () => {
 		await expect.element(screen.getByText('Severance.S01.1080p-GRP')).toBeVisible();
 		await expect.element(screen.getByText('Severance.S02.MULTi.1080p.WEB.H265-GRP')).toBeVisible();
 		expect(searches(api).map((c) => c.path.includes('page=2'))).toEqual([false, true]);
+		// a long list of results: rows out of view are skipped by layout and paint
+		const row = screen.getByRole('listitem').filter({ hasText: 'Severance.S01.1080p-GRP' }).element();
+		expect(getComputedStyle(row).contentVisibility).toBe('auto');
 	});
 
 	it('recent searches: one press searches again, a cross forgets one, Clear forgets them all', async () => {

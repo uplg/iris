@@ -84,10 +84,11 @@ DTOs** — every client generates them:
   until you regenerate + commit `web/openapi.json`.
 - **Web** generates TS types: `openapi-typescript` → `packages/iris-api/src/api-types.ts`
   (run by `dev`, `build` and `check`). `packages/iris-api/src/client.ts` wraps them with the fetch client.
-  The generator lives in its own mini-package (`web/tools/api-gen/`) pinned
-  to TypeScript 6: it needs the TS compiler API (`ts.factory`), which the
-  TS 7 native compiler used by the main build no longer ships. Don't
-  "unify" the two TypeScript versions.
+  The generator lives in its own mini-package (`web/tools/api-gen/`). The
+  web app and `tools/api-gen` both stay on **TypeScript 6**: Svelte's tooling
+  (SvelteKit's peer range, svelte-check) needs it, and so does the generator
+  (it uses the TS compiler API, `ts.factory`, which the TS 7 native compiler
+  no longer ships). Don't bump either to 7 until both support it.
 - **Android TV** generates `@Serializable` models: the `org.openapi.generator`
   Gradle plugin (`openApiGenerate` task, wired before compile via the AGP
   Variant API) → `app/build/generated/openapi/…/data/` in package
@@ -360,6 +361,20 @@ Kotlin sealed class side. See memory `project_serde_kotlinx_discriminator`.
 - One oxlint config (`web/.oxlintrc.json`) for `web` and `packages`; its only
   override, scoped to `iris-core`, turns off two rules that misread the
   engine's async loops and worker `postMessage`.
+- Words said once: a past moment is `ago()` (`sentence` « on 3 Oct », `short`
+  « 3 Oct »), an episode `episodeCode()` (`S2:E4`; `long` « Season 2 · Episode 4 »
+  only in heroes and page headings), a release's state `lib/torrent.ts`, the
+  playback languages `lib/language.ts`, the server's refusals
+  `@iris/api/refusals` (by code; by message words only where the server sends
+  no code yet). The Android TV app mirrors these words.
+- Patched dependencies (`patchedDependencies` in the root `package.json`,
+  files in `patches/`): mediabunny and @hevcjs/core. A version bump needs the
+  patch regenerated under the new key (`bun patch <pkg>`, edit, `bun patch
+  --commit`), never the old file renamed: bun applies a stale patch by line
+  offset and can land it in the wrong function (a corrupted dist, found only by
+  `bun run build`). Then grep the `[iris patch]` markers in
+  `node_modules/.bun/<pkg>@<version>/…/dist` and run `bun run sync-vendor` in
+  `web/` (hevc.js's worker is copied into `web/static`).
 
 ## UI rules
 

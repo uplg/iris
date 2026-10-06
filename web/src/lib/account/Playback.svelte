@@ -12,10 +12,9 @@
 	import Group from '#lib/components/Group.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Select from '#lib/components/Select.svelte';
-	import { languageName } from '#lib/language.ts';
+	import { FILE_OWN, languageName, languagesPhrase, OFF, SUBTITLES_OFF } from '#lib/language.ts';
 
 	const NONE = 'none';
-	const OFF = 'off';
 	const COMMON = ['fr', 'en', 'es', 'de', 'it', 'pt', 'ja', 'ko'];
 	const langName = (code: string) => languageName(code) ?? code;
 
@@ -31,13 +30,10 @@
 	const audio = $derived(choice(prefs.data?.audio_language));
 	const subtitles = $derived(choice(prefs.data?.subtitle_language));
 	const listed = (current: string) => (current === NONE || current === OFF || COMMON.includes(current) ? COMMON : [...COMMON, current]);
-	const audioOptions = $derived([
-		{ value: NONE, label: 'The file’s own' },
-		...listed(audio).map((c) => ({ value: c, label: langName(c) }))
-	]);
+	const audioOptions = $derived([{ value: NONE, label: FILE_OWN }, ...listed(audio).map((c) => ({ value: c, label: langName(c) }))]);
 	const subtitleOptions = $derived([
-		{ value: NONE, label: 'The file’s own' },
-		{ value: OFF, label: 'No subtitles' },
+		{ value: NONE, label: FILE_OWN },
+		{ value: OFF, label: SUBTITLES_OFF },
 		...listed(subtitles).map((c) => ({ value: c, label: langName(c) }))
 	]);
 
@@ -51,7 +47,7 @@
 			() => me.savePlaybackPreferences(body),
 			async () => {
 				await playbackPrefsSaved(null);
-				ui.say(field === 'audio_language' ? 'Audio language saved.' : 'Subtitle language saved.');
+				ui.say(`Saved: ${languagesPhrase(body, true)}.`);
 			},
 			field
 		);

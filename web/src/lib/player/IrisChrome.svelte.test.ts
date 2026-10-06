@@ -100,7 +100,7 @@ describe('IrisChrome keys', () => {
 		expect(onAudioPick).toHaveBeenCalledWith('1');
 		await page.getByRole('radio', { name: 'English, for deaf and hard of hearing (SDH)' }).click();
 		expect(onSubtitleChange.mock.lastCall?.[0]?.stream_idx).toBe(3);
-		await page.getByRole('radio', { name: 'Off' }).click();
+		await page.getByRole('radio', { name: 'Subtitles off' }).click();
 		expect(onSubtitleChange).toHaveBeenLastCalledWith(null);
 		await userEvent.keyboard('{Escape}');
 		await expect.element(dialog).not.toBeInTheDocument();

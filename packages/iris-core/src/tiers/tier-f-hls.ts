@@ -189,6 +189,7 @@ export const mountTierF: EngineMount = async (opts) => {
 	let disposed = false;
 	let liveAudio: LiveAudioHandle | null = null;
 	let liveAudioStarted = false;
+	const liveAudioAbort = new AbortController();
 	let liveMasterReloads = 0;
 	if (live) {
 		// The E-AC-3 detector. hls.js only creates SourceBuffers for codecs MSE
@@ -220,7 +221,7 @@ export const mountTierF: EngineMount = async (opts) => {
 			console.info('[iris-core] Tier F live: no MSE-decodable audio — starting WebAudio sidecar');
 			void (async () => {
 				try {
-					const h = await mountLiveAudio(video, hls, streamUrl);
+					const h = await mountLiveAudio(video, hls, streamUrl, liveAudioAbort.signal);
 					// `disposed` covers engine teardown; `hasMseAudio()` covers hls.js
 					// announcing an audio buffer while we were mounting.
 					if (disposed || hasMseAudio()) h.dispose();
@@ -450,6 +451,7 @@ export const mountTierF: EngineMount = async (opts) => {
 		fallbackDuration: opts.manifest.duration_s ?? null,
 		dispose: async () => {
 			disposed = true;
+			liveAudioAbort.abort();
 			liveAudio?.dispose();
 			liveAudio = null;
 			unbind();

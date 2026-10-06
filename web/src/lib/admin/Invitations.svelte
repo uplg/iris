@@ -5,7 +5,7 @@
 	// folded behind their count, each saying who used it or when it ran out.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { admin, type CreatedInvitation, type Invitation } from '@iris/api/client';
-	import { onDay, plural, until } from '@iris/api/format';
+	import { ago, onDay, plural, until } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
@@ -38,12 +38,12 @@
 
 	const made = (i: Invitation) => {
 		const by = nameOf(i.created_by);
-		return `Made ${onDay(i.created_at)}${by ? ` by ${by}` : ''}`;
+		return `Made ${ago(i.created_at)}${by ? ` by ${by}` : ''}`;
 	};
 	const outcome = (i: Invitation) => {
-		if (!i.consumed_at) return `Expired ${onDay(i.expires_at)}`;
+		if (!i.consumed_at) return `Expired ${ago(i.expires_at)}`;
 		const who = nameOf(i.consumed_by);
-		return `Used ${onDay(i.consumed_at)}${who ? ` by ${who}` : ''}`;
+		return `Used ${ago(i.consumed_at)}${who ? ` by ${who}` : ''}`;
 	};
 
 	async function create() {
@@ -112,7 +112,7 @@
 								ghost
 								danger
 								label="Revoke"
-								ariaLabel="Revoke the invitation made {onDay(i.created_at)}"
+								ariaLabel="Revoke the invitation made {ago(i.created_at)}"
 								title="Revoke this invitation?"
 								description="Its link stops working at once. Whoever has it cannot make an account with it."
 								action="Revoke the invitation"

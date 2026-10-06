@@ -3,7 +3,7 @@
 	// words, who added it, and what can be done: play it, open its files, delete it. Delete is
 	// for an admin or whoever added it; anyone else sees it, not operable, and why.
 	import { tmdbImage, torrents, type CollectionListItem, type ContinueWatchingItem, type TorrentView } from '@iris/api/client';
-	import { formatSize, isVideo, percent, when } from '@iris/api/format';
+	import { formatSize, isVideo, percent, ago } from '@iris/api/format';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture, unavailable } from '#lib/gesture.svelte.ts';
 	import Poster from '#lib/components/Poster.svelte';
@@ -13,6 +13,7 @@
 	import Disclosure from '#lib/components/Disclosure.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import { deleteDescription, ratioOf, releaseName, releaseStatus, watchState } from './model.ts';
+	import { isFetching } from '#lib/torrent.ts';
 	import { refreshLibrary } from '#lib/queries.ts';
 	import FileList from './FileList.svelte';
 
@@ -32,12 +33,12 @@
 	const videos = $derived(t.files.filter((f) => isVideo(f.path)));
 	const status = $derived(releaseStatus(t));
 	const pct = $derived(Math.min(100, Math.max(0, t.progress_pct)));
-	const showBar = $derived(!t.finished && pct < 100);
+	const showBar = $derived(isFetching(t));
 	const ratio = $derived(ratioOf(t.uploaded_bytes_total, t.downloaded_bytes_total));
 	const facts = $derived(
 		[
 			`Added by ${t.added_by_name}`,
-			when(Date.parse(t.added_at)),
+			ago(t.added_at, 'short'),
 			t.source_provider && `from ${t.source_provider}`,
 			`${formatSize(t.uploaded_bytes_total)} sent`,
 			ratio !== null && `ratio ${ratio.toFixed(2)}`

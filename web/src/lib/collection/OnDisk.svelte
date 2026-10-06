@@ -3,7 +3,7 @@
 	// is; a movie's copies play from here. Deleting is for an admin or whoever added it (the
 	// server says so per release, `can_delete`): others see the control, not operable, and why.
 	import { torrents as torrentsApi, type CollectionDetail, type TorrentView } from '@iris/api/client';
-	import { formatRecentTime, formatSize, percent, plural } from '@iris/api/format';
+	import { ago, formatSize, percent, plural } from '@iris/api/format';
 	import { Gesture, unavailable } from '#lib/gesture.svelte.ts';
 	import { refocus } from '#lib/focus.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -12,7 +12,8 @@
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import { refetchCollection } from './actions.ts';
 	import { mainVideo, qualityWords } from './merge.ts';
-	import { downloading, eta } from './status.ts';
+	import { eta } from './status.ts';
+	import { isFetching } from '#lib/torrent.ts';
 	import { watchHref } from '#lib/paths.ts';
 
 	let { collection: c }: { collection: CollectionDetail } = $props();
@@ -24,9 +25,7 @@
 	const NO_DELETE = 'Only an admin, or the person who added it, can delete this.';
 	const nameOf = (t: TorrentView) => t.name ?? t.infohash;
 	const facts = (t: TorrentView) =>
-		[qualityWords(nameOf(t)), formatSize(t.total_size_bytes), `added by ${t.added_by_name} ${formatRecentTime(t.added_at)}`]
-			.filter(Boolean)
-			.join(' · ');
+		[qualityWords(nameOf(t)), formatSize(t.total_size_bytes), `added by ${t.added_by_name} ${ago(t.added_at)}`].filter(Boolean).join(' · ');
 
 	function remove(t: TorrentView) {
 		const row = list?.querySelector(`[data-infohash="${t.infohash}"]`);
@@ -56,7 +55,7 @@
 				<li data-infohash={t.infohash}>
 					<p class="release">{nameOf(t)}</p>
 					<p class="hint">{facts(t)}</p>
-					{#if downloading(t)}
+					{#if isFetching(t)}
 						<StatusLine tone={t.state === 'error' ? 'warn' : 'busy'} text="Downloading · {percent(t.progress_pct)} · {eta(t)}" />
 					{/if}
 					<div class="actions">

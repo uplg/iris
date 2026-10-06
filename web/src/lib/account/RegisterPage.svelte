@@ -6,6 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, auth } from '@iris/api/client';
+	import { registerRefusal } from '@iris/api/refusals';
 	import { session } from '#lib/session.svelte.ts';
 	import { pageTitle } from '#lib/title.ts';
 	import { errorText } from '#lib/errors.ts';
@@ -32,15 +33,15 @@
 		if (field !== 'form') fields[field]?.focus();
 	}
 
-	/** Which field a refusal is about, from the server's words. */
+	/** Which field a refusal is about (`@iris/api/refusals`). */
 	function refusal(e: unknown): boolean {
 		if (!(e instanceof ApiError)) return false;
-		const text = errorText(e);
-		if (/invitation/i.test(e.message)) say('token', 'This invitation code is not valid any more. Ask for a new invitation link.');
-		else if (/already registered/i.test(e.message)) say('email', 'An account already uses this email. Sign in instead.');
-		else if (/email/i.test(e.message)) say('email', 'This does not look like an email address.');
-		else if (/password/i.test(e.message)) say('password', `Use at least ${MIN} characters.`);
-		else say('form', text);
+		const which = registerRefusal(e);
+		if (which === 'invitation') say('token', 'This invitation code is not valid any more. Ask for a new invitation link.');
+		else if (which === 'email_taken') say('email', 'An account already uses this email. Sign in instead.');
+		else if (which === 'email_invalid') say('email', 'This does not look like an email address.');
+		else if (which === 'password') say('password', `Use at least ${MIN} characters.`);
+		else say('form', errorText(e));
 		return true;
 	}
 

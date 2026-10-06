@@ -4,6 +4,7 @@
 import type { TorrentView } from '@iris/api/client';
 import { percent } from '@iris/api/format';
 import type { DecodeTier, Manifest, VideoTrack } from '@iris/core/manifest-client';
+import { isComplete } from '#lib/torrent.ts';
 
 const CODECS: [RegExp, string][] = [
 	[/hevc|hev1|hvc1|h265|x265/i, 'HEVC'],
@@ -38,7 +39,7 @@ export const TIER_WORDS: Record<DecodeTier, string> = {
 export function factsLine(t: TorrentView | undefined, manifest: Manifest | undefined, tier: DecodeTier | null): string {
 	const parts: string[] = [];
 	if (t)
-		parts.push(t.finished ? 'Playing from disk' : `Playing while it downloads, ${percent(Math.min(100, Math.max(0, t.progress_pct)))}`);
+		parts.push(isComplete(t) ? 'Playing from disk' : `Playing while it downloads, ${percent(Math.min(100, Math.max(0, t.progress_pct)))}`);
 	const picture = pictureWords(manifest?.video[0]);
 	if (picture) parts.push(picture);
 	if (tier) parts.push(TIER_WORDS[tier]);

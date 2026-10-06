@@ -4,6 +4,8 @@
 import type { TorrentView } from '@iris/api/client';
 import { duration, percent, plural, timeLeft } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
+import { etaSeconds, isFetching } from '#lib/torrent.ts';
+import { watchedShare } from '#lib/watched.ts';
 import { languageWord, listWords, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
 
 /** What the row's first downloaded release does when pressed. */
@@ -24,13 +26,11 @@ export interface Lookup {
 /** « done in about 6 min », or why it is not moving. */
 export function eta(t: TorrentView): string {
 	if (t.state === 'paused') return 'paused';
-	if (t.state === 'error') return t.error ? `stopped: ${t.error}` : 'stopped by an error';
-	const left = Math.max(0, t.total_size_bytes - t.progress_bytes);
-	if (t.download_speed_bps <= 0) return t.peers > 0 ? 'starting' : 'waiting for peers';
-	return `done in about ${duration(left / t.download_speed_bps)}`;
+	if (t.state === 'error') return t.error ? `stopped with an error: ${t.error}` : 'stopped with an error';
+	const left = etaSeconds(t);
+	if (left === null) return t.peers > 0 ? 'starting' : 'waiting for peers';
+	return `done in about ${duration(left)}`;
 }
-
-export const downloading = (t: TorrentView | undefined) => !!t && !t.finished;
 
 export function rowState(ep: Episode, look: Lookup): RowState {
 	const disk = ep.variants.filter((v): v is Downloaded => v.status === 'downloaded');
@@ -42,7 +42,7 @@ export function rowState(ep: Episode, look: Lookup): RowState {
 		const t = look.torrent(first.infohash);
 		const length = first.duration_seconds && first.duration_seconds > 0 ? first.duration_seconds : null;
 		const at = first.position_seconds ?? 0;
-		if (t && downloading(t)) {
+		if (isFetching(t)) {
 			return {
 				tone: t.state === 'error' ? 'warn' : 'busy',
 				text: `Downloading · ${percent(t.progress_pct)} · ${eta(t)}`,
@@ -52,7 +52,7 @@ export function rowState(ep: Episode, look: Lookup): RowState {
 		if (first.watched) return { tone: 'ok', text: length ? `Watched · ${duration(length)}` : 'Watched', verb: 'Watch again' };
 		if (at > 0) {
 			const left = length ? ` · ${timeLeft(length - at)}` : '';
-			return { tone: 'info', text: `In progress${left}`, progress: length ? at / length : undefined, verb: 'Resume' };
+			return { tone: 'info', text: `In progress${left}`, progress: watchedShare(at, length) ?? undefined, verb: 'Resume' };
 		}
 		return { tone: 'ok', text: length ? `On disk · ${duration(length)}` : 'On disk', verb: 'Play' };
 	}

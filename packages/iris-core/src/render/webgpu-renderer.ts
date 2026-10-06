@@ -14,99 +14,134 @@ import type { VideoRenderer, VideoRendererOptions } from './renderer-factory';
 
 type WebGpuNavigator = Navigator & { gpu: GPU };
 
+async function requestDevice(nav: WebGpuNavigator): Promise<GPUDevice> {
+	const adapter = await nav.gpu.requestAdapter();
+	if (!adapter) throw new Error('WebGPU adapter request returned null');
+	return adapter.requestDevice();
+}
+
+export type DeviceLossAction = 'ignore' | 'recreate' | 'fail';
+
+/** What a lost device calls for. `destroyed` is our own dispose; any other loss (a driver
+ *  reset, the GPU process reaping a hidden tab) gets one fresh device before the page is told
+ *  to demote the tier: a second loss, or a re-request that fails, is an engine failure. */
+export function deviceLossAction(reason: string | undefined, state: { disposed: boolean; recreated: boolean }): DeviceLossAction {
+	if (state.disposed || reason === 'destroyed') return 'ignore';
+	return state.recreated ? 'fail' : 'recreate';
+}
+
 export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<VideoRenderer> {
 	const nav = navigator as WebGpuNavigator;
 	if (!nav.gpu) throw new Error('WebGPU API not available');
 
-	const adapter = await nav.gpu.requestAdapter();
-	if (!adapter) throw new Error('WebGPU adapter request returned null');
-	const device = await adapter.requestDevice();
+	const device = await requestDevice(nav);
 	const canvas = document.createElement('canvas');
+	let gpu: Gpu;
 	try {
-		return setUp(opts, nav, device, canvas);
+		canvas.className = 'h-full w-full object-contain bg-black';
+		opts.container.appendChild(canvas);
+		const context = canvas.getContext('webgpu');
+		if (!context) throw new Error('Failed to get WebGPU canvas context');
+		gpu = buildGpu(nav, device, context);
 	} catch (e) {
 		// the Canvas2D fallback mounts its own canvas: release this attempt's
 		device.destroy();
 		canvas.remove();
 		throw e;
 	}
+	return setUp(opts, nav, gpu, canvas);
 }
 
-function setUp(opts: VideoRendererOptions, nav: WebGpuNavigator, device: GPUDevice, canvas: HTMLCanvasElement): VideoRenderer {
-	// HDR detection: Chrome 129+ exposes extended-range canvases. The
-	// `colorSpace` field can be set to `'display-p3'` or `'rec2100-hlg'`.
-	// For Phase 2-polish we keep the canvas in linear sRGB; the shader
-	// performs PQ/HLG → linear → BT.709 → sRGB display-encoded output.
-	// HDR-aware canvas configuration lands as a follow-up once we have
-	// a reliable HDR-source detection (frame's color space metadata).
-	canvas.className = 'h-full w-full object-contain bg-black';
-	opts.container.appendChild(canvas);
-	const context = canvas.getContext('webgpu');
-	if (!context) {
-		throw new Error('Failed to get WebGPU canvas context');
-	}
+type Gpu = {
+	device: GPUDevice;
+	context: GPUCanvasContext;
+	sampler: GPUSampler;
+	pipeline: GPURenderPipeline;
+	/** The tone-mapping mode flag: 0 = SDR passthrough, 1 = PQ→SDR (ACES), 2 = HLG→SDR. */
+	uniformBuffer: GPUBuffer;
+};
+
+function buildGpu(nav: WebGpuNavigator, device: GPUDevice, context: GPUCanvasContext): Gpu {
+	// The canvas stays in linear sRGB; the shader performs PQ/HLG → linear → BT.709 → sRGB.
 	const presentationFormat = nav.gpu.getPreferredCanvasFormat();
-	context.configure({
-		device,
-		format: presentationFormat,
-		alphaMode: 'opaque'
-	});
-
-	const sampler = device.createSampler({
-		magFilter: 'linear',
-		minFilter: 'linear'
-	});
-
+	context.configure({ device, format: presentationFormat, alphaMode: 'opaque' });
+	const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
 	const shaderModule = device.createShaderModule({ code: SHADER });
 	const pipeline = device.createRenderPipeline({
 		layout: 'auto',
-		vertex: {
-			module: shaderModule,
-			entryPoint: 'vs_main'
-		},
-		fragment: {
-			module: shaderModule,
-			entryPoint: 'fs_main',
-			targets: [{ format: presentationFormat }]
-		},
+		vertex: { module: shaderModule, entryPoint: 'vs_main' },
+		fragment: { module: shaderModule, entryPoint: 'fs_main', targets: [{ format: presentationFormat }] },
 		primitive: { topology: 'triangle-list' }
 	});
+	const uniformBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+	return { device, context, sampler, pipeline, uniformBuffer };
+}
 
-	// Uniform buffer carries the tone-mapping mode flag.
-	// 0 = SDR passthrough, 1 = PQ→SDR (ACES), 2 = HLG→SDR.
-	const uniformBuffer = device.createBuffer({
-		size: 16,
-		usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+/** Resolves once the page is visible: a device re-requested from a hidden tab is often lost again. */
+function whenVisible(): Promise<void> {
+	if (document.visibilityState === 'visible') return Promise.resolve();
+	return new Promise((resolve) => {
+		const onChange = () => {
+			if (document.visibilityState !== 'visible') return;
+			document.removeEventListener('visibilitychange', onChange);
+			resolve();
+		};
+		document.addEventListener('visibilitychange', onChange);
 	});
+}
 
-	// Bind groups can't include external textures statically; we build a
-	// fresh group per frame from the imported texture. The sampler +
-	// uniform buffer are stable.
-
+function setUp(opts: VideoRendererOptions, nav: WebGpuNavigator, first: Gpu, canvas: HTMLCanvasElement): VideoRenderer {
+	// Bind groups can't include external textures statically; we build a fresh group per frame
+	// from the imported texture. The sampler + uniform buffer are stable.
 	let intrinsic: { width: number; height: number } | null = null;
 	const queue = new FrameQueue<VideoFrame>();
 	let lastDrawn = 0;
 	let disposed = false;
+	/** Null while a lost device is being replaced: frames are dropped meanwhile. */
+	let gpu: Gpu | null = first;
+	let recreated = false;
 	/** The tone-map mode the uniform holds (-1: none written yet). */
 	let writtenMode = -1;
 
-	void (async () => {
-		const info = await device.lost;
-		// Expected on `dispose()` (we call device.destroy()). Anything
-		// else (driver crash, page hidden long enough that the GPU
-		// process reaped us, …) is rare; bump to warn there.
-		if (disposed || info.reason === 'destroyed') {
-			console.debug('[iris-core] WebGPU device released:', info.reason);
-		} else {
+	const fail = (e: unknown) => opts.onError?.(e instanceof Error ? e : new Error(String(e)));
+
+	const watchLoss = (current: Gpu) => {
+		void (async () => {
+			const info = await current.device.lost;
+			const action = deviceLossAction(info.reason, { disposed, recreated });
+			if (action === 'ignore') return;
 			console.warn('[iris-core] WebGPU device lost:', info.reason, info.message);
-		}
-	})();
+			gpu = null;
+			if (action === 'fail') {
+				fail(new Error(`WebGPU device lost: ${info.message || info.reason}`));
+				return;
+			}
+			recreated = true;
+			try {
+				await whenVisible();
+				if (disposed) return;
+				const device = await requestDevice(nav);
+				if (disposed) {
+					device.destroy();
+					return;
+				}
+				gpu = buildGpu(nav, device, current.context);
+				writtenMode = -1;
+				watchLoss(gpu);
+				loop.kick();
+			} catch (e) {
+				if (!disposed) fail(e);
+			}
+		})();
+	};
+	watchLoss(first);
 
 	const draw = (frame: VideoFrame): void => {
-		if (disposed) {
+		if (disposed || !gpu) {
 			frame.close();
 			return;
 		}
+		const { device, context, sampler, pipeline, uniformBuffer } = gpu;
 		if (!intrinsic) {
 			intrinsic = { width: frame.displayWidth, height: frame.displayHeight };
 			canvas.width = intrinsic.width;
@@ -132,7 +167,7 @@ function setUp(opts: VideoRendererOptions, nav: WebGpuNavigator, device: GPUDevi
 			externalTexture = device.importExternalTexture({ source: frame });
 		} catch (e) {
 			frame.close();
-			opts.onError?.(e instanceof Error ? e : new Error(String(e)));
+			fail(e);
 			return;
 		}
 
@@ -187,6 +222,7 @@ function setUp(opts: VideoRendererOptions, nav: WebGpuNavigator, device: GPUDevi
 		enqueue,
 		queueDepth: () => queue.depth,
 		clear: () => queue.clear(),
+		setPaused: loop.setPaused,
 		lastDrawnTs: () => lastDrawn,
 		intrinsicSize: () => intrinsic,
 		canvas,
@@ -197,7 +233,7 @@ function setUp(opts: VideoRendererOptions, nav: WebGpuNavigator, device: GPUDevi
 			loop.stop();
 			queue.clear();
 			try {
-				device.destroy();
+				gpu?.device.destroy();
 			} catch {
 				/* idempotent */
 			}
