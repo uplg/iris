@@ -59,7 +59,7 @@ describe('register', () => {
 	});
 
 	it('a used invitation is said under the code, with what to do', async () => {
-		stubApi({ 'POST /auth/register': json({ error: 'bad_request', message: 'bad request: invalid or expired invitation' }, 400) });
+		stubApi({ 'POST /auth/register': json({ error: 'bad_request', message: 'invalid or expired invitation' }, 400) });
 		await render(RegisterPage);
 		await page.getByLabelText('Email').fill('alex@example.com');
 		await password().fill('long enough');

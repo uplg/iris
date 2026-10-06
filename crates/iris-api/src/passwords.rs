@@ -34,9 +34,10 @@ async fn run_argon2<T: Send + 'static>(
 /// Reject a password the household policy doesn't accept.
 pub fn check_policy(password: &str) -> ApiResult<()> {
     if password.len() < MIN_LEN {
-        return Err(ApiError::BadRequest(format!(
-            "password too short (min {MIN_LEN} chars)"
-        )));
+        return Err(ApiError::Invalid {
+            code: "password_too_short",
+            message: format!("Use at least {MIN_LEN} characters."),
+        });
     }
     Ok(())
 }

@@ -21,12 +21,11 @@
 
 	const CHANGED = 'Your password is changed. Sign in again with the new one.';
 
-	/** The field a refusal is about. Both answer 400 `bad_request`; only the server's words
-	 * tell the wrong current password from the policy's refusal of the new one. */
+	/** The field a refusal is about, from the server's code. */
 	function refusedField(err: unknown): 'current' | 'next' | undefined {
-		if (!(err instanceof ApiError) || err.status !== 400) return undefined;
-		if (/current password/i.test(err.message)) return 'current';
-		if (/too short/i.test(err.message)) return 'next';
+		if (!(err instanceof ApiError)) return undefined;
+		if (err.code === 'wrong_password') return 'current';
+		if (err.code === 'password_too_short') return 'next';
 		return undefined;
 	}
 

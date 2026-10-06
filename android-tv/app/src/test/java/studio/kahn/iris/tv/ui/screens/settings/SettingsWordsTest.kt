@@ -73,12 +73,12 @@ class SettingsWordsTest {
 
     @Test
     fun aRefusedPasswordChangeIsSaidUnderItsField() {
-        val wrong = UiError("bad request: This is not your current password.", "bad_request", 400)
+        val wrong = UiError("This is not your current password.", "wrong_password", 400)
         assertEquals(DialogError(wrong.message, DialogField.First), passwordRefusal(wrong))
-        val short = UiError("bad request: password too short (min 8 chars)", "bad_request", 400)
+        val short = UiError("Use at least 8 characters.", "password_too_short", 400)
         assertEquals(DialogError(short.message, DialogField.Second), passwordRefusal(short))
         // anything else is the generic answer: a dead session is not a wrong password
         assertNull(passwordRefusal(UiError("This TV is signed out. Pair it again from Settings.", "unauthorized", 401)))
-        assertNull(passwordRefusal(UiError("bad request: something else", "bad_request", 400)))
+        assertNull(passwordRefusal(UiError("something else", "bad_request", 400)))
     }
 }

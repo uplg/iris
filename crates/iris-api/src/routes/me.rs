@@ -68,9 +68,10 @@ pub(crate) async fn change_password(
     // 400, not 401: a wrong current password is a form error, not an
     // expired session (a 401 makes clients try a refresh first).
     if !crate::passwords::verify(&body.old_password, &current).await? {
-        return Err(ApiError::BadRequest(
-            "This is not your current password.".into(),
-        ));
+        return Err(ApiError::Invalid {
+            code: "wrong_password",
+            message: "This is not your current password.".into(),
+        });
     }
     let new_hash = crate::passwords::hash(&body.new_password).await?;
     // Every session ends with the old password, this one included: the

@@ -128,14 +128,14 @@ describe('account page', () => {
 
 	it('a wrong current password is said under it, with the focus on it', async () => {
 		const api = site({
-			'POST /me/password': json({ error: 'bad_request', message: 'bad request: This is not your current password.' }, 400)
+			'POST /me/password': json({ error: 'wrong_password', message: 'This is not your current password.' }, 400)
 		});
 		await render(AccountPage);
 		await page.getByLabelText('Current password', { exact: true }).fill('nope');
 		await page.getByLabelText('New password', { exact: true }).fill('long enough');
 		await page.getByRole('button', { name: 'Change my password' }).click();
 		const current = page.getByLabelText('Current password', { exact: true });
-		await expect.element(current).toHaveAccessibleDescription('bad request: This is not your current password.');
+		await expect.element(current).toHaveAccessibleDescription('This is not your current password.');
 		await expect.element(current).toHaveFocus();
 		expect(api.sent('POST', '/me/password')[0].body).toEqual({ old_password: 'nope', new_password: 'long enough' });
 		expect(api.sent('POST', '/auth/refresh')).toEqual([]);
@@ -144,13 +144,13 @@ describe('account page', () => {
 	});
 
 	it('the server’s refusal of the new password is said under it', async () => {
-		site({ 'POST /me/password': json({ error: 'bad_request', message: 'bad request: password too short (min 8 chars)' }, 400) });
+		site({ 'POST /me/password': json({ error: 'password_too_short', message: 'Use at least 8 characters.' }, 400) });
 		await render(AccountPage);
 		await page.getByLabelText('Current password', { exact: true }).fill('old secret');
 		await page.getByLabelText('New password', { exact: true }).fill('long enough');
 		await page.getByRole('button', { name: 'Change my password' }).click();
 		const next = page.getByLabelText('New password', { exact: true });
-		await expect.element(next).toHaveAccessibleDescription('At least 8 characters. bad request: password too short (min 8 chars)');
+		await expect.element(next).toHaveAccessibleDescription('At least 8 characters. Use at least 8 characters.');
 		await expect.element(next).toHaveFocus();
 		await expect.element(page.getByLabelText('Current password', { exact: true })).not.toHaveAttribute('aria-invalid');
 		expect(ui.toasts).toEqual([]);
@@ -225,12 +225,12 @@ describe('account page', () => {
 	});
 
 	it('a refused code is said under the code field', async () => {
-		site({ 'POST /me/devices': json({ error: 'bad_request', message: 'bad request: invalid or expired code' }, 400) });
+		site({ 'POST /me/devices': json({ error: 'bad_request', message: 'invalid or expired code' }, 400) });
 		await render(AccountPage);
 		await page.getByLabelText('Pairing code').fill('ABCD-EFGH');
 		await page.getByRole('button', { name: 'Pair the TV' }).click();
 		const field = page.getByLabelText('Pairing code');
-		await expect.element(field).toHaveAccessibleDescription('bad request: invalid or expired code');
+		await expect.element(field).toHaveAccessibleDescription('invalid or expired code');
 		await expect.element(field).toHaveFocus();
 	});
 

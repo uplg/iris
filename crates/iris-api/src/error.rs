@@ -16,6 +16,11 @@ pub enum ApiError {
     BadRequest(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    /// A form value the server refuses, with its own `code` so clients place
+    /// and word the error without matching on the message (which stays the
+    /// English fallback for clients that don't know the code).
+    #[error("{message}")]
+    Invalid { code: &'static str, message: String },
     /// The chosen release has 0 seeders — grabbing it would never complete.
     /// Distinct code so clients can show a "dead torrent" message.
     #[error("this release has no seeders and can't be downloaded")]
@@ -67,8 +72,13 @@ impl IntoResponse for ApiError {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found", self.to_string()),
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized", self.to_string()),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", self.to_string()),
-            ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request", self.to_string()),
-            ApiError::Conflict(_) => (StatusCode::CONFLICT, "conflict", self.to_string()),
+            // The message goes out without the `Display` prefix (`bad request: …`),
+            // which is for logs: clients show it as is.
+            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, "bad_request", m.clone()),
+            ApiError::Conflict(m) => (StatusCode::CONFLICT, "conflict", m.clone()),
+            ApiError::Invalid { code, message } => {
+                (StatusCode::BAD_REQUEST, *code, message.clone())
+            }
             ApiError::DeadTorrent => (StatusCode::CONFLICT, "dead_torrent", self.to_string()),
             ApiError::ArchiveOnly => (StatusCode::CONFLICT, "archive_only", self.to_string()),
             ApiError::DuplicateInLibrary(_) => (

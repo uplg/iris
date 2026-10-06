@@ -136,10 +136,9 @@ const val PASSWORD_MIN = 8
  * only the server's words tell a wrong current password from a refused new one.
  */
 fun passwordRefusal(e: UiError): DialogError? {
-    if (e.status != 400) return null
-    return when {
-        e.message.contains("current password", ignoreCase = true) -> DialogError(e.message)
-        e.message.contains("too short", ignoreCase = true) -> DialogError(e.message, DialogField.Second)
+    return when (e.code) {
+        "wrong_password" -> DialogError(e.message)
+        "password_too_short" -> DialogError(e.message, DialogField.Second)
         else -> null
     }
 }
