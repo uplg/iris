@@ -635,6 +635,11 @@ impl LiveTvService {
                     .collect()
             })
             .collect();
+        // Drop records no snapshot references any more (tokenised URLs mint a
+        // new key every refresh). The snapshot being replaced is still alive
+        // here, so a URL that survives the refresh keeps its record.
+        health_map.retain(|_, h| Arc::strong_count(h) > 1);
+        drop(health_map);
         // Seed the elected index at the BEST source that isn't cooling down
         // rather than a blind 0 — sources are already ordered (tier, quality),
         // health survives refreshes, so a just-dead feed stays skipped instead
@@ -1991,6 +1996,47 @@ mod tests {
             builder = builder.header(http::header::CONTENT_LENGTH, len);
         }
         reqwest::Response::from(builder.body(body).unwrap())
+    }
+
+    fn channel_with(urls: &[&str]) -> Channel {
+        Channel {
+            id: "c".into(),
+            name: "C".into(),
+            tvg_id: None,
+            logo_url: None,
+            categories: Vec::new(),
+            geo_blocked: false,
+            not_24_7: false,
+            tnt_number: None,
+            sources: urls
+                .iter()
+                .map(|u| channels::StreamSource {
+                    url: (*u).to_string(),
+                    quality: None,
+                    user_agent: None,
+                    referrer: None,
+                    tier: channels::classify_source(u),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn health_records_follow_live_snapshots() {
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let first = svc.build_snapshot(vec![channel_with(&["http://a/1", "http://a/keep"])]);
+        first.health[0][1].mark_failure(epoch_ms());
+        let second = svc.build_snapshot(vec![channel_with(&["http://a/2", "http://a/keep"])]);
+        assert!(
+            second.health[0][1].in_cooldown(epoch_ms()),
+            "survives a refresh"
+        );
+        drop(first);
+        let _third = svc.build_snapshot(vec![channel_with(&["http://a/keep"])]);
+        drop(second);
+        let keys: HashSet<String> = svc.inner.health.read().unwrap().keys().cloned().collect();
+        assert!(keys.contains("http://a/keep"));
+        assert!(!keys.contains("http://a/1"));
     }
 
     #[tokio::test]
