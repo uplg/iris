@@ -132,6 +132,10 @@ pub struct TmdbSuggestion {
     pub year: Option<u32>,
     pub overview: Option<String>,
     pub poster_path: Option<String>,
+    /// TMDB's vote count: the strict SCENE match's tie-break between exact
+    /// homonyms. Server-side only, never serialised.
+    #[serde(skip)]
+    pub vote_count: Option<u32>,
 }
 
 /// One entry of TMDB's genre taxonomy (`/genre/{movie,tv}/list`). Powers
@@ -293,6 +297,7 @@ impl TmdbMultiResult {
             year: year_of(date.as_deref()),
             overview: self.overview.filter(|s| !s.is_empty()),
             poster_path: self.poster_path,
+            vote_count: self.vote_count,
         })
     }
 }
@@ -356,12 +361,29 @@ impl TmdbClient {
         kind: TmdbKind,
         year: Option<u32>,
     ) -> Option<Vec<TmdbSuggestion>> {
+        self.search_typed_in(query, kind, year, None).await
+    }
+
+    /// [`Self::search_typed`] with TMDB's titles in `language` (`fr-FR`):
+    /// the match is the same, only `title` is the localized one.
+    pub async fn search_typed_in(
+        &self,
+        query: &str,
+        kind: TmdbKind,
+        year: Option<u32>,
+        language: Option<&str>,
+    ) -> Option<Vec<TmdbSuggestion>> {
         let trimmed = query.trim();
         if trimmed.is_empty() {
             return Some(Vec::new());
         }
         let marker = kind.as_wire();
-        let cache_key = format!("{marker}:{}:{}", year.unwrap_or(0), trimmed.to_lowercase());
+        let cache_key = format!(
+            "{marker}:{}:{}:{}",
+            language.unwrap_or(""),
+            year.unwrap_or(0),
+            trimmed.to_lowercase()
+        );
         self.inner
             .searches
             .get_or_fetch(cache_key, || async {
@@ -378,6 +400,9 @@ impl TmdbClient {
                 ];
                 if let Some(y) = year_str.as_deref() {
                     params.push((year_param, y));
+                }
+                if let Some(lang) = language {
+                    params.push(("language", lang));
                 }
                 let raw: TmdbMultiRaw = self
                     .get_json(&format!("search/{marker}"), &params, "typed-search")
@@ -812,6 +837,7 @@ struct TmdbMultiResult {
     first_air_date: Option<String>, // tv
     overview: Option<String>,
     poster_path: Option<String>,
+    vote_count: Option<u32>,
 }
 
 #[derive(Deserialize)]

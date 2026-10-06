@@ -36,6 +36,16 @@ use crate::tmdb::{MediaMetadata, TmdbClient, TmdbKind, TmdbSuggestion};
 /// the fuzzy suggestion entries.
 pub const STRICT_CACHE_PREFIX: &str = "strict:";
 
+/// TMDB title languages the strict match compares against (`None` = TMDB's
+/// default, English).
+const SEARCH_LANGUAGES: [Option<&str>; 2] = [None, Some("fr-FR")];
+
+/// An exact homonym wins a tie only with this many times the runner-up's
+/// TMDB votes, and at least [`DOMINANT_MIN_VOTES`]: a release on a tracker is
+/// the mainstream title, not a same-name short with three votes.
+const DOMINANCE: u32 = 10;
+const DOMINANT_MIN_VOTES: u32 = 50;
+
 /// Same TTL as the suggestion cache: re-ask TMDB monthly, so a title added
 /// after a negative answer gets picked up.
 const MAX_AGE_DAYS: i64 = 30;
@@ -87,6 +97,17 @@ impl Trust {
 /// write it), `&` read as `and`, every other non-alphanumeric run collapsed
 /// to one space. Numbers and articles are kept as is: `Part One` ≠ `Part 1`.
 pub fn title_key(s: &str) -> String {
+    key_with(s, false)
+}
+
+/// The keys a title may match under: [`title_key`], and the one reading an
+/// apostrophe as a space, for French elisions SCENE names spell apart
+/// (`C Est Magnifique` = `C'est magnifique`, `L Argent` = `L'argent`).
+fn title_keys(s: &str) -> [String; 2] {
+    [key_with(s, false), key_with(s, true)]
+}
+
+fn key_with(s: &str, apostrophe_splits: bool) -> String {
     use unicode_normalization::UnicodeNormalization;
     use unicode_normalization::char::is_combining_mark;
 
@@ -101,7 +122,9 @@ pub fn title_key(s: &str) -> String {
     };
     for c in s.nfkd().filter(|c| !is_combining_mark(*c)) {
         match c {
-            '\'' | '\u{2019}' | '\u{2018}' | '\u{02BC}' | '`' | '\u{00B4}' => {}
+            '\'' | '\u{2019}' | '\u{2018}' | '\u{02BC}' | '`' | '\u{00B4}' => {
+                pending_space |= apostrophe_splits;
+            }
             '&' => {
                 pending_space = true;
                 push_word(&mut out, "and", &mut pending_space);
@@ -130,25 +153,39 @@ pub fn strict_scene_match<'a>(
     kind: TmdbKind,
     year: Option<u32>,
 ) -> Option<&'a TmdbSuggestion> {
-    let key = title_key(release_title);
-    if key.is_empty() {
+    let keys = title_keys(release_title);
+    if keys[0].is_empty() {
         return None;
     }
+    let same = |t: &str| title_keys(t).iter().any(|k| keys.contains(k));
     let titled: Vec<&TmdbSuggestion> = candidates
         .iter()
         .filter(|c| c.kind == kind)
-        .filter(|c| {
-            title_key(&c.title) == key
-                || c.original_title
-                    .as_deref()
-                    .is_some_and(|o| title_key(o) == key)
-        })
+        .filter(|c| same(&c.title) || c.original_title.as_deref().is_some_and(same))
         .collect();
     let unique = |tier: Vec<&'a TmdbSuggestion>| -> Option<&'a TmdbSuggestion> {
-        let first = *tier.first()?;
-        tier.iter()
-            .all(|c| c.tmdb_id == first.tmdb_id)
-            .then_some(first)
+        let mut ids: Vec<&TmdbSuggestion> = Vec::with_capacity(tier.len());
+        for c in tier {
+            if !ids.iter().any(|i| i.tmdb_id == c.tmdb_id) {
+                ids.push(c);
+            }
+        }
+        ids.sort_by_key(|c| std::cmp::Reverse(c.vote_count.unwrap_or(0)));
+        match ids.as_slice() {
+            [] => None,
+            [only] => Some(*only),
+            [top, next, ..] => {
+                let votes = top.vote_count.unwrap_or(0);
+                (votes >= DOMINANT_MIN_VOTES
+                    && votes
+                        >= next
+                            .vote_count
+                            .unwrap_or(0)
+                            .max(1)
+                            .saturating_mul(DOMINANCE))
+                .then_some(*top)
+            }
+        }
     };
     let Some(y) = year else {
         return unique(titled);
@@ -286,6 +323,7 @@ pub(crate) trait TmdbSource {
         query: &str,
         kind: TmdbKind,
         year: Option<u32>,
+        language: Option<&'static str>,
     ) -> Option<Vec<TmdbSuggestion>>;
 
     async fn lookup(&self, id: u64, kind: TmdbKind) -> Option<Option<MediaMetadata>>;
@@ -297,8 +335,9 @@ impl TmdbSource for TmdbClient {
         query: &str,
         kind: TmdbKind,
         year: Option<u32>,
+        language: Option<&'static str>,
     ) -> Option<Vec<TmdbSuggestion>> {
-        TmdbClient::search_typed(self, query, kind, year).await
+        self.search_typed_in(query, kind, year, language).await
     }
 
     async fn lookup(&self, id: u64, kind: TmdbKind) -> Option<Option<MediaMetadata>> {
@@ -310,7 +349,9 @@ impl TmdbSource for TmdbClient {
 /// persistent `tmdb_resolve_cache` (namespaced [`STRICT_CACHE_PREFIX`]).
 /// Asks TMDB's typed search with the year filter and without it, so a ±1
 /// movie year or a title buried under same-year noise is still among the
-/// candidates; only [`strict_scene_match`] decides.
+/// candidates, in English and in French (French releases carry the French
+/// title, which TMDB returns as `title` only in `fr-FR`); only
+/// [`strict_scene_match`] decides.
 pub(crate) async fn strict_scene<S: TmdbSource>(
     pool: &SqlitePool,
     tmdb: &S,
@@ -337,16 +378,20 @@ pub(crate) async fn strict_scene<S: TmdbSource>(
     {
         return Ok(from_entry(&hit, kind));
     }
-    let mut candidates = tmdb
-        .search_typed(&query, kind, year)
-        .await
-        .ok_or(Unreachable)?;
-    if year.is_some() {
+    let mut candidates = Vec::new();
+    for language in SEARCH_LANGUAGES {
         candidates.extend(
-            tmdb.search_typed(&query, kind, None)
+            tmdb.search_typed(&query, kind, year, language)
                 .await
                 .ok_or(Unreachable)?,
         );
+        if year.is_some() {
+            candidates.extend(
+                tmdb.search_typed(&query, kind, None, language)
+                    .await
+                    .ok_or(Unreachable)?,
+            );
+        }
     }
     let matched = strict_scene_match(&candidates, title, kind, year).cloned();
     let entry = matched.as_ref().map_or_else(
@@ -376,6 +421,7 @@ fn from_entry(entry: &ResolveEntry, kind: TmdbKind) -> Option<TmdbSuggestion> {
         year: entry.year.and_then(|y| u32::try_from(y).ok()),
         poster_path: entry.poster_path.clone(),
         overview: entry.overview.clone(),
+        vote_count: None,
     })
 }
 
@@ -417,6 +463,7 @@ impl Evaluation {
             year: meta.year,
             overview: meta.overview.clone(),
             poster_path: meta.poster_path.clone(),
+            vote_count: None,
         })
     }
 }
@@ -549,6 +596,7 @@ pub(crate) mod tests {
             year: Some(year),
             overview: None,
             poster_path: Some(format!("/{id}.jpg")),
+            vote_count: None,
         }
     }
 
@@ -578,6 +626,8 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub(crate) struct FakeTmdb {
         pub searches: HashMap<String, Vec<TmdbSuggestion>>,
+        /// `fr-FR` answers, same keys; a query absent here answers as English.
+        pub searches_fr: HashMap<String, Vec<TmdbSuggestion>>,
         pub ids: HashMap<u64, MediaMetadata>,
         pub offline: bool,
     }
@@ -592,13 +642,14 @@ pub(crate) mod tests {
             query: &str,
             kind: TmdbKind,
             _year: Option<u32>,
+            language: Option<&'static str>,
         ) -> Option<Vec<TmdbSuggestion>> {
             if self.offline {
                 return None;
             }
+            let fr = language.and_then(|_| self.searches_fr.get(query));
             Some(
-                self.searches
-                    .get(query)
+                fr.or_else(|| self.searches.get(query))
                     .map(|v| v.iter().filter(|s| s.kind == kind).cloned().collect())
                     .unwrap_or_default(),
             )
@@ -690,6 +741,97 @@ pub(crate) mod tests {
         assert!(
             strict_scene_match(&same_year_twins, "Midnight", TmdbKind::Movie, Some(2021)).is_none()
         );
+    }
+
+    #[test]
+    fn a_dominant_homonym_wins_a_tie_a_close_one_does_not() {
+        let votes = |id, title, year, v| TmdbSuggestion {
+            vote_count: Some(v),
+            ..suggestion(id, TmdbKind::Movie, title, year)
+        };
+        let annihilation = vec![
+            votes(300_668, "Annihilation", 2018, 6_900),
+            votes(883_188, "Annihilation", 2018, 2),
+        ];
+        assert_eq!(
+            strict_scene_match(&annihilation, "Annihilation", TmdbKind::Movie, Some(2018))
+                .map(|s| s.tmdb_id),
+            Some(300_668),
+            "a same-year short with two votes doesn't make the film ambiguous"
+        );
+        let close = vec![
+            votes(37_854, "One Piece", 1999, 5_000),
+            votes(111_110, "One Piece", 2023, 2_100),
+        ];
+        assert!(
+            strict_scene_match(&close, "One Piece", TmdbKind::Movie, None).is_none(),
+            "two real titles under one name stay ambiguous"
+        );
+        let obscure = vec![
+            votes(1, "Midnight", 2021, 30),
+            votes(2, "Midnight", 2021, 0),
+        ];
+        assert!(
+            strict_scene_match(&obscure, "Midnight", TmdbKind::Movie, Some(2021)).is_none(),
+            "dominance needs a minimum of votes"
+        );
+        let twice = vec![
+            votes(300_668, "Annihilation", 2018, 6_900),
+            votes(300_668, "Annihilation", 2018, 6_900),
+        ];
+        assert!(
+            strict_scene_match(&twice, "Annihilation", TmdbKind::Movie, Some(2018)).is_some(),
+            "the same id from two searches is one candidate"
+        );
+    }
+
+    #[test]
+    fn a_french_elision_spelled_apart_still_matches() {
+        let cands = vec![suggestion(
+            783_570,
+            TmdbKind::Movie,
+            "C'est magnifique !",
+            2022,
+        )];
+        assert!(
+            strict_scene_match(&cands, "C Est Magnifique", TmdbKind::Movie, Some(2022)).is_some()
+        );
+        assert!(
+            strict_scene_match(&cands, "Cest Magnifique", TmdbKind::Movie, Some(2022)).is_some()
+        );
+        assert!(strict_scene_match(&cands, "C Magnifique", TmdbKind::Movie, Some(2022)).is_none());
+    }
+
+    #[tokio::test]
+    async fn the_french_title_counts_as_an_exact_title() {
+        let pool = iris_db::test_support::migrated_pool().await;
+        let english = suggestion(
+            22,
+            TmdbKind::Movie,
+            "Pirates of the Caribbean: The Curse of the Black Pearl",
+            2003,
+        );
+        let french = TmdbSuggestion {
+            title: "Pirates des Caraïbes : La Malédiction du Black Pearl".into(),
+            ..english.clone()
+        };
+        let query =
+            iris_media::filename::series_key("Pirates des Caraibes La Malediction du Black Pearl");
+        let tmdb = FakeTmdb {
+            searches: HashMap::from([(query.clone(), vec![english])]),
+            searches_fr: HashMap::from([(query, vec![french])]),
+            ..FakeTmdb::default()
+        };
+        let hit = strict_scene(
+            &pool,
+            &tmdb,
+            "Pirates des Caraibes La Malediction du Black Pearl",
+            TmdbKind::Movie,
+            Some(2003),
+        )
+        .await
+        .unwrap();
+        assert_eq!(hit.map(|s| s.tmdb_id), Some(22));
     }
 
     fn check(id: u64, plausible: bool) -> TrackerCheck {

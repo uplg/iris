@@ -181,6 +181,7 @@ fn from_entry(entry: &ResolveEntry, kind_hint: Option<TmdbKind>) -> Option<TmdbS
         year: entry.year.and_then(|y| u32::try_from(y).ok()),
         poster_path: entry.poster_path.clone(),
         overview: entry.overview.clone(),
+        vote_count: None,
     })
 }
 
