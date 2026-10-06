@@ -483,6 +483,9 @@ impl SourceHealth {
 pub struct CountrySnapshot {
     pub channels: Arc<Vec<Channel>>,
     fetched_at: Instant,
+    /// Epoch-millis of the last request that read the country (carried over
+    /// by a refresh): what keeps it in the background refresh.
+    last_viewed_ms: AtomicU64,
     /// Parallel to `channels`: elected source index per channel.
     active_source: Vec<AtomicUsize>,
     /// Parallel to `channels[i].sources`: shared per-URL health records.
@@ -705,7 +708,7 @@ impl LiveTvService {
 
     /// How long a country's playlists and iptv-org's databases are kept.
     fn playlist_ttl(&self) -> Duration {
-        Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1))
+        self.inner.cfg.playlist_ttl()
     }
 
     pub fn default_country(&self) -> &str {
@@ -803,6 +806,7 @@ impl LiveTvService {
     pub async fn channels(&self, country: &str) -> Result<Arc<CountrySnapshot>, LiveTvError> {
         let country = validate_country(country)?;
         if let Some(snap) = self.inner.snapshots.read().expect("poisoned").get(&country) {
+            snap.last_viewed_ms.store(epoch_ms(), Ordering::Relaxed);
             return Ok(snap.clone());
         }
         // Cold load — single-flight so a burst of first requests fetches once.
@@ -1030,6 +1034,7 @@ impl LiveTvService {
         CountrySnapshot {
             channels: Arc::new(built),
             fetched_at: Instant::now(),
+            last_viewed_ms: AtomicU64::new(now_ms),
             active_source,
             health,
             by_id,
@@ -2477,7 +2482,7 @@ impl LiveTvService {
     /// TTL. Runs forever; spawn once at boot.
     pub fn spawn_refresh_loop(self) {
         let playlist_ttl = self.playlist_ttl();
-        let epg_ttl = Duration::from_hours(self.inner.cfg.epg_refresh_hours.max(1));
+        let epg_ttl = self.inner.cfg.epg_ttl();
         // Transcode idle reaper: its 60 s idle window needs a much faster
         // cadence than the 15 min refresh ticker below.
         {
@@ -2597,7 +2602,38 @@ impl LiveTvService {
         }
     }
 
+    /// Drop the countries nobody opened within `idle` (their snapshot and
+    /// guide), so the refresh stops fetching them; the next view loads them
+    /// afresh. Returns the dropped codes.
+    fn evict_idle(&self, idle: Duration) -> Vec<String> {
+        let limit = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX);
+        let now = epoch_ms();
+        let gone: Vec<String> = {
+            let mut snaps = self.inner.snapshots.write().expect("poisoned");
+            let gone: Vec<String> = snaps
+                .iter()
+                .filter(|(_, s)| {
+                    now.saturating_sub(s.last_viewed_ms.load(Ordering::Relaxed)) > limit
+                })
+                .map(|(c, _)| c.clone())
+                .collect();
+            for country in &gone {
+                snaps.remove(country);
+            }
+            gone
+        };
+        if !gone.is_empty() {
+            let mut epg = self.inner.epg.write().expect("poisoned");
+            for country in &gone {
+                epg.remove(country);
+            }
+            tracing::info!(countries = ?gone, "live tv countries left unviewed, no longer refreshed");
+        }
+        gone
+    }
+
     async fn refresh_stale(&self, playlist_ttl: Duration, epg_ttl: Duration) {
+        self.evict_idle(self.inner.cfg.snapshot_idle());
         let stale_countries: Vec<String> = {
             let snaps = self.inner.snapshots.read().expect("poisoned");
             snaps
@@ -2615,11 +2651,14 @@ impl LiveTvService {
                 }
                 Ok(snap) => {
                     let snap = Arc::new(snap);
-                    self.inner
-                        .snapshots
-                        .write()
-                        .expect("poisoned")
-                        .insert(country.clone(), snap.clone());
+                    {
+                        let mut snaps = self.inner.snapshots.write().expect("poisoned");
+                        if let Some(old) = snaps.get(&country) {
+                            let viewed = old.last_viewed_ms.load(Ordering::Relaxed);
+                            snap.last_viewed_ms.store(viewed, Ordering::Relaxed);
+                        }
+                        snaps.insert(country.clone(), snap.clone());
+                    }
                     // Re-elect on fresh liveness (health carries over by URL,
                     // but new alternates deserve a look too).
                     self.clone().spawn_probe(country, snap);
@@ -3324,6 +3363,36 @@ https://a/x.m3u8
             svc.mux_siblings("ie", &["lquipe".to_string()]).await,
             ["lequipe"],
             "a prewarm seed keyed by the old id"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_country_left_unviewed_leaves_the_refresh() {
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let idle = svc.inner.cfg.snapshot_idle();
+        let long_ago = epoch_ms() - u64::try_from(idle.as_millis()).unwrap() - 1;
+        for code in ["ie", "fr"] {
+            let snap = Arc::new(svc.build_snapshot(vec![channel_with(&["http://x/1"])]));
+            snap.last_viewed_ms.store(long_ago, Ordering::Relaxed);
+            svc.inner
+                .snapshots
+                .write()
+                .unwrap()
+                .insert(code.into(), snap);
+            svc.inner
+                .epg
+                .write()
+                .unwrap()
+                .insert(code.into(), Arc::default());
+        }
+        svc.channels("fr").await.unwrap();
+        assert_eq!(svc.evict_idle(idle), ["ie"], "the viewed one stays");
+        let snaps = svc.inner.snapshots.read().unwrap();
+        assert!(snaps.contains_key("fr") && !snaps.contains_key("ie"));
+        let epg = svc.inner.epg.read().unwrap();
+        assert!(
+            epg.contains_key("fr") && !epg.contains_key("ie"),
+            "its guide too"
         );
     }
 

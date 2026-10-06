@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use figment::Figment;
 use figment::providers::{Env, Format, Toml};
@@ -86,6 +87,10 @@ pub struct LiveTvConfig {
     pub playlist_refresh_hours: u64,
     #[serde(default = "default_livetv_epg_refresh_hours")]
     pub epg_refresh_hours: u64,
+    /// Days a loaded country is kept refreshed without anyone opening it
+    /// (see [`LiveTvConfig::snapshot_idle`]).
+    #[serde(default = "default_livetv_snapshot_idle_days")]
+    pub snapshot_idle_days: u64,
     /// tvg-id base (e.g. "TF1") → TNT channel number; merged over the
     /// built-in table so a renamed tvg-id can be re-pinned without a
     /// release. Only meaningful for `fr`.
@@ -114,6 +119,59 @@ pub struct LiveTvConfig {
     /// dlive.sx (a `DaddyLiveHD` mirror) as an extra source. Off by default.
     #[serde(default)]
     pub dlive: DliveConfig,
+}
+
+/// Ceiling of every live TV duration knob: an absurd value saturates here
+/// instead of overflowing the `Duration` or the `Instant` arithmetic later.
+const MAX_KNOB: Duration = Duration::from_hours(24 * 365);
+
+/// A duration knob of `n` × `unit`, at least one unit, at most [`MAX_KNOB`].
+fn knob(n: u64, unit: Duration) -> Duration {
+    let secs = unit.as_secs().saturating_mul(n.max(1));
+    Duration::from_secs(secs).min(MAX_KNOB)
+}
+
+const HOUR: Duration = Duration::from_hours(1);
+const MINUTE: Duration = Duration::from_mins(1);
+const SECOND: Duration = Duration::from_secs(1);
+
+impl LiveTvConfig {
+    /// How long a country's playlists and iptv-org's databases are kept.
+    pub fn playlist_ttl(&self) -> Duration {
+        knob(self.playlist_refresh_hours, HOUR)
+    }
+
+    pub fn epg_ttl(&self) -> Duration {
+        knob(self.epg_refresh_hours, HOUR)
+    }
+
+    /// A country nobody opened for this long leaves the background refresh;
+    /// the next view loads it again.
+    pub fn snapshot_idle(&self) -> Duration {
+        knob(self.snapshot_idle_days, HOUR * 24)
+    }
+}
+
+impl DliveConfig {
+    pub fn index_ttl(&self) -> Duration {
+        knob(self.index_refresh_hours, HOUR)
+    }
+
+    pub fn page_budget_window(&self) -> Duration {
+        knob(self.page_budget_window_mins, MINUTE)
+    }
+
+    pub fn first_byte_timeout(&self) -> Duration {
+        knob(self.first_byte_timeout_secs, SECOND)
+    }
+
+    pub fn cold_start_timeout(&self) -> Duration {
+        knob(self.cold_start_timeout_secs, SECOND)
+    }
+
+    pub fn breaker_open(&self) -> Duration {
+        knob(self.breaker_open_mins, MINUTE)
+    }
 }
 
 /// `[live_tv.dlive]` — dlive.sx channels as extra sources. dlive.sx bans an
@@ -360,6 +418,9 @@ fn default_livetv_playlist_refresh_hours() -> u64 {
 fn default_livetv_epg_refresh_hours() -> u64 {
     6
 }
+fn default_livetv_snapshot_idle_days() -> u64 {
+    3
+}
 
 impl Default for LiveTvConfig {
     fn default() -> Self {
@@ -376,6 +437,7 @@ impl Default for LiveTvConfig {
             tuner: TunerConfig::default(),
             playlist_refresh_hours: default_livetv_playlist_refresh_hours(),
             epg_refresh_hours: default_livetv_epg_refresh_hours(),
+            snapshot_idle_days: default_livetv_snapshot_idle_days(),
             tnt_overrides: HashMap::new(),
             epg_id_overrides: HashMap::new(),
             vavoo_enabled: true,
@@ -693,6 +755,28 @@ mod tests {
         // serde field defaults fire, so a bare prod config.toml is covered.
         let bare: LiveTvConfig = toml::from_str("").unwrap();
         assert_eq!(bare.extra_playlists, cfg.extra_playlists);
+    }
+
+    #[test]
+    fn live_duration_knobs_saturate_instead_of_panicking() {
+        let absurd: LiveTvConfig = toml::from_str(&format!(
+            "playlist_refresh_hours = {max}\nepg_refresh_hours = 0\nsnapshot_idle_days = {max}\n[dlive]\nindex_refresh_hours = {max}\nbreaker_open_mins = {max}\nfirst_byte_timeout_secs = {max}\npage_budget_window_mins = 0\n",
+            max = i64::MAX
+        ))
+        .unwrap();
+        assert_eq!(absurd.playlist_ttl(), MAX_KNOB);
+        assert_eq!(absurd.snapshot_idle(), MAX_KNOB);
+        assert_eq!(absurd.epg_ttl(), HOUR, "at least one unit");
+        assert_eq!(absurd.dlive.index_ttl(), MAX_KNOB);
+        assert_eq!(absurd.dlive.breaker_open(), MAX_KNOB);
+        assert_eq!(absurd.dlive.first_byte_timeout(), MAX_KNOB);
+        assert_eq!(absurd.dlive.page_budget_window(), MINUTE);
+        assert!(std::time::Instant::now().checked_add(MAX_KNOB).is_some());
+
+        let defaults = LiveTvConfig::default();
+        assert_eq!(defaults.playlist_ttl(), HOUR * 6);
+        assert_eq!(defaults.snapshot_idle(), HOUR * 72);
+        assert_eq!(defaults.dlive.first_byte_timeout(), SECOND * 5);
     }
 
     #[test]
