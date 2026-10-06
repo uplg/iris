@@ -38,10 +38,13 @@
 	});
 
 	async function startAutofill() {
-		if (!(await conditionalSupported())) return;
-		autofill = new AbortController();
+		// made before the support check: a sign-in another way (or leaving) during it gives up a
+		// wait not started yet, which would otherwise never end and collide with the modal request
+		const wait = new AbortController();
+		autofill = wait;
+		if (!(await conditionalSupported()) || wait.signal.aborted) return;
 		try {
-			done(await signIn({ conditional: true, signal: autofill.signal }));
+			done(await signIn({ conditional: true, signal: wait.signal }));
 		} catch {
 			// no passkey picked, or the wait given up: the form stays
 		}

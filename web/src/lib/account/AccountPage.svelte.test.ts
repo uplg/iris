@@ -315,3 +315,33 @@ describe('account page', () => {
 		expect(api.sent('POST', '/me/display-name')[0].body).toEqual({ display_name: 'Leo' });
 	});
 });
+
+describe('sign in', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it('a passkey asked before the browser said whether autofill works starts no autofill wait beside it', async () => {
+		session.revoked('');
+		let answer: (v: boolean) => void = () => undefined;
+		const pkc = PublicKeyCredential as unknown as { isConditionalMediationAvailable: () => Promise<boolean> };
+		vi.spyOn(pkc, 'isConditionalMediationAvailable').mockImplementation(() => new Promise<boolean>((r) => (answer = r)));
+		const credentialJson = { id: 'Y3JlZA', rawId: 'Y3JlZA', type: 'public-key', response: {} };
+		const get = vi
+			.spyOn(navigator.credentials, 'get')
+			.mockResolvedValue({ id: credentialJson.id, toJSON: () => credentialJson } as unknown as Credential);
+		const api = stubApi({
+			'POST /auth/passkey/login/start': {
+				ceremony: 'c1',
+				options: {
+					publicKey: { challenge: 'Y2hhbGxlbmdlLWNoYWxsZW5nZQ', rpId: 'localhost', allowCredentials: [], userVerification: 'required' }
+				}
+			},
+			'POST /auth/passkey/login/finish': leonard
+		});
+		await render(SignIn);
+		await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
+		answer(true);
+		await expect.poll(() => session.user?.id).toBe('u1');
+		expect(api.sent('POST', '/auth/passkey/login/start').map((c) => c.body)).toEqual([{ conditional: false }]);
+		expect(get).toHaveBeenCalledTimes(1);
+	});
+});

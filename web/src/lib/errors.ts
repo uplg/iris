@@ -8,6 +8,8 @@ const BY_CODE: Record<string, string> = {
 	// the browser's WebAuthn refusals (DOMException names)
 	NotAllowedError: 'The passkey request was cancelled or timed out. Try again when you are ready.',
 	AbortError: 'The passkey request was cancelled. Try again when you are ready.',
+	// the browser answered a passkey request with no credential (`@iris/api/passkeys`)
+	cancelled: 'The passkey request was cancelled. Try again when you are ready.',
 	SecurityError: 'Passkeys need this site over https. Open Iris at its usual address.',
 	InvalidStateError: 'This device already holds a passkey for your account.',
 	// the server's refusals (backend error codes)
