@@ -382,7 +382,7 @@ impl TranscodeManager {
         Ok(session)
     }
 
-    /// [`Self::remove`], but only while `key` still maps to `session`: another
+    /// Kill `session` and drop it, only while `key` still maps to it: another
     /// viewer may have respawned a dead session under the same key and dir.
     async fn remove_session(&self, key: &str, session: &Arc<Session>) {
         let removed = {
@@ -399,28 +399,23 @@ impl TranscodeManager {
         }
     }
 
-    async fn remove(&self, channel_key: &str) {
-        let session = self.sessions.lock().await.remove(channel_key);
-        if let Some(session) = session {
-            let _ = session.child.lock().await.kill().await;
-            let _ = tokio::fs::remove_dir_all(&session.dir).await;
-        }
-    }
-
-    /// Kill sessions nobody has touched within their per-mode idle window
-    /// service's background loop.
+    /// Kill sessions nobody has touched within their per-mode idle window.
     pub async fn reap_idle(&self) {
-        let idle_keys: Vec<String> = {
+        let idle: Vec<(String, Arc<Session>)> = {
             let sessions = self.sessions.lock().await;
             sessions
                 .iter()
                 .filter(|(_, s)| s.idle())
-                .map(|(k, _)| k.clone())
+                .map(|(k, s)| (k.clone(), s.clone()))
                 .collect()
         };
-        for key in idle_keys {
+        for (key, session) in idle {
+            // A viewer may have come back while an earlier session was killed.
+            if !session.idle() {
+                continue;
+            }
             tracing::info!(channel = %key, "reaping idle live transcode session");
-            self.remove(&key).await;
+            self.remove_session(&key, &session).await;
         }
     }
 
@@ -489,17 +484,17 @@ impl TranscodeManager {
 
     /// Kill every session on a mux (all its channels share the adapter).
     async fn reap_freq(&self, freq: &str) {
-        let keys: Vec<String> = {
+        let on_mux: Vec<(String, Arc<Session>)> = {
             let sessions = self.sessions.lock().await;
             sessions
                 .iter()
                 .filter(|(_, s)| s.freq.as_deref() == Some(freq))
-                .map(|(k, _)| k.clone())
+                .map(|(k, s)| (k.clone(), s.clone()))
                 .collect()
         };
-        for key in keys {
+        for (key, session) in on_mux {
             tracing::info!(channel = %key, freq = %freq, "reaping session (mux reclaimed)");
-            self.remove(&key).await;
+            self.remove_session(&key, &session).await;
         }
     }
 }
@@ -588,6 +583,25 @@ mod tests {
         assert!(Arc::ptr_eq(&kept, &fresh));
         manager.remove_session(&key, &fresh).await;
         assert!(manager.sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_reaper_kills_idle_sessions_only() {
+        let manager = TranscodeManager::default();
+        let idle = sleeping_session(Mode::Reencode, "http://x/a.m3u8", "iris-test-idle");
+        idle.last_access_ms.store(0, Ordering::Relaxed);
+        let watched = sleeping_session(Mode::Reencode, "http://x/b.m3u8", "iris-test-watched");
+        {
+            let mut sessions = manager.sessions.lock().await;
+            sessions.insert(Mode::Reencode.key("fr:a"), idle);
+            sessions.insert(Mode::Reencode.key("fr:b"), watched);
+        }
+        manager.reap_idle().await;
+        let sessions = manager.sessions.lock().await;
+        assert_eq!(
+            sessions.keys().cloned().collect::<Vec<_>>(),
+            [Mode::Reencode.key("fr:b")]
+        );
     }
 
     #[tokio::test]
