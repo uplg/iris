@@ -26,7 +26,7 @@ use utoipa::ToSchema;
 const STREAM_CHUNK_SIZE: usize = 256 * 1024;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::extract::AuthUser;
+use crate::routes::extract::{AuthUser, Infohash};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -119,9 +119,9 @@ pub struct FileProgressEntry {
 pub(crate) async fn get_torrent_progress(
     State(state): State<AppState>,
     user: AuthUser,
-    Path(infohash): Path<String>,
+    Path(infohash): Path<Infohash>,
 ) -> ApiResult<Json<Vec<FileProgressEntry>>> {
-    let infohash = infohash.to_ascii_lowercase();
+    let infohash = infohash.into_inner();
     let rows = iris_db::playback::list_for_torrent(state.db(), user.id, &infohash).await?;
     Ok(Json(
         rows.into_iter()
@@ -156,9 +156,9 @@ pub struct ProgressView {
 pub(crate) async fn get_progress(
     State(state): State<AppState>,
     user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    Path((infohash, idx)): Path<(Infohash, usize)>,
 ) -> ApiResult<Json<Option<ProgressView>>> {
-    let infohash = infohash.to_ascii_lowercase();
+    let infohash = infohash.into_inner();
     let row = iris_db::playback::get(state.db(), user.id, &infohash, file_idx_to_i64(idx)).await?;
     Ok(Json(row.map(|r| ProgressView {
         position_seconds: r.position_seconds,
@@ -210,11 +210,11 @@ const PROGRESS_RESET_GUARD_PREV_MIN_SECS: f64 = 300.0;
 pub(crate) async fn put_progress(
     State(state): State<AppState>,
     user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    Path((infohash, idx)): Path<(Infohash, usize)>,
     headers: HeaderMap,
     Json(body): Json<ProgressUpdate>,
 ) -> ApiResult<StatusCode> {
-    let infohash = hex_infohash(&infohash)?;
+    let infohash = infohash.into_inner();
     let file_idx = file_idx_to_i64(idx);
     let position_seconds = body.position_seconds.max(0.0);
 
@@ -325,9 +325,9 @@ pub(crate) async fn put_progress(
 pub(crate) async fn delete_progress(
     State(state): State<AppState>,
     user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    Path((infohash, idx)): Path<(Infohash, usize)>,
 ) -> ApiResult<StatusCode> {
-    let infohash = infohash.to_ascii_lowercase();
+    let infohash = infohash.into_inner();
     iris_db::playback::delete(state.db(), user.id, &infohash, file_idx_to_i64(idx)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -342,9 +342,9 @@ pub(crate) async fn delete_progress(
 pub(crate) async fn mark_watched(
     State(state): State<AppState>,
     user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    Path((infohash, idx)): Path<(Infohash, usize)>,
 ) -> ApiResult<StatusCode> {
-    let infohash = infohash.to_ascii_lowercase();
+    let infohash = infohash.into_inner();
     iris_db::playback::mark_completed(state.db(), user.id, &infohash, file_idx_to_i64(idx)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -456,9 +456,9 @@ pub(crate) async fn ingest(
 pub(crate) async fn regrab(
     State(state): State<AppState>,
     user: AuthUser,
-    Path(infohash): Path<String>,
+    Path(infohash): Path<Infohash>,
 ) -> ApiResult<Json<IngestResponse>> {
-    let row = torrent_or_404(&state, &infohash.to_ascii_lowercase()).await?;
+    let row = torrent_or_404(&state, &infohash).await?;
     let (Some(provider_id), Some(external_id)) = (row.source_provider, row.source_external_id)
     else {
         return Err(ApiError::BadRequest(
@@ -1081,9 +1081,9 @@ pub(crate) async fn list(
 pub(crate) async fn get_one(
     State(state): State<AppState>,
     user: AuthUser,
-    Path(infohash): Path<String>,
+    Path(infohash): Path<Infohash>,
 ) -> ApiResult<Json<TorrentView>> {
-    let row = torrent_or_404(&state, &infohash.to_ascii_lowercase()).await?;
+    let row = torrent_or_404(&state, &infohash).await?;
     TorrentView::live(&state, &user, row)
         .map(Json)
         .ok_or(ApiError::NotFound)
@@ -1103,7 +1103,7 @@ pub(crate) async fn get_one(
 pub(crate) async fn pause(
     State(state): State<AppState>,
     user: AuthUser,
-    Path(infohash): Path<String>,
+    Path(infohash): Path<Infohash>,
 ) -> ApiResult<StatusCode> {
     let row = owned_row(&state, &user, &infohash).await?;
     state
@@ -1129,7 +1129,7 @@ pub(crate) async fn pause(
 pub(crate) async fn resume(
     State(state): State<AppState>,
     user: AuthUser,
-    Path(infohash): Path<String>,
+    Path(infohash): Path<Infohash>,
 ) -> ApiResult<StatusCode> {
     let row = owned_row(&state, &user, &infohash).await?;
     // An unfinished torrent downloads again: it takes one of the tracker's
@@ -1154,9 +1154,9 @@ pub(crate) async fn resume(
 async fn owned_row(
     state: &AppState,
     user: &AuthUser,
-    infohash: &str,
+    infohash: &Infohash,
 ) -> ApiResult<iris_db::torrents::TorrentRow> {
-    let row = torrent_or_404(state, &infohash.to_ascii_lowercase()).await?;
+    let row = torrent_or_404(state, infohash).await?;
     if !may_delete(user, row.added_by) {
         return Err(ApiError::Forbidden);
     }
@@ -1177,7 +1177,7 @@ async fn owned_row(
 pub(crate) async fn remove(
     State(state): State<AppState>,
     user: AuthUser,
-    Path(infohash): Path<String>,
+    Path(infohash): Path<Infohash>,
 ) -> ApiResult<StatusCode> {
     let row = owned_row(&state, &user, &infohash).await?;
     // Capture the final upload delta before the engine drops the torrent —
@@ -1237,9 +1237,9 @@ pub(crate) async fn remove(
 pub(crate) async fn probe_file(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    Path((infohash, idx)): Path<(Infohash, usize)>,
 ) -> ApiResult<Json<iris_media::MediaProbe>> {
-    let infohash = infohash.to_ascii_lowercase();
+    let infohash = infohash.into_inner();
     let row = torrent_or_404(&state, &infohash).await?;
     let path = state
         .engine()
@@ -1296,9 +1296,9 @@ pub(crate) async fn probe_file(
 pub(crate) async fn manifest_json(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    Path((infohash, idx)): Path<(Infohash, usize)>,
 ) -> ApiResult<Json<iris_media::Manifest>> {
-    let infohash = hex_infohash(&infohash)?;
+    let infohash = infohash.into_inner();
     let row = torrent_or_404(&state, &infohash).await?;
 
     let snapshot = state
@@ -1431,10 +1431,10 @@ pub struct SeekHint {
 pub(crate) async fn seek_hint(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    Path((infohash, idx)): Path<(Infohash, usize)>,
     Json(body): Json<SeekHint>,
 ) -> ApiResult<StatusCode> {
-    let infohash = hex_infohash(&infohash)?;
+    let infohash = infohash.into_inner();
     tracing::debug!(
         infohash,
         file_idx = idx,
@@ -1549,10 +1549,10 @@ pub struct PlaybackErrorResponse {
 pub(crate) async fn playback_error(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    Path((infohash, idx)): Path<(Infohash, usize)>,
     Json(body): Json<PlaybackErrorBody>,
 ) -> ApiResult<Json<PlaybackErrorResponse>> {
-    let infohash = hex_infohash(&infohash)?;
+    let infohash = infohash.into_inner();
     tracing::warn!(
         infohash,
         file_idx = idx,
@@ -1667,7 +1667,7 @@ pub struct PlayStatus {
 pub(crate) async fn play_status(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    Path((infohash, idx)): Path<(Infohash, usize)>,
     req: Request<Body>,
 ) -> ApiResult<Json<PlayStatus>> {
     // Caps are OPTIONAL: the `Iris-Caps` middleware only inserts the extension
@@ -1677,7 +1677,7 @@ pub(crate) async fn play_status(
     // web client. Pull it defensively and fall back to default caps (no
     // transcode), exactly like `play_asset` does. We never break a client.
     let caps = crate::middleware::IrisCaps::of(&req);
-    let infohash = infohash.to_ascii_lowercase();
+    let infohash = infohash.into_inner();
     torrent_or_404(&state, &infohash).await?;
     let path = state
         .engine()
@@ -1832,7 +1832,7 @@ pub(crate) async fn play_status(
 pub(crate) async fn subtitle_vtt(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
+    Path((infohash, idx, stream_idx)): Path<(Infohash, usize, u32)>,
 ) -> ApiResult<Response> {
     serve_subtitle(
         &state,
@@ -1858,7 +1858,7 @@ pub(crate) async fn subtitle_vtt(
 pub(crate) async fn subtitle_ass(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
+    Path((infohash, idx, stream_idx)): Path<(Infohash, usize, u32)>,
 ) -> ApiResult<Response> {
     serve_subtitle(
         &state,
@@ -1884,7 +1884,7 @@ pub(crate) async fn subtitle_ass(
 pub(crate) async fn subtitle_sup(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx, stream_idx)): Path<(String, usize, u32)>,
+    Path((infohash, idx, stream_idx)): Path<(Infohash, usize, u32)>,
 ) -> ApiResult<Response> {
     serve_subtitle(
         &state,
@@ -1909,16 +1909,15 @@ pub(crate) async fn subtitle_sup(
 ///   to drive `libass.setTrackByUrl` re-fetches without remounting.
 async fn serve_subtitle(
     state: &AppState,
-    infohash: &str,
+    infohash: &Infohash,
     idx: usize,
     stream_idx: u32,
     format: iris_media::SubtitleFormat,
 ) -> ApiResult<Response> {
-    let infohash = infohash.to_ascii_lowercase();
-    let row = torrent_or_404(state, &infohash).await?;
+    let row = torrent_or_404(state, infohash).await?;
     let path = state
         .engine()
-        .file_path(&infohash, idx)
+        .file_path(infohash, idx)
         .map_err(map_engine_err)?;
     if !path.exists() {
         return Err(ApiError::BadRequest("file not yet on disk".into()));
@@ -1930,8 +1929,7 @@ async fn serve_subtitle(
     let torrent_finished = torrent_finished(state, &row);
 
     let cache_dir = state.cfg().storage.data_dir.join("subs");
-    let cache_path =
-        iris_media::subtitle_cache_path(&cache_dir, &infohash, idx, stream_idx, format);
+    let cache_path = iris_media::subtitle_cache_path(&cache_dir, infohash, idx, stream_idx, format);
     let marker_path = cache_path.with_extension(format!("{}.ok", format.extension()));
 
     // Cache hit requires BOTH the file AND its completion marker. The
@@ -1978,10 +1976,10 @@ async fn serve_subtitle(
 pub(crate) async fn stream_file(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx)): Path<(String, usize)>,
+    Path((infohash, idx)): Path<(Infohash, usize)>,
     req: Request<Body>,
 ) -> ApiResult<Response> {
-    let infohash = infohash.to_ascii_lowercase();
+    let infohash = infohash.into_inner();
     let row = torrent_or_404(&state, &infohash).await?;
 
     // Fully-downloaded torrents stream straight from disk. The bytes are
@@ -2087,10 +2085,10 @@ pub(crate) async fn stream_file(
 pub(crate) async fn play_asset(
     State(state): State<AppState>,
     _user: AuthUser,
-    Path((infohash, idx, asset)): Path<(String, usize, String)>,
+    Path((infohash, idx, asset)): Path<(Infohash, usize, String)>,
     req: Request<Body>,
 ) -> ApiResult<Response> {
-    let infohash = infohash.to_ascii_lowercase();
+    let infohash = infohash.into_inner();
     let row = torrent_or_404(&state, &infohash).await?;
 
     let path = state
@@ -2568,15 +2566,6 @@ pub(crate) async fn torrent_or_404(
     iris_db::torrents::find_by_infohash(state.db(), infohash)
         .await?
         .ok_or(ApiError::NotFound)
-}
-
-/// A path infohash lowercased, refused unless it is hex.
-fn hex_infohash(infohash: &str) -> ApiResult<String> {
-    let infohash = infohash.to_ascii_lowercase();
-    if !infohash.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(ApiError::BadRequest("invalid infohash".into()));
-    }
-    Ok(infohash)
 }
 
 #[cfg(test)]

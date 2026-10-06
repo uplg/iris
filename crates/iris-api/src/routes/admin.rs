@@ -11,7 +11,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::extract::AdminUser;
+use crate::routes::extract::{AdminUser, Infohash};
 use crate::routes::library::verified_poster;
 use crate::routes::me::{HistoryItem, history_items};
 use crate::routes::{PageQuery, page_limit};
@@ -824,9 +824,9 @@ impl From<crate::tmdb::TmdbSuggestion> for TmdbDiagnoseSuggestion {
 pub(crate) async fn diagnose_tmdb(
     State(state): State<AppState>,
     _admin: AdminUser,
-    Path(infohash): Path<String>,
+    Path(infohash): Path<Infohash>,
 ) -> ApiResult<Json<TmdbDiagnose>> {
-    let infohash = infohash.to_ascii_lowercase();
+    let infohash = infohash.into_inner();
     let row = crate::routes::torrents::torrent_or_404(&state, &infohash).await?;
 
     let collection_tmdb_id = match row.collection_id {

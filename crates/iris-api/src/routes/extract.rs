@@ -86,3 +86,65 @@ where
         Ok(Self(user))
     }
 }
+
+/// An `{infohash}` path parameter: a v1 `BitTorrent` infohash (40 hex
+/// characters), lowercased — the form librqbit stores and every table keys
+/// on. Anything else fails extraction with a 400 before a handler reaches
+/// the DB or the engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Infohash(String);
+
+impl Infohash {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        if iris_core::ids::is_infohash_hex(raw) {
+            Ok(Self(raw.to_ascii_lowercase()))
+        } else {
+            Err(format!(
+                "invalid infohash `{raw}`: expected 40 hex characters"
+            ))
+        }
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl std::ops::Deref for Infohash {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Infohash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Infohash {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Infohash;
+
+    #[test]
+    fn infohash_is_validated_and_lowercased() {
+        let ok = Infohash::parse("ABCDEF0123456789abcdef0123456789ABCDEF01").unwrap();
+        assert_eq!(&*ok, "abcdef0123456789abcdef0123456789abcdef01");
+        assert!(Infohash::parse("abc").is_err());
+        assert!(Infohash::parse("zz25 9ba623eec5f33167c083b51b30122c7fa06").is_err());
+        assert!(Infohash::parse(&"a".repeat(64)).is_err());
+        let de: Infohash =
+            serde_json::from_str("\"98259BA623EEC5F33167C083B51B30122C7FA068\"").unwrap();
+        assert_eq!(&*de, "98259ba623eec5f33167c083b51b30122c7fa068");
+        assert!(serde_json::from_str::<Infohash>("\"not-a-hash\"").is_err());
+    }
+}
