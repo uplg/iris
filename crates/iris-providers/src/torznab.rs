@@ -239,6 +239,7 @@ impl TorznabProvider {
         let http = crate::tls::client_builder()
             .default_headers(headers)
             .timeout(Duration::from_secs(20))
+            .redirect(stop_at_magnet())
             .build()
             .map_err(|e| Error::Provider(format!("torznab http client: {e}")))?;
 
@@ -365,6 +366,44 @@ impl TorznabProvider {
             total_count,
             total_pages,
         })
+    }
+}
+
+/// Redirects are followed (download links usually bounce to the `.torrent`)
+/// except to a non-HTTP target: an indexer that answers with a 3xx to a
+/// `magnet:` URI hands that response back, see [`magnet_location`].
+fn stop_at_magnet() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if !matches!(attempt.url().scheme(), "http" | "https") {
+            attempt.stop()
+        } else if attempt.previous().len() >= 10 {
+            attempt.error("too many redirects")
+        } else {
+            attempt.follow()
+        }
+    })
+}
+
+/// The `magnet:` URI a redirect points at.
+fn magnet_location(res: &reqwest::Response) -> Option<String> {
+    if !res.status().is_redirection() {
+        return None;
+    }
+    let location = res
+        .headers()
+        .get(reqwest::header::LOCATION)?
+        .to_str()
+        .ok()?;
+    location
+        .trim()
+        .starts_with("magnet:")
+        .then(|| location.trim().to_owned())
+}
+
+impl TorznabProvider {
+    /// Whether a search left a download link for `external_id`.
+    pub async fn has_link(&self, external_id: &str) -> bool {
+        self.link_cache.lock().await.get(external_id).is_some()
     }
 }
 
@@ -510,6 +549,9 @@ impl SearchProvider for TorznabProvider {
             .send()
             .await
             .map_err(|e| crate::util::http_error("torznab download", e))?;
+        if let Some(magnet) = magnet_location(&res) {
+            return Ok(TorrentSource::Magnet(magnet));
+        }
         if !res.status().is_success() && res.status() != StatusCode::FOUND {
             let status = res.status();
             let body = res.bytes().await.unwrap_or_default();
@@ -1057,8 +1099,43 @@ pub(crate) fn text_value(t: &BytesText) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// A local HTTP server answering every request with `response`; its
+    /// base URL.
+    pub(crate) async fn serve(response: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_download_link_redirecting_to_a_magnet_resolves_to_it() {
+        let base = serve(
+            "HTTP/1.1 302 Found\r\nlocation: magnet:?xt=urn:btih:98259ba623eec5f33167c083b51b30122c7fa068&dn=x\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        )
+        .await;
+        let entry: ProviderEntry = toml::from_str(&format!(
+            "id = \"idx\"\nkind = \"torznab\"\nbase_url = \"{base}\"\napi_key = \"k\"\n"
+        ))
+        .unwrap();
+        let p = TorznabProvider::from_config(&entry).unwrap();
+        p.cache_download_url("42".into(), format!("{base}/dl/42"))
+            .await;
+        match p.resolve("42").await.unwrap() {
+            TorrentSource::Magnet(m) => assert!(m.starts_with("magnet:?xt=urn:btih:98259b")),
+            TorrentSource::TorrentFile(_) => panic!("a magnet"),
+        }
+    }
 
     /// `page` comes straight from `/api/search?page=`.
     #[tokio::test]

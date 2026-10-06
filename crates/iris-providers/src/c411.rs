@@ -374,8 +374,10 @@ impl SearchProvider for C411 {
         // Fast path: the Torznab link cache already has the signed
         // download URL for this infohash (populated either by an
         // earlier search or by a prior prime-via-search round below).
-        if let Ok(source) = self.torznab.resolve(external_id).await {
-            return Ok(source);
+        // Its download failing is THE error (expired link, no credit):
+        // surfaced as is, not hidden behind a "no cached URL".
+        if self.torznab.has_link(external_id).await {
+            return self.torznab.resolve(external_id).await;
         }
 
         // Cache miss — typical when the user clicks a featured item
@@ -666,6 +668,26 @@ mod tests {
         assert!(a.is_err() && b.is_err());
         assert!(c411.featured_movies().await.is_err());
         assert_eq!(dials.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_download_is_the_error_resolve_reports() {
+        let base = crate::torznab::tests::serve(
+            "HTTP/1.1 403 Forbidden\r\ncontent-length: 26\r\nconnection: close\r\n\r\nNot enough download credit",
+        )
+        .await;
+        let entry: ProviderEntry = toml::from_str(&format!(
+            "id = \"c411\"\nkind = \"c411\"\nbase_url = \"{base}\"\napi_key = \"k\"\n"
+        ))
+        .unwrap();
+        let c411 = C411::from_config(&entry).unwrap();
+        let infohash = "98259ba623eec5f33167c083b51b30122c7fa068";
+        c411.torznab
+            .cache_download_url(infohash.into(), format!("{base}/dl"))
+            .await;
+        let err = c411.resolve(infohash).await.unwrap_err().to_string();
+        assert!(err.contains("403"), "{err}");
+        assert!(err.contains("download credit"), "{err}");
     }
 
     #[test]
