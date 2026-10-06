@@ -10,7 +10,7 @@
 	import { STORAGE } from '#lib/storage.ts';
 	import { Dialog } from 'bits-ui';
 	import { untrack } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { ApiError, follows, library, me, progress as progressApi, torrents, type TorrentView } from '@iris/api/client';
 	import { duration as lengthWords, episodeCode, fileName, formatSize, isVideo, percent, prettySceneName, speed } from '@iris/api/format';
 	import { hevcMseNeedsIdrStart } from '@iris/core/caps';
@@ -340,11 +340,25 @@
 					? name
 					: null
 	);
+	// a series goes back to its page; a film steps back in the history (a film page holding one
+	// copy replaced itself with this player, so a link to it would open the player again), or
+	// to the library when it was opened from outside Iris
+	let inApp = $state(false);
+	afterNavigate(({ from }) => {
+		if (from) inApp = true;
+	});
 	const back = $derived(
-		collectionId
-			? { href: `/collection/${collectionId}`, label: collectionQ.data?.display_title ?? 'the series' }
-			: { href: '/library', label: 'the library' }
+		isTv && collectionId
+			? { href: `/collection/${collectionId}`, label: `Back to ${collectionQ.data?.display_title ?? 'the series'}` }
+			: inApp
+				? { href: '/library', label: 'Back', onclick: stepBack }
+				: { href: '/library', label: 'Back to the library' }
 	);
+	function stepBack(e: MouseEvent) {
+		if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+		e.preventDefault();
+		history.back();
+	}
 	const facts = $derived(factsLine(data, manifest, tier));
 
 	const source = $derived(tier ? playSource(tier, infohash, fileIdx, nonce) : null);

@@ -43,7 +43,7 @@
 
 {#snippet top()}
 	<StageTopBar
-		back={{ href: `/live?country=${encodeURIComponent(country)}`, label: 'channels' }}
+		back={{ href: `/live?country=${encodeURIComponent(country)}`, label: 'Back to channels' }}
 		title={name}
 		sub={now ? nowWords(now) : null}
 		facts={channel?.geo_blocked ? 'May be blocked in your country' : null}

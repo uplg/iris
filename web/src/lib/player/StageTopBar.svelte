@@ -6,7 +6,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 
 	interface Props {
-		back: { href: string; label: string };
+		back: { href: string; label: string; onclick?: (e: MouseEvent) => void };
 		title: string;
 		sub?: string | null;
 		facts?: string | null;
@@ -15,7 +15,7 @@
 </script>
 
 <div class="topbar">
-	<a class="back" href={back.href}><Icon name="arrow-left" /><span class="back-text">Back to {back.label}</span></a>
+	<a class="back" href={back.href} onclick={back.onclick}><Icon name="arrow-left" /><span class="back-text">{back.label}</span></a>
 	<div class="heading">
 		<h1 tabindex="-1">{title}</h1>
 		{#if sub}<p class="sub">{sub}</p>{/if}
