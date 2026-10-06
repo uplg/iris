@@ -58,7 +58,7 @@ import { FeedGate } from '../mse/feed-gate';
 import { endStream, openMediaSource, releaseVideo } from '../mse/media-source';
 import { relaxMediabunnyGopCheck } from '../mse/output';
 import { bufferedAhead, evictionSpan, forwardGapTarget } from '../mse/ranges';
-import { irisUrlSource } from '../stream-fetch';
+import { irisUrlSource } from '../stream-source';
 import { nalLengthSize, packetHasIdr } from '../decode/h264-idr';
 
 /** How far behind the playlist's end we aim the first keyframe. */

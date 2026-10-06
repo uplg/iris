@@ -25,7 +25,7 @@ import { startVideoPipeline, type VideoPipelineHandle } from '../decode/video-pi
 import { probeVideoTrack } from '../decode/webcodecs-probe';
 import { createAudioScheduler, type AudioScheduler } from '../audio/audio-scheduler';
 import { WallClock } from '../audio/wall-clock';
-import { irisUrlSource, VOD_RETRY } from '../stream-fetch';
+import { irisUrlSource, VOD_RETRY } from '../stream-source';
 import { mountRenderer, type VideoRenderer } from '../render/renderer-factory';
 import { defaultAudioIndex, manifestAudioTracks, type EngineAudioTrack, type EngineHandle, type EngineMount } from '../engine';
 

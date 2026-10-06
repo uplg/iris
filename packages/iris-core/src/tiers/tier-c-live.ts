@@ -60,7 +60,7 @@ import { AppendQueue } from '../mse/append-queue';
 import { endStream, openMediaSource, releaseVideo } from '../mse/media-source';
 import { relaxMediabunnyGopCheck } from '../mse/output';
 import { evictionSpan, forwardGapTarget } from '../mse/ranges';
-import { irisUrlSource } from '../stream-fetch';
+import { irisUrlSource } from '../stream-source';
 
 /** How far behind the playlist's end we aim the first keyframe. */
 const LIVE_EDGE_BACKOFF_S = 12;

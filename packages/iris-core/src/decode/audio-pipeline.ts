@@ -8,7 +8,8 @@
 
 import { AudioSampleSink, EncodedPacketSink, type InputAudioTrack } from 'mediabunny';
 
-import { ensureLibavAudioDecoderRegistered, libavCanDecode } from './libav-audio-decoder';
+import { ensureLibavAudioDecoderRegistered } from './libav-audio-decoder';
+import { libavCanDecode } from './libav-codecs';
 import { DECODE_QUEUE_POLL_MS, PACING_POLL_MS } from './video-pipeline';
 import { configWithFreshDescription } from './webcodecs-probe';
 

@@ -9,7 +9,7 @@
  * Tier B picks this path automatically when:
  *   1. The manifest's audio codec isn't `browser_native` (i.e., not
  *      AAC/Opus/MP3/Vorbis) AND
- *   2. The codec IS in our libav-supported set (see `SUPPORTED`).
+ *   2. The codec IS in our libav-supported set (see `libav-codecs.ts`).
  *
  * Mediabunny calls `LibavAudioDecoder.supports()` to decide whether
  * to use us. Returning `true` for an unsupported codec inside libav
@@ -17,38 +17,7 @@
  */
 
 import { AudioSample, CustomAudioDecoder, registerDecoder, type AudioCodec, type EncodedPacket } from 'mediabunny';
-
-/**
- * Audio codecs handled by this libav-backed decoder.
- *
- * The Iris variant of libav.js (built in the Dockerfile's
- * `libav-builder` stage) bundles `ac3`, `eac3`, `flac`, plus all
- * PCM flavours we care about. The npm-shipped `default` variant
- * is a strict subset of this (FLAC + PCM only) — when running
- * outside Docker (dev), the `iris.wasm.*` files don't exist and
- * libav falls back to `default`, in which case `ac3`/`eac3`
- * `ff_init_decoder` returns "Codec not found" and we surface a
- * Tier B mount error that the IrisPlayer demotes to F.
- */
-const SUPPORTED: ReadonlySet<AudioCodec> = new Set<AudioCodec>([
-	'ac3',
-	'eac3',
-	'flac',
-	// mediabunny surfaces `A_DTS` Matroska tracks natively since 1.55
-	// (it used to need a local patch); the libav `dca` decoder picks up
-	// the packets and produces PCM samples. DTS-HD MA core layer is
-	// decoded; the extension substream is dropped (fine — Tier B
-	// re-encodes to AAC anyway).
-	'dts',
-	'pcm-s16',
-	'pcm-s24',
-	'pcm-s32',
-	'pcm-f32'
-]);
-
-export function libavCanDecode(codec: string): boolean {
-	return SUPPORTED.has(codec as AudioCodec);
-}
+import { libavCanDecode } from './libav-codecs';
 
 // AV_SAMPLE_FMT_* values from libav. The number is the libav enum
 // value as exported in the JS bindings.
@@ -153,7 +122,7 @@ function getLibav(): Promise<LibavLike> {
 
 class LibavAudioDecoder extends CustomAudioDecoder {
 	static supports(codec: AudioCodec, _config: AudioDecoderConfig): boolean {
-		return SUPPORTED.has(codec);
+		return libavCanDecode(codec);
 	}
 
 	private libav: LibavLike | null = null;

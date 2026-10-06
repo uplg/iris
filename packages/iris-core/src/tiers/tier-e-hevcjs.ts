@@ -49,7 +49,8 @@ import {
 	type EngineHandle,
 	type EngineMount
 } from '../engine';
-import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
+import { ensureLibavAudioDecoderRegistered } from '../decode/libav-audio-decoder';
+import { libavCanDecode } from '../decode/libav-codecs';
 import { pickAudioEncoder, transcodeSampleSource } from '../decode/audio-plan';
 import { AppendQueue } from '../mse/append-queue';
 import { FeedGate } from '../mse/feed-gate';
@@ -57,7 +58,7 @@ import { initSegmentEnd } from '../mse/fmp4';
 import { endStream, openMediaSource, releaseVideo } from '../mse/media-source';
 import { relaxMediabunnyGopCheck } from '../mse/output';
 import { aheadInRange, coversTime, evictionSpan, landsAt } from '../mse/ranges';
-import { irisUrlSource, VOD_RETRY } from '../stream-fetch';
+import { irisUrlSource, VOD_RETRY } from '../stream-source';
 
 /** `subscribeSegmentStat` from `@hevcjs/core`, captured on first load. The lib
  *  publishes one stat per transcoded segment, `speedX` being media-seconds

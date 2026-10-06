@@ -36,7 +36,8 @@ import {
 import { hevcMseNeedsIdrStart, isFirefox, isMobileLike } from '../caps';
 import { pickAudioEncoder, transcodeSampleSource, type AudioEncoderChoice } from '../decode/audio-plan';
 import { HevcCraSplicer, descriptionBytes, splicePacket } from '../decode/hevc-cra-splice';
-import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
+import { ensureLibavAudioDecoderRegistered } from '../decode/libav-audio-decoder';
+import { libavCanDecode } from '../decode/libav-codecs';
 import {
 	appendNativeTrack,
 	bindVideoCallbacks,
@@ -52,7 +53,7 @@ import { initSegmentSplit } from '../mse/fmp4';
 import { endStream, openMediaSource, releaseVideo, waitForIdle } from '../mse/media-source';
 import { relaxMediabunnyGopCheck } from '../mse/output';
 import { bufferedAhead, bufferedSpan, coversTime, describeRanges, evictionSpan, forwardGapTarget, landsAt } from '../mse/ranges';
-import { irisUrlSource, VOD_RETRY } from '../stream-fetch';
+import { irisUrlSource, VOD_RETRY } from '../stream-source';
 
 // Live SourceBuffer window
 //

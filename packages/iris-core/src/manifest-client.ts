@@ -9,9 +9,8 @@
 
 import type { components } from '@iris/api/api-types';
 import { isHevc } from './codec';
-import { capsHeader, hevcMseNeedsIdrStart, isMobileLike, mseSupportsType, probeCapabilities } from './caps';
-import { libavCanDecode } from './decode/libav-audio-decoder';
-import { cheapProbeVideoCodec } from './decode/webcodecs-probe';
+import { capsHeader, cheapProbeVideoCodec, hevcMseNeedsIdrStart, isMobileLike, mseSupportsType, probeCapabilities } from './caps';
+import { libavCanDecode } from './decode/libav-codecs';
 import { irisFetch } from './stream-fetch';
 
 // The manifest wire format is owned by the Rust `iris-media::manifest`
