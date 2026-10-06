@@ -34,6 +34,8 @@ interface AppContainer {
     val mediaOkHttpClient: OkHttpClient
     /** The client of the APK host ([buildUpdateOkHttpClient]): never the session's cookies. */
     val updateOkHttpClient: OkHttpClient
+    /** The in-app update, one per process: its check and its download outlive any screen. */
+    val updates: AppUpdates
     val channels: ChannelsService
     /**
      * Process-lifetime scope for fire-and-forget background work that
@@ -70,6 +72,7 @@ class DefaultAppContainer(context: Context) : AppContainer {
         buildOkHttpClient(sessionStore, context.applicationContext.cacheDir) { outdatedFlag.value = true }
     override val mediaOkHttpClient: OkHttpClient = deriveMediaOkHttpClient(okHttpClient)
     override val updateOkHttpClient: OkHttpClient by lazy { buildUpdateOkHttpClient() }
+    override val updates: AppUpdates by lazy { AppUpdates(context.applicationContext, { updateOkHttpClient }, applicationScope) }
     override val channels: ChannelsService = ChannelsService(context.applicationContext)
     override val applicationScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO)

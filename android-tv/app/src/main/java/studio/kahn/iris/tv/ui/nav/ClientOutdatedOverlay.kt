@@ -7,11 +7,10 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -30,6 +29,13 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionSize
+import studio.kahn.iris.tv.ui.components.ActionStyle
+import studio.kahn.iris.tv.ui.components.StatusLine
+import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.data.UpdateState
+import studio.kahn.iris.tv.ui.update.UpdateActions
+import studio.kahn.iris.tv.ui.update.UpdateButton
+import studio.kahn.iris.tv.ui.update.UpdateProgress
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisWordmark
 import studio.kahn.iris.tv.ui.components.KeyHint
@@ -44,12 +50,12 @@ import studio.kahn.iris.tv.ui.theme.IrisType
 
 /**
  * The server refused this app as too old (HTTP 426): everything but
- * Settings, where the updater lives, is covered. The screen below stays
+ * Settings is covered; the update starts from here or from Settings. The screen below stays
  * composed (its state is kept for after the update) but cannot take focus
  * or taps. Back leaves the app.
  */
 @Composable
-fun ClientOutdatedOverlay(installedVersion: String, onOpenSettings: () -> Unit) {
+fun ClientOutdatedOverlay(update: UpdateState, actions: UpdateActions, onOpenSettings: () -> Unit) {
     val activity = LocalActivity.current
     BackHandler { activity?.moveTaskToBack(true) }
     val open = remember { FocusRequester() }
@@ -84,20 +90,19 @@ fun ClientOutdatedOverlay(installedVersion: String, onOpenSettings: () -> Unit) 
             Eyebrow("Update needed")
             Text("This server needs a newer Iris", style = IrisType.panel, color = IrisColor.ink)
             Text(
-                "Iris $installedVersion is too old for it. Open Settings and install the update: the update does not come from this server, so it works now.",
+                "Iris ${update.installed} is too old for it. The update does not come from this server, so it installs now; the TV’s installer asks you to confirm.",
                 style = IrisType.body,
                 color = IrisColor.inkMuted,
             )
-            ActionButton(
-                "Open Settings to update",
-                onOpenSettings,
-                icon = Icons.Rounded.SystemUpdate,
-                size = ActionSize.Large,
-                modifier = Modifier.focusRequester(open),
-            )
+            if (update.available != null && update.progress == null) StatusLine("Iris ${update.available} is ready to download", tone = StatusTone.Available)
+            UpdateProgress(update.progress)
+            Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+                UpdateButton(update.progress, actions, Modifier.focusRequester(open), size = ActionSize.Large)
+                ActionButton("Open Settings", onOpenSettings, style = ActionStyle.Secondary, size = ActionSize.Large)
+            }
         }
         KeyHints(
-            hints = listOf(KeyHint(Keys.OK, "Open Settings"), KeyHint(Keys.BACK, "Leave Iris")),
+            hints = listOf(KeyHint(Keys.OK, "Choose"), KeyHint(Keys.BACK, "Leave Iris")),
             modifier = Modifier.align(Alignment.BottomStart),
         )
     }

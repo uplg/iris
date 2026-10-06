@@ -14,6 +14,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import studio.kahn.iris.tv.data.AppUpdater
+import studio.kahn.iris.tv.data.UpdateState
+import studio.kahn.iris.tv.ui.update.UpdateActions
 import studio.kahn.iris.tv.ui.components.TopTab
 import studio.kahn.iris.tv.ui.nav.ClientOutdatedOverlay
 import studio.kahn.iris.tv.ui.nav.TopLevelShell
@@ -48,6 +51,18 @@ class ShellScreenshots {
 
     @Test
     fun clientOutdated() = shots.snapEverySize("shell_client_outdated") {
-        ClientOutdatedOverlay(installedVersion = "1.5.0", onOpenSettings = {})
+        ClientOutdatedOverlay(outdated, UpdateActions(), onOpenSettings = {})
     }
+
+    @Test
+    fun clientOutdatedDownloading() = shots.snap("shell_client_outdated_downloading") {
+        ClientOutdatedOverlay(outdated.copy(progress = AppUpdater.Progress.Downloading(31_000_000, 52_000_000)), UpdateActions(), onOpenSettings = {})
+    }
+
+    @Test
+    fun headerUpdate() = shots.snapEverySize("shell_header_update") {
+        TopLevelShell(TopTab.Library, "Leonard", updateAvailable = true, onSelect = {}, onAccount = {}) {}
+    }
+
+    private val outdated = UpdateState(installed = "1.5.0", latest = AppUpdater.VersionStatus.UpdateAvailable("1.6.0"))
 }

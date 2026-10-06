@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.TmdbMetadataCache
@@ -25,7 +24,6 @@ import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.libraryCollections
 import studio.kahn.iris.tv.data.libraryTorrents
 import studio.kahn.iris.tv.ui.state.BusyActions
-import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.DismissCwRequest
@@ -76,7 +74,6 @@ data class HomeUiState(
     /** The action in flight (`get:<tile>`, `remove:<card>`…): one at a time. */
     val busy: String? = null,
     val notice: Notice? = null,
-    val updateAvailable: Boolean = false,
     /** Non-null while the first-run preferences sheet is due. */
     val onboarding: PreferencesResponse? = null,
 )
@@ -100,7 +97,6 @@ internal data class HomeData(
     val onboardingClosed: Boolean = false,
     val busy: String? = null,
     val notice: Notice? = null,
-    val updateAvailable: Boolean = false,
 )
 
 private const val LIBRARY_ROW = 12
@@ -147,7 +143,6 @@ internal fun homeUi(d: HomeData): HomeUiState {
         libraryCount = collections.size,
         busy = d.busy,
         notice = d.notice,
-        updateAvailable = d.updateAvailable,
         onboarding = d.preferences?.takeIf { !it.onboardingCompleted && !d.onboardingClosed },
     )
 }
@@ -183,11 +178,6 @@ class HomeViewModel(
     init {
         viewModelScope.launch {
             actions.state.collect { a -> data.update { it.copy(busy = a.busyKey, notice = a.notice) } }
-        }
-        viewModelScope.launch {
-            val latest = AppUpdater.fetchLatestVersion(container.updateOkHttpClient)
-            val available = AppUpdater.versionStatus(BuildConfig.VERSION_NAME, latest) is AppUpdater.VersionStatus.UpdateAvailable
-            data.update { it.copy(updateAvailable = available) }
         }
     }
 

@@ -69,6 +69,7 @@ private fun NavOptionsBuilder.asTab() {
 @Stable
 class ShellHost(
     val accountName: State<String>,
+    val updateAvailable: State<Boolean>,
     val onSelect: (TopTab) -> Unit,
     val onAccount: () -> Unit,
 )
@@ -88,6 +89,7 @@ inline fun <reified T : Any> NavGraphBuilder.section(
         TopLevelShell(
             tab = tab,
             accountName = host.accountName.value,
+            updateAvailable = host.updateAvailable.value,
             onSelect = host.onSelect,
             onAccount = host.onAccount,
             headerOverContent = headerOverContent,
@@ -164,6 +166,7 @@ fun shellBack(tab: TopTab, headerFocused: Boolean): ShellBack = when {
 fun TopLevelShell(
     tab: TopTab,
     accountName: String,
+    updateAvailable: Boolean = false,
     onSelect: (TopTab) -> Unit,
     onAccount: () -> Unit,
     headerOverContent: Boolean = false,
@@ -198,6 +201,7 @@ fun TopLevelShell(
                 onSelect = { if (it != tab) onSelect(it) },
                 accountName = accountName,
                 onAccount = onAccount,
+                updateAvailable = updateAvailable,
             )
         }
     }

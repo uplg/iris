@@ -8,9 +8,11 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.GenreOption
 import studio.kahn.iris.tv.data.LanguageOption
 import studio.kahn.iris.tv.data.MediaKind
+import studio.kahn.iris.tv.data.UpdateNotice
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.TopTab
 import studio.kahn.iris.tv.ui.nav.TopLevelShell
@@ -116,8 +118,8 @@ class HomeScreenshots {
     )
 
     @Composable
-    private fun Home(state: HomeUiState, over: @Composable () -> Unit = {}) {
-        TopLevelShell(TopTab.Home, "Leonard", onSelect = {}, onAccount = {}, headerOverContent = true) {
+    private fun Home(state: HomeUiState, update: UpdateNotice? = null, over: @Composable () -> Unit = {}) {
+        TopLevelShell(TopTab.Home, "Leonard", updateAvailable = update != null, onSelect = {}, onAccount = {}, headerOverContent = true) {
             Box {
                 HomeContent(
                     state = state,
@@ -127,6 +129,7 @@ class HomeScreenshots {
                     onOpenDiscover = {},
                     onOpenLibrary = {},
                     onOpenSearch = {},
+                    update = update,
                 )
                 over()
             }
@@ -137,8 +140,21 @@ class HomeScreenshots {
     fun home() = shots.snapEverySize("home") { Home(home) }
 
     @Test
+    fun homeUpdate() = shots.snapEverySize("home_update") { Home(home, UpdateNotice("1.0.4", "1.0.2", null)) }
+
+    @Test
+    fun homeUpdateDownloading() = shots.snapEverySize("home_update_downloading") {
+        Home(home, UpdateNotice("1.0.4", "1.0.2", AppUpdater.Progress.Downloading(31_000_000, 52_000_000)))
+    }
+
+    @Test
+    fun homeUpdateFailed() = shots.snap("home_update_failed") {
+        Home(home, UpdateNotice("1.0.4", "1.0.2", AppUpdater.Progress.Failed("the TV couldn’t reach synthe.se (timeout)")))
+    }
+
+    @Test
     fun homeNotice() = shots.snap("home_notice") {
-        Home(home.copy(notice = Notice("Could not get E20. The server is busy. Open the series to pick another release.", StatusTone.Down), updateAvailable = true))
+        Home(home.copy(notice = Notice("Could not get E20. The server is busy. Open the series to pick another release.", StatusTone.Down)))
     }
 
     @Test

@@ -48,6 +48,9 @@ object AppUpdater {
      *  update path). */
     const val LATEST_VERSION_URL: String = "https://synthe.se/app-release.version"
 
+    /** The host of [APK_URL], as said in the words of a failed download. */
+    private const val APK_HOST = "synthe.se"
+
     /** Cache subdirectory used by [downloadApk]; emptied at each process start ([clearDownloads]):
      *  an install restarts the process, and a file from an earlier process is never handed on. */
     private const val CACHE_SUBDIR = "updates"
@@ -100,12 +103,12 @@ object AppUpdater {
         val response = try {
             client.newCall(request).execute()
         } catch (e: IOException) {
-            emit(Progress.Failed("network: ${e.message ?: "unreachable"}"))
+            emit(Progress.Failed("the TV couldn’t reach $APK_HOST (${e.message ?: "no answer"})"))
             return@flow
         }
         response.use { resp ->
             if (!resp.isSuccessful) {
-                emit(Progress.Failed("server returned HTTP ${resp.code}"))
+                emit(Progress.Failed("$APK_HOST answered HTTP ${resp.code}"))
                 return@flow
             }
             // OkHttp 4+ guarantees `body` is non-null after a successful
@@ -135,7 +138,7 @@ object AppUpdater {
                 }
                 done = true
             } catch (e: IOException) {
-                emit(Progress.Failed("download interrupted: ${e.message ?: "io"}"))
+                emit(Progress.Failed("the download stopped half-way (${e.message ?: "connection lost"})"))
                 return@flow
             } finally {
                 if (!done) tmp.delete()
@@ -145,7 +148,7 @@ object AppUpdater {
         if (target.exists()) target.delete()
         if (!tmp.renameTo(target)) {
             tmp.delete()
-            emit(Progress.Failed("could not rename downloaded apk to ${target.path}"))
+            emit(Progress.Failed("the TV couldn’t save the downloaded file"))
             return@flow
         }
         emit(Progress.Ready(target))
