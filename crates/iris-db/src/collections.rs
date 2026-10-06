@@ -415,10 +415,12 @@ pub async fn list_due_for_scan(
          WHERE kind = 'tv' \
            AND parsed_title_normalized IS NOT NULL \
            AND (last_indexer_scan_at IS NULL \
-                OR last_indexer_scan_at < datetime('now', '-' || ?1 || ' seconds')) \
+                OR last_indexer_scan_at < ?1) \
          ORDER BY last_indexer_scan_at IS NOT NULL, last_indexer_scan_at"
     ))
-    .bind(cooldown_seconds)
+    // The column holds chrono's RFC 3339 (`…T…+00:00`); SQLite's
+    // `datetime('now')` (`… …`) would sort after it all day long.
+    .bind(Utc::now() - chrono::TimeDelta::seconds(cooldown_seconds))
     .fetch_all(pool)
     .await
 }
@@ -784,5 +786,31 @@ mod tests {
             1,
             "newer watch activity resurfaces the dismissed ghost",
         );
+    }
+
+    #[tokio::test]
+    async fn a_scan_is_due_once_its_cooldown_has_passed_the_same_day() {
+        let pool = migrated_pool().await;
+        let show = find_or_create(&pool, "severance", "Severance", Kind::Tv, false)
+            .await
+            .unwrap();
+        let due = |pool: SqlitePool| async move {
+            list_due_for_scan(&pool, 7_200)
+                .await
+                .unwrap()
+                .iter()
+                .map(|c| c.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(due(pool.clone()).await, vec![show.id], "never scanned");
+        touch_scanned(&pool, show.id).await.unwrap();
+        assert!(due(pool.clone()).await.is_empty(), "inside the cooldown");
+        sqlx::query("UPDATE collections SET last_indexer_scan_at = ?1 WHERE id = ?2")
+            .bind(Utc::now() - chrono::TimeDelta::hours(3))
+            .bind(show.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(due(pool.clone()).await, vec![show.id], "cooldown elapsed");
     }
 }
