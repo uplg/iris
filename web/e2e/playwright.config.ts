@@ -46,6 +46,8 @@ export default defineConfig({
 		// Zen is driven by puppeteer over WebDriver BiDi inside its specs (lib/zen.ts): the
 		// project only selects them, its own Playwright browser is never launched
 		{ name: 'zen', grep: /@zen\b/ },
+		// WebKit with the iPad descriptor (UA, viewport, touch): emulation, not iPadOS
+		{ name: 'ipad', grep: /@ipad\b/, use: { ...devices['iPad Pro 11 landscape'] } },
 		{
 			name: 'phone',
 			grep: /@phone\b/,
