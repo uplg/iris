@@ -358,10 +358,10 @@ export const searchDetails = {
 		api.get<ReleaseDetails>(`/search/details?provider=${encodeURIComponent(provider_id)}&id=${encodeURIComponent(external_id)}`)
 };
 
-/** Build a TMDB image URL. Sizes: w92, w154, w185, w342, w500, original. */
+/** Build a TMDB image URL: posters up to w500, backdrops and stills at w780 / w1280. */
 export function tmdbImage(
 	path: string | null | undefined,
-	size: 'w92' | 'w154' | 'w185' | 'w342' | 'w500' | 'original' = 'w185'
+	size: 'w92' | 'w154' | 'w185' | 'w342' | 'w500' | 'w780' | 'w1280' | 'original' = 'w185'
 ): string | null {
 	if (!path) return null;
 	return `https://image.tmdb.org/t/p/${size}${path}`;

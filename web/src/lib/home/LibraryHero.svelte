@@ -1,10 +1,9 @@
 <script lang="ts">
 	// Nothing to resume: the freshest title of the library (its own verified name and art).
-	import type { CollectionListItem } from '@iris/api/client';
+	import { tmdbImage, type CollectionListItem } from '@iris/api/client';
 	import { formatSize, kindLabel } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import Hero from './Hero.svelte';
-	import { stillUrl } from './data.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 
 	let { item }: { item: CollectionListItem } = $props();
@@ -16,7 +15,7 @@
 	title={item.display_title}
 	meta={[md.data?.year ? String(md.data.year) : null, kindLabel(item.kind, item.is_anime), formatSize(item.total_size_bytes)]}
 	overview={md.data?.overview}
-	art={stillUrl(md.data?.backdrop_path, 'w1280')}
+	art={tmdbImage(md.data?.backdrop_path, 'w1280')}
 >
 	{#snippet actions()}
 		<a class="btn primary" href="/collection/{item.id}"><Icon name="play" />Open</a>
