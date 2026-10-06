@@ -13,6 +13,7 @@
 pub mod c411;
 mod cache;
 pub mod hdtorrents;
+mod login_gate;
 pub mod nyaa;
 pub mod registry;
 pub mod tls;
@@ -105,7 +106,7 @@ pub trait SearchProvider: Send + Sync {
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("fetch_bytes get: {e}")))?;
+            .map_err(|e| crate::util::http_error("fetch_bytes get", e))?;
         let status = resp.status();
         // A signed URL the tracker declines to honour is policy, not a
         // transport failure — say so, or the user reads a bare 401 and
@@ -122,11 +123,12 @@ pub trait SearchProvider: Send + Sync {
         }
         let resp = resp
             .error_for_status()
-            .map_err(|e| Error::Provider(format!("fetch_bytes status: {e}")))?;
+            .map_err(|e| crate::util::http_error("fetch_bytes status", e))?;
         resp.bytes()
             .await
-            .map_err(|e| Error::Provider(format!("fetch_bytes body: {e}")))
+            .map_err(|e| crate::util::http_error("fetch_bytes body", e))
     }
 }
 
 pub use registry::ProviderRegistry;
+pub use util::redact;

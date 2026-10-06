@@ -430,9 +430,9 @@ pub async fn prune_window(
                    LEFT JOIN collections c ON c.id = t.collection_id \
                    WHERE t.deleted_at IS NULL AND c.tmdb_id IS NOT NULL \
                  UNION \
-                 SELECT tmdb_id FROM series_follows \
+                 SELECT tmdb_id FROM series_follows WHERE tmdb_id IS NOT NULL \
                  UNION \
-                 SELECT tmdb_id FROM pulse_signals \
+                 SELECT tmdb_id FROM pulse_signals WHERE tmdb_id IS NOT NULL \
              ) \
          )",
     )
@@ -631,6 +631,40 @@ mod tests {
         .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "Fresh Drop");
+    }
+
+    #[tokio::test]
+    async fn prune_window_still_prunes_with_an_unresolved_follow() {
+        let pool = migrated_pool().await;
+        let user = crate::test_support::make_user(&pool).await;
+        let old = Utc::now() - chrono::Duration::days(40);
+        upsert_item(&pool, &movie_release(1, "Old Drop", 5, old))
+            .await
+            .unwrap();
+        upsert_item(&pool, &movie_release(2, "Followed Drop", 5, old))
+            .await
+            .unwrap();
+        crate::follows::add(&pool, user, "unresolved anime", "Unresolved", None)
+            .await
+            .unwrap();
+        crate::follows::add(&pool, user, "followed drop", "Followed Drop", Some(2))
+            .await
+            .unwrap();
+
+        let cutoff = Utc::now() - chrono::Duration::days(28);
+        let removed = prune_window(&pool, cutoff, cutoff).await.unwrap();
+        assert_eq!(removed, 1, "a NULL follow id no longer spares everything");
+        let rows = query_for_user(
+            &pool,
+            &CatalogQuery {
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Followed Drop");
     }
 
     #[tokio::test]

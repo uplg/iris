@@ -57,7 +57,12 @@ the anti-DDoS that's always on doesn't block ordinary inbound traffic. If
 you have enabled it, add `45100/tcp` and `45100/udp` accept rules.
 
 The HTTP port stays unexposed — Cloudflare tunnel handles ingress, no
-inbound 80/443 needed.
+inbound 80/443 needed. `docker-compose.yml` publishes no HTTP port at all:
+cloudflared reaches `iris:8080` over the compose network. Don't add one —
+Docker-published ports bypass the host firewall, and a request reaching the
+origin directly could forge `CF-Connecting-IP` past the auth rate limits.
+To reach the stack from the server itself, `just dev` loads
+`docker-compose.dev.yml`, which binds the port on `127.0.0.1` only.
 
 ---
 

@@ -11,8 +11,7 @@
 //!
 //! Identity is the SCENE-normalised name. The Watchlist shelf and
 //! Series page run entirely off this — TMDB is consulted only to
-//! resolve a poster URL when the joined collection has been
-//! `tmdb_verified` (probe runtime match).
+//! resolve a poster URL from the joined TV collection's resolved id.
 //!
 //! Episode listings come from two sources, keyed on the same
 //! normalised name:
@@ -55,8 +54,8 @@ pub(crate) struct CreateFollowRequest {
     /// for identity; the original is kept for indexer queries and
     /// UI display.
     name: String,
-    /// Optional TMDB id — stored as decoration. Surfaces a poster
-    /// only after the corresponding collection gets `tmdb_verified`.
+    /// Optional TMDB id — stored as decoration; the poster comes from the
+    /// joined collection's id, not from this one.
     tmdb_id: Option<i64>,
 }
 
@@ -175,8 +174,8 @@ pub(crate) struct FollowSummary {
     /// SCENE-normalised name — clients route by this, not `tmdb_id`.
     normalized_name: String,
     name: String,
-    /// Decoration TMDB id (may be null). Even when present, only
-    /// rendered as a poster after the joined collection is verified.
+    /// Decoration TMDB id (may be null). The poster comes from the joined
+    /// TV collection's id, not from this one.
     tmdb_id: Option<i64>,
     poster_path: Option<String>,
     backdrop_path: Option<String>,
@@ -185,10 +184,9 @@ pub(crate) struct FollowSummary {
     created_at: DateTime<Utc>,
 }
 
-/// Build the client-facing summary. Poster lookup is gated on the
-/// matching collection being `tmdb_verified` — without that signal
-/// we refuse to fetch TMDB metadata to avoid surfacing the wrong
-/// show's poster.
+/// Build the client-facing summary. The poster comes from the joined TV
+/// collection's resolved id only (never the follow's own decoration id);
+/// no runtime-verification gate applies here.
 async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> FollowSummary {
     let trusted_tmdb = trusted_tmdb_id(state.db(), &row.normalized_name).await;
     // `series_follows` is TV-only — hint the namespace so a numerical
@@ -215,11 +213,9 @@ async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> Follo
     }
 }
 
-/// Returns a TMDB id we trust enough to use for poster lookup —
-/// i.e., one stored on a collection whose `tmdb_id` was written by
-/// the post-verify enrichment path (which only fires when the
-/// runtime probe matched). Returns None when no verified
-/// collection joins to this normalised name.
+/// The TMDB id of the TV collection joining this normalised name, as
+/// resolved from its SCENE identity. Not gated on `tmdb_verified`.
+/// None when no such collection has an id.
 async fn trusted_tmdb_id(pool: &iris_db::SqlitePool, normalized_name: &str) -> Option<i64> {
     iris_db::collections::first_tv_tmdb_id(pool, normalized_name)
         .await
@@ -312,15 +308,20 @@ pub(crate) async fn episodes(
     // status is the higher-signal answer.
     let mut by_key: BTreeMap<(i64, i64), EpisodeItem> = BTreeMap::new();
 
+    let mut infohashes: Vec<&str> = downloaded.iter().map(|d| d.infohash.as_str()).collect();
+    infohashes.sort_unstable();
+    infohashes.dedup();
+    let progress = iris_db::playback::progress_for_files(state.db(), user.id, &infohashes)
+        .await
+        .unwrap_or_default();
     for d in &downloaded {
         if let Some(s) = q.season
             && d.season != i64::from(s)
         {
             continue;
         }
-        let watched = iris_db::playback::get(state.db(), user.id, &d.infohash, d.file_idx)
-            .await
-            .unwrap_or(None)
+        let watched = progress
+            .get(&(d.infohash.clone(), d.file_idx))
             .is_some_and(|p| p.completed);
         by_key.insert(
             (d.season, d.episode),
@@ -510,18 +511,18 @@ pub(crate) async fn episode_context(
     // 3. Finally, fall back to file_idx+1 in the same torrent so
     //    season packs with no follow / collection-context still
     //    surface a "next" button.
-    let next_collection = if let Some(n) = normalized {
-        let same_season = (current_row.season, current_row.episode + 1);
-        let by_same_season = lookup_next_episode(state.db(), follow.as_ref(), n, same_season).await;
-        if by_same_season.is_some() {
-            by_same_season
-        } else {
-            let next_season = (current_row.season + 1, 1);
-            lookup_next_episode(state.db(), follow.as_ref(), n, next_season).await
-        }
-    } else {
-        None
+    let series = match normalized {
+        Some(n) => Some(SeriesEpisodes::load(state.db(), n, follow.is_some()).await),
+        None => None,
     };
+    let next_collection = series.as_ref().and_then(|s| {
+        lookup_next_episode(
+            s,
+            follow.as_ref(),
+            (current_row.season, current_row.episode + 1),
+        )
+        .or_else(|| lookup_next_episode(s, follow.as_ref(), (current_row.season + 1, 1)))
+    });
     let next = match next_collection {
         Some(ep) => Some(ep),
         None => same_torrent_next(state.db(), &p.infohash, p.file_idx + 1).await?,
@@ -529,33 +530,28 @@ pub(crate) async fn episode_context(
 
     // Symmetric previous-episode lookup. (S, E-1), then the last
     // episode of S-1, then same-torrent file_idx-1.
-    let prev_collection = if let Some(n) = normalized {
+    let prev_collection = series.as_ref().and_then(|s| {
         if current_row.episode > 1 {
-            let same_season = (current_row.season, current_row.episode - 1);
-            lookup_next_episode(state.db(), follow.as_ref(), n, same_season).await
+            lookup_next_episode(
+                s,
+                follow.as_ref(),
+                (current_row.season, current_row.episode - 1),
+            )
         } else if current_row.season > 1 {
             // Find the highest-numbered episode of the previous
             // season so the chip can land the user there.
             let prev_season = current_row.season - 1;
-            let last_ep = iris_db::episode_files::list_for_normalized(state.db(), n)
-                .await
-                .unwrap_or_default()
-                .into_iter()
+            let last_ep = s
+                .on_disk
+                .iter()
                 .filter(|r| r.season == prev_season)
                 .map(|r| r.episode)
-                .max();
-            match last_ep {
-                Some(ep) => {
-                    lookup_next_episode(state.db(), follow.as_ref(), n, (prev_season, ep)).await
-                }
-                None => None,
-            }
+                .max()?;
+            lookup_next_episode(s, follow.as_ref(), (prev_season, last_ep))
         } else {
             None
         }
-    } else {
-        None
-    };
+    });
     let prev = match prev_collection {
         Some(ep) => Some(ep),
         None if p.file_idx > 0 => {
@@ -601,16 +597,37 @@ async fn name_episodes(
 /// `None` when neither layer knows about it. `available` is only
 /// surfaced when the user actually follows the series — without a
 /// follow they have no `/grab` endpoint to call anyway.
-async fn lookup_next_episode(
-    pool: &iris_db::SqlitePool,
+/// A series' episodes on disk and, when followed, its cached offers: read
+/// once per [`episode_context`] call, then looked up per neighbour.
+struct SeriesEpisodes {
+    on_disk: Vec<iris_db::episode_files::EpisodeFileRow>,
+    available: Vec<iris_db::available_episodes::AvailableEpisodeRow>,
+}
+
+impl SeriesEpisodes {
+    async fn load(pool: &iris_db::SqlitePool, normalized_name: &str, followed: bool) -> Self {
+        let on_disk = iris_db::episode_files::list_for_normalized(pool, normalized_name)
+            .await
+            .unwrap_or_default();
+        let available = if followed {
+            iris_db::available_episodes::list_best_for_series(pool, normalized_name)
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        Self { on_disk, available }
+    }
+}
+
+fn lookup_next_episode(
+    series: &SeriesEpisodes,
     follow: Option<&iris_db::follows::FollowRow>,
-    normalized_name: &str,
     (season, episode): (i64, i64),
 ) -> Option<EpisodePoint> {
-    let on_disk = iris_db::episode_files::list_for_normalized(pool, normalized_name)
-        .await
-        .unwrap_or_default()
-        .into_iter()
+    let on_disk = series
+        .on_disk
+        .iter()
         .find(|r| r.season == season && r.episode == episode);
     if let Some(row) = on_disk {
         return Some(EpisodePoint {
@@ -618,16 +635,14 @@ async fn lookup_next_episode(
             season,
             episode,
             status: EpisodeStatus::Downloaded,
-            infohash: Some(row.infohash),
+            infohash: Some(row.infohash.clone()),
             file_idx: Some(row.file_idx),
             name: None,
         });
     }
     let follow = follow?;
-    let avail = iris_db::available_episodes::list_best_for_series(pool, normalized_name)
-        .await
-        .unwrap_or_default();
-    if avail
+    if series
+        .available
         .iter()
         .any(|a| a.season == season && a.episode == episode)
     {
@@ -913,11 +928,19 @@ pub(crate) async fn dominant_owned_language(state: &AppState, normalized_name: &
         .await
         .unwrap_or_default();
     let mut counts = (0u32, 0u32, 0u32);
+    // Each file counts (a pack weighs its episodes), but each torrent is
+    // looked up once.
+    let mut by_torrent: std::collections::HashMap<&str, Language> =
+        std::collections::HashMap::new();
     for f in &files {
-        tally(
-            &mut counts,
-            resolve_owned_language(state, &f.infohash).await,
-        );
+        let lang = if let Some(lang) = by_torrent.get(f.infohash.as_str()) {
+            *lang
+        } else {
+            let lang = resolve_owned_language(state, &f.infohash).await;
+            by_torrent.insert(&f.infohash, lang);
+            lang
+        };
+        tally(&mut counts, lang);
     }
     if counts == (0, 0, 0) {
         // Nothing on disk (typically a garbage-collected series) — fall
@@ -1128,6 +1151,7 @@ async fn resolve_grab_source(
     let cached_count = cached.len();
     refresh_offer_liveness(state.db(), &cached, &live).await;
 
+    let mut pack_swept = false;
     let owns_any_in_season = owned_files.iter().any(|f| f.season == season);
     if !owns_any_in_season
         && let Some((pack, true)) = verified_pack_offer(
@@ -1137,6 +1161,7 @@ async fn resolve_grab_source(
             season,
             language,
             &profile,
+            &mut pack_swept,
         )
         .await?
     {
@@ -1174,6 +1199,7 @@ async fn resolve_grab_source(
         season,
         language,
         &profile,
+        &mut pack_swept,
     )
     .await?
     {
@@ -1214,8 +1240,11 @@ pub(crate) async fn grab_episode_core(
     // circuit so a "grab the one I already have" click still tracks.
     // Idempotent — `iris_db::follows::add` is a no-op when
     // (user_id, normalized_name) already exists.
-    let _ =
-        iris_db::follows::add(state.db(), user_id, normalized_name, display_title, tmdb_id).await;
+    if let Err(e) =
+        iris_db::follows::add(state.db(), user_id, normalized_name, display_title, tmdb_id).await
+    {
+        tracing::warn!(error = %e, normalized_name, "grab: auto-follow failed");
+    }
 
     // Short-circuit only when we already hold the episode in the
     // requested language. An explicit FR badge click must NOT return
@@ -1259,7 +1288,7 @@ pub(crate) async fn grab_episode_core(
         GrabSource::Singleton(pick) => pick,
     };
 
-    let result = ingest_picked(
+    let (result, slot) = ingest_picked(
         state,
         &pick,
         ReprimeHint {
@@ -1270,7 +1299,7 @@ pub(crate) async fn grab_episode_core(
     )
     .await?;
 
-    super::torrents::record_ingest(
+    if let Err(e) = super::torrents::record_ingest(
         state,
         &result.snapshot,
         || format!("{display_title} S{season:02}E{episode:02}"),
@@ -1278,7 +1307,12 @@ pub(crate) async fn grab_episode_core(
         pick.indexer_torrent_id.clone(),
         user_id,
     )
-    .await?;
+    .await
+    {
+        super::torrents::discard_unrecorded(state, &result).await;
+        return Err(e.into());
+    }
+    drop(slot);
 
     // Prefer the leaf whose name designates the requested episode —
     // singleton releases usually repeat the SxxEyy marker in the video
@@ -1364,7 +1398,9 @@ async fn finalise_grabbed_episode(
         // arrives as `season=1, episode=<absolute>`, so a high
         // episode under season 1 carries the absolute number.
         let absolute_episode = fleuve_absolute(season, episode);
-        let _ = iris_db::episode_files::upsert(
+        // The next "Play next" resolves through this row: a failed write is
+        // the grab failing, not a silent 200.
+        iris_db::episode_files::upsert(
             state.db(),
             iris_db::episode_files::UpsertEpisodeFile {
                 collection_id,
@@ -1376,7 +1412,7 @@ async fn finalise_grabbed_episode(
                 absolute_episode,
             },
         )
-        .await;
+        .await?;
     }
     Ok(())
 }
@@ -1456,7 +1492,7 @@ async fn verify_owned_claim(
         tracing::warn!(error = %e, row = %row.id, "failed to delete poisoned episode_files row");
     }
     let idx = healed?;
-    let _ = iris_db::episode_files::upsert(
+    if let Err(e) = iris_db::episode_files::upsert(
         state.db(),
         iris_db::episode_files::UpsertEpisodeFile {
             collection_id: row.collection_id,
@@ -1468,7 +1504,10 @@ async fn verify_owned_claim(
             absolute_episode: fleuve_absolute(season, episode),
         },
     )
-    .await;
+    .await
+    {
+        tracing::warn!(error = %e, infohash = %row.infohash, "episode file correction failed");
+    }
     Some((row.infohash, idx))
 }
 
@@ -1567,6 +1606,23 @@ async fn ingest_picked(
     state: &AppState,
     pick: &PickedAvailability,
     reprime: ReprimeHint<'_>,
+) -> ApiResult<(iris_torrent::IngestResult, Option<LeechSlot>)> {
+    // Same slot guard as the manual grab: the follow scheduler grabs
+    // unattended, so on a capped tracker it is the likeliest way to walk into
+    // the cap without anyone reading the error. The caller holds the slot
+    // until the torrent's row is written.
+    let slot = super::torrents::take_leech_slot(state, &pick.indexer_provider).await?;
+    let result = add_picked(state, pick, reprime).await?;
+    super::torrents::reject_unstreamable(state, &result).await?;
+    Ok((result, slot))
+}
+
+type LeechSlot = tokio::sync::OwnedMutexGuard<()>;
+
+async fn add_picked(
+    state: &AppState,
+    pick: &PickedAvailability,
+    reprime: ReprimeHint<'_>,
 ) -> ApiResult<iris_torrent::IngestResult> {
     // Resolution order:
     //   1. Magnet — pre-resolved magnet URI, hand straight to librqbit.
@@ -1580,16 +1636,12 @@ async fn ingest_picked(
     //      the indexer. Works for providers that don't
     //      ship a URL in the search payload, and as a fallback when
     //      the persisted URL has expired.
-    // Same slot guard as the manual grab (`torrents::check_leech_slots`):
-    // the follow scheduler grabs unattended, so on a capped tracker it is the
-    // likeliest way to walk into the cap without anyone reading the error.
-    crate::routes::torrents::check_leech_slots(state, &pick.indexer_provider).await?;
     if !pick.magnet.is_empty() {
         return state
             .engine()
             .add_from_magnet(&pick.magnet)
             .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")));
+            .map_err(super::torrents::map_engine_err);
     }
     if let Some(url) = pick.download_url.as_deref()
         && let Some(provider) = state.providers().get(&pick.indexer_provider)
@@ -1601,7 +1653,7 @@ async fn ingest_picked(
                     .engine()
                     .add_from_bytes(bytes.to_vec())
                     .await
-                    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")));
+                    .map_err(super::torrents::map_engine_err);
             }
             Err(e) => {
                 tracing::warn!(
@@ -1660,7 +1712,7 @@ async fn ingest_picked(
             state.engine().add_from_bytes(b).await
         }
     }
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))
+    .map_err(super::torrents::map_engine_err)
 }
 
 /// Hard gate shared by every grab that has `.torrent` bytes in hand:
@@ -1750,7 +1802,7 @@ async fn ingest_pack_and_pick_episode(
     season: i64,
     episode: i64,
 ) -> ApiResult<GrabResponse> {
-    let result = ingest_picked(
+    let (result, slot) = ingest_picked(
         state,
         &pack,
         // Re-prime hint targets the season pack, not the individual
@@ -1770,29 +1822,28 @@ async fn ingest_pack_and_pick_episode(
     // can't trust position alone — a multi-disc pack might have
     // `Disc1/Show.S01E04.mkv` ahead of `Disc2/Show.S01E12.mkv`
     // alphabetically without that matching the requested episode.
-    let file_idx =
-        find_leaf_for_episode(&result.snapshot.files, season, episode).ok_or_else(|| {
-            // The pack is already in the engine at this point; surface
-            // which leaf names defeated the SCENE parser so the 404 is
-            // diagnosable (bad pack naming vs genuinely absent episode).
-            let leaves: Vec<&str> = result
-                .snapshot
-                .files
-                .iter()
-                .map(|f| f.path.rsplit('/').next().unwrap_or(&f.path))
-                .collect();
-            tracing::warn!(
-                season,
-                episode,
-                provider = %pack.indexer_provider,
-                torrent_id = %pack.indexer_torrent_id,
-                ?leaves,
-                "grab: requested episode not found inside ingested season pack"
-            );
-            ApiError::NotFound
-        })?;
+    let Some(file_idx) = find_leaf_for_episode(&result.snapshot.files, season, episode) else {
+        // Surface which leaf names defeated the SCENE parser so the 404 is
+        // diagnosable (bad pack naming vs genuinely absent episode).
+        let leaves: Vec<&str> = result
+            .snapshot
+            .files
+            .iter()
+            .map(|f| f.path.rsplit('/').next().unwrap_or(&f.path))
+            .collect();
+        tracing::warn!(
+            season,
+            episode,
+            provider = %pack.indexer_provider,
+            torrent_id = %pack.indexer_torrent_id,
+            ?leaves,
+            "grab: requested episode not found inside ingested season pack"
+        );
+        super::torrents::discard_unrecorded(state, &result).await;
+        return Err(ApiError::NotFound);
+    };
 
-    super::torrents::record_ingest(
+    if let Err(e) = super::torrents::record_ingest(
         state,
         &result.snapshot,
         || format!("{display_title} S{season:02} pack"),
@@ -1800,7 +1851,12 @@ async fn ingest_pack_and_pick_episode(
         pack.indexer_torrent_id.clone(),
         user_id,
     )
-    .await?;
+    .await
+    {
+        super::torrents::discard_unrecorded(state, &result).await;
+        return Err(e.into());
+    }
+    drop(slot);
 
     // Same finalisation as the singleton path — collection_assign
     // will SCENE-parse every file in the pack and create
@@ -1814,15 +1870,6 @@ async fn ingest_pack_and_pick_episode(
         file_idx,
         already_grabbed: result.already_managed,
     })
-}
-
-/// View a live search result through the shared ranking lens.
-fn result_candidate(r: &iris_core::search::SearchResult) -> iris_core::ranking::Candidate {
-    iris_core::ranking::Candidate {
-        seeders: r.seeders.map(i64::from),
-        size_bytes: r.size_bytes.and_then(|s| i64::try_from(s).ok()),
-        is_multi: detect_language(&r.title) == Language::Multi,
-    }
 }
 
 /// One live indexer sweep for a `(season, episode)` — or the season's
@@ -1888,6 +1935,7 @@ async fn verified_pack_offer(
     season: i64,
     sel: &LangSel,
     profile: &GrabProfile,
+    swept: &mut bool,
 ) -> Result<Option<(PickedAvailability, bool)>, sqlx::Error> {
     // Cheap cache pre-check before paying for a provider fan-out.
     if find_pack_offer(state.db(), normalized_name, season, sel, profile)
@@ -1896,6 +1944,11 @@ async fn verified_pack_offer(
     {
         return Ok(None);
     }
+    // One season sweep per grab: its seeder counts are already on the rows.
+    if *swept {
+        return find_pack_offer(state.db(), normalized_name, season, sel, profile).await;
+    }
+    *swept = true;
     let live = live_results(state, display_title, season, None).await;
     let rows = iris_db::available_episodes::list_pack_offers_for_season(
         state.db(),
@@ -1958,7 +2011,7 @@ async fn pick_live_singleton(
     )> = results
         .into_iter()
         .map(|r| {
-            let cand = result_candidate(&r);
+            let cand = crate::ranking::candidate(&r);
             let quality = iris_media::filename::parse(&r.title).and_then(|p| p.quality);
             let codec = detect_codec(&r.title);
             let qr = tag_rank(quality.as_deref(), q_pref);

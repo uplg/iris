@@ -13,6 +13,6 @@ pub mod metadata;
 pub use engine::{Engine, EngineError, FileEntry, IngestResult, TorrentSnapshot, TorrentState};
 pub use gc::{DerivedCache, DerivedTrimFn, Gc, GcConfig, GcReport};
 pub use metadata::{
-    TorrentFilePreview, TorrentPreview, is_main_video, is_video_path, main_video_index,
-    parse_preview,
+    TorrentFilePreview, TorrentPreview, is_main_video, is_streamable, is_video_path,
+    main_video_index, parse_preview,
 };

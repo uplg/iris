@@ -66,6 +66,7 @@ use url::Url;
 
 use crate::SearchProvider;
 use crate::cache::{DetailsCache, FifoCache};
+use crate::login_gate::{LoginGate, SessionGeneration};
 use crate::nfo;
 use crate::util::{
     BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, KindCategories, base_url, extract_year, field_or_env,
@@ -126,10 +127,7 @@ pub struct TorrentLeech {
     /// Cookie-jar client — the session IS the jar. One login primes it;
     /// every subsequent request rides the stored cookies.
     http: Client,
-    /// `true` once a login round-trip succeeded. Held in a Mutex so
-    /// concurrent searches single-flight the (re)login instead of
-    /// hammering the login form in parallel.
-    logged_in: Mutex<bool>,
+    login_gate: LoginGate,
     /// Torrent fid -> signed RSS download URL captured from search rows
     /// (carries the real `{filename}` tail).
     link_cache: Mutex<FifoCache<String>>,
@@ -169,7 +167,7 @@ impl TorrentLeech {
             alt_2fa_token,
             rss_key,
             http,
-            logged_in: Mutex::new(false),
+            login_gate: LoginGate::new(),
             link_cache: Mutex::new(FifoCache::new()),
             details_cache: DetailsCache::new(),
         }))
@@ -193,13 +191,13 @@ impl TorrentLeech {
             .form(&form)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("torrentleech login: {e}")))?;
+            .map_err(|e| crate::util::http_error("torrentleech login", e))?;
 
         let status = res.status();
         let body = res
             .text()
             .await
-            .map_err(|e| Error::Provider(format!("torrentleech login body: {e}")))?;
+            .map_err(|e| crate::util::http_error("torrentleech login body", e))?;
 
         if body.contains(LOGIN_OK_MARKER) {
             tracing::debug!(provider = %self.id, "torrentleech login succeeded");
@@ -212,18 +210,8 @@ impl TorrentLeech {
         )))
     }
 
-    async fn ensure_login(&self) -> Result<()> {
-        let mut logged = self.logged_in.lock().await;
-        if *logged {
-            return Ok(());
-        }
-        self.login().await?;
-        *logged = true;
-        Ok(())
-    }
-
-    async fn invalidate_session(&self) {
-        *self.logged_in.lock().await = false;
+    async fn ensure_login(&self) -> Result<SessionGeneration> {
+        self.login_gate.ensure(|| self.login()).await
     }
 
     /// Authenticated GET expecting a JSON body. An HTML body means the
@@ -232,13 +220,13 @@ impl TorrentLeech {
     async fn authed_get_json(&self, url: Url) -> Result<String> {
         let mut attempt = 0u8;
         loop {
-            self.ensure_login().await?;
+            let session = self.ensure_login().await?;
             let res = self
                 .http
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(|e| Error::Provider(format!("torrentleech request: {e}")))?;
+                .map_err(|e| crate::util::http_error("torrentleech request", e))?;
             if !res.status().is_success() {
                 let status = res.status();
                 return Err(Error::Provider(format!(
@@ -248,11 +236,11 @@ impl TorrentLeech {
             let body = res
                 .text()
                 .await
-                .map_err(|e| Error::Provider(format!("torrentleech body: {e}")))?;
+                .map_err(|e| crate::util::http_error("torrentleech body", e))?;
             let looks_logged_out = body.trim_start().starts_with('<');
             if looks_logged_out && attempt == 0 {
                 attempt += 1;
-                self.invalidate_session().await;
+                self.login_gate.invalidate(session).await;
                 continue;
             }
             if looks_logged_out {
@@ -270,13 +258,13 @@ impl TorrentLeech {
     async fn authed_get_html(&self, url: Url) -> Result<String> {
         let mut attempt = 0u8;
         loop {
-            self.ensure_login().await?;
+            let session = self.ensure_login().await?;
             let res = self
                 .http
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(|e| Error::Provider(format!("torrentleech request: {e}")))?;
+                .map_err(|e| crate::util::http_error("torrentleech request", e))?;
             if !res.status().is_success() {
                 let status = res.status();
                 return Err(Error::Provider(format!(
@@ -286,11 +274,11 @@ impl TorrentLeech {
             let body = res
                 .text()
                 .await
-                .map_err(|e| Error::Provider(format!("torrentleech body: {e}")))?;
+                .map_err(|e| crate::util::http_error("torrentleech body", e))?;
             let looks_logged_out = !body.contains(LOGIN_OK_MARKER);
             if looks_logged_out && attempt == 0 {
                 attempt += 1;
-                self.invalidate_session().await;
+                self.login_gate.invalidate(session).await;
                 continue;
             }
             if looks_logged_out {
@@ -335,7 +323,7 @@ impl TorrentLeech {
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("torrentleech download: {e}")))?;
+            .map_err(|e| crate::util::http_error("torrentleech download", e))?;
         if !res.status().is_success() {
             let status = res.status();
             return Err(Error::Provider(format!(
@@ -345,7 +333,7 @@ impl TorrentLeech {
         let bytes = res
             .bytes()
             .await
-            .map_err(|e| Error::Provider(format!("torrentleech download body: {e}")))?;
+            .map_err(|e| crate::util::http_error("torrentleech download body", e))?;
         if bytes.first().copied() != Some(BENCODE_DICT_MARKER) {
             let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned();
             tracing::warn!(

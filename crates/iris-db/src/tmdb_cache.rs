@@ -126,12 +126,40 @@ pub async fn put(
     Ok(())
 }
 
+/// Drop entries fetched before `before`; `get` never returns them anyway.
+pub async fn prune(pool: &SqlitePool, before: DateTime<Utc>) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query("DELETE FROM tmdb_resolve_cache WHERE fetched_at < ?1")
+        .bind(before)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::test_support::migrated_pool;
     use chrono::{Duration, Utc};
 
-    use super::{ResolveEntry, get, put};
+    use super::{ResolveEntry, get, prune, put};
+
+    #[tokio::test]
+    async fn prune_drops_only_stale_entries() {
+        let pool = migrated_pool().await;
+        let stale = ResolveEntry {
+            fetched_at: Utc::now() - Duration::days(40),
+            ..entry(1)
+        };
+        put(&pool, "old show", None, &stale).await.unwrap();
+        put(&pool, "new show", None, &entry(2)).await.unwrap();
+        let removed = prune(&pool, Utc::now() - Duration::days(30)).await.unwrap();
+        assert_eq!(removed, 1);
+        assert!(
+            get(&pool, "new show", None, Duration::days(1))
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
 
     fn entry(tmdb_id: i64) -> ResolveEntry {
         ResolveEntry {

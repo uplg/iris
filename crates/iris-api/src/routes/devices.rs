@@ -191,10 +191,13 @@ pub(crate) async fn link(
     Json(req): Json<LinkRequest>,
 ) -> ApiResult<axum::http::StatusCode> {
     let code = req.code.trim().to_ascii_uppercase();
-    let active = iris_db::device_codes::find_active_by_code(state.db(), &code)
+    // Unknown or expired is a 400; claimed meanwhile, the 409 below.
+    if iris_db::device_codes::find_active_by_code(state.db(), &code)
         .await?
-        .ok_or_else(|| ApiError::BadRequest("invalid or expired code".into()))?;
-    let _ = active;
+        .is_none()
+    {
+        return Err(ApiError::BadRequest("invalid or expired code".into()));
+    }
     let label = req
         .label
         .as_deref()

@@ -173,12 +173,17 @@ impl AniListClient {
                 r.media_recommendation.and_then(RawMedia::into_media),
             );
         }
-        self.inner
-            .cache
-            .write()
-            .await
-            .insert(cache_key, (Instant::now() + ANILIST_CACHE_TTL, out.clone()));
+        self.store(cache_key, ANILIST_CACHE_TTL, out.clone()).await;
         out
+    }
+
+    /// Insert, sweeping expired entries first: keys are per searched title,
+    /// so the map would otherwise grow for the life of the process.
+    async fn store(&self, cache_key: String, ttl: Duration, items: Vec<AniListMedia>) {
+        let now = Instant::now();
+        let mut cache = self.inner.cache.write().await;
+        cache.retain(|_, (expires_at, _)| *expires_at > now);
+        cache.insert(cache_key, (now + ttl, items));
     }
 
     /// Space outgoing requests ≥ [`ANILIST_MIN_INTERVAL`] apart. The lock is
@@ -196,10 +201,7 @@ impl AniListClient {
     }
 
     async fn cache_failure(&self, cache_key: String) -> Vec<AniListMedia> {
-        self.inner.cache.write().await.insert(
-            cache_key,
-            (Instant::now() + ANILIST_FAILURE_TTL, Vec::new()),
-        );
+        self.store(cache_key, ANILIST_FAILURE_TTL, Vec::new()).await;
         Vec::new()
     }
 }

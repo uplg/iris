@@ -395,7 +395,7 @@ pub(crate) struct ResetPasswordRequest {
     params(("id" = Uuid, Path)),
     request_body = ResetPasswordRequest,
     responses(
-        (status = 204, description = "Password reset; all refresh tokens revoked"),
+        (status = 204, description = "Password reset; every session revoked and every passkey removed"),
         (status = 400, description = "New password too short (min 8 chars)"),
         (status = 403, description = "Caller is not an admin"),
         (status = 404, description = "No such user"),
@@ -414,7 +414,9 @@ pub(crate) async fn reset_user_password(
         return Err(ApiError::NotFound);
     };
     let hash = crate::passwords::hash(&body.new_password).await?;
-    iris_db::users::set_password(state.db(), user_id, &hash).await?;
+    let passkeys = iris_db::users::set_password(state.db(), user_id, &hash)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     super::audit(
         &state,
         admin.0.id,
@@ -424,6 +426,20 @@ pub(crate) async fn reset_user_password(
         Some(&target.email),
     )
     .await;
+    if passkeys > 0 {
+        super::audit(
+            &state,
+            admin.0.id,
+            "user.passkeys_revoked",
+            "user",
+            Some(&id.to_string()),
+            Some(&format!(
+                "{}: {passkeys} removed by the reset",
+                target.email
+            )),
+        )
+        .await;
+    }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -616,6 +632,10 @@ pub(crate) struct CreateInvitationRequest {
     ttl_secs: Option<i64>,
 }
 
+/// Past this, `Duration::seconds` and the expiry addition would overflow
+/// (and panic) long before any useful horizon.
+const MAX_INVITATION_TTL_SECS: i64 = 366 * 24 * 3600;
+
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct CreatedInvitation {
     id: Uuid,
@@ -630,7 +650,7 @@ pub(crate) struct CreatedInvitation {
     request_body = CreateInvitationRequest,
     responses(
         (status = 200, description = "Created invitation with its one-time plaintext token", body = CreatedInvitation),
-        (status = 400, description = "TTL too short (min 60s)"),
+        (status = 400, description = "TTL too short (min 60 s) or too long (max 1 year)"),
         (status = 403, description = "Caller is not an admin"),
     ),
     tag = "admin",
@@ -643,6 +663,9 @@ pub(crate) async fn create_invitation(
     let ttl = req.ttl_secs.unwrap_or(state.cfg().auth.invitation_ttl_secs);
     if ttl < 60 {
         return Err(ApiError::BadRequest("ttl too short".into()));
+    }
+    if ttl > MAX_INVITATION_TTL_SECS {
+        return Err(ApiError::BadRequest("ttl too long (max 1 year)".into()));
     }
     let expires_at = Utc::now() + Duration::seconds(ttl);
     let token = new_invitation_token();

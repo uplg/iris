@@ -292,7 +292,7 @@ impl TorznabProvider {
                 .query(&qs)
                 .send()
                 .await
-                .map_err(|e| Error::Provider(format!("torznab request: {e}")))?;
+                .map_err(|e| crate::util::http_error("torznab request", e))?;
             if res.status().is_server_error() && attempt == 0 {
                 attempt += 1;
                 tracing::debug!(
@@ -304,10 +304,10 @@ impl TorznabProvider {
             }
             break res
                 .error_for_status()
-                .map_err(|e| Error::Provider(format!("torznab status: {e}")))?
+                .map_err(|e| crate::util::http_error("torznab status", e))?
                 .text()
                 .await
-                .map_err(|e| Error::Provider(format!("torznab body: {e}")))?;
+                .map_err(|e| crate::util::http_error("torznab body", e))?;
         };
 
         let parsed = parse_torznab_xml(&body).map_err(|e| {
@@ -509,7 +509,7 @@ impl SearchProvider for TorznabProvider {
             .get(&url)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("torznab download: {e}")))?;
+            .map_err(|e| crate::util::http_error("torznab download", e))?;
         if !res.status().is_success() && res.status() != StatusCode::FOUND {
             let status = res.status();
             let body = res.text().await.unwrap_or_default();
@@ -521,7 +521,7 @@ impl SearchProvider for TorznabProvider {
         let bytes = res
             .bytes()
             .await
-            .map_err(|e| Error::Provider(format!("torznab download body: {e}")))?;
+            .map_err(|e| crate::util::http_error("torznab download body", e))?;
 
         // Some indexers respond with a magnet body instead of a .torrent
         // file when the user lacks bandwidth credit — detect and surface
@@ -535,7 +535,7 @@ impl SearchProvider for TorznabProvider {
         }
 
         if bytes.first().copied() != Some(BENCODE_DICT_MARKER) {
-            // Surface the URL we hit + a short preview so misconfigured
+            // Surface the host we hit + a short preview so misconfigured
             // indexers (HTML detail page in `<link>`, missing/expired
             // apikey returning a login HTML, etc.) are diagnosable from
             // logs without re-running the whole flow.
@@ -543,7 +543,7 @@ impl SearchProvider for TorznabProvider {
             tracing::warn!(
                 provider = %self.id,
                 external_id,
-                url = %url,
+                url = %crate::util::url_origin(&url),
                 first_byte = ?bytes.first(),
                 body_preview = %preview,
                 "torznab download returned non-bencoded body",
@@ -655,7 +655,7 @@ impl RawItem {
                 self.languages.push(value.to_ascii_lowercase());
             }
             "infohash" if !value.is_empty() => {
-                self.infohash = Some(value.to_ascii_lowercase());
+                self.infohash = crate::util::normalize_infohash(value);
             }
             "tmdbid" | "tmdb" => {
                 if let Ok(n) = value.parse()

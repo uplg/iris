@@ -32,7 +32,7 @@ pub fn spawn(pool: SqlitePool, engine: Arc<Engine>, providers: ProviderRegistry)
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            reconcile_once(&pool, &engine, &providers).await;
+            crate::supervise::tick("seed stats", reconcile_once(&pool, &engine, &providers)).await;
         }
     });
 }
@@ -40,28 +40,26 @@ pub fn spawn(pool: SqlitePool, engine: Arc<Engine>, providers: ProviderRegistry)
 async fn reconcile_once(pool: &SqlitePool, engine: &Engine, providers: &ProviderRegistry) {
     let no_seed = no_seed_infohashes(pool, providers).await;
     let snapshots = engine.list();
+    // Upload deltas, download max (so ratios divide two lifetime
+    // quantities) and the "fully downloaded" stamp, persisted while the
+    // session can still answer it: after a restart the re-checking
+    // (`initializing`) session reports finished = false for minutes, and the
+    // DB stamp is what lets streaming serve finished torrents from disk then.
+    let counters: Vec<_> = snapshots
+        .iter()
+        .map(|s| iris_db::torrents::SnapshotCounters {
+            infohash: &s.infohash,
+            uploaded_bytes: s.uploaded_bytes,
+            progress_bytes: s.progress_bytes,
+            finished: s.finished,
+        })
+        .collect();
+    if let Err(e) = iris_db::torrents::reconcile_snapshots(pool, &counters).await {
+        tracing::warn!(error = %e, "seed_stats reconcile failed");
+    }
     for snap in snapshots {
-        if let Err(e) =
-            iris_db::torrents::reconcile_uploaded(pool, &snap.infohash, snap.uploaded_bytes).await
-        {
-            tracing::warn!(error = %e, infohash = %snap.infohash, "seed_stats reconcile failed");
-        }
-        // Same idea for downloads (monotonic max of on-disk progress) so
-        // ratios divide two lifetime quantities. See `reconcile_downloaded`.
-        if let Err(e) =
-            iris_db::torrents::reconcile_downloaded(pool, &snap.infohash, snap.progress_bytes).await
-        {
-            tracing::warn!(error = %e, infohash = %snap.infohash, "seed_stats dl reconcile failed");
-        }
         if !snap.finished {
             continue;
-        }
-        // Persist "fully downloaded" while the session can still answer it.
-        // After a restart the re-checking (`initializing`) session reports
-        // finished = false for minutes; the DB stamp is what lets streaming
-        // serve finished torrents straight from disk during that window.
-        if let Err(e) = iris_db::torrents::mark_finished(pool, &snap.infohash).await {
-            tracing::warn!(error = %e, infohash = %snap.infohash, "seed_stats mark_finished failed");
         }
         // Provider policy: this tracker's grabs don't seed. The download is
         // done, so leave the swarm. Files stay on disk and playback reads

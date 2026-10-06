@@ -271,15 +271,18 @@ async fn prewarm_tv_collection(
     // The collection's TMDB id is resolved once, up in `assign_after_ingest`
     // via `resolve_collection_tmdb` (movies + TV) — not here, to keep a single
     // resolution path. This prewarm only kicks the episode scheduler below.
+    // In the background and under the scheduler's cooldown: a grab of an
+    // established series would otherwise wait on one more full indexer
+    // sweep, and spend it, for offers scanned minutes ago.
     if let Some(reg) = deps.providers
-        && let Err(e) =
-            crate::collections_scheduler::scan_collection(pool, reg, collection.id).await
+        && crate::collections_scheduler::scan_is_due(collection)
     {
-        tracing::warn!(
-            error = %e,
-            collection_id = %collection.id,
-            "prewarm: initial scheduler scan failed",
-        );
+        let (pool, reg, id) = (pool.clone(), reg.clone(), collection.id);
+        tokio::spawn(async move {
+            if let Err(e) = crate::collections_scheduler::scan_collection(&pool, &reg, id).await {
+                tracing::warn!(error = %e, collection_id = %id, "prewarm: initial scheduler scan failed");
+            }
+        });
     }
 }
 
@@ -1113,39 +1116,18 @@ async fn try_merge_twin(
     merge_collection_into(pool, providers, &plain, &anime).await;
 }
 
-/// Fold `loser` into `winner`: re-home torrents + episode files, re-key
-/// per-user follows, drop the loser's stale availability cache, delete the
-/// emptied loser, then rescan the winner so availability repopulates under
-/// the surviving key (now collecting BOTH naming styles — see
-/// `collections_scheduler`). Order matters: children move BEFORE the delete
-/// because `episode_files.collection_id` is `ON DELETE CASCADE`.
+/// Fold `loser` into `winner` (one transaction, see
+/// `collections::merge_into`), then rescan the winner so availability
+/// repopulates under the surviving key (now collecting BOTH naming styles —
+/// see `collections_scheduler`).
 async fn merge_collection_into(
     pool: &SqlitePool,
     providers: Option<&iris_providers::ProviderRegistry>,
     loser: &CollectionRow,
     winner: &CollectionRow,
 ) {
-    if let Err(e) = iris_db::torrents::reassign_collection(pool, loser.id, winner.id).await {
-        tracing::warn!(error = %e, loser = %loser.id, "anime merge: reassign torrents failed");
-        return;
-    }
-    if let Err(e) = episode_files::reassign_collection(pool, loser.id, winner.id).await {
-        tracing::warn!(error = %e, loser = %loser.id, "anime merge: reassign episode_files failed");
-        return;
-    }
-    if let (Some(lnorm), Some(wnorm)) = (
-        loser.parsed_title_normalized.as_deref(),
-        winner.parsed_title_normalized.as_deref(),
-    ) {
-        if let Err(e) = iris_db::follows::reassign_or_drop(pool, lnorm, wnorm).await {
-            tracing::warn!(error = %e, "anime merge: reassign follows failed");
-        }
-        // The loser's availability cache is keyed by its now-dead name; drop
-        // it and let the winner's rescan below repopulate under the survivor.
-        let _ = iris_db::available_episodes::delete_for_series(pool, lnorm).await;
-    }
-    if let Err(e) = iris_db::collections::delete(pool, loser.id).await {
-        tracing::warn!(error = %e, loser = %loser.id, "anime merge: delete loser failed");
+    if let Err(e) = iris_db::collections::merge_into(pool, loser, winner).await {
+        tracing::warn!(error = %e, loser = %loser.id, "anime merge failed, nothing moved");
         return;
     }
     tracing::info!(

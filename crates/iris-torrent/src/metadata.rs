@@ -111,6 +111,17 @@ fn compute_streamable(files: &[TorrentFilePreview]) -> bool {
     video_bytes > 0 && video_bytes >= archive_bytes
 }
 
+/// [`TorrentPreview::streamable`] for a torrent already in the engine — the
+/// only check a magnet can get, since it has no `.torrent` bytes to preview.
+#[must_use]
+pub fn is_streamable(files: &[crate::FileEntry]) -> bool {
+    let files: Vec<TorrentFilePreview> = files
+        .iter()
+        .map(|f| TorrentFilePreview::classify(f.index, f.path.clone(), f.size_bytes))
+        .collect();
+    compute_streamable(&files)
+}
+
 pub fn parse_preview(bytes: &[u8]) -> anyhow::Result<TorrentPreview> {
     let parsed: TorrentMetaV1<ByteBuf> = torrent_from_bytes(bytes)?;
     let info_hash = hex::encode(parsed.info_hash.0);
@@ -238,5 +249,19 @@ mod tests {
             file("Extras/artwork.zip", 30_000_000),
         ];
         assert!(compute_streamable(&files));
+    }
+
+    #[test]
+    fn engine_file_lists_get_the_same_verdict() {
+        let entry = |index, path: &str, size_bytes| crate::FileEntry {
+            index,
+            path: path.into(),
+            size_bytes,
+        };
+        assert!(!super::is_streamable(&[
+            entry(0, "Movie-GRP/movie.rar", 4_000_000_000),
+            entry(1, "Movie-GRP/Sample/movie-sample.mkv", 50_000_000),
+        ]));
+        assert!(super::is_streamable(&[entry(0, "Movie.2024.mkv", 1)]));
     }
 }

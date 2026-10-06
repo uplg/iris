@@ -124,8 +124,8 @@ struct Session {
     child: tokio::sync::Mutex<tokio::process::Child>,
     last_access_ms: AtomicU64,
     mode: Mode,
-    /// Tuner mux frequency (`f=` of the tune URL) — `None` for internet
-    /// inputs. Drives the mux-admission bookkeeping.
+    /// Tuner mux frequency (`f=` of the tune URL), whatever the mode — `None`
+    /// for internet inputs. Drives the mux-admission bookkeeping.
     freq: Option<String>,
     /// Prewarm mux member: kept warm for hours instead of minutes.
     pinned: std::sync::atomic::AtomicBool,
@@ -193,7 +193,7 @@ impl TranscodeManager {
             }
             // Bail out early if ffmpeg died (bad input, missing codec…).
             if let Ok(Some(status)) = session.child.lock().await.try_wait() {
-                self.remove(&mode.key(channel_key)).await;
+                self.remove_session(&mode.key(channel_key), &session).await;
                 return Err(LiveTvError::Upstream(format!(
                     "live transcoder exited early ({status})"
                 )));
@@ -374,11 +374,29 @@ impl TranscodeManager {
             child: tokio::sync::Mutex::new(child),
             last_access_ms: AtomicU64::new(epoch_ms()),
             mode,
-            freq: (mode == Mode::Remux).then(|| tuner_freq(input)).flatten(),
+            // A re-encode of a tuner feed holds an adapter too.
+            freq: tuner_freq(input),
             pinned: std::sync::atomic::AtomicBool::new(pinned),
         });
         sessions.insert(session_key, session.clone());
         Ok(session)
+    }
+
+    /// [`Self::remove`], but only while `key` still maps to `session`: another
+    /// viewer may have respawned a dead session under the same key and dir.
+    async fn remove_session(&self, key: &str, session: &Arc<Session>) {
+        let removed = {
+            let mut sessions = self.sessions.lock().await;
+            if sessions.get(key).is_some_and(|s| Arc::ptr_eq(s, session)) {
+                sessions.remove(key)
+            } else {
+                None
+            }
+        };
+        if let Some(session) = removed {
+            let _ = session.child.lock().await.kill().await;
+            let _ = tokio::fs::remove_dir_all(&session.dir).await;
+        }
     }
 
     async fn remove(&self, channel_key: &str) {
@@ -537,6 +555,56 @@ fn is_valid_segment_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sleeping_session(mode: Mode, input: &str, dir: &str) -> Arc<Session> {
+        let child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        Arc::new(Session {
+            dir: std::env::temp_dir().join(dir),
+            child: tokio::sync::Mutex::new(child),
+            last_access_ms: AtomicU64::new(epoch_ms()),
+            mode,
+            freq: tuner_freq(input),
+            pinned: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    #[tokio::test]
+    async fn early_exit_cleanup_spares_a_respawned_session() {
+        let manager = TranscodeManager::default();
+        let key = Mode::Remux.key("fr:m6");
+        let stale = sleeping_session(Mode::Remux, "http://x/s.m3u8", "iris-test-stale");
+        let fresh = sleeping_session(Mode::Remux, "http://x/s.m3u8", "iris-test-fresh");
+        manager
+            .sessions
+            .lock()
+            .await
+            .insert(key.clone(), fresh.clone());
+        manager.remove_session(&key, &stale).await;
+        let kept = manager.sessions.lock().await.get(&key).cloned().unwrap();
+        assert!(Arc::ptr_eq(&kept, &fresh));
+        manager.remove_session(&key, &fresh).await;
+        assert!(manager.sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reencode_of_a_tuner_feed_counts_toward_its_mux() {
+        let manager = TranscodeManager::default();
+        let tune = "http://tuner:8554/tune?f=690000000&p=0,17,256,1000,1001";
+        let session = sleeping_session(Mode::Reencode, tune, "iris-test-enc");
+        manager
+            .sessions
+            .lock()
+            .await
+            .insert(Mode::Reencode.key("fr:tf1"), session);
+        let heat = manager.freq_heat().await;
+        assert_eq!(heat.get("690000000"), Some(&true));
+        manager.reap_freq("690000000").await;
+        assert!(manager.sessions.lock().await.is_empty());
+    }
 
     #[test]
     fn segment_name_validation() {

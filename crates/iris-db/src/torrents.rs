@@ -110,35 +110,32 @@ pub struct NewTorrent {
     pub added_by: UserId,
 }
 
-/// Insert if the infohash is new, otherwise return the existing row
-/// (un-soft-deleting it). The torrent's own `tmdb_id` is no longer written —
+/// Insert if the infohash is new, otherwise return the existing row. A live
+/// row is returned as is. A soft-deleted one is brought back as the new
+/// grab: the re-grabber becomes `added_by` and the release's provenance is
+/// the new one. One statement, so two concurrent grabs of the same
+/// infohash both succeed. The torrent's own `tmdb_id` is no longer written —
 /// the parent collection's id is the single source of truth (resolved from the
 /// collection's SCENE identity); see `collection_assign::resolve_collection_tmdb`.
 pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sqlx::Error> {
-    if let Some(existing) = find_by_infohash(pool, &new.infohash).await? {
-        if existing.deleted_at.is_some() {
-            // Re-grab of an evicted/deleted torrent: the payload is gone from
-            // disk (librqbit re-preallocates zero-filled files), so the old
-            // `finished_at` no longer reflects reality. Reset it — endpoints
-            // like `play_asset` trust `finished_at` as "complete on disk" and
-            // would otherwise probe a zero-filled preallocation. It gets
-            // re-stamped by `set_finished` when the re-download completes.
-            sqlx::query("UPDATE torrents SET deleted_at = NULL, finished_at = NULL WHERE id = ?1")
-                .bind(existing.id)
-                .execute(pool)
-                .await?;
-        }
-        return find_by_infohash(pool, &new.infohash)
-            .await?
-            .ok_or(sqlx::Error::RowNotFound);
-    }
     let id = Uuid::new_v4();
     let now = Utc::now();
     let added_by: Uuid = new.added_by.into();
+    // On a resurrect the payload is gone from disk (librqbit re-preallocates
+    // zero-filled files), so `finished_at` is reset: `play_asset` trusts it
+    // as "complete on disk". `set_finished` re-stamps it later.
     sqlx::query(
         "INSERT INTO torrents (id, infohash, name, total_size_bytes, source_provider, \
          source_external_id, added_by, added_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+         ON CONFLICT(infohash) DO UPDATE SET \
+            source_provider = COALESCE(excluded.source_provider, torrents.source_provider), \
+            source_external_id = \
+                COALESCE(excluded.source_external_id, torrents.source_external_id), \
+            added_by = excluded.added_by, \
+            finished_at = NULL, \
+            deleted_at = NULL \
+         WHERE torrents.deleted_at IS NOT NULL",
     )
     .bind(id)
     .bind(&new.infohash)
@@ -272,22 +269,68 @@ pub async fn reconcile_uploaded(
     session_now: u64,
 ) -> Result<(), sqlx::Error> {
     let now = i64::try_from(session_now).unwrap_or(i64::MAX);
-    // Single UPDATE so the read of the previous value and the write of the
-    // new total can't interleave with a delete or another reconcile pass.
-    sqlx::query(
-        "UPDATE torrents SET \
-           uploaded_bytes_total = uploaded_bytes_total + \
-             CASE WHEN ?1 >= uploaded_bytes_session_seen \
-                  THEN ?1 - uploaded_bytes_session_seen \
-                  ELSE ?1 END, \
-           uploaded_bytes_session_seen = ?1 \
-         WHERE infohash = ?2",
-    )
-    .bind(now)
-    .bind(infohash)
-    .execute(pool)
-    .await?;
+    sqlx::query(RECONCILE_UPLOADED)
+        .bind(now)
+        .bind(infohash)
+        .execute(pool)
+        .await?;
     Ok(())
+}
+
+/// Single UPDATE so the read of the previous value and the write of the new
+/// total can't interleave with a delete or another reconcile pass. An
+/// unchanged session counter writes nothing.
+const RECONCILE_UPLOADED: &str = "UPDATE torrents SET \
+       uploaded_bytes_total = uploaded_bytes_total + \
+         CASE WHEN ?1 >= uploaded_bytes_session_seen \
+              THEN ?1 - uploaded_bytes_session_seen \
+              ELSE ?1 END, \
+       uploaded_bytes_session_seen = ?1 \
+     WHERE infohash = ?2 AND uploaded_bytes_session_seen IS NOT ?1";
+
+const RECONCILE_DOWNLOADED: &str = "UPDATE torrents SET downloaded_bytes_total = ?1 \
+     WHERE infohash = ?2 AND downloaded_bytes_total < ?1";
+
+const MARK_FINISHED: &str = "UPDATE torrents SET finished_at = ?1 \
+     WHERE infohash = ?2 AND finished_at IS NULL AND deleted_at IS NULL";
+
+/// One engine snapshot's counters, for [`reconcile_snapshots`].
+pub struct SnapshotCounters<'a> {
+    pub infohash: &'a str,
+    pub uploaded_bytes: u64,
+    pub progress_bytes: u64,
+    pub finished: bool,
+}
+
+/// [`reconcile_uploaded`], [`reconcile_downloaded`] and [`mark_finished`]
+/// for every live torrent in one transaction: one write-lock acquisition
+/// per tick instead of up to three per torrent.
+pub async fn reconcile_snapshots(
+    pool: &SqlitePool,
+    snapshots: &[SnapshotCounters<'_>],
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now();
+    let mut tx = pool.begin().await?;
+    for s in snapshots {
+        sqlx::query(RECONCILE_UPLOADED)
+            .bind(i64::try_from(s.uploaded_bytes).unwrap_or(i64::MAX))
+            .bind(s.infohash)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(RECONCILE_DOWNLOADED)
+            .bind(i64::try_from(s.progress_bytes).unwrap_or(i64::MAX))
+            .bind(s.infohash)
+            .execute(&mut *tx)
+            .await?;
+        if s.finished {
+            sqlx::query(MARK_FINISHED)
+                .bind(now)
+                .bind(s.infohash)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await
 }
 
 /// Reconcile the lifetime download counter from a live snapshot's
@@ -302,14 +345,11 @@ pub async fn reconcile_downloaded(
     progress_now: u64,
 ) -> Result<(), sqlx::Error> {
     let now = i64::try_from(progress_now).unwrap_or(i64::MAX);
-    sqlx::query(
-        "UPDATE torrents SET downloaded_bytes_total = MAX(downloaded_bytes_total, ?1) \
-         WHERE infohash = ?2",
-    )
-    .bind(now)
-    .bind(infohash)
-    .execute(pool)
-    .await?;
+    sqlx::query(RECONCILE_DOWNLOADED)
+        .bind(now)
+        .bind(infohash)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -356,14 +396,11 @@ pub async fn lifetime_bytes(pool: &SqlitePool) -> Result<(u64, u64), sqlx::Error
 /// already in place when a later deploy puts the restored session
 /// through its `initializing` re-check.
 pub async fn mark_finished(pool: &SqlitePool, infohash: &str) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE torrents SET finished_at = ?1 \
-         WHERE infohash = ?2 AND finished_at IS NULL AND deleted_at IS NULL",
-    )
-    .bind(Utc::now())
-    .bind(infohash)
-    .execute(pool)
-    .await?;
+    sqlx::query(MARK_FINISHED)
+        .bind(Utc::now())
+        .bind(infohash)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -390,23 +427,6 @@ pub async fn set_collection(
         .execute(pool)
         .await?;
     Ok(())
-}
-
-/// Move every torrent attached to collection `from` over to `to`. Used by
-/// the anime noise-split merge (`collection_assign`) that collapses an
-/// `anime:K` + plain `K` pair pointing at the same TMDB entity into one.
-/// Returns the number of torrents re-homed.
-pub async fn reassign_collection(
-    pool: &SqlitePool,
-    from: Uuid,
-    to: Uuid,
-) -> Result<u64, sqlx::Error> {
-    let res = sqlx::query("UPDATE torrents SET collection_id = ?2 WHERE collection_id = ?1")
-        .bind(from)
-        .bind(to)
-        .execute(pool)
-        .await?;
-    Ok(res.rows_affected())
 }
 
 /// All torrents currently attached to a collection. Powers the Series
@@ -571,6 +591,91 @@ mod tests {
         let again = upsert(&pool, new).await.unwrap();
         assert_eq!(again.id, row.id);
         assert!(again.finished_at.is_some(), "live dup keeps finished_at");
+    }
+
+    #[tokio::test]
+    async fn regrab_of_a_deleted_torrent_belongs_to_the_new_grab() {
+        let pool = migrated_pool().await;
+        let first = crate::test_support::make_named_user(&pool, "A").await;
+        let second = crate::test_support::make_named_user(&pool, "B").await;
+        let grab = |by: UserId, provider: &str| NewTorrent {
+            infohash: "cc".repeat(20),
+            name: "Heat 1995".into(),
+            total_size_bytes: 1,
+            source_provider: Some(provider.into()),
+            source_external_id: Some(format!("{provider}-1")),
+            added_by: by,
+        };
+        let row = upsert(&pool, grab(first, "c411")).await.unwrap();
+
+        let live = upsert(&pool, grab(second, "seedpool")).await.unwrap();
+        assert_eq!(live.added_by, row.added_by, "a live row keeps its grabber");
+        assert_eq!(live.source_provider.as_deref(), Some("c411"));
+
+        soft_delete(&pool, TorrentId(row.id)).await.unwrap();
+        let back = upsert(&pool, grab(second, "seedpool")).await.unwrap();
+        assert_eq!(back.id, row.id);
+        assert_eq!(back.added_by, Uuid::from(second));
+        assert_eq!(back.source_provider.as_deref(), Some("seedpool"));
+        assert_eq!(back.source_external_id.as_deref(), Some("seedpool-1"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_reconcile_counts_deltas_once_and_stamps_finished() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let row = upsert(
+            &pool,
+            NewTorrent {
+                infohash: "ee".repeat(20),
+                name: "Seeded".into(),
+                total_size_bytes: 100,
+                source_provider: None,
+                source_external_id: None,
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        let tick = |uploaded, progress, finished| SnapshotCounters {
+            infohash: &row.infohash,
+            uploaded_bytes: uploaded,
+            progress_bytes: progress,
+            finished,
+        };
+        reconcile_snapshots(&pool, &[tick(100, 50, false)])
+            .await
+            .unwrap();
+        reconcile_snapshots(&pool, &[tick(100, 40, true)])
+            .await
+            .unwrap();
+        // A restart resets the session counter: 30 is a fresh delta.
+        reconcile_snapshots(&pool, &[tick(30, 100, true)])
+            .await
+            .unwrap();
+        let got = find_by_infohash(&pool, &row.infohash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.uploaded_bytes_total, 130);
+        assert_eq!(got.downloaded_bytes_total, 100);
+        assert!(got.finished_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_grabs_share_one_row() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let new = NewTorrent {
+            infohash: "dd".repeat(20),
+            name: "Twice".into(),
+            total_size_bytes: 1,
+            source_provider: None,
+            source_external_id: None,
+            added_by: user,
+        };
+        let (a, b) = tokio::join!(upsert(&pool, new.clone()), upsert(&pool, new));
+        assert_eq!(a.unwrap().id, b.unwrap().id);
     }
 
     /// Upsert a row then overwrite its lifetime counters — test helper

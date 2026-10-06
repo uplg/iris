@@ -36,7 +36,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use thiserror::Error;
 use tokio::io::AsyncBufReadExt;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::{Mutex, Notify};
 
 #[derive(Debug, Error)]
@@ -212,6 +212,9 @@ pub enum VideoMode {
     },
 }
 
+/// Every value [`RemuxPlan::cache_suffix`] can take.
+const VARIANT_SUFFIXES: [&str; 4] = ["", "_h264", "_hevc", "_hevc10"];
+
 impl RemuxPlan {
     /// Cache-dir discriminator. `Copy` keeps the bare `infohash_idx`
     /// key so every pre-existing cache entry (and the caps-unaware
@@ -242,8 +245,10 @@ impl RemuxPlan {
 
 #[derive(Debug, Clone)]
 pub struct AudioRendition {
-    /// `0:a:N` source index.
-    pub source_idx: usize,
+    /// Absolute input stream index, mapped as `0:N`. Not `0:a:N`: the probe
+    /// drops duplicate audio streams, so a probe position isn't the file's
+    /// audio position.
+    pub source_stream: u32,
     /// `Copy` is only safe for codecs the browser decodes natively
     /// (AAC / MP3 / Opus / Vorbis). Otherwise pick `Aac` to transcode.
     pub codec: AudioCodec,
@@ -261,27 +266,6 @@ pub struct AudioRendition {
 pub enum AudioCodec {
     Copy,
     Aac,
-}
-
-impl RemuxPlan {
-    pub fn copy_only_with_languages(audio_languages: &[Option<String>]) -> Self {
-        Self {
-            audio: audio_languages
-                .iter()
-                .enumerate()
-                .map(|(i, lang)| AudioRendition {
-                    source_idx: i,
-                    codec: AudioCodec::Copy,
-                    name: format!("audio_{i}"),
-                    language: lang.clone().unwrap_or_else(|| "und".into()),
-                    default: i == 0,
-                })
-                .collect(),
-            source_video_codec: None,
-            source_duration_secs: None,
-            video: VideoMode::Copy,
-        }
-    }
 }
 
 /// Server-wide encoder settings for the transcode (catch-up) path, sourced
@@ -425,6 +409,10 @@ impl RemuxManager {
         Some(progress_fraction(encoded, total))
     }
 
+    pub async fn is_in_flight(&self, key: &str) -> bool {
+        self.inner.jobs.lock().await.contains_key(key)
+    }
+
     /// Returns the recorded error message for `key` if a recent ffmpeg
     /// run failed and the cooldown hasn't elapsed.
     pub async fn recent_failure(&self, key: &str) -> Option<String> {
@@ -506,6 +494,41 @@ impl RemuxManager {
         // it so the next play attempt actually re-runs ffmpeg.
         self.inner.failures.lock().await.remove(key);
         Ok(freed)
+    }
+
+    /// Drop every cache of a torrent (each file, each variant), returning
+    /// the freed bytes. A job still running for one of them fails on its
+    /// next segment write.
+    pub async fn wipe_torrent(&self, infohash: &str) -> u64 {
+        let prefix = format!("{infohash}_");
+        let mut freed = 0;
+        let Ok(mut rd) = tokio::fs::read_dir(&self.inner.base_dir).await else {
+            return 0;
+        };
+        while let Ok(Some(e)) = rd.next_entry().await {
+            if let Some(name) = e.file_name().to_str()
+                && name.starts_with(&prefix)
+            {
+                freed += dir_size(&e.path()).await.unwrap_or(0);
+                let _ = tokio::fs::remove_dir_all(e.path()).await;
+            }
+        }
+        self.inner
+            .failures
+            .lock()
+            .await
+            .retain(|key, _| !key.starts_with(&prefix));
+        freed
+    }
+
+    /// [`Self::touch_played`] for every variant of one file: the playback
+    /// heartbeat doesn't know which one the player is on, and a finished
+    /// transcode left unbumped would be evicted mid-film.
+    pub async fn touch_played_file(&self, infohash: &str, file_idx: usize) {
+        for suffix in VARIANT_SUFFIXES {
+            self.touch_played(&format!("{infohash}_{file_idx}{suffix}"))
+                .await;
+        }
     }
 
     /// Bump the "last played" timestamp for [`key`] so LRU eviction
@@ -804,6 +827,9 @@ async fn dir_size(path: &Path) -> std::io::Result<u64> {
 /// Asset names accepted by `/play/{*asset}`. Matches every file ffmpeg
 /// produces under the cache dir, rejects everything else (path traversal
 /// segments like `..`, absolute paths, control characters).
+/// Only what the players fetch: playlists, init segments and media
+/// segments. `ffmpeg.log` (server paths, ffmpeg errors) and `.last_played`
+/// live in the same directory.
 fn is_safe_asset_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() < 128
@@ -811,6 +837,10 @@ fn is_safe_asset_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && std::path::Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e, "m3u8" | "mp4" | "m4s"))
 }
 
 /// Two-stage HLS-CMAF pipeline: ffmpeg encodes per-stream MP4 outputs
@@ -954,7 +984,7 @@ async fn run_ffmpeg(
         // option, so without this the audio MP4s would still inherit
         // chapters and the parasitic chapter-text track they generate.
         cmd.args(["-map_chapters", "-1"])
-            .args(["-map", &format!("0:a:{}?", a.source_idx)]);
+            .args(["-map", &format!("0:{}?", a.source_stream)]);
         match a.codec {
             AudioCodec::Copy => {
                 cmd.args(["-c:a", "copy"]);
@@ -1040,7 +1070,7 @@ async fn run_ffmpeg_hls(
     // transcoded to AAC stereo. Per-stream codec specifiers (`-c:a:<n>`)
     // because everything goes into one HLS output context.
     for (i, a) in plan.audio.iter().enumerate() {
-        cmd.args(["-map", &format!("0:a:{}", a.source_idx)]);
+        cmd.args(["-map", &format!("0:{}", a.source_stream)]);
         match a.codec {
             AudioCodec::Copy => {
                 cmd.arg(format!("-c:a:{i}")).arg("copy");
@@ -1099,7 +1129,9 @@ async fn run_ffmpeg_child(
     log_path: &Path,
     job: &Arc<JobState>,
 ) -> Result<(), RemuxError> {
-    let mut child = cmd.spawn()?;
+    // The job task owns the child: dropped at shutdown, it must not leave
+    // an orphan encoding on.
+    let mut child = cmd.kill_on_drop(true).spawn()?;
     if let Some(stderr) = child.stderr.take() {
         let log = log_path.to_path_buf();
         tokio::spawn(async move { drain_stderr_to_log(stderr, log).await });
@@ -1209,7 +1241,7 @@ async fn run_shaka(
         "remuxer: spawning shaka-packager",
     );
 
-    let mut child = cmd.spawn()?;
+    let mut child = cmd.kill_on_drop(true).spawn()?;
     if let Some(stderr) = child.stderr.take() {
         let log = log_path.to_path_buf();
         tokio::spawn(async move { append_stderr_to_log(stderr, log).await });
@@ -1272,10 +1304,6 @@ async fn drain_stderr_to_log(stderr: tokio::process::ChildStderr, log_path: Path
         }
     }
 }
-
-// Suppress dead-code warnings on Child while we don't surface a kill API.
-#[allow(dead_code)]
-fn _silence_child_unused(_: &Child) {}
 
 /// `-vf` chain for a `VideoMode::Transcode` re-encode: a never-upscale 1080p
 /// cap, so a CPU-only encoder isn't handed a 4K source it can't keep ahead of
@@ -1358,6 +1386,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_player_assets_are_served() {
+        for ok in ["master.m3u8", "video_init.mp4", "fre_12.m4s", "v_3.m4s"] {
+            assert!(is_safe_asset_name(ok), "{ok}");
+        }
+        for refused in [
+            "ffmpeg.log",
+            ".last_played",
+            "../master.m3u8",
+            "a/b.m4s",
+            "",
+        ] {
+            assert!(!is_safe_asset_name(refused), "{refused}");
+        }
+    }
+
+    #[test]
     fn transcode_filter_never_needs_zimg() {
         for tonemap in [false, true] {
             let vf = transcode_video_filter(tonemap);
@@ -1384,6 +1428,31 @@ mod tests {
             .open(&sentinel)
             .unwrap();
         f.set_modified(SystemTime::now() - age).unwrap();
+    }
+
+    #[tokio::test]
+    async fn torrent_wide_wipe_and_touch_cover_every_variant() {
+        let base =
+            std::env::temp_dir().join(format!("iris-remux-wipe-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for key in ["abc_0", "abc_0_h264", "abc_1", "abd_0"] {
+            std::fs::create_dir_all(base.join(key)).unwrap();
+            std::fs::write(base.join(key).join("v.m4s"), vec![0u8; 10]).unwrap();
+        }
+        let mgr = RemuxManager::new(base.clone());
+
+        mgr.touch_played_file("abc", 0).await;
+        assert!(base.join("abc_0").join(LAST_PLAYED_SENTINEL).exists());
+        assert!(base.join("abc_0_h264").join(LAST_PLAYED_SENTINEL).exists());
+        assert!(!base.join("abc_1").join(LAST_PLAYED_SENTINEL).exists());
+
+        assert!(mgr.wipe_torrent("abc").await >= 30);
+        assert!(!base.join("abc_0").exists());
+        assert!(!base.join("abc_0_h264").exists());
+        assert!(!base.join("abc_1").exists());
+        assert!(base.join("abd_0").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]

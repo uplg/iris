@@ -46,16 +46,7 @@ use iris_media::filename::Language;
 use iris_providers::ProviderRegistry;
 use uuid::Uuid;
 
-/// View a search result through the shared "recommended" ordering lens
-/// (seeders + size + `MULTi`). `is_multi` is passed in because the caller
-/// already resolved the language for the `(S, E, language)` bucket.
-fn candidate_of(r: &SearchResult, is_multi: bool) -> iris_core::ranking::Candidate {
-    iris_core::ranking::Candidate {
-        seeders: r.seeders.map(i64::from),
-        size_bytes: r.size_bytes.map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
-        is_multi,
-    }
-}
+use crate::ranking::candidate_of;
 
 /// How often to scan all TV collections. Most series ship a new
 /// episode once a week, so 4 h means we surface a release within
@@ -83,7 +74,8 @@ pub fn spawn(pool: SqlitePool, providers: ProviderRegistry) {
         ticker.tick().await; // skip the immediate firing
         loop {
             ticker.tick().await;
-            run_pass(&pool, providers.clone()).await;
+            crate::supervise::tick("collections scheduler", run_pass(&pool, providers.clone()))
+                .await;
         }
     });
     tracing::info!(
@@ -122,6 +114,14 @@ async fn run_pass(pool: &SqlitePool, providers: Arc<ProviderRegistry>) {
         // every tick.
         let _ = iris_db::collections::touch_scanned(pool, collection.id).await;
     }
+}
+
+/// Whether the periodic scheduler would scan this collection now (never
+/// scanned, or last scanned before the cooldown).
+pub(crate) fn scan_is_due(collection: &iris_db::collections::CollectionRow) -> bool {
+    collection.last_indexer_scan_at.is_none_or(|at| {
+        at < chrono::Utc::now() - chrono::TimeDelta::seconds(PER_COLLECTION_COOLDOWN_SECS)
+    })
 }
 
 /// Public entry-point — scan one collection on demand. Used by

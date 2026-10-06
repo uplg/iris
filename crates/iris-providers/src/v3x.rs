@@ -43,11 +43,11 @@ use iris_core::search::{
 use reqwest::header::{HeaderMap, HeaderValue, ORIGIN, REFERER};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
-use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
 use crate::cache::DetailsCache;
+use crate::login_gate::{LoginGate, SessionGeneration};
 use crate::nfo;
 use crate::torznab::TorznabProvider;
 use crate::util::{base_url, field_or_env, optional_field_or_env};
@@ -71,7 +71,7 @@ struct Session {
     login: String,
     password: String,
     http: Client,
-    logged_in: Mutex<bool>,
+    login_gate: LoginGate,
     cache: DetailsCache,
 }
 
@@ -126,16 +126,16 @@ impl Session {
             login,
             password,
             http,
-            logged_in: Mutex::new(false),
+            login_gate: LoginGate::new(),
             cache: DetailsCache::new(),
         })
     }
 
-    async fn ensure_login(&self) -> Result<()> {
-        let mut logged = self.logged_in.lock().await;
-        if *logged {
-            return Ok(());
-        }
+    async fn ensure_login(&self) -> Result<SessionGeneration> {
+        self.login_gate.ensure(|| self.login()).await
+    }
+
+    async fn login(&self) -> Result<()> {
         let url = self
             .base_url
             .join("/auth/login")
@@ -150,7 +150,7 @@ impl Session {
             }))
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("v3x login: {e}")))?;
+            .map_err(|e| crate::util::http_error("v3x login", e))?;
         let status = res.status();
         let body: serde_json::Value = res.json().await.unwrap_or_default();
         if !status.is_success() {
@@ -165,7 +165,6 @@ impl Session {
                 "v3x login needs 2FA, which Iris can't answer — disable it for this account".into(),
             ));
         }
-        *logged = true;
         Ok(())
     }
 
@@ -179,16 +178,16 @@ impl Session {
             .map_err(|e| Error::Provider(format!("v3x details url: {e}")))?;
         let mut retried = false;
         let raw: DetailRaw = loop {
-            self.ensure_login().await?;
+            let session = self.ensure_login().await?;
             let res = self
                 .http
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(|e| Error::Provider(format!("v3x details: {e}")))?;
+                .map_err(|e| crate::util::http_error("v3x details", e))?;
             if res.status() == StatusCode::UNAUTHORIZED && !retried {
                 retried = true;
-                *self.logged_in.lock().await = false;
+                self.login_gate.invalidate(session).await;
                 continue;
             }
             if !res.status().is_success() {
@@ -200,7 +199,7 @@ impl Session {
             break res
                 .json()
                 .await
-                .map_err(|e| Error::Provider(format!("v3x details body: {e}")))?;
+                .map_err(|e| crate::util::http_error("v3x details body", e))?;
         };
         let d = raw.into_details(provider_id, id);
         self.cache.put(id.to_string(), d.clone()).await;

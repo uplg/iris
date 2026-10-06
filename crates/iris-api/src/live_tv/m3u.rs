@@ -107,8 +107,9 @@ fn parse_attrs(section: &str) -> HashMap<String, String> {
         }
         // Key = identifier run ending at `=`.
         let key_start = section[..eq]
-            .rfind(|c: char| c.is_whitespace())
-            .map_or(0, |p| p + 1);
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map_or(0, |(p, c)| p + c.len_utf8());
         let key = section[key_start..eq].trim();
         let val_start = eq + 2;
         let Some(val_end) = section[val_start..].find('"').map(|p| val_start + p) else {
@@ -193,6 +194,15 @@ http://example.com/arte.m3u8
             parse("#EXTINF:-1 tvg-id=\"X.fr\",\nhttp://x/s.m3u8\n"),
             Vec::<M3uEntry>::new()
         );
+    }
+
+    #[test]
+    fn multibyte_whitespace_before_a_key_does_not_panic() {
+        let attrs =
+            parse_attrs("-1 tvg-id=\"X.fr\"\u{a0}tvg-logo=\"l.png\"\u{3000}group-title=\"G\"");
+        assert_eq!(attrs.get("tvg-id").unwrap(), "X.fr");
+        assert_eq!(attrs.get("tvg-logo").unwrap(), "l.png");
+        assert_eq!(attrs.get("group-title").unwrap(), "G");
     }
 
     #[test]

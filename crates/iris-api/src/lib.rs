@@ -22,6 +22,7 @@ pub mod routes;
 pub mod seed_stats;
 pub mod simkl;
 pub mod state;
+pub mod supervise;
 pub mod tmdb;
 pub mod tmdb_backfill;
 pub mod tmdb_resolve;
@@ -56,7 +57,9 @@ fn setup_remuxer(
         ticker.tick().await; // skip immediate boot tick
         loop {
             ticker.tick().await;
-            let (count, _) = evictor.evict_to(cap_bytes).await;
+            let count = supervise::tick("remux evictor", evictor.evict_to(cap_bytes))
+                .await
+                .map_or(0, |(count, _)| count);
             if count > 0 {
                 tracing::info!(count, "remuxer cache eviction pass complete");
             }
@@ -93,29 +96,17 @@ fn setup_gc(
         }
     };
 
-    // Wipe matching remux cache dirs (one per file index, named
-    // `{infohash}_{idx}`) after a torrent is evicted, so derived state
-    // doesn't outlive its source.
+    // Derived state (remux variants, extracted subtitles) doesn't outlive
+    // its source.
     let on_evict = {
         let remuxer = remuxer.clone();
+        let subs_dir = routes::torrents::subtitle_cache_dir(cfg);
         move |infohash: &str| {
             let remuxer = remuxer.clone();
+            let subs_dir = subs_dir.clone();
             let h = infohash.to_string();
             tokio::spawn(async move {
-                let cache_dir = remuxer.base_dir().to_path_buf();
-                let prefix = format!("{h}_");
-                if let Ok(mut rd) = tokio::fs::read_dir(&cache_dir).await {
-                    while let Ok(Some(e)) = rd.next_entry().await {
-                        if let Some(name) = e.file_name().to_str()
-                            && name.starts_with(&prefix)
-                        {
-                            // Cache entries are directories — remove_file
-                            // fails silently on them and the orphaned
-                            // cache then inflates the remux dir forever.
-                            let _ = tokio::fs::remove_dir_all(e.path()).await;
-                        }
-                    }
-                }
+                routes::torrents::wipe_derived(&remuxer, &subs_dir, &h).await;
             });
         }
     };
@@ -233,12 +224,14 @@ fn spawn_background_jobs(
             tmdb.clone(),
             app_state.providers().clone(),
             app_state.cfg().discovery.clone(),
+            app_state.anilist().cloned(),
         );
         pulse::spawn(
             pool.clone(),
             tmdb.clone(),
             app_state.providers().clone(),
             &app_state.cfg().discovery,
+            app_state.anilist().cloned(),
         );
     }
 
@@ -318,14 +311,17 @@ fn spawn_background_jobs(
         ticker.tick().await; // skip the immediate fire
         loop {
             ticker.tick().await;
-            collection_assign::run_backfill(
-                &bf_pool,
-                collection_assign::EnrichDeps {
-                    tmdb: bf_tmdb.as_ref(),
-                    anilist: bf_anilist.as_ref(),
-                    providers: Some(&bf_providers),
-                },
-                &bf_engine,
+            supervise::tick(
+                "collection backfill",
+                collection_assign::run_backfill(
+                    &bf_pool,
+                    collection_assign::EnrichDeps {
+                        tmdb: bf_tmdb.as_ref(),
+                        anilist: bf_anilist.as_ref(),
+                        providers: Some(&bf_providers),
+                    },
+                    &bf_engine,
+                ),
             )
             .await;
         }

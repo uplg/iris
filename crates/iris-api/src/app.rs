@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -6,7 +5,6 @@ use axum::extract::Request;
 use axum::routing::get;
 use tower::Layer;
 use tower_governor::GovernorLayer;
-use tower_governor::governor::GovernorConfigBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::normalize_path::NormalizePathLayer;
@@ -15,7 +13,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::client_version::client_version_layer;
 use crate::middleware::{coop_coep_layers, iris_caps_layer, static_cache_layer};
-use crate::rate_limit::CloudflareIpKeyExtractor;
+use crate::rate_limit::{self, Quota};
 use crate::routes;
 use crate::state::AppState;
 
@@ -43,22 +41,9 @@ pub fn build_router(state: AppState) -> Router {
     // then cleared the code and regenerated — a 429 feedback spiral) AND
     // collaterally 429'd browser refreshes into a logout. The generous lane
     // keeps the TV's poll answering cleanly so it never spirals.
-    let login_governor = Arc::new(
-        GovernorConfigBuilder::default()
-            .per_second(5)
-            .burst_size(20)
-            .key_extractor(CloudflareIpKeyExtractor)
-            .finish()
-            .expect("login governor config is hard-coded and valid"),
-    );
-    let session_governor = Arc::new(
-        GovernorConfigBuilder::default()
-            .per_second(20)
-            .burst_size(60)
-            .key_extractor(CloudflareIpKeyExtractor)
-            .finish()
-            .expect("session governor config is hard-coded and valid"),
-    );
+    let login_governor = rate_limit::lane(Quota::LOGIN);
+    let session_governor = rate_limit::lane(Quota::SESSION);
+    rate_limit::spawn_sweeper(vec![login_governor.clone(), session_governor.clone()]);
     // Device-pairing endpoints are nested under the generous session lane
     // (rather than as a separate top-level group) because axum forbids
     // overlapping nest paths like `/auth` and `/auth/device`. Each subtree

@@ -308,27 +308,92 @@ pub async fn set_display_title(
 /// stamped with that same wrong value and the standard "first writer
 /// wins" rule would block the correction. Live ingestion flows must
 /// keep using [`set_tmdb_id_if_missing`].
+///
+/// A changed id un-verifies the member torrents in the same transaction:
+/// their runtime check vouched for the old id, not this one.
 pub async fn set_tmdb_id(pool: &SqlitePool, id: Uuid, tmdb_id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE collections SET tmdb_id = ?1 WHERE id = ?2")
-        .bind(tmdb_id)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
+    let mut tx = pool.begin().await?;
+    let changed =
+        sqlx::query("UPDATE collections SET tmdb_id = ?1 WHERE id = ?2 AND tmdb_id IS NOT ?1")
+            .bind(tmdb_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    if changed > 0 {
+        sqlx::query("UPDATE torrents SET tmdb_verified = FALSE WHERE collection_id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
 }
 
 /// Hard-delete a collection row. Member torrents are `ON DELETE SET NULL`
 /// (re-orphaned, then re-assigned on the next backfill tick); member
-/// `episode_files` are `ON DELETE CASCADE`. So callers that need to PRESERVE
-/// those children — the anime noise-split merge — must re-home them onto the
-/// surviving collection FIRST (see `torrents::reassign_collection` /
-/// `episode_files::reassign_collection`), then delete the emptied loser here.
+/// `episode_files` are `ON DELETE CASCADE`. A merge that must PRESERVE
+/// those children goes through [`merge_into`].
 pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
     sqlx::query("DELETE FROM collections WHERE id = ?1")
         .bind(id)
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Fold the `loser` collection into `winner` in one transaction: torrents,
+/// episode files and the per-user rows keyed on the collection (series
+/// playback preferences, Continue-Watching and ghost dismissals) move over,
+/// follows and offers keyed on the loser's name are re-keyed or dropped,
+/// then the emptied loser goes. In one transaction so an ingest landing on
+/// the loser mid-merge can't lose its episode files to the delete's
+/// cascade. A user row that already exists on the winner wins.
+pub async fn merge_into(
+    pool: &SqlitePool,
+    loser: &CollectionRow,
+    winner: &CollectionRow,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    for sql in [
+        "UPDATE torrents SET collection_id = ?2 WHERE collection_id = ?1",
+        "UPDATE episode_files SET collection_id = ?2 WHERE collection_id = ?1",
+        "UPDATE OR IGNORE collection_playback_preferences SET collection_id = ?2 \
+         WHERE collection_id = ?1",
+        "UPDATE OR IGNORE cw_dismissed SET collection_id = ?2 WHERE collection_id = ?1",
+        "UPDATE OR IGNORE ghost_dismissed SET collection_id = ?2 WHERE collection_id = ?1",
+    ] {
+        sqlx::query(sql)
+            .bind(loser.id)
+            .bind(winner.id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let (Some(lnorm), Some(wnorm)) = (
+        loser.parsed_title_normalized.as_deref(),
+        winner.parsed_title_normalized.as_deref(),
+    ) {
+        sqlx::query(
+            "UPDATE OR IGNORE series_follows SET normalized_name = ?2 WHERE normalized_name = ?1",
+        )
+        .bind(lnorm)
+        .bind(wnorm)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM series_follows WHERE normalized_name = ?1")
+            .bind(lnorm)
+            .execute(&mut *tx)
+            .await?;
+        // Keyed by the now-dead name; the winner's rescan repopulates.
+        sqlx::query("DELETE FROM available_episodes WHERE normalized_name = ?1")
+            .bind(lnorm)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DELETE FROM collections WHERE id = ?1")
+        .bind(loser.id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
 }
 
 /// Standalone collection — used when neither TMDB id nor a parseable
@@ -415,10 +480,12 @@ pub async fn list_due_for_scan(
          WHERE kind = 'tv' \
            AND parsed_title_normalized IS NOT NULL \
            AND (last_indexer_scan_at IS NULL \
-                OR last_indexer_scan_at < datetime('now', '-' || ?1 || ' seconds')) \
+                OR last_indexer_scan_at < ?1) \
          ORDER BY last_indexer_scan_at IS NOT NULL, last_indexer_scan_at"
     ))
-    .bind(cooldown_seconds)
+    // The column holds chrono's RFC 3339 (`…T…+00:00`); SQLite's
+    // `datetime('now')` (`… …`) would sort after it all day long.
+    .bind(Utc::now() - chrono::TimeDelta::seconds(cooldown_seconds))
     .fetch_all(pool)
     .await
 }
@@ -656,17 +723,29 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(ef_count(&pool, plain.id).await, 1);
-
-        crate::episode_files::reassign_collection(&pool, plain.id, anime.id)
+        // A per-series language choice made on the plain twin.
+        let user = make_user(&pool).await;
+        let french = crate::playback_preferences::PlaybackPreferences {
+            audio_language: Some("fre".into()),
+            subtitle_language: None,
+        };
+        crate::playback_preferences::set_for_collection(&pool, user, plain.id, &french)
             .await
             .unwrap();
-        assert_eq!(ef_count(&pool, plain.id).await, 0);
-        assert_eq!(ef_count(&pool, anime.id).await, 1);
+        let plain = get(&pool, plain.id).await.unwrap().unwrap();
+        let anime = get(&pool, anime.id).await.unwrap().unwrap();
 
-        delete(&pool, plain.id).await.unwrap();
+        merge_into(&pool, &plain, &anime).await.unwrap();
+
         assert!(get(&pool, plain.id).await.unwrap().is_none());
-        // The survivor keeps the moved episode file (no cascade wipe).
+        // The survivor keeps the moved episode file (no cascade wipe)…
         assert_eq!(ef_count(&pool, anime.id).await, 1);
+        // …and the user's series preference.
+        let (prefs, own) = crate::playback_preferences::get_for_collection(&pool, user, anime.id)
+            .await
+            .unwrap();
+        assert!(own);
+        assert_eq!(prefs.audio_language.as_deref(), Some("fre"));
     }
 
     /// Ghosts are scoped to the user who watched them: a fully-GC'd
@@ -784,5 +863,72 @@ mod tests {
             1,
             "newer watch activity resurfaces the dismissed ghost",
         );
+    }
+
+    #[tokio::test]
+    async fn replacing_the_tmdb_id_unverifies_member_torrents() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let film = find_or_create(&pool, "heat 1995", "Heat", Kind::Movie, false)
+            .await
+            .unwrap();
+        set_tmdb_id(&pool, film.id, 949).await.unwrap();
+        let t = crate::torrents::upsert(
+            &pool,
+            crate::torrents::NewTorrent {
+                infohash: "ab".repeat(20),
+                name: "Heat.1995.1080p".into(),
+                total_size_bytes: 1,
+                source_provider: None,
+                source_external_id: None,
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        crate::torrents::set_collection(&pool, &t.infohash, Some(film.id))
+            .await
+            .unwrap();
+        crate::torrents::set_tmdb_verified(&pool, &t.infohash, true)
+            .await
+            .unwrap();
+        let verified = |pool: SqlitePool, ih: String| async move {
+            crate::torrents::find_by_infohash(&pool, &ih)
+                .await
+                .unwrap()
+                .unwrap()
+                .tmdb_verified
+        };
+
+        set_tmdb_id(&pool, film.id, 949).await.unwrap();
+        assert!(verified(pool.clone(), t.infohash.clone()).await, "same id");
+        set_tmdb_id(&pool, film.id, 11).await.unwrap();
+        assert!(!verified(pool.clone(), t.infohash.clone()).await, "new id");
+    }
+
+    #[tokio::test]
+    async fn a_scan_is_due_once_its_cooldown_has_passed_the_same_day() {
+        let pool = migrated_pool().await;
+        let show = find_or_create(&pool, "severance", "Severance", Kind::Tv, false)
+            .await
+            .unwrap();
+        let due = |pool: SqlitePool| async move {
+            list_due_for_scan(&pool, 7_200)
+                .await
+                .unwrap()
+                .iter()
+                .map(|c| c.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(due(pool.clone()).await, vec![show.id], "never scanned");
+        touch_scanned(&pool, show.id).await.unwrap();
+        assert!(due(pool.clone()).await.is_empty(), "inside the cooldown");
+        sqlx::query("UPDATE collections SET last_indexer_scan_at = ?1 WHERE id = ?2")
+            .bind(Utc::now() - chrono::TimeDelta::hours(3))
+            .bind(show.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(due(pool.clone()).await, vec![show.id], "cooldown elapsed");
     }
 }

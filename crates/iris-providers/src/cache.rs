@@ -67,14 +67,46 @@ impl DetailsCache {
             .map(|(d, _)| d.clone())
     }
 
+    /// Stale entries are swept here: `get` only filters them, and every
+    /// previewed release would otherwise stay for the life of the process.
     pub(crate) async fn put(&self, key: String, details: TorrentDetails) {
-        self.map.lock().await.insert(key, (details, Instant::now()));
+        let mut map = self.map.lock().await;
+        map.retain(|_, (_, at)| at.elapsed() < DETAILS_TTL);
+        map.insert(key, (details, Instant::now()));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FifoCache, LINK_CACHE_CAP};
+    use std::time::Instant;
+
+    use iris_core::search::TorrentDetails;
+
+    use super::{DETAILS_TTL, DetailsCache, FifoCache, LINK_CACHE_CAP};
+
+    fn details() -> TorrentDetails {
+        serde_json::from_value(serde_json::json!({
+            "provider_id": "p", "external_id": "1", "title": "t",
+        }))
+        .expect("minimal details")
+    }
+
+    #[tokio::test]
+    async fn details_cache_sweeps_stale_entries_on_put() {
+        let cache = DetailsCache::new();
+        let stale = Instant::now()
+            .checked_sub(DETAILS_TTL * 2)
+            .expect("monotonic clock");
+        cache
+            .map
+            .lock()
+            .await
+            .insert("old".into(), (details(), stale));
+        cache.put("new".into(), details()).await;
+        let map = cache.map.lock().await;
+        assert!(!map.contains_key("old"));
+        assert!(map.contains_key("new"));
+    }
 
     #[test]
     fn fifo_cache_evicts_oldest_first() {

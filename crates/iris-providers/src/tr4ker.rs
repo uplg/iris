@@ -113,7 +113,7 @@ impl Tr4ker {
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("tr4ker details request: {e}")))?;
+            .map_err(|e| crate::util::http_error("tr4ker details request", e))?;
         if res.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -128,7 +128,7 @@ impl Tr4ker {
         let body = res
             .text()
             .await
-            .map_err(|e| Error::Provider(format!("tr4ker details body: {e}")))?;
+            .map_err(|e| crate::util::http_error("tr4ker details body", e))?;
         let raw: TorrentDetailRaw = serde_json::from_str(&body).map_err(|e| {
             tracing::warn!(
                 provider = %self.id,

@@ -50,6 +50,7 @@ use url::Url;
 
 use crate::SearchProvider;
 use crate::cache::{DetailsCache, FifoCache};
+use crate::login_gate::{LoginGate, SessionGeneration};
 use crate::nfo;
 use crate::util::{
     BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, KindCategories, base_url, extract_year, field_or_env,
@@ -113,10 +114,7 @@ pub struct HdTorrents {
     /// Cookie-jar client — the session IS the jar. One login primes it;
     /// every subsequent request rides the stored cookies.
     http: Client,
-    /// `true` once a login round-trip succeeded. Held in a Mutex so
-    /// concurrent searches single-flight the (re)login instead of
-    /// hammering `login.php` in parallel.
-    logged_in: Mutex<bool>,
+    login_gate: LoginGate,
     /// Torrent id -> absolute `download.php` URL captured from search
     /// rows (carries the `f=<name>.torrent` filename parameter).
     link_cache: Mutex<FifoCache<String>>,
@@ -151,7 +149,7 @@ impl HdTorrents {
             username,
             password,
             http,
-            logged_in: Mutex::new(false),
+            login_gate: LoginGate::new(),
             link_cache: Mutex::new(FifoCache::new()),
             details_cache: DetailsCache::new(),
         }))
@@ -170,13 +168,13 @@ impl HdTorrents {
             .form(&[("uid", self.username.as_str()), ("pwd", &self.password)])
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("hdtorrents login: {e}")))?;
+            .map_err(|e| crate::util::http_error("hdtorrents login", e))?;
 
         let status = res.status();
         let body = res
             .text()
             .await
-            .map_err(|e| Error::Provider(format!("hdtorrents login body: {e}")))?;
+            .map_err(|e| crate::util::http_error("hdtorrents login body", e))?;
 
         if body.to_ascii_lowercase().contains(LOGIN_OK_MARKER) {
             tracing::debug!(provider = %self.id, "hdtorrents login succeeded");
@@ -189,18 +187,8 @@ impl HdTorrents {
         )))
     }
 
-    async fn ensure_login(&self) -> Result<()> {
-        let mut logged = self.logged_in.lock().await;
-        if *logged {
-            return Ok(());
-        }
-        self.login().await?;
-        *logged = true;
-        Ok(())
-    }
-
-    async fn invalidate_session(&self) {
-        *self.logged_in.lock().await = false;
+    async fn ensure_login(&self) -> Result<SessionGeneration> {
+        self.login_gate.ensure(|| self.login()).await
     }
 
     /// Authenticated GET returning the response body, re-logging in and
@@ -208,13 +196,13 @@ impl HdTorrents {
     async fn authed_get_text(&self, url: Url) -> Result<String> {
         let mut attempt = 0u8;
         loop {
-            self.ensure_login().await?;
+            let session = self.ensure_login().await?;
             let res = self
                 .http
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(|e| Error::Provider(format!("hdtorrents request: {e}")))?;
+                .map_err(|e| crate::util::http_error("hdtorrents request", e))?;
             if !res.status().is_success() {
                 let status = res.status();
                 return Err(Error::Provider(format!(
@@ -224,10 +212,10 @@ impl HdTorrents {
             let body = res
                 .text()
                 .await
-                .map_err(|e| Error::Provider(format!("hdtorrents body: {e}")))?;
+                .map_err(|e| crate::util::http_error("hdtorrents body", e))?;
             if body.contains(NOT_AUTHORIZED_MARKER) && attempt == 0 {
                 attempt += 1;
-                self.invalidate_session().await;
+                self.login_gate.invalidate(session).await;
                 continue;
             }
             if body.contains(NOT_AUTHORIZED_MARKER) {
@@ -244,13 +232,13 @@ impl HdTorrents {
     async fn authed_get_bytes(&self, url: Url) -> Result<bytes::Bytes> {
         let mut attempt = 0u8;
         loop {
-            self.ensure_login().await?;
+            let session = self.ensure_login().await?;
             let res = self
                 .http
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(|e| Error::Provider(format!("hdtorrents download: {e}")))?;
+                .map_err(|e| crate::util::http_error("hdtorrents download", e))?;
             if !res.status().is_success() {
                 let status = res.status();
                 return Err(Error::Provider(format!(
@@ -260,12 +248,12 @@ impl HdTorrents {
             let bytes = res
                 .bytes()
                 .await
-                .map_err(|e| Error::Provider(format!("hdtorrents download body: {e}")))?;
+                .map_err(|e| crate::util::http_error("hdtorrents download body", e))?;
             let looks_expired = bytes.first().copied() != Some(BENCODE_DICT_MARKER)
                 && String::from_utf8_lossy(&bytes).contains(NOT_AUTHORIZED_MARKER);
             if looks_expired && attempt == 0 {
                 attempt += 1;
-                self.invalidate_session().await;
+                self.login_gate.invalidate(session).await;
                 continue;
             }
             return Ok(bytes);

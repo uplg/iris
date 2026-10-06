@@ -49,6 +49,35 @@ pub async fn get(
     .await
 }
 
+/// The user's progress on every file of `infohashes`, keyed by
+/// `(infohash, file_idx)`, in one query — the episode lists' watched ticks
+/// and resume positions.
+pub async fn progress_for_files(
+    pool: &SqlitePool,
+    user_id: UserId,
+    infohashes: &[&str],
+) -> Result<std::collections::HashMap<(String, i64), ProgressRow>, sqlx::Error> {
+    if infohashes.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let user: Uuid = user_id.into();
+    let list = serde_json::to_string(infohashes).map_err(|e| sqlx::Error::Encode(e.into()))?;
+    let rows: Vec<ProgressRow> = sqlx::query_as(
+        "SELECT user_id, infohash, file_idx, position_seconds, duration_seconds, \
+         audio_track_idx, subtitle_track_idx, completed, last_watched_at \
+         FROM playback_progress \
+         WHERE user_id = ?1 AND infohash IN (SELECT value FROM json_each(?2))",
+    )
+    .bind(user)
+    .bind(list)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ((r.infohash.clone(), r.file_idx), r))
+        .collect())
+}
+
 pub async fn list_for_torrent(
     pool: &SqlitePool,
     user_id: UserId,
@@ -400,7 +429,10 @@ pub async fn continue_watching_next_up(
                 SELECT 1 FROM playback_progress p2 \
                 JOIN episode_files ef2 ON ef2.infohash = p2.infohash AND ef2.file_idx = p2.file_idx \
                 WHERE p2.user_id = ?1 AND ef2.collection_id = ef.collection_id \
-                  AND p2.last_watched_at > p.last_watched_at) \
+                  AND (p2.last_watched_at > p.last_watched_at \
+                       OR (p2.last_watched_at = p.last_watched_at \
+                           AND (ef2.season > ef.season \
+                                OR (ef2.season = ef.season AND ef2.episode > ef.episode))))) \
          ) latest \
          JOIN collections c ON c.id = latest.cid \
          JOIN episode_files nf ON nf.collection_id = latest.cid \
@@ -468,7 +500,10 @@ pub async fn continue_watching_frontiers(
                 SELECT 1 FROM playback_progress p2 \
                 JOIN episode_files ef2 ON ef2.infohash = p2.infohash AND ef2.file_idx = p2.file_idx \
                 WHERE p2.user_id = ?1 AND ef2.collection_id = ef.collection_id \
-                  AND p2.last_watched_at > p.last_watched_at) \
+                  AND (p2.last_watched_at > p.last_watched_at \
+                       OR (p2.last_watched_at = p.last_watched_at \
+                           AND (ef2.season > ef.season \
+                                OR (ef2.season = ef.season AND ef2.episode > ef.episode))))) \
          ) latest \
          JOIN collections c ON c.id = latest.cid AND c.kind = 'tv' \
          WHERE NOT EXISTS ( \
@@ -846,6 +881,88 @@ mod tests {
             subtitle_track_idx: None,
             completed,
         }
+    }
+
+    #[tokio::test]
+    async fn a_title_marked_watched_at_once_has_one_frontier_its_last_episode() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let show = crate::collections::find_or_create(
+            &pool,
+            "severance",
+            "Severance",
+            crate::collections::Kind::Tv,
+            false,
+        )
+        .await
+        .unwrap();
+        let mut files = Vec::new();
+        for episode in [3, 1, 2] {
+            let t = make_torrent(&pool, user, &format!("Severance.S01E0{episode}")).await;
+            crate::torrents::set_collection(&pool, &t.infohash, Some(show.id))
+                .await
+                .unwrap();
+            crate::episode_files::upsert(
+                &pool,
+                crate::episode_files::UpsertEpisodeFile {
+                    collection_id: show.id,
+                    season: 1,
+                    episode,
+                    infohash: t.infohash.clone(),
+                    file_idx: 0,
+                    derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                    absolute_episode: None,
+                },
+            )
+            .await
+            .unwrap();
+            files.push((t.infohash, 0));
+        }
+        mark_completed_many(&pool, user, &files).await.unwrap();
+
+        let frontiers = continue_watching_frontiers(&pool, user, 24).await.unwrap();
+        assert_eq!(frontiers.len(), 1, "tied timestamps no longer all survive");
+        assert_eq!(
+            (frontiers[0].prev_season, frontiers[0].prev_episode),
+            (1, 3)
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_for_files_reads_only_the_users_rows() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let other = crate::test_support::make_named_user(&pool, "Other").await;
+        let done = make_torrent(&pool, user, "Done").await;
+        let halfway = make_torrent(&pool, user, "Halfway").await;
+        let elsewhere = make_torrent(&pool, user, "Elsewhere").await;
+        upsert(&pool, progress(user, done.infohash.clone(), true))
+            .await
+            .unwrap();
+        upsert(&pool, progress(user, halfway.infohash.clone(), false))
+            .await
+            .unwrap();
+        upsert(&pool, progress(user, elsewhere.infohash.clone(), true))
+            .await
+            .unwrap();
+        upsert(&pool, progress(other, halfway.infohash.clone(), true))
+            .await
+            .unwrap();
+
+        let got = progress_for_files(&pool, user, &[&done.infohash, &halfway.infohash])
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 2, "the other torrent and user are left out");
+        assert!(got[&(done.infohash.clone(), 0)].completed);
+        let partial = &got[&(halfway.infohash.clone(), 0)];
+        assert!(!partial.completed, "the user's own row, not the other's");
+        assert!((partial.position_seconds - 120.0).abs() < f64::EPSILON);
+        assert!(
+            progress_for_files(&pool, user, &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// Watch-order shapes at the SQL level: only `(s, e+1)` and `(s+1, 1)`

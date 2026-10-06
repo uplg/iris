@@ -467,6 +467,14 @@ pub(crate) struct EpisodeEntry {
     /// `"absolute"`. Additive — older clients ignore it.
     #[serde(default)]
     absolute_episode: Option<i64>,
+    /// The caller's progress on this file, when they started it — saves a
+    /// progress read per row.
+    #[serde(default)]
+    position_seconds: Option<f64>,
+    #[serde(default)]
+    duration_seconds: Option<f64>,
+    #[serde(default)]
+    last_watched_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -977,45 +985,42 @@ async fn build_tv_episode_view(
         (i64, i64),
         Vec<iris_media::filename::Language>,
     > = std::collections::HashMap::new();
+    let mut infohashes: Vec<&str> = files.iter().map(|f| f.infohash.as_str()).collect();
+    infohashes.sort_unstable();
+    infohashes.dedup();
+    let progress = iris_db::playback::progress_for_files(state.db(), user_id, &infohashes)
+        .await
+        .unwrap_or_default();
     for f in files {
+        let lang = resolve_torrent_language(
+            state,
+            &f.infohash,
+            &torrent_names,
+            &torrent_source_providers,
+        );
         // episode == 0 is the season-pack sentinel — keep it out
         // of the dedup map so the indexer's individual S04E05
         // hit still surfaces as "available" even when an S04
         // pack has been ingested.
         if f.episode > 0 {
-            let lang = resolve_torrent_language(
-                state,
-                &f.infohash,
-                &torrent_names,
-                &torrent_source_providers,
-            );
             owned_languages
                 .entry((f.season, f.episode))
                 .or_default()
                 .push(lang);
         }
-        let watched = iris_db::playback::get(state.db(), user_id, &f.infohash, f.file_idx)
-            .await
-            .unwrap_or(None)
-            .is_some_and(|p| p.completed);
-        let language = Some(
-            resolve_torrent_language(
-                state,
-                &f.infohash,
-                &torrent_names,
-                &torrent_source_providers,
-            )
-            .as_str()
-            .to_string(),
-        );
+        let progress = progress.get(&(f.infohash.clone(), f.file_idx));
+        let language = Some(lang.as_str().to_string());
         episodes_out.push(EpisodeEntry {
             season: f.season,
             episode: f.episode,
             infohash: f.infohash,
             file_idx: f.file_idx,
-            watched,
+            watched: progress.is_some_and(|p| p.completed),
             language,
             absolute_episode: f.absolute_episode,
+            position_seconds: progress.map(|p| p.position_seconds),
+            duration_seconds: progress.and_then(|p| p.duration_seconds),
+            last_watched_at: progress.map(|p| p.last_watched_at),
         });
     }
     episodes_out.sort_by_key(|e| (e.season, e.episode, e.file_idx));

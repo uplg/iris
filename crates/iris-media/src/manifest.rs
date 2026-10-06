@@ -425,28 +425,90 @@ async fn detect_layout(container: &str, path: &Path, size_bytes: u64) -> Contain
 }
 
 async fn read_mp4_moov_at_start(path: &Path) -> Option<bool> {
-    use tokio::io::AsyncReadExt;
     let mut file = tokio::fs::File::open(path).await.ok()?;
-    let mut buf = [0_u8; 32];
-    let n = file.read(&mut buf).await.ok()?;
-    if n < 16 {
-        return None;
+    moov_before_mdat(&mut file).await
+}
+
+/// Walk the top-level boxes from byte 0: `Some(true)` when `moov` comes
+/// before `mdat` (fast-start), `Some(false)` the other way round, `None`
+/// when this isn't an MP4 (no leading `ftyp`) or the layout can't tell.
+/// Box headers are read whole and boxes skipped by their size, so an
+/// `ftyp` of any length (32 bytes is common) and `free`/`wide` padding
+/// in between are handled.
+async fn moov_before_mdat(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+) -> Option<bool> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let mut offset = 0_u64;
+    for i in 0..16 {
+        let mut header = [0_u8; 8];
+        file.read_exact(&mut header).await.ok()?;
+        let kind = &header[4..8];
+        if i == 0 && kind != b"ftyp" {
+            return None;
+        }
+        match kind {
+            b"moov" => return Some(true),
+            b"mdat" => return Some(false),
+            _ => {}
+        }
+        let size = u64::from(u32::from_be_bytes([
+            header[0], header[1], header[2], header[3],
+        ]));
+        let size = match size {
+            // 64-bit `largesize` follows the header.
+            1 => {
+                let mut large = [0_u8; 8];
+                file.read_exact(&mut large).await.ok()?;
+                u64::from_be_bytes(large)
+            }
+            // 0 = "to end of file": nothing follows it.
+            0 => return None,
+            s => s,
+        };
+        if size < 8 {
+            return None;
+        }
+        offset = offset.checked_add(size)?;
+        file.seek(std::io::SeekFrom::Start(offset)).await.ok()?;
     }
-    // First box must be ftyp for an MP4; if not, this isn't actually MP4.
-    if &buf[4..8] != b"ftyp" {
-        return None;
-    }
-    let first_box_size = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-    if first_box_size < 8 || first_box_size > n.saturating_sub(8) {
-        return None;
-    }
-    let next_type = &buf[first_box_size + 4..first_box_size + 8];
-    Some(next_type == b"moov")
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mp4_box(kind: [u8; 4], body_len: usize) -> Vec<u8> {
+        let size = u32::try_from(8 + body_len).unwrap();
+        let mut b = size.to_be_bytes().to_vec();
+        b.extend_from_slice(&kind);
+        b.resize(8 + body_len, 0);
+        b
+    }
+
+    async fn layout_of(boxes: &[Vec<u8>]) -> Option<bool> {
+        let mut cursor = std::io::Cursor::new(boxes.concat());
+        moov_before_mdat(&mut cursor).await
+    }
+
+    #[tokio::test]
+    async fn fast_start_detection_handles_long_ftyp_and_padding() {
+        let ftyp32 = mp4_box(*b"ftyp", 24);
+        assert_eq!(
+            layout_of(&[ftyp32.clone(), mp4_box(*b"moov", 40), mp4_box(*b"mdat", 8)]).await,
+            Some(true)
+        );
+        assert_eq!(
+            layout_of(&[ftyp32.clone(), mp4_box(*b"free", 4), mp4_box(*b"moov", 40)]).await,
+            Some(true)
+        );
+        assert_eq!(
+            layout_of(&[ftyp32, mp4_box(*b"mdat", 100), mp4_box(*b"moov", 40)]).await,
+            Some(false)
+        );
+        assert_eq!(layout_of(&[mp4_box(*b"moov", 8)]).await, None, "no ftyp");
+    }
 
     #[test]
     fn vp9_codec_string_main_profile() {

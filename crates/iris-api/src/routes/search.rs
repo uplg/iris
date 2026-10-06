@@ -441,6 +441,7 @@ pub struct DetailsParams {
         (status = 200, description = "Normalised torrent detail view", body = ReleaseDetails),
         (status = 400, description = "Unknown provider"),
         (status = 404, description = "Provider exposes no detail page for this id"),
+        (status = 502, description = "The tracker's detail endpoint failed"),
     ),
     tag = "search",
 )]
@@ -477,8 +478,16 @@ pub(crate) async fn details(
         }
         Err(e) => {
             tracing::warn!(provider = %params.provider, id = %params.id, error = %e, "details fetch failed");
-            Err(ApiError::Internal(anyhow::anyhow!("details: {e}")))
+            Err(details_failure(e))
         }
+    }
+}
+
+/// A tracker that timed out or answered garbage is a 502, not a server bug.
+fn details_failure(e: iris_core::Error) -> ApiError {
+    match e {
+        iris_core::Error::Provider(m) => ApiError::Upstream(m),
+        e => ApiError::Internal(anyhow::anyhow!("details: {e}")),
     }
 }
 
@@ -552,5 +561,21 @@ fn prepend_dubious_warning(
             DescriptionFormat::Html => format!("{warning}{body}"),
         },
         _ => warning,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::response::IntoResponse;
+    use http::StatusCode;
+
+    use super::details_failure;
+
+    #[test]
+    fn a_failing_tracker_reads_as_bad_gateway() {
+        let res = details_failure(iris_core::Error::Provider("timed out".into())).into_response();
+        assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+        let res = details_failure(iris_core::Error::InvalidInput("x".into())).into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

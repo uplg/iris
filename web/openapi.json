@@ -162,7 +162,7 @@
             }
           },
           "400": {
-            "description": "TTL too short (min 60s)"
+            "description": "TTL too short (min 60 s) or too long (max 1 year)"
           },
           "403": {
             "description": "Caller is not an admin"
@@ -516,7 +516,7 @@
         },
         "responses": {
           "204": {
-            "description": "Password reset; all refresh tokens revoked"
+            "description": "Password reset; every session revoked and every passkey removed"
           },
           "400": {
             "description": "New password too short (min 8 chars)"
@@ -2247,7 +2247,7 @@
         },
         "responses": {
           "204": {
-            "description": "Password changed; every other session revoked, this one renewed"
+            "description": "Password changed; every session revoked, this one included (its cookies are cleared), and every passkey removed"
           },
           "400": {
             "description": "New password too short (min 8 chars), or the current one is wrong"
@@ -2817,6 +2817,9 @@
           },
           "404": {
             "description": "Provider exposes no detail page for this id"
+          },
+          "502": {
+            "description": "The tracker's detail endpoint failed"
           }
         }
       }
@@ -4748,7 +4751,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Optional TMDB id — stored as decoration. Surfaces a poster\nonly after the corresponding collection gets `tmdb_verified`."
+            "description": "Optional TMDB id — stored as decoration; the poster comes from the\njoined collection's id, not from this one."
           }
         }
       },
@@ -4997,6 +5000,13 @@
             "format": "int64",
             "description": "Absolute episode number for fleuve anime (`One Piece S01E1156` →\n1156). `null` for ordinary seasonal episodes. The client renders\n\"Episode N\" from this when the collection's `numbering` is\n`\"absolute\"`. Additive — older clients ignore it."
           },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
           "episode": {
             "type": "integer",
             "format": "int64"
@@ -5014,6 +5024,21 @@
               "null"
             ],
             "description": "Language tag derived from the parent torrent's SCENE name so\nusers can tell a French / English / `MULTi` episode apart at a\nglance. Same string form as `AvailableEpisodeEntry.language`\n(`\"french\"` / `\"english\"` / `\"multi\"` / `\"unknown\"`). `null`\nwhen the parent torrent is no longer registered in the\nengine (shouldn't happen but defensive)."
+          },
+          "last_watched_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "position_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The caller's progress on this file, when they started it — saves a\nprogress read per row."
           },
           "season": {
             "type": "integer",
@@ -5369,7 +5394,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Decoration TMDB id (may be null). Even when present, only\nrendered as a poster after the joined collection is verified."
+            "description": "Decoration TMDB id (may be null). The poster comes from the joined\nTV collection's id, not from this one."
           }
         }
       },

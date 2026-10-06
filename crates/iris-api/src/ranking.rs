@@ -254,11 +254,19 @@ pub(crate) fn resolve_language_tag(
 /// recommended tie-break: seeders + size + whether it's a `MULTi` release
 /// (so `MULTi` gets the effective-size discount). Language is read from the
 /// SCENE title via the shared `detect_language`.
-fn candidate(r: &SearchResult) -> iris_core::ranking::Candidate {
+pub(crate) fn candidate(r: &SearchResult) -> iris_core::ranking::Candidate {
+    candidate_of(r, detect_language(&r.title) == Language::Multi)
+}
+
+/// [`candidate`] with the language already resolved by the caller (the
+/// schedulers bucket results per language). The one search-result view of
+/// the ranking: a size past `i64::MAX` saturates rather than reading as
+/// unknown.
+pub(crate) fn candidate_of(r: &SearchResult, is_multi: bool) -> iris_core::ranking::Candidate {
     iris_core::ranking::Candidate {
         seeders: r.seeders.map(i64::from),
         size_bytes: r.size_bytes.map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
-        is_multi: detect_language(&r.title) == Language::Multi,
+        is_multi,
     }
 }
 
@@ -431,6 +439,19 @@ mod tests {
     fn with_infohash(mut r: SearchResult, ih: &str) -> SearchResult {
         r.infohash = Some(ih.into());
         r
+    }
+
+    #[test]
+    fn the_candidate_view_reads_language_and_saturates_size() {
+        let multi = mk_result("Show.S01E01.MULTi.1080p", 4, 2, None);
+        assert!(candidate(&multi).is_multi);
+        assert!(
+            !candidate_of(&multi, false).is_multi,
+            "a caller-resolved language wins"
+        );
+        let mut absurd = mk_result("Show.S01E01.1080p", 4, 2, None);
+        absurd.size_bytes = Some(u64::MAX);
+        assert_eq!(candidate(&absurd).size_bytes, Some(i64::MAX));
     }
 
     /// Build a `LibraryIndex` from owned infohashes plus `(infohash,

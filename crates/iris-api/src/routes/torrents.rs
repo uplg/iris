@@ -266,10 +266,7 @@ pub(crate) async fn put_progress(
     // could lose the cache — or the whole torrent — mid-play. The heartbeat
     // is the proof someone still has the player open (paused included).
     let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
-    state
-        .remuxer()
-        .touch_played(&format!("{infohash}_{idx}"))
-        .await;
+    state.remuxer().touch_played_file(&infohash, idx).await;
 
     // "Moved on to the next episode" ⇒ the one before it is done. Skipping the
     // credits and jumping to the next episode otherwise leaves the prior one
@@ -492,6 +489,31 @@ async fn is_dead(provider: &Arc<dyn iris_providers::SearchProvider>, external_id
 ///
 /// Only *live* unfinished torrents count: a paused one has announced
 /// `stopped` on the way out, so the tracker no longer counts it either.
+/// [`check_leech_slots`] for a grab, holding the provider's slot lock: the
+/// caller keeps the guard until the torrent has its library row, so two
+/// grabs can't both see a free slot before either one counts. `None` for an
+/// uncapped provider.
+pub(crate) async fn take_leech_slot(
+    state: &AppState,
+    provider_id: &str,
+) -> ApiResult<Option<tokio::sync::OwnedMutexGuard<()>>> {
+    static LOCKS: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    if state.providers().leech_slots(provider_id).is_none() {
+        return Ok(None);
+    }
+    let lock = LOCKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(provider_id.to_owned())
+        .or_default()
+        .clone();
+    let guard = lock.lock_owned().await;
+    check_leech_slots(state, provider_id).await?;
+    Ok(Some(guard))
+}
+
 pub(crate) async fn check_leech_slots(state: &AppState, provider_id: &str) -> ApiResult<()> {
     let Some(slots) = state.providers().leech_slots(provider_id) else {
         return Ok(());
@@ -510,6 +532,9 @@ pub(crate) async fn check_leech_slots(state: &AppState, provider_id: &str) -> Ap
         .await?
         .into_iter()
         .filter(|row| row.source_provider.as_deref() == Some(provider_id))
+        // Stamped finished: complete on disk, whatever the snapshot says
+        // during the post-restart re-check.
+        .filter(|row| row.finished_at.is_none())
         .filter_map(|row| unfinished.get(&row.infohash).map(|snap| (row, snap)))
         .map(|(row, snap)| format!("{} ({:.0}%)", row.name, snap.progress_pct))
         .collect();
@@ -636,19 +661,20 @@ pub(crate) async fn ingest_core(
         return Err(ApiError::DeadTorrent);
     }
 
-    check_leech_slots(state, &provider_id).await?;
+    let _slot = take_leech_slot(state, &provider_id).await?;
     let source = resolve_release(state, &provider, &provider_id, &external_id).await?;
     pre_engine_guards(state, &source, allow_duplicate).await?;
     let result = match source {
         TorrentSource::TorrentFile(bytes) => state.engine().add_from_bytes(bytes).await,
         TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,
     }
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine: {e}")))?;
+    .map_err(map_engine_err)?;
+    reject_unstreamable(state, &result).await?;
 
     // No torrent-level tmdb resolution: the collection's id is the single
     // source of truth, resolved from the collection's SCENE identity in
     // `collection_assign::resolve_collection_tmdb` once the torrent is assigned.
-    let row = super::torrents::record_ingest(
+    let row = match record_ingest(
         state,
         &result.snapshot,
         || "<unnamed>".into(),
@@ -656,7 +682,14 @@ pub(crate) async fn ingest_core(
         external_id,
         user_id,
     )
-    .await?;
+    .await
+    {
+        Ok(row) => row,
+        Err(e) => {
+            discard_unrecorded(state, &result).await;
+            return Err(e.into());
+        }
+    };
 
     // Pre-warm the remuxer cache on a best-effort background task. By the
     // time the user clicks Play, the `.fmp4` file is already on disk — the
@@ -883,7 +916,7 @@ fn build_remux_plan(
             AudioCodec::Aac
         };
         renditions.push(AudioRendition {
-            source_idx: a.index,
+            source_stream: a.absolute_index,
             codec,
             name,
             language,
@@ -1120,7 +1153,7 @@ pub(crate) async fn pause(
         .engine()
         .pause_by_infohash(&row.infohash)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine pause: {e}")))?;
+        .map_err(map_engine_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1155,7 +1188,7 @@ pub(crate) async fn resume(
         .engine()
         .resume_by_infohash(&row.infohash)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine resume: {e}")))?;
+        .map_err(map_engine_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1167,6 +1200,9 @@ async fn owned_row(
     infohash: &Infohash,
 ) -> ApiResult<iris_db::torrents::TorrentRow> {
     let row = torrent_or_404(state, infohash).await?;
+    if row.deleted_at.is_some() {
+        return Err(ApiError::NotFound);
+    }
     if !may_delete(user, row.added_by) {
         return Err(ApiError::Forbidden);
     }
@@ -1198,11 +1234,12 @@ pub(crate) async fn remove(
             iris_db::torrents::reconcile_uploaded(state.db(), &row.infohash, snap.uploaded_bytes)
                 .await;
     }
-    state
-        .engine()
-        .delete_by_infohash(&row.infohash, true)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("engine delete: {e}")))?;
+    match state.engine().delete_by_infohash(&row.infohash, true).await {
+        // Not in the engine (it failed to restore after a restart): the row
+        // must still be removable.
+        Ok(()) | Err(iris_torrent::EngineError::NotFound) => {}
+        Err(e) => return Err(ApiError::Internal(anyhow::anyhow!("engine delete: {e}"))),
+    }
     // Cascade the removal into `episode_files`. Soft-deleting the torrent
     // row + dropping the handle + wiping files would otherwise leave the
     // (collection, season, episode) → infohash mappings behind, and the
@@ -1216,11 +1253,12 @@ pub(crate) async fn remove(
         // user-visible regression. Log and continue with the soft-delete.
         tracing::warn!(error = %e, infohash = %row.infohash, "episode_files cascade delete failed");
     }
-    // Drop every cached fragmented MP4 for this torrent. We don't know the
-    // file count from here without going back to the engine snapshot — the
-    // GC callback wired up in `iris-api::lib` already does this prefix
-    // sweep on the cache dir, so it's enough to soft-delete the row and
-    // let the next eviction tick clean up the leftovers.
+    wipe_derived(
+        state.remuxer(),
+        &subtitle_cache_dir(state.cfg()),
+        &row.infohash,
+    )
+    .await;
     iris_db::torrents::soft_delete(state.db(), TorrentId::from(row.id)).await?;
     super::audit(
         &state,
@@ -1409,12 +1447,13 @@ fn map_probe_err(e: &iris_media::ProbeError, torrent_finished: bool) -> ApiError
     }
 }
 
-fn map_engine_err(e: iris_torrent::EngineError) -> ApiError {
+pub(crate) fn map_engine_err(e: iris_torrent::EngineError) -> ApiError {
     match e {
         iris_torrent::EngineError::NotFound => ApiError::NotFound,
         iris_torrent::EngineError::FileOutOfRange => {
             ApiError::BadRequest("file index out of range".into())
         }
+        iris_torrent::EngineError::MetadataTimeout => ApiError::Upstream(e.to_string()),
         iris_torrent::EngineError::Librqbit(e) => ApiError::Internal(e),
     }
 }
@@ -1452,19 +1491,49 @@ pub(crate) async fn seek_hint(
         playhead_s = body.playhead_s,
         "seek hint",
     );
+    // A file on disk has nothing to fetch: the read would only compete with
+    // the real playback read.
+    let row = torrent_or_404(&state, &infohash).await?;
+    if torrent_finished(&state, &row) {
+        return Ok(StatusCode::NO_CONTENT);
+    }
     // Spawn the prefetch in the background so the client gets its 204 back
     // immediately; librqbit picks up the priority bias as soon as the read
     // starts. We aim for ~30 seconds of playback ahead — derived from the
     // probed bitrate when we have one, falling back to a flat 64 MiB cap.
+    // One prefetch per file: a new seek aborts the previous one, whose
+    // position the player has already left.
+    let key = format!("{infohash}_{idx}");
+    let mut prefetches = SEEK_PREFETCHES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let entry = prefetches.entry(key.clone()).or_default();
+    if let Some(task) = entry.task.take() {
+        task.abort();
+    }
+    let window = entry.window;
     let engine = state.engine().clone();
     let probes = state.probes().clone();
-    let infohash_clone = infohash.clone();
     let byte_offset = body.byte_offset;
-    tokio::spawn(async move {
-        let bytes_ahead = playhead_window_bytes(&engine, &probes, &infohash_clone, idx).await;
+    let task_key = key;
+    let task = tokio::spawn(async move {
+        let bytes_ahead = if let Some(w) = window {
+            w
+        } else {
+            let w = playhead_window_bytes(&engine, &probes, &infohash, idx).await;
+            if let Some(w) = w
+                && let Some(entry) = SEEK_PREFETCHES
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get_mut(&task_key)
+            {
+                entry.window = Some(w);
+            }
+            w.unwrap_or(PREFETCH_FALLBACK)
+        };
         if let Err(e) = engine
             .prefetch_range(
-                &infohash_clone,
+                &infohash,
                 idx,
                 byte_offset,
                 bytes_ahead,
@@ -1475,52 +1544,58 @@ pub(crate) async fn seek_hint(
             tracing::debug!(error = %e, "seek hint prefetch errored");
         }
     });
+    entry.task = Some(task.abort_handle());
+    drop(prefetches);
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Per `{infohash}_{idx}`: the prefetch in flight, and the playhead window
+/// once measured (one ffprobe per file, not one per seek).
+#[derive(Default)]
+struct SeekPrefetch {
+    task: Option<tokio::task::AbortHandle>,
+    window: Option<u64>,
+}
+
+static SEEK_PREFETCHES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, SeekPrefetch>>,
+> = std::sync::LazyLock::new(Default::default);
+
+const PREFETCH_FALLBACK: u64 = 64 * 1024 * 1024;
+
 /// Window of bytes to mark high-priority ahead of the playhead. Targets
 /// ~30 seconds of playback by deriving bytes-per-second from the cached
-/// probe (total size ÷ duration); falls back to a flat 64 MiB ceiling
-/// when the probe is unavailable. Capped at 256 MiB so a long seek on a
-/// 4 K HEVC remux doesn't lock librqbit into an impossibly wide window.
+/// probe (total size ÷ duration); `None` when the probe can't tell yet (the
+/// caller then uses [`PREFETCH_FALLBACK`]). Capped at 256 MiB so a long
+/// seek on a 4 K HEVC remux doesn't lock librqbit into an impossibly wide
+/// window.
 async fn playhead_window_bytes(
     engine: &std::sync::Arc<iris_torrent::Engine>,
     probes: &iris_media::ProbeCache,
     infohash: &str,
     idx: usize,
-) -> u64 {
-    const FALLBACK: u64 = 64 * 1024 * 1024;
+) -> Option<u64> {
     const CAP: u64 = 256 * 1024 * 1024;
     const SECONDS_AHEAD: f64 = 30.0;
 
-    let Some(snapshot) = engine.get_by_infohash(infohash) else {
-        return FALLBACK;
-    };
+    let snapshot = engine.get_by_infohash(infohash)?;
     let file_size = snapshot
         .files
         .iter()
         .find(|f| f.index == idx)
-        .map_or(0, |f| f.size_bytes);
-    if file_size == 0 {
-        return FALLBACK;
-    }
-    let Ok(path) = engine.file_path(infohash, idx) else {
-        return FALLBACK;
-    };
-    let Ok(probe) = probes
+        .map(|f| f.size_bytes)
+        .filter(|s| *s > 0)?;
+    let path = engine.file_path(infohash, idx).ok()?;
+    let probe = probes
         .get_or_probe(infohash, idx, &path, snapshot.finished)
         .await
-    else {
-        return FALLBACK;
-    };
-    let Some(duration) = probe.duration_seconds.filter(|d| *d > 0.0) else {
-        return FALLBACK;
-    };
+        .ok()?;
+    let duration = probe.duration_seconds.filter(|d| *d > 0.0)?;
     #[allow(clippy::cast_precision_loss)]
     let bps = file_size as f64 / duration;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let bytes = (bps * SECONDS_AHEAD).round() as u64;
-    bytes.clamp(8 * 1024 * 1024, CAP)
+    Some(bytes.clamp(8 * 1024 * 1024, CAP))
 }
 
 /// Playback-error report sent by clients when a decode tier fails.
@@ -1688,14 +1763,16 @@ pub(crate) async fn play_status(
     // transcode), exactly like `play_asset` does. We never break a client.
     let caps = crate::middleware::IrisCaps::of(&req);
     let infohash = infohash.into_inner();
-    torrent_or_404(&state, &infohash).await?;
+    let row = torrent_or_404(&state, &infohash).await?;
     let path = state
         .engine()
         .file_path(&infohash, idx)
         .map_err(map_engine_err)?;
 
+    // The DB stamp first: during the post-deploy re-check the snapshot says
+    // unfinished for minutes about a file `play_asset` already serves.
     if let Some(snap) = state.engine().get_by_infohash(&infohash)
-        && !snap.finished
+        && !torrent_finished(&state, &row)
     {
         return Ok(Json(PlayStatus {
             ready: false,
@@ -1820,6 +1897,16 @@ pub(crate) async fn play_status(
             error: Some(msg),
         }));
     }
+    // A copy remux writes the master only once the whole file is remuxed: a
+    // job in flight is not ready yet.
+    if state.remuxer().is_in_flight(&key).await {
+        return Ok(Json(PlayStatus {
+            ready: false,
+            reason: Some("remuxing".into()),
+            progress: state.remuxer().progress(&key).await,
+            error: None,
+        }));
+    }
     Ok(Json(PlayStatus {
         ready: true,
         reason: None,
@@ -1938,7 +2025,7 @@ async fn serve_subtitle(
     // extracted subtitle may be promoted to the permanent cache.
     let torrent_finished = torrent_finished(state, &row);
 
-    let cache_dir = state.cfg().storage.data_dir.join("subs");
+    let cache_dir = subtitle_cache_dir(state.cfg());
     let cache_path = iris_media::subtitle_cache_path(&cache_dir, infohash, idx, stream_idx, format);
     let marker_path = cache_path.with_extension(format!("{}.ok", format.extension()));
 
@@ -1966,7 +2053,6 @@ async fn serve_subtitle(
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, format.mime())
         .header(header::CACHE_CONTROL, "no-store")
-        .header(header::TRANSFER_ENCODING, "chunked")
         .body(Body::from_stream(stream))
         .unwrap())
 }
@@ -2007,8 +2093,8 @@ pub(crate) async fn stream_file(
         let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
         let mime = mime_for_filename(&path.to_string_lossy());
         let method = req.method().clone();
-        let range = req.headers().get(header::RANGE).cloned();
-        return serve_file_with_range(&path, &mime, method, range, 0).await;
+        let range = byte_range(req.headers());
+        return serve_file_with_range(&path, &mime, method, range).await;
     }
 
     let stream = state
@@ -2023,7 +2109,7 @@ pub(crate) async fn stream_file(
     let mime = guess_mime(&infohash, idx, state.engine());
     let total = stream.file_size();
     let mut reader = stream.into_reader();
-    let range = req.headers().get(header::RANGE).cloned();
+    let range = byte_range(req.headers());
     let head_only = req.method() == Method::HEAD;
 
     if let Some(rh) = range.as_ref() {
@@ -2170,11 +2256,8 @@ pub(crate) async fn play_asset(
 
     let mime = guess_hls_mime(&asset);
     let method = req.method().clone();
-    let range = req.headers().get(header::RANGE).cloned();
-    // expected_total = 0 → use actual file size; HLS players ask only for
-    // ranges already advertised in the playlist, no need to lie about
-    // the total like the old single-file progressive setup did.
-    let mut resp = serve_file_with_range(&asset_path, mime, method, range, 0).await?;
+    let range = byte_range(req.headers());
+    let mut resp = serve_file_with_range(&asset_path, mime, method, range).await?;
     // Cache policy. Playlists MUST NOT be cached — in EVENT mode the
     // master + variant playlists are rewritten as ffmpeg appends new
     // segments, and a cached stale master broke us once already
@@ -2218,58 +2301,24 @@ fn guess_hls_mime(asset: &str) -> &'static str {
 /// Used for both the raw source (`/stream`) and the cached fMP4
 /// (`/play`). Read-ahead is implicit through [`tokio::fs::File`] +
 /// [`ReaderStream`].
-///
-/// `expected_total` lets the caller advertise a `Content-Length` /
-/// `Content-Range` total larger than what's currently on disk — needed
-/// for the cached fMP4 path where ffmpeg keeps appending while we
-/// serve. Pass `0` to fall back to the actual file size (used by the
-/// raw-source `/stream` route, which always serves complete files).
 async fn serve_file_with_range(
     path: &std::path::Path,
     mime: &str,
     method: Method,
     range: Option<HeaderValue>,
-    expected_total: u64,
 ) -> ApiResult<Response> {
     let mut file = tokio::fs::File::open(path)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("open {}: {e}", path.display())))?;
-    let actual = file
+    let total = file
         .metadata()
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("stat {}: {e}", path.display())))?
         .len();
-    // Advertise the larger of the estimate and the actual size — the
-    // browser uses this for the timeline, so reporting the partial size
-    // would freeze the seekable region at the moment-of-first-request.
-    let total = expected_total.max(actual);
     let head_only = method == Method::HEAD;
 
     if let Some(rh) = range.as_ref() {
-        if let Some((start, end)) = parse_range(rh, total) {
-            // If the requested range starts past what's currently on disk
-            // (typical when the player resumes at a saved time deep into
-            // a still-encoding file), long-poll for ffmpeg to catch up
-            // rather than 416-ing — the browser treats an immediate 416
-            // on the initial GET as a fatal media error.
-            //
-            // Cap the wait at 60s so we never hold the connection longer
-            // than typical fetch timeouts. If ffmpeg can't catch up in
-            // time the client is told via 416 and can retry; meanwhile
-            // playback from earlier positions continues to work.
-            let mut actual = actual;
-            if start >= actual {
-                actual = wait_for_size(path, start + 1, std::time::Duration::from_mins(1))
-                    .await
-                    .unwrap_or(actual);
-            }
-            if start >= actual {
-                return Ok(range_not_satisfiable("range past current EOF", total));
-            }
-            // Clip the response to what's actually written. The player
-            // will issue a follow-up range for the remaining bytes once
-            // ffmpeg has written more.
-            let effective_end = end.min(actual - 1);
+        if let Some((start, effective_end)) = parse_range(rh, total) {
             let len = effective_end - start + 1;
             if head_only {
                 return Ok(build_headers(
@@ -2346,27 +2395,13 @@ fn build_headers(
     builder
 }
 
-/// Poll `path` until its size is at least `min_size` or `timeout` elapses.
-/// Returns the latest observed size (which may still be below `min_size`
-/// if the wait timed out — caller decides what to do then). Used to let
-/// byte-range requests for forward seeks long-poll while ffmpeg is still
-/// writing the cache file.
-async fn wait_for_size(
-    path: &std::path::Path,
-    min_size: u64,
-    timeout: std::time::Duration,
-) -> std::io::Result<u64> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        let size = tokio::fs::metadata(path).await?.len();
-        if size >= min_size {
-            return Ok(size);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Ok(size);
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    }
+/// The request's `Range` header, when it is in bytes. RFC 9110: a range in
+/// another unit is ignored (a full 200), not refused with a 416.
+fn byte_range(headers: &HeaderMap) -> Option<HeaderValue> {
+    headers
+        .get(header::RANGE)
+        .filter(|rh| rh.to_str().is_ok_and(|s| s.starts_with("bytes=")))
+        .cloned()
 }
 
 fn parse_range(value: &HeaderValue, total: u64) -> Option<(u64, u64)> {
@@ -2568,6 +2603,55 @@ pub(crate) async fn record_ingest(
     .await
 }
 
+/// Take back an engine add whose grab failed before the torrent got its
+/// library row: with no row, GC, delete and the leech-slot guard can't see
+/// it, yet it downloads, seeds and comes back on every boot. A torrent the
+/// engine already managed is left alone.
+pub(crate) async fn discard_unrecorded(state: &AppState, result: &iris_torrent::IngestResult) {
+    if result.already_managed {
+        return;
+    }
+    if let Err(e) = state
+        .engine()
+        .delete_by_infohash(&result.snapshot.infohash, true)
+        .await
+    {
+        tracing::warn!(
+            infohash = %result.snapshot.infohash,
+            error = %e,
+            "grab: could not remove the torrent of a failed grab"
+        );
+    }
+}
+
+pub(crate) fn subtitle_cache_dir(cfg: &iris_config::AppConfig) -> std::path::PathBuf {
+    cfg.storage.data_dir.join("subs")
+}
+
+/// Drop everything derived from a torrent's files: remux variants and
+/// extracted subtitle tracks.
+pub(crate) async fn wipe_derived(
+    remuxer: &iris_media::RemuxManager,
+    subs_dir: &std::path::Path,
+    infohash: &str,
+) {
+    remuxer.wipe_torrent(infohash).await;
+    iris_media::subtitles::wipe_torrent(subs_dir, infohash).await;
+}
+
+/// The archive gate for a torrent the engine just added: `.torrent` bytes
+/// were checked before the add, a magnet only gets its file list now.
+pub(crate) async fn reject_unstreamable(
+    state: &AppState,
+    result: &iris_torrent::IngestResult,
+) -> ApiResult<()> {
+    if iris_torrent::is_streamable(&result.snapshot.files) {
+        return Ok(());
+    }
+    discard_unrecorded(state, result).await;
+    Err(ApiError::ArchiveOnly)
+}
+
 /// The torrent row for an (already lowercased) infohash, or 404.
 pub(crate) async fn torrent_or_404(
     state: &AppState,
@@ -2576,6 +2660,58 @@ pub(crate) async fn torrent_or_404(
     iris_db::torrents::find_by_infohash(state.db(), infohash)
         .await?
         .ok_or(ApiError::NotFound)
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::{byte_range, parse_range};
+    use http::{HeaderMap, HeaderValue, header};
+
+    fn headers(range: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(header::RANGE, HeaderValue::from_str(range).unwrap());
+        h
+    }
+
+    #[test]
+    fn a_non_byte_range_is_ignored() {
+        assert!(byte_range(&headers("items=0-9")).is_none());
+        assert!(byte_range(&HeaderMap::new()).is_none());
+        let bytes = byte_range(&headers("bytes=0-9")).unwrap();
+        assert_eq!(parse_range(&bytes, 100), Some((0, 9)));
+    }
+
+    #[test]
+    fn byte_ranges_clamp_to_the_file() {
+        let r = |s| HeaderValue::from_static(s);
+        assert_eq!(parse_range(&r("bytes=90-200"), 100), Some((90, 99)));
+        assert_eq!(parse_range(&r("bytes=-10"), 100), Some((90, 99)));
+        assert_eq!(parse_range(&r("bytes=100-"), 100), None);
+        assert_eq!(parse_range(&r("bytes=-0"), 100), None);
+    }
+}
+
+#[cfg(test)]
+mod engine_err_tests {
+    use super::map_engine_err;
+    use crate::error::ApiError;
+    use iris_torrent::EngineError;
+
+    #[test]
+    fn engine_refusals_are_not_server_errors() {
+        assert!(matches!(
+            map_engine_err(EngineError::FileOutOfRange),
+            ApiError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_engine_err(EngineError::MetadataTimeout),
+            ApiError::Upstream(_)
+        ));
+        assert!(matches!(
+            map_engine_err(EngineError::NotFound),
+            ApiError::NotFound
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -2628,6 +2764,37 @@ mod video_mode_tests {
             audio: Vec::new(),
             subtitle: Vec::new(),
         }
+    }
+
+    #[test]
+    fn audio_renditions_map_the_file_stream_not_the_probe_position() {
+        let audio = |index, absolute_index, language: &str| iris_media::AudioStream {
+            index,
+            absolute_index,
+            codec: "aac".into(),
+            channels: 2,
+            channel_layout: None,
+            sample_rate: None,
+            language: Some(language.into()),
+            title: None,
+            default: false,
+            forced: false,
+            browser_compatible: true,
+        };
+        // Streams 0:1 jpn, 0:2 jpn (duplicate, dropped by the probe), 0:3 fre.
+        let mut p = probe("h264", 1920, 1080, 8);
+        p.audio = vec![audio(0, 1, "jpn"), audio(1, 3, "fre")];
+        let plan = super::build_remux_plan(
+            &p,
+            &ClientCapabilities::default(),
+            &TranscodeConfig::default(),
+        );
+        let streams: Vec<_> = plan
+            .audio
+            .iter()
+            .map(|a| (a.language.as_str(), a.source_stream))
+            .collect();
+        assert_eq!(streams, [("jpn", 1), ("fre", 3)]);
     }
 
     // A 1440p H.264 file a TV-class decoder (level 4.2 = 1080p) rejects: the

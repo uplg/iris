@@ -137,12 +137,12 @@ impl NyaaProvider {
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("nyaa get: {e}")))?
+            .map_err(|e| crate::util::http_error("nyaa get", e))?
             .error_for_status()
-            .map_err(|e| Error::Provider(format!("nyaa status: {e}")))?;
+            .map_err(|e| crate::util::http_error("nyaa status", e))?;
         resp.text()
             .await
-            .map_err(|e| Error::Provider(format!("nyaa body: {e}")))
+            .map_err(|e| crate::util::http_error("nyaa body", e))
     }
 
     /// Build the query string nyaa's search engine sees. Nyaa tokenises on
@@ -310,7 +310,10 @@ impl RawItem {
             size_bytes: self.size.as_deref().and_then(parse_size),
             seeders: self.seeders,
             leechers: self.leechers,
-            infohash: self.infohash.map(|h| h.to_ascii_lowercase()),
+            infohash: self
+                .infohash
+                .as_deref()
+                .and_then(crate::util::normalize_infohash),
             magnet: None,
             category: self.category,
             tags: Vec::new(),

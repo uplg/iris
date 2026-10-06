@@ -34,8 +34,12 @@ services:
     volumes:
       - ./config:/srv/iris/config:ro
       - iris-data:/data
+    # The HTTP port is NOT published: cloudflared (and caddy) reach
+    # `iris:8080` over the compose network, and a published port is open to
+    # the internet (Docker bypasses the host firewall) where anyone could
+    # forge `CF-Connecting-IP` past the auth rate limits. Local access goes
+    # through the dev override (`just dev`, docker-compose.dev.yml).
     ports:
-      - "${IRIS_BIND_PORT:-8080}:8080"
       # Pinned BitTorrent listen port — forwarded so inbound peer connections
       # actually reach librqbit (matters for download speed AND ratio on
       # private trackers).

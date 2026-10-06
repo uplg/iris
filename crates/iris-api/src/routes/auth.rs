@@ -107,7 +107,10 @@ pub(crate) async fn register(
     // a `users` row created while `invitations::consume` failed (the
     // invite got used between the lookup and the consume), bricking
     // the email forever with no usable account.
-    let mut tx = state.db().begin().await?;
+    // IMMEDIATE: the transaction reads before it writes, and a deferred one
+    // whose snapshot went stale fails its first write with SQLITE_BUSY
+    // without waiting (double-clicked register, a concurrent write).
+    let mut tx = state.db().begin_with("BEGIN IMMEDIATE").await?;
 
     let invitation = iris_db::invitations::find_active_by_hash(&mut *tx, &hashed_invite)
         .await?
@@ -128,7 +131,13 @@ pub(crate) async fn register(
             is_admin: false,
         },
     )
-    .await?;
+    .await
+    .map_err(|e| match e.as_database_error() {
+        Some(db) if db.is_unique_violation() => {
+            ApiError::Conflict("email already registered".into())
+        }
+        _ => e.into(),
+    })?;
 
     let consumed =
         iris_db::invitations::consume(&mut *tx, InvitationId::from(invitation.id), user.id).await?;
@@ -280,10 +289,13 @@ pub(crate) async fn logout(State(state): State<AppState>, jar: CookieJar) -> Api
     {
         iris_db::refresh_tokens::revoke(state.db(), claims.jti).await?;
     }
-    let jar = jar
-        .remove(Cookie::build(ACCESS_COOKIE).path("/").build())
-        .remove(Cookie::build(REFRESH_COOKIE).path("/api/auth").build());
-    Ok(jar)
+    Ok(clear_session(jar))
+}
+
+/// The jar with this browser's session cookies removed.
+pub(crate) fn clear_session(jar: CookieJar) -> CookieJar {
+    jar.remove(Cookie::build(ACCESS_COOKIE).path("/").build())
+        .remove(Cookie::build(REFRESH_COOKIE).path("/api/auth").build())
 }
 
 pub(crate) async fn issue_session(
@@ -346,7 +358,6 @@ pub async fn issue_session_for_kind(
         secure,
     );
 
-    let _ = is_admin; // claim already encoded in the access token
     Ok(jar.clone().add(access_cookie).add(refresh_cookie))
 }
 

@@ -40,32 +40,16 @@ const KINDS: [MediaKind; 2] = [MediaKind::Movie, MediaKind::Tv];
 /// without a refresh.
 const UNDATED_TTL_DAYS: i64 = 14;
 
-/// View a search result through the shared "recommended" ordering lens
-/// (smallest sane size first, seeders only as a garde-fou, `MULTi` discounted).
-pub(crate) fn candidate_of(r: &SearchResult, is_multi: bool) -> iris_core::ranking::Candidate {
-    iris_core::ranking::Candidate {
-        seeders: r.seeders.map(i64::from),
-        size_bytes: r.size_bytes.and_then(|b| i64::try_from(b).ok()),
-        is_multi,
-    }
-}
+use crate::ranking::candidate_of;
 
 pub fn spawn(
     pool: SqlitePool,
     tmdb: TmdbClient,
     providers: ProviderRegistry,
     cfg: DiscoveryConfig,
+    anilist: Option<AniListClient>,
 ) {
     let providers = Arc::new(providers);
-    // Keyless AniList client for anime correlation (precise poster + the
-    // anime dedup identity). Absence just disables the anime category.
-    let anilist = match AniListClient::new() {
-        Ok(c) => Some(c),
-        Err(e) => {
-            tracing::warn!(error = %e, "anilist init failed; anime correlation disabled");
-            None
-        }
-    };
     tokio::spawn(async move {
         // One slice per (provider, kind); a full pass over `slices` is a cycle.
         // `catalog_ids()`, not `ids()`: a provider can declare itself
@@ -91,14 +75,17 @@ pub fn spawn(
         loop {
             ticker.tick().await; // first tick fires immediately (after warm-up)
             let (provider_id, kind) = &slices[idx % slices.len()];
-            run_slice(
-                &pool,
-                &tmdb,
-                anilist.as_ref(),
-                &providers,
-                provider_id,
-                *kind,
-                &cfg,
+            crate::supervise::tick(
+                "freshness scheduler",
+                run_slice(
+                    &pool,
+                    &tmdb,
+                    anilist.as_ref(),
+                    &providers,
+                    provider_id,
+                    *kind,
+                    &cfg,
+                ),
             )
             .await;
             idx += 1;
