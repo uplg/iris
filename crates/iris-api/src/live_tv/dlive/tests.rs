@@ -146,6 +146,38 @@ fn dlive_entries_merge_into_iptv_org_channels_or_stand_alone() {
     assert_eq!(bein.categories, vec!["Sports".to_string()]);
 }
 
+#[test]
+fn rte_one_and_rte2_merge_with_free_tv() {
+    let index = Index {
+        names: HashMap::from([(364, "RTE 1".to_string()), (365, "RTE 2".to_string())]),
+    };
+    let free_tv = |tvg: &str, name: &str, url: &str| M3uEntry {
+        name: name.to_string(),
+        attrs: HashMap::from([("tvg-id".to_string(), tvg.to_string())]),
+        vlc_opts: HashMap::new(),
+        kodi_props: HashMap::new(),
+        url: url.to_string(),
+    };
+    let mut lists = vec![(
+        SourceOrigin::Extra,
+        vec![
+            free_tv("RTEOne.ie", "RTÉ One", "https://live.rte.ie/channel1.m3u8"),
+            free_tv("RTE2.ie", "RTÉ2", "https://live.rte.ie/channel2.m3u8"),
+        ],
+    )];
+    lists.extend(entries_for(&index, &[364, 365], &[1], "ie"));
+    let channels = crate::live_tv::channels::build_channels(&lists, None);
+    assert_eq!(channels.len(), 2);
+    let one = channels.iter().find(|c| c.id == "rteone").unwrap();
+    assert_eq!(one.name, "RTÉ One");
+    assert_eq!(
+        one.sources[0].url, "dlive://364/1",
+        "dlive ahead of the locked feed"
+    );
+    let two = channels.iter().find(|c| c.id == "rte2").unwrap();
+    assert_eq!(two.sources.len(), 2);
+}
+
 fn token_for(slug: &str, expiry: i64) -> String {
     format!(
         "{}.{}",

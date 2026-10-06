@@ -216,15 +216,19 @@ fn default_dlive_breaker_open_mins() -> u64 {
 }
 fn default_dlive_countries() -> HashMap<String, Vec<u32>> {
     // TNT networks, then the pay sports channels only dlive carries. C8
-    // (956) went off air in Feb 2025 and is left out.
-    HashMap::from([(
-        "fr".to_string(),
-        vec![
-            469, 950, 951, 952, 953, 470, 958, 959, 955, 957, 964, 962, 645, 963, 954, 961, 965,
-            121, 122, 463, 464, 271, 273, 116, 117, 118, 494, 495, 496, 497, 498, 499, 500, 119,
-            120, 772, 773, 960,
-        ],
-    )])
+    // (956) went off air in Feb 2025 and is left out. RTÉ One and RTÉ2: the
+    // broadcaster's own feeds are DRM-locked.
+    HashMap::from([
+        (
+            "fr".to_string(),
+            vec![
+                469, 950, 951, 952, 953, 470, 958, 959, 955, 957, 964, 962, 645, 963, 954, 961,
+                965, 121, 122, 463, 464, 271, 273, 116, 117, 118, 494, 495, 496, 497, 498, 499,
+                500, 119, 120, 772, 773, 960,
+            ],
+        ),
+        ("ie".to_string(), vec![364, 365]),
+    ])
 }
 
 /// `[live_tv.tuner]` — the tunerd network-tuner appliance. That's the whole
@@ -689,6 +693,7 @@ mod tests {
         assert!(!bare.dlive.enabled);
         assert_eq!(bare.dlive.players, vec![1, 2, 6]);
         assert!(bare.dlive.countries["fr"].contains(&469));
+        assert_eq!(bare.dlive.countries["ie"], vec![364, 365], "RTÉ One, RTÉ2");
         let on: LiveTvConfig =
             toml::from_str("[dlive]\nenabled = true\npage_budget = 8\n").unwrap();
         assert!(on.dlive.enabled);

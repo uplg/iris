@@ -353,8 +353,18 @@ pub fn clean_name(raw: &str, country: &str) -> String {
         }
         tokens.pop();
     }
-    tokens.join(" ")
+    let name = tokens.join(" ");
+    let key = super::super::channels::normalize(&name);
+    NAME_ALIASES
+        .iter()
+        .find(|(from, _)| *from == key)
+        .map_or(name, |(_, to)| (*to).to_string())
 }
+
+/// dlive names whose fold differs from the iptv-org identity they carry
+/// (folded dlive name → a name folding onto that identity). `RTE One`, not
+/// `RTÉ One`: the fold drops an uppercase accented letter.
+const NAME_ALIASES: &[(&str, &str)] = &[("rte1", "RTE One")];
 
 /// Category for a dlive-only channel (no iptv-org counterpart to inherit one
 /// from): dlive mostly adds pay sports channels.
@@ -500,6 +510,9 @@ mod tests {
         assert_eq!(clean_name("France", "fr"), "France");
         assert_eq!(clean_name("Sky Cinema Hits UK", "gb"), "Sky Cinema Hits");
         assert_eq!(clean_name("TF1 France", "gb"), "TF1 France");
+        let fold = |raw: &str| crate::live_tv::channels::normalize(&clean_name(raw, "ie"));
+        assert_eq!(fold("RTE 1"), "rteone", "RTÉ One's identity (RTEOne.ie)");
+        assert_eq!(fold("RTE 2"), "rte2", "RTÉ2's identity (RTE2.ie)");
         assert_eq!(category_for("beIN SPORTS 1"), Some("Sports"));
         assert_eq!(category_for("TF1"), None);
     }
