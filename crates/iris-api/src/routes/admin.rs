@@ -395,7 +395,7 @@ pub(crate) struct ResetPasswordRequest {
     params(("id" = Uuid, Path)),
     request_body = ResetPasswordRequest,
     responses(
-        (status = 204, description = "Password reset; all refresh tokens revoked"),
+        (status = 204, description = "Password reset; every session revoked and every passkey removed"),
         (status = 400, description = "New password too short (min 8 chars)"),
         (status = 403, description = "Caller is not an admin"),
         (status = 404, description = "No such user"),
@@ -414,7 +414,9 @@ pub(crate) async fn reset_user_password(
         return Err(ApiError::NotFound);
     };
     let hash = crate::passwords::hash(&body.new_password).await?;
-    iris_db::users::set_password(state.db(), user_id, &hash).await?;
+    let passkeys = iris_db::users::set_password(state.db(), user_id, &hash)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     super::audit(
         &state,
         admin.0.id,
@@ -424,6 +426,20 @@ pub(crate) async fn reset_user_password(
         Some(&target.email),
     )
     .await;
+    if passkeys > 0 {
+        super::audit(
+            &state,
+            admin.0.id,
+            "user.passkeys_revoked",
+            "user",
+            Some(&id.to_string()),
+            Some(&format!(
+                "{}: {passkeys} removed by the reset",
+                target.email
+            )),
+        )
+        .await;
+    }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 

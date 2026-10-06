@@ -280,10 +280,13 @@ pub(crate) async fn logout(State(state): State<AppState>, jar: CookieJar) -> Api
     {
         iris_db::refresh_tokens::revoke(state.db(), claims.jti).await?;
     }
-    let jar = jar
-        .remove(Cookie::build(ACCESS_COOKIE).path("/").build())
-        .remove(Cookie::build(REFRESH_COOKIE).path("/api/auth").build());
-    Ok(jar)
+    Ok(clear_session(jar))
+}
+
+/// The jar with this browser's session cookies removed.
+pub(crate) fn clear_session(jar: CookieJar) -> CookieJar {
+    jar.remove(Cookie::build(ACCESS_COOKIE).path("/").build())
+        .remove(Cookie::build(REFRESH_COOKIE).path("/api/auth").build())
 }
 
 pub(crate) async fn issue_session(

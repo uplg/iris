@@ -155,14 +155,17 @@ pub async fn get_password_hash(
     Ok(row.map(|r| r.0))
 }
 
-/// Replace a user's password and end every one of their sessions, in one
-/// transaction: a new password never coexists with sessions opened under
-/// the old one.
+/// Replace a user's password and end every way into the account opened
+/// under the old one, in one transaction: every session (a just-rotated
+/// one loses its grace window too) and every passkey, since a stolen
+/// session could have registered its own.
+///
+/// Returns `None` for an unknown user, else how many passkeys went.
 pub async fn set_password(
     pool: &SqlitePool,
     id: UserId,
     new_hash: &str,
-) -> Result<bool, sqlx::Error> {
+) -> Result<Option<u64>, sqlx::Error> {
     let uuid: Uuid = id.into();
     let mut tx = pool.begin().await?;
     let res = sqlx::query("UPDATE users SET password_hash = ?1 WHERE id = ?2")
@@ -170,15 +173,24 @@ pub async fn set_password(
         .bind(uuid)
         .execute(&mut *tx)
         .await?;
+    if res.rows_affected() != 1 {
+        return Ok(None);
+    }
     sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = ?1 WHERE user_id = ?2 AND revoked_at IS NULL",
+        "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, ?1), rotated_at = NULL \
+         WHERE user_id = ?2",
     )
     .bind(Utc::now())
     .bind(uuid)
     .execute(&mut *tx)
     .await?;
+    let passkeys = sqlx::query("DELETE FROM webauthn_credentials WHERE user_id = ?1")
+        .bind(uuid)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     tx.commit().await?;
-    Ok(res.rows_affected() == 1)
+    Ok(Some(passkeys))
 }
 
 /// Delete an account. `reassign_torrents_to` (the acting admin) inherits
@@ -266,10 +278,52 @@ mod tests {
             .await
             .unwrap();
         assert!(crate::refresh_tokens::is_active(&pool, jti).await.unwrap());
+        let rotated = Uuid::new_v4();
+        crate::refresh_tokens::insert(&pool, rotated, user, Utc::now() + chrono::Duration::days(1))
+            .await
+            .unwrap();
+        crate::refresh_tokens::mark_rotated(&pool, rotated)
+            .await
+            .unwrap();
+        crate::passkeys::insert(
+            &pool,
+            &crate::passkeys::NewPasskey {
+                user_id: user,
+                credential_id: "cred",
+                passkey_json: "{}",
+                name: "Phone",
+                backup_eligible: false,
+                backed_up: false,
+            },
+        )
+        .await
+        .unwrap();
 
-        assert!(set_password(&pool, user, "new-hash").await.unwrap());
+        assert_eq!(
+            set_password(&pool, user, "new-hash").await.unwrap(),
+            Some(1)
+        );
 
         assert!(!crate::refresh_tokens::is_active(&pool, jti).await.unwrap());
+        assert!(
+            crate::refresh_tokens::recently_rotated(&pool, rotated, 60)
+                .await
+                .unwrap()
+                .is_none(),
+            "a just-rotated token can't come back through the grace window"
+        );
+        assert!(
+            crate::passkeys::list_for_user(&pool, user)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            set_password(&pool, UserId::from(Uuid::new_v4()), "x")
+                .await
+                .unwrap(),
+            None
+        );
         assert_eq!(
             get_password_hash(&pool, user).await.unwrap().as_deref(),
             Some("new-hash")

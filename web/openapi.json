@@ -516,7 +516,7 @@
         },
         "responses": {
           "204": {
-            "description": "Password reset; all refresh tokens revoked"
+            "description": "Password reset; every session revoked and every passkey removed"
           },
           "400": {
             "description": "New password too short (min 8 chars)"
@@ -2247,7 +2247,7 @@
         },
         "responses": {
           "204": {
-            "description": "Password changed; every other session revoked, this one renewed"
+            "description": "Password changed; every session revoked, this one included (its cookies are cleared), and every passkey removed"
           },
           "400": {
             "description": "New password too short (min 8 chars), or the current one is wrong"

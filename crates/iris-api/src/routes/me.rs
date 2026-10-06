@@ -49,7 +49,7 @@ pub(crate) struct ChangePasswordRequest {
     operation_id = "change_password",
     request_body = ChangePasswordRequest,
     responses(
-        (status = 204, description = "Password changed; every other session revoked, this one renewed"),
+        (status = 204, description = "Password changed; every session revoked, this one included (its cookies are cleared), and every passkey removed"),
         (status = 400, description = "New password too short (min 8 chars), or the current one is wrong"),
         (status = 401, description = "Not authenticated"),
     ),
@@ -73,11 +73,36 @@ pub(crate) async fn change_password(
         ));
     }
     let new_hash = crate::passwords::hash(&body.new_password).await?;
-    // Every session ends with the old password; this one gets a fresh pair
-    // so the person who changed it stays signed in here.
-    iris_db::users::set_password(state.db(), user.id, &new_hash).await?;
-    let jar = crate::routes::auth::issue_session(&state, &jar, user.id, user.is_admin).await?;
-    Ok((jar, axum::http::StatusCode::NO_CONTENT))
+    // Every session ends with the old password, this one included: the
+    // caller signs in again with the new one.
+    let passkeys = iris_db::users::set_password(state.db(), user.id, &new_hash)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+    let id = Uuid::from(user.id).to_string();
+    super::audit(
+        &state,
+        user.id,
+        "user.password_change",
+        "user",
+        Some(&id),
+        None,
+    )
+    .await;
+    if passkeys > 0 {
+        super::audit(
+            &state,
+            user.id,
+            "user.passkeys_revoked",
+            "user",
+            Some(&id),
+            Some(&format!("{passkeys} removed by the password change")),
+        )
+        .await;
+    }
+    Ok((
+        crate::routes::auth::clear_session(jar),
+        axum::http::StatusCode::NO_CONTENT,
+    ))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
