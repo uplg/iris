@@ -141,7 +141,10 @@ sha2 = "0.11.0"
 # `SessionOptions::client_name_and_version` (PR 577) — needed because
 # UNIT3D-Announce trackers (e.g. theoldschool.cc) reject HTTP announces
 # with absent/long User-Agents, and 8.x had no public knob.
-librqbit = "9.0.1"
+# Default features (`default-tls`) link OpenSSL — SHA-1 via `crypto-hash` and
+# reqwest via native-tls — and the Wolfi runtime ships no `libssl3`. `rust-tls`
+# swaps both for aws-lc-rs / rustls, matching the rest of the workspace.
+librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls", "http-api-client"] }
 
 [profile.release]
 lto = "thin"
