@@ -50,9 +50,9 @@ import studio.kahn.iris.tv.ui.screens.search.AudioOption
 import studio.kahn.iris.tv.ui.screens.search.GrabAsk
 import studio.kahn.iris.tv.ui.screens.search.GrabRefusal
 import studio.kahn.iris.tv.ui.screens.search.GrabUi
-import studio.kahn.iris.tv.ui.screens.search.LoadMoreAtEnd
+import studio.kahn.iris.tv.ui.components.LoadMoreAtEnd
 import studio.kahn.iris.tv.ui.screens.search.MoreFooter
-import studio.kahn.iris.tv.ui.screens.search.ReleaseList
+import studio.kahn.iris.tv.ui.components.RowList
 import studio.kahn.iris.tv.ui.screens.search.SearchKind
 import studio.kahn.iris.tv.ui.screens.search.SearchSort
 import studio.kahn.iris.tv.ui.screens.search.SeasonOption
@@ -246,7 +246,7 @@ private fun Body(
             val list = rememberLazyListState()
             val hasNext = page.next != null
             LoadMoreAtEnd(list, enabled = hasNext && !state.loadingMore && state.moreError == null, onLoadMore = actions.onLoadMore)
-            ReleaseList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
+            RowList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
                 releaseRows(state.shown, grab, remembered, actions.onRelease, actions.onGrab, withTitle = false)
                 item(key = "more") { MoreFooter(state.loadingMore, state.moreError, hasNext, actions.onRetryMore) }
             }

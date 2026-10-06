@@ -2,10 +2,34 @@ package studio.kahn.iris.tv.ui.components
 
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Text
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import studio.kahn.iris.tv.ui.state.UiError
+import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.theme.IrisType
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridItemScope
 import androidx.compose.foundation.lazy.grid.LazyGridScope
@@ -56,6 +80,97 @@ fun <T> CardRow(
         horizontalArrangement = Arrangement.spacedBy(gap),
     ) {
         items(items, key = key) { item -> itemContent(item) }
+    }
+}
+
+/**
+ * A vertical list of rows (search results as a list, a title's releases), with the [CardRow]
+ * contract: stable keys, and coming back to the list lands on the row focused last.
+ */
+@Composable
+fun RowList(
+    state: LazyListState,
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(4.dp),
+    gap: Dp = 7.dp,
+    content: LazyListScope.() -> Unit,
+) {
+    LazyColumn(
+        modifier = modifier
+            .focusRestorer()
+            .focusGroup(),
+        state = state,
+        contentPadding = contentPadding,
+        verticalArrangement = Arrangement.spacedBy(gap),
+        content = content,
+    )
+}
+
+/** Asks for the next page ([onLoadMore]) when the last rows of [state] come into view: driven by scrolling, no timer. */
+@Composable
+fun LoadMoreAtEnd(state: LazyListState, enabled: Boolean, onLoadMore: () -> Unit) {
+    LoadMoreNear(state, enabled, LOOKAHEAD, onLoadMore) {
+        state.layoutInfo.let { (it.visibleItemsInfo.lastOrNull()?.index ?: 0) to it.totalItemsCount }
+    }
+}
+
+/** [LoadMoreAtEnd] for a grid: a row of a grid holds several items, so it looks further ahead. */
+@Composable
+fun LoadMoreAtEnd(state: LazyGridState, enabled: Boolean, onLoadMore: () -> Unit) {
+    LoadMoreNear(state, enabled, LOOKAHEAD * 2, onLoadMore) {
+        state.layoutInfo.let { (it.visibleItemsInfo.lastOrNull()?.index ?: 0) to it.totalItemsCount }
+    }
+}
+
+@Composable
+private fun LoadMoreNear(key: Any, enabled: Boolean, lookahead: Int, onLoadMore: () -> Unit, seen: () -> Pair<Int, Int>) {
+    val load by rememberUpdatedState(onLoadMore)
+    LaunchedEffect(key, enabled) {
+        if (!enabled) return@LaunchedEffect
+        snapshotFlow { seen().let { (last, total) -> last >= total - lookahead } }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect { load() }
+    }
+}
+
+private const val LOOKAHEAD = 4
+
+/**
+ * The end of a paged list: the next page loading ([loadingText]), its failure with a retry,
+ * or the end said ([endText]).
+ */
+@Composable
+fun PageEnd(
+    loadingMore: Boolean,
+    error: UiError?,
+    hasNext: Boolean,
+    onRetry: () -> Unit,
+    loadingText: String,
+    endText: String,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = IrisSize.control),
+        contentAlignment = Alignment.Center,
+    ) {
+        when {
+            error != null -> Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3), verticalAlignment = Alignment.CenterVertically) {
+                StatusLine("The next page did not load: ${error.message}", tone = StatusTone.Down)
+                ActionButton("Try again", onRetry, style = ActionStyle.Secondary, size = ActionSize.Small, icon = Icons.Rounded.Refresh)
+            }
+            loadingMore || hasNext -> Row(
+                Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Spinner(Modifier.size(10.dp), color = IrisColor.inkMuted)
+                Text(loadingText, style = IrisType.meta, color = IrisColor.inkMuted)
+            }
+            else -> Text(endText, style = IrisType.meta, color = IrisColor.inkMuted)
+        }
     }
 }
 

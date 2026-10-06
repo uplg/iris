@@ -98,11 +98,11 @@ import studio.kahn.iris.tv.ui.screens.search.GrabAsk
 import studio.kahn.iris.tv.ui.screens.search.GrabRefusal
 import studio.kahn.iris.tv.ui.screens.search.GrabUi
 import studio.kahn.iris.tv.ui.screens.search.LibraryMatchRow
-import studio.kahn.iris.tv.ui.screens.search.LoadMoreAtEnd
+import studio.kahn.iris.tv.ui.components.LoadMoreAtEnd
 import studio.kahn.iris.tv.ui.screens.search.MatchTarget
 import studio.kahn.iris.tv.ui.screens.search.MoreFooter
 import studio.kahn.iris.tv.ui.screens.search.ReleaseCard
-import studio.kahn.iris.tv.ui.screens.search.ReleaseList
+import studio.kahn.iris.tv.ui.components.RowList
 import studio.kahn.iris.tv.ui.screens.search.SearchKeyboard
 import studio.kahn.iris.tv.ui.screens.search.KEYBOARD_WIDTH
 import studio.kahn.iris.tv.ui.screens.search.SearchKind
@@ -777,7 +777,7 @@ private fun ResultsBody(
             } else {
                 val list = rememberLazyListState()
                 LoadMoreAtEnd(list, enabled = hasNext && !state.loadingMore && state.moreError == null, onLoadMore = actions.onLoadMore)
-                ReleaseList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
+                RowList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
                     items(state.matches, key = { "match-${it.collectionId}" }) { m: LibraryMatch -> LibraryMatchRow(m, actions.onMatch) }
                     releaseRows(shown, grab, remembered, actions.onRelease, actions.onGrab)
                     item(key = "more") { MoreFooter(state.loadingMore, state.moreError, hasNext, actions.onRetryMore) }
