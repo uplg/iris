@@ -53,6 +53,7 @@ import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 /** Every action Settings offers, so the stateless body takes one parameter for them. */
 @Immutable
@@ -144,7 +145,7 @@ private fun YouSection(state: SettingsUiState, actions: SettingsActions) {
                     busyText = "Saving…",
                 )
             }
-            OutcomeLine(state.outcome, SettingsSection.You)
+            NoticeLine(state.outcome.notice(SettingsSection.You))
             Column {
                 FactRow("Email", user.email)
                 FactRow("Role", if (user.isAdmin) "Admin" else "Member")
@@ -163,7 +164,7 @@ private fun PlaybackSection(state: SettingsUiState, actions: SettingsActions) {
                 subtitleWords(languageChoice(prefs.subtitleLanguage)),
                 onClick = { actions.onOpen(SettingsDialog.Subtitles) },
             )
-            OutcomeLine(state.outcome, SettingsSection.Playback)
+            NoticeLine(state.outcome.notice(SettingsSection.Playback))
             Text(
                 "Changing a track while watching saves the new one here too.",
                 style = IrisType.meta,
@@ -212,7 +213,7 @@ private fun RecommendationsSection(state: SettingsUiState, actions: SettingsActi
                     color = IrisColor.inkMuted,
                 )
             }
-            OutcomeLine(state.outcome, SettingsSection.Recommendations)
+            NoticeLine(state.outcome.notice(SettingsSection.Recommendations))
         }
     }
 }
@@ -246,7 +247,7 @@ private fun DevicesSection(state: SettingsUiState, actions: SettingsActions, now
                 ActionButton("Stop waiting", actions.onStopWaiting, style = ActionStyle.Secondary, size = ActionSize.Small)
             }
         } else {
-            OutcomeLine(state.outcome, SettingsSection.Devices)
+            NoticeLine(state.outcome.notice(SettingsSection.Devices))
         }
         Loaded(state.devices, actions.onRetry) { devices ->
             if (devices.isEmpty()) {
@@ -324,7 +325,7 @@ private fun PasswordSection(state: SettingsUiState, actions: SettingsActions) {
             icon = Icons.Rounded.Key,
             style = ActionStyle.Secondary,
         )
-        OutcomeLine(state.outcome, SettingsSection.Password)
+        NoticeLine(state.outcome.notice(SettingsSection.Password))
     }
 }
 

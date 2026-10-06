@@ -77,6 +77,7 @@ import studio.kahn.iris.tv.ui.components.RowCard
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StaleNotice
+import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.screens.library.ChosenPanelOptions
 import studio.kahn.iris.tv.ui.screens.library.CollectionPage
 import studio.kahn.iris.tv.ui.screens.library.CollectionUiState
@@ -87,13 +88,10 @@ import studio.kahn.iris.tv.ui.screens.library.FileUi
 import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.screens.library.GoneUi
 import studio.kahn.iris.tv.ui.screens.library.LanguagesUi
-import studio.kahn.iris.tv.ui.screens.library.NoticeLine
 import studio.kahn.iris.tv.ui.screens.library.PackUi
 import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
 import studio.kahn.iris.tv.ui.screens.library.ReleaseItem
 import studio.kahn.iris.tv.ui.screens.library.ReleaseRow
-import studio.kahn.iris.tv.ui.screens.library.Tone
-import studio.kahn.iris.tv.ui.screens.library.ToneLine
 import studio.kahn.iris.tv.ui.screens.library.audioWords
 import studio.kahn.iris.tv.ui.screens.library.busyKey
 import studio.kahn.iris.tv.ui.screens.library.subtitleWords
@@ -107,6 +105,8 @@ import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 import studio.kahn.iris.tv.ui.format.languageName
 import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 /** Everything a title's page hands back. */
 @Immutable
@@ -557,7 +557,7 @@ private fun EpisodeCard(
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
             Text(row.heading, style = IrisType.bodyStrong, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            ToneLine(row.state.tone, if (busy) "Asking the server…" else row.state.text)
+            StatusLine(if (busy) "Asking the server…" else row.state.text, tone = row.state.tone)
             row.state.progress?.let { Meter(it, Modifier.widthIn(max = 240.dp)) }
             row.details.forEach { Text(it, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
@@ -595,7 +595,7 @@ private fun GoneRow(g: GoneUi, busy: Set<String>, actions: CollectionActions) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
-            g.watchLine?.let { ToneLine(if (g.watched) Tone.Ok else Tone.Info, it) }
+            g.watchLine?.let { StatusLine(it, tone = if (g.watched) StatusTone.Ok else StatusTone.Info) }
             Text(g.name, style = IrisType.mono, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(g.facts, style = IrisType.meta, color = IrisColor.inkMuted)
         }
@@ -652,7 +652,7 @@ internal fun EpisodeSheet(
         onAction = { onAction(row, it) },
         onDismiss = onDismiss,
     ) {
-        ToneLine(row.state.tone, row.state.text)
+        StatusLine(row.state.text, tone = row.state.tone)
         row.aired?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
         row.overview?.let { Text(it, style = IrisType.reading, color = IrisColor.ink, maxLines = 6, overflow = TextOverflow.Ellipsis) }
         row.details.forEach { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }

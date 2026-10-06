@@ -33,6 +33,8 @@ import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.formatSpeed
 import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.format.timeLeft
+import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** The library's two views (web: Titles / Downloads and seeding). */
 enum class LibraryView(val label: String) {
@@ -258,11 +260,11 @@ fun titlesUi(
         val id = c.id.toString()
         val base = titleStatus(c, activity[id])
         val resume = resumeBy[id]
-        val plain = base.tone == Tone.Ok
+        val plain = base.tone == StatusTone.Ok
         val progress = resume?.durationSeconds?.takeIf { it > 0 && plain }?.let { (resume.positionSeconds / it).toFloat().coerceIn(0f, 1f) }
         val status = when {
             plain && resume != null -> inProgress(c, resume)
-            plain && (fresh[id] ?: 0) > 0 -> Status(Tone.Ok, plural(fresh[id] ?: 0, "new episode"))
+            plain && (fresh[id] ?: 0) > 0 -> Status(StatusTone.Ok, plural(fresh[id] ?: 0, "new episode"))
             else -> base
         }
         TitleCard(
@@ -284,9 +286,9 @@ private fun inProgress(c: CollectionListItem, w: ContinueWatchingItem): Status {
     val code = episodeCode(w.season, w.episode)
     val d = w.durationSeconds
     return when {
-        c.kind == MediaKind.tv && code != null -> Status(Tone.Info, "In progress · $code")
-        d != null && d > w.positionSeconds -> Status(Tone.Info, timeLeft(d - w.positionSeconds))
-        else -> Status(Tone.Info, "In progress")
+        c.kind == MediaKind.tv && code != null -> Status(StatusTone.Info, "In progress · $code")
+        d != null && d > w.positionSeconds -> Status(StatusTone.Info, timeLeft(d - w.positionSeconds))
+        else -> Status(StatusTone.Info, "In progress")
     }
 }
 

@@ -70,7 +70,6 @@ import studio.kahn.iris.tv.ui.screens.home.HomeEvent
 import studio.kahn.iris.tv.ui.screens.home.HomeRow
 import studio.kahn.iris.tv.ui.screens.home.HomeUiState
 import studio.kahn.iris.tv.ui.screens.home.HomeViewModel
-import studio.kahn.iris.tv.ui.screens.home.Notice
 import studio.kahn.iris.tv.ui.screens.home.rememberCardFocus
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
@@ -80,6 +79,8 @@ import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.components.Notice
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 /**
  * Home (TV.dc.html, web `routes/+page.svelte`): what to watch now (resume the last thing,
@@ -394,9 +395,7 @@ private fun RightNow(facts: Loadable<List<String>>) {
 @Composable
 private fun Footer(notice: Notice?, updateAvailable: Boolean) {
     ScreenFooter(HOME_HINTS, trailing = if (updateAvailable) "An app update is waiting in Settings" else null) {
-        if (notice != null) {
-            StatusLine(notice.text, tone = notice.tone, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-        }
+        NoticeLine(notice)
     }
 }
 

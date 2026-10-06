@@ -20,6 +20,7 @@ import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** What OK does on a history line. */
 enum class LineAction { Play, Restore, OpenTitle, None }

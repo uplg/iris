@@ -47,6 +47,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 /**
  * Discover (web `routes/discover`): tonight's moods, movies or series (a board of tiles,
@@ -127,11 +128,7 @@ fun DiscoverContent(
                 KeyHint(Keys.HOLD_OK, "Not interested"),
                 KeyHint(Keys.BACK, if (mood == null) "To the menu" else "To all moods"),
             ),
-        ) {
-            state.notice?.let {
-                StatusLine(it.text, tone = it.tone, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-            }
-        }
+        ) { NoticeLine(state.notice) }
     }
     FooterLayout(
         footer = footer,

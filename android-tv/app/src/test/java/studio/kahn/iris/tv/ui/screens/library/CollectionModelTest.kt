@@ -9,6 +9,7 @@ import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.FileProgressEntry
 import studio.kahn.iris.tv.data.GoneEpisodeEntry
 import studio.kahn.iris.tv.screenshot.LibraryFixtures as F
+import studio.kahn.iris.tv.ui.components.StatusTone
 
 class CollectionModelTest {
     private fun disk(s: Long, e: Long, lang: String? = "french", abs: Long? = null) =
@@ -73,8 +74,8 @@ class CollectionModelTest {
         val rows = mergeEpisodes(F.series.episodes, F.series.availableEpisodes.orEmpty(), F.series.goneEpisodes.orEmpty(), F.series.episodeInfo)
         fun state(e: Long, progress: FileProgressEntry? = null) =
             rowState(rows.first { it.season == 2L && it.episode == e }, { null }, { _, _ -> progress })
-        assertEquals(RowState(Tone.Ok, "Watched · 50 min", verb = Verb.WatchAgain), state(1))
-        assertEquals(RowState(Tone.Ok, "On disk", verb = Verb.Play), state(5))
+        assertEquals(RowState(StatusTone.Ok, "Watched · 50 min", verb = Verb.WatchAgain), state(1))
+        assertEquals(RowState(StatusTone.Ok, "On disk", verb = Verb.Play), state(5))
         val half = FileProgressEntry(completed = false, fileIdx = 5, lastWatchedAt = F.at, positionSeconds = 600.0, durationSeconds = 1_800.0)
         assertEquals("In progress · 20 min left", state(5, half).text)
         assertEquals(Verb.Resume, state(5, half).verb)

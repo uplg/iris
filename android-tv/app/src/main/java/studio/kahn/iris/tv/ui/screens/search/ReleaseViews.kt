@@ -69,6 +69,8 @@ import studio.kahn.iris.tv.ui.theme.IrisType
 import studio.kahn.iris.tv.ui.format.codecWord
 import studio.kahn.iris.tv.ui.format.kindWord
 import studio.kahn.iris.tv.ui.format.languageLabel
+import studio.kahn.iris.tv.ui.components.Notice
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 /**
  * One release as a list row (TVSearchList, TVTitleReleases): what it is in
@@ -218,17 +220,7 @@ fun SummaryLine(words: String?, failed: List<ProviderResultMeta>, onRetry: () ->
 @Composable
 fun GrabRefusal(grab: GrabUi, onClose: () -> Unit, modifier: Modifier = Modifier) {
     val refused = grab as? GrabUi.Refused ?: return
-    val close = remember { FocusRequester() }
-    LaunchedEffect(refused) { runCatching { close.requestFocus() } }
-    FramedBlock(modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Assertive }) {
-        Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
-                StatusLine("Nothing was downloaded", tone = StatusTone.Down, style = IrisType.bodyStrong)
-                Text(refused.message, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            }
-            ActionButton("Close", onClose, style = ActionStyle.Secondary, size = ActionSize.Small, modifier = Modifier.focusRequester(close))
-        }
-    }
+    NoticeLine(Notice("Nothing was downloaded", StatusTone.Down), modifier, detail = refused.message, onClose = onClose)
 }
 
 /** The asks of a grab (a huge pack, a second copy of a movie) as a confirmation. */

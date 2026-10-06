@@ -43,10 +43,7 @@ import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
-
-/** A line the screen says after an action, in words (and its tone). */
-@Immutable
-data class Notice(val text: String, val tone: StatusTone = StatusTone.Muted)
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** Where an action leads; the screen navigates. */
 sealed interface HomeEvent {

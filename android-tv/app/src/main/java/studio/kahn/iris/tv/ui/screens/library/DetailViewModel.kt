@@ -24,6 +24,7 @@ import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.format.prettySceneName
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** A release's own page: what it is, what it does, its video files. */
 @Immutable

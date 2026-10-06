@@ -38,6 +38,7 @@ import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.languageName
 import studio.kahn.iris.tv.ui.format.recentTime
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** One episode row, its words already said. */
 @Immutable

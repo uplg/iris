@@ -31,6 +31,7 @@ import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
 import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** The parts of Settings, in rail order. */
 enum class SettingsSection(val label: String) {
@@ -78,6 +79,10 @@ sealed interface SettingsDialog {
 /** What the last action did, said in its section. */
 @Immutable
 data class Outcome(val section: SettingsSection, val text: String, val failed: Boolean = false)
+
+/** The outcome said in [section], when it is that section's. */
+fun Outcome?.notice(section: SettingsSection): Notice? =
+    this?.takeIf { it.section == section }?.let { Notice(it.text, failed = it.failed) }
 
 /** Which field of the open dialog an error is about. */
 enum class DialogField { First, Second }

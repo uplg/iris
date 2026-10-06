@@ -75,7 +75,6 @@ import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.screens.library.LibraryUiState
 import studio.kahn.iris.tv.ui.screens.library.LibraryView
 import studio.kahn.iris.tv.ui.screens.library.LibraryViewModel
-import studio.kahn.iris.tv.ui.screens.library.NoticeLine
 import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
 import studio.kahn.iris.tv.ui.screens.library.ReleaseItem
 import studio.kahn.iris.tv.ui.screens.library.ReleaseRow
@@ -94,6 +93,7 @@ import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 /** Everything the library screen hands back to its ViewModel and to navigation. */
 @Immutable

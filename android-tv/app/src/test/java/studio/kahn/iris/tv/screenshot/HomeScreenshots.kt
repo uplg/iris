@@ -27,12 +27,12 @@ import studio.kahn.iris.tv.ui.screens.home.HeroModel
 import studio.kahn.iris.tv.ui.screens.home.HomeUiState
 import studio.kahn.iris.tv.ui.screens.home.MoodModel
 import studio.kahn.iris.tv.ui.screens.home.MoodResultsModel
-import studio.kahn.iris.tv.ui.screens.home.Notice
 import studio.kahn.iris.tv.ui.screens.home.OnboardingUiState
 import studio.kahn.iris.tv.ui.screens.home.Picks
 import studio.kahn.iris.tv.ui.screens.home.ShelfModel
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** Home, Discover and the first-run sheet, from fake states (TV.dc.html), at every size. */
 @RunWith(RobolectricTestRunner::class)

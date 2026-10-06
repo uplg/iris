@@ -44,7 +44,6 @@ import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.screens.library.DetailUiState
 import studio.kahn.iris.tv.ui.screens.library.DetailViewModel
-import studio.kahn.iris.tv.ui.screens.library.NoticeLine
 import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
 import studio.kahn.iris.tv.ui.screens.library.ReleaseItem
 import studio.kahn.iris.tv.ui.screens.library.ReleaseRow
@@ -57,6 +56,7 @@ import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 @Immutable
 data class DetailActions(

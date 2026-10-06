@@ -7,6 +7,7 @@ import org.junit.Test
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.screenshot.LibraryFixtures as F
+import studio.kahn.iris.tv.ui.components.StatusTone
 
 class LibraryModelTest {
     private val activity = activityByCollection(F.torrents)
@@ -21,11 +22,11 @@ class LibraryModelTest {
     @Test
     fun titleStatusSaysWhatIsHappening() {
         val bear = F.titles.first { it.displayTitle == "The Bear" }
-        assertEquals(Status(Tone.Busy, "Downloading S4 · 42%"), titleStatus(bear, activity[bear.id.toString()]))
+        assertEquals(Status(StatusTone.Busy, "Downloading S4 · 42%"), titleStatus(bear, activity[bear.id.toString()]))
         val arcane = F.titles.first { it.displayTitle == "Arcane" }
-        assertEquals(Status(Tone.Warn, "Download stuck · 61%"), titleStatus(arcane, activity[arcane.id.toString()]))
+        assertEquals(Status(StatusTone.Warn, "Download stuck · 61%"), titleStatus(arcane, activity[arcane.id.toString()]))
         val ghost = F.titles.first { it.ghost == true }
-        assertEquals(Status(Tone.Info, "No longer on disk"), titleStatus(ghost, null))
+        assertEquals(Status(StatusTone.Info, "No longer on disk"), titleStatus(ghost, null))
         val severance = F.titles.first()
         assertEquals("19 episodes on disk", titleStatus(severance, null).text)
         assertEquals("On disk", titleStatus(F.titles[1], null).text)
@@ -71,7 +72,7 @@ class LibraryModelTest {
         assertEquals("Seeding · 3 peers downloading · 117 KB/s up", releaseStatus(F.torrents[2]).text)
         assertEquals("Paused after download · nyaa releases never seed", releaseStatus(F.torrents[4]).text)
         val broken = F.torrent("x", "X", state = TorrentState.error).copy(error = "disk full")
-        assertEquals(Status(Tone.Warn, "Error · disk full"), releaseStatus(broken))
+        assertEquals(Status(StatusTone.Warn, "Error · disk full"), releaseStatus(broken))
     }
 
     @Test
