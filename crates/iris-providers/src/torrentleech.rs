@@ -69,7 +69,7 @@ use crate::cache::{DetailsCache, FifoCache};
 use crate::nfo;
 use crate::util::{
     BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str,
-    optional_field_or_env, parse_size,
+    optional_field_or_env, parse_size, scene_query,
 };
 
 /// Body marker of a live session — the post-login page (and every
@@ -546,19 +546,12 @@ fn sort_order(o: Option<iris_core::search::SortOrder>) -> &'static str {
     }
 }
 
-/// SCENE-parsed title + S/E rebuilt like the other providers, then
+/// The shared [`scene_query`], then
 /// adapted to TL's search engine: dots and colons are separators, and a
 /// leading `-` on a word negates the term (Jackett #3096) so it's
 /// stripped.
 fn build_search_term(q: &SearchQuery) -> String {
-    let base = match q.parsed_title.as_deref() {
-        Some(t) if !t.is_empty() => match (q.season, q.episode) {
-            (Some(s), Some(e)) if e > 0 => format!("{t} S{s:02}E{e:02}"),
-            (Some(s), _) => format!("{t} S{s:02}"),
-            _ => q.q.clone(),
-        },
-        _ => q.q.clone(),
-    };
+    let base = scene_query(q);
     let cleaned: String = base
         .chars()
         .map(|c| if c == '.' || c == ':' { ' ' } else { c })
@@ -1038,15 +1031,7 @@ mod tests {
     fn query(q: &str) -> SearchQuery {
         SearchQuery {
             q: q.into(),
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
-            parsed_title: None,
-            season: None,
-            episode: None,
-            year: None,
+            ..SearchQuery::default()
         }
     }
 

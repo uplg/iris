@@ -46,7 +46,9 @@ use url::Url;
 use crate::SearchProvider;
 use crate::cache::FifoCache;
 use crate::nfo;
-use crate::util::{BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str};
+use crate::util::{
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, scene_query,
+};
 
 const DEFAULT_API_PATH: &str = "/api";
 pub struct Unit3dProvider {
@@ -313,7 +315,7 @@ impl SearchProvider for Unit3dProvider {
         // still works (UNIT3D matches the whole string) but typing
         // just "Classroom of the Elite" used to drown S04E11 in
         // season packs because the only filter was raw `q`.
-        let name_filter = build_unit3d_name_filter(q);
+        let name_filter = scene_query(q);
 
         // `/api/torrents/filter` parameter names per the official docs
         // (camelCase across the board). Anything UNIT3D doesn't
@@ -551,27 +553,6 @@ struct TorrentAttributes {
 /// value can't poison downstream identity comparisons.
 ///
 /// Two encodings observed in the wild:
-/// Build the `name=` substring filter sent to UNIT3D's
-/// `/api/torrents/filter`. When the SCENE parser extracted a usable
-/// title + season (+ optional episode) from the raw query, rebuild a
-/// canonical SCENE-form string the indexer matches verbatim
-/// (`Classroom.of.the.Elite S04E11`). Without a parser hit we pass
-/// the raw `q` straight through — no regression for free-text searches.
-fn build_unit3d_name_filter(q: &SearchQuery) -> String {
-    let parsed = match q.parsed_title.as_deref() {
-        Some(t) if !t.is_empty() => t,
-        _ => return q.q.clone(),
-    };
-    match (q.season, q.episode) {
-        (Some(s), Some(e)) if e > 0 => format!("{parsed} S{s:02}E{e:02}"),
-        (Some(s), _) => format!("{parsed} S{s:02}"),
-        // Parser recognised a title but no S/E — keep the raw q in
-        // case it contained year / qualifier info we'd lose by
-        // collapsing to the parsed title alone.
-        _ => q.q.clone(),
-    }
-}
-
 ///   * 40 hex chars — the canonical form (`/api/torrents/{id}`,
 ///     mainline `UNIT3D` search rows). Pass-through.
 ///   * 80 hex chars — `/api/torrents/filter` ships the infohash

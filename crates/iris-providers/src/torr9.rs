@@ -27,7 +27,9 @@ use iris_core::search::{
 
 use crate::cache::DetailsCache;
 use crate::nfo;
-use crate::util::{BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str};
+use crate::util::{
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, scene_query,
+};
 use quick_xml::Reader;
 use quick_xml::escape::unescape as xml_unescape;
 use quick_xml::events::Event;
@@ -305,7 +307,7 @@ impl SearchProvider for Torr9 {
         // pulled a clean title + season/episode out of the raw query
         // we rebuild a SCENE-form filter so the indexer narrows
         // exactly to the requested release line.
-        let q_param = build_torr9_q(q);
+        let q_param = scene_query(q);
 
         let mut qs: Vec<(&'static str, String)> = vec![
             ("q", q_param),
@@ -688,21 +690,6 @@ fn torr9_sort_field(f: SortField) -> &'static str {
         SortField::Seeders => "seeders",
         SortField::Leechers => "leechers",
         SortField::Uploaded => "upload_date",
-    }
-}
-
-/// Compose torr9's `q=` substring filter from the parsed query
-/// hints. SCENE-form `<title> SxxExx` when both are known; otherwise
-/// fall through to the raw user input — no regression for free text.
-fn build_torr9_q(q: &SearchQuery) -> String {
-    let parsed = match q.parsed_title.as_deref() {
-        Some(t) if !t.is_empty() => t,
-        _ => return q.q.clone(),
-    };
-    match (q.season, q.episode) {
-        (Some(s), Some(e)) if e > 0 => format!("{parsed} S{s:02}E{e:02}"),
-        (Some(s), _) => format!("{parsed} S{s:02}"),
-        _ => q.q.clone(),
     }
 }
 

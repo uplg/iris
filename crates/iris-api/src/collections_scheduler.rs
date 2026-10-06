@@ -189,13 +189,9 @@ async fn check_one(
         limit: Some(100),
         sort_by: Some(SortField::Seeders),
         order: Some(SortOrder::Desc),
-        kind: None,
         // Scheduler intentionally queries by show name only — providers
         // shouldn't narrow to a specific S/E here.
-        parsed_title: None,
-        season: None,
-        episode: None,
-        year: None,
+        ..SearchQuery::default()
     };
     let agg = providers.search_all(&q).await;
     if agg.results.is_empty() {

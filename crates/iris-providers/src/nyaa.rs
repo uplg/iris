@@ -840,12 +840,7 @@ mod tests {
             parsed_title: Some("one piece".into()),
             season: Some(1),
             episode: Some(1174),
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
-            year: None,
+            ..SearchQuery::default()
         };
         assert_eq!(NyaaProvider::query_text(&q), "one piece");
 
@@ -891,14 +886,9 @@ mod tests {
             .search(&SearchQuery {
                 q: "one piece".into(),
                 page: Some(1),
-                limit: None,
                 sort_by: Some(SortField::Seeders),
                 order: Some(SortOrder::Desc),
-                kind: None,
-                parsed_title: None,
-                season: None,
-                episode: None,
-                year: None,
+                ..SearchQuery::default()
             })
             .await
             .expect("search succeeds");

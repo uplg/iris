@@ -345,15 +345,9 @@ impl SearchProvider for C411 {
                 q: title,
                 page: Some(1),
                 limit: Some(25),
-                sort_by: None,
-                order: None,
-                kind: None,
                 // Priming a featured-link lookup — no need to push
                 // structured hints down to the underlying Torznab.
-                parsed_title: None,
-                season: None,
-                episode: None,
-                year: None,
+                ..SearchQuery::default()
             };
             // Best-effort: if the search fails (network, indexer
             // 5xx), we fall through to the explicit error below

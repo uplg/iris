@@ -470,10 +470,7 @@ fn search_query(title: &str, kind: MediaKind, year: Option<u32>) -> SearchQuery 
         sort_by: Some(SortField::Seeders),
         order: Some(SortOrder::Desc),
         kind: Some(kind),
-        parsed_title: None,
-        season: None,
-        episode: None,
-        year: None,
+        ..SearchQuery::default()
     }
 }
 

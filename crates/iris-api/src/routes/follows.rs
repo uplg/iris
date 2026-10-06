@@ -1696,11 +1696,10 @@ fn build_reprime_query(reprime: &ReprimeHint<'_>) -> iris_core::search::SearchQu
         limit: Some(20),
         sort_by: Some(SortField::Seeders),
         order: Some(SortOrder::Desc),
-        kind: None,
         parsed_title: Some(iris_media::filename::series_key(reprime.display_title)),
         season: Some(reprime.season as u32),
         episode: reprime.episode.map(|e| e as u32),
-        year: None,
+        ..SearchQuery::default()
     }
 }
 

@@ -53,6 +53,7 @@ use crate::cache::{DetailsCache, FifoCache};
 use crate::nfo;
 use crate::util::{
     BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, parse_size,
+    scene_query,
 };
 
 /// Body marker of an expired/absent session — the site answers 200 with
@@ -458,16 +459,9 @@ impl SearchProvider for HdTorrents {
 
 /// The site's search box treats `.` as a separator and rejects raw
 /// parentheses ("hacking" detection — the form encoder takes care of
-/// those). SCENE-parsed title + S/E is rebuilt like the UNIT3D filter.
+/// those). Starts from the shared [`scene_query`].
 fn build_search_term(q: &SearchQuery) -> String {
-    let base = match q.parsed_title.as_deref() {
-        Some(t) if !t.is_empty() => match (q.season, q.episode) {
-            (Some(s), Some(e)) if e > 0 => format!("{t} S{s:02}E{e:02}"),
-            (Some(s), _) => format!("{t} S{s:02}"),
-            _ => q.q.clone(),
-        },
-        _ => q.q.clone(),
-    };
+    let base = scene_query(q);
     base.replace('.', " ")
 }
 
@@ -977,29 +971,16 @@ mod tests {
     fn search_term_rebuilds_scene_form_and_strips_dots() {
         let q = SearchQuery {
             q: "Classroom.of.the.Elite S04E11 1080p".into(),
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
             parsed_title: Some("Classroom of the Elite".into()),
             season: Some(4),
             episode: Some(11),
-            year: None,
+            ..SearchQuery::default()
         };
         assert_eq!(build_search_term(&q), "Classroom of the Elite S04E11");
 
         let raw = SearchQuery {
             q: "The.Movie.2023".into(),
-            parsed_title: None,
-            season: None,
-            episode: None,
-            page: None,
-            limit: None,
-            sort_by: None,
-            order: None,
-            kind: None,
-            year: None,
+            ..SearchQuery::default()
         };
         assert_eq!(build_search_term(&raw), "The Movie 2023");
     }
@@ -1058,15 +1039,7 @@ mod tests {
         let page = p
             .search(&SearchQuery {
                 q: std::env::var("HDT_QUERY").unwrap_or_else(|_| "dune".into()),
-                page: None,
-                limit: None,
-                sort_by: None,
-                order: None,
-                kind: None,
-                parsed_title: None,
-                season: None,
-                episode: None,
-                year: None,
+                ..SearchQuery::default()
             })
             .await
             .expect("live search");

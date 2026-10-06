@@ -61,10 +61,7 @@ pub trait SearchProvider: Send + Sync {
             sort_by: Some(SortField::Uploaded),
             order: Some(SortOrder::Desc),
             kind,
-            parsed_title: None,
-            season: None,
-            episode: None,
-            year: None,
+            ..SearchQuery::default()
         })
         .await
     }

@@ -491,14 +491,8 @@ mod tests {
             .search(&SearchQuery {
                 q: "dune".into(),
                 page: Some(1),
-                limit: None,
-                sort_by: None,
-                order: None,
                 kind: Some(MediaKind::Movie),
-                parsed_title: None,
-                season: None,
-                episode: None,
-                year: None,
+                ..SearchQuery::default()
             })
             .await
             .expect("search succeeds");
