@@ -8,7 +8,7 @@
 		"./*": "./src/*.ts"
 	},
 	"dependencies": {
-		"@hevcjs/core": "^1.4.5",
+		"@hevcjs/core": "^1.4.8",
 		"@iris/api": "workspace:*",
 		"@jellyfin/libass-wasm": "^4.2.4",
 		"hls.js": "^1.7.3",
