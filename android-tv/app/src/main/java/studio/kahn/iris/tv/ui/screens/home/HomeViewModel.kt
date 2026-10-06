@@ -7,7 +7,6 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -20,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
@@ -44,6 +44,9 @@ import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.components.Notice
+import studio.kahn.iris.tv.ui.state.FAST_MS
+import studio.kahn.iris.tv.ui.state.SLOW_MS
+import studio.kahn.iris.tv.ui.state.pollWhile
 
 /** Where an action leads; the screen navigates. */
 sealed interface HomeEvent {
@@ -150,10 +153,6 @@ internal fun heroPrefsKey(item: ContinueWatchingItem): String = item.collectionI
 internal fun featuredMetaKey(r: studio.kahn.iris.tv.data.SearchResult): MetaKey? =
     (r.titleMatch?.tmdbId ?: r.tmdbId)?.let { MetaKey(it, r.titleMatch?.kind ?: r.kind) }
 
-/** The signed-in server's API, or a readable failure when the TV is not paired. */
-internal suspend fun AppContainer.api(): IrisApi =
-    apiFor(sessionStore.serverUrl.first() ?: throw IllegalStateException("This TV is signed out. Pair it again from Settings."))
-
 /**
  * The home (TV.dc.html): reads every row when the screen starts (so coming back from the
  * player shows where one stopped), then, while it stays started, the live facts and the
@@ -186,10 +185,7 @@ class HomeViewModel(
     /** Run by the screen while it is started: one full read, then the live loop. */
     suspend fun refreshWhileStarted() {
         refreshRows()
-        while (true) {
-            refreshLive()
-            delay(if (somethingMoves()) FAST_MS else SLOW_MS)
-        }
+        pollWhile({ if (somethingMoves()) FAST_MS else SLOW_MS }) { refreshLive() }
     }
 
     fun retry() {
@@ -449,8 +445,6 @@ class HomeViewModel(
     }
 
     internal companion object {
-        const val FAST_MS = 3_000L
-        const val SLOW_MS = 30_000L
         const val FOR_YOU_STALE_MS = 60_000L
         const val COLLECTIONS_MOVING_MS = 10_000L
         const val COLLECTIONS_IDLE_MS = 60_000L

@@ -18,10 +18,6 @@ import studio.kahn.iris.tv.data.grabRelease
 import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.format.formatSize
 
-/** The signed-in server's API, or the signed-out sentence. */
-internal suspend fun AppContainer.api(): IrisApi =
-    apiFor(sessionStore.serverUrl.first() ?: error("This TV is signed out. Pair it again from Settings."))
-
 /** Where a grab is: what the person must read or agree to before it goes on. */
 @Immutable
 sealed interface GrabUi {
