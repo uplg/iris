@@ -111,8 +111,8 @@ data class LibraryActions(
  * The library (TVLibrary board, web `/library`): Titles (a poster grid with type and state
  * filters, a find field and a sort) or Downloads and seeding (every release by what it is
  * doing, with play, pause or resume and delete). In the Library section the shell draws the
- * header above it; the `Torrents` route opens it alone ([initialView] Downloads), with its own
- * top margin.
+ * header above it and opens it on the view last chosen on this device ([initialView] null);
+ * the `Torrents` route opens it alone ([initialView] Downloads), with its own top margin.
  */
 @Composable
 fun LibraryScreen(
@@ -120,7 +120,7 @@ fun LibraryScreen(
     onOpenCollection: (collectionId: String) -> Unit,
     onOpenTorrent: (infohash: String) -> Unit,
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
-    initialView: LibraryView = LibraryView.Titles,
+    initialView: LibraryView? = null,
 ) {
     val vm = irisViewModel(container) { c, _ -> LibraryViewModel(c, initialView) }
     val state by vm.state.collectAsStateWithLifecycle()
@@ -173,9 +173,10 @@ fun LibraryContent(
     val scope = rememberCoroutineScope()
     val keys = rememberFocusReturn(fallback = top)
 
-    // The Titles view places its own focus (the title opened last); Downloads starts at the top.
-    LaunchedEffect(Unit) {
-        if (state.view != LibraryView.Downloads) return@LaunchedEffect
+    // The Titles view places its own focus (the title opened last); Downloads starts at the top,
+    // also when it is the view kept on this device (it arrives after the first frame).
+    LaunchedEffect(state.view) {
+        if (state.view != LibraryView.Downloads || contentFocused) return@LaunchedEffect
         snapshotFlow { list.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
         runCatching { top.requestFocus() }
     }

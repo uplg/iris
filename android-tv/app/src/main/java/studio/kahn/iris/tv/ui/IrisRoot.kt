@@ -198,7 +198,6 @@ fun IrisRoot(
             section<Routes.Library>(TopTab.Library, shellHost) {
                 LibraryScreen(
                     container = container,
-                    initialView = LibraryView.Titles,
                     onOpenCollection = { collectionId -> navController.navigate(Routes.Collection(collectionId)) },
                     onOpenTorrent = { infohash -> navController.navigate(Routes.Detail(infohash)) },
                     onPlay = { infohash, fileIdx -> navController.navigate(Routes.Watch(infohash, fileIdx)) },

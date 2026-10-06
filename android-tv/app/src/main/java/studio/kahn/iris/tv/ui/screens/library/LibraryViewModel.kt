@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -139,7 +140,7 @@ private fun List<TorrentView>.anyMoving() = any(::moving)
  * Reads poll only while the screen is started ([pollWhileStarted]), quick while a download
  * moves; every action waits for the server and reads again before showing a change.
  */
-class LibraryViewModel(private val container: AppContainer, initialView: LibraryView) : ViewModel() {
+class LibraryViewModel(private val container: AppContainer, initialView: LibraryView?) : ViewModel() {
     private val torrents = LiveRead({ t: Torrents? -> if (t?.items?.anyMoving() == true) FAST_MS else SLOW_MS }) {
         val v = (container.api().library("torrents") as LibraryResponse.TorrentsWrapper).value
         Torrents(v.items, v.totalUploadedBytes, v.totalDownloadedBytes)
@@ -154,8 +155,19 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
     private val watchlist = LiveRead({ _: List<WatchlistItem>? -> 5 * 60_000L }) { container.api().watchlist() }
 
     private val controls = MutableStateFlow(
-        Controls(initialView, TitleFilters(), "", emptySet(), null),
+        Controls(initialView ?: LibraryView.Titles, TitleFilters(), "", emptySet(), null),
     )
+    private var chosen = false
+
+    init {
+        if (initialView == null) {
+            viewModelScope.launch {
+                val kept = container.prefsStore.libraryView.first()
+                val view = LibraryView.entries.firstOrNull { it.name == kept } ?: LibraryView.Titles
+                if (!chosen) controls.update { it.copy(view = view) }
+            }
+        }
+    }
 
     /** The title opened last: coming back lands on it. */
     var lastOpened: String? = null
@@ -193,7 +205,12 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
         listOf(torrents, collections, summary, watching, watchlist).forEach { it.poke() }
     }
 
-    fun choose(view: LibraryView) = controls.update { it.copy(view = view, notice = null) }
+    /** The view chosen, kept on this device for the next visit. */
+    fun choose(view: LibraryView) {
+        chosen = true
+        controls.update { it.copy(view = view, notice = null) }
+        viewModelScope.launch { container.prefsStore.setLibraryView(view.name) }
+    }
 
     fun setFilters(filters: TitleFilters) = controls.update { it.copy(filters = filters) }
 
