@@ -324,23 +324,7 @@ async fn watchlist_item(
     // `series_follows`). Hint the TMDB namespace so the same
     // numerical id can't collide with an unrelated movie.
     let (poster_path, backdrop_path) = library::collection_artwork(state, artwork_id, "tv").await;
-    // "New" cutoff = last ENGAGEMENT (max of page visit and watch)
-    // — visit-only kept badging episodes that were already out when
-    // the user watched, and badged the whole cache when they had
-    // never opened the page. (With no collection resolved,
-    // `collection_id` is the follow's id → lookup returns None.)
-    let last_watched =
-        iris_db::playback::last_watched_in_collection(state.db(), user_id, collection_id)
-            .await
-            .unwrap_or(None);
-    let engaged_at = library::engaged_at(f.last_visited_at, last_watched);
-    let new_count = iris_db::available_episodes::count_new_for_series(
-        state.db(),
-        &f.normalized_name,
-        engaged_at,
-    )
-    .await
-    .unwrap_or(0);
+    let new_count = follow_new_count(state, user_id, &f, collection_id).await;
     WatchlistItem {
         id: collection_id,
         normalized_name: f.normalized_name,
@@ -352,6 +336,27 @@ async fn watchlist_item(
         last_visited_at: f.last_visited_at,
         created_at: f.created_at,
     }
+}
+
+/// A follow's "new episodes" badge. Cutoff = last ENGAGEMENT (max of page
+/// visit and watch) — visit-only kept badging episodes that were already out
+/// when the user watched, and badged the whole cache when they had never
+/// opened the page. (With no collection resolved, `collection_id` is the
+/// follow's id → no watch found.)
+async fn follow_new_count(
+    state: &AppState,
+    user_id: iris_core::ids::UserId,
+    f: &iris_db::follows::FollowRow,
+    collection_id: uuid::Uuid,
+) -> i64 {
+    let last_watched =
+        iris_db::playback::last_watched_in_collection(state.db(), user_id, collection_id)
+            .await
+            .unwrap_or(None);
+    let engaged_at = library::engaged_at(f.last_visited_at, last_watched);
+    iris_db::available_episodes::count_new_for_series(state.db(), &f.normalized_name, engaged_at)
+        .await
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -486,14 +491,24 @@ pub(crate) async fn summary(
         .filter(|t| t.finished && t.state == iris_torrent::TorrentState::Live)
         .count();
 
+    // The badges alone: no artwork, no titles.
     let follows = iris_db::follows::list_for_user(state.db(), user.id).await?;
     let state_ref = &state;
-    let new_episodes =
-        crate::fanout::map_ordered(follows, |f| watchlist_item(state_ref, user.id, f))
-            .await
-            .iter()
-            .map(|w| w.new_count)
-            .sum();
+    let new_episodes = crate::fanout::map_ordered(follows, |f| async move {
+        let collection_id = iris_db::collections::find_by_parsed_title(
+            state_ref.db(),
+            &f.normalized_name,
+            iris_db::collections::Kind::Tv,
+        )
+        .await
+        .ok()
+        .flatten()
+        .map_or(f.id, |c| c.id);
+        follow_new_count(state_ref, user.id, &f, collection_id).await
+    })
+    .await
+    .iter()
+    .sum();
 
     let dir = state.cfg().storage.download_dir.clone();
     let disk = tokio::task::spawn_blocking(move || disk_space(&dir))
@@ -1037,6 +1052,71 @@ pub(crate) async fn history_items(
         }
     })
     .await)
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use crate::routes::auth::tests::{app_with_member, call};
+
+    #[tokio::test]
+    async fn the_home_summary_counts_the_watchlist_badges() {
+        let (state, app, user, _) = app_with_member().await;
+        let db = state.db();
+        iris_db::collections::find_or_create(
+            db,
+            "show",
+            "Show",
+            iris_db::collections::Kind::Tv,
+            false,
+        )
+        .await
+        .unwrap();
+        iris_db::follows::add(db, user, "show", "Show", None)
+            .await
+            .unwrap();
+        iris_db::follows::add(db, user, "nothing yet", "Nothing Yet", None)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE series_follows SET last_visited_at = ?1")
+            .bind(chrono::Utc::now() - chrono::Duration::days(2))
+            .execute(db)
+            .await
+            .unwrap();
+        for (name, episode) in [("show", 1), ("show", 2), ("nothing yet", 1)] {
+            iris_db::available_episodes::upsert(
+                db,
+                iris_db::available_episodes::UpsertAvailableEpisode {
+                    normalized_name: name.into(),
+                    season: 1,
+                    episode,
+                    indexer_provider: "p".into(),
+                    indexer_torrent_id: format!("{name}-{episode}"),
+                    magnet: String::new(),
+                    quality: None,
+                    seeders: Some(4),
+                    size_bytes: None,
+                    language: None,
+                    download_url: None,
+                    absolute_episode: None,
+                    codec: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let token = state.jwt().issue_access(user, false).unwrap();
+        let watchlist = call(&app, "GET", "/api/me/watchlist", Some(&token), None, None).await;
+        let badges: i64 = watchlist
+            .json
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["new_count"].as_i64().unwrap())
+            .sum();
+        assert_eq!(badges, 3);
+        let summary = call(&app, "GET", "/api/me/summary", Some(&token), None, None).await;
+        assert_eq!(summary.json["new_episodes"], badges);
+    }
 }
 
 #[cfg(test)]
