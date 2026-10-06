@@ -1129,7 +1129,9 @@ async fn run_ffmpeg_child(
     log_path: &Path,
     job: &Arc<JobState>,
 ) -> Result<(), RemuxError> {
-    let mut child = cmd.spawn()?;
+    // The job task owns the child: dropped at shutdown, it must not leave
+    // an orphan encoding on.
+    let mut child = cmd.kill_on_drop(true).spawn()?;
     if let Some(stderr) = child.stderr.take() {
         let log = log_path.to_path_buf();
         tokio::spawn(async move { drain_stderr_to_log(stderr, log).await });
@@ -1239,7 +1241,7 @@ async fn run_shaka(
         "remuxer: spawning shaka-packager",
     );
 
-    let mut child = cmd.spawn()?;
+    let mut child = cmd.kill_on_drop(true).spawn()?;
     if let Some(stderr) = child.stderr.take() {
         let log = log_path.to_path_buf();
         tokio::spawn(async move { append_stderr_to_log(stderr, log).await });
