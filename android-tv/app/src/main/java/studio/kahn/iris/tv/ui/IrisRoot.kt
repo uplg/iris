@@ -150,7 +150,7 @@ fun IrisRoot(
                     onUseCode = { navController.popBackStack() },
                 )
             }
-            section<Routes.Home>(TopTab.Home, shellHost) {
+            section<Routes.Home>(TopTab.Home, shellHost, headerOverContent = true) {
                 HomeScreen(
                     container = container,
                     onPlay = { infohash, fileIdx ->
@@ -167,12 +167,6 @@ fun IrisRoot(
                     },
                     onOpenDiscover = {
                         navController.navigate(Routes.Discover)
-                    },
-                    onOpenLiveTv = {
-                        navController.navigate(Routes.LiveTv)
-                    },
-                    onOpenSettings = {
-                        navController.navigate(Routes.Settings)
                     },
                 )
             }
@@ -196,12 +190,8 @@ fun IrisRoot(
             section<Routes.Discover>(TopTab.Discover, shellHost) {
                 DiscoverScreen(
                     container = container,
-                    onSelectTab = { },
                     onOpenSearch = { query ->
                         navController.navigate(Routes.Search(query))
-                    },
-                    onOpenSettings = {
-                        navController.navigate(Routes.Settings)
                     },
                 )
             }

@@ -59,7 +59,6 @@ sealed interface HomeEvent {
 /** Everything the home draws, in words. */
 @Immutable
 data class HomeUiState(
-    val account: String? = null,
     val hero: HeroModel? = null,
     /** True until the home knows what its hero is (or that it has none). */
     val heroPending: Boolean = true,
@@ -84,7 +83,6 @@ internal data class MetaKey(val id: Long, val kind: MediaKind?)
 /** What the home read, as read: [homeUi] turns it into words. */
 @Immutable
 internal data class HomeData(
-    val account: String? = null,
     val continueWatching: Loadable<List<ContinueWatchingItem>> = Loadable.Loading,
     val watchlist: Loadable<List<WatchlistItem>> = Loadable.Loading,
     val forYou: Loadable<ForYou> = Loadable.Loading,
@@ -132,7 +130,6 @@ internal fun homeUi(d: HomeData): HomeUiState {
         )
     val collections = d.collections.valueOrNull.orEmpty()
     return HomeUiState(
-        account = d.account,
         hero = hero,
         heroPending = heroPending,
         rightNow = d.summary.map(::rightNow),
@@ -160,11 +157,6 @@ internal fun featuredMetaKey(r: studio.kahn.iris.tv.data.SearchResult): MetaKey?
 internal suspend fun AppContainer.api(): IrisApi =
     apiFor(sessionStore.serverUrl.first() ?: throw IllegalStateException("This TV is signed out. Pair it again from Settings."))
 
-/** The name the header shows: the account's display name, else the start of its email. */
-internal suspend fun AppContainer.accountName(): String? =
-    (runCatching { api().me().displayName }.getOrNull() ?: sessionStore.session.first()?.email?.substringBefore('@'))
-        ?.takeIf { it.isNotBlank() }
-
 /**
  * The home (TV.dc.html): reads every row when the screen starts (so coming back from the
  * player shows where one stopped), then, while it stays started, the live facts and the
@@ -187,10 +179,6 @@ class HomeViewModel(
     private var collectionsReadAt: Long? = null
 
     init {
-        viewModelScope.launch {
-            val name = container.accountName()
-            data.update { it.copy(account = name) }
-        }
         viewModelScope.launch {
             val latest = AppUpdater.fetchLatestVersion(container.okHttpClient)
             val available = AppUpdater.versionStatus(BuildConfig.VERSION_NAME, latest) is AppUpdater.VersionStatus.UpdateAvailable
