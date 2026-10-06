@@ -6271,6 +6271,10 @@
             "format": "int32",
             "description": "French TNT number (Arcom) — set only for `fr` national networks;\ndrives the pinned \"TNT\" section.",
             "minimum": 0
+          },
+          "unreachable": {
+            "type": "boolean",
+            "description": "Every feed failed its last check: the channel will likely not play\nnow. Sent only when true."
           }
         }
       },

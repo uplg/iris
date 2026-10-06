@@ -365,6 +365,15 @@ impl CountrySnapshot {
     fn channel_index(&self, id: &str) -> Option<usize> {
         self.channels.iter().position(|c| c.id == id)
     }
+
+    /// Every feed of channel `i` failed its last check (the probe, a zap) and
+    /// is cooling down: it may come back, but it will likely not play now.
+    pub fn unreachable(&self, i: usize) -> bool {
+        let now = epoch_ms();
+        self.health
+            .get(i)
+            .is_some_and(|h| !h.is_empty() && h.iter().all(|s| s.in_cooldown(now)))
+    }
 }
 
 struct ServiceInner {
@@ -2219,6 +2228,17 @@ mod tests {
             fr.iter().any(|(_, id)| *id == "disneychannel"),
             "Disney Channel FR (Vavoo-only) must be searchable"
         );
+    }
+
+    #[test]
+    fn a_channel_is_unreachable_only_when_every_feed_cools_down() {
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let snap = svc.build_snapshot(vec![channel_with(&["http://u/1", "http://u/2"])]);
+        snap.health[0][0].mark_failure(epoch_ms());
+        assert!(!snap.unreachable(0), "one feed left");
+        snap.health[0][1].mark_failure(epoch_ms());
+        assert!(snap.unreachable(0));
+        assert!(!snap.unreachable(1), "no such channel");
     }
 
     fn country(code: &str, name: &str) -> Country {

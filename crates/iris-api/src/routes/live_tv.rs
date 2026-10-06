@@ -102,6 +102,10 @@ pub(crate) struct LiveChannel {
     /// French TNT number (Arcom) — set only for `fr` national networks;
     /// drives the pinned "TNT" section.
     pub tnt_number: Option<u16>,
+    /// Every feed failed its last check: the channel will likely not play
+    /// now. Sent only when true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unreachable: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -199,7 +203,8 @@ pub(crate) async fn live_channels(
         channels: snap
             .channels
             .iter()
-            .map(|c| LiveChannel {
+            .enumerate()
+            .map(|(i, c)| LiveChannel {
                 id: c.id.clone(),
                 name: c.name.clone(),
                 // Same-origin signed proxy URL: no hotlink CORS noise, and
@@ -217,6 +222,7 @@ pub(crate) async fn live_channels(
                 geo_blocked: c.geo_blocked,
                 not_24_7: c.not_24_7,
                 tnt_number: c.tnt_number,
+                unreachable: snap.unreachable(i),
             })
             .collect(),
     }))
