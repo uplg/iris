@@ -1240,8 +1240,11 @@ pub(crate) async fn grab_episode_core(
     // circuit so a "grab the one I already have" click still tracks.
     // Idempotent — `iris_db::follows::add` is a no-op when
     // (user_id, normalized_name) already exists.
-    let _ =
-        iris_db::follows::add(state.db(), user_id, normalized_name, display_title, tmdb_id).await;
+    if let Err(e) =
+        iris_db::follows::add(state.db(), user_id, normalized_name, display_title, tmdb_id).await
+    {
+        tracing::warn!(error = %e, normalized_name, "grab: auto-follow failed");
+    }
 
     // Short-circuit only when we already hold the episode in the
     // requested language. An explicit FR badge click must NOT return
@@ -1395,7 +1398,9 @@ async fn finalise_grabbed_episode(
         // arrives as `season=1, episode=<absolute>`, so a high
         // episode under season 1 carries the absolute number.
         let absolute_episode = fleuve_absolute(season, episode);
-        let _ = iris_db::episode_files::upsert(
+        // The next "Play next" resolves through this row: a failed write is
+        // the grab failing, not a silent 200.
+        iris_db::episode_files::upsert(
             state.db(),
             iris_db::episode_files::UpsertEpisodeFile {
                 collection_id,
@@ -1407,7 +1412,7 @@ async fn finalise_grabbed_episode(
                 absolute_episode,
             },
         )
-        .await;
+        .await?;
     }
     Ok(())
 }
@@ -1487,7 +1492,7 @@ async fn verify_owned_claim(
         tracing::warn!(error = %e, row = %row.id, "failed to delete poisoned episode_files row");
     }
     let idx = healed?;
-    let _ = iris_db::episode_files::upsert(
+    if let Err(e) = iris_db::episode_files::upsert(
         state.db(),
         iris_db::episode_files::UpsertEpisodeFile {
             collection_id: row.collection_id,
@@ -1499,7 +1504,10 @@ async fn verify_owned_claim(
             absolute_episode: fleuve_absolute(season, episode),
         },
     )
-    .await;
+    .await
+    {
+        tracing::warn!(error = %e, infohash = %row.infohash, "episode file correction failed");
+    }
     Some((row.infohash, idx))
 }
 
