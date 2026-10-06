@@ -130,7 +130,7 @@ describe('admin page', () => {
 		const api = household();
 		await render(AdminHarness);
 		await expect.poll(() => playRows().length).toBe(20);
-		await page.getByRole('radio', { name: 'Films' }).click();
+		await page.getByRole('radio', { name: 'Movies' }).click();
 		await expect.poll(() => historyCalls(api).at(-1)?.path).toBe('/admin/watch-history?kind=movie&limit=20');
 		await expect.poll(() => [...playRows()].every((r) => r.textContent?.includes('Movie'))).toBe(true);
 

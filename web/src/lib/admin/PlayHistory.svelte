@@ -13,7 +13,8 @@
 	import ToggleGroup from '#lib/components/ToggleGroup.svelte';
 	import PlayRow from './PlayRow.svelte';
 	import ShowMore from './ShowMore.svelte';
-	import { byDay, peopleChoices } from './model.ts';
+	import { peopleChoices } from './model.ts';
+	import DayList from './DayList.svelte';
 	import { playsQuery, usersQuery } from './queries.ts';
 
 	interface Props {
@@ -27,7 +28,7 @@
 	const KINDS: { value: Kind; label: string }[] = [
 		{ value: 'all', label: 'Everything' },
 		{ value: 'tv', label: 'Series' },
-		{ value: 'movie', label: 'Films' }
+		{ value: 'movie', label: 'Movies' }
 	];
 
 	let who = $state(EVERYONE);
@@ -46,7 +47,6 @@
 	const value = loadable(plays);
 	const rows = $derived(plays.data?.pages.flat() ?? []);
 	const now = $derived(plays.dataUpdatedAt || Date.now());
-	const days = $derived(byDay(rows, (p) => p.last_watched_at, now));
 	const people = $derived(peopleChoices(users.data, { value: EVERYONE, label: 'Everyone' }));
 
 	async function more() {
@@ -73,16 +73,9 @@
 	</div>
 	<Loaded {value} empty={rows.length === 0} emptyText={filtered ? 'No plays match these filters.' : 'No playback recorded yet.'}>
 		<div class={['plays', userId && 'narrow']}>
-			{#each days as day (day.key)}
-				<section class="day" aria-labelledby="plays-{day.key}">
-					<h3 class="day-title" id="plays-{day.key}">{day.heading}</h3>
-					<ul class="plain-list">
-						{#each day.items as p (`${p.user_id}:${p.infohash}:${p.file_idx}`)}
-							<PlayRow play={p} {now} person={!userId} />
-						{/each}
-					</ul>
-				</section>
-			{/each}
+			<DayList id="plays" items={rows} at={(p) => p.last_watched_at} key={(p) => `${p.user_id}:${p.infohash}:${p.file_idx}`} {now}>
+				{#snippet row(p)}<PlayRow play={p} {now} person={!userId} />{/snippet}
+			</DayList>
 		</div>
 		<ShowMore
 			more={!!plays.hasNextPage}
@@ -119,17 +112,6 @@
 	/* one person's list has no person column: kept to a readable width */
 	.narrow {
 		max-width: var(--measure-wide);
-	}
-	.day {
-		display: grid;
-	}
-	.day-title {
-		font: var(--t-label);
-		font-family: var(--font-text);
-		color: var(--ink-muted);
-		padding-block: var(--s-2);
-		border-bottom: 1px solid var(--line);
-		letter-spacing: 0;
 	}
 	.btn {
 		min-height: var(--control-h);

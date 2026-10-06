@@ -11,7 +11,8 @@
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Select from '#lib/components/Select.svelte';
 	import ShowMore from './ShowMore.svelte';
-	import { byDay, peopleChoices } from './model.ts';
+	import { peopleChoices } from './model.ts';
+	import DayList from './DayList.svelte';
 	import { auditQuery, usersQuery } from './queries.ts';
 
 	const ACTIONS: Record<string, string> = {
@@ -48,7 +49,6 @@
 	const users = createQuery(usersQuery, () => queryClient);
 	const value = loadable(log);
 	const rows = $derived(log.data?.pages.flat() ?? []);
-	const days = $derived(byDay(rows, (e) => e.created_at, log.dataUpdatedAt || Date.now()));
 	const people = $derived(peopleChoices(users.data, { value: ALL, label: 'Anyone' }));
 
 	/** The details as people read them: byte counts as sizes, releases counted in words. */
@@ -73,22 +73,17 @@
 	</div>
 	<Loaded {value} empty={rows.length === 0} emptyText={filtered ? 'Nothing recorded matches these filters.' : 'Nothing recorded yet.'}>
 		<div class="days">
-			{#each days as day (day.key)}
-				<section aria-labelledby="audit-{day.key}">
-					<h3 class="day-title" id="audit-{day.key}">{day.heading}</h3>
-					<ul class="plain-list">
-						{#each day.items as e (e.id)}
-							<li class="entry">
-								<time datetime={e.created_at}>{clockTime(e.created_at)}</time>
-								<div class="text">
-									<span><strong>{e.actor_display_name}</strong> {ACTIONS[e.action] ?? e.action}</span>
-									{#if details(e)}<span class="details">{details(e)}</span>{/if}
-								</div>
-							</li>
-						{/each}
-					</ul>
-				</section>
-			{/each}
+			<DayList id="audit" items={rows} at={(e) => e.created_at} key={(e) => e.id} now={log.dataUpdatedAt || Date.now()}>
+				{#snippet row(e)}
+					<li class="entry">
+						<time datetime={e.created_at}>{clockTime(e.created_at)}</time>
+						<div class="text">
+							<span><strong>{e.actor_display_name}</strong> {ACTIONS[e.action] ?? e.action}</span>
+							{#if details(e)}<span class="details">{details(e)}</span>{/if}
+						</div>
+					</li>
+				{/snippet}
+			</DayList>
 		</div>
 		<ShowMore
 			more={!!log.hasNextPage}
@@ -114,14 +109,6 @@
 		display: grid;
 		gap: var(--s-4);
 		max-width: var(--measure-wide);
-	}
-	.day-title {
-		font: var(--t-label);
-		font-family: var(--font-text);
-		letter-spacing: 0;
-		color: var(--ink-muted);
-		padding-block: var(--s-2);
-		border-bottom: 1px solid var(--line);
 	}
 	.entry {
 		display: grid;
