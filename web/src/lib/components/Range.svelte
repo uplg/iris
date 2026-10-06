@@ -27,8 +27,20 @@
 		/** Hide the visible label when the card already says it; it stays for readers. */
 		hideLabel?: boolean;
 	}
-	let { label, value, min = 0, max = 100, step = 1, page = 10, valueText, oncommit, send, live = false, reason, hideLabel = false }: Props =
-		$props();
+	let {
+		label,
+		value,
+		min = 0,
+		max = 100,
+		step = 1,
+		page = 10,
+		valueText,
+		oncommit,
+		send,
+		live = false,
+		reason,
+		hideLabel = false
+	}: Props = $props();
 	const g = new Gesture();
 	/** Each send its own key: a live slider may have two in flight. */
 	let sends = 0;
