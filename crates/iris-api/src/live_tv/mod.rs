@@ -15,6 +15,7 @@ pub mod channels;
 pub mod epg;
 pub mod m3u;
 pub mod proxy;
+mod refresh_cell;
 pub mod transcode;
 pub mod vavoo;
 
@@ -27,6 +28,7 @@ use serde::Deserialize;
 use url::Url;
 
 use channels::{Channel, SourceTier};
+use refresh_cell::RefreshCell;
 use transcode::Mode;
 
 /// Browser UA presented to upstreams that don't pin one via the playlist
@@ -94,6 +96,10 @@ const LOGO_CACHE_MAX: usize = 4096;
 /// Logos above this many bytes aren't cached in memory (channel logos are
 /// tiny PNG/SVG; anything larger is almost certainly not a real logo).
 const LOGO_MAX_BYTES: usize = 512 * 1024;
+
+/// How long a failed best-effort load (streams DB, search index, guide…) is
+/// remembered before the next caller may retry it.
+const FAILED_LOAD_RETRY: Duration = Duration::from_mins(10);
 
 #[derive(Debug, thiserror::Error)]
 pub enum LiveTvError {
@@ -299,34 +305,30 @@ impl CountrySnapshot {
     }
 }
 
-struct EpgSnapshot {
-    index: Arc<epg::EpgIndex>,
-    fetched_at: Instant,
-}
-
 struct ServiceInner {
     cfg: iris_config::LiveTvConfig,
     http: reqwest::Client,
     signer: proxy::Signer,
     countries: RwLock<Option<(Arc<Vec<Country>>, Instant)>>,
     snapshots: RwLock<HashMap<String, Arc<CountrySnapshot>>>,
-    epg: RwLock<HashMap<String, Arc<EpgSnapshot>>>,
+    /// Programme guide per country.
+    epg: RwLock<HashMap<String, Arc<RefreshCell<epg::EpgIndex>>>>,
     /// iptv-org's full stream database (all alternate feeds per channel),
     /// cached like the playlists.
-    streams_db: RwLock<Option<(Arc<StreamsDb>, Instant)>>,
+    streams_db: RefreshCell<StreamsDb>,
     /// Cross-country channel-search index (from iptv-org's channels DB,
     /// intersected with the streams DB so every hit is playable), cached
     /// like the playlists.
-    search_index: RwLock<Option<(Arc<Vec<SearchEntry>>, Instant)>>,
+    search_index: RefreshCell<Vec<SearchEntry>>,
     /// Folded channel name → logo URL (from iptv-org's channels + logos DBs,
     /// no playability filter), for back-filling channels whose feed carries
     /// no logo — chiefly Vavoo entries. Cached like the playlists.
-    name_logos: RwLock<Option<(Arc<NameLogos>, Instant)>>,
+    name_logos: RefreshCell<NameLogos>,
     /// Per-URL liveness, shared across snapshots (see [`SourceHealth`]).
     health: RwLock<HashMap<String, Arc<SourceHealth>>>,
-    /// Serializes cold loads so N concurrent first-requests for a country
-    /// fetch its playlist once.
-    load_lock: tokio::sync::Mutex<()>,
+    /// Per-country cold-load locks, so N concurrent first-requests for a
+    /// country fetch its playlist once without queueing other countries.
+    load_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Fetched channel logos, keyed by upstream URL. Third-party logo hosts
     /// (GitHub raw, various CDNs) rate-limit a burst of ~200 concurrent GETs
     /// from one server IP — so a whole grid loading cold used to 429. We fetch
@@ -415,11 +417,11 @@ impl LiveTvService {
                 countries: RwLock::new(None),
                 snapshots: RwLock::new(HashMap::new()),
                 epg: RwLock::new(HashMap::new()),
-                streams_db: RwLock::new(None),
-                search_index: RwLock::new(None),
-                name_logos: RwLock::new(None),
+                streams_db: RefreshCell::default(),
+                search_index: RefreshCell::default(),
+                name_logos: RefreshCell::default(),
                 health: RwLock::new(HashMap::new()),
-                load_lock: tokio::sync::Mutex::new(()),
+                load_locks: std::sync::Mutex::new(HashMap::new()),
                 logo_cache: RwLock::new(HashMap::new()),
                 logo_sem: tokio::sync::Semaphore::new(LOGO_FETCH_CONCURRENCY),
                 logo_http,
@@ -467,7 +469,15 @@ impl LiveTvService {
             return Ok(snap.clone());
         }
         // Cold load — single-flight so a burst of first requests fetches once.
-        let _guard = self.inner.load_lock.lock().await;
+        let lock = self
+            .inner
+            .load_locks
+            .lock()
+            .expect("poisoned")
+            .entry(country.clone())
+            .or_default()
+            .clone();
+        let _guard = lock.lock().await;
         if let Some(snap) = self.inner.snapshots.read().expect("poisoned").get(&country) {
             return Ok(snap.clone());
         }
@@ -637,6 +647,14 @@ impl LiveTvService {
     /// iptv-org stream database, cached with the playlist TTL. Best-effort:
     /// `None` disables the merge, never fails a channel load.
     async fn streams_db(&self) -> Option<Arc<StreamsDb>> {
+        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
+        self.inner
+            .streams_db
+            .get(ttl, FAILED_LOAD_RETRY, || self.load_streams_db())
+            .await
+    }
+
+    async fn load_streams_db(&self) -> Option<StreamsDb> {
         #[derive(serde::Deserialize)]
         struct ApiStream {
             #[serde(default)]
@@ -650,13 +668,6 @@ impl LiveTvService {
             referrer: Option<String>,
         }
 
-        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
-        if let Some((db, at)) = self.inner.streams_db.read().expect("poisoned").clone()
-            && at.elapsed() < ttl
-        {
-            return Some(db);
-        }
-
         let fetched: Vec<ApiStream> = match self
             .inner
             .http
@@ -668,25 +679,13 @@ impl LiveTvService {
             Ok(resp) => match resp.json().await {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(error = %e, "live tv streams db parse failed");
-                    return self
-                        .inner
-                        .streams_db
-                        .read()
-                        .expect("poisoned")
-                        .clone()
-                        .map(|(db, _)| db);
+                    tracing::warn!(error = %e.without_url(), "live tv streams db parse failed");
+                    return None;
                 }
             },
             Err(e) => {
-                tracing::warn!(error = %e, "live tv streams db fetch failed");
-                return self
-                    .inner
-                    .streams_db
-                    .read()
-                    .expect("poisoned")
-                    .clone()
-                    .map(|(db, _)| db);
+                tracing::warn!(error = %e.without_url(), "live tv streams db fetch failed");
+                return None;
             }
         };
 
@@ -709,9 +708,7 @@ impl LiveTvService {
                 });
         }
         tracing::info!(channels = map.len(), "live tv streams db loaded");
-        let db = Arc::new(map);
-        *self.inner.streams_db.write().expect("poisoned") = Some((db.clone(), Instant::now()));
-        Some(db)
+        Some(map)
     }
 
     async fn fetch_text(&self, url: &str, timeout: Duration) -> Result<(String, Url), LiveTvError> {
@@ -890,7 +887,9 @@ impl LiveTvService {
         if q.len() < 2 {
             return Vec::new();
         }
-        let Some(index) = self.search_index().await else {
+        // The refresh loop rebuilds past the TTL; a search only loads a
+        // missing index.
+        let Some(index) = self.search_index(Duration::MAX).await else {
             return Vec::new();
         };
         let mut hits: Vec<(usize, &SearchEntry)> = index
@@ -913,7 +912,14 @@ impl LiveTvService {
     }
 
     /// Build (or serve the cached) search index from iptv-org's channels DB.
-    async fn search_index(&self) -> Option<Arc<Vec<SearchEntry>>> {
+    async fn search_index(&self, ttl: Duration) -> Option<Arc<Vec<SearchEntry>>> {
+        self.inner
+            .search_index
+            .get(ttl, FAILED_LOAD_RETRY, || self.load_search_index())
+            .await
+    }
+
+    async fn load_search_index(&self) -> Option<Vec<SearchEntry>> {
         #[derive(serde::Deserialize)]
         struct ApiChannel {
             id: String,
@@ -934,12 +940,6 @@ impl LiveTvService {
             url: String,
         }
 
-        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
-        if let Some((idx, at)) = self.inner.search_index.read().expect("poisoned").clone()
-            && at.elapsed() < ttl
-        {
-            return Some(idx);
-        }
         // Playability filter — a name hit without any stream is a dead card.
         let streams = self.streams_db().await?;
         let logos_url = self
@@ -967,13 +967,13 @@ impl LiveTvService {
             Ok(resp) => match resp.json().await {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(error = %e, "live tv channels db parse failed");
-                    return self.cached_search_index();
+                    tracing::warn!(error = %e.without_url(), "live tv channels db parse failed");
+                    return None;
                 }
             },
             Err(e) => {
-                tracing::warn!(error = %e, "live tv channels db fetch failed");
-                return self.cached_search_index();
+                tracing::warn!(error = %e.without_url(), "live tv channels db fetch failed");
+                return None;
             }
         };
 
@@ -1018,8 +1018,6 @@ impl LiveTvService {
         // so a real search must surface them too.
         self.augment_search_index(&name_logo, &mut index).await;
         tracing::info!(channels = index.len(), "live tv search index built");
-        let index = Arc::new(index);
-        *self.inner.search_index.write().expect("poisoned") = Some((index.clone(), Instant::now()));
         Some(index)
     }
 
@@ -1062,20 +1060,19 @@ impl LiveTvService {
         }
     }
 
-    fn cached_search_index(&self) -> Option<Arc<Vec<SearchEntry>>> {
-        self.inner
-            .search_index
-            .read()
-            .expect("poisoned")
-            .clone()
-            .map(|(idx, _)| idx)
-    }
-
     /// Folded channel-name → logo URL, from iptv-org's channels + logos DBs
     /// (no playability filter, unlike the search index), for back-filling
     /// feeds that carry no logo — chiefly Vavoo. Cached; best-effort (`None`
     /// on any fetch/parse failure just skips the back-fill).
     async fn name_logo_index(&self) -> Option<Arc<NameLogos>> {
+        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
+        self.inner
+            .name_logos
+            .get(ttl, FAILED_LOAD_RETRY, || self.load_name_logo_index())
+            .await
+    }
+
+    async fn load_name_logo_index(&self) -> Option<NameLogos> {
         #[derive(serde::Deserialize)]
         struct ApiChannel {
             id: String,
@@ -1087,13 +1084,6 @@ impl LiveTvService {
         struct ApiLogo {
             channel: String,
             url: String,
-        }
-
-        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
-        if let Some((idx, at)) = self.inner.name_logos.read().expect("poisoned").clone()
-            && at.elapsed() < ttl
-        {
-            return Some(idx);
         }
 
         let logos_url = self
@@ -1141,8 +1131,6 @@ impl LiveTvService {
             }
         }
         tracing::info!(names = map.len(), "live tv name→logo index built");
-        let map = Arc::new(map);
-        *self.inner.name_logos.write().expect("poisoned") = Some((map.clone(), Instant::now()));
         Some(map)
     }
 
@@ -1625,31 +1613,27 @@ impl LiveTvService {
     /// `None` when the country has no configured guide or the fetch failed
     /// (now/next is best-effort, never a page error).
     async fn epg_index(&self, country: &str) -> Option<Arc<epg::EpgIndex>> {
-        let url = self.inner.cfg.epg_urls.get(country)?.clone();
-        if let Some(snap) = self.inner.epg.read().expect("poisoned").get(country) {
-            return Some(snap.index.clone());
-        }
-        let _guard = self.inner.load_lock.lock().await;
-        if let Some(snap) = self.inner.epg.read().expect("poisoned").get(country) {
-            return Some(snap.index.clone());
-        }
-        match self.fetch_epg(&url).await {
-            Ok(index) => {
-                let index = Arc::new(index);
-                self.inner.epg.write().expect("poisoned").insert(
-                    country.to_string(),
-                    Arc::new(EpgSnapshot {
-                        index: index.clone(),
-                        fetched_at: Instant::now(),
-                    }),
-                );
-                Some(index)
-            }
-            Err(e) => {
-                tracing::warn!(country, error = %e, "live tv EPG fetch failed");
-                None
-            }
-        }
+        self.epg_index_within(country, Duration::MAX).await
+    }
+
+    /// [`Self::epg_index`], reloading a guide older than `ttl`.
+    async fn epg_index_within(&self, country: &str, ttl: Duration) -> Option<Arc<epg::EpgIndex>> {
+        let url = self.inner.cfg.epg_urls.get(country)?;
+        let cell = self
+            .inner
+            .epg
+            .write()
+            .expect("poisoned")
+            .entry(country.to_string())
+            .or_default()
+            .clone();
+        cell.get(ttl, FAILED_LOAD_RETRY, || async {
+            self.fetch_epg(url)
+                .await
+                .inspect_err(|e| tracing::warn!(country, error = %e, "live tv EPG fetch failed"))
+                .ok()
+        })
+        .await
     }
 
     async fn fetch_epg(&self, url: &str) -> Result<epg::EpgIndex, LiveTvError> {
@@ -1752,7 +1736,7 @@ impl LiveTvService {
         {
             let svc = self.clone();
             tokio::spawn(async move {
-                svc.search_index().await;
+                svc.search_index(Duration::MAX).await;
             });
         }
         // Hydrate the configured tuner channels at boot and keep their remux
@@ -1862,40 +1846,22 @@ impl LiveTvService {
             }
         }
 
-        let stale_epg: Vec<(String, String)> = {
-            let epgs = self.inner.epg.read().expect("poisoned");
-            epgs.iter()
-                .filter(|(_, s)| s.fetched_at.elapsed() > epg_ttl)
-                .filter_map(|(c, _)| {
-                    self.inner
-                        .cfg
-                        .epg_urls
-                        .get(c)
-                        .map(|u| (c.clone(), u.clone()))
-                })
-                .collect()
-        };
-        for (country, url) in stale_epg {
-            match self.fetch_epg(&url).await {
-                Ok(index) => {
-                    self.inner.epg.write().expect("poisoned").insert(
-                        country,
-                        Arc::new(EpgSnapshot {
-                            index: Arc::new(index),
-                            fetched_at: Instant::now(),
-                        }),
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(country, error = %e, "live tv EPG refresh failed");
-                }
-            }
+        let epg_countries: Vec<String> = self
+            .inner
+            .epg
+            .read()
+            .expect("poisoned")
+            .keys()
+            .cloned()
+            .collect();
+        for country in epg_countries {
+            self.epg_index_within(&country, epg_ttl).await;
         }
 
         // Keep the cross-country search index fresh in the background: this is
         // a no-op while it's within its TTL and rebuilds it once past it, so a
         // search never pays the cold cost after the boot warm.
-        self.search_index().await;
+        self.search_index(playlist_ttl).await;
     }
 }
 
