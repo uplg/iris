@@ -271,15 +271,18 @@ async fn prewarm_tv_collection(
     // The collection's TMDB id is resolved once, up in `assign_after_ingest`
     // via `resolve_collection_tmdb` (movies + TV) — not here, to keep a single
     // resolution path. This prewarm only kicks the episode scheduler below.
+    // In the background and under the scheduler's cooldown: a grab of an
+    // established series would otherwise wait on one more full indexer
+    // sweep, and spend it, for offers scanned minutes ago.
     if let Some(reg) = deps.providers
-        && let Err(e) =
-            crate::collections_scheduler::scan_collection(pool, reg, collection.id).await
+        && crate::collections_scheduler::scan_is_due(collection)
     {
-        tracing::warn!(
-            error = %e,
-            collection_id = %collection.id,
-            "prewarm: initial scheduler scan failed",
-        );
+        let (pool, reg, id) = (pool.clone(), reg.clone(), collection.id);
+        tokio::spawn(async move {
+            if let Err(e) = crate::collections_scheduler::scan_collection(&pool, &reg, id).await {
+                tracing::warn!(error = %e, collection_id = %id, "prewarm: initial scheduler scan failed");
+            }
+        });
     }
 }
 

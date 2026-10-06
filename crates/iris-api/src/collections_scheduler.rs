@@ -125,6 +125,14 @@ async fn run_pass(pool: &SqlitePool, providers: Arc<ProviderRegistry>) {
     }
 }
 
+/// Whether the periodic scheduler would scan this collection now (never
+/// scanned, or last scanned before the cooldown).
+pub(crate) fn scan_is_due(collection: &iris_db::collections::CollectionRow) -> bool {
+    collection.last_indexer_scan_at.is_none_or(|at| {
+        at < chrono::Utc::now() - chrono::TimeDelta::seconds(PER_COLLECTION_COOLDOWN_SECS)
+    })
+}
+
 /// Public entry-point — scan one collection on demand. Used by
 /// ingest-time hooks so a newly-grouped TV collection shows its
 /// available episodes on first visit instead of waiting on the 4h

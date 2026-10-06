@@ -1151,6 +1151,7 @@ async fn resolve_grab_source(
     let cached_count = cached.len();
     refresh_offer_liveness(state.db(), &cached, &live).await;
 
+    let mut pack_swept = false;
     let owns_any_in_season = owned_files.iter().any(|f| f.season == season);
     if !owns_any_in_season
         && let Some((pack, true)) = verified_pack_offer(
@@ -1160,6 +1161,7 @@ async fn resolve_grab_source(
             season,
             language,
             &profile,
+            &mut pack_swept,
         )
         .await?
     {
@@ -1197,6 +1199,7 @@ async fn resolve_grab_source(
         season,
         language,
         &profile,
+        &mut pack_swept,
     )
     .await?
     {
@@ -1933,6 +1936,7 @@ async fn verified_pack_offer(
     season: i64,
     sel: &LangSel,
     profile: &GrabProfile,
+    swept: &mut bool,
 ) -> Result<Option<(PickedAvailability, bool)>, sqlx::Error> {
     // Cheap cache pre-check before paying for a provider fan-out.
     if find_pack_offer(state.db(), normalized_name, season, sel, profile)
@@ -1941,6 +1945,11 @@ async fn verified_pack_offer(
     {
         return Ok(None);
     }
+    // One season sweep per grab: its seeder counts are already on the rows.
+    if *swept {
+        return find_pack_offer(state.db(), normalized_name, season, sel, profile).await;
+    }
+    *swept = true;
     let live = live_results(state, display_title, season, None).await;
     let rows = iris_db::available_episodes::list_pack_offers_for_season(
         state.db(),
