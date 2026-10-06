@@ -29,7 +29,71 @@ deploy *ARGS:
 dev port="8080":
     IRIS_BIND_PORT={{ port }} docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
-# --- Backend (Rust workspace) -----------------------------------------------
+# Pull a consistent copy of the prod DB into ~/iris-prod-rehearsal/incoming (VACUUM INTO, prod keeps running).
+rehearsal-fetch host="yuki":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p ~/iris-prod-rehearsal/incoming
+    ssh {{ host }} 'p=$(docker volume inspect iris_iris-data -f "{{{{.Mountpoint}}"); rm -f /tmp/iris-prod.db; sqlite3 "file:$p/iris.db?mode=ro" "VACUUM INTO '"'"'/tmp/iris-prod.db'"'"'"'
+    ssh {{ host }} 'zstd -q -3 -T0 -c /tmp/iris-prod.db && rm -f /tmp/iris-prod.db' | zstd -q -d > ~/iris-prod-rehearsal/incoming/iris-prod.db
+    sqlite3 ~/iris-prod-rehearsal/incoming/iris-prod.db "PRAGMA quick_check;"
+
+# The image is `iris:rehearsal` (`docker build -t iris:rehearsal .`). No
+# librqbit/ state is copied, so the engine holds no torrent and nothing
+# announces. The data lives in a named volume like prod: SQLite's WAL -shm
+# mmap over a Docker Desktop bind mount SIGBUSes as soon as the host touches
+# the file, so query it from a container:
+# `docker run --rm -v iris-rehearsal-data:/data iris-sqlite /data/iris.db "<sql>"`.
+# `docker volume rm iris-rehearsal-data` starts over from the copy.
+# Local iris-prod on a prod DB copy, http://localhost:18080 (`mode=lan`: a TV box can pair).
+rehearsal db mode="local":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="{{ db }}"
+    mode="{{ mode }}"
+    repo=$PWD
+    vol=iris-rehearsal-data
+    port=18080
+    if [ "$mode" = lan ]; then
+      ip=$(ipconfig getifaddr en0 || ipconfig getifaddr en1)
+      bind=0.0.0.0
+      public="http://$ip:$port"
+    else
+      bind=127.0.0.1
+      public="http://localhost:$port"
+    fi
+    docker image inspect iris-sqlite >/dev/null 2>&1 ||
+      printf 'FROM alpine:3\nRUN apk add --no-cache sqlite\nENTRYPOINT ["sqlite3"]\n' | docker build -q -t iris-sqlite - >/dev/null
+    docker rm -f iris-rehearsal >/dev/null 2>&1 || true
+    if ! docker volume inspect $vol >/dev/null 2>&1; then
+      sqlite3 "$src" "PRAGMA quick_check;" | grep -qx ok
+      docker volume create $vol >/dev/null
+      docker run --rm -v "$(dirname "$src"):/in:ro" -v $vol:/data alpine:3 \
+        sh -c "cp /in/$(basename "$src") /data/iris.db && chown -R 1001:1001 /data 2>/dev/null; true"
+    fi
+    # No librqbit/ persistence is ever copied: the engine boots with zero torrents,
+    # so nothing announces to a tracker. Library rows stay in the DB.
+    if docker run --rm -v $vol:/data alpine:3 sh -c '[ -n "$(ls -A /data/librqbit 2>/dev/null)" ]'; then
+      echo "refusing: /data/librqbit is not empty (a torrent would announce)" >&2
+      exit 1
+    fi
+    docker run -d --name iris-rehearsal \
+      --env-file "$repo/.env" \
+      -e IRIS_CONFIG=/srv/iris/config/config.toml \
+      -e IRIS_SERVER__BIND=0.0.0.0:8080 \
+      -e IRIS_SERVER__WEB_DIST=/srv/iris/web \
+      -e IRIS_SERVER__PUBLIC_URL="$public" \
+      -e IRIS_STORAGE__DATA_DIR=/data \
+      -e IRIS_STORAGE__DOWNLOAD_DIR=/data/downloads \
+      -e IRIS_AUTH__JWT_SECRET="$(openssl rand -base64 48)" \
+      -e RUST_LOG=info,iris_api=debug,tower_http=info,html5ever=error \
+      -v "$repo/config:/srv/iris/config:ro" \
+      -v $vol:/data \
+      -p "$bind:$port:8080" \
+      iris:rehearsal >/dev/null
+    echo "iris-rehearsal → $public   (logs: docker logs -f iris-rehearsal)"
+
+# Backend (Rust workspace)
 
 # Run the dev server on :8080.
 run:
@@ -47,7 +111,7 @@ clippy:
 test:
     cargo test --workspace
 
-# --- Web (bun) --------------------------------------------------------------
+# Web (bun)
 
 # Vite dev server (proxies /api -> http://localhost:8080).
 web-dev:
@@ -70,7 +134,7 @@ fmt:
     cargo fmt --all
     cd web && bun run format
 
-# --- Android TV -------------------------------------------------------------
+# Android TV
 
 # Build the sideloadable release APK (R8); runs :app:openApiGenerate first.
 apk:
@@ -108,7 +172,7 @@ apk-push host="yuki" dir="/var/www/iris":
 tv-aars:
     cd android-tv && rm -rf .ffmpeg-ext-build/media && ./scripts/build-ffmpeg-ext.sh && ./scripts/build-av1-ext.sh
 
-# --- Gate -------------------------------------------------------------------
+# Gate
 
 # Full local gate: clippy + tests + web lint/build + release APK.
 verify: clippy test web-lint web-build apk
