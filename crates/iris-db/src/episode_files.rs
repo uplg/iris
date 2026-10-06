@@ -246,7 +246,8 @@ pub async fn list_library_keys(pool: &SqlitePool) -> Result<Vec<LibraryEpisodeKe
          JOIN collections c ON c.id = ef.collection_id \
          WHERE c.kind = 'tv' \
            AND EXISTS (SELECT 1 FROM torrents t \
-                       WHERE t.infohash = ef.infohash AND t.deleted_at IS NULL)",
+                       WHERE t.infohash = ef.infohash AND t.deleted_at IS NULL) \
+         ORDER BY ef.season, ef.episode, ef.file_idx",
     )
     .fetch_all(pool)
     .await
@@ -426,4 +427,57 @@ pub async fn correct_scene_parsed_with_absolute(
     .execute(pool)
     .await?;
     Ok(res.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::collections::{self, Kind};
+    use crate::test_support::{make_user, migrated_pool};
+    use crate::torrents::{self, NewTorrent};
+
+    use super::{DerivedFrom, UpsertEpisodeFile, list_library_keys, upsert};
+
+    #[tokio::test]
+    async fn a_season_pack_lists_its_first_episode_first() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let show = collections::create_standalone(&pool, "Severance", Kind::Tv)
+            .await
+            .unwrap();
+        collections::set_parsed_title_normalized(&pool, show.id, "severance")
+            .await
+            .unwrap();
+        let pack = torrents::upsert(
+            &pool,
+            NewTorrent {
+                infohash: "ab".repeat(20),
+                name: "Severance.S01.1080p.WEB.H264-GROUP".into(),
+                total_size_bytes: 1,
+                source_provider: None,
+                source_external_id: None,
+                tracker_tmdb_id: None,
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        for (episode, file_idx) in [(7, 0), (1, 6)] {
+            upsert(
+                &pool,
+                UpsertEpisodeFile {
+                    collection_id: show.id,
+                    season: 1,
+                    episode,
+                    infohash: pack.infohash.clone(),
+                    file_idx,
+                    derived_from: DerivedFrom::SceneParse,
+                    absolute_episode: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let keys = list_library_keys(&pool).await.unwrap();
+        assert_eq!(keys.iter().map(|k| k.episode).collect::<Vec<_>>(), [1, 7]);
+    }
 }
