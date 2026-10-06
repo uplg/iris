@@ -498,6 +498,7 @@ impl Rig {
     fn channel(&self, sources: &[(&str, SourceOrigin)]) -> Arc<crate::live_tv::CountrySnapshot> {
         let ch = Channel {
             id: "tf1".into(),
+            legacy_ids: Vec::new(),
             name: "TF1".into(),
             tvg_id: None,
             logo_url: None,

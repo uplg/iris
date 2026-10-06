@@ -487,7 +487,8 @@ pub struct CountrySnapshot {
     active_source: Vec<AtomicUsize>,
     /// Parallel to `channels[i].sources`: shared per-URL health records.
     health: Vec<Vec<Arc<SourceHealth>>>,
-    /// Channel id → index into `channels`, for the per-segment lookups.
+    /// Channel id, current or legacy ([`Channel::legacy_ids`]) → index into
+    /// `channels`, for the per-segment lookups.
     by_id: HashMap<String, usize>,
 }
 
@@ -1019,6 +1020,13 @@ impl LiveTvService {
         for (i, c) in built.iter().enumerate() {
             by_id.entry(c.id.clone()).or_insert(i);
         }
+        // Legacy ids after every current one: an old id that is now another
+        // channel's own id names that channel.
+        for (i, c) in built.iter().enumerate() {
+            for legacy in &c.legacy_ids {
+                by_id.entry(legacy.clone()).or_insert(i);
+            }
+        }
         CountrySnapshot {
             channels: Arc::new(built),
             fetched_at: Instant::now(),
@@ -1145,6 +1153,9 @@ impl LiveTvService {
         let snap = self.channels(&country).await?;
         let idx = snap.channel_index(id).ok_or(LiveTvError::UnknownChannel)?;
         let channel = &snap.channels[idx];
+        // A legacy id plays as the channel's current one, so its proxy URLs
+        // and tuner session are the ones every other viewer shares.
+        let id = channel.id.as_str();
         let channel_key = format!("{country}:{id}");
         let now_ms = epoch_ms();
         self.dlive_housekeeping(channel);
@@ -1708,7 +1719,7 @@ impl LiveTvService {
         {
             return Err(LiveTvError::Upstream("tuner at mux capacity".into()));
         }
-        let channel_key = format!("{country}:{id}");
+        let channel_key = format!("{country}:{}", channel.id);
         self.inner
             .transcode
             .master_playlist(
@@ -1730,7 +1741,11 @@ impl LiveTvService {
         name: &str,
     ) -> Result<Vec<u8>, LiveTvError> {
         let country = validate_country(country)?;
-        let channel_key = format!("{country}:{id}");
+        let current = self.channels(&country).await.ok().and_then(|snap| {
+            let i = snap.channel_index(id)?;
+            Some(snap.channels[i].id.clone())
+        });
+        let channel_key = format!("{country}:{}", current.as_deref().unwrap_or(id));
         self.inner
             .transcode
             .segment(Mode::from_segment_name(name), &channel_key, name)
@@ -2403,7 +2418,11 @@ impl LiveTvService {
     /// XMLTV id for a channel: config override → exact tvg-id → nothing.
     /// (`EpgIndex` lookups are already case-insensitive.)
     fn resolve_epg_id(&self, channel: &Channel, index: &epg::EpgIndex) -> Option<String> {
-        if let Some(id) = self.inner.cfg.epg_id_overrides.get(&channel.id) {
+        let overrides = &self.inner.cfg.epg_id_overrides;
+        if let Some(id) = std::iter::once(&channel.id)
+            .chain(&channel.legacy_ids)
+            .find_map(|id| overrides.get(id))
+        {
             return Some(id.clone());
         }
         if let Some(tvg_id) = channel.tvg_id.as_ref() {
@@ -2424,19 +2443,28 @@ impl LiveTvService {
     /// Expand channel ids to every channel sharing their tuner MUX (same
     /// `f=` in the tuner source URL): one tuned adapter serves the whole
     /// frequency, so its siblings are warm-able for the cost of a `-c copy`
-    /// ffmpeg each. Unknown ids pass through so a config typo still
-    /// surfaces as a logged prewarm failure.
+    /// ffmpeg each. A legacy id comes out as the channel's current one;
+    /// unknown ids pass through so a config typo still surfaces as a logged
+    /// prewarm failure.
     async fn mux_siblings(&self, country: &str, seeds: &[String]) -> Vec<String> {
         let Ok(snap) = self.channels(country).await else {
             return seeds.to_vec();
         };
+        let mut out: Vec<String> = Vec::with_capacity(seeds.len());
+        for seed in seeds {
+            let id = snap
+                .channel_index(seed)
+                .map_or_else(|| seed.clone(), |i| snap.channels[i].id.clone());
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
         let freqs: HashSet<String> = snap
             .channels
             .iter()
-            .filter(|c| seeds.iter().any(|s| s == &c.id))
+            .filter(|c| out.contains(&c.id))
             .filter_map(channel_tuner_freq)
             .collect();
-        let mut out: Vec<String> = seeds.to_vec();
         for ch in snap.channels.iter() {
             if channel_tuner_freq(ch).is_some_and(|f| freqs.contains(&f)) && !out.contains(&ch.id) {
                 out.push(ch.id.clone());
@@ -2788,6 +2816,7 @@ mod tests {
     fn channel_with(urls: &[&str]) -> Channel {
         Channel {
             id: "c".into(),
+            legacy_ids: Vec::new(),
             name: "C".into(),
             tvg_id: None,
             logo_url: None,
@@ -3236,6 +3265,65 @@ https://a/x.m3u8
             agents.lock().unwrap().as_slice(),
             ["UA-1"],
             "untagged: the elected feed"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_id_minted_by_the_old_fold_still_opens_its_channel() {
+        use axum::routing::get;
+        let app = axum::Router::new().route(
+            "/equipe.m3u8",
+            get(|| async { "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\ne-1.ts\n" }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let cfg = iris_config::LiveTvConfig {
+            epg_id_overrides: [("lquipe".to_string(), "LEquipe.fr".to_string())].into(),
+            ..Default::default()
+        };
+        let svc = LiveTvService::new(cfg, "test-secret").unwrap();
+        let playlist = m3u::parse(&format!(
+            "#EXTM3U\n#EXTINF:-1,L'ÉQUIPE\nhttp://{addr}/equipe.m3u8\n"
+        ));
+        let built = channels::build_channels(&[(SourceOrigin::IptvOrg, playlist.clone())], None);
+        let snap = Arc::new(svc.build_snapshot(built));
+        svc.inner
+            .snapshots
+            .write()
+            .unwrap()
+            .insert("ie".into(), snap.clone());
+
+        let idx = snap.channel_index("lequipe").unwrap();
+        assert_eq!(snap.channel_index("lquipe"), Some(idx), "the old id");
+        let mut shadowed = playlist;
+        shadowed.extend(m3u::parse("#EXTINF:-1,Lquipe\nhttp://x/lquipe.m3u8\n"));
+        let other = svc.build_snapshot(channels::build_channels(
+            &[(SourceOrigin::IptvOrg, shadowed)],
+            None,
+        ));
+        let own = other.channel_index("lquipe").unwrap();
+        assert_eq!(
+            other.channels[own].id, "lquipe",
+            "a current id is never shadowed by an old one"
+        );
+        let mp = svc.master_playlist("ie", "lquipe").await.unwrap();
+        assert!(
+            mp.body.contains("c=ie:lequipe&"),
+            "minted under the current id"
+        );
+        svc.report_playback_failure("ie", "lquipe").await.unwrap();
+        assert!(snap.health[idx][0].in_cooldown(epoch_ms()));
+        assert_eq!(
+            svc.resolve_epg_id(&snap.channels[idx], &epg::EpgIndex::default())
+                .as_deref(),
+            Some("LEquipe.fr"),
+            "a config override keyed by the old id"
+        );
+        assert_eq!(
+            svc.mux_siblings("ie", &["lquipe".to_string()]).await,
+            ["lequipe"],
+            "a prewarm seed keyed by the old id"
         );
     }
 
