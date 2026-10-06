@@ -69,10 +69,8 @@ export type EngineMountOptions = {
 };
 
 export type EngineHandle = {
-	// Lifecycle ---------------------------------------------------------
 	dispose: () => Promise<void>;
 
-	// Read state --------------------------------------------------------
 	currentTime: () => number;
 	duration: () => number | null;
 	paused: () => boolean;
@@ -81,7 +79,6 @@ export type EngineHandle = {
 	/** Buffered byte/time ranges as `[start, end]` pairs in seconds. */
 	buffered: () => Array<[number, number]>;
 
-	// Controls ---------------------------------------------------------
 	play: () => Promise<void>;
 	pause: () => void;
 	/** Seek to `seconds`. Engines that can't seek (e.g., Tier C without
@@ -90,11 +87,9 @@ export type EngineHandle = {
 	setVolume: (vol01: number) => void;
 	setMuted: (muted: boolean) => void;
 
-	// Audio tracks -----------------------------------------------------
 	audioTracks: () => EngineAudioTrack[];
 	setAudioTrack: (id: string) => void;
 
-	// Native subtitles -------------------------------------------------
 	/** Set the active native (`<track>`-renderable) subtitle by the
 	 *  `stream_idx` it had in the manifest. `null` disables all native
 	 *  subs. Engines without a `<video>` element are a no-op — ASS/PGS
@@ -115,7 +110,6 @@ export type EngineHandle = {
 	 *  and only while the panel is open. */
 	stats?: () => Array<[string, string]>;
 
-	// Optional escape hatches ------------------------------------------
 	/** The underlying `<video>` element when the engine has one. Used by
 	 *  `IrisChrome` for native fullscreen + Document PiP wiring. Returns
 	 *  null for canvas-only engines (C/D). */
@@ -127,6 +121,25 @@ export type EngineHandle = {
 };
 
 export type EngineMount = (opts: EngineMountOptions) => Promise<EngineHandle>;
+
+/** The audio track an engine plays when the page names none: the file's default, else the
+ *  first. An index into `manifest.audio`. */
+export function defaultAudioIndex(manifest: Manifest): number {
+	return Math.max(
+		0,
+		manifest.audio.findIndex((a) => a.default)
+	);
+}
+
+/** The manifest's audio tracks as the chrome lists them, `activeIdx` marked active. */
+export function manifestAudioTracks(manifest: Manifest, activeIdx: number): EngineAudioTrack[] {
+	return manifest.audio.map((a, i) => ({
+		id: String(i),
+		label: a.title ?? a.lang?.toUpperCase() ?? `Audio ${i + 1}`,
+		lang: a.lang ?? undefined,
+		active: i === activeIdx
+	}));
+}
 
 /** Convenience: build the standard set of `<video>` event listeners
  *  that forward to the unified callbacks. Engines that wrap a `<video>`
@@ -296,28 +309,10 @@ export function videoBackedHandle(
 		setAudioTrack: extras.setAudioTrack ?? (() => undefined),
 		setNativeSubtitle: (streamIdx) => {
 			if (!extras.nativeTrackMap) return;
-			// Try to apply the mode change. The `TextTrack` backing each
-			// `<track>` element is created lazily by the browser — `el.track`
-			// can be null for a few rAF ticks after `appendChild`. Retry up
-			// to ~1 s before giving up so the picker selection actually takes.
-			const trackMap = extras.nativeTrackMap;
-			let attempts = 0;
-			const apply = (): void => {
-				let pending = false;
-				for (const [idx, trackEl] of trackMap) {
-					const t = trackEl.track;
-					if (!t) {
-						pending = true;
-						continue;
-					}
-					t.mode = idx === streamIdx ? 'showing' : 'disabled';
-				}
-				if (pending && attempts < 60) {
-					attempts += 1;
-					requestAnimationFrame(apply);
-				}
-			};
-			apply();
+			// `HTMLTrackElement.track` exists from the element's creation (never null per spec)
+			for (const [idx, trackEl] of extras.nativeTrackMap) {
+				trackEl.track.mode = idx === streamIdx ? 'showing' : 'disabled';
+			}
 		},
 		setNativeSubtitleSrc: (streamIdx, url) => {
 			const el = extras.nativeTrackMap?.get(streamIdx);
