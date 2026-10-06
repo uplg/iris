@@ -1,1486 +1,750 @@
 package studio.kahn.iris.tv.ui.screens
 
-import studio.kahn.iris.tv.data.isVideoPath
-import studio.kahn.iris.tv.ui.theme.IrisColor
-import studio.kahn.iris.tv.ui.formatSize
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BookmarkBorder
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.BorderStroke
-import androidx.tv.material3.Border
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
-import androidx.tv.material3.Card
-import androidx.tv.material3.CardDefaults
-import androidx.tv.material3.ClickableSurfaceDefaults
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Surface
-import androidx.tv.material3.SurfaceDefaults
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import coil3.compose.AsyncImage
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.AvailableEpisodeEntry
-import studio.kahn.iris.tv.data.CollectionDetail
-import studio.kahn.iris.tv.data.DismissGoneRequest
-import studio.kahn.iris.tv.data.EpisodeEntry
-import studio.kahn.iris.tv.data.FileEntry
-import studio.kahn.iris.tv.data.GoneEpisodeEntry
-import studio.kahn.iris.tv.data.GoneReleaseEntry
-import studio.kahn.iris.tv.data.ResolveBody
-import studio.kahn.iris.tv.data.SeasonPackEntry
-import studio.kahn.iris.tv.data.TorrentView
-import studio.kahn.iris.tv.data.tmdbBackdropUrl
-import studio.kahn.iris.tv.data.tmdbPosterUrl
-import studio.kahn.iris.tv.ui.components.ConfirmDialog
-import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
+import studio.kahn.iris.tv.ui.components.Artwork
+import studio.kahn.iris.tv.ui.components.Chip
+import studio.kahn.iris.tv.ui.components.ChipTone
+import studio.kahn.iris.tv.ui.components.ConfirmDialog
+import studio.kahn.iris.tv.ui.components.ErrorState
+import studio.kahn.iris.tv.ui.components.Eyebrow
+import studio.kahn.iris.tv.ui.components.FactRow
+import studio.kahn.iris.tv.ui.components.FramedBlock
+import studio.kahn.iris.tv.ui.components.KeyHint
+import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.Keys
 import studio.kahn.iris.tv.ui.components.LanguageChip
-import studio.kahn.iris.tv.ui.theme.Focus
-import studio.kahn.iris.tv.ui.theme.IrisColors
-import studio.kahn.iris.tv.ui.theme.LocalTvLayout
-import studio.kahn.iris.tv.ui.theme.Radius
-import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.components.touchClick
+import studio.kahn.iris.tv.ui.components.LoadingState
+import studio.kahn.iris.tv.ui.components.Meter
+import studio.kahn.iris.tv.ui.components.PanelLabel
+import studio.kahn.iris.tv.ui.components.PanelOptions
+import studio.kahn.iris.tv.ui.components.PillChoice
+import studio.kahn.iris.tv.ui.components.RowCard
+import studio.kahn.iris.tv.ui.components.SectionTitle
+import studio.kahn.iris.tv.ui.components.SidePanel
+import studio.kahn.iris.tv.ui.components.StaleNotice
+import studio.kahn.iris.tv.ui.screens.library.ChosenPanelOptions
+import studio.kahn.iris.tv.ui.screens.library.CollectionPage
+import studio.kahn.iris.tv.ui.screens.library.CollectionUiState
+import studio.kahn.iris.tv.ui.screens.library.CollectionViewModel
+import studio.kahn.iris.tv.ui.screens.library.EpisodeAction
+import studio.kahn.iris.tv.ui.screens.library.EpisodeRowUi
+import studio.kahn.iris.tv.ui.screens.library.FileUi
+import studio.kahn.iris.tv.ui.screens.library.FocusKeys
+import studio.kahn.iris.tv.ui.screens.library.GoneUi
+import studio.kahn.iris.tv.ui.screens.library.LanguagesUi
+import studio.kahn.iris.tv.ui.screens.library.NoticeLine
+import studio.kahn.iris.tv.ui.screens.library.PackUi
+import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
+import studio.kahn.iris.tv.ui.screens.library.ReleaseItem
+import studio.kahn.iris.tv.ui.screens.library.ReleaseRow
+import studio.kahn.iris.tv.ui.screens.library.Tone
+import studio.kahn.iris.tv.ui.screens.library.ToneLine
+import studio.kahn.iris.tv.ui.screens.library.audioWords
+import studio.kahn.iris.tv.ui.screens.library.busyKey
+import studio.kahn.iris.tv.ui.screens.library.languageName
+import studio.kahn.iris.tv.ui.screens.library.neighbourOf
+import studio.kahn.iris.tv.ui.screens.library.plural
+import studio.kahn.iris.tv.ui.screens.library.subtitleWords
+import studio.kahn.iris.tv.ui.state.Loadable
+import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
+import studio.kahn.iris.tv.ui.state.irisViewModel
+import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.theme.IrisLayout
+import studio.kahn.iris.tv.ui.theme.IrisSize
+import studio.kahn.iris.tv.ui.theme.IrisSpace
+import studio.kahn.iris.tv.ui.theme.IrisType
 
+/** Everything a title's page hands back. */
+@Immutable
+data class CollectionActions(
+    val onPlay: (infohash: String, fileIdx: Int) -> Unit = { _, _ -> },
+    val onEpisode: (EpisodeRowUi, EpisodeAction) -> Unit = { _, _ -> },
+    val onSeason: (Long) -> Unit = {},
+    val onWatchlist: () -> Unit = {},
+    val onPack: (PackUi, Boolean) -> Unit = { _, _ -> },
+    val onRelease: ReleaseActions = ReleaseActions(),
+    val onGoneAgain: (GoneUi) -> Unit = {},
+    val onGoneHide: (GoneUi) -> Unit = {},
+    val onSaveLanguages: (audio: String?, subtitles: String?, onSaved: () -> Unit) -> Unit = { _, _, _ -> },
+    val onManageReleases: () -> Unit = {},
+    val onRetry: () -> Unit = {},
+    val onBack: () -> Unit = {},
+)
 
 /**
- * Unified TV / movie collection screen — the only "what does my
- * library hold for this show" surface post-0.4. Mirrors the web's
- * `/collection/:id`:
- *
- *   * Server-provided hero (poster + backdrop now ship inside
- *     `CollectionDetail`, no separate `tmdbMetadata` round-trip).
- *   * TV-kind: merged episode list — on-disk episodes (Play) AND
- *     indexer offers (Grab & Play / Prepare). Each available row
- *     carries a language badge so the household's anglophone +
- *     francophone users pick from the variant they want.
- *   * Movie / SCENE-unparseable TV: raw file list fallback so the
- *     user can still launch playback.
- *
- * The retired `SeriesScreen` route forwards here; the Home shelf's
- * Watchlist tile clicks land here directly.
+ * A title of the library (web `/collection/[id]`, drawn in the TVTitleReleases language): the
+ * poster and the title aside, then what to do (resume or start, keep it on the watchlist,
+ * the series' languages), its episodes by season (packs, offers in each language, reclaimed
+ * releases), what is on disk, what used to be, and the files. OK does an episode's main
+ * action; hold OK (or a long press) lists every action of it.
  */
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun CollectionScreen(
     container: AppContainer,
     collectionId: String,
-    onPickFile: (infohash: String, fileIdx: Int) -> Unit,
+    onPlay: (infohash: String, fileIdx: Int) -> Unit,
+    onReplaceWithPlayer: (infohash: String, fileIdx: Int) -> Unit,
+    onOpenTorrent: (infohash: String) -> Unit,
+    onManageReleases: () -> Unit,
     onBack: () -> Unit,
 ) {
-    val layout = LocalTvLayout.current
-    val scope = rememberCoroutineScope()
-    var detail by remember(collectionId) { mutableStateOf<CollectionDetail?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var selectedSeason by rememberSaveable(collectionId) { mutableIntStateOf(-1) }
-    // Infohash of the reclaimed release currently being re-ingested via
-    // "Download again" — drives the row's busy state, one at a time.
-    var restoringInfohash by remember { mutableStateOf<String?>(null) }
-    // (infohash, label) pending hide — nothing disappears without
-    // the ConfirmDialog.
-    var confirmHide by remember(collectionId) { mutableStateOf<Pair<String, String>?>(null) }
-    // Multi-copy movies: (infohash, release name) pending deletion —
-    // confirmed through the same ConfirmDialog pattern as `confirmHide`,
-    // then `DELETE /api/torrents/{infohash}` + reload.
-    var confirmDeleteCopy by remember(collectionId) { mutableStateOf<Pair<String, String>?>(null) }
-
-    suspend fun reload() {
-        val url = container.sessionStore.serverUrl.first() ?: run {
-            error = "Not signed in"; return
-        }
-        val api = container.apiFor(url)
-        runCatching { api.collectionDetail(collectionId) }
-            .onSuccess { detail = it; error = null }
-            .onFailure { error = it.message ?: "Failed to load collection" }
+    val vm = irisViewModel(container, key = "collection:$collectionId") { c, _ -> CollectionViewModel(c, collectionId) }
+    val state by vm.state.collectAsStateWithLifecycle()
+    val event by vm.playEvents.collectAsStateWithLifecycle()
+    RepeatWhileStarted(Unit) { vm.pollWhileStarted() }
+    LaunchedEffect(event) {
+        val e = event ?: return@LaunchedEffect
+        vm.consumePlay()
+        if (e.replace) onReplaceWithPlayer(e.infohash, e.fileIdx) else onPlay(e.infohash, e.fileIdx)
     }
-
-    LaunchedEffect(collectionId) { reload() }
-
-    val d = detail
-    if (d == null) {
-        LoadingOrError(error = error, onBack = onBack)
-        return
-    }
-
-    // On-disk + offers + gone merged — a ghost reads like before the GC.
-    val merged = remember(d) {
-        mergeEpisodes(d.episodes, d.availableEpisodes.orEmpty(), d.goneEpisodes.orEmpty())
-    }
-    // Fleuve anime (One Piece): one flat absolute-numbered list, no
-    // season tabs. Derived server-side, so a season-cut anime keeps the
-    // seasonal layout below.
-    val isAbsolute = d.numbering == "absolute"
-    val absoluteRows = remember(d) {
-        mergeEpisodesAbsolute(d.episodes, d.availableEpisodes.orEmpty(), d.goneEpisodes.orEmpty())
-    }
-    // Seasons that have either episodes OR a pack offer — a brand
-    // new follow whose only signal is a pack still gets its season
-    // tab so the user has a "Grab full Season N" affordance.
-    val seasons = remember(merged, d.seasonPacks) {
-        val map = sortedMapOf<Int, MutableList<MergedEpisode>>()
-        for (row in merged) {
-            map.getOrPut(row.season.toInt()) { mutableListOf() }.add(row)
-        }
-        for (p in d.seasonPacks.orEmpty()) {
-            map.getOrPut(p.season.toInt()) { mutableListOf() }
-        }
-        map.mapValues { it.value.toList() }.toSortedMap()
-    }
-    if (selectedSeason == -1 && seasons.isNotEmpty()) {
-        // Season 0 is "Specials" — land on the first REAL season by
-        // default so a show with OAVs/specials doesn't open on the
-        // specials tab. Falls back to season 0 only when it's the only
-        // season available.
-        selectedSeason = seasons.keys.firstOrNull { it > 0 } ?: seasons.keys.first()
-    }
-    val activeSeason = selectedSeason
-
-    // An absolute (fleuve) list can be 1000+ episodes — landing focus on
-    // episode 1 would mean D-padding to the bottom forever. Land on the
-    // last episode the household ALREADY HAS on disk (where the user is in
-    // their watch-through), not the newest available. Fall back to the
-    // latest row only when nothing is downloaded yet.
-    val listState = rememberLazyListState()
-    val focusTarget = remember(collectionId) { FocusRequester() }
-    // D-pad Up from the first row below the season tabs (a pack banner or
-    // the first episode) must land on the active season pill — without
-    // this, Compose's default spatial search skips the LazyRow entirely
-    // and jumps straight to the hero's Back button.
-    val seasonTabsFocus = remember(collectionId) { FocusRequester() }
-    val focusRowIdx = remember(absoluteRows) {
-        absoluteRows
-            .indexOfLast { row ->
-                // Gone counts as owned: a ghost's frontier is where the user
-                // stopped, not the bottom of a 1000-row list.
-                row.variants.any { it is EpisodeVariant.Downloaded || it is EpisodeVariant.Gone }
-            }
-            .let { if (it >= 0) it else absoluteRows.lastIndex }
-    }
-    // Keyed on (collection, the target row) so it fires once per load and
-    // again only if the owned-up-to point actually moves (a new grab).
-    LaunchedEffect(collectionId, isAbsolute, focusRowIdx) {
-        if (isAbsolute && focusRowIdx >= 0) {
-            // hero is item 0, so episode i sits at LazyColumn index 1 + i.
-            listState.scrollToItem(1 + focusRowIdx)
-            // The scrolled-in row's focus node may attach a frame or two
-            // later — retry across a few frames for robustness.
-            repeat(6) {
-                withFrameNanos { }
-                if (runCatching { focusTarget.requestFocus() }.isSuccess) return@LaunchedEffect
-            }
-        }
-    }
-
-    Box(Modifier.fillMaxSize()) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
-        ) {
-            item(key = "hero") {
-                CollectionHero(detail = d, onBack = onBack)
-            }
-
-            if (d.kind == MediaKind.tv && isAbsolute && absoluteRows.isNotEmpty()) {
-                // Flat absolute list — no season tabs, no packs (a fleuve
-                // anime numbers continuously; "Season N" packs don't apply).
-                itemsIndexed(
-                    absoluteRows,
-                    key = { _, it -> it.absolute?.let { a -> "abs:$a" } ?: "se:${it.season}:${it.episode}" },
-                ) { index, ep ->
-                    Box(
-                        Modifier
-                            .padding(
-                                horizontal = layout.gutterHorizontal,
-                                vertical = Spacing.xs,
-                            )
-                            // Focus target for the "land on last owned episode"
-                            // effect — focusGroup forwards the request to the
-                            // row's first chip.
-                            .then(
-                                if (index == focusRowIdx) {
-                                    Modifier.focusRequester(focusTarget).focusGroup()
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                    ) {
-                        EpisodeRow(
-                            ep = ep,
-                            onPlay = onPickFile,
-                            onGrabVariant = { variant ->
-                                scope.launch {
-                                    doGrabVariant(
-                                        container,
-                                        collectionId,
-                                        ep.season,
-                                        ep.episode,
-                                        variant,
-                                        onPickFile,
-                                    )
-                                    reload()
-                                }
-                            },
-                            onRestoreVariant = { variant ->
-                                scope.launch {
-                                    doRestoreVariant(container, d.tmdbId, variant, onPickFile)
-                                    reload()
-                                }
-                            },
-                            onDismissVariant = { variant ->
-                                confirmHide = variant.infohash to variant.releaseName
-                            },
-                        )
-                    }
-                }
-            } else if (d.kind == MediaKind.tv && (merged.isNotEmpty() || d.seasonPacks.orEmpty().isNotEmpty())) {
-                if (seasons.size > 1) {
-                    item(key = "season-tabs") {
-                        Box(Modifier.padding(horizontal = layout.gutterHorizontal, vertical = Spacing.md)) {
-                            SeasonTabs(
-                                seasons = seasons.keys.toList(),
-                                value = activeSeason,
-                                onChange = { selectedSeason = it },
-                                focusRequester = seasonTabsFocus,
-                            )
-                        }
-                    }
-                }
-
-                val currentPacks = d.seasonPacks.orEmpty().filter { it.season.toInt() == activeSeason }
-                // Up-navigation from the first row below the tabs must land back
-                // on the season pill — only wire it on row index 0, and only
-                // when there's actually a tab row above to land on.
-                val firstRowGetsUpFocus = seasons.size > 1
-                if (currentPacks.isNotEmpty()) {
-                    itemsIndexed(
-                        currentPacks,
-                        key = { _, it -> "pack:${it.season}:${it.language ?: "_"}:${it.indexerTorrentId}" },
-                    ) { index, pack ->
-                        Box(
-                            Modifier.padding(
-                                horizontal = layout.gutterHorizontal,
-                                vertical = Spacing.xs,
-                            ),
-                        ) {
-                            SeasonPackBanner(
-                                pack = pack,
-                                // Up-from-first-banner → season tabs. Rides
-                                // INSIDE the banner's focus group (see
-                                // `buttonsModifier`), a wrapper-level
-                                // focusProperties never reaches the buttons.
-                                buttonsModifier = if (index == 0 && firstRowGetsUpFocus) {
-                                    Modifier.focusProperties { up = seasonTabsFocus }
-                                } else {
-                                    Modifier
-                                },
-                                onGrab = {
-                                    scope.launch {
-                                        doGrabPack(container, collectionId, pack, autoPlay = true, onPlay = onPickFile)
-                                        reload()
-                                    }
-                                },
-                                onPrepare = {
-                                    scope.launch {
-                                        doGrabPack(container, collectionId, pack, autoPlay = false, onPlay = onPickFile)
-                                        reload()
-                                    }
-                                },
-                            )
-                        }
-                    }
-                }
-
-                val currentRows = seasons[activeSeason].orEmpty()
-                itemsIndexed(currentRows, key = { _, it -> "${it.season}:${it.episode}" }) { index, ep ->
-                    // Up-from-first-row → season tabs; must ride inside the chip
-                    // strip's focus group (see EpisodeRow.chipsModifier).
-                    val firstRowUp = index == 0 && currentPacks.isEmpty() && firstRowGetsUpFocus
-                    Box(
-                        Modifier.padding(
-                            horizontal = layout.gutterHorizontal,
-                            vertical = Spacing.xs,
-                        ),
-                    ) {
-                        EpisodeRow(
-                            ep = ep,
-                            chipsModifier = if (firstRowUp) {
-                                Modifier.focusProperties { up = seasonTabsFocus }
-                            } else {
-                                Modifier
-                            },
-                            onPlay = onPickFile,
-                            onGrabVariant = { variant ->
-                                scope.launch {
-                                    doGrabVariant(
-                                        container,
-                                        collectionId,
-                                        ep.season,
-                                        ep.episode,
-                                        variant,
-                                        onPickFile,
-                                    )
-                                    reload()
-                                }
-                            },
-                            onRestoreVariant = { variant ->
-                                scope.launch {
-                                    doRestoreVariant(container, d.tmdbId, variant, onPickFile)
-                                    reload()
-                                }
-                            },
-                            onDismissVariant = { variant ->
-                                confirmHide = variant.infohash to variant.releaseName
-                            },
-                        )
-                    }
-                }
-            } else if (d.torrents.size > 1) {
-                // Several copies of the same movie: group the files under
-                // one header per release so duplicates stay visible and
-                // deletable — a flat list hid which file came from which
-                // copy (mirrors the web ReleaseVersions view).
-                item(key = "files-header") {
-                    Eyebrow(
-                        "${d.torrents.size} copies on disk",
-                        modifier = Modifier.padding(
-                            horizontal = layout.gutterHorizontal,
-                            vertical = Spacing.md,
-                        ),
-                    )
-                }
-                for (t in d.torrents) {
-                    item(key = "release:${t.infohash}") {
-                        Box(
-                            Modifier.padding(
-                                horizontal = layout.gutterHorizontal,
-                                vertical = Spacing.xs,
-                            ),
-                        ) {
-                            ReleaseCopyRow(
-                                torrent = t,
-                                onDelete = {
-                                    confirmDeleteCopy =
-                                        t.infohash to (t.name ?: t.infohash)
-                                },
-                            )
-                        }
-                    }
-                    val tFiles = t.files.filter { f ->
-                        isVideoPath(f.path)
-                    }
-                    items(tFiles, key = { f -> "${t.infohash}:${f.index}" }) { f ->
-                        Box(
-                            Modifier.padding(
-                                horizontal = layout.gutterHorizontal,
-                                vertical = Spacing.xs,
-                            ),
-                        ) {
-                            FileRow(file = f, onClick = { onPickFile(t.infohash, f.index) })
-                        }
-                    }
-                }
-            } else {
-                // Movie / unparsed-TV fallback. Server already sorts files
-                // SCENE-aware inside the snapshot, so no client-side reorder
-                // is needed.
-                item(key = "files-header") {
-                    Eyebrow(
-                        "Files",
-                        modifier = Modifier.padding(
-                            horizontal = layout.gutterHorizontal,
-                            vertical = Spacing.md,
-                        ),
-                    )
-                }
-                val files: List<Pair<TorrentView, FileEntry>> = d.torrents.flatMap { t ->
-                    t.files
-                        .filter { f -> isVideoPath(f.path) }
-                        .map { f -> t to f }
-                }
-                items(files, key = { (t, f) -> "${t.infohash}:${f.index}" }) { (t, f) ->
-                    Box(
-                        Modifier.padding(
-                            horizontal = layout.gutterHorizontal,
-                            vertical = Spacing.xs,
-                        ),
-                    ) {
-                        FileRow(file = f, onClick = { onPickFile(t.infohash, f.index) })
-                    }
-                }
-            }
-
-            // "Previously on disk" keeps what the episode list can't show
-            // inline: movies and packs the parser never split.
-            val goneInline = d.goneEpisodes.orEmpty()
-                .filter { it.episode > 0L }
-                .map { it.infohash }
-                .toSet()
-            val goneReleases = d.goneReleases.orEmpty().filter { it.infohash !in goneInline }
-            if (goneReleases.isNotEmpty()) {
-                item(key = "gone-header") {
-                    Eyebrow(
-                        "Previously on disk",
-                        modifier = Modifier.padding(
-                            horizontal = layout.gutterHorizontal,
-                            vertical = Spacing.md,
-                        ),
-                    )
-                }
-                items(goneReleases, key = { "gone:${it.infohash}" }) { r ->
-                    Box(
-                        Modifier.padding(
-                            horizontal = layout.gutterHorizontal,
-                            vertical = Spacing.xs,
-                        ),
-                    ) {
-                        GoneReleaseRow(
-                            release = r,
-                            busy = restoringInfohash == r.infohash,
-                            enabled = restoringInfohash == null,
-                            onHide = { confirmHide = r.infohash to r.name },
-                            onDownloadAgain = {
-                                scope.launch {
-                                    restoringInfohash = r.infohash
-                                    try {
-                                        val url = container.sessionStore.serverUrl.first()
-                                            ?: run { error = "Not signed in"; return@launch }
-                                        container.apiFor(url).ingest(
-                                            // Same-release resurrect — explicit
-                                            // intent, skip the duplicate guard.
-                                            ResolveBody(
-                                                providerId = r.sourceProvider,
-                                                externalId = r.sourceExternalId,
-                                                tmdbId = d.tmdbId,
-                                                allowDuplicate = true,
-                                            ),
-                                        )
-                                        reload()
-                                    } catch (e: Exception) {
-                                        error = e.message ?: "Restore failed"
-                                    } finally {
-                                        restoringInfohash = null
-                                    }
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-
-            item(key = "trailing") {
-                Box(Modifier.padding(vertical = Spacing.xl))
-            }
-        }
-
-    confirmHide?.let { (infohash, name) ->
-        ConfirmDialog(
-            eyebrow = "Hide from this page",
-            title = name,
-            body = "Hidden for you only. Your watch history is kept, and " +
-                "the entry returns if the release is downloaded again.",
-            confirmLabel = "Hide",
-            onConfirm = {
-                confirmHide = null
-                scope.launch {
-                    doDismissGoneRelease(container, infohash)
-                    reload()
+    CollectionContent(
+        state = state,
+        lastRow = vm.lastRow,
+        actions = CollectionActions(
+            onPlay = onPlay,
+            onEpisode = { row, action ->
+                vm.lastRow = row.key
+                when (action) {
+                    is EpisodeAction.Play -> onPlay(action.infohash, action.fileIdx)
+                    is EpisodeAction.Grab -> vm.grab(action, row.words)
+                    is EpisodeAction.DownloadAgain -> vm.downloadAgain(action.gone)
+                    is EpisodeAction.Hide -> vm.hide(action.infohash, row.words)
+                    is EpisodeAction.MarkWatched -> vm.markWatched(action, row.words)
                 }
             },
-            onCancel = { confirmHide = null },
-        )
-    }
-
-    confirmDeleteCopy?.let { (infohash, name) ->
-        ConfirmDialog(
-            eyebrow = "Delete this copy",
-            title = name,
-            body = "Removes the release and its files from the server. " +
-                "Other copies of this movie stay untouched.",
-            confirmLabel = "Delete",
-            onConfirm = {
-                confirmDeleteCopy = null
-                scope.launch {
-                    runCatching {
-                        val url = container.sessionStore.serverUrl.first()
-                        if (url != null) container.apiFor(url).deleteTorrent(infohash)
-                    }
-                    reload()
-                }
-            },
-            onCancel = { confirmDeleteCopy = null },
-        )
-    }
-    }
-}
-
-/** One reclaimed release: watch state first, SCENE name second,
- *  Download again + per-user Hide. */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun GoneReleaseRow(
-    release: GoneReleaseEntry,
-    busy: Boolean,
-    enabled: Boolean,
-    onDownloadAgain: () -> Unit,
-    onHide: () -> Unit,
-) {
-    val watchLine = when {
-        release.watched == true -> "Watched"
-        (release.positionSeconds ?: 0.0) > 0.0 -> {
-            val pct = release.durationSeconds?.takeIf { it > 0 }
-                ?.let { ((release.positionSeconds ?: 0.0) / it * 100).toInt().coerceIn(0, 100) }
-            if (pct != null) "$pct% watched" else "Started"
-        }
-        else -> null
-    }
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(
-            Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            if (watchLine != null) {
-                Text(
-                    watchLine,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            Text(
-                release.name,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (watchLine != null) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                "${formatSize(release.totalSizeBytes)} · via ${release.sourceProvider}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        ActionButton(
-            if (busy) "Restoring…" else "Download again",
-            onDownloadAgain,
-            style = ActionStyle.Secondary,
-            enabled = enabled && !busy,
-        )
-        ActionButton(
-            "Hide",
-            onHide,
-            style = ActionStyle.Secondary,
-            enabled = enabled && !busy,
-        )
-    }
-}
-
-// Episode merge model — one row per (season, episode), variants inside
-// (mirrors web's MergedEpisode shape)
-
-private data class MergedEpisode(
-    val season: Long,
-    val episode: Long,
-    /** Absolute episode number for fleuve anime — set only in the
-     *  absolute-numbering layout. When non-null the row renders as
-     *  "Episode N"; `season`/`episode` still carry the fansub
-     *  coordinate used for the grab call. */
-    val absolute: Long? = null,
-    val variants: List<EpisodeVariant>,
-)
-
-private sealed class EpisodeVariant {
-    abstract val language: String?
-
-    /** A release that's already on disk — clicking the chip plays it. */
-    data class Downloaded(
-        val infohash: String,
-        val fileIdx: Int,
-        val watched: Boolean,
-        override val language: String?,
-    ) : EpisodeVariant()
-
-    /** A cached indexer offer — clicking the chip grabs the matching
-     *  language (server enforces a strict-match grab). */
-    data class Available(
-        val quality: String?,
-        val seeders: Long?,
-        val sizeBytes: Long?,
-        override val language: String?,
-    ) : EpisodeVariant()
-
-    /** A reclaimed release. Click = re-ingest (same infohash, saved
-     *  position resumes) and play; long-press = per-user hide. */
-    data class Gone(
-        val infohash: String,
-        val fileIdx: Int,
-        val watched: Boolean,
-        val releaseName: String,
-        val quality: String?,
-        val totalSizeBytes: Long,
-        val sourceProvider: String,
-        val sourceExternalId: String,
-        override val language: String?,
-    ) : EpisodeVariant()
-}
-
-/** A same-language (or Multi) release on disk makes "Re-grab" pure
- *  noise — Play sits right next to it. */
-private fun pruneShadowedGone(variants: List<EpisodeVariant>): List<EpisodeVariant> {
-    val downloadedLangs = variants
-        .filterIsInstance<EpisodeVariant.Downloaded>()
-        .map { it.language ?: "" }
-        .toSet()
-    if (downloadedLangs.isEmpty()) return variants
-    val hasMulti = "multi" in downloadedLangs
-    return variants.filter {
-        it !is EpisodeVariant.Gone || (!hasMulti && (it.language ?: "") !in downloadedLangs)
-    }
-}
-
-/** Chip order inside a row: downloaded first (the natural Play
- *  primary), then gone (it WAS on disk), then available offers. */
-private fun variantRank(v: EpisodeVariant): Int = when (v) {
-    is EpisodeVariant.Downloaded -> 0
-    is EpisodeVariant.Gone -> 1
-    is EpisodeVariant.Available -> 2
-}
-
-private fun goneVariant(g: GoneEpisodeEntry): EpisodeVariant.Gone = EpisodeVariant.Gone(
-    infohash = g.infohash,
-    fileIdx = g.fileIdx.toInt(),
-    watched = g.watched,
-    releaseName = g.releaseName,
-    quality = g.quality,
-    totalSizeBytes = g.totalSizeBytes ?: 0L,
-    sourceProvider = g.sourceProvider,
-    sourceExternalId = g.sourceExternalId,
-    language = g.language,
-)
-
-private fun mergeEpisodes(
-    onDisk: List<EpisodeEntry>,
-    available: List<AvailableEpisodeEntry>,
-    gone: List<GoneEpisodeEntry>,
-): List<MergedEpisode> {
-    // One row per (season, episode); gone rows keep their slot so a
-    // ghost reads like before the GC. episode == 0 is the pack sentinel.
-    val buckets = linkedMapOf<Pair<Long, Long>, MutableList<EpisodeVariant>>()
-    val ensure = { season: Long, episode: Long ->
-        buckets.getOrPut(season to episode) { mutableListOf() }
-    }
-    for (d in onDisk) {
-        if (d.episode == 0L) continue
-        ensure(d.season, d.episode).add(
-            EpisodeVariant.Downloaded(
-                infohash = d.infohash,
-                fileIdx = d.fileIdx.toInt(),
-                watched = d.watched,
-                language = d.language,
+            onSeason = vm::chooseSeason,
+            onWatchlist = vm::toggleWatchlist,
+            onPack = vm::grabPack,
+            onRelease = ReleaseActions(
+                onPlay = onPlay,
+                onFiles = onOpenTorrent,
+                onPause = vm::pause,
+                onResume = vm::resume,
+                onDelete = vm::delete,
             ),
-        )
-    }
-    for (g in gone) {
-        if (g.episode == 0L) continue
-        ensure(g.season, g.episode).add(goneVariant(g))
-    }
-    for (a in available) {
-        if (a.episode == 0L) continue
-        ensure(a.season, a.episode).add(
-            EpisodeVariant.Available(
-                quality = a.quality,
-                seeders = a.seeders,
-                sizeBytes = a.sizeBytes,
-                language = a.language,
-            ),
-        )
-    }
-    return buckets
-        .map { (key, variants) ->
-            val sorted = pruneShadowedGone(variants).sortedWith(
-                compareBy({ variantRank(it) }, { it.language ?: "" }),
-            )
-            MergedEpisode(season = key.first, episode = key.second, variants = sorted)
-        }
-        .sortedWith(compareBy({ it.season }, { it.episode }))
-}
-
-/** Absolute-numbering merge for fleuve anime (One Piece): group by the
- *  absolute episode number (falling back to `episode`, since a fansub
- *  `S01E1156` stores 1156 there too) into one flat ordered list — no
- *  seasons. Each row keeps the underlying (season, episode) for the
- *  grab call; `absolute` drives the "Episode N" label. Mirrors the
- *  web client's `mergeEpisodesAbsolute`. */
-private fun mergeEpisodesAbsolute(
-    onDisk: List<EpisodeEntry>,
-    available: List<AvailableEpisodeEntry>,
-    gone: List<GoneEpisodeEntry>,
-): List<MergedEpisode> {
-    // Season-cut releases (no derivable absolute) must NOT fold under
-    // their raw `episode` — that aliased unrelated cuts onto a bogus
-    // "Episode 1..7". Owned + gone rows always appear; offers only
-    // with an absolute. Mirrors web `mergeEpisodesAbsolute`.
-    data class Row(val season: Long, val episode: Long, val absolute: Long?, val variants: MutableList<EpisodeVariant>)
-    val buckets = linkedMapOf<String, Row>()
-    val ensure = { abs: Long?, season: Long, episode: Long ->
-        val key = if (abs != null) "a:$abs" else "s:$season:$episode"
-        buckets.getOrPut(key) { Row(season, episode, abs, mutableListOf()) }
-    }
-    for (d in onDisk) {
-        if (d.episode == 0L) continue
-        ensure(d.absoluteEpisode, d.season, d.episode).variants.add(
-            EpisodeVariant.Downloaded(
-                infohash = d.infohash,
-                fileIdx = d.fileIdx.toInt(),
-                watched = d.watched,
-                language = d.language,
-            ),
-        )
-    }
-    for (g in gone) {
-        if (g.episode == 0L) continue
-        ensure(g.absoluteEpisode, g.season, g.episode).variants.add(goneVariant(g))
-    }
-    for (a in available) {
-        if (a.episode == 0L) continue
-        // Skip season-cut offers with no absolute — unplaceable here.
-        val abs = a.absoluteEpisode ?: continue
-        ensure(abs, a.season, a.episode).variants.add(
-            EpisodeVariant.Available(
-                quality = a.quality,
-                seeders = a.seeders,
-                sizeBytes = a.sizeBytes,
-                language = a.language,
-            ),
-        )
-    }
-    return buckets.values
-        .map { row ->
-            val sorted = pruneShadowedGone(row.variants).sortedWith(
-                compareBy({ variantRank(it) }, { it.language ?: "" }),
-            )
-            MergedEpisode(season = row.season, episode = row.episode, absolute = row.absolute, variants = sorted)
-        }
-        // Absolute-numbered rows first (ascending); owned-without-absolute trail.
-        .sortedWith(
-            compareBy({ it.absolute == null }, { it.absolute ?: Long.MAX_VALUE }, { it.season }, { it.episode }),
-        )
-}
-
-private suspend fun doGrabVariant(
-    container: AppContainer,
-    collectionId: String,
-    season: Long,
-    episode: Long,
-    variant: EpisodeVariant.Available,
-    onPlay: (infohash: String, fileIdx: Int) -> Unit,
-) {
-    val url = container.sessionStore.serverUrl.first() ?: return
-    val api = container.apiFor(url)
-    val res = withContext(Dispatchers.IO) {
-        runCatching {
-            api.grabCollectionEpisode(
-                id = collectionId,
-                season = season.toInt(),
-                episode = episode.toInt(),
-                language = variant.language,
-            )
-        }.getOrNull()
-    } ?: return
-    // The grab is always play-on-success on TV — the alternate
-    // "Prepare" web button doesn't have a clean D-pad equivalent
-    // and the user typically opens an episode to watch it.
-    onPlay(res.infohash, res.fileIdx.toInt())
-}
-
-/** Re-ingest a reclaimed release and jump back into playback
- *  (same infohash, saved position resumes). */
-private suspend fun doRestoreVariant(
-    container: AppContainer,
-    tmdbId: Long?,
-    variant: EpisodeVariant.Gone,
-    onPlay: (infohash: String, fileIdx: Int) -> Unit,
-) {
-    val url = container.sessionStore.serverUrl.first() ?: return
-    val api = container.apiFor(url)
-    val ok = withContext(Dispatchers.IO) {
-        runCatching {
-            api.ingest(
-                // Same-release resurrect — explicit intent, skip the
-                // duplicate guard.
-                ResolveBody(
-                    providerId = variant.sourceProvider,
-                    externalId = variant.sourceExternalId,
-                    tmdbId = tmdbId,
-                    allowDuplicate = true,
-                ),
-            )
-        }.isSuccess
-    }
-    if (ok) onPlay(variant.infohash, variant.fileIdx)
-}
-
-/** Per-user hide of one reclaimed release (history stays). */
-private suspend fun doDismissGoneRelease(container: AppContainer, infohash: String) {
-    val url = container.sessionStore.serverUrl.first() ?: return
-    withContext(Dispatchers.IO) {
-        runCatching { container.apiFor(url).dismissGone(DismissGoneRequest(infohash = infohash)) }
-    }
-}
-
-/// Grab a full season pack. Calls the same per-episode endpoint
-/// with `episode = 1` — the backend falls back to the cached pack
-/// (no E01 singleton expected for a pack-only season) and resolves
-/// the pack's E01 file inside the snapshot. Once collection_assign
-/// runs on the ingest, episode_files rows materialise for every
-/// leaf, so subsequent visits see the whole season as "downloaded".
-private suspend fun doGrabPack(
-    container: AppContainer,
-    collectionId: String,
-    pack: SeasonPackEntry,
-    autoPlay: Boolean,
-    onPlay: (infohash: String, fileIdx: Int) -> Unit,
-) {
-    val url = container.sessionStore.serverUrl.first() ?: return
-    val api = container.apiFor(url)
-    val res = withContext(Dispatchers.IO) {
-        runCatching {
-            api.grabCollectionEpisode(
-                id = collectionId,
-                season = pack.season.toInt(),
-                episode = 1,
-                language = pack.language,
-            )
-        }.getOrNull()
-    } ?: return
-    if (autoPlay) {
-        onPlay(res.infohash, res.fileIdx.toInt())
-    }
-}
-
-// Hero
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun CollectionHero(
-    detail: CollectionDetail,
-    onBack: () -> Unit,
-) {
-    val layout = LocalTvLayout.current
-    val backdrop = tmdbBackdropUrl(detail.backdropPath, "w1280")
-    val poster = tmdbPosterUrl(detail.posterPath, "w342")
-    Box(Modifier.fillMaxWidth().aspectRatio(layout.heroAspect)) {
-        if (backdrop != null) {
-            AsyncImage(
-                model = backdrop,
-                contentDescription = detail.displayTitle,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
-            Box(
-                Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(
-                        0.4f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.88f),
-                    ),
-                ),
-            )
-        } else {
-            // Tinted gradient fallback — same aesthetic as the
-            // web's empty-poster card, never a flat black void.
-            Box(
-                Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
-                            MaterialTheme.colorScheme.background,
-                        ),
-                    ),
-                ),
-            )
-        }
-        Row(
-            Modifier
-                .align(Alignment.BottomStart)
-                .padding(
-                    start = layout.gutterHorizontal,
-                    end = layout.gutterHorizontal,
-                    bottom = Spacing.lg,
-                )
-                .fillMaxWidth(),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.xl),
-        ) {
-            if (poster != null) {
-                AsyncImage(
-                    model = poster,
-                    contentDescription = null,
-                    modifier = Modifier.width(120.dp).aspectRatio(2f / 3f),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-                Text(
-                    detail.displayTitle,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                val subtitle = buildString {
-                    append(if (detail.kind == MediaKind.tv) "Series" else "Movie")
-                    append(" · ")
-                    append(detail.torrents.size)
-                    append(" torrent")
-                    if (detail.torrents.size > 1) append("s")
-                    if (detail.kind == MediaKind.tv && detail.episodes.isNotEmpty()) {
-                        append(" · ${detail.episodes.size} episodes")
-                    }
-                }
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if ((detail.hasNewSinceLastVisit ?: 0) > 0) {
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        colors = SurfaceDefaults.colors(
-                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                        ),
-                    ) {
-                        Text(
-                            "${detail.hasNewSinceLastVisit} new since your last visit",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 2.dp),
-                        )
-                    }
-                }
-            }
-            ActionButton("← Back", onBack, style = ActionStyle.Secondary)
-        }
-    }
-}
-
-// Season tabs + Episode rows
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun SeasonTabs(
-    seasons: List<Int>,
-    value: Int,
-    onChange: (Int) -> Unit,
-    focusRequester: FocusRequester? = null,
-) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-        items(seasons) { s ->
-            val selected = s == value
-            // ClickableSurfaceDefaults.colors has FOUR slots — the
-            // resting `containerColor` we already set, but ALSO a
-            // `focusedContainerColor` that defaults to the theme's
-            // pale-on-light fallback. Without overriding it the
-            // unselected chip turned white-on-white the moment the
-            // D-pad landed on it; fix by giving every state an
-            // explicit colour. Same for `contentColor` so the text
-            // stays readable on every surface.
-            val pill = RoundedCornerShape(Radius.pill)
-            Surface(
-                onClick = { onChange(s) },
-                modifier = (if (selected && focusRequester != null) {
-                    Modifier.focusRequester(focusRequester)
-                } else {
-                    Modifier
-                }).touchClick { onChange(s) },
-                shape = ClickableSurfaceDefaults.shape(shape = pill),
-                // Disable the default focus scale — the tabs sit in a
-                // dense LazyRow and a 1.1× pop on focus shoves
-                // neighbours around. Focus reads as the brand ring + glow.
-                scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
-                colors = ClickableSurfaceDefaults.colors(
-                    containerColor = if (selected) IrisColors.Elev2 else IrisColors.Overlay06,
-                    focusedContainerColor = if (selected) IrisColors.Elev2 else IrisColors.Overlay12,
-                    contentColor = if (selected) IrisColors.Foreground else IrisColors.MutedForeground,
-                    focusedContentColor = IrisColors.Foreground,
-                ),
-                border = ClickableSurfaceDefaults.border(
-                    border = Border.None,
-                    focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = pill),
-                ),
-            ) {
-                Text(
-                    if (s == 0) "Specials" else "Season $s",
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun EpisodeRow(
-    ep: MergedEpisode,
-    onPlay: (infohash: String, fileIdx: Int) -> Unit,
-    onGrabVariant: (EpisodeVariant.Available) -> Unit,
-    onRestoreVariant: (EpisodeVariant.Gone) -> Unit,
-    onDismissVariant: (EpisodeVariant.Gone) -> Unit,
-    /// `horizontalScroll` installs a focus group and focus-property
-    /// aggregation stops at the nearest ancestor target — custom
-    /// destinations must ride here, inside it.
-    chipsModifier: Modifier = Modifier,
-) {
-    val anyWatched = ep.variants.any {
-        (it is EpisodeVariant.Downloaded && it.watched) || (it is EpisodeVariant.Gone && it.watched)
-    }
-    // Layout mirrors `SeasonPackBanner` exactly (info column on the
-    // left with weight=1f, action buttons on the right inside a Row
-    // — fixed height container). The previous Column-of-Rows shape
-    // broke D-pad focus traversal on Compose-TV: arrivals from the
-    // LazyColumn didn't reach the chips below the header line.
-    // Same pattern, same focus behaviour the user already confirmed
-    // works for pack banners.
-    Surface(
-        modifier = Modifier.fillMaxWidth().height(72.dp),
-        shape = RoundedCornerShape(Radius.button),
-        colors = SurfaceDefaults.colors(
-            containerColor = IrisColors.Overlay06,
-            contentColor = MaterialTheme.colorScheme.onSurface,
+            onGoneAgain = vm::downloadAgain,
+            onGoneHide = { vm.hide(it.infohash, it.name) },
+            onSaveLanguages = vm::saveLanguages,
+            onManageReleases = onManageReleases,
+            onRetry = vm::retry,
+            onBack = onBack,
         ),
-    ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = Spacing.lg, vertical = Spacing.md),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-        ) {
-            // Weight on the chip strip, not the label — the other way
-            // around, a many-chip row crushed the label.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-            ) {
-                Text(
-                    // Fleuve anime rows show "Episode 1156"; seasonal
-                    // rows keep the SxxExx label.
-                    ep.absolute?.let { "Episode %d".format(it) }
-                        ?: "S%02dE%02d".format(ep.season, ep.episode),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (anyWatched) {
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        colors = SurfaceDefaults.colors(
-                            containerColor = IrisColor.inkMuted.copy(alpha = 0.85f),
-                        ),
-                    ) {
-                        Text(
-                            "watched",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                    }
-                }
-            }
-            // Overflowing chips scroll; focus brings them into view.
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                Row(Modifier.horizontalScroll(rememberScrollState())) {
-                    Row(
-                        chipsModifier,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        ep.variants.forEach { v ->
-                            VariantChip(
-                                variant = v,
-                                onPlay = onPlay,
-                                onGrab = onGrabVariant,
-                                onRestore = onRestoreVariant,
-                                onDismiss = onDismissVariant,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
+    )
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun VariantChip(
-    variant: EpisodeVariant,
-    onPlay: (infohash: String, fileIdx: Int) -> Unit,
-    onGrab: (EpisodeVariant.Available) -> Unit,
-    onRestore: (EpisodeVariant.Gone) -> Unit,
-    onDismiss: (EpisodeVariant.Gone) -> Unit,
+fun CollectionContent(
+    state: CollectionUiState,
+    actions: CollectionActions,
+    lastRow: String? = null,
 ) {
-    when (variant) {
-        is EpisodeVariant.Downloaded -> {
-            val chipShape = RoundedCornerShape(Radius.button)
-            Button(
-                onClick = { onPlay(variant.infohash, variant.fileIdx) },
-                modifier = Modifier.touchClick { onPlay(variant.infohash, variant.fileIdx) },
-                shape = ButtonDefaults.shape(shape = chipShape),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                // Disable the default focused-scale pop — the chips
-                // sit in a dense row, a 1.1× zoom pushes neighbours
-                // off-screen on every D-pad move. Focus = brand ring + glow.
-                scale = ButtonDefaults.scale(focusedScale = 1f),
-                border = ButtonDefaults.border(
-                    focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = chipShape),
-                ),
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    LanguageChip(language = variant.language)
-                    Text(
-                        if (variant.watched) "Replay" else "Play",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
-            }
-        }
-        is EpisodeVariant.Available -> {
-            // Compact until focused — on a D-pad, focus precedes the
-            // click, so the metadata is always seen before committing.
-            var focused by remember { mutableStateOf(false) }
-            val meta = listOfNotNull(
-                variant.quality?.takeIf { it.isNotBlank() },
-                variant.seeders?.let { "${it}↑" },
-                variant.sizeBytes?.let { formatSize(it) },
-            ).joinToString(" · ")
-            val grabShape = RoundedCornerShape(Radius.button)
-            Button(
-                onClick = { onGrab(variant) },
-                modifier = Modifier
-                    .onFocusChanged { focused = it.isFocused }
-                    .touchClick { onGrab(variant) },
-                shape = ButtonDefaults.shape(shape = grabShape),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                scale = ButtonDefaults.scale(focusedScale = 1f),
-                colors = ButtonDefaults.colors(
-                    // Emerald tone for "available" so it visually
-                    // reads different from the primary "Play"
-                    // chip even though the focus mechanics match.
-                    containerColor = IrisColors.Success.copy(alpha = 0.20f),
-                    focusedContainerColor = IrisColors.Success.copy(alpha = 0.55f),
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                    focusedContentColor = Color.White,
-                ),
-                border = ButtonDefaults.border(
-                    focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = grabShape),
-                ),
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    LanguageChip(language = variant.language)
-                    Text(
-                        if (focused && meta.isNotEmpty()) "Grab · $meta" else "Grab",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
-            }
-        }
-        is EpisodeVariant.Gone -> {
-            // Click re-grabs, long-press hides (confirmed). Compact until
-            // focused, like the Grab chip.
-            var focused by remember { mutableStateOf(false) }
-            val meta = listOfNotNull(
-                variant.quality?.takeIf { it.isNotBlank() },
-                variant.totalSizeBytes.takeIf { it > 0 }?.let { formatSize(it) },
-            ).joinToString(" · ")
-            val goneShape = RoundedCornerShape(Radius.button)
-            Button(
-                onClick = { onRestore(variant) },
-                onLongClick = { onDismiss(variant) },
-                modifier = Modifier
-                    .onFocusChanged { focused = it.isFocused }
-                    .touchClick(onLongClick = { onDismiss(variant) }) { onRestore(variant) },
-                shape = ButtonDefaults.shape(shape = goneShape),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                scale = ButtonDefaults.scale(focusedScale = 1f),
-                colors = ButtonDefaults.colors(
-                    containerColor = IrisColors.Overlay12,
-                    focusedContainerColor = IrisColors.Overlay12,
-                    contentColor = IrisColors.MutedForeground,
-                    focusedContentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-                border = ButtonDefaults.border(
-                    focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = goneShape),
-                ),
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    LanguageChip(language = variant.language)
-                    Text(
-                        if (focused && meta.isNotEmpty()) "Re-grab · $meta" else "Re-grab",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun SeasonPackBanner(
-    pack: SeasonPackEntry,
-    onGrab: () -> Unit,
-    onPrepare: () -> Unit,
-    /// Must ride inside the banner's focus group (same aggregation
-    /// rule as EpisodeRow.chipsModifier).
-    buttonsModifier: Modifier = Modifier,
-) {
-    // Meta line only while the D-pad is inside the banner (the
-    // focusGroup's hasFocus covers descendants). Fixed height.
-    var hasFocus by remember { mutableStateOf(false) }
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(88.dp)
-            .onFocusChanged { hasFocus = it.hasFocus }
-            .focusGroup(),
-        shape = RoundedCornerShape(12.dp),
-        colors = SurfaceDefaults.colors(
-            containerColor = IrisColor.accent.copy(alpha = 0.18f),
-            contentColor = MaterialTheme.colorScheme.onSurface,
-        ),
-    ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = Spacing.lg, vertical = Spacing.md),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        colors = SurfaceDefaults.colors(
-                            containerColor = IrisColor.accent.copy(alpha = 0.85f),
-                        ),
-                    ) {
-                        Text(
-                            "SEASON PACK",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                    }
-                    Text(
-                        "Season ${pack.season} · full pack",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    LanguageChip(language = pack.language)
-                }
-                val meta = listOfNotNull(
-                    pack.quality?.takeIf { it.isNotBlank() },
-                    pack.seeders?.let { "$it seeders" },
-                    pack.sizeBytes?.let { formatSize(it) },
-                    "via ${pack.indexerProvider}",
-                ).joinToString(" · ")
-                if (hasFocus && meta.isNotEmpty()) {
-                    Text(
-                        meta,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Row(buttonsModifier, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                ActionButton("Prepare", onPrepare, style = ActionStyle.Secondary)
-                ActionButton("Grab & play", onGrab)
-            }
-        }
-    }
-}
-
-// File fallback (movies / SCENE-unparseable TV)
-
-/** Header for one copy of a multi-copy movie: release name + size +
- *  who grabbed it, with the row click opening the delete confirm. Its
- *  files render right below as regular [FileRow]s (those play). */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun ReleaseCopyRow(torrent: TorrentView, onDelete: () -> Unit) {
-    val rowShape = RoundedCornerShape(Radius.button)
-    Card(
-        onClick = onDelete,
-        modifier = Modifier.fillMaxWidth().height(64.dp).touchClick(onClick = onDelete),
-        shape = CardDefaults.shape(shape = rowShape),
-        scale = CardDefaults.scale(focusedScale = 1f),
-        colors = CardDefaults.colors(
-            containerColor = Color.Transparent,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            focusedContainerColor = IrisColors.Overlay06,
-            focusedContentColor = MaterialTheme.colorScheme.onSurface,
-        ),
-        border = CardDefaults.border(
-            focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = rowShape),
-        ),
-    ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    torrent.name ?: torrent.infohash,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                )
-                Text(
-                    "${formatSize(torrent.totalSizeBytes)} · added by ${torrent.addedByName}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                "✕ Delete",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun FileRow(file: FileEntry, onClick: () -> Unit) {
-    val rowShape = RoundedCornerShape(Radius.button)
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(64.dp).touchClick(onClick = onClick),
-        shape = CardDefaults.shape(shape = rowShape),
-        scale = CardDefaults.scale(focusedScale = 1f),
-        colors = CardDefaults.colors(
-            containerColor = IrisColors.Overlay06,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            focusedContainerColor = IrisColors.Overlay12,
-            focusedContentColor = MaterialTheme.colorScheme.onSurface,
-        ),
-        border = CardDefaults.border(
-            focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = rowShape),
-        ),
-    ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    file.path.substringAfterLast('/'),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                )
-                Text(
-                    formatSize(file.sizeBytes),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                "▶ Play",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-    }
-}
-
-// Loading / error shell
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun LoadingOrError(error: String?, onBack: () -> Unit) {
-    val layout = LocalTvLayout.current
+    val layout = IrisLayout.current
+    val page = state.page
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(layout.gutterHorizontal),
-        contentAlignment = Alignment.Center,
+            .background(IrisColor.ground),
     ) {
-        if (error != null) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.md),
-            ) {
-                Text(error, color = MaterialTheme.colorScheme.error)
-                ActionButton("Back", onBack, style = ActionStyle.Secondary)
+        when (page) {
+            Loadable.Loading -> LoadingState(label = "Loading the title…")
+            is Loadable.Failed -> ErrorState(
+                page.error.message,
+                actions.onRetry,
+                title = if (page.error.status == 404) "This title is no longer in the library" else "Couldn't load this title",
+            )
+            is Loadable.Ready, is Loadable.Stale -> {
+                val p = page.valueOrNull ?: return@Box
+                TitlePage(p, state, actions, lastRow, page.errorOrNull)
             }
-        } else {
-            Text("Loading collection…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Column(
+            Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .background(IrisColor.ground)
+                .padding(horizontal = layout.safeHorizontal, vertical = IrisSpace.s4),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+        ) {
+            NoticeLine(state.notice)
+            val hasEpisodes = page.valueOrNull?.episodes?.isNotEmpty() == true
+            KeyHints(
+                buildList {
+                    add(KeyHint(Keys.OK, if (hasEpisodes) "Play or grab" else "Choose"))
+                    if (hasEpisodes) add(KeyHint(Keys.HOLD_OK, "Everything for an episode"))
+                    add(KeyHint(Keys.BACK, "To the top, then the library"))
+                },
+            )
         }
     }
 }
 
+private sealed interface Sheet {
+    data class Episode(val row: EpisodeRowUi) : Sheet
+    data object Languages : Sheet
+}
+
+@Composable
+private fun TitlePage(
+    p: CollectionPage,
+    state: CollectionUiState,
+    actions: CollectionActions,
+    lastRow: String?,
+    stale: studio.kahn.iris.tv.ui.state.UiError?,
+) {
+    val layout = IrisLayout.current
+    val list = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val playFocus = remember { FocusRequester() }
+    val keys = remember { FocusKeys() }
+    var refocus by remember { mutableStateOf<List<String>?>(null) }
+    LaunchedEffect(refocus) {
+        val wanted = refocus ?: return@LaunchedEffect
+        refocus = null
+        if (!keys.focus(*wanted.toTypedArray())) runCatching { playFocus.requestFocus() }
+    }
+    var atPlay by remember { mutableStateOf(false) }
+    var sheet by remember { mutableStateOf<Sheet?>(null) }
+    var deleting by remember { mutableStateOf<ReleaseRow?>(null) }
+    val episodesStart = remember(p.packs.size) { EPISODES_FIRST + p.packs.size }
+    val focusKey = lastRow?.takeIf { k -> p.episodes.any { it.key == k } }
+        ?: p.episodes.getOrNull(p.opening)?.key?.takeIf { p.opening > 0 }
+
+    LaunchedEffect(Unit) {
+        val index = p.episodes.indexOfFirst { it.key == focusKey }
+        if (focusKey != null && index >= 0) {
+            val item = episodesStart + index
+            if (list.layoutInfo.visibleItemsInfo.none { it.index == item }) list.scrollToItem(item)
+            snapshotFlow { list.layoutInfo.visibleItemsInfo.any { it.index == item } }.first { it }
+            keys.focus("ep:$focusKey")
+        } else {
+            snapshotFlow { list.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
+            runCatching { playFocus.requestFocus() }
+        }
+    }
+    BackHandler(enabled = sheet == null && deleting == null) {
+        if (atPlay && list.firstVisibleItemIndex == 0) {
+            actions.onBack()
+        } else {
+            scope.launch {
+                list.scrollToItem(0)
+                runCatching { playFocus.requestFocus() }
+            }
+        }
+    }
+
+    val compact = layout.height < 500.dp
+    Row(
+        Modifier
+            .fillMaxSize()
+            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical),
+        horizontalArrangement = Arrangement.spacedBy(if (compact) IrisSpace.s7 else IrisSpace.s9),
+    ) {
+        Aside(p, compact, Modifier.width(if (compact) 120.dp else 210.dp))
+        LazyColumn(
+            state = list,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxSize(),
+            contentPadding = PaddingValues(top = IrisSpace.s1, bottom = 80.dp, start = IrisSpace.s2, end = IrisSpace.s2),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+        ) {
+            item(key = "head") {
+                Head(
+                    p = p,
+                    state = state,
+                    actions = actions,
+                    stale = stale,
+                    onLanguages = { sheet = Sheet.Languages },
+                    languagesFocus = keys.of(LANGUAGES_KEY),
+                    playFocus = playFocus,
+                    onPlayFocused = { atPlay = it },
+                )
+            }
+            if (p.showEpisodes) {
+                item(key = "episodes") { EpisodesHead(p, actions.onSeason) }
+                items(p.packs, key = { "pack:${it.key}" }) { pack -> PackBlock(pack, state.busy, actions.onPack) }
+                items(p.episodes, key = { "ep:${it.key}" }) { row ->
+                    EpisodeCard(
+                        row = row,
+                        busy = row.actions.any { it.busyKey() in state.busy },
+                        onClick = {
+                            val main = row.actions.firstOrNull()
+                            if (main != null) actions.onEpisode(row, main) else sheet = Sheet.Episode(row)
+                        },
+                        onLongClick = { sheet = Sheet.Episode(row) },
+                        modifier = Modifier.focusRequester(keys.of("ep:${row.key}")),
+                    )
+                }
+                p.emptyEpisodes?.let { words -> item(key = "no-episodes") { Hint(words) } }
+            }
+            item(key = "on-disk") {
+                SectionTitle("On disk", meta = plural(p.onDisk.size, "release"), modifier = Modifier.padding(top = IrisSpace.s7))
+            }
+            items(p.onDisk, key = { "disk:${it.infohash}" }) { row ->
+                ReleaseItem(
+                    row,
+                    actions.onRelease.copy(onDelete = { deleting = it }),
+                    state.busy,
+                    Modifier.focusRequester(keys.of("disk:${row.infohash}")),
+                    showTitle = false,
+                )
+            }
+            item(key = "manage") {
+                Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+                    if (p.onDisk.isEmpty()) Hint("Nothing of this title is on disk any more.")
+                    ActionButton("Manage releases", actions.onManageReleases, style = ActionStyle.Secondary, size = ActionSize.Small)
+                }
+            }
+            state.languages?.let { langs ->
+                item(key = "languages") { LanguagesBlock(langs, onChange = { sheet = Sheet.Languages }) }
+            }
+            if (p.showFiles) {
+                item(key = "files") { SectionTitle("Files", modifier = Modifier.padding(top = IrisSpace.s7)) }
+                items(p.files, key = { "file:${it.key}" }) { f -> FileCard(f) { actions.onPlay(f.infohash, f.fileIdx) } }
+                if (p.files.isEmpty()) item(key = "no-files") { Hint("No video file is on disk for this title.") }
+            }
+            if (p.gone.isNotEmpty()) {
+                item(key = "gone") {
+                    SectionTitle("Previously on disk", meta = plural(p.gone.size, "release"), modifier = Modifier.padding(top = IrisSpace.s7))
+                }
+                items(p.gone, key = { "gone:${it.infohash}" }) { g -> GoneRow(g, state.busy, actions) }
+                item(key = "gone-hint") { Hint("Hiding a release takes it off this page for you only. Your history is kept.") }
+            }
+        }
+    }
+
+    when (val s = sheet) {
+        null -> Unit
+        is Sheet.Episode -> EpisodeSheet(
+            row = p.episodes.firstOrNull { it.key == s.row.key } ?: s.row,
+            busy = state.busy,
+            onAction = { row, action -> actions.onEpisode(row, action) },
+            onDismiss = {
+                sheet = null
+                refocus = listOf("ep:${s.row.key}")
+            },
+        )
+        Sheet.Languages -> state.languages?.valueOrNull?.let { langs ->
+            LanguagesPanel(
+                title = p.title,
+                langs = langs,
+                saving = "languages" in state.busy,
+                onSave = { a, s2 ->
+                    actions.onSaveLanguages(a, s2) {
+                        sheet = null
+                        refocus = listOf(LANGUAGES_KEY)
+                    }
+                },
+                onDismiss = {
+                    sheet = null
+                    refocus = listOf(LANGUAGES_KEY)
+                },
+            )
+        }
+    }
+    deleting?.let { row ->
+        ConfirmDialog(
+            eyebrow = "Delete a release of ${p.title}",
+            title = "Delete ${row.release}?",
+            body = "It leaves the disk for everyone in the house. Watch history is kept. ${row.deleteBody}",
+            confirmLabel = "Delete release",
+            onConfirm = {
+                deleting = null
+                actions.onRelease.onDelete(row)
+                refocus = listOfNotNull(neighbourOf(p.onDisk.map { it.infohash }, row.infohash)?.let { "disk:$it" })
+            },
+            onCancel = {
+                deleting = null
+                refocus = listOf("disk:${row.infohash}")
+            },
+        )
+    }
+}
+
+private const val EPISODES_FIRST = 2
+private const val LANGUAGES_KEY = "languages"
+
+@Composable
+private fun Aside(p: CollectionPage, compact: Boolean, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
+        Eyebrow("Library · ${if (p.series) "Series" else "Movie"}")
+        Artwork(
+            title = p.title,
+            imageUrl = p.posterUrl,
+            width = if (compact) 96.dp else IrisSize.posterAside,
+            titleStyle = IrisType.group,
+        )
+        if (!compact) {
+            Text(p.eyebrow, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun Head(
+    p: CollectionPage,
+    state: CollectionUiState,
+    actions: CollectionActions,
+    stale: studio.kahn.iris.tv.ui.state.UiError?,
+    onLanguages: () -> Unit,
+    languagesFocus: FocusRequester,
+    playFocus: FocusRequester,
+    onPlayFocused: (Boolean) -> Unit,
+) {
+    // The first action takes the page's focus; the Languages action is where its panel returns.
+    val playModifier = Modifier
+        .focusRequester(playFocus)
+        .onFocusChanged { onPlayFocused(it.hasFocus) }
+    val languagesModifier = Modifier.focusRequester(languagesFocus)
+    Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
+        Text(p.title, style = IrisType.title, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(p.facts, style = IrisType.metaLarge, color = IrisColor.inkMuted)
+        if (p.chips.isNotEmpty() || p.fresh > 0) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
+                if (p.fresh > 0) Chip("${plural(p.fresh, "new episode")} since your last visit", tone = ChipTone.Ok)
+                p.chips.forEach { Chip(it) }
+            }
+        }
+        p.overview?.let {
+            Text(it, style = IrisType.reading, color = IrisColor.ink, maxLines = 4, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 560.dp))
+        }
+        stale?.let { StaleNotice(it) }
+        FlowRow(
+            Modifier.padding(top = IrisSpace.s2),
+            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s4),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+        ) {
+            val target = p.playTarget
+            if (target != null) {
+                ActionButton(
+                    p.playLabel,
+                    { actions.onPlay(target.infohash, target.fileIdx) },
+                    icon = Icons.Rounded.PlayArrow,
+                    size = ActionSize.Large,
+                    modifier = playModifier,
+                )
+            }
+            if (p.onWatchlist != null) {
+                ActionButton(
+                    if (p.onWatchlist) "On your watchlist" else "Add to your watchlist",
+                    actions.onWatchlist,
+                    icon = if (p.onWatchlist) Icons.Rounded.Check else Icons.Rounded.BookmarkBorder,
+                    style = ActionStyle.Secondary,
+                    size = ActionSize.Large,
+                    busy = "watchlist" in state.busy,
+                    busyText = "Saving…",
+                    modifier = if (target == null) playModifier else Modifier,
+                )
+            }
+            if (state.languages != null) {
+                ActionButton(
+                    "Languages",
+                    onLanguages,
+                    icon = Icons.Rounded.Language,
+                    style = ActionStyle.Secondary,
+                    size = ActionSize.Large,
+                    enabled = state.languages.valueOrNull != null,
+                    modifier = if (target == null && p.onWatchlist == null) playModifier.then(languagesModifier) else languagesModifier,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpisodesHead(p: CollectionPage, onSeason: (Long) -> Unit) {
+    Column(Modifier.padding(top = IrisSpace.s7), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
+        SectionTitle("Episodes", meta = p.seasonFact)
+        if (p.seasons.isNotEmpty()) {
+            Box(Modifier.horizontalScroll(rememberScrollState())) {
+                PillChoice(
+                    options = p.seasons,
+                    selected = p.seasons.first { it.season == p.season },
+                    onSelect = { onSeason(it.season) },
+                    label = { it.label },
+                    modifier = Modifier.padding(IrisSpace.s1),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PackBlock(pack: PackUi, busy: Set<String>, onPack: (PackUi, Boolean) -> Unit) {
+    FramedBlock(Modifier.fillMaxWidth()) {
+        Text(pack.title, style = IrisType.bodyStrong, color = IrisColor.ink)
+        Text(pack.facts, style = IrisType.meta, color = IrisColor.inkMuted)
+        Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+            ActionButton(
+                "Grab and play",
+                { onPack(pack, true) },
+                icon = Icons.Rounded.PlayArrow,
+                size = ActionSize.Small,
+                busy = "pack-play:${pack.key}" in busy,
+                busyText = "Grabbing…",
+            )
+            ActionButton(
+                "Download only",
+                { onPack(pack, false) },
+                icon = Icons.Rounded.Download,
+                style = ActionStyle.Secondary,
+                size = ActionSize.Small,
+                busy = "pack:${pack.key}" in busy,
+                busyText = "Grabbing…",
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EpisodeCard(
+    row: EpisodeRowUi,
+    busy: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    RowCard(onClick = onClick, onLongClick = onLongClick, modifier = modifier) { focused ->
+        Text(
+            row.number,
+            style = IrisType.section,
+            color = if (focused) IrisColor.ink else IrisColor.inkMuted,
+            modifier = Modifier.widthIn(min = 30.dp),
+            maxLines = 1,
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
+            Text(row.heading, style = IrisType.bodyStrong, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            ToneLine(row.state.tone, if (busy) "Asking the server…" else row.state.text)
+            row.state.progress?.let { Meter(it, Modifier.widthIn(max = 240.dp)) }
+            row.details.forEach { Text(it, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s1), itemVerticalAlignment = Alignment.CenterVertically) {
+            row.languages.forEach { LanguageChip(it) }
+        }
+        row.actions.firstOrNull()?.let {
+            Text(it.label, style = IrisType.controlSmall, color = if (focused) IrisColor.ink else IrisColor.accent, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun FileCard(f: FileUi, onClick: () -> Unit) {
+    RowCard(onClick = onClick) { _ ->
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
+            Text(f.name, style = IrisType.mono, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(f.facts, style = IrisType.meta, color = IrisColor.inkMuted)
+        }
+        Text("Play", style = IrisType.controlSmall, color = IrisColor.accent)
+    }
+}
+
+@Composable
+private fun GoneRow(g: GoneUi, busy: Set<String>, actions: CollectionActions) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val y = size.height - 0.5.dp.toPx()
+                drawLine(IrisColor.line, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
+            }
+            .padding(vertical = IrisSpace.s4),
+        horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
+            g.watchLine?.let { ToneLine(if (g.watched) Tone.Ok else Tone.Info, it) }
+            Text(g.name, style = IrisType.mono, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(g.facts, style = IrisType.meta, color = IrisColor.inkMuted)
+        }
+        ActionButton(
+            "Download again",
+            { actions.onGoneAgain(g) },
+            icon = Icons.Rounded.Download,
+            style = ActionStyle.Secondary,
+            size = ActionSize.Small,
+            busy = "again:${g.infohash}" in busy,
+            busyText = "Asking…",
+        )
+        ActionButton(
+            "Hide",
+            { actions.onGoneHide(g) },
+            style = ActionStyle.Secondary,
+            size = ActionSize.Small,
+            busy = "hide:${g.infohash}" in busy,
+            busyText = "Hiding…",
+        )
+    }
+}
+
+@Composable
+private fun LanguagesBlock(langs: Loadable<LanguagesUi>, onChange: () -> Unit) {
+    FramedBlock(Modifier.fillMaxWidth().padding(top = IrisSpace.s7)) {
+        Text("Next episodes play with", style = IrisType.group, color = IrisColor.ink)
+        when (val l = langs.valueOrNull) {
+            null -> Hint(if (langs is Loadable.Failed) langs.error.message else "Loading…")
+            else -> {
+                FactRow("Audio", audioWords(l.audio))
+                FactRow("Subtitles", subtitleWords(l.subtitles))
+                Hint(if (l.forCollection) "Chosen for this series." else "Your usual choice, from your account.")
+            }
+        }
+        ActionButton("Change languages", onChange, icon = Icons.Rounded.Language, style = ActionStyle.Secondary, size = ActionSize.Small)
+    }
+}
+
+@Composable
+internal fun EpisodeSheet(
+    row: EpisodeRowUi,
+    busy: Set<String>,
+    onAction: (EpisodeRowUi, EpisodeAction) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val first = remember { FocusRequester() }
+    var waiting by remember { mutableStateOf<String?>(null) }
+    var seen by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    LaunchedEffect(busy, waiting) {
+        val key = waiting ?: return@LaunchedEffect
+        if (key in busy) seen = true else if (seen) onDismiss()
+    }
+    SidePanel(title = row.title, onDismiss = onDismiss, footer = "Back closes this panel") {
+        Column(Modifier.padding(horizontal = IrisSpace.s4), verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+            ToneLine(row.state.tone, row.state.text)
+            row.aired?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
+            row.overview?.let { Text(it, style = IrisType.reading, color = IrisColor.ink, maxLines = 6, overflow = TextOverflow.Ellipsis) }
+            row.details.forEach { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
+            if (row.actions.isEmpty()) Hint("Nothing to do yet: no release of this episode is known.")
+            Spacer(Modifier.height(IrisSpace.s2))
+            row.actions.forEachIndexed { i, action ->
+                val key = action.busyKey()
+                ActionButton(
+                    action.label,
+                    {
+                        if (action is EpisodeAction.Play) {
+                            onDismiss()
+                        } else {
+                            waiting = key
+                            seen = false
+                        }
+                        onAction(row, action)
+                    },
+                    style = if (i == 0) ActionStyle.Primary else ActionStyle.Secondary,
+                    busy = key in busy,
+                    busyText = "Asking the server…",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (i == 0) Modifier.focusRequester(first) else Modifier),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun LanguagesPanel(
+    title: String,
+    langs: LanguagesUi,
+    saving: Boolean,
+    onSave: (String?, String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var audio by remember { mutableStateOf(langs.audio.orEmpty()) }
+    var subs by remember { mutableStateOf(langs.subtitles.orEmpty()) }
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    SidePanel(title = "Languages for $title", onDismiss = onDismiss) {
+        Text(
+            "The next episodes start with these. Other titles keep your usual choice.",
+            style = IrisType.meta,
+            color = IrisColor.inkMuted,
+            modifier = Modifier.padding(horizontal = IrisSpace.s4),
+        )
+        PanelLabel("Audio")
+        ChosenPanelOptions(
+            options = listOf("") + langs.audioOptions,
+            selected = audio,
+            onSelect = { audio = it },
+            label = { if (it.isEmpty()) "Each file’s own default" else languageName(it) ?: it },
+            selectedFocus = first,
+        )
+        PanelLabel("Subtitles")
+        PanelOptions(
+            options = listOf("", "off") + langs.subtitleOptions,
+            selected = subs,
+            onSelect = { subs = it },
+            label = { subtitleWords(it.ifEmpty { null }) },
+        )
+        Row(
+            Modifier.padding(horizontal = IrisSpace.s4, vertical = IrisSpace.s4),
+            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+        ) {
+            ActionButton(
+                "Save for this series",
+                { onSave(audio.ifEmpty { null }, subs.ifEmpty { null }) },
+                icon = Icons.Rounded.Check,
+                busy = saving,
+                busyText = "Saving…",
+            )
+            ActionButton("Cancel", onDismiss, style = ActionStyle.Secondary)
+        }
+    }
+}
+
+@Composable
+private fun Hint(text: String) {
+    Text(text, style = IrisType.meta, color = IrisColor.inkMuted)
+}

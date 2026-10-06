@@ -358,6 +358,17 @@ interface IrisApi {
         @Query("language") language: String? = null,
     ): GrabResponse
 
+    // Library, a title's page, history.
+
+
+    /** Leave the swarm, files stay on disk. 403 unless admin or whoever added it. */
+    @POST("api/torrents/{infohash}/pause")
+    suspend fun pauseTorrent(@Path("infohash") infohash: String)
+
+    /** Back in the swarm. 409 when the tracker's download slots are full. */
+    @POST("api/torrents/{infohash}/resume")
+    suspend fun resumeTorrent(@Path("infohash") infohash: String)
+
     // ------------------------------ Live TV ------------------------------
     // Channels play via `api/livetv/{country}/channels/{id}/master.m3u8`
     // (built as a URL for Media3, not a Retrofit call) — the backend
