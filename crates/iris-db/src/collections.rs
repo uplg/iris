@@ -266,32 +266,92 @@ pub async fn set_kind(pool: &SqlitePool, id: Uuid, kind: Kind) -> Result<(), sql
     Ok(())
 }
 
-/// Rewrite `parsed_title_normalized` on an existing collection.
-/// Used by the boot-time self-heal when an older parser run stamped
-/// a leaky title (file-leaf SCENE garbage instead of the canonical
-/// torrent name). Skipped if another row already owns the target
-/// key — that case demands a migration we don't auto-resolve.
-pub async fn set_parsed_title_normalized(
-    pool: &SqlitePool,
-    id: Uuid,
-    normalized: &str,
-) -> Result<(), sqlx::Error> {
-    let mut tx = pool.begin().await?;
-    let old: Option<String> =
-        sqlx::query_scalar("SELECT parsed_title_normalized FROM collections WHERE id = ?1")
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .flatten();
-    sqlx::query("UPDATE collections SET parsed_title_normalized = ?1 WHERE id = ?2")
-        .bind(normalized)
+/// What a re-key does to the collection's TMDB match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TmdbChange<'a> {
+    Keep,
+    Clear,
+    /// A trusted match: the id and the signal backing it.
+    Trusted(i64, &'a str),
+}
+
+/// A rename in place of a collection's identity (the self-heals).
+#[derive(Debug, Clone, Copy)]
+pub struct Rekey<'a> {
+    pub key: &'a str,
+    pub display_title: &'a str,
+    /// `None` leaves the flag as is.
+    pub is_anime: Option<bool>,
+    pub tmdb: TmdbChange<'a>,
+}
+
+/// Rename a collection's identity in one `BEGIN IMMEDIATE` transaction: key,
+/// display title, anime flag and TMDB match together, its follows carried to
+/// the new key and the offers cached for the old one dropped. `false`: the key
+/// is another collection's (nothing written) or the row is gone.
+pub async fn rekey(pool: &SqlitePool, id: Uuid, change: Rekey<'_>) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let Some((old, kind, old_tmdb)): Option<(Option<String>, String, Option<i64>)> =
+        sqlx::query_as(
+            "SELECT parsed_title_normalized, kind, tmdb_id FROM collections WHERE id = ?1",
+        )
         .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    if let Some(old) = old.as_deref().filter(|old| *old != normalized) {
-        carry_name_keyed_rows(&mut tx, old, normalized).await?;
+        .fetch_optional(&mut *tx)
+        .await?
+    else {
+        return Ok(false);
+    };
+    let owned: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM collections WHERE parsed_title_normalized = ?1 AND kind = ?2 AND id != ?3",
+    )
+    .bind(change.key)
+    .bind(&kind)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if owned.is_some() {
+        return Ok(false);
     }
-    tx.commit().await
+    sqlx::query(
+        "UPDATE collections SET parsed_title_normalized = ?1, display_title = ?2, \
+         is_anime = COALESCE(?3, is_anime) WHERE id = ?4",
+    )
+    .bind(change.key)
+    .bind(change.display_title)
+    .bind(change.is_anime)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    let new_tmdb = match change.tmdb {
+        TmdbChange::Keep => old_tmdb,
+        TmdbChange::Clear => {
+            sqlx::query("UPDATE collections SET tmdb_id = NULL, tmdb_trust = NULL WHERE id = ?1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            None
+        }
+        TmdbChange::Trusted(tmdb_id, trust) => {
+            sqlx::query("UPDATE collections SET tmdb_id = ?1, tmdb_trust = ?2 WHERE id = ?3")
+                .bind(tmdb_id)
+                .bind(trust)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            Some(tmdb_id)
+        }
+    };
+    if new_tmdb != old_tmdb {
+        sqlx::query("UPDATE torrents SET tmdb_verified = FALSE WHERE collection_id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(old) = old.as_deref().filter(|old| *old != change.key) {
+        carry_name_keyed_rows(&mut tx, old, change.key).await?;
+    }
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// A collection's key moved from `from` to `to`: its follows go with it (a
@@ -966,9 +1026,44 @@ mod tests {
         .await
         .unwrap();
 
-        set_parsed_title_normalized(&pool, col.id, "dr stone")
+        sqlx::query("UPDATE collections SET tmdb_id = 7, tmdb_trust = 'scene' WHERE id = ?1")
+            .bind(col.id)
+            .execute(&pool)
             .await
             .unwrap();
+        let other = find_or_create(&pool, "dr who", "Dr Who", Kind::Tv, false)
+            .await
+            .unwrap();
+        let rekey = |key| Rekey {
+            key,
+            display_title: "Dr Stone",
+            is_anime: None,
+            tmdb: TmdbChange::Keep,
+        };
+        assert!(
+            !super::rekey(&pool, col.id, rekey("dr who")).await.unwrap(),
+            "another collection's key"
+        );
+        assert_eq!(
+            get(&pool, other.id).await.unwrap().unwrap().display_title,
+            "Dr Who"
+        );
+        assert!(
+            super::rekey(&pool, col.id, rekey("dr stone"))
+                .await
+                .unwrap()
+        );
+        let renamed = get(&pool, col.id).await.unwrap().unwrap();
+        assert_eq!(
+            (
+                renamed.parsed_title_normalized.as_deref(),
+                renamed.display_title.as_str(),
+                renamed.tmdb_id,
+                renamed.tmdb_trust.as_deref()
+            ),
+            (Some("dr stone"), "Dr Stone", Some(7), Some("scene")),
+            "a pure re-key keeps the trusted match"
+        );
 
         let keys = |user| {
             let pool = pool.clone();

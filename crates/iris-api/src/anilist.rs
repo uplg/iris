@@ -68,6 +68,30 @@ pub struct AniListMedia {
     pub is_movie: bool,
 }
 
+/// The result that IS `title`: same series key (never AniList's fuzzy first
+/// hit, which can be another show), same format (series or movie), the one
+/// from `year` when several match.
+pub fn strict_match<'a>(
+    results: &'a [AniListMedia],
+    title: &str,
+    is_movie: bool,
+    year: Option<u32>,
+) -> Option<&'a AniListMedia> {
+    let want = iris_media::filename::series_key(title);
+    if want.is_empty() {
+        return None;
+    }
+    let mut matching = results
+        .iter()
+        .filter(|m| m.is_movie == is_movie && iris_media::filename::series_key(&m.title) == want);
+    let first = matching.next()?;
+    let year = year.and_then(|y| u16::try_from(y).ok());
+    if first.year == year || year.is_none() {
+        return Some(first);
+    }
+    Some(matching.find(|m| m.year == year).unwrap_or(first))
+}
+
 const SEARCH_QUERY: &str = "\
 query ($search: String) {
   Page(page: 1, perPage: 10) {
@@ -308,6 +332,49 @@ impl RawMedia {
             average_score: self.average_score.map(|s| s / 100.0),
             is_movie,
         })
+    }
+}
+
+#[cfg(test)]
+mod strict_match_tests {
+    use super::{AniListMedia, strict_match};
+
+    fn media(id: i64, title: &str, year: u16, is_movie: bool) -> AniListMedia {
+        AniListMedia {
+            anilist_id: id,
+            title: title.into(),
+            year: Some(year),
+            release_date: None,
+            cover_image: None,
+            banner_image: None,
+            description: None,
+            genres: Vec::new(),
+            popularity: None,
+            average_score: None,
+            is_movie,
+        }
+    }
+
+    #[test]
+    fn only_the_same_title_and_format_match() {
+        let results = [
+            media(1, "Dr. Stone: New World", 2023, false),
+            media(2, "Dr. Stone", 2019, true),
+            media(3, "Dr. Stone", 2019, false),
+            media(4, "Dr. Stone", 2025, false),
+        ];
+        let id = |title, is_movie, year| {
+            strict_match(&results, title, is_movie, year).map(|m| m.anilist_id)
+        };
+        assert_eq!(
+            id("Dr. Stone", false, None),
+            Some(3),
+            "the fuzzy first hit is another show"
+        );
+        assert_eq!(id("Dr Stone", false, Some(2025)), Some(4));
+        assert_eq!(id("Dr. Stone", false, Some(1999)), Some(3));
+        assert_eq!(id("Dr. Stone", true, None), Some(2));
+        assert_eq!(id("One Piece", false, None), None);
     }
 }
 
