@@ -4,9 +4,10 @@ use axum::extract::State;
 use axum::routing::post;
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
-use chrono::Duration;
+use chrono::{Duration, Utc};
 use iris_auth::hash_invitation_token;
 use iris_core::ids::{InvitationId, UserId};
+use iris_db::refresh_tokens::{NewSession, Rotation, Session, Successor};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -225,59 +226,38 @@ pub(crate) async fn refresh(
         .check(state.db(), UserId::from(claims.sub), claims.issued_at_ms())
         .await?;
 
-    // Resolve the device tagging to carry forward, tolerating a rotation race.
-    // Normal path: the jti is active → rotate it (`mark_rotated`, not `revoke`,
-    // so a straggler can still be recognised below), atomically. Race path: the jti isn't
-    // active but was rotated within the grace window → a near-simultaneous
-    // refresh already rotated it, the session is alive, so re-issue instead of
-    // logging the user out. An explicitly revoked token (logout / device
-    // revoke; `rotated_at` IS NULL) matches neither branch and still 401s.
-    //
-    // Device tagging is carried across the rotation so a paired TV keeps its
-    // `device_kind` (else it drops off the account device list), and devices
-    // get the SLIDING full device TTL re-issued on every refresh — a TV in
-    // regular use never expires; only one left off longer than the whole window
-    // needs re-pairing. Browsers keep `None` (the default, also re-issued).
-    let (device_label, device_kind) = if let Some(prev) =
-        iris_db::refresh_tokens::mark_rotated(state.db(), claims.jti).await?
-    {
-        (prev.device_label, prev.device_kind)
-    } else if let Some(rot) = iris_db::refresh_tokens::recently_rotated(
+    // Devices get the SLIDING full device TTL on every rotation — a TV in
+    // regular use never expires; only one left off longer than the whole
+    // window needs re-pairing. A straggler replaying a just-rotated token gets
+    // the successor already minted for it, cookies and all, so a multi-tab /
+    // retry race neither logs the user out nor forks the session.
+    let session = match iris_db::refresh_tokens::rotate(
         state.db(),
         claims.jti,
         REFRESH_ROTATION_GRACE_SECS,
+        |device_kind| new_successor(&state, device_kind),
     )
     .await?
     {
-        // Straggler from a near-simultaneous rotation — the session is alive.
-        tracing::debug!(jti = %claims.jti, "refresh straggler within rotation grace; re-issuing");
-        (rot.device_label, rot.device_kind)
-    } else {
-        tracing::warn!(jti = %claims.jti, "refresh rejected: refresh-token row not active (revoked/rotated/expired)");
-        return Err(ApiError::Unauthorized);
+        Rotation::Rotated(session) => session,
+        Rotation::Replayed(session) => {
+            tracing::debug!(jti = %claims.jti, "refresh straggler within rotation grace; replaying its successor");
+            session
+        }
+        Rotation::FamilyRevoked => {
+            tracing::warn!(jti = %claims.jti, "refresh rejected: rotated token replayed after the grace window; session ended");
+            return Err(ApiError::Unauthorized);
+        }
+        Rotation::Rejected => {
+            tracing::warn!(jti = %claims.jti, "refresh rejected: refresh-token row not active (revoked/expired)");
+            return Err(ApiError::Unauthorized);
+        }
     };
 
-    let user_id = UserId::from(claims.sub);
-    let user = iris_db::users::find_by_id(state.db(), user_id)
+    let user = iris_db::users::find_by_id(state.db(), UserId::from(session.user_id))
         .await?
         .ok_or(ApiError::Unauthorized)?;
-
-    let ttl_override = if device_kind.is_some() {
-        Some(state.cfg().auth.device_refresh_ttl_secs)
-    } else {
-        None
-    };
-    let jar = issue_session_for_kind(
-        &state,
-        &jar,
-        user.id,
-        user.is_admin,
-        ttl_override,
-        device_label.as_deref(),
-        device_kind.as_deref(),
-    )
-    .await?;
-
+    let jar = session_cookies(&state, &jar, user.id, user.is_admin, &session)?;
     Ok((jar, Json(user.into())))
 }
 
@@ -308,67 +288,79 @@ pub(crate) async fn issue_session(
     user_id: UserId,
     is_admin: bool,
 ) -> ApiResult<CookieJar> {
-    issue_session_for_kind(state, jar, user_id, is_admin, None, None, None).await
+    let new = new_session(state, user_id, None, None);
+    iris_db::refresh_tokens::insert_session(state.db(), &new).await?;
+    session_cookies(state, jar, user_id, is_admin, &stored(&new))
 }
 
-/// Variant of [`issue_session`] for device-paired sessions: longer refresh
-/// TTL, and the refresh-token row is tagged with `device_label` + `device_kind`
-/// so we can list/revoke devices in the account UI.
-pub async fn issue_session_for_kind(
+/// A refresh token's id and instants: the configured TTL, or the longer
+/// device one for a paired device.
+pub(crate) fn new_successor(state: &AppState, device_kind: Option<&str>) -> Successor {
+    let auth = &state.cfg().auth;
+    let ttl = if device_kind.is_some() {
+        auth.device_refresh_ttl_secs
+    } else {
+        auth.refresh_ttl_secs
+    };
+    let issued_at = Utc::now();
+    Successor {
+        jti: Uuid::new_v4(),
+        issued_at,
+        expires_at: issued_at + Duration::seconds(ttl),
+    }
+}
+
+/// A new session (its own family) to store. Device-paired sessions carry
+/// `device_label` + `device_kind` so the account UI can list and revoke them.
+pub(crate) fn new_session<'a>(
     state: &AppState,
-    jar: &CookieJar,
     user_id: UserId,
-    is_admin: bool,
-    refresh_ttl_override_secs: Option<i64>,
-    device_label: Option<&str>,
-    device_kind: Option<&str>,
-) -> ApiResult<CookieJar> {
-    issue_device_session(
-        state,
-        jar,
+    device_label: Option<&'a str>,
+    device_kind: Option<&'a str>,
+) -> NewSession<'a> {
+    let next = new_successor(state, device_kind);
+    NewSession {
+        jti: next.jti,
+        family_id: next.jti,
         user_id,
-        is_admin,
-        refresh_ttl_override_secs,
+        issued_at: next.issued_at,
+        expires_at: next.expires_at,
         device_label,
         device_kind,
-    )
-    .await
-    .map(|(jar, _)| jar)
+    }
 }
 
-/// [`issue_session_for_kind`], also answering the new refresh session's id.
-pub async fn issue_device_session(
+pub(crate) fn stored(new: &NewSession<'_>) -> Session {
+    Session {
+        jti: new.jti,
+        user_id: new.user_id.into(),
+        issued_at: new.issued_at,
+        expires_at: new.expires_at,
+        device_label: new.device_label.map(str::to_owned),
+        device_kind: new.device_kind.map(str::to_owned),
+    }
+}
+
+/// The access cookie, and the refresh cookie for a stored session: its JWT is
+/// minted from the row (the same token each time) and lives as long as the
+/// row, so a replayed successor never stretches the session.
+pub(crate) fn session_cookies(
     state: &AppState,
     jar: &CookieJar,
     user_id: UserId,
     is_admin: bool,
-    refresh_ttl_override_secs: Option<i64>,
-    device_label: Option<&str>,
-    device_kind: Option<&str>,
-) -> ApiResult<(CookieJar, Uuid)> {
+    session: &Session,
+) -> ApiResult<CookieJar> {
     let access = state
         .jwt()
         .issue_access(user_id, is_admin)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("issue access: {e}")))?;
-    let refresh_ttl = refresh_ttl_override_secs.unwrap_or(state.cfg().auth.refresh_ttl_secs);
-    // The override TTL must reach the JWT encoder itself: `verify_refresh`
-    // checks the token's `exp` before any DB lookup, so the JWT, the DB
-    // `expires_at` and the cookie Max-Age have to agree on the horizon.
-    let issued = state
+    // `verify_refresh` checks the JWT's own `exp` before any DB lookup, so the
+    // JWT, the row's `expires_at` and the cookie Max-Age share one horizon.
+    let refresh = state
         .jwt()
-        .issue_refresh(user_id, refresh_ttl_override_secs.map(Duration::seconds))
+        .encode_refresh(user_id, session.jti, session.issued_at, session.expires_at)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("issue refresh: {e}")))?;
-    let (refresh, jti) = (issued.token, issued.jti);
-
-    iris_db::refresh_tokens::insert_with_device(
-        state.db(),
-        jti,
-        user_id,
-        issued.expires_at,
-        device_label,
-        device_kind,
-    )
-    .await?;
 
     let secure = state.cfg().cookie_secure();
     let access_cookie = build_cookie(
@@ -381,12 +373,12 @@ pub async fn issue_device_session(
     let refresh_cookie = build_cookie(
         REFRESH_COOKIE,
         refresh,
-        Duration::seconds(refresh_ttl),
+        session.expires_at - Utc::now(),
         "/api/auth",
         secure,
     );
 
-    Ok((jar.clone().add(access_cookie).add(refresh_cookie), jti))
+    Ok(jar.clone().add(access_cookie).add(refresh_cookie))
 }
 
 fn build_cookie(
@@ -609,6 +601,37 @@ pub(crate) mod tests {
                 .status,
             StatusCode::OK
         );
+    }
+
+    #[tokio::test]
+    async fn a_straggler_refresh_gets_the_same_successor_and_logout_ends_the_family() {
+        let (_state, app, _, email) = app_with_member().await;
+        let first = login(&app, &email, PASSWORD)
+            .await
+            .cookie("iris_refresh")
+            .unwrap();
+        let winner = call(&app, "POST", "/api/auth/refresh", None, Some(&first), None).await;
+        assert_eq!(winner.status, StatusCode::OK);
+        let second = winner.cookie("iris_refresh").unwrap();
+        assert_ne!(second, first);
+        let straggler = call(&app, "POST", "/api/auth/refresh", None, Some(&first), None).await;
+        assert_eq!(straggler.status, StatusCode::OK);
+        assert_eq!(
+            straggler.cookie("iris_refresh").as_deref(),
+            Some(second.as_str()),
+            "the straggler is handed the successor, not a session of its own"
+        );
+
+        let out = call(&app, "POST", "/api/auth/logout", None, Some(&second), None).await;
+        assert_eq!(out.status, StatusCode::OK);
+        for token in [&first, &second] {
+            assert_eq!(
+                call(&app, "POST", "/api/auth/refresh", None, Some(token), None)
+                    .await
+                    .status,
+                StatusCode::UNAUTHORIZED
+            );
+        }
     }
 
     #[tokio::test]

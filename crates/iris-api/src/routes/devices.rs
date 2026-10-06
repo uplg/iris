@@ -22,7 +22,6 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::auth::issue_device_session;
 use crate::routes::extract::{AuthUser, Path};
 use crate::state::AppState;
 
@@ -151,22 +150,20 @@ pub(crate) async fn poll(
     }
 
     // Hand the device back a real session via the same cookie path the web
-    // login uses, with a longer refresh TTL and labelled with the device
-    // kind so the user can revoke it in their account UI.
-    if let Some(previous) = row.session_jti {
-        iris_db::refresh_tokens::revoke(state.db(), previous).await?;
+    // login uses, with the device TTL and labelled with the device kind so the
+    // user can revoke it in their account UI.
+    let new =
+        crate::routes::auth::new_session(&state, user.id, row.label.as_deref(), Some(&row.kind));
+    if !iris_db::refresh_tokens::replace_for_device_code(state.db(), row.device_id, &new).await? {
+        return Ok((jar, Json(PollResponse::Expired)));
     }
-    let (jar, jti) = issue_device_session(
+    let jar = crate::routes::auth::session_cookies(
         &state,
         &jar,
         user.id,
         user.is_admin,
-        Some(state.cfg().auth.device_refresh_ttl_secs),
-        row.label.as_deref(),
-        Some(&row.kind),
-    )
-    .await?;
-    iris_db::device_codes::set_session(state.db(), row.device_id, jti).await?;
+        &crate::routes::auth::stored(&new),
+    )?;
 
     Ok((
         jar,

@@ -300,9 +300,18 @@ mod tests {
         crate::refresh_tokens::insert(&pool, rotated, user, Utc::now() + chrono::Duration::days(1))
             .await
             .unwrap();
-        crate::refresh_tokens::mark_rotated(&pool, rotated)
-            .await
-            .unwrap();
+        let rotation = crate::refresh_tokens::rotate(&pool, rotated, 60, |_| {
+            crate::refresh_tokens::Successor {
+                jti: Uuid::new_v4(),
+                issued_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::days(1),
+            }
+        })
+        .await
+        .unwrap();
+        let crate::refresh_tokens::Rotation::Rotated(head) = rotation else {
+            panic!("{rotation:?}");
+        };
         crate::passkeys::insert(
             &pool,
             &crate::passkeys::NewPasskey {
@@ -328,10 +337,15 @@ mod tests {
 
         assert!(!crate::refresh_tokens::is_active(&pool, jti).await.unwrap());
         assert!(
-            crate::refresh_tokens::recently_rotated(&pool, rotated, 60)
+            !crate::refresh_tokens::is_active(&pool, head.jti)
                 .await
                 .unwrap()
-                .is_none(),
+        );
+        assert!(
+            crate::refresh_tokens::rotate(&pool, rotated, 60, |_| panic!("no mint"))
+                .await
+                .unwrap()
+                == crate::refresh_tokens::Rotation::Rejected,
             "a just-rotated token can't come back through the grace window"
         );
         assert!(

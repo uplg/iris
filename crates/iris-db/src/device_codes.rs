@@ -50,16 +50,6 @@ pub async fn create(
     })
 }
 
-/// Remember the session a poll handed the device.
-pub async fn set_session(pool: &SqlitePool, device_id: Uuid, jti: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE device_codes SET session_jti = ?1 WHERE device_id = ?2")
-        .bind(jti)
-        .bind(device_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 pub async fn find_by_device_id(
     pool: &SqlitePool,
     device_id: Uuid,
@@ -122,42 +112,4 @@ pub async fn cleanup_expired(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_support::{make_user, migrated_pool};
-
-    #[tokio::test]
-    async fn a_claimed_code_remembers_the_session_it_handed_out() {
-        let pool = migrated_pool().await;
-        let user = make_user(&pool).await;
-        let code = create(
-            &pool,
-            "ABCD2345",
-            Utc::now() + chrono::TimeDelta::minutes(10),
-            "android-tv",
-        )
-        .await
-        .unwrap();
-        assert!(
-            claim(&pool, "ABCD2345", user, Some("Living room"))
-                .await
-                .unwrap()
-        );
-        let fresh = find_by_device_id(&pool, code.device_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(fresh.session_jti, None);
-
-        let jti = Uuid::new_v4();
-        set_session(&pool, code.device_id, jti).await.unwrap();
-        let polled = find_by_device_id(&pool, code.device_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(polled.session_jti, Some(jti));
-    }
 }
