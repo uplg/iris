@@ -29,7 +29,7 @@ use iris_db::SqlitePool;
 use iris_media::filename::Language;
 use iris_providers::ProviderRegistry;
 
-use crate::anilist::{AniListClient, AniListMedia};
+use crate::anilist::AniListClient;
 use crate::tmdb::{MediaMetadata, TmdbClient, TmdbKind};
 use crate::tmdb_resolve;
 
@@ -243,7 +243,13 @@ pub(crate) async fn upsert_window_rows(
         // never create duplicate anime rows keyed on a NULL anilist_id.
         let anime = if is_anime_meta(&meta) {
             match anilist {
-                Some(a) => pick_anime(&a.search(&meta.title).await, meta.year),
+                Some(a) => crate::anilist::strict_match(
+                    &a.search(&meta.title).await,
+                    &meta.title,
+                    kind == MediaKind::Movie,
+                    meta.year,
+                )
+                .cloned(),
                 None => None,
             }
         } else {
@@ -299,16 +305,6 @@ pub(crate) async fn upsert_window_rows(
 /// Japanese. Good enough to gate the (cached) AniList reconciliation.
 fn is_anime_meta(meta: &MediaMetadata) -> bool {
     meta.genre_ids.contains(&16) && meta.original_language.as_deref() == Some("ja")
-}
-
-/// Pick the AniList match for a title, preferring an exact release-year match.
-fn pick_anime(results: &[AniListMedia], year: Option<u32>) -> Option<AniListMedia> {
-    if let Some(y) = year.and_then(|y| u16::try_from(y).ok())
-        && let Some(m) = results.iter().find(|m| m.year == Some(y))
-    {
-        return Some(m.clone());
-    }
-    results.first().cloned()
 }
 
 async fn run_gc(pool: &SqlitePool, cfg: &DiscoveryConfig) {

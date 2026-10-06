@@ -21,6 +21,10 @@ pub enum ApiError {
     /// English fallback for clients that don't know the code).
     #[error("{message}")]
     Invalid { code: &'static str, message: String },
+    /// [`Self::Invalid`] for a request that conflicts with the current state:
+    /// a `409` carrying its own `code`.
+    #[error("{message}")]
+    Refused { code: &'static str, message: String },
     /// The chosen release has 0 seeders — grabbing it would never complete.
     /// Distinct code so clients can show a "dead torrent" message.
     #[error("this release has no seeders and can't be downloaded")]
@@ -86,6 +90,7 @@ impl IntoResponse for ApiError {
             ApiError::Invalid { code, message } => {
                 (StatusCode::BAD_REQUEST, *code, message.clone())
             }
+            ApiError::Refused { code, message } => (StatusCode::CONFLICT, *code, message.clone()),
             ApiError::DeadTorrent => (StatusCode::CONFLICT, "dead_torrent", self.to_string()),
             ApiError::ArchiveOnly => (StatusCode::CONFLICT, "archive_only", self.to_string()),
             ApiError::DuplicateInLibrary(_) => (

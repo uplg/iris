@@ -14,6 +14,77 @@ pub struct RefreshToken {
     pub device_kind: Option<String>,
 }
 
+/// A session token to store. `issued_at` / `expires_at` are the very instants
+/// its JWT carries, so the JWT can be minted again from the row.
+#[derive(Debug, Clone)]
+pub struct NewSession<'a> {
+    pub jti: Uuid,
+    /// The first token's jti for a new session, the predecessor's family on
+    /// a rotation.
+    pub family_id: Uuid,
+    pub user_id: UserId,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub device_label: Option<&'a str>,
+    pub device_kind: Option<&'a str>,
+}
+
+/// A stored, live session token: what a refresh hands back.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct Session {
+    pub jti: Uuid,
+    pub user_id: Uuid,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub device_label: Option<String>,
+    pub device_kind: Option<String>,
+}
+
+/// The token a rotation mints, chosen by the caller from the predecessor's
+/// device kind (paired devices get a longer TTL).
+#[derive(Debug, Clone, Copy)]
+pub struct Successor {
+    pub jti: Uuid,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rotation {
+    /// The token was live: it is retired and this successor replaces it.
+    Rotated(Session),
+    /// The token was rotated within the grace window (several tabs refreshing
+    /// at once, a retried request): the successor already minted for it.
+    Replayed(Session),
+    /// Rotated longer ago than the grace window: a stolen token replayed, or
+    /// one kept around. The whole family was revoked.
+    FamilyRevoked,
+    /// Unknown, expired or revoked.
+    Rejected,
+}
+
+pub async fn insert_session<'e, E>(executor: E, new: &NewSession<'_>) -> Result<(), sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let user: Uuid = new.user_id.into();
+    sqlx::query(
+        "INSERT INTO refresh_tokens \
+         (jti, family_id, user_id, issued_at, expires_at, device_label, device_kind) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )
+    .bind(new.jti)
+    .bind(new.family_id)
+    .bind(user)
+    .bind(new.issued_at)
+    .bind(new.expires_at)
+    .bind(new.device_label)
+    .bind(new.device_kind)
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
 pub async fn insert(
     pool: &SqlitePool,
     jti: Uuid,
@@ -23,6 +94,7 @@ pub async fn insert(
     insert_with_device(pool, jti, user_id, expires_at, None, None).await
 }
 
+/// A new session of its own family, issued now.
 pub async fn insert_with_device(
     pool: &SqlitePool,
     jti: Uuid,
@@ -31,20 +103,19 @@ pub async fn insert_with_device(
     device_label: Option<&str>,
     device_kind: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    let user: Uuid = user_id.into();
-    sqlx::query(
-        "INSERT INTO refresh_tokens (jti, user_id, issued_at, expires_at, device_label, device_kind) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    insert_session(
+        pool,
+        &NewSession {
+            jti,
+            family_id: jti,
+            user_id,
+            issued_at: Utc::now(),
+            expires_at,
+            device_label,
+            device_kind,
+        },
     )
-    .bind(jti)
-    .bind(user)
-    .bind(Utc::now())
-    .bind(expires_at)
-    .bind(device_label)
-    .bind(device_kind)
-    .execute(pool)
-    .await?;
-    Ok(())
+    .await
 }
 
 pub async fn list_devices_for_user(
@@ -65,6 +136,8 @@ pub async fn list_devices_for_user(
     .await
 }
 
+/// End the session `jti` belongs to, every token of its family, when it is
+/// one of `user_id`'s. `false`: no such session for this user.
 pub async fn revoke_for_user(
     pool: &SqlitePool,
     user_id: UserId,
@@ -72,36 +145,20 @@ pub async fn revoke_for_user(
 ) -> Result<bool, sqlx::Error> {
     let user: Uuid = user_id.into();
     let res = sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = ?1 \
-         WHERE jti = ?2 AND user_id = ?3 AND revoked_at IS NULL",
+        "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, ?1), rotated_at = NULL \
+         WHERE user_id = ?3 AND family_id = \
+           (SELECT family_id FROM refresh_tokens \
+            WHERE jti = ?2 AND user_id = ?3 AND revoked_at IS NULL)",
     )
     .bind(Utc::now())
     .bind(jti)
     .bind(user)
     .execute(pool)
     .await?;
-    Ok(res.rows_affected() == 1)
-}
-
-/// Device label / kind / `expires_at` of the refresh token [`mark_rotated`]
-/// just retired. Used by `/auth/refresh` to carry the device tagging forward
-/// when rotating the token — without
-/// this, paired-device rows lose their `device_kind` after the first
-/// rotation and the account-page listing (which filters on
-/// `device_kind IS NOT NULL`) shows "no paired devices yet".
-#[derive(Debug, Clone)]
-pub struct ActiveDeviceInfo {
-    pub device_label: Option<String>,
-    pub device_kind: Option<String>,
-    pub expires_at: DateTime<Utc>,
+    Ok(res.rows_affected() > 0)
 }
 
 pub async fn is_active(pool: &SqlitePool, jti: Uuid) -> Result<bool, sqlx::Error> {
-    // EXISTS-style probe with `query_scalar` — we don't need to materialise
-    // a full RefreshToken row, and `FromRow` is strict about every column
-    // declared on the struct being present in the SELECT. Selecting a
-    // narrow projection here used to crash with `ColumnNotFound("device_label")`
-    // on every /auth/refresh after migration 0004 added those columns.
     let row: Option<i64> = sqlx::query_scalar(
         "SELECT 1 FROM refresh_tokens \
          WHERE jti = ?1 AND revoked_at IS NULL AND expires_at > ?2",
@@ -113,76 +170,172 @@ pub async fn is_active(pool: &SqlitePool, jti: Uuid) -> Result<bool, sqlx::Error
     Ok(row.is_some())
 }
 
-pub async fn revoke(pool: &SqlitePool, jti: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE refresh_tokens SET revoked_at = ?1 WHERE jti = ?2 AND revoked_at IS NULL")
-        .bind(Utc::now())
-        .bind(jti)
-        .execute(pool)
-        .await?;
+/// End the session `jti` belongs to (logout): every token of its family,
+/// rotated ones included, so none comes back through the grace window.
+pub async fn revoke<'e, E>(executor: E, jti: Uuid) -> Result<(), sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, ?1), rotated_at = NULL \
+         WHERE family_id = (SELECT family_id FROM refresh_tokens WHERE jti = ?2)",
+    )
+    .bind(Utc::now())
+    .bind(jti)
+    .execute(executor)
+    .await?;
     Ok(())
 }
 
-/// Mark an active refresh token as ROTATED and return its device tagging,
-/// in one statement: of two near-simultaneous refreshes exactly one gets
-/// `Some`, the other falls through to [`recently_rotated`]. Rotated means
-/// revoked but flagged `rotated_at`, so a straggler can be recognised and
-/// tolerated. `revoke` (logout / device revoke) leaves `rotated_at` NULL so
-/// a session the user deliberately killed is never resurrected by the
-/// grace window. `None`: the token wasn't active.
-pub async fn mark_rotated(
-    pool: &SqlitePool,
+#[derive(sqlx::FromRow)]
+struct ChainRow {
+    #[sqlx(flatten)]
+    session: Session,
+    family_id: Uuid,
+    revoked_at: Option<DateTime<Utc>>,
+    rotated_at: Option<DateTime<Utc>>,
+    successor_jti: Option<Uuid>,
+}
+
+async fn chain_row(
+    conn: &mut sqlx::SqliteConnection,
     jti: Uuid,
-) -> Result<Option<ActiveDeviceInfo>, sqlx::Error> {
-    let now = Utc::now();
-    let row: Option<(Option<String>, Option<String>, DateTime<Utc>)> = sqlx::query_as(
-        "UPDATE refresh_tokens SET revoked_at = ?1, rotated_at = ?1 \
-         WHERE jti = ?2 AND revoked_at IS NULL AND expires_at > ?1 \
-         RETURNING device_label, device_kind, expires_at",
+) -> Result<Option<ChainRow>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT jti, user_id, issued_at, expires_at, device_label, device_kind, \
+                COALESCE(family_id, jti) AS family_id, revoked_at, rotated_at, successor_jti \
+         FROM refresh_tokens WHERE jti = ?1",
     )
-    .bind(now)
     .bind(jti)
-    .fetch_optional(pool)
-    .await?;
-    Ok(
-        row.map(|(device_label, device_kind, expires_at)| ActiveDeviceInfo {
-            device_label,
-            device_kind,
-            expires_at,
-        }),
-    )
+    .fetch_optional(&mut *conn)
+    .await
 }
 
-/// Device tagging carried on a token ROTATED within the grace window — the
-/// straggler-refresh recovery path. `Some` only when the jti was rotated (not
-/// explicitly revoked) no longer ago than `grace_secs`; `None` otherwise, so
-/// the caller falls back to a 401.
-#[derive(Debug, Clone)]
-pub struct RotatedInfo {
-    pub device_label: Option<String>,
-    pub device_kind: Option<String>,
-}
-
-pub async fn recently_rotated(
+/// Retire `jti` for a successor, or recognise a straggler, in one
+/// `BEGIN IMMEDIATE` transaction so two refreshes of the same token can't
+/// both mint. `mint` picks the successor from the predecessor's device kind;
+/// it runs only when a successor is created.
+pub async fn rotate(
     pool: &SqlitePool,
     jti: Uuid,
     grace_secs: i64,
-) -> Result<Option<RotatedInfo>, sqlx::Error> {
-    // Text comparison on the RFC3339 `rotated_at` — same proven shape as the
-    // `expires_at > ?` filters above (sqlx encodes DateTime<Utc> consistently,
-    // and the format sorts lexicographically).
-    let cutoff = Utc::now() - Duration::seconds(grace_secs);
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT device_label, device_kind FROM refresh_tokens \
-         WHERE jti = ?1 AND rotated_at IS NOT NULL AND rotated_at >= ?2",
+    mint: impl FnOnce(Option<&str>) -> Successor,
+) -> Result<Rotation, sqlx::Error> {
+    const MAX_HOPS: usize = 16;
+    let now = Utc::now();
+    let grace_start = now - Duration::seconds(grace_secs);
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let Some(row) = chain_row(&mut tx, jti).await? else {
+        return Ok(Rotation::Rejected);
+    };
+    let live = row.revoked_at.is_none() && row.session.expires_at > now;
+    let outcome = if live
+        || (row.rotated_at.is_some_and(|at| at >= grace_start) && row.successor_jti.is_none())
+    {
+        // A token rotated before families existed has no successor to hand
+        // back: its straggler gets one minted, once, like a live token.
+        let next = mint(row.session.device_kind.as_deref());
+        insert_session(
+            &mut *tx,
+            &NewSession {
+                jti: next.jti,
+                family_id: row.family_id,
+                user_id: UserId::from(row.session.user_id),
+                issued_at: next.issued_at,
+                expires_at: next.expires_at,
+                device_label: row.session.device_label.as_deref(),
+                device_kind: row.session.device_kind.as_deref(),
+            },
+        )
+        .await?;
+        sqlx::query(
+            "UPDATE refresh_tokens \
+             SET revoked_at = COALESCE(revoked_at, ?1), rotated_at = COALESCE(rotated_at, ?1), \
+                 successor_jti = ?2 \
+             WHERE jti = ?3",
+        )
+        .bind(now)
+        .bind(next.jti)
+        .bind(jti)
+        .execute(&mut *tx)
+        .await?;
+        Rotation::Rotated(Session {
+            jti: next.jti,
+            user_id: row.session.user_id,
+            issued_at: next.issued_at,
+            expires_at: next.expires_at,
+            device_label: row.session.device_label,
+            device_kind: row.session.device_kind,
+        })
+    } else if let Some(rotated_at) = row.rotated_at {
+        if rotated_at < grace_start {
+            sqlx::query(
+                "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, ?1), rotated_at = NULL \
+                 WHERE family_id = ?2",
+            )
+            .bind(now)
+            .bind(row.family_id)
+            .execute(&mut *tx)
+            .await?;
+            Rotation::FamilyRevoked
+        } else {
+            // The winner may have refreshed again since: follow the chain to
+            // the family's live head.
+            let mut next = row.successor_jti;
+            let mut found = Rotation::Rejected;
+            for _ in 0..MAX_HOPS {
+                let Some(jti) = next else { break };
+                let Some(step) = chain_row(&mut tx, jti).await? else {
+                    break;
+                };
+                if step.revoked_at.is_none() && step.session.expires_at > now {
+                    found = Rotation::Replayed(step.session);
+                    break;
+                }
+                if step.rotated_at.is_none_or(|at| at < grace_start) {
+                    break;
+                }
+                next = step.successor_jti;
+            }
+            found
+        }
+    } else {
+        Rotation::Rejected
+    };
+    tx.commit().await?;
+    Ok(outcome)
+}
+
+/// The session a claimed pairing code hands its device, replacing (revoking
+/// the family of) the one a previous poll handed out, in one transaction: two
+/// overlapping polls leave exactly one live session. `false`: the code is gone
+/// or unclaimed, nothing was issued.
+pub async fn replace_for_device_code(
+    pool: &SqlitePool,
+    device_id: Uuid,
+    new: &NewSession<'_>,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let row: Option<(Option<Uuid>,)> = sqlx::query_as(
+        "SELECT session_jti FROM device_codes WHERE device_id = ?1 AND claimed_by IS NOT NULL",
     )
-    .bind(jti)
-    .bind(cutoff)
-    .fetch_optional(pool)
+    .bind(device_id)
+    .fetch_optional(&mut *tx)
     .await?;
-    Ok(row.map(|(device_label, device_kind)| RotatedInfo {
-        device_label,
-        device_kind,
-    }))
+    let Some((previous,)) = row else {
+        return Ok(false);
+    };
+    if let Some(previous) = previous {
+        revoke(&mut *tx, previous).await?;
+    }
+    insert_session(&mut *tx, new).await?;
+    sqlx::query("UPDATE device_codes SET session_jti = ?1 WHERE device_id = ?2")
+        .bind(new.jti)
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Delete sessions nobody can use any more: expired, or revoked/rotated
@@ -200,23 +353,46 @@ mod tests {
     use super::*;
     use crate::test_support::migrated_pool;
 
+    fn successor(ttl: Duration) -> Successor {
+        let issued_at = Utc::now();
+        Successor {
+            jti: Uuid::new_v4(),
+            issued_at,
+            expires_at: issued_at + ttl,
+        }
+    }
+
+    async fn backdate_rotation(pool: &SqlitePool, jti: Uuid, by: Duration) {
+        sqlx::query("UPDATE refresh_tokens SET rotated_at = ?1 WHERE jti = ?2")
+            .bind(Utc::now() - by)
+            .bind(jti)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn prune_keeps_live_sessions_only() {
         let pool = migrated_pool().await;
         let user = crate::test_support::make_user(&pool).await;
         let live = Uuid::new_v4();
         let expired = Uuid::new_v4();
-        let revoked = Uuid::new_v4();
+        let rotated = Uuid::new_v4();
         insert(&pool, live, user, Utc::now() + Duration::days(7))
             .await
             .unwrap();
         insert(&pool, expired, user, Utc::now() - Duration::days(3))
             .await
             .unwrap();
-        insert(&pool, revoked, user, Utc::now() + Duration::days(7))
+        insert(&pool, rotated, user, Utc::now() + Duration::days(7))
             .await
             .unwrap();
-        mark_rotated(&pool, revoked).await.unwrap();
+        let Rotation::Rotated(head) = rotate(&pool, rotated, 60, |_| successor(Duration::days(7)))
+            .await
+            .unwrap()
+        else {
+            panic!("a live token rotates");
+        };
 
         // Rotated a moment ago: still inside any grace window, kept.
         assert_eq!(
@@ -229,10 +405,13 @@ mod tests {
             1
         );
         assert!(is_active(&pool, live).await.unwrap());
+        assert!(is_active(&pool, head.jti).await.unwrap());
     }
 
+    /// A rotation carries the device tagging and the family forward; the
+    /// predecessor is no longer active.
     #[tokio::test]
-    async fn only_one_of_two_rotations_wins() {
+    async fn a_rotation_hands_the_device_tagging_to_its_successor() {
         let pool = migrated_pool().await;
         let user = crate::test_support::make_user(&pool).await;
         let jti = Uuid::new_v4();
@@ -241,92 +420,207 @@ mod tests {
             jti,
             user,
             Utc::now() + Duration::hours(1),
-            Some("TV"),
-            Some("android-tv"),
-        )
-        .await
-        .unwrap();
-        let first = mark_rotated(&pool, jti).await.unwrap();
-        let second = mark_rotated(&pool, jti).await.unwrap();
-        assert_eq!(
-            first.and_then(|i| i.device_kind).as_deref(),
-            Some("android-tv")
-        );
-        assert!(second.is_none());
-    }
-
-    /// The rotation grace contract: a token ROTATED (the happy path of
-    /// `/auth/refresh`) drops out of the active lookup but stays recoverable —
-    /// with its device tagging — for a straggler refresh within the grace
-    /// window; outside the window, and for an explicitly REVOKED token, it is
-    /// gone for good. This is what stops a multi-tab / retry race from logging
-    /// the user out while never resurrecting a session they deliberately killed.
-    #[tokio::test]
-    async fn rotation_is_recoverable_within_grace_but_revocation_is_not() {
-        let pool = migrated_pool().await;
-        let user = crate::test_support::make_user(&pool).await;
-
-        // A device-tagged token, active for an hour, then rotated.
-        let rotated = Uuid::new_v4();
-        insert_with_device(
-            &pool,
-            rotated,
-            user,
-            Utc::now() + Duration::hours(1),
             Some("Living room"),
             Some("android-tv"),
         )
         .await
         .unwrap();
-        mark_rotated(&pool, rotated).await.unwrap();
+        let mut seen_kind = None;
+        let outcome = rotate(&pool, jti, 60, |kind| {
+            seen_kind = kind.map(str::to_owned);
+            successor(Duration::days(90))
+        })
+        .await
+        .unwrap();
+        assert_eq!(seen_kind.as_deref(), Some("android-tv"));
+        let Rotation::Rotated(next) = outcome else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(next.device_label.as_deref(), Some("Living room"));
+        assert!(!is_active(&pool, jti).await.unwrap());
+        assert!(is_active(&pool, next.jti).await.unwrap());
+        let listed = list_devices_for_user(&pool, user).await.unwrap();
+        assert_eq!(listed.iter().map(|t| t.jti).collect::<Vec<_>>(), [next.jti]);
+    }
 
-        // No longer active for the normal refresh lookup …
-        assert!(!is_active(&pool, rotated).await.unwrap());
-
-        // … but a straggler within the grace window recovers it, carrying the
-        // device tagging forward.
-        let info = recently_rotated(&pool, rotated, 60)
-            .await
-            .unwrap()
-            .expect("rotated token recoverable within grace");
-        assert_eq!(info.device_kind.as_deref(), Some("android-tv"));
-        assert_eq!(info.device_label.as_deref(), Some("Living room"));
-
-        // Backdate the rotation past the grace window → no longer recoverable.
-        sqlx::query("UPDATE refresh_tokens SET rotated_at = ?1 WHERE jti = ?2")
-            .bind(Utc::now() - Duration::minutes(2))
-            .bind(rotated)
-            .execute(&pool)
+    /// The grace contract: a straggler within the window gets the SAME
+    /// successor, never a session of its own; after the window the replay
+    /// ends the family.
+    #[tokio::test]
+    async fn a_replay_within_grace_gets_the_same_successor_and_after_it_revokes_the_family() {
+        let pool = migrated_pool().await;
+        let user = crate::test_support::make_user(&pool).await;
+        let first = Uuid::new_v4();
+        insert(&pool, first, user, Utc::now() + Duration::days(7))
             .await
             .unwrap();
-        assert!(
-            recently_rotated(&pool, rotated, 60)
+        let Rotation::Rotated(second) = rotate(&pool, first, 60, |_| successor(Duration::days(7)))
+            .await
+            .unwrap()
+        else {
+            panic!("a live token rotates");
+        };
+
+        let replay = rotate(&pool, first, 60, |_| panic!("a straggler never mints"))
+            .await
+            .unwrap();
+        assert_eq!(replay, Rotation::Replayed(second.clone()));
+
+        // The winner refreshed again meanwhile: the straggler follows the
+        // chain to the live head.
+        let Rotation::Rotated(third) =
+            rotate(&pool, second.jti, 60, |_| successor(Duration::days(7)))
                 .await
                 .unwrap()
-                .is_none()
+        else {
+            panic!("the head rotates");
+        };
+        assert_eq!(
+            rotate(&pool, first, 60, |_| panic!("no mint"))
+                .await
+                .unwrap(),
+            Rotation::Replayed(third.clone())
         );
+        let tokens: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM refresh_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(tokens, 3, "replays minted nothing");
 
-        // An explicitly REVOKED token (logout / device revoke) leaves
-        // `rotated_at` NULL and is never resurrected by the grace window.
-        let revoked = Uuid::new_v4();
-        insert_with_device(
+        backdate_rotation(&pool, first, Duration::minutes(5)).await;
+        assert_eq!(
+            rotate(&pool, first, 60, |_| panic!("no mint"))
+                .await
+                .unwrap(),
+            Rotation::FamilyRevoked
+        );
+        assert!(!is_active(&pool, third.jti).await.unwrap());
+        assert_eq!(
+            rotate(&pool, third.jti, 60, |_| panic!("no mint"))
+                .await
+                .unwrap(),
+            Rotation::Rejected
+        );
+    }
+
+    /// Logout and device revoke end the family: neither the live head nor a
+    /// just-rotated token comes back.
+    #[tokio::test]
+    async fn logout_and_device_revoke_end_the_whole_family() {
+        let pool = migrated_pool().await;
+        let user = crate::test_support::make_user(&pool).await;
+        for by_device in [false, true] {
+            let first = Uuid::new_v4();
+            insert_with_device(
+                &pool,
+                first,
+                user,
+                Utc::now() + Duration::days(7),
+                None,
+                Some("android-tv"),
+            )
+            .await
+            .unwrap();
+            let Rotation::Rotated(head) =
+                rotate(&pool, first, 60, |_| successor(Duration::days(7)))
+                    .await
+                    .unwrap()
+            else {
+                panic!("rotates");
+            };
+            if by_device {
+                let other = crate::test_support::make_user(&pool).await;
+                assert!(!revoke_for_user(&pool, other, head.jti).await.unwrap());
+                assert!(revoke_for_user(&pool, user, head.jti).await.unwrap());
+            } else {
+                revoke(&pool, head.jti).await.unwrap();
+            }
+            assert!(!is_active(&pool, head.jti).await.unwrap());
+            assert_eq!(
+                rotate(&pool, first, 60, |_| panic!("no mint"))
+                    .await
+                    .unwrap(),
+                Rotation::Rejected,
+                "by_device={by_device}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_token_rotated_before_families_mints_its_successor_once() {
+        let pool = migrated_pool().await;
+        let user = crate::test_support::make_user(&pool).await;
+        let old = Uuid::new_v4();
+        insert(&pool, old, user, Utc::now() + Duration::days(7))
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE refresh_tokens SET revoked_at = ?1, rotated_at = ?1, family_id = NULL \
+             WHERE jti = ?2",
+        )
+        .bind(Utc::now())
+        .bind(old)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let Rotation::Rotated(minted) = rotate(&pool, old, 60, |_| successor(Duration::days(7)))
+            .await
+            .unwrap()
+        else {
+            panic!("a pre-family straggler gets a successor");
+        };
+        assert_eq!(
+            rotate(&pool, old, 60, |_| panic!("once")).await.unwrap(),
+            Rotation::Replayed(minted)
+        );
+    }
+
+    #[tokio::test]
+    async fn two_overlapping_polls_leave_one_live_device_session() {
+        let pool = migrated_pool().await;
+        let user = crate::test_support::make_user(&pool).await;
+        let code = crate::device_codes::create(
             &pool,
-            revoked,
-            user,
-            Utc::now() + Duration::hours(1),
-            None,
-            None,
+            "ABCD-2345",
+            Utc::now() + Duration::minutes(10),
+            "android-tv",
         )
         .await
         .unwrap();
-        revoke(&pool, revoked).await.unwrap();
-        assert!(!is_active(&pool, revoked).await.unwrap());
+        let session = |jti| NewSession {
+            jti,
+            family_id: jti,
+            user_id: user,
+            issued_at: Utc::now(),
+            expires_at: Utc::now() + Duration::days(90),
+            device_label: None,
+            device_kind: Some("android-tv"),
+        };
+        let early = Uuid::new_v4();
         assert!(
-            recently_rotated(&pool, revoked, 60)
+            !replace_for_device_code(&pool, code.device_id, &session(early))
+                .await
+                .unwrap(),
+            "an unclaimed code issues nothing"
+        );
+        assert!(
+            crate::device_codes::claim(&pool, "ABCD-2345", user, None)
                 .await
                 .unwrap()
-                .is_none()
         );
+        let (a, b) = (session(Uuid::new_v4()), session(Uuid::new_v4()));
+        let (ra, rb) = tokio::join!(
+            replace_for_device_code(&pool, code.device_id, &a),
+            replace_for_device_code(&pool, code.device_id, &b),
+        );
+        assert!(ra.unwrap() && rb.unwrap());
+        let live = list_devices_for_user(&pool, user).await.unwrap();
+        assert_eq!(live.len(), 1);
+        let row = crate::device_codes::find_by_device_id(&pool, code.device_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.session_jti, Some(live[0].jti));
     }
 
     #[tokio::test]

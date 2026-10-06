@@ -1735,6 +1735,41 @@
         }
       }
     },
+    "/api/me/devices/link/{code}": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Whether the device behind a code the caller linked has signed in. Read\nonly: issues nothing. Visible to whoever claimed the code, and admins.",
+        "operationId": "device_link_status",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "description": "The pairing code the caller linked",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Where the pairing stands",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such code, or not one the caller claimed"
+          }
+        }
+      }
+    },
     "/api/me/devices/{jti}": {
       "delete": {
         "tags": [
@@ -5574,7 +5609,9 @@
           "threshold_bytes",
           "target_bytes",
           "derived_freed_bytes",
-          "evicted"
+          "evicted",
+          "min_free_bytes",
+          "orphans"
         ],
         "properties": {
           "derived_freed_bytes": {
@@ -5588,6 +5625,23 @@
             "items": {
               "$ref": "#/components/schemas/EvictedEntry"
             }
+          },
+          "free_bytes_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Free space on the download dir's filesystem before the pass (`None`:\nunreadable).",
+            "minimum": 0
+          },
+          "min_free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "orphans": {
+            "$ref": "#/components/schemas/OrphanReport"
           },
           "target_bytes": {
             "type": "integer",
@@ -6032,7 +6086,6 @@
         "type": "object",
         "required": [
           "id",
-          "created_by",
           "created_at",
           "expires_at"
         ],
@@ -6056,8 +6109,12 @@
             "format": "date-time"
           },
           "created_by": {
-            "type": "string",
-            "format": "uuid"
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`None` once the admin who made it is deleted."
           },
           "expires_at": {
             "type": "string",
@@ -6287,6 +6344,25 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "LinkState": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "linked",
+          "expired"
+        ]
+      },
+      "LinkStatus": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/LinkState"
           }
         }
       },
@@ -7018,6 +7094,39 @@
           "label": {
             "type": "string",
             "description": "Display label (`Chills`)."
+          }
+        }
+      },
+      "OrphanReport": {
+        "type": "object",
+        "description": "Files under the download dir no torrent references.",
+        "required": [
+          "files",
+          "bytes",
+          "deleted",
+          "examples"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "They were deleted (`storage.delete_orphan_files`), not only counted."
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A few of their paths, for the dry run."
+          },
+          "files": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

@@ -157,8 +157,9 @@ pub async fn get_password_hash(
 
 /// Replace a user's password and end every way into the account opened
 /// under the old one, in one transaction: every session (a just-rotated
-/// one loses its grace window too) and every passkey, since a stolen
-/// session could have registered its own.
+/// one loses its grace window too, and `sessions_valid_after` kills the
+/// access tokens already out) and every passkey, since a stolen session
+/// could have registered its own.
 ///
 /// Returns `None` for an unknown user, else how many passkeys went.
 pub async fn set_password(
@@ -167,12 +168,15 @@ pub async fn set_password(
     new_hash: &str,
 ) -> Result<Option<u64>, sqlx::Error> {
     let uuid: Uuid = id.into();
-    let mut tx = pool.begin().await?;
-    let res = sqlx::query("UPDATE users SET password_hash = ?1 WHERE id = ?2")
-        .bind(new_hash)
-        .bind(uuid)
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let now = Utc::now();
+    let res =
+        sqlx::query("UPDATE users SET password_hash = ?1, sessions_valid_after = ?2 WHERE id = ?3")
+            .bind(new_hash)
+            .bind(now)
+            .bind(uuid)
+            .execute(&mut *tx)
+            .await?;
     if res.rows_affected() != 1 {
         return Ok(None);
     }
@@ -180,7 +184,7 @@ pub async fn set_password(
         "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, ?1), rotated_at = NULL \
          WHERE user_id = ?2",
     )
-    .bind(Utc::now())
+    .bind(now)
     .bind(uuid)
     .execute(&mut *tx)
     .await?;
@@ -218,6 +222,20 @@ pub async fn delete(
         .await?;
     tx.commit().await?;
     Ok(res.rows_affected() == 1)
+}
+
+/// `None`: no such user. `Some(None)`: a user whose sessions were never cut.
+pub async fn sessions_valid_after(
+    pool: &SqlitePool,
+    id: UserId,
+) -> Result<Option<Option<DateTime<Utc>>>, sqlx::Error> {
+    let uuid: Uuid = id.into();
+    let row: Option<(Option<DateTime<Utc>>,)> =
+        sqlx::query_as("SELECT sessions_valid_after FROM users WHERE id = ?1")
+            .bind(uuid)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|r| r.0))
 }
 
 pub async fn update_display_name(
@@ -282,9 +300,18 @@ mod tests {
         crate::refresh_tokens::insert(&pool, rotated, user, Utc::now() + chrono::Duration::days(1))
             .await
             .unwrap();
-        crate::refresh_tokens::mark_rotated(&pool, rotated)
-            .await
-            .unwrap();
+        let rotation = crate::refresh_tokens::rotate(&pool, rotated, 60, |_| {
+            crate::refresh_tokens::Successor {
+                jti: Uuid::new_v4(),
+                issued_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::days(1),
+            }
+        })
+        .await
+        .unwrap();
+        let crate::refresh_tokens::Rotation::Rotated(head) = rotation else {
+            panic!("{rotation:?}");
+        };
         crate::passkeys::insert(
             &pool,
             &crate::passkeys::NewPasskey {
@@ -299,17 +326,26 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(sessions_valid_after(&pool, user).await.unwrap(), Some(None));
+        let before = Utc::now();
         assert_eq!(
             set_password(&pool, user, "new-hash").await.unwrap(),
             Some(1)
         );
+        let cut = sessions_valid_after(&pool, user).await.unwrap().flatten();
+        assert!(cut.is_some_and(|t| t >= before), "the cut is stamped");
 
         assert!(!crate::refresh_tokens::is_active(&pool, jti).await.unwrap());
         assert!(
-            crate::refresh_tokens::recently_rotated(&pool, rotated, 60)
+            !crate::refresh_tokens::is_active(&pool, head.jti)
                 .await
                 .unwrap()
-                .is_none(),
+        );
+        assert!(
+            crate::refresh_tokens::rotate(&pool, rotated, 60, |_| panic!("no mint"))
+                .await
+                .unwrap()
+                == crate::refresh_tokens::Rotation::Rejected,
             "a just-rotated token can't come back through the grace window"
         );
         assert!(

@@ -11,6 +11,7 @@ pub mod maintenance;
 pub mod middleware;
 pub mod observability;
 pub mod openapi;
+pub mod parse_audit;
 pub mod passkeys;
 pub mod passwords;
 pub mod presence;
@@ -20,6 +21,7 @@ pub mod rate_limit;
 pub mod reco;
 pub mod routes;
 pub mod seed_stats;
+pub mod session_cut;
 pub mod simkl;
 pub mod state;
 pub mod supervise;
@@ -121,6 +123,13 @@ fn setup_gc(
             cleanup_target_pct: cfg.storage.cleanup_target_pct,
             interval: std::time::Duration::from_mins(15),
             active_window: std::time::Duration::from_hours(1),
+            min_free_bytes: cfg.storage.min_free_bytes(),
+            orphan_min_age: std::time::Duration::from_hours(cfg.storage.orphan_min_age_hours),
+            delete_orphans: cfg.storage.delete_orphan_files,
+            orphan_exclude: vec![
+                cfg.storage.data_dir.clone(),
+                cfg.storage.data_dir.join("librqbit"),
+            ],
         },
         cfg.storage.download_dir.clone(),
         Some(derived),
@@ -277,7 +286,10 @@ fn spawn_background_jobs(
 
     {
         let db = app_state.db().clone();
-        tokio::spawn(async move { routes::follows::repair_release_named_follows(&db).await });
+        tokio::spawn(async move {
+            routes::follows::repair_release_named_follows(&db).await;
+            routes::follows::repair_stranded_follows(&db).await;
+        });
     }
 
     // Collection assignment backfill — attaches a `collections` row to
@@ -333,6 +345,11 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
 
     let cfg = iris_config::AppConfig::load(&config_path)
         .with_context(|| format!("loading config {}", config_path.display()))?;
+    match cfg.jwt_secret_problem() {
+        Ok(None) => {}
+        Ok(Some(warning)) => tracing::error!("{warning}"),
+        Err(refusal) => anyhow::bail!(refusal),
+    }
 
     let providers_cfg = cfg
         .load_providers(providers_override.as_deref())

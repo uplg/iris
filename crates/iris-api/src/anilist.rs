@@ -8,12 +8,12 @@
 //! `pick_best`) and falls back to an AniList-only catalogue row when
 //! there's no TMDB match — it never drops a title.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::ttl_cache::TtlCache;
 use serde::Deserialize;
-use tokio::sync::RwLock;
 
 /// AniList changes day-to-day at most; a 6 h cache matches the scheduler
 /// cadence and keeps the keyless public endpoint happy.
@@ -35,11 +35,16 @@ pub struct AniListClient {
 
 struct Inner {
     http: reqwest::Client,
-    /// `cache_key` → (expiry, items). Expiry-based (not insertion-based) so
-    /// success and failure entries can carry different TTLs.
-    cache: RwLock<HashMap<String, (Instant, Vec<AniListMedia>)>>,
+    endpoint: String,
+    /// Answers by `cache_key`, single-flight per key.
+    cache: TtlCache<String, Vec<AniListMedia>>,
+    /// Keys whose last fetch failed, under the shorter failure TTL.
+    failed: TtlCache<String, ()>,
     last_request: tokio::sync::Mutex<Option<Instant>>,
 }
+
+/// Distinct titles and recommendation ids kept per cache.
+const ANILIST_CACHE_CAPACITY: usize = 2048;
 
 /// A normalized AniList title — ready to reconcile to TMDB or fall back
 /// to an AniList-only catalogue row.
@@ -68,6 +73,30 @@ pub struct AniListMedia {
     pub is_movie: bool,
 }
 
+/// The result that IS `title`: same series key (never AniList's fuzzy first
+/// hit, which can be another show), same format (series or movie), the one
+/// from `year` when several match.
+pub fn strict_match<'a>(
+    results: &'a [AniListMedia],
+    title: &str,
+    is_movie: bool,
+    year: Option<u32>,
+) -> Option<&'a AniListMedia> {
+    let want = iris_media::filename::series_key(title);
+    if want.is_empty() {
+        return None;
+    }
+    let mut matching = results
+        .iter()
+        .filter(|m| m.is_movie == is_movie && iris_media::filename::series_key(&m.title) == want);
+    let first = matching.next()?;
+    let year = year.and_then(|y| u16::try_from(y).ok());
+    if first.year == year || year.is_none() {
+        return Some(first);
+    }
+    Some(matching.find(|m| m.year == year).unwrap_or(first))
+}
+
 const SEARCH_QUERY: &str = "\
 query ($search: String) {
   Page(page: 1, perPage: 10) {
@@ -92,6 +121,10 @@ query ($mediaId: Int) {
 
 impl AniListClient {
     pub fn new() -> anyhow::Result<Self> {
+        Self::with_endpoint(ENDPOINT)
+    }
+
+    fn with_endpoint(endpoint: &str) -> anyhow::Result<Self> {
         let http = iris_providers::tls::client_builder()
             .timeout(Duration::from_secs(15))
             .user_agent("iris/1.0 (+https://uplg.xyz)")
@@ -99,7 +132,9 @@ impl AniListClient {
         Ok(Self {
             inner: Arc::new(Inner {
                 http,
-                cache: RwLock::new(HashMap::new()),
+                endpoint: endpoint.to_owned(),
+                cache: TtlCache::new(ANILIST_CACHE_TTL, ANILIST_CACHE_CAPACITY),
+                failed: TtlCache::new(ANILIST_FAILURE_TTL, ANILIST_CACHE_CAPACITY),
                 last_request: tokio::sync::Mutex::new(None),
             }),
         })
@@ -131,36 +166,69 @@ impl AniListClient {
         query: &str,
         variables: serde_json::Value,
     ) -> Vec<AniListMedia> {
-        if let Some((expires_at, items)) = self.inner.cache.read().await.get(&cache_key).cloned()
-            && Instant::now() < expires_at
-        {
+        let recently_failed = self
+            .inner
+            .failed
+            .get_or_fetch(cache_key.clone(), || async { None })
+            .await
+            .is_some();
+        if recently_failed {
+            return Vec::new();
+        }
+        let fetched = self
+            .inner
+            .cache
+            .get_or_fetch(cache_key.clone(), || {
+                self.fetch_uncached(&cache_key, query, variables)
+            })
+            .await;
+        if let Some(items) = fetched {
             return items;
         }
+        self.inner
+            .failed
+            .get_or_fetch(cache_key, || async { Some(()) })
+            .await;
+        Vec::new()
+    }
+
+    /// `None`: the request, its status or its payload failed.
+    async fn fetch_uncached(
+        &self,
+        cache_key: &str,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Option<Vec<AniListMedia>> {
         self.throttle().await;
         let body = serde_json::json!({ "query": query, "variables": variables });
-        let res = match self.inner.http.post(ENDPOINT).json(&body).send().await {
+        let res = match self
+            .inner
+            .http
+            .post(&self.inner.endpoint)
+            .json(&body)
+            .send()
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(error = %e, cache_key, "anilist fetch failed");
-                return self.cache_failure(cache_key).await;
+                return None;
             }
         };
         if !res.status().is_success() {
             tracing::warn!(status = %res.status(), cache_key, "anilist non-success");
-            return self.cache_failure(cache_key).await;
+            return None;
         }
         let parsed: GqlResponse = match res.json().await {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, cache_key, "anilist parse failed");
-                return self.cache_failure(cache_key).await;
+                return None;
             }
         };
-        let Some(page) = parsed.data.and_then(|d| d.page) else {
-            // GraphQL-level error (`data: null` with 200) — same treatment
-            // as a transport failure.
-            return self.cache_failure(cache_key).await;
-        };
+        // GraphQL-level error (`data: null` with 200): same as a transport
+        // failure.
+        let page = parsed.data.and_then(|d| d.page)?;
         let mut out: Vec<AniListMedia> = Vec::new();
         let mut seen: HashSet<i64> = HashSet::new();
         for m in page.media {
@@ -173,17 +241,7 @@ impl AniListClient {
                 r.media_recommendation.and_then(RawMedia::into_media),
             );
         }
-        self.store(cache_key, ANILIST_CACHE_TTL, out.clone()).await;
-        out
-    }
-
-    /// Insert, sweeping expired entries first: keys are per searched title,
-    /// so the map would otherwise grow for the life of the process.
-    async fn store(&self, cache_key: String, ttl: Duration, items: Vec<AniListMedia>) {
-        let now = Instant::now();
-        let mut cache = self.inner.cache.write().await;
-        cache.retain(|_, (expires_at, _)| *expires_at > now);
-        cache.insert(cache_key, (now + ttl, items));
+        Some(out)
     }
 
     /// Space outgoing requests ≥ [`ANILIST_MIN_INTERVAL`] apart. The lock is
@@ -198,11 +256,6 @@ impl AniListClient {
             }
         }
         *last = Some(Instant::now());
-    }
-
-    async fn cache_failure(&self, cache_key: String) -> Vec<AniListMedia> {
-        self.store(cache_key, ANILIST_FAILURE_TTL, Vec::new()).await;
-        Vec::new()
     }
 }
 
@@ -308,6 +361,81 @@ impl RawMedia {
             average_score: self.average_score.map(|s| s / 100.0),
             is_movie,
         })
+    }
+}
+
+#[cfg(test)]
+mod strict_match_tests {
+    use super::{AniListMedia, strict_match};
+
+    fn media(id: i64, title: &str, year: u16, is_movie: bool) -> AniListMedia {
+        AniListMedia {
+            anilist_id: id,
+            title: title.into(),
+            year: Some(year),
+            release_date: None,
+            cover_image: None,
+            banner_image: None,
+            description: None,
+            genres: Vec::new(),
+            popularity: None,
+            average_score: None,
+            is_movie,
+        }
+    }
+
+    #[test]
+    fn only_the_same_title_and_format_match() {
+        let results = [
+            media(1, "Dr. Stone: New World", 2023, false),
+            media(2, "Dr. Stone", 2019, true),
+            media(3, "Dr. Stone", 2019, false),
+            media(4, "Dr. Stone", 2025, false),
+        ];
+        let id = |title, is_movie, year| {
+            strict_match(&results, title, is_movie, year).map(|m| m.anilist_id)
+        };
+        assert_eq!(
+            id("Dr. Stone", false, None),
+            Some(3),
+            "the fuzzy first hit is another show"
+        );
+        assert_eq!(id("Dr Stone", false, Some(2025)), Some(4));
+        assert_eq!(id("Dr. Stone", false, Some(1999)), Some(3));
+        assert_eq!(id("Dr. Stone", true, None), Some(2));
+        assert_eq!(id("One Piece", false, None), None);
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::AniListClient;
+
+    #[tokio::test]
+    async fn a_failed_lookup_is_not_retried_inside_the_failure_window() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&hits);
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    .await;
+            }
+        });
+        let client = AniListClient::with_endpoint(&format!("http://127.0.0.1:{port}")).unwrap();
+        assert!(client.search("bleach").await.is_empty());
+        assert!(client.search("Bleach").await.is_empty());
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "the failure is remembered");
     }
 }
 

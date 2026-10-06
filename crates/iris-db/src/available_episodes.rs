@@ -471,10 +471,11 @@ pub async fn upsert(pool: &SqlitePool, a: UpsertAvailableEpisode) -> Result<(), 
         "INSERT INTO available_episodes \
             (id, normalized_name, season, episode, indexer_provider, indexer_torrent_id, \
              magnet, quality, seeders, size_bytes, found_at, language, download_url, \
-             absolute_episode, codec) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) \
+             absolute_episode, codec, last_seen_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?11) \
          ON CONFLICT(normalized_name, season, episode, indexer_provider, indexer_torrent_id) \
          DO UPDATE SET \
+            last_seen_at     = excluded.last_seen_at, \
             magnet           = excluded.magnet, \
             quality          = excluded.quality, \
             seeders          = excluded.seeders, \
@@ -502,6 +503,16 @@ pub async fn upsert(pool: &SqlitePool, a: UpsertAvailableEpisode) -> Result<(), 
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Drop offers no scan has returned since `before`. Returns how many went.
+pub async fn prune_unseen(pool: &SqlitePool, before: DateTime<Utc>) -> Result<u64, sqlx::Error> {
+    let res =
+        sqlx::query("DELETE FROM available_episodes WHERE COALESCE(last_seen_at, found_at) < ?1")
+            .bind(before)
+            .execute(pool)
+            .await?;
+    Ok(res.rows_affected())
 }
 
 /// Hard-delete every cached offer for a normalised series name. Used by
@@ -678,5 +689,55 @@ mod count_new_tests {
             .await
             .unwrap();
         assert_eq!(visible(pool.clone()).await, (2, 1, 1, 1, true));
+    }
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+
+    fn offer(torrent: &str) -> UpsertAvailableEpisode {
+        UpsertAvailableEpisode {
+            normalized_name: "show".into(),
+            season: 1,
+            episode: 1,
+            indexer_provider: "p".into(),
+            indexer_torrent_id: torrent.into(),
+            magnet: String::new(),
+            quality: None,
+            seeders: Some(3),
+            size_bytes: None,
+            language: None,
+            download_url: None,
+            absolute_episode: None,
+            codec: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_offer_no_scan_returns_any_more_is_pruned() {
+        let pool = crate::test_support::migrated_pool().await;
+        upsert(&pool, offer("gone")).await.unwrap();
+        upsert(&pool, offer("kept")).await.unwrap();
+        let month_ago = Utc::now() - chrono::Duration::days(40);
+        sqlx::query("UPDATE available_episodes SET found_at = ?1, last_seen_at = ?1")
+            .bind(month_ago)
+            .execute(&pool)
+            .await
+            .unwrap();
+        upsert(&pool, offer("kept")).await.unwrap();
+        let cutoff = Utc::now() - chrono::Duration::days(30);
+        assert_eq!(prune_unseen(&pool, cutoff).await.unwrap(), 1);
+        let left: Vec<(String, DateTime<Utc>)> =
+            sqlx::query_as("SELECT indexer_torrent_id, found_at FROM available_episodes")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].0, "kept");
+        assert!(
+            left[0].1 < cutoff,
+            "a re-seen offer keeps its first-found date"
+        );
     }
 }

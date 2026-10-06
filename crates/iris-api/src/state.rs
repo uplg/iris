@@ -31,6 +31,7 @@ struct Inner {
     pub presence: Presence,
     pub live_tv: Option<LiveTvService>,
     pub passkeys: Option<crate::passkeys::Passkeys>,
+    pub session_cuts: crate::session_cut::SessionCuts,
 }
 
 impl AppState {
@@ -109,6 +110,7 @@ impl AppState {
                 presence: Presence::new(),
                 live_tv,
                 passkeys,
+                session_cuts: crate::session_cut::SessionCuts::default(),
             }),
         }
     }
@@ -143,6 +145,10 @@ impl AppState {
                 cleanup_target_pct: cfg.storage.cleanup_target_pct,
                 interval: std::time::Duration::from_mins(15),
                 active_window: std::time::Duration::from_hours(1),
+                min_free_bytes: 0,
+                orphan_min_age: std::time::Duration::from_hours(24),
+                delete_orphans: false,
+                orphan_exclude: Vec::new(),
             },
             cfg.storage.download_dir.clone(),
             None,
@@ -204,6 +210,9 @@ impl AppState {
     }
     pub fn presence(&self) -> &Presence {
         &self.inner.presence
+    }
+    pub fn session_cuts(&self) -> &crate::session_cut::SessionCuts {
+        &self.inner.session_cuts
     }
     pub fn live_tv(&self) -> Option<&LiveTvService> {
         self.inner.live_tv.as_ref()

@@ -525,6 +525,7 @@ pub(crate) async fn delete_user(
     if !iris_db::users::delete(state.db(), user_id, admin.0.id).await? {
         return Err(ApiError::NotFound);
     }
+    state.session_cuts().forget(user_id);
     super::audit(
         &state,
         admin.0.id,
@@ -571,6 +572,7 @@ pub(crate) async fn reset_user_password(
     let passkeys = iris_db::users::set_password(state.db(), user_id, &hash)
         .await?
         .ok_or(ApiError::NotFound)?;
+    state.session_cuts().forget(user_id);
     super::audit(
         &state,
         admin.0.id,
@@ -745,7 +747,8 @@ pub(crate) async fn storage_stats(
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct InvitationView {
     id: Uuid,
-    created_by: Uuid,
+    /// `None` once the admin who made it is deleted.
+    created_by: Option<Uuid>,
     created_at: chrono::DateTime<Utc>,
     expires_at: chrono::DateTime<Utc>,
     consumed_at: Option<chrono::DateTime<Utc>>,
@@ -832,6 +835,15 @@ pub(crate) async fn create_invitation(
         },
     )
     .await?;
+    super::audit(
+        &state,
+        admin.0.id,
+        "invitation.create",
+        "invitation",
+        Some(&row.id.to_string()),
+        Some(&format!("expires {}", row.expires_at.to_rfc3339())),
+    )
+    .await;
     Ok(Json(CreatedInvitation {
         id: row.id,
         token: token.plaintext,
@@ -853,11 +865,20 @@ pub(crate) async fn create_invitation(
 )]
 pub(crate) async fn revoke_invitation(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<axum::http::StatusCode> {
     let ok = iris_db::invitations::revoke(state.db(), InvitationId::from(id)).await?;
     if ok {
+        super::audit(
+            &state,
+            admin.0.id,
+            "invitation.revoke",
+            "invitation",
+            Some(&id.to_string()),
+            None,
+        )
+        .await;
         Ok(axum::http::StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)
@@ -1283,6 +1304,42 @@ mod tests {
         let member_token = state.jwt().issue_access(ana, false).unwrap();
         let app = crate::app::build_router(state.clone());
         (state, app, admin_token, member_token, ana, bo)
+    }
+
+    #[tokio::test]
+    async fn creating_and_revoking_an_invitation_is_audited() {
+        let (state, app, admin, _, _, _) = household().await;
+        let created = crate::routes::auth::tests::call(
+            &app,
+            "POST",
+            "/api/admin/invitations",
+            Some(&admin),
+            None,
+            Some(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::OK);
+        let id = created.json["id"].as_str().unwrap().to_owned();
+        let revoked = crate::routes::auth::tests::call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/invitations/{id}"),
+            Some(&admin),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(revoked.status, StatusCode::NO_CONTENT);
+        let actions: Vec<String> = iris_db::audit::list(state.db(), 50, 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.resource_id.as_deref() == Some(id.as_str()))
+            .map(|r| r.action)
+            .collect();
+        assert_eq!(actions.len(), 2, "{actions:?}");
+        assert!(actions.iter().any(|a| a == "invitation.create"));
+        assert!(actions.iter().any(|a| a == "invitation.revoke"));
     }
 
     #[tokio::test]

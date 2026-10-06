@@ -2390,7 +2390,6 @@ dependencies = [
  "quick-xml 0.42.0",
  "rand 0.10.3",
  "reqwest",
- "rustix",
  "semver",
  "serde",
  "serde_json",
@@ -2424,6 +2423,7 @@ dependencies = [
  "jsonwebtoken",
  "rand 0.10.3",
  "serde",
+ "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.21",
  "uuid",
@@ -2533,6 +2533,7 @@ dependencies = [
  "iris-media",
  "librqbit",
  "reqwest",
+ "rustix",
  "serde",
  "sqlx",
  "thiserror 2.0.21",
@@ -2542,6 +2543,7 @@ dependencies = [
  "url",
  "urlencoding",
  "utoipa",
+ "uuid",
  "webpki-root-certs",
 ]
 

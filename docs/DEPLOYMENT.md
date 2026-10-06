@@ -341,6 +341,31 @@ untrusted ones and flushes the negative and fuzzy entries of
 `tmdb_resolve_cache`. Re-running it is safe; rows TMDB couldn't be asked
 about stay untouched.
 
+### Filename-parser dry run (`parse-dryrun`)
+
+Before shipping a change to the SCENE filename parser, list what it does to
+the library's collection identities (key, display title, kind, season; the
+renames the 5-minute heals would make and the collisions they'd skip), on a
+copy of the prod DB. Read only:
+
+```bash
+cargo run -p iris-api --bin parse-dryrun -- --db ./iris-copy.db
+```
+
+### Reclaiming database space (`iris maintenance vacuum`)
+
+SQLite keeps the pages a big prune freed. To hand them back to the disk,
+once, with the server stopped (the rebuild holds the write lock throughout):
+
+```bash
+docker compose stop iris
+docker compose run --rm iris maintenance vacuum
+docker compose start iris
+```
+
+It prints the file size before and after. `--db <path>` points it at another
+database file.
+
 ---
 
 ## 9. Troubleshooting

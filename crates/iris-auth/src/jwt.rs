@@ -1,4 +1,4 @@
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use iris_core::ids::UserId;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,11 @@ pub struct AccessClaims {
     pub exp: i64,
     pub iat: i64,
     pub iss: String,
+    /// `iat` in milliseconds: a password change cuts sessions at an instant
+    /// finer than `iat`'s seconds, so a sign-in in the same second as the cut
+    /// survives it. Absent from the tokens minted before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iat_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +45,38 @@ pub struct RefreshClaims {
     pub exp: i64,
     pub iat: i64,
     pub iss: String,
+    /// `iat` in milliseconds: a password change cuts sessions at an instant
+    /// finer than `iat`'s seconds, so a sign-in in the same second as the cut
+    /// survives it. Absent from the tokens minted before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iat_ms: Option<i64>,
+}
+
+impl AccessClaims {
+    /// When the token was minted, in milliseconds; a token without `iat_ms`
+    /// counts as minted at the start of its `iat` second, the earliest it can be.
+    #[must_use]
+    pub fn issued_at_ms(&self) -> i64 {
+        self.iat_ms.unwrap_or(self.iat.saturating_mul(1000))
+    }
+}
+
+impl RefreshClaims {
+    /// See [`AccessClaims::issued_at_ms`].
+    #[must_use]
+    pub fn issued_at_ms(&self) -> i64 {
+        self.iat_ms.unwrap_or(self.iat.saturating_mul(1000))
+    }
+}
+
+/// A refresh token as minted: the JWT, its id, and the instants it carries
+/// (stored as is, so [`Issuer::encode_refresh`] can mint the same JWT again).
+#[derive(Debug, Clone)]
+pub struct IssuedRefresh {
+    pub token: String,
+    pub jti: Uuid,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +108,7 @@ impl Issuer {
             iat: now.timestamp(),
             exp: (now + self.access_ttl).timestamp(),
             iss: self.issuer.clone(),
+            iat_ms: Some(now.timestamp_millis()),
         };
         Ok(encode(&Header::default(), &claims, &self.encoding)?)
     }
@@ -85,20 +123,38 @@ impl Issuer {
         &self,
         user_id: UserId,
         ttl_override: Option<Duration>,
-    ) -> Result<(String, Uuid, chrono::DateTime<Utc>), JwtError> {
-        let now = Utc::now();
+    ) -> Result<IssuedRefresh, JwtError> {
+        let issued_at = Utc::now();
         let jti = Uuid::new_v4();
-        let exp = now + ttl_override.unwrap_or(self.refresh_ttl);
+        let expires_at = issued_at + ttl_override.unwrap_or(self.refresh_ttl);
+        let token = self.encode_refresh(user_id, jti, issued_at, expires_at)?;
+        Ok(IssuedRefresh {
+            token,
+            jti,
+            issued_at,
+            expires_at,
+        })
+    }
+
+    /// The refresh JWT for these claims. Deterministic (HMAC), so a session
+    /// re-encoded from its stored row is the very token first handed out.
+    pub fn encode_refresh(
+        &self,
+        user_id: UserId,
+        jti: Uuid,
+        issued_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<String, JwtError> {
         let claims = RefreshClaims {
             sub: user_id.into(),
             kind: TokenKind::Refresh,
             jti,
-            iat: now.timestamp(),
-            exp: exp.timestamp(),
+            iat: issued_at.timestamp(),
+            exp: expires_at.timestamp(),
             iss: self.issuer.clone(),
+            iat_ms: Some(issued_at.timestamp_millis()),
         };
-        let token = encode(&Header::default(), &claims, &self.encoding)?;
-        Ok((token, jti, exp))
+        Ok(encode(&Header::default(), &claims, &self.encoding)?)
     }
 
     pub fn verify_access(&self, token: &str) -> Result<AccessClaims, JwtError> {
@@ -146,7 +202,11 @@ mod tests {
         let iss = issuer();
         let year = Duration::days(365);
         let before = Utc::now();
-        let (token, _jti, exp) = iss
+        let IssuedRefresh {
+            token,
+            expires_at: exp,
+            ..
+        } = iss
             .issue_refresh(UserId::from(Uuid::new_v4()), Some(year))
             .expect("issue");
         assert!(
@@ -166,12 +226,39 @@ mod tests {
     fn refresh_without_override_uses_configured_ttl() {
         let iss = issuer();
         let before = Utc::now();
-        let (token, _jti, exp) = iss
+        let IssuedRefresh {
+            token,
+            expires_at: exp,
+            ..
+        } = iss
             .issue_refresh(UserId::from(Uuid::new_v4()), None)
             .expect("issue");
         let claims = iss.verify_refresh(&token).expect("verify");
         let ceiling = (before + Duration::days(8)).timestamp();
         assert!(claims.exp <= ceiling, "default TTL must stay ~7 days");
         assert_eq!(claims.exp, exp.timestamp());
+    }
+
+    #[test]
+    fn a_refresh_token_re_encodes_to_the_same_jwt() {
+        let iss = issuer();
+        let user = UserId::from(Uuid::new_v4());
+        let first = iss.issue_refresh(user, None).expect("issue");
+        let again = iss
+            .encode_refresh(user, first.jti, first.issued_at, first.expires_at)
+            .expect("encode");
+        assert_eq!(first.token, again);
+        let claims = iss.verify_refresh(&again).expect("verify");
+        assert_eq!(claims.issued_at_ms(), first.issued_at.timestamp_millis());
+    }
+
+    #[test]
+    fn a_token_without_iat_ms_counts_from_its_iat_second() {
+        let claims: AccessClaims = serde_json::from_value(serde_json::json!({
+            "sub": Uuid::nil(), "kind": "access", "admin": false,
+            "exp": 2, "iat": 1, "iss": "x",
+        }))
+        .expect("an old token still parses");
+        assert_eq!(claims.issued_at_ms(), 1000);
     }
 }

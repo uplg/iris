@@ -794,7 +794,37 @@ pub fn normalize_title(s: &str) -> String {
 /// recognisable — even a bare title produces a `Parsed { title, .. }`
 /// with everything else null.
 pub fn parse(filename: &str) -> Option<Parsed> {
-    let stem = filename.rsplit_once('.').map_or(filename, |(s, _ext)| s);
+    parse_stem(strip_file_extension(filename))
+}
+
+/// `name` without its extension when it ends in one a release carries (video,
+/// subtitle, archive, sidecar), compared case-insensitively. Anything else is
+/// part of the name: a release name has no extension (`Movie.2021`,
+/// `Dr. Stone S03E01 1080p`), and its last dot segment is a year, a tag or a
+/// group.
+pub fn strip_file_extension(name: &str) -> &str {
+    const KNOWN: &[&str] = &[
+        "mkv", "mp4", "m4v", "avi", "mov", "m2ts", "mts", "webm", "wmv", "flv", "mpg", "mpeg",
+        "vob", "ogm", "ogv", "3gp", "iso", "srt", "ass", "ssa", "sub", "idx", "sup", "vtt", "smi",
+        "rar", "zip", "7z", "nfo", "sfv", "par2", "txt", "jpg", "jpeg", "png",
+    ];
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return name;
+    };
+    let lower = ext.to_ascii_lowercase();
+    // `rNN` volumes of a RAR set; `ts` only in lower case, since `.TS` closing
+    // a release name is the telesync source tag.
+    let known = KNOWN.contains(&lower.as_str())
+        || ext == "ts"
+        || (lower.len() == 3
+            && lower.starts_with('r')
+            && lower[1..].bytes().all(|b| b.is_ascii_digit()));
+    if known { stem } else { name }
+}
+
+/// [`parse`] for a name that carries no file extension (a release name, a
+/// title).
+pub fn parse_stem(stem: &str) -> Option<Parsed> {
     if stem.trim().is_empty() {
         return None;
     }
@@ -1136,6 +1166,32 @@ fn find_group(stem: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_known_extension_is_cut() {
+        use super::{parse, strip_file_extension};
+        assert_eq!(
+            parse("Dr. Stone S03E01 1080p WEB").unwrap().title,
+            "Dr Stone"
+        );
+        let movie = parse("Movie.2021").unwrap();
+        assert_eq!((movie.title.as_str(), movie.year), ("Movie", Some(2021)));
+        let pack = parse("Some.Show.S02.MULTI.1080p.WEB.x264-GRP").unwrap();
+        assert_eq!(pack.group.as_deref(), Some("GRP"));
+        assert_eq!(parse("Some.Show.S02").unwrap().season, Some(2));
+        for (name, stem) in [
+            ("Show.S01E01.1080p.WEB-GRP.mkv", "Show.S01E01.1080p.WEB-GRP"),
+            ("Show.S01E01.MKV", "Show.S01E01"),
+            ("show.s01e01.fr.srt", "show.s01e01.fr"),
+            ("release.r07", "release"),
+            ("clip.ts", "clip"),
+            ("Movie.2021.TS", "Movie.2021.TS"),
+            ("Mr. Robot", "Mr. Robot"),
+            ("no extension", "no extension"),
+        ] {
+            assert_eq!(strip_file_extension(name), stem, "{name}");
+        }
+    }
+
     use super::*;
 
     #[test]

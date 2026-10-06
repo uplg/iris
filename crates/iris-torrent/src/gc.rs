@@ -11,6 +11,7 @@
 //! (within `active_window`) are protected — we never yank a file out
 //! from under a viewer.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +19,6 @@ use std::time::Duration;
 use chrono::Utc;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use iris_core::ids::TorrentId;
 use sqlx::SqlitePool;
 use tokio::time::MissedTickBehavior;
 
@@ -46,6 +46,15 @@ pub struct GcConfig {
     /// Torrents whose last activity (see [`last_activity`]) falls within this
     /// window are protected from eviction.
     pub active_window: Duration,
+    /// Free space the download dir's filesystem must keep (0: no floor).
+    pub min_free_bytes: u64,
+    /// An unreferenced file younger than this is never an orphan.
+    pub orphan_min_age: Duration,
+    /// Delete orphan files instead of only reporting them.
+    pub delete_orphans: bool,
+    /// Trees the orphan sweep never enters (the data dir, the engine's
+    /// state); one that IS the download dir turns the sweep off.
+    pub orphan_exclude: Vec<PathBuf>,
 }
 
 impl GcConfig {
@@ -72,6 +81,8 @@ struct Inner {
     /// by infohash (e.g. the remuxer's `.fmp4` files) can clean up too.
     on_evict: Box<dyn Fn(&str) + Send + Sync>,
     run_lock: tokio::sync::Mutex<()>,
+    /// The orphan sweep's last (files, bytes), to log only on change.
+    last_orphans: std::sync::Mutex<(u64, u64)>,
 }
 
 impl Gc {
@@ -92,6 +103,7 @@ impl Gc {
                 derived,
                 on_evict: Box::new(on_evict),
                 run_lock: tokio::sync::Mutex::new(()),
+                last_orphans: std::sync::Mutex::new((0, 0)),
             }),
         }
     }
@@ -136,6 +148,22 @@ impl Gc {
         let used = torrent_used.saturating_add(derived_used);
         let threshold = cfg.threshold_bytes();
         let target = cfg.target_bytes();
+        let free = free_bytes(&self.inner.download_dir);
+        // Over the budget: back down to its target. Short of real disk
+        // space (other tenants of the disk, files the budget doesn't count):
+        // back up to 1.5× the floor. Whichever asks for more.
+        let over_budget = if used >= threshold {
+            used.saturating_sub(target)
+        } else {
+            0
+        };
+        let short_of_disk = match free {
+            Some(free) if cfg.min_free_bytes > 0 && free < cfg.min_free_bytes => {
+                (cfg.min_free_bytes + cfg.min_free_bytes / 2).saturating_sub(free)
+            }
+            _ => 0,
+        };
+        let to_free = over_budget.max(short_of_disk);
 
         let mut report = GcReport {
             used_bytes_before: used,
@@ -144,49 +172,53 @@ impl Gc {
             derived_freed_bytes: 0,
             evicted: Vec::new(),
             used_bytes_after: used,
+            free_bytes_before: free,
+            min_free_bytes: cfg.min_free_bytes,
+            orphans: OrphanReport::default(),
         };
 
-        if used < threshold {
+        if to_free > 0 {
+            self.free_up(to_free, derived_used, &mut report).await?;
+        } else {
             tracing::debug!(
                 used,
                 torrent_used,
                 derived_used,
                 threshold,
+                free,
                 "gc: under threshold, nothing to do"
             );
-            return Ok(report);
         }
+        report.orphans = self.sweep_orphans().await;
+        Ok(report)
+    }
 
-        // Step 1: trim the derived cache first — those bytes regenerate
-        // from the underlying torrent on the next play, so dropping them
-        // costs nothing beyond a one-off ffmpeg run. Aim to leave the
-        // derived cache at `target - torrent_used` so that after this
-        // step the total sits at exactly `target`. If torrents alone
-        // already exceed target, ask the derived cache to shrink to
-        // zero (it'll wipe everything that's not in flight).
-        let mut current_used = used;
+    /// Trim the derived cache first — those bytes regenerate from the
+    /// underlying torrent on the next play, so dropping them costs nothing
+    /// beyond a one-off ffmpeg run — and only then evict torrents.
+    async fn free_up(
+        &self,
+        to_free: u64,
+        derived_used: u64,
+        report: &mut GcReport,
+    ) -> anyhow::Result<()> {
+        let mut remaining = to_free;
         if let Some(d) = &self.inner.derived {
-            let derived_target = target.saturating_sub(torrent_used);
+            let derived_target = derived_used.saturating_sub(remaining);
             let freed = (d.trim_to)(derived_target).await;
             report.derived_freed_bytes = freed;
-            current_used = current_used.saturating_sub(freed);
+            remaining = remaining.saturating_sub(freed);
             tracing::info!(
                 derived_target,
                 freed,
-                used_before = used,
-                used_after = current_used,
+                to_free,
+                remaining,
                 "gc: derived cache trim pass",
             );
-            if current_used <= target {
-                report.used_bytes_after = current_used;
-                return Ok(report);
-            }
         }
-
-        // Step 2: only now do we touch real torrents.
-        self.evict_torrents(current_used, target, &mut report)
-            .await?;
-
+        if remaining > 0 {
+            self.evict_torrents(remaining, 0, report).await?;
+        }
         let post_torrent_used = dir_size(&self.inner.download_dir).await.unwrap_or(0);
         let post_derived_used = match &self.inner.derived {
             Some(d) => dir_size(&d.dir).await.unwrap_or(0),
@@ -198,9 +230,95 @@ impl Gc {
             derived_freed = report.derived_freed_bytes,
             before = report.used_bytes_before,
             after = report.used_bytes_after,
+            free_before = ?report.free_bytes_before,
             "gc: pass complete"
         );
-        Ok(report)
+        Ok(())
+    }
+
+    /// Files under the download dir that no torrent reads: left by a crash,
+    /// an engine that lost a torrent, a delete from an older build. Never one
+    /// a managed torrent references, never one under a live row's folder
+    /// (its torrent may just have failed to restore), never one touched
+    /// within `orphan_min_age`; deleted only with `delete_orphans`, else
+    /// logged when the set changes.
+    async fn sweep_orphans(&self) -> OrphanReport {
+        let cfg = &self.inner.cfg;
+        let engine = &self.inner.engine;
+        let root = &self.inner.download_dir;
+        let mut report = OrphanReport {
+            deleted: cfg.delete_orphans,
+            ..OrphanReport::default()
+        };
+        // Only a tree inside the download dir is in the walk's way; one that
+        // is the download dir itself (the data dir as download dir) ends it.
+        let excluded: Vec<&Path> = cfg
+            .orphan_exclude
+            .iter()
+            .map(PathBuf::as_path)
+            .filter(|ex| ex.starts_with(root))
+            .collect();
+        if excluded.contains(&root.as_path()) || !engine.file_lists_known() {
+            return report;
+        }
+        let protected: HashSet<std::ffi::OsString> =
+            match iris_db::torrents::list_active(&self.inner.pool).await {
+                Ok(rows) => rows
+                    .into_iter()
+                    .filter(|r| !engine.contains(&r.infohash))
+                    .map(|r| r.name.into())
+                    .collect(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "gc: orphan sweep skipped, rows unreadable");
+                    return report;
+                }
+            };
+        let walk = OrphanWalk {
+            root,
+            excluded: &excluded,
+            protected: &protected,
+            referenced: &engine.referenced_files(),
+            min_age: cfg.orphan_min_age,
+        };
+        let mut emptied = Vec::new();
+        for (path, len) in walk.run().await {
+            report.files += 1;
+            report.bytes = report.bytes.saturating_add(len);
+            if !cfg.delete_orphans {
+                if report.examples.len() < 5 {
+                    report.examples.push(path.display().to_string());
+                }
+                continue;
+            }
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => {
+                    tracing::info!(path = %path.display(), size = len, "gc: orphan file deleted");
+                    emptied.extend(path.parent().map(Path::to_path_buf));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %path.display(), "gc: orphan delete failed");
+                }
+            }
+        }
+        remove_emptied(root, emptied).await;
+        let seen = (report.files, report.bytes);
+        let changed = {
+            let mut last = self
+                .inner
+                .last_orphans
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::replace(&mut *last, seen) != seen
+        };
+        if changed && report.files > 0 && !cfg.delete_orphans {
+            tracing::info!(
+                files = report.files,
+                bytes = report.bytes,
+                examples = ?report.examples,
+                "gc: files no torrent references (dry run: storage.delete_orphan_files = true deletes them)"
+            );
+        }
+        report
     }
 
     async fn evict_torrents(
@@ -239,47 +357,24 @@ impl Gc {
                 size = row.total_size_bytes,
                 "gc: evicting torrent"
             );
-            // Final upload reconcile so the bytes seeded since the last
-            // 30 s tick aren't lost when librqbit drops the torrent.
-            if let Some(snap) = self.inner.engine.get_by_infohash(&row.infohash) {
-                let _ = iris_db::torrents::reconcile_uploaded(
-                    &self.inner.pool,
-                    &row.infohash,
-                    snap.uploaded_bytes,
-                )
-                .await;
-            }
-            let files_deleted = match self
-                .inner
-                .engine
-                .delete_by_infohash(&row.infohash, true)
-                .await
+            let removed = match crate::removal::remove_torrent(
+                &self.inner.engine,
+                &self.inner.pool,
+                &fresh,
+            )
+            .await
             {
-                Ok(()) => true,
-                // Not in the engine: nothing left to delete there, and the
-                // row must not stay "active" for every later pass to retry.
-                // Its files (if any) were not touched, so nothing is freed.
-                Err(crate::EngineError::NotFound) => false,
+                Ok(r) => r,
                 Err(e) => {
-                    tracing::warn!(error = %e, "gc: engine delete failed, skipping");
+                    tracing::warn!(error = %e, infohash = %row.infohash, "gc: eviction failed, skipping");
                     continue;
                 }
             };
             (self.inner.on_evict)(&row.infohash);
-            let row_was_live = match iris_db::torrents::soft_delete(
-                &self.inner.pool,
-                TorrentId::from(row.id),
-            )
-            .await
-            {
-                Ok(live) => live,
-                Err(e) => {
-                    tracing::warn!(error = %e, infohash = %row.infohash, "gc: soft delete failed");
-                    true
-                }
-            };
-            let freed = if files_deleted && row_was_live {
-                u64::try_from(row.total_size_bytes).unwrap_or(0)
+            // Only what came off the disk counts: files another torrent still
+            // reads stayed, and a torrent the engine no longer had freed nothing.
+            let freed = if removed.row_was_live {
+                removed.freed_bytes
             } else {
                 0
             };
@@ -305,6 +400,22 @@ pub struct GcReport {
     /// torrent footprint (or no derived cache was registered).
     pub derived_freed_bytes: u64,
     pub evicted: Vec<EvictedEntry>,
+    /// Free space on the download dir's filesystem before the pass (`None`:
+    /// unreadable).
+    pub free_bytes_before: Option<u64>,
+    pub min_free_bytes: u64,
+    pub orphans: OrphanReport,
+}
+
+/// Files under the download dir no torrent references.
+#[derive(Debug, Clone, Default, serde::Serialize, utoipa::ToSchema)]
+pub struct OrphanReport {
+    pub files: u64,
+    pub bytes: u64,
+    /// They were deleted (`storage.delete_orphan_files`), not only counted.
+    pub deleted: bool,
+    /// A few of their paths, for the dry run.
+    pub examples: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -325,6 +436,92 @@ fn later_of(
     added: chrono::DateTime<Utc>,
 ) -> chrono::DateTime<Utc> {
     played.map_or(added, |p| p.max(added))
+}
+
+/// The orphan sweep's walk of the download dir.
+struct OrphanWalk<'a> {
+    root: &'a Path,
+    excluded: &'a [&'a Path],
+    /// Top-level names of live rows the engine doesn't manage.
+    protected: &'a HashSet<std::ffi::OsString>,
+    referenced: &'a HashSet<PathBuf>,
+    min_age: Duration,
+}
+
+impl OrphanWalk<'_> {
+    /// Each orphan file with its size.
+    async fn run(&self) -> Vec<(PathBuf, u64)> {
+        let mut found = Vec::new();
+        let mut stack = vec![self.root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(mut read) = tokio::fs::read_dir(&dir).await else {
+                continue;
+            };
+            while let Ok(Some(entry)) = read.next_entry().await {
+                let path = entry.path();
+                if self.excluded.iter().any(|ex| path.starts_with(ex))
+                    || (dir == self.root && self.protected.contains(&entry.file_name()))
+                {
+                    continue;
+                }
+                let Ok(meta) = entry.metadata().await else {
+                    continue;
+                };
+                if meta.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let old = meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| m.elapsed().ok())
+                    .is_some_and(|age| age >= self.min_age);
+                if old && !self.referenced.contains(&path) {
+                    found.push((path, meta.len()));
+                }
+            }
+        }
+        found
+    }
+}
+
+/// The directories the deleted orphans sat in, and their parents, once
+/// empty; never `root` nor above it.
+async fn remove_emptied(root: &Path, mut dirs: Vec<PathBuf>) {
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    dirs.dedup();
+    for dir in dirs {
+        for d in dir
+            .ancestors()
+            .take_while(|d| *d != root && d.starts_with(root))
+        {
+            if tokio::fs::remove_dir(d).await.is_err() {
+                break;
+            }
+        }
+    }
+}
+
+/// Total and free bytes (as an unprivileged writer sees them) of the
+/// filesystem holding `path`.
+#[must_use]
+pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
+    let st = rustix::fs::statvfs(path).ok()?;
+    let block = to_u64(st.f_frsize);
+    Some((
+        to_u64(st.f_blocks).saturating_mul(block),
+        to_u64(st.f_bavail).saturating_mul(block),
+    ))
+}
+
+/// `statvfs` field widths differ across platforms (`u32` on macOS, `u64`
+/// or `c_long` on Linux).
+fn to_u64<T: TryInto<u64>>(v: T) -> u64 {
+    v.try_into().unwrap_or(0)
+}
+
+fn free_bytes(path: &Path) -> Option<u64> {
+    disk_space(path).map(|(_, free)| free)
 }
 
 /// Bytes under `path`, recursively. A missing directory counts as empty.
@@ -355,7 +552,151 @@ pub async fn dir_size(path: &Path) -> std::io::Result<u64> {
 mod tests {
     use chrono::{Duration, Utc};
 
-    use super::later_of;
+    use super::{Gc, GcConfig, later_of};
+    use crate::Engine;
+    use crate::removal::tests::{grab, temp_dir, torrent_bytes, write};
+
+    fn config(max_storage_bytes: u64, min_free_bytes: u64, delete_orphans: bool) -> GcConfig {
+        GcConfig {
+            max_storage_bytes,
+            cleanup_threshold_pct: 90,
+            cleanup_target_pct: 75,
+            interval: std::time::Duration::from_mins(15),
+            active_window: std::time::Duration::ZERO,
+            min_free_bytes,
+            orphan_min_age: std::time::Duration::from_hours(24),
+            delete_orphans,
+            orphan_exclude: Vec::new(),
+        }
+    }
+
+    /// Two copies of one release (shared files) plus nothing else.
+    async fn shared_pair(dir: &std::path::Path) -> (std::sync::Arc<Engine>, sqlx::SqlitePool) {
+        let engine = Engine::offline(dir.to_path_buf()).await.unwrap();
+        let pool = iris_db::test_support::migrated_pool().await;
+        let name = "Show.S01.1080p.WEB-GRP";
+        write(dir, &format!("{name}/Show.S01E01.mkv"), 40_000);
+        write(dir, &format!("{name}/Show.S01E02.mkv"), 30_000);
+        let files = [("Show.S01E01.mkv", 40_000), ("Show.S01E02.mkv", 30_000)];
+        grab(&engine, &pool, torrent_bytes(name, &files, "a")).await;
+        grab(&engine, &pool, torrent_bytes(name, &files, "b")).await;
+        (engine, pool)
+    }
+
+    #[tokio::test]
+    async fn eviction_credits_only_the_bytes_that_left_the_disk() {
+        let dir = temp_dir();
+        let (engine, pool) = shared_pair(&dir).await;
+        let gc = Gc::new(
+            engine,
+            pool,
+            config(1_000, 0, false),
+            dir.clone(),
+            None,
+            |_| {},
+        );
+        let report = gc.run_once().await.unwrap();
+        let freed: Vec<u64> = report.evicted.iter().map(|e| e.freed_bytes).collect();
+        assert_eq!(
+            freed,
+            [0, 70_000],
+            "the first copy's files stayed for the second"
+        );
+        assert_eq!(report.used_bytes_after, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn too_little_free_disk_evicts_under_the_budget() {
+        let dir = temp_dir();
+        let (engine, pool) = shared_pair(&dir).await;
+        let roomy = config(u64::MAX / 200, 0, false);
+        let gc = Gc::new(
+            engine.clone(),
+            pool.clone(),
+            roomy,
+            dir.clone(),
+            None,
+            |_| {},
+        );
+        assert!(gc.run_once().await.unwrap().evicted.is_empty());
+        let floor = config(u64::MAX / 200, u64::MAX / 4, false);
+        let gc = Gc::new(engine, pool, floor, dir.clone(), None, |_| {});
+        let report = gc.run_once().await.unwrap();
+        assert!(report.free_bytes_before.is_some());
+        assert_eq!(report.evicted.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn orphans_are_counted_then_deleted_only_when_asked() {
+        let dir = temp_dir();
+        let (engine, pool) = shared_pair(&dir).await;
+        let old = std::time::SystemTime::now() - std::time::Duration::from_hours(48);
+        let age = |rel: &str| {
+            std::fs::File::options()
+                .write(true)
+                .open(dir.join(rel))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        };
+        write(&dir, "leftover/old.mkv", 500);
+        age("leftover/old.mkv");
+        write(&dir, "fresh.mkv", 300);
+        age("Show.S01.1080p.WEB-GRP/Show.S01E01.mkv");
+        let user = iris_db::test_support::make_user(&pool).await;
+        iris_db::torrents::upsert(
+            &pool,
+            iris_db::torrents::NewTorrent {
+                infohash: "c".repeat(40),
+                name: "Lost.Release-GRP".into(),
+                total_size_bytes: 200,
+                source_provider: None,
+                source_external_id: None,
+                tracker_tmdb_id: None,
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        write(&dir, "Lost.Release-GRP/lost.mkv", 200);
+        age("Lost.Release-GRP/lost.mkv");
+
+        let roomy = |delete| config(u64::MAX / 200, 0, delete);
+        let dry = Gc::new(
+            engine.clone(),
+            pool.clone(),
+            roomy(false),
+            dir.clone(),
+            None,
+            |_| {},
+        );
+        let report = dry.run_once().await.unwrap().orphans;
+        assert_eq!(
+            (report.files, report.bytes, report.deleted),
+            (1, 500, false)
+        );
+        assert!(dir.join("leftover/old.mkv").exists());
+
+        let wet = Gc::new(engine, pool, roomy(true), dir.clone(), None, |_| {});
+        let report = wet.run_once().await.unwrap().orphans;
+        assert_eq!((report.files, report.deleted), (1, true));
+        assert!(
+            !dir.join("leftover").exists(),
+            "the orphan and its emptied folder"
+        );
+        assert!(dir.join("fresh.mkv").exists(), "too young");
+        assert!(
+            dir.join("Lost.Release-GRP/lost.mkv").exists(),
+            "a live row's folder"
+        );
+        assert!(
+            dir.join("Show.S01.1080p.WEB-GRP/Show.S01E01.mkv").exists(),
+            "referenced"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_regrab_after_an_old_play_counts_as_fresh_activity() {

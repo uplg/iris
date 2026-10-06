@@ -4,9 +4,10 @@ use axum::extract::State;
 use axum::routing::post;
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
-use chrono::Duration;
+use chrono::{Duration, Utc};
 use iris_auth::hash_invitation_token;
 use iris_core::ids::{InvitationId, UserId};
+use iris_db::refresh_tokens::{NewSession, Rotation, Session, Successor};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -95,7 +96,10 @@ pub(crate) async fn register(
     crate::passwords::check_policy(&req.password)?;
     let email = normalize_email(&req.email);
     if !email.contains('@') || email.len() < 3 {
-        return Err(ApiError::BadRequest("invalid email".into()));
+        return Err(ApiError::Invalid {
+            code: "invalid_email",
+            message: "invalid email".into(),
+        });
     }
 
     let hashed_invite = hash_invitation_token(&req.invite_token);
@@ -114,13 +118,16 @@ pub(crate) async fn register(
 
     let invitation = iris_db::invitations::find_active_by_hash(&mut *tx, &hashed_invite)
         .await?
-        .ok_or_else(|| ApiError::BadRequest("invalid or expired invitation".into()))?;
+        .ok_or_else(|| ApiError::Invalid {
+            code: "invalid_invitation",
+            message: "invalid or expired invitation".into(),
+        })?;
 
     if iris_db::users::find_by_email(&mut *tx, &email)
         .await?
         .is_some()
     {
-        return Err(ApiError::Conflict("email already registered".into()));
+        return Err(email_taken());
     }
 
     let user = iris_db::users::create(
@@ -133,9 +140,7 @@ pub(crate) async fn register(
     )
     .await
     .map_err(|e| match e.as_database_error() {
-        Some(db) if db.is_unique_violation() => {
-            ApiError::Conflict("email already registered".into())
-        }
+        Some(db) if db.is_unique_violation() => email_taken(),
         _ => e.into(),
     })?;
 
@@ -143,13 +148,23 @@ pub(crate) async fn register(
         iris_db::invitations::consume(&mut *tx, InvitationId::from(invitation.id), user.id).await?;
     if !consumed {
         // Drop without commit → tx rolls back, the `users` insert is undone.
-        return Err(ApiError::Conflict("invitation already used".into()));
+        return Err(ApiError::Refused {
+            code: "invitation_used",
+            message: "invitation already used".into(),
+        });
     }
 
     tx.commit().await?;
 
     let jar = issue_session(&state, &jar, user.id, user.is_admin).await?;
     Ok((jar, Json(user.into())))
+}
+
+fn email_taken() -> ApiError {
+    ApiError::Refused {
+        code: "email_taken",
+        message: "email already registered".into(),
+    }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -220,60 +235,43 @@ pub(crate) async fn refresh(
         tracing::warn!(error = %e, "refresh rejected: token verify failed");
         ApiError::Unauthorized
     })?;
+    state
+        .session_cuts()
+        .check(state.db(), UserId::from(claims.sub), claims.issued_at_ms())
+        .await?;
 
-    // Resolve the device tagging to carry forward, tolerating a rotation race.
-    // Normal path: the jti is active → rotate it (`mark_rotated`, not `revoke`,
-    // so a straggler can still be recognised below), atomically. Race path: the jti isn't
-    // active but was rotated within the grace window → a near-simultaneous
-    // refresh already rotated it, the session is alive, so re-issue instead of
-    // logging the user out. An explicitly revoked token (logout / device
-    // revoke; `rotated_at` IS NULL) matches neither branch and still 401s.
-    //
-    // Device tagging is carried across the rotation so a paired TV keeps its
-    // `device_kind` (else it drops off the account device list), and devices
-    // get the SLIDING full device TTL re-issued on every refresh — a TV in
-    // regular use never expires; only one left off longer than the whole window
-    // needs re-pairing. Browsers keep `None` (the default, also re-issued).
-    let (device_label, device_kind) = if let Some(prev) =
-        iris_db::refresh_tokens::mark_rotated(state.db(), claims.jti).await?
-    {
-        (prev.device_label, prev.device_kind)
-    } else if let Some(rot) = iris_db::refresh_tokens::recently_rotated(
+    // Devices get the SLIDING full device TTL on every rotation — a TV in
+    // regular use never expires; only one left off longer than the whole
+    // window needs re-pairing. A straggler replaying a just-rotated token gets
+    // the successor already minted for it, cookies and all, so a multi-tab /
+    // retry race neither logs the user out nor forks the session.
+    let session = match iris_db::refresh_tokens::rotate(
         state.db(),
         claims.jti,
         REFRESH_ROTATION_GRACE_SECS,
+        |device_kind| new_successor(&state, device_kind),
     )
     .await?
     {
-        // Straggler from a near-simultaneous rotation — the session is alive.
-        tracing::debug!(jti = %claims.jti, "refresh straggler within rotation grace; re-issuing");
-        (rot.device_label, rot.device_kind)
-    } else {
-        tracing::warn!(jti = %claims.jti, "refresh rejected: refresh-token row not active (revoked/rotated/expired)");
-        return Err(ApiError::Unauthorized);
+        Rotation::Rotated(session) => session,
+        Rotation::Replayed(session) => {
+            tracing::debug!(jti = %claims.jti, "refresh straggler within rotation grace; replaying its successor");
+            session
+        }
+        Rotation::FamilyRevoked => {
+            tracing::warn!(jti = %claims.jti, "refresh rejected: rotated token replayed after the grace window; session ended");
+            return Err(ApiError::Unauthorized);
+        }
+        Rotation::Rejected => {
+            tracing::warn!(jti = %claims.jti, "refresh rejected: refresh-token row not active (revoked/expired)");
+            return Err(ApiError::Unauthorized);
+        }
     };
 
-    let user_id = UserId::from(claims.sub);
-    let user = iris_db::users::find_by_id(state.db(), user_id)
+    let user = iris_db::users::find_by_id(state.db(), UserId::from(session.user_id))
         .await?
         .ok_or(ApiError::Unauthorized)?;
-
-    let ttl_override = if device_kind.is_some() {
-        Some(state.cfg().auth.device_refresh_ttl_secs)
-    } else {
-        None
-    };
-    let jar = issue_session_for_kind(
-        &state,
-        &jar,
-        user.id,
-        user.is_admin,
-        ttl_override,
-        device_label.as_deref(),
-        device_kind.as_deref(),
-    )
-    .await?;
-
+    let jar = session_cookies(&state, &jar, user.id, user.is_admin, &session)?;
     Ok((jar, Json(user.into())))
 }
 
@@ -304,66 +302,79 @@ pub(crate) async fn issue_session(
     user_id: UserId,
     is_admin: bool,
 ) -> ApiResult<CookieJar> {
-    issue_session_for_kind(state, jar, user_id, is_admin, None, None, None).await
+    let new = new_session(state, user_id, None, None);
+    iris_db::refresh_tokens::insert_session(state.db(), &new).await?;
+    session_cookies(state, jar, user_id, is_admin, &stored(&new))
 }
 
-/// Variant of [`issue_session`] for device-paired sessions: longer refresh
-/// TTL, and the refresh-token row is tagged with `device_label` + `device_kind`
-/// so we can list/revoke devices in the account UI.
-pub async fn issue_session_for_kind(
+/// A refresh token's id and instants: the configured TTL, or the longer
+/// device one for a paired device.
+pub(crate) fn new_successor(state: &AppState, device_kind: Option<&str>) -> Successor {
+    let auth = &state.cfg().auth;
+    let ttl = if device_kind.is_some() {
+        auth.device_refresh_ttl_secs
+    } else {
+        auth.refresh_ttl_secs
+    };
+    let issued_at = Utc::now();
+    Successor {
+        jti: Uuid::new_v4(),
+        issued_at,
+        expires_at: issued_at + Duration::seconds(ttl),
+    }
+}
+
+/// A new session (its own family) to store. Device-paired sessions carry
+/// `device_label` + `device_kind` so the account UI can list and revoke them.
+pub(crate) fn new_session<'a>(
     state: &AppState,
-    jar: &CookieJar,
     user_id: UserId,
-    is_admin: bool,
-    refresh_ttl_override_secs: Option<i64>,
-    device_label: Option<&str>,
-    device_kind: Option<&str>,
-) -> ApiResult<CookieJar> {
-    issue_device_session(
-        state,
-        jar,
+    device_label: Option<&'a str>,
+    device_kind: Option<&'a str>,
+) -> NewSession<'a> {
+    let next = new_successor(state, device_kind);
+    NewSession {
+        jti: next.jti,
+        family_id: next.jti,
         user_id,
-        is_admin,
-        refresh_ttl_override_secs,
+        issued_at: next.issued_at,
+        expires_at: next.expires_at,
         device_label,
         device_kind,
-    )
-    .await
-    .map(|(jar, _)| jar)
+    }
 }
 
-/// [`issue_session_for_kind`], also answering the new refresh session's id.
-pub async fn issue_device_session(
+pub(crate) fn stored(new: &NewSession<'_>) -> Session {
+    Session {
+        jti: new.jti,
+        user_id: new.user_id.into(),
+        issued_at: new.issued_at,
+        expires_at: new.expires_at,
+        device_label: new.device_label.map(str::to_owned),
+        device_kind: new.device_kind.map(str::to_owned),
+    }
+}
+
+/// The access cookie, and the refresh cookie for a stored session: its JWT is
+/// minted from the row (the same token each time) and lives as long as the
+/// row, so a replayed successor never stretches the session.
+pub(crate) fn session_cookies(
     state: &AppState,
     jar: &CookieJar,
     user_id: UserId,
     is_admin: bool,
-    refresh_ttl_override_secs: Option<i64>,
-    device_label: Option<&str>,
-    device_kind: Option<&str>,
-) -> ApiResult<(CookieJar, Uuid)> {
+    session: &Session,
+) -> ApiResult<CookieJar> {
     let access = state
         .jwt()
         .issue_access(user_id, is_admin)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("issue access: {e}")))?;
-    let refresh_ttl = refresh_ttl_override_secs.unwrap_or(state.cfg().auth.refresh_ttl_secs);
-    // The override TTL must reach the JWT encoder itself: `verify_refresh`
-    // checks the token's `exp` before any DB lookup, so the JWT, the DB
-    // `expires_at` and the cookie Max-Age have to agree on the horizon.
-    let (refresh, jti, exp) = state
+    // `verify_refresh` checks the JWT's own `exp` before any DB lookup, so the
+    // JWT, the row's `expires_at` and the cookie Max-Age share one horizon.
+    let refresh = state
         .jwt()
-        .issue_refresh(user_id, refresh_ttl_override_secs.map(Duration::seconds))
+        .encode_refresh(user_id, session.jti, session.issued_at, session.expires_at)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("issue refresh: {e}")))?;
-
-    iris_db::refresh_tokens::insert_with_device(
-        state.db(),
-        jti,
-        user_id,
-        exp,
-        device_label,
-        device_kind,
-    )
-    .await?;
 
     let secure = state.cfg().cookie_secure();
     let access_cookie = build_cookie(
@@ -376,12 +387,12 @@ pub async fn issue_device_session(
     let refresh_cookie = build_cookie(
         REFRESH_COOKIE,
         refresh,
-        Duration::seconds(refresh_ttl),
+        session.expires_at - Utc::now(),
         "/api/auth",
         secure,
     );
 
-    Ok((jar.clone().add(access_cookie).add(refresh_cookie), jti))
+    Ok(jar.clone().add(access_cookie).add(refresh_cookie))
 }
 
 fn build_cookie(
@@ -405,4 +416,359 @@ fn build_cookie(
         // so it is immune to skew.
         .max_age(time::Duration::seconds(ttl.num_seconds()))
         .build()
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use iris_core::ids::UserId;
+    use iris_providers::ProviderRegistry;
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+
+    use crate::state::AppState;
+
+    pub(crate) struct Reply {
+        pub status: StatusCode,
+        pub json: Value,
+        /// `name=value` of every cookie the response sets.
+        pub cookies: Vec<String>,
+    }
+
+    impl Reply {
+        pub fn cookie(&self, name: &str) -> Option<String> {
+            self.cookies
+                .iter()
+                .find(|c| c.starts_with(&format!("{name}=")))
+                .cloned()
+        }
+    }
+
+    pub(crate) async fn call(
+        app: &axum::Router,
+        method: &str,
+        path: &str,
+        bearer: Option<&str>,
+        cookie: Option<&str>,
+        body: Option<Value>,
+    ) -> Reply {
+        let mut req = Request::builder().method(method).uri(path);
+        if let Some(t) = bearer {
+            req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        if let Some(c) = cookie {
+            req = req.header(header::COOKIE, c);
+        }
+        let req = match body {
+            Some(b) => req
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(b.to_string())),
+            None => req.body(Body::empty()),
+        }
+        .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let cookies = res
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .filter_map(|v| v.split(';').next())
+            .filter(|kv| !kv.ends_with('='))
+            .map(str::to_owned)
+            .collect();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        Reply {
+            status,
+            json: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            cookies,
+        }
+    }
+
+    pub(crate) const PASSWORD: &str = "correct horse battery";
+
+    /// A router over a fresh DB holding one member who signs in with
+    /// [`PASSWORD`].
+    pub(crate) async fn app_with_member() -> (AppState, axum::Router, UserId, String) {
+        let pool = iris_db::test_support::migrated_pool().await;
+        let email = "ana@example.org".to_owned();
+        let user = iris_db::users::create(
+            &pool,
+            iris_db::users::NewUser {
+                email: email.clone(),
+                password_hash: crate::passwords::hash(PASSWORD).await.unwrap(),
+                is_admin: false,
+            },
+        )
+        .await
+        .unwrap();
+        let state = AppState::for_tests(pool, ProviderRegistry::from_entries(&[]).unwrap()).await;
+        let app = crate::app::build_router(state.clone());
+        (state, app, user.id, email)
+    }
+
+    pub(crate) async fn login(app: &axum::Router, email: &str, password: &str) -> Reply {
+        call(
+            app,
+            "POST",
+            "/api/auth/login",
+            None,
+            None,
+            Some(json!({ "email": email, "password": password })),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_password_change_ends_every_session_the_callers_included() {
+        let (state, app, user, email) = app_with_member().await;
+        let signed_in = login(&app, &email, PASSWORD).await;
+        assert_eq!(signed_in.status, StatusCode::OK);
+        let refresh = signed_in.cookie("iris_refresh").unwrap();
+        let old = state.jwt().issue_access(user, false).unwrap();
+        assert_eq!(
+            call(&app, "GET", "/api/me", Some(&old), None, None)
+                .await
+                .status,
+            StatusCode::OK
+        );
+        let code = iris_db::device_codes::create(
+            state.db(),
+            "ABCD-2345",
+            chrono::Utc::now() + chrono::Duration::minutes(10),
+            "android-tv",
+        )
+        .await
+        .unwrap();
+        assert!(
+            iris_db::device_codes::claim(state.db(), "ABCD-2345", user, None)
+                .await
+                .unwrap()
+        );
+
+        let changed = call(
+            &app,
+            "POST",
+            "/api/me/password",
+            Some(&old),
+            None,
+            Some(json!({ "old_password": PASSWORD, "new_password": "a brand new secret" })),
+        )
+        .await;
+        assert_eq!(changed.status, StatusCode::NO_CONTENT);
+
+        for (method, path, body) in [
+            ("GET", "/api/me", None),
+            ("POST", "/api/me/passkeys/register/start", Some(json!({}))),
+            (
+                "POST",
+                "/api/me/devices",
+                Some(json!({ "code": "WXYZ-2345" })),
+            ),
+        ] {
+            assert_eq!(
+                call(&app, method, path, Some(&old), None, body)
+                    .await
+                    .status,
+                StatusCode::UNAUTHORIZED,
+                "{method} {path} with a token from before the change"
+            );
+        }
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/api/auth/refresh",
+                None,
+                Some(&refresh),
+                None
+            )
+            .await
+            .status,
+            StatusCode::UNAUTHORIZED
+        );
+        let polled = call(
+            &app,
+            "GET",
+            &format!("/api/auth/device/poll/{}", code.device_id),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(polled.json["status"], "expired", "{:?}", polled.json);
+        assert!(polled.cookie("iris_refresh").is_none());
+
+        assert_eq!(
+            login(&app, &email, PASSWORD).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        let again = login(&app, &email, "a brand new secret").await;
+        assert_eq!(again.status, StatusCode::OK);
+        let fresh = state.jwt().issue_access(user, false).unwrap();
+        assert_eq!(
+            call(&app, "GET", "/api/me", Some(&fresh), None, None)
+                .await
+                .status,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn a_straggler_refresh_gets_the_same_successor_and_logout_ends_the_family() {
+        let (_state, app, _, email) = app_with_member().await;
+        let first = login(&app, &email, PASSWORD)
+            .await
+            .cookie("iris_refresh")
+            .unwrap();
+        let winner = call(&app, "POST", "/api/auth/refresh", None, Some(&first), None).await;
+        assert_eq!(winner.status, StatusCode::OK);
+        let second = winner.cookie("iris_refresh").unwrap();
+        assert_ne!(second, first);
+        let straggler = call(&app, "POST", "/api/auth/refresh", None, Some(&first), None).await;
+        assert_eq!(straggler.status, StatusCode::OK);
+        assert_eq!(
+            straggler.cookie("iris_refresh").as_deref(),
+            Some(second.as_str()),
+            "the straggler is handed the successor, not a session of its own"
+        );
+
+        let out = call(&app, "POST", "/api/auth/logout", None, Some(&second), None).await;
+        assert_eq!(out.status, StatusCode::OK);
+        for token in [&first, &second] {
+            assert_eq!(
+                call(&app, "POST", "/api/auth/refresh", None, Some(token), None)
+                    .await
+                    .status,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn registration_refusals_carry_their_codes() {
+        let (state, app, user, email) = app_with_member().await;
+        let invite = iris_auth::new_invitation_token();
+        iris_db::invitations::create(
+            state.db(),
+            iris_db::invitations::NewInvitation {
+                token_hash: invite.hash,
+                created_by: user,
+                expires_at: chrono::Utc::now() + chrono::Duration::days(1),
+            },
+        )
+        .await
+        .unwrap();
+        let register = |token: &str, email: &str| {
+            let body =
+                json!({ "invite_token": token, "email": email, "password": "long enough secret" });
+            let app = app.clone();
+            async move { call(&app, "POST", "/api/auth/register", None, None, Some(body)).await }
+        };
+        for (token, address, status, code) in [
+            (
+                invite.plaintext.as_str(),
+                "nope",
+                StatusCode::BAD_REQUEST,
+                "invalid_email",
+            ),
+            (
+                "forged",
+                "bo@example.org",
+                StatusCode::BAD_REQUEST,
+                "invalid_invitation",
+            ),
+            (
+                invite.plaintext.as_str(),
+                email.as_str(),
+                StatusCode::CONFLICT,
+                "email_taken",
+            ),
+        ] {
+            let reply = register(token, address).await;
+            assert_eq!(
+                (reply.status, reply.json["error"].as_str()),
+                (status, Some(code))
+            );
+            assert!(
+                reply.json["message"]
+                    .as_str()
+                    .is_some_and(|m| !m.is_empty())
+            );
+        }
+        assert_eq!(
+            register(&invite.plaintext, "bo@example.org").await.status,
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn a_race_lost_invitation_is_a_coded_409() {
+        let res = axum::response::IntoResponse::into_response(crate::error::ApiError::Refused {
+            code: "invitation_used",
+            message: "invitation already used".into(),
+        });
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn guessing_the_current_password_is_rate_limited_like_a_login() {
+        let (_state, app, _, _) = app_with_member().await;
+        let mut limited = false;
+        for _ in 0..40 {
+            let reply = call(
+                &app,
+                "POST",
+                "/api/me/password",
+                None,
+                None,
+                Some(json!({ "old_password": "guess", "new_password": "whatever long" })),
+            )
+            .await;
+            if reply.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = true;
+                break;
+            }
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+        }
+        assert!(limited, "the login lane's burst ran out");
+    }
+
+    #[tokio::test]
+    async fn a_deleted_account_loses_its_access_token_at_once() {
+        let (state, app, user, _) = app_with_member().await;
+        let admin = iris_db::test_support::make_user(state.db()).await;
+        sqlx::query("UPDATE users SET is_admin = 1 WHERE id = ?1")
+            .bind(uuid::Uuid::from(admin))
+            .execute(state.db())
+            .await
+            .unwrap();
+        let admin_token = state.jwt().issue_access(admin, true).unwrap();
+        let token = state.jwt().issue_access(user, false).unwrap();
+        assert_eq!(
+            call(&app, "GET", "/api/me", Some(&token), None, None)
+                .await
+                .status,
+            StatusCode::OK
+        );
+        let deleted = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/users/{}", uuid::Uuid::from(user)),
+            Some(&admin_token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(deleted.status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            call(&app, "GET", "/api/me", Some(&token), None, None)
+                .await
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
 }

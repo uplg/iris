@@ -47,7 +47,7 @@ use url::Url;
 
 use crate::SearchProvider;
 use crate::cache::DetailsCache;
-use crate::login_gate::{LoginGate, SessionGeneration};
+use crate::login_gate::{LoginFailure, LoginGate, SessionGeneration};
 use crate::nfo;
 use crate::torznab::TorznabProvider;
 use crate::util::{base_url, field_or_env, optional_field_or_env};
@@ -135,11 +135,11 @@ impl Session {
         self.login_gate.ensure(|| self.login()).await
     }
 
-    async fn login(&self) -> Result<()> {
+    async fn login(&self) -> std::result::Result<(), LoginFailure> {
         let url = self
             .base_url
             .join("/auth/login")
-            .map_err(|e| Error::Provider(format!("v3x login url: {e}")))?;
+            .map_err(|e| LoginFailure::Rejected(Error::Provider(format!("v3x login url: {e}"))))?;
         let res = self
             .http
             .post(url)
@@ -150,20 +150,23 @@ impl Session {
             }))
             .send()
             .await
-            .map_err(|e| crate::util::http_error("v3x login", e))?;
+            .map_err(|e| LoginFailure::Transient(crate::util::http_error("v3x login", e)))?;
         let status = res.status();
         let body: serde_json::Value = res.json().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(Error::Provider(format!("v3x login failed: HTTP {status}")));
+            return Err(LoginFailure::by_status(
+                status,
+                Error::Provider(format!("v3x login failed: HTTP {status}")),
+            ));
         }
         if body
             .get("twoFactorRequired")
             .and_then(serde_json::Value::as_bool)
             == Some(true)
         {
-            return Err(Error::Provider(
+            return Err(LoginFailure::Rejected(Error::Provider(
                 "v3x login needs 2FA, which Iris can't answer — disable it for this account".into(),
-            ));
+            )));
         }
         Ok(())
     }

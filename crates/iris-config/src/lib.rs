@@ -590,6 +590,17 @@ pub struct StorageConfig {
     /// firewall / docker for inbound peer connections.
     #[serde(default = "default_torrent_port")]
     pub torrent_port: u16,
+    /// Free space (GiB) the filesystem holding `download_dir` must keep,
+    /// whatever the budget says: below it the GC evicts until 1.5× this is
+    /// free. 0 turns the floor off.
+    #[serde(default = "default_min_free_gb")]
+    pub min_free_gb: u64,
+    /// Files in `download_dir` no torrent references (and untouched for
+    /// `orphan_min_age_hours`) are only logged unless this is on.
+    #[serde(default)]
+    pub delete_orphan_files: bool,
+    #[serde(default = "default_orphan_min_age_hours")]
+    pub orphan_min_age_hours: u64,
 }
 
 impl StorageConfig {
@@ -597,6 +608,12 @@ impl StorageConfig {
     #[must_use]
     pub fn max_storage_bytes(&self) -> u64 {
         self.max_storage_gb.saturating_mul(1 << 30)
+    }
+
+    /// `min_free_gb` in bytes (GiB).
+    #[must_use]
+    pub fn min_free_bytes(&self) -> u64 {
+        self.min_free_gb.saturating_mul(1 << 30)
     }
 }
 
@@ -611,6 +628,12 @@ fn default_cleanup_target() -> u8 {
 }
 fn default_torrent_port() -> u16 {
     45100
+}
+fn default_min_free_gb() -> u64 {
+    10
+}
+fn default_orphan_min_age_hours() -> u64 {
+    24
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -686,6 +709,11 @@ pub struct ProvidersConfig {
     pub providers: Vec<ProviderEntry>,
 }
 
+/// Bytes of HMAC key below which `auth.jwt_secret` is flagged at boot.
+pub const MIN_JWT_SECRET_BYTES: usize = 32;
+/// The `jwt_secret` of `config/config.toml.example`.
+const EXAMPLE_JWT_SECRET: &str = "change-me-in-production";
+
 impl AppConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
@@ -698,6 +726,38 @@ impl AppConfig {
             .extract()
             .map_err(Box::new)?;
         Ok(cfg)
+    }
+
+    /// What's wrong with `auth.jwt_secret`, if anything: anyone who knows or
+    /// guesses it mints sessions for every account. `Err` refuses to start:
+    /// empty, or the placeholder from the example config, on a server that
+    /// isn't local. `Ok(Some(_))` is a warning: shorter than
+    /// [`MIN_JWT_SECRET_BYTES`], or the placeholder on a local dev server.
+    pub fn jwt_secret_problem(&self) -> Result<Option<String>, String> {
+        let secret = self.auth.jwt_secret.trim();
+        let url = self.server.public_url.trim();
+        let local = ["http://localhost", "http://127.0.0.1", "http://[::1]"]
+            .iter()
+            .any(|p| url.starts_with(p));
+        let placeholder = secret.is_empty() || secret == EXAMPLE_JWT_SECRET;
+        if placeholder && !local {
+            return Err(format!(
+                "auth.jwt_secret is {}: set a random secret of at least {MIN_JWT_SECRET_BYTES} bytes \
+                 (e.g. `openssl rand -base64 48`); changing it signs every session out",
+                if secret.is_empty() {
+                    "empty"
+                } else {
+                    "the example placeholder"
+                }
+            ));
+        }
+        Ok((placeholder || secret.len() < MIN_JWT_SECRET_BYTES).then(|| {
+            format!(
+                "auth.jwt_secret is {} bytes; use a random one of at least {MIN_JWT_SECRET_BYTES} \
+                 (e.g. `openssl rand -base64 48`); changing it signs every session out",
+                secret.len()
+            )
+        }))
     }
 
     /// Whether session cookies get the `Secure` attribute. Explicit
@@ -731,6 +791,38 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_secret(public_url: &str, secret: &str) -> AppConfig {
+        toml::from_str(&format!(
+            "[server]\npublic_url = \"{public_url}\"\n[storage]\ndata_dir = \"d\"\ndownload_dir = \"d/dl\"\n[auth]\njwt_secret = \"{secret}\"\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_weak_jwt_secret_warns_and_a_placeholder_refuses_outside_dev() {
+        let strong = "k".repeat(48);
+        assert_eq!(
+            with_secret("https://iris.example", &strong).jwt_secret_problem(),
+            Ok(None)
+        );
+        assert!(matches!(
+            with_secret("https://iris.example", "short").jwt_secret_problem(),
+            Ok(Some(w)) if w.contains("5 bytes")
+        ));
+        for refused in ["", "change-me-in-production"] {
+            assert!(
+                with_secret("https://iris.example", refused)
+                    .jwt_secret_problem()
+                    .is_err(),
+                "{refused:?}"
+            );
+            assert!(matches!(
+                with_secret("http://localhost:8080", refused).jwt_secret_problem(),
+                Ok(Some(_))
+            ));
+        }
+    }
 
     /// A config with no `[live_tv]` section must still ship the curated FR
     /// fallback playlists — that's what gives every French channel real

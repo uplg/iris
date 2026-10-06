@@ -444,9 +444,13 @@ mod tests {
         let show = collections::create_standalone(&pool, "Severance", Kind::Tv)
             .await
             .unwrap();
-        collections::set_parsed_title_normalized(&pool, show.id, "severance")
-            .await
-            .unwrap();
+        let rekey = collections::Rekey {
+            key: "severance",
+            display_title: "Severance",
+            is_anime: None,
+            tmdb: collections::TmdbChange::Keep,
+        };
+        assert!(collections::rekey(&pool, show.id, rekey).await.unwrap());
         let pack = torrents::upsert(
             &pool,
             NewTorrent {

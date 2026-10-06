@@ -27,14 +27,13 @@ where
 {
     type Rejection = ApiError;
 
-    fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> impl Future<Output = Result<Self, Self::Rejection>> {
-        // Nothing here awaits — the token is in the headers and verification
-        // is pure CPU — so hand axum a ready future instead of an async block
-        // that would poll once for nothing.
-        std::future::ready(Self::from_parts(parts, &AppState::from_ref(state)))
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let app = AppState::from_ref(state);
+        let user = Self::from_parts(parts, &app)?;
+        app.session_cuts()
+            .check(app.db(), user.id, user.claims.issued_at_ms())
+            .await?;
+        Ok(user)
     }
 }
 

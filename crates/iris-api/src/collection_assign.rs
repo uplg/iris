@@ -254,14 +254,8 @@ async fn prewarm_tv_collection(
 /// fuzzy near-miss doesn't attach the wrong show's id. TV shows only
 /// (`!is_movie`).
 async fn anilist_id_for(anilist: Option<&AniListClient>, title: &str) -> Option<i64> {
-    let client = anilist?;
-    let want = filename::series_key(title);
-    client
-        .search(title)
-        .await
-        .into_iter()
-        .find(|m| !m.is_movie && filename::series_key(&m.title) == want)
-        .map(|m| m.anilist_id)
+    let results = anilist?.search(title).await;
+    crate::anilist::strict_match(&results, title, false, None).map(|m| m.anilist_id)
 }
 
 fn guess_kind(
@@ -460,16 +454,16 @@ async fn reconcile_scene_episodes(pool: &SqlitePool, infohash: &str, files: &[(u
 ///   sweep resolves instead (see [`merge_same_tmdb_splits`]).
 /// - Only names with a structural parse (season or year) are
 ///   candidates — without that we have no clean title to write.
-/// - When the key DOES change, the collection's `tmdb_id` was
-///   resolved from the old (wrong) title: it is cleared and
-///   immediately re-resolved from the corrected identity.
-async fn heal_tv_collection_identity(pool: &SqlitePool, deps: EnrichDeps<'_>, infohash: &str) {
-    let Ok(Some(torrent)) = iris_db::torrents::find_by_infohash(pool, infohash).await else {
-        return;
-    };
-    let Some(collection_id) = torrent.collection_id else {
-        return;
-    };
+/// - When the key DOES change, the TMDB match is re-evaluated from the
+///   corrected identity first ([`crate::tmdb_trust::on_rekey`]): a trusted
+///   new match replaces the old one, a trusted old one stays without one,
+///   a weak one (it came from the old title) goes; TMDB unreachable defers
+///   the whole re-key to a later tick.
+async fn heal_tv_collection_identity(
+    pool: &SqlitePool,
+    deps: EnrichDeps<'_>,
+    collection_id: uuid::Uuid,
+) {
     let Ok(Some(collection)) = iris_db::collections::get(pool, collection_id).await else {
         return;
     };
@@ -519,32 +513,32 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, deps: EnrichDeps<'_>, in
         return;
     }
     let new_display = parsed.display_with_year(true);
-    if let Err(e) =
-        iris_db::collections::set_parsed_title_normalized(pool, collection_id, &new_key).await
-    {
-        tracing::warn!(error = %e, collection_id = %collection_id, "heal: set_parsed_title_normalized failed");
+    // The TMDB side is decided before anything is written: TMDB unreachable
+    // leaves the whole re-key to a later pass, so it is retried, and a trusted
+    // id is only ever replaced by another trusted match.
+    let Ok(tmdb) = crate::tmdb_trust::on_rekey(pool, deps.tmdb, &collection, &new_display).await
+    else {
+        tracing::debug!(collection_id = %collection_id, "heal: TMDB unreachable, re-key deferred");
         return;
+    };
+    let rekey = iris_db::collections::Rekey {
+        key: &new_key,
+        display_title: &new_display,
+        is_anime: None,
+        tmdb: tmdb.as_change(),
+    };
+    match iris_db::collections::rekey(pool, collection_id, rekey).await {
+        Ok(true) => tracing::info!(
+            collection_id = %collection_id,
+            old_key = %current_key,
+            new_key = %new_key,
+            new_display = %new_display,
+            tmdb = ?tmdb,
+            "TV collection identity self-healed from torrent-name consensus",
+        ),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(error = %e, collection_id = %collection_id, "heal: re-key failed"),
     }
-    if let Err(e) = iris_db::collections::set_display_title(pool, collection_id, &new_display).await
-    {
-        tracing::warn!(error = %e, collection_id = %collection_id, "heal: set_display_title failed");
-        return;
-    }
-    // The old tmdb_id was resolved from the old title — poison now that
-    // the identity changed. Clear it and re-resolve from the corrected
-    // display title right away (first-writer-wins semantics start over).
-    if let Err(e) = iris_db::collections::clear_tmdb_id(pool, collection_id).await {
-        tracing::warn!(error = %e, collection_id = %collection_id, "heal: clear_tmdb_id failed");
-    } else if let Ok(Some(fresh)) = iris_db::collections::get(pool, collection_id).await {
-        resolve_collection_tmdb(pool, deps, &fresh).await;
-    }
-    tracing::info!(
-        collection_id = %collection_id,
-        old_key = %current_key,
-        new_key = %new_key,
-        new_display = %new_display,
-        "TV collection identity self-healed from torrent-name consensus",
-    );
 }
 
 /// The identity the collection's torrent names agree on: among all
@@ -557,9 +551,20 @@ fn consensus_identity<'a, I>(names: I) -> Option<filename::Parsed>
 where
     I: Iterator<Item = &'a str>,
 {
+    consensus_identity_by(names, filename::parse)
+}
+
+/// [`consensus_identity`] under a given parser (the parse dry run compares two).
+pub(crate) fn consensus_identity_by<'a, I>(
+    names: I,
+    parse: fn(&str) -> Option<filename::Parsed>,
+) -> Option<filename::Parsed>
+where
+    I: Iterator<Item = &'a str>,
+{
     let mut best: Option<(String, filename::Parsed)> = None;
     for name in names {
-        let Some(p) = filename::parse(name) else {
+        let Some(p) = parse(name) else {
             continue;
         };
         if !is_structural(&p) {
@@ -700,14 +705,20 @@ impl AnimeHeal<'_> {
     /// Pure, uncollided source row → rewrite its key / title / flag.
     async fn rename_in_place(&self) {
         let display = self.parsed.display_with_year(true);
-        if collections::set_parsed_title_normalized(self.pool, self.source_id, &self.new_key)
-            .await
-            .is_err()
-        {
-            return;
+        let rekey = collections::Rekey {
+            key: &self.new_key,
+            display_title: &display,
+            is_anime: Some(self.is_anime),
+            tmdb: collections::TmdbChange::Keep,
+        };
+        match collections::rekey(self.pool, self.source_id, rekey).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                tracing::warn!(error = %e, collection_id = %self.source_id, "anime heal: re-key failed");
+                return;
+            }
         }
-        let _ = collections::set_display_title(self.pool, self.source_id, &display).await;
-        let _ = collections::set_is_anime(self.pool, self.source_id, self.is_anime, None).await;
         backfill_episode_absolutes(self.pool, self.infohash, self.files).await;
         tracing::info!(
             collection_id = %self.source_id,
@@ -890,15 +901,19 @@ async fn heal_anime_batch_metadata(
         {
             return;
         }
-        if let Err(e) =
-            collections::set_parsed_title_normalized(pool, collection_id, &new_key).await
-        {
-            tracing::warn!(error = %e, collection_id = %collection_id, "anime batch heal: set key failed");
-            return;
-        }
-        if let Err(e) = collections::set_display_title(pool, collection_id, &new_display).await {
-            tracing::warn!(error = %e, collection_id = %collection_id, "anime batch heal: set display failed");
-            return;
+        let rekey = collections::Rekey {
+            key: &new_key,
+            display_title: &new_display,
+            is_anime: None,
+            tmdb: collections::TmdbChange::Keep,
+        };
+        match collections::rekey(pool, collection_id, rekey).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                tracing::warn!(error = %e, collection_id = %collection_id, "anime batch heal: re-key failed");
+                return;
+            }
         }
         tracing::info!(
             collection_id = %collection_id,
@@ -964,27 +979,32 @@ async fn heal_bracketed_display_titles(pool: &SqlitePool, deps: EnrichDeps<'_>) 
             continue;
         };
         let is_tv = c.is_tv();
-        let kind = if is_tv { Kind::Tv } else { Kind::Movie };
         let new_display = parsed.display_with_year(is_tv);
         if new_display.is_empty() || new_display == c.display_title {
             continue;
         }
         let new_key = parsed.collection_key_kind(is_tv, c.is_anime);
         let current_key = c.parsed_title_normalized.as_deref().unwrap_or("");
-        if !new_key.is_empty() && new_key != current_key {
-            let owned_elsewhere = matches!(
-                collections::find_by_parsed_title(pool, &new_key, kind).await,
-                Ok(Some(other)) if other.id != c.id
-            );
-            if !owned_elsewhere
-                && let Err(e) = collections::set_parsed_title_normalized(pool, c.id, &new_key).await
-            {
-                tracing::warn!(error = %e, collection_id = %c.id, "bracket heal: set key failed");
-                continue;
-            }
-        }
-        if let Err(e) = collections::set_display_title(pool, c.id, &new_display).await {
-            tracing::warn!(error = %e, collection_id = %c.id, "bracket heal: set display failed");
+        // A canonical key another collection owns stays its owner's: only the
+        // display title is cleaned then.
+        let rekeyed = if new_key.is_empty() || new_key == current_key {
+            Ok(false)
+        } else {
+            let rekey = collections::Rekey {
+                key: &new_key,
+                display_title: &new_display,
+                is_anime: None,
+                tmdb: collections::TmdbChange::Keep,
+            };
+            collections::rekey(pool, c.id, rekey).await
+        };
+        let written = match rekeyed {
+            Ok(true) => Ok(()),
+            Ok(false) => collections::set_display_title(pool, c.id, &new_display).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = written {
+            tracing::warn!(error = %e, collection_id = %c.id, "bracket heal: rename failed");
             continue;
         }
         tracing::info!(
@@ -1015,7 +1035,9 @@ async fn merge_same_tmdb_splits(
     let mut by_entity: std::collections::HashMap<(String, i64), Vec<&CollectionRow>> =
         std::collections::HashMap::new();
     for c in &cols {
-        if let Some(tmdb) = c.tmdb_id {
+        if let Some(tmdb) = c.tmdb_id
+            && crate::tmdb_trust::is_identity_trust(c.tmdb_trust.as_deref())
+        {
             by_entity.entry((c.kind.clone(), tmdb)).or_default().push(c);
         }
     }
@@ -1074,6 +1096,12 @@ async fn try_merge_twin(
     if anime.tmdb_id != Some(tmdb) || plain.tmdb_id != Some(tmdb) {
         return;
     }
+    // Two weak ids agreeing proves nothing: a merge can't be undone.
+    if !crate::tmdb_trust::is_identity_trust(anime.tmdb_trust.as_deref())
+        || !crate::tmdb_trust::is_identity_trust(plain.tmdb_trust.as_deref())
+    {
+        return;
+    }
     merge_collection_into(pool, providers, &plain, &anime).await;
 }
 
@@ -1123,6 +1151,9 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
         }
     };
     let mut done = 0;
+    // The identity heal reads every sibling of a collection: once per
+    // collection and tick, not once per member torrent.
+    let mut tv_to_heal: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
     for row in rows {
         if row.collection_id.is_some() {
             // Self-heal stale episode numbers from a since-improved
@@ -1159,7 +1190,7 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
                 // ("Silicon Valley - 1x01 - … Multi Papaya") AND kept
                 // truncated file titles ("Goblin") over the richer torrent
                 // name. Re-derives from torrent-name consensus.
-                heal_tv_collection_identity(pool, deps, &row.infohash).await;
+                tv_to_heal.extend(row.collection_id);
             }
             continue;
         }
@@ -1174,6 +1205,9 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
             snap.files.into_iter().map(|f| (f.index, f.path)).collect();
         assign_after_ingest(pool, deps, &row.infohash, &row.name, &files).await;
         done += 1;
+    }
+    for id in tv_to_heal {
+        heal_tv_collection_identity(pool, deps, id).await;
     }
     if done > 0 {
         tracing::info!(count = done, "collection backfill complete");
@@ -1233,6 +1267,130 @@ mod tests {
         )
         .expect("consensus");
         assert_eq!(got.title, "Goblin The Lonely and Great God");
+    }
+
+    const NO_DEPS: EnrichDeps<'static> = EnrichDeps {
+        tmdb: None,
+        anilist: None,
+        providers: None,
+    };
+
+    async fn set_tmdb(pool: &SqlitePool, id: uuid::Uuid, tmdb: Option<i64>, trust: Option<&str>) {
+        sqlx::query("UPDATE collections SET tmdb_id = ?1, tmdb_trust = ?2 WHERE id = ?3")
+            .bind(tmdb)
+            .bind(trust)
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn attach(pool: &SqlitePool, collection: uuid::Uuid, name: &str) -> String {
+        let user = iris_db::test_support::make_user(pool).await;
+        let t = iris_db::torrents::upsert(
+            pool,
+            iris_db::torrents::NewTorrent {
+                infohash: uuid::Uuid::new_v4().simple().to_string(),
+                name: name.to_owned(),
+                total_size_bytes: 1,
+                source_provider: None,
+                source_external_id: None,
+                tracker_tmdb_id: None,
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        iris_db::torrents::set_collection(pool, &t.infohash, Some(collection))
+            .await
+            .unwrap();
+        t.infohash
+    }
+
+    #[tokio::test]
+    async fn same_tmdb_splits_merge_only_on_trusted_ids() {
+        let pool = iris_db::test_support::migrated_pool().await;
+        let long = collections::find_or_create(
+            &pool,
+            "goblin the lonely and great god",
+            "Goblin The Lonely and Great God",
+            Kind::Tv,
+            false,
+        )
+        .await
+        .unwrap();
+        let short = collections::find_or_create(&pool, "goblin", "Goblin", Kind::Tv, false)
+            .await
+            .unwrap();
+        for weak in [None, Some("tracker")] {
+            set_tmdb(&pool, long.id, Some(67_915), weak).await;
+            set_tmdb(&pool, short.id, Some(67_915), weak).await;
+            merge_same_tmdb_splits(&pool, None).await;
+            assert!(
+                collections::get(&pool, short.id).await.unwrap().is_some(),
+                "{weak:?} ids agreeing merge nothing"
+            );
+        }
+        set_tmdb(&pool, long.id, Some(67_915), Some("scene")).await;
+        set_tmdb(&pool, short.id, Some(67_915), Some("tracker_scene")).await;
+        merge_same_tmdb_splits(&pool, None).await;
+        assert!(collections::get(&pool, short.id).await.unwrap().is_none());
+        assert!(collections::get(&pool, long.id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_heal_rekey_keeps_a_trusted_id_carries_follows_and_drops_a_weak_one() {
+        for (trust, kept) in [
+            (Some("scene"), Some(7)),
+            (Some("admin"), Some(7)),
+            (None, None),
+        ] {
+            let pool = iris_db::test_support::migrated_pool().await;
+            let col = collections::find_or_create(&pool, "dr", "Dr", Kind::Tv, false)
+                .await
+                .unwrap();
+            set_tmdb(&pool, col.id, Some(7), trust).await;
+            let fan = iris_db::test_support::make_user(&pool).await;
+            iris_db::follows::add(&pool, fan, "dr", "Dr", None)
+                .await
+                .unwrap();
+            attach(&pool, col.id, "Dr. Stone S03E01 1080p WEB").await;
+
+            heal_tv_collection_identity(&pool, NO_DEPS, col.id).await;
+
+            let healed = collections::get(&pool, col.id).await.unwrap().unwrap();
+            assert_eq!(healed.parsed_title_normalized.as_deref(), Some("dr stone"));
+            assert_eq!(healed.display_title, "Dr Stone");
+            assert_eq!(
+                (healed.tmdb_id, healed.tmdb_trust.as_deref()),
+                (kept, trust.filter(|_| kept.is_some())),
+                "{trust:?}"
+            );
+            let follows = iris_db::follows::list_for_user(&pool, fan).await.unwrap();
+            assert_eq!(
+                follows
+                    .iter()
+                    .map(|f| f.normalized_name.as_str())
+                    .collect::<Vec<_>>(),
+                ["dr stone"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_backfill_heals_each_collection_once_from_all_its_members() {
+        let pool = iris_db::test_support::migrated_pool().await;
+        let col = collections::find_or_create(&pool, "dr", "Dr", Kind::Tv, false)
+            .await
+            .unwrap();
+        attach(&pool, col.id, "Dr. Stone S03E01 1080p WEB").await;
+        attach(&pool, col.id, "Dr. Stone S03E02 1080p WEB").await;
+        let dir = std::env::temp_dir().join(format!("iris-backfill-{}", uuid::Uuid::new_v4()));
+        let engine = iris_torrent::Engine::offline(dir.clone()).await.unwrap();
+        run_backfill(&pool, NO_DEPS, &engine).await;
+        let healed = collections::get(&pool, col.id).await.unwrap().unwrap();
+        assert_eq!(healed.parsed_title_normalized.as_deref(), Some("dr stone"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

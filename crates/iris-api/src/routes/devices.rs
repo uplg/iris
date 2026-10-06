@@ -22,7 +22,6 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::auth::issue_device_session;
 use crate::routes::extract::{AuthUser, Path};
 use crate::state::AppState;
 
@@ -36,6 +35,7 @@ pub fn me_router() -> Router<AppState> {
     Router::new()
         .route("/", axum::routing::get(list).post(link))
         .route("/{jti}", axum::routing::delete(revoke))
+        .route("/link/{code}", axum::routing::get(link_status))
 }
 
 const DEVICE_CODE_TTL_SECS: i64 = 600; // 10 minutes
@@ -141,24 +141,30 @@ pub(crate) async fn poll(
     let user = iris_db::users::find_by_id(state.db(), UserId::from(user_id))
         .await?
         .ok_or(ApiError::NotFound)?;
+    // Linked by a session the password change since ended: the pairing went
+    // with it.
+    let cut = iris_db::users::sessions_valid_after(state.db(), user.id)
+        .await?
+        .flatten();
+    if cut.is_some_and(|cut| row.claimed_at.is_none_or(|at| at < cut)) {
+        return Ok((jar, Json(PollResponse::Expired)));
+    }
 
     // Hand the device back a real session via the same cookie path the web
-    // login uses, with a longer refresh TTL and labelled with the device
-    // kind so the user can revoke it in their account UI.
-    if let Some(previous) = row.session_jti {
-        iris_db::refresh_tokens::revoke(state.db(), previous).await?;
+    // login uses, with the device TTL and labelled with the device kind so the
+    // user can revoke it in their account UI.
+    let new =
+        crate::routes::auth::new_session(&state, user.id, row.label.as_deref(), Some(&row.kind));
+    if !iris_db::refresh_tokens::replace_for_device_code(state.db(), row.device_id, &new).await? {
+        return Ok((jar, Json(PollResponse::Expired)));
     }
-    let (jar, jti) = issue_device_session(
+    let jar = crate::routes::auth::session_cookies(
         &state,
         &jar,
         user.id,
         user.is_admin,
-        Some(state.cfg().auth.device_refresh_ttl_secs),
-        row.label.as_deref(),
-        Some(&row.kind),
-    )
-    .await?;
-    iris_db::device_codes::set_session(state.db(), row.device_id, jti).await?;
+        &crate::routes::auth::stored(&new),
+    )?;
 
     Ok((
         jar,
@@ -212,6 +218,67 @@ pub(crate) async fn link(
         return Err(ApiError::Conflict("code already claimed or expired".into()));
     }
     Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkState {
+    /// Claimed; the device hasn't collected its session yet.
+    Pending,
+    /// The device polled and signed in.
+    Linked,
+    /// The code ran out before the device signed in, or the password change
+    /// since ended the session that claimed it.
+    Expired,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LinkStatus {
+    pub status: LinkState,
+}
+
+/// Whether the device behind a code the caller linked has signed in. Read
+/// only: issues nothing. Visible to whoever claimed the code, and admins.
+#[utoipa::path(
+    get,
+    path = "/api/me/devices/link/{code}",
+    operation_id = "device_link_status",
+    params(("code" = String, Path, description = "The pairing code the caller linked")),
+    responses(
+        (status = 200, description = "Where the pairing stands", body = LinkStatus),
+        (status = 404, description = "No such code, or not one the caller claimed"),
+    ),
+    tag = "devices",
+)]
+pub(crate) async fn link_status(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(code): Path<String>,
+) -> ApiResult<Json<LinkStatus>> {
+    let code = code.trim().to_ascii_uppercase();
+    let row = iris_db::device_codes::find_by_code(state.db(), &code)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let Some(claimer) = row.claimed_by else {
+        return Err(ApiError::NotFound);
+    };
+    if claimer != Uuid::from(user.id) && !user.is_admin {
+        return Err(ApiError::NotFound);
+    }
+    let cut = iris_db::users::sessions_valid_after(state.db(), UserId::from(claimer))
+        .await?
+        .flatten();
+    let cut_off = cut.is_some_and(|cut| row.claimed_at.is_none_or(|at| at < cut));
+    let status = if cut_off {
+        LinkState::Expired
+    } else if row.session_jti.is_some() {
+        LinkState::Linked
+    } else if row.expires_at < Utc::now() {
+        LinkState::Expired
+    } else {
+        LinkState::Pending
+    };
+    Ok(Json(LinkStatus { status }))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -300,6 +367,82 @@ fn generate_code() -> String {
 #[cfg(test)]
 mod tests {
     use super::bounded;
+    use crate::routes::auth::tests::{app_with_member, call};
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn the_link_status_follows_the_device_and_only_its_claimer_sees_it() {
+        let (state, app, user, _) = app_with_member().await;
+        let token = state.jwt().issue_access(user, false).unwrap();
+        let stranger = iris_db::test_support::make_user(state.db()).await;
+        let stranger = state.jwt().issue_access(stranger, false).unwrap();
+        let code = iris_db::device_codes::create(
+            state.db(),
+            "ABCD-2345",
+            chrono::Utc::now() + chrono::Duration::minutes(10),
+            "android-tv",
+        )
+        .await
+        .unwrap();
+        let status = |bearer: String| {
+            let app = app.clone();
+            async move {
+                call(
+                    &app,
+                    "GET",
+                    "/api/me/devices/link/abcd-2345",
+                    Some(&bearer),
+                    None,
+                    None,
+                )
+                .await
+            }
+        };
+        assert_eq!(
+            status(token.clone()).await.status,
+            StatusCode::NOT_FOUND,
+            "unclaimed"
+        );
+
+        let linked = call(
+            &app,
+            "POST",
+            "/api/me/devices",
+            Some(&token),
+            None,
+            Some(serde_json::json!({ "code": "ABCD-2345" })),
+        )
+        .await;
+        assert_eq!(linked.status, StatusCode::NO_CONTENT);
+        let pending = status(token.clone()).await;
+        assert_eq!(pending.json["status"], "pending");
+        assert_eq!(status(stranger).await.status, StatusCode::NOT_FOUND);
+        assert!(pending.cookie("iris_refresh").is_none(), "issues nothing");
+        let still = iris_db::device_codes::find_by_device_id(state.db(), code.device_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(still.session_jti, None, "no side effect");
+
+        let polled = call(
+            &app,
+            "GET",
+            &format!("/api/auth/device/poll/{}", code.device_id),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(polled.json["status"], "linked");
+        assert_eq!(status(token.clone()).await.json["status"], "linked");
+
+        sqlx::query("UPDATE device_codes SET expires_at = ?1, session_jti = NULL")
+            .bind(chrono::Utc::now() - chrono::Duration::minutes(1))
+            .execute(state.db())
+            .await
+            .unwrap();
+        assert_eq!(status(token).await.json["status"], "expired");
+    }
 
     #[test]
     fn a_device_tag_is_cut_to_64_bytes_on_a_char_boundary() {

@@ -8,6 +8,9 @@
 //! engine snapshots every 30 s and merges deltas into
 //! `torrents.uploaded_bytes_total`.
 //!
+//! It also pauses engine torrents no live row owns (see
+//! `iris_torrent::removal::sweep_strays`).
+//!
 //! The same walk is the natural place to leave the swarm on torrents whose
 //! provider declared `seed = false`: a torrent is only ever "finished" as
 //! observed here, and the check has to be re-run after every restart anyway
@@ -38,6 +41,9 @@ pub fn spawn(pool: SqlitePool, engine: Arc<Engine>, providers: ProviderRegistry)
 }
 
 async fn reconcile_once(pool: &SqlitePool, engine: &Engine, providers: &ProviderRegistry) {
+    if let Err(e) = iris_torrent::removal::sweep_strays(engine, pool).await {
+        tracing::warn!(error = %e, "stray torrent sweep failed");
+    }
     let no_seed = no_seed_infohashes(pool, providers).await;
     let snapshots = engine.list();
     // Upload deltas, download max (so ratios divide two lifetime

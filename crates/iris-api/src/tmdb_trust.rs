@@ -581,6 +581,82 @@ pub(crate) async fn refresh_collection<S: TmdbSource>(
     }
 }
 
+/// A match backed strongly enough to merge collections on, or to keep through
+/// a re-key until another trusted one replaces it: admin, or a strict SCENE
+/// match (with or without a tracker agreeing). A tracker id alone or a legacy
+/// id (no trust) is not.
+pub fn is_identity_trust(stored: Option<&str>) -> bool {
+    matches!(
+        stored.and_then(Trust::from_stored),
+        Some(Trust::Admin | Trust::TrackerScene | Trust::Scene)
+    )
+}
+
+/// What re-keying a collection to `new_display` does to its TMDB match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnRekey {
+    Keep,
+    Clear,
+    Trusted(i64, Trust),
+}
+
+impl OnRekey {
+    pub fn as_change(self) -> iris_db::collections::TmdbChange<'static> {
+        match self {
+            Self::Keep => iris_db::collections::TmdbChange::Keep,
+            Self::Clear => iris_db::collections::TmdbChange::Clear,
+            Self::Trusted(id, trust) => {
+                iris_db::collections::TmdbChange::Trusted(id, trust.as_str())
+            }
+        }
+    }
+}
+
+/// The TMDB side of a re-key, decided BEFORE it is written so a failed
+/// evaluation leaves the whole re-key for a later pass: an admin match stays;
+/// a trusted match of the new identity replaces whatever was there; with none,
+/// a trusted id stays (until a trusted one replaces it) and a weaker one, which
+/// came from the old title, goes. `tmdb: None` (no TMDB configured) decides on
+/// the stored trust alone.
+pub(crate) async fn on_rekey<S: TmdbSource>(
+    pool: &SqlitePool,
+    tmdb: Option<&S>,
+    collection: &iris_db::collections::CollectionRow,
+    new_display: &str,
+) -> Result<OnRekey, Unreachable> {
+    let stored = collection.tmdb_trust.as_deref();
+    if stored.and_then(Trust::from_stored) == Some(Trust::Admin) {
+        return Ok(OnRekey::Keep);
+    }
+    let without_match = if is_identity_trust(stored) {
+        OnRekey::Keep
+    } else if collection.tmdb_id.is_some() {
+        OnRekey::Clear
+    } else {
+        OnRekey::Keep
+    };
+    let Some(tmdb) = tmdb else {
+        return Ok(without_match);
+    };
+    let trackers: Vec<u64> = iris_db::collections::tracker_tmdb_ids(pool, collection.id)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, collection_id = %collection.id, "re-key: tracker ids read failed");
+            Unreachable
+        })?
+        .into_iter()
+        .filter_map(|i| u64::try_from(i).ok())
+        .collect();
+    let kind = TmdbKind::from_wire(&collection.kind);
+    let eval = evaluate(pool, tmdb, new_display, kind, &trackers).await?;
+    Ok(match eval.decision {
+        Some((id, trust)) => {
+            i64::try_from(id).map_or(without_match, |id| OnRekey::Trusted(id, trust))
+        }
+        None => without_match,
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::HashMap;
@@ -929,6 +1005,83 @@ pub(crate) mod tests {
                 .unwrap_err(),
             Unreachable
         );
+    }
+
+    #[tokio::test]
+    async fn a_rekey_keeps_a_trusted_id_until_a_trusted_one_replaces_it() {
+        use iris_db::collections::{Kind, find_or_create, get};
+        let pool = iris_db::test_support::migrated_pool().await;
+        let c = find_or_create(&pool, "dr", "Dr", Kind::Tv, false)
+            .await
+            .unwrap();
+        let set = |trust: Option<&'static str>, id: Option<i64>| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query("UPDATE collections SET tmdb_id = ?1, tmdb_trust = ?2 WHERE id = ?3")
+                    .bind(id)
+                    .bind(trust)
+                    .bind(c.id)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                get(&pool, c.id).await.unwrap().unwrap()
+            }
+        };
+        let mut tmdb = FakeTmdb::default();
+        tmdb.searches.insert(
+            "dr stone".into(),
+            vec![suggestion(86_031, TmdbKind::Tv, "Dr. Stone", 2019)],
+        );
+        let none = FakeTmdb::default();
+        let offline = FakeTmdb {
+            offline: true,
+            ..FakeTmdb::default()
+        };
+
+        let scene = set(Some("scene"), Some(7)).await;
+        assert_eq!(
+            on_rekey(&pool, Some(&tmdb), &scene, "Dr Stone").await,
+            Ok(OnRekey::Trusted(86_031, Trust::Scene))
+        );
+        sqlx::query("DELETE FROM tmdb_resolve_cache")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            on_rekey(&pool, Some(&none), &scene, "Dr Stone").await,
+            Ok(OnRekey::Keep),
+            "no new trusted match: the trusted id stays"
+        );
+        sqlx::query("DELETE FROM tmdb_resolve_cache")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            on_rekey(&pool, Some(&offline), &scene, "Dr Stone").await,
+            Err(Unreachable),
+            "TMDB down: decide nothing, retried on a later pass"
+        );
+        assert_eq!(
+            on_rekey::<FakeTmdb>(&pool, None, &scene, "Dr Stone").await,
+            Ok(OnRekey::Keep)
+        );
+
+        let admin = set(Some("admin"), Some(7)).await;
+        assert_eq!(
+            on_rekey(&pool, Some(&tmdb), &admin, "Dr Stone").await,
+            Ok(OnRekey::Keep)
+        );
+        for weak in [Some("tracker"), None] {
+            let row = set(weak, Some(7)).await;
+            assert_eq!(
+                on_rekey(&pool, Some(&none), &row, "Dr Stone").await,
+                Ok(OnRekey::Clear),
+                "{weak:?} came from the old title"
+            );
+        }
+        assert!(is_identity_trust(Some("tracker_scene")));
+        assert!(!is_identity_trust(Some("tracker")));
+        assert!(!is_identity_trust(None));
     }
 
     #[tokio::test]

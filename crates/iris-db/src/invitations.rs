@@ -8,7 +8,8 @@ use uuid::Uuid;
 pub struct Invitation {
     pub id: Uuid,
     pub token_hash: String,
-    pub created_by: Uuid,
+    /// `None` once the admin who made it is deleted.
+    pub created_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub consumed_at: Option<DateTime<Utc>>,
@@ -41,7 +42,7 @@ pub async fn create(pool: &SqlitePool, new: NewInvitation) -> Result<Invitation,
     Ok(Invitation {
         id,
         token_hash: new.token_hash,
-        created_by: creator,
+        created_by: Some(creator),
         created_at: now,
         expires_at: new.expires_at,
         consumed_at: None,
@@ -105,4 +106,31 @@ pub async fn revoke(pool: &SqlitePool, id: InvitationId) -> Result<bool, sqlx::E
         .execute(pool)
         .await?;
     Ok(res.rows_affected() == 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{make_user, migrated_pool};
+
+    #[tokio::test]
+    async fn an_invitation_outlives_the_admin_who_made_it() {
+        let pool = migrated_pool().await;
+        let admin = make_user(&pool).await;
+        let heir = make_user(&pool).await;
+        let made = create(
+            &pool,
+            NewInvitation {
+                token_hash: "h".into(),
+                created_by: admin,
+                expires_at: Utc::now() + chrono::Duration::days(1),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(crate::users::delete(&pool, admin, heir).await.unwrap());
+        let left = list(&pool).await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!((left[0].id, left[0].created_by), (made.id, None));
+    }
 }

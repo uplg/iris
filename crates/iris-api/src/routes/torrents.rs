@@ -5,7 +5,6 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::{get, post};
-use iris_core::ids::TorrentId;
 use iris_core::search::{MediaKind, TorrentSource};
 use iris_torrent::{TorrentPreview, TorrentSnapshot};
 use serde::{Deserialize, Serialize};
@@ -1236,20 +1235,11 @@ pub(crate) async fn remove(
     Path(infohash): Path<Infohash>,
 ) -> ApiResult<StatusCode> {
     let row = owned_row(&state, &user, &infohash).await?;
-    // Capture the final upload delta before the engine drops the torrent —
-    // otherwise the bytes uploaded since the last 30 s reconcile tick are
-    // lost forever.
-    if let Some(snap) = state.engine().get_by_infohash(&row.infohash) {
-        let _ =
-            iris_db::torrents::reconcile_uploaded(state.db(), &row.infohash, snap.uploaded_bytes)
-                .await;
-    }
-    match state.engine().delete_by_infohash(&row.infohash, true).await {
-        // Not in the engine (it failed to restore after a restart): the row
-        // must still be removable.
-        Ok(()) | Err(iris_torrent::EngineError::NotFound) => {}
-        Err(e) => return Err(ApiError::Internal(anyhow::anyhow!("engine delete: {e}"))),
-    }
+    // Not in the engine (it failed to restore after a restart): the row is
+    // still removed. Files the same release from another tracker reads stay.
+    iris_torrent::removal::remove_torrent(state.engine(), state.db(), &row)
+        .await
+        .map_err(ApiError::Internal)?;
     // Cascade the removal into `episode_files`. Soft-deleting the torrent
     // row + dropping the handle + wiping files would otherwise leave the
     // (collection, season, episode) → infohash mappings behind, and the
@@ -1269,7 +1259,6 @@ pub(crate) async fn remove(
         &row.infohash,
     )
     .await;
-    iris_db::torrents::soft_delete(state.db(), TorrentId::from(row.id)).await?;
     super::audit(
         &state,
         user.id,
@@ -1449,7 +1438,7 @@ fn map_probe_err(e: &iris_media::ProbeError, torrent_finished: bool) -> ApiError
         // any client retry-policy that keys on either phrasing keeps
         // polling (web regex + older shipped APKs — strict no-break-APK
         // discipline, see CLAUDE.md backward-compat).
-        ApiError::BadRequest(format!(
+        not_on_disk(format!(
             "file not yet on disk: download in progress ({msg})"
         ))
     } else {
@@ -2018,7 +2007,7 @@ async fn serve_subtitle(
         .file_path(infohash, idx)
         .map_err(map_engine_err)?;
     if !path.exists() {
-        return Err(ApiError::BadRequest("file not yet on disk".into()));
+        return Err(not_on_disk("file not yet on disk".into()));
     }
 
     // DB stamp first — the snapshot can't answer "finished" during the
@@ -2542,19 +2531,36 @@ fn ensure_probe_readable(
         && s.peers == 0
         && s.download_speed_bps == 0
     {
-        return Err(ApiError::Conflict(format!(
-            "stalled: no seeders for this file ({:.0}% downloaded, 0 peers, 0 B/s) — \
-                     nothing to read yet",
-            s.progress_pct
-        )));
+        return Err(stalled(s.progress_pct));
     }
     if !path.exists() {
-        return Err(ApiError::BadRequest(format!(
+        return Err(not_on_disk(format!(
             "file not yet on disk: {}",
             path.display()
         )));
     }
     Ok(())
+}
+
+/// The non-retryable "dead swarm" 409. Shipped clients match `stalled:` /
+/// "no seeders" in the message, newer ones the code.
+fn stalled(progress_pct: f64) -> ApiError {
+    ApiError::Refused {
+        code: "stalled",
+        message: format!(
+            "stalled: no seeders for this file ({progress_pct:.0}% downloaded, 0 peers, 0 B/s) — \
+             nothing to read yet"
+        ),
+    }
+}
+
+/// The retryable "keep polling" 400. Shipped clients match the message's
+/// "not yet on disk" token, newer ones the code.
+fn not_on_disk(message: String) -> ApiError {
+    ApiError::Invalid {
+        code: "not_on_disk",
+        message,
+    }
 }
 
 /// `416` with the `bytes */{total}` the RFC asks for.
@@ -2616,9 +2622,17 @@ pub(crate) async fn discard_unrecorded(state: &AppState, result: &iris_torrent::
     if result.already_managed {
         return;
     }
+    let infohash = &result.snapshot.infohash;
+    let own;
+    let held = if let Some(held) = result.lock() {
+        held
+    } else {
+        own = state.engine().lock(infohash).await;
+        &own
+    };
     if let Err(e) = state
         .engine()
-        .delete_by_infohash(&result.snapshot.infohash, true)
+        .delete_by_infohash(infohash, held, false)
         .await
     {
         tracing::warn!(
@@ -2693,6 +2707,62 @@ mod range_tests {
         assert_eq!(parse_range(&r("bytes=-10"), 100), Some((90, 99)));
         assert_eq!(parse_range(&r("bytes=100-"), 100), None);
         assert_eq!(parse_range(&r("bytes=-0"), 100), None);
+    }
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use axum::response::IntoResponse;
+
+    async fn rendered(e: crate::error::ApiError) -> (http::StatusCode, serde_json::Value) {
+        let res = e.into_response();
+        let status = res.status();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_file_not_on_disk_is_a_coded_retryable_400() {
+        let state = crate::state::AppState::for_tests(
+            iris_db::test_support::migrated_pool().await,
+            iris_providers::ProviderRegistry::from_entries(&[]).unwrap(),
+        )
+        .await;
+        let missing = std::env::temp_dir().join(format!("iris-missing-{}", uuid::Uuid::new_v4()));
+        let err =
+            super::ensure_probe_readable(&state, &"a".repeat(40), &missing, false, 0).unwrap_err();
+        let (status, json) = rendered(err).await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert_eq!(json["error"], "not_on_disk");
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap()
+                .contains("not yet on disk")
+        );
+
+        let probe = iris_media::ProbeError::Failed(1, "EBML header parsing failed".into());
+        let (status, json) = rendered(super::map_probe_err(&probe, false)).await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert_eq!(json["error"], "not_on_disk");
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap()
+                .contains("download in progress")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dead_swarm_is_a_coded_409_keeping_the_old_wording() {
+        let (status, json) = rendered(super::stalled(42.0)).await;
+        assert_eq!(status, http::StatusCode::CONFLICT);
+        assert_eq!(json["error"], "stalled");
+        let message = json["message"].as_str().unwrap();
+        assert!(message.starts_with("stalled: no seeders"));
+        assert!(message.contains("42%"));
     }
 }
 
