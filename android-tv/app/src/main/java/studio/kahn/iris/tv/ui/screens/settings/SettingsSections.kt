@@ -28,6 +28,8 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import java.time.ZonedDateTime
 import studio.kahn.iris.tv.BuildConfig
+import studio.kahn.iris.tv.ui.format.audioChoiceWords
+import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
 import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.DeviceView
 import studio.kahn.iris.tv.ui.components.ActionButton
@@ -158,10 +160,10 @@ private fun YouSection(state: SettingsUiState, actions: SettingsActions) {
 private fun PlaybackSection(state: SettingsUiState, actions: SettingsActions) {
     SettingsGroup("Playback", "The languages a film or an episode starts in, on every device, when it offers them.") {
         Loaded(state.playback, actions.onRetry) { prefs ->
-            SettingRow("Audio", audioWords(languageChoice(prefs.audioLanguage)), onClick = { actions.onOpen(SettingsDialog.Audio) })
+            SettingRow("Audio", audioChoiceWords(languageChoice(prefs.audioLanguage)), onClick = { actions.onOpen(SettingsDialog.Audio) })
             SettingRow(
                 "Subtitles",
-                subtitleWords(languageChoice(prefs.subtitleLanguage)),
+                subtitleChoiceWords(languageChoice(prefs.subtitleLanguage)),
                 onClick = { actions.onOpen(SettingsDialog.Subtitles) },
             )
             NoticeLine(state.outcome.notice(SettingsSection.Playback))

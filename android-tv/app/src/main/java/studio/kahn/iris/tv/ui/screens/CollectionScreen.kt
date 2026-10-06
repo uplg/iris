@@ -52,6 +52,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.audioChoiceWords
+import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionSheet
@@ -93,9 +96,7 @@ import studio.kahn.iris.tv.ui.screens.library.PackUi
 import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
 import studio.kahn.iris.tv.ui.screens.library.ReleaseItem
 import studio.kahn.iris.tv.ui.screens.library.ReleaseRow
-import studio.kahn.iris.tv.ui.screens.library.audioWords
 import studio.kahn.iris.tv.ui.screens.library.busyKey
-import studio.kahn.iris.tv.ui.screens.library.subtitleWords
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
 import studio.kahn.iris.tv.ui.state.irisViewModel
@@ -642,8 +643,8 @@ private fun LanguagesBlock(langs: Loadable<LanguagesUi>, onChange: () -> Unit) {
         when (val l = langs.valueOrNull) {
             null -> Hint(if (langs is Loadable.Failed) langs.error.message else "Loading…")
             else -> {
-                FactRow("Audio", audioWords(l.audio))
-                FactRow("Subtitles", subtitleWords(l.subtitles))
+                FactRow("Audio", audioChoiceWords(l.audio))
+                FactRow("Subtitles", subtitleChoiceWords(l.subtitles))
                 Hint(if (l.forCollection) "Chosen for this series." else "Your usual choice, from your account.")
             }
         }
@@ -700,15 +701,15 @@ internal fun LanguagesPanel(
             options = listOf("") + langs.audioOptions,
             selected = audio,
             onSelect = { audio = it },
-            label = { if (it.isEmpty()) "Each file’s own default" else languageName(it) ?: it },
+            label = { audioChoiceWords(it.ifEmpty { null }) },
             selectedFocus = first,
         )
         PanelLabel("Subtitles")
         PanelOptions(
-            options = listOf("", "off") + langs.subtitleOptions,
+            options = listOf("", NO_SUBTITLES) + langs.subtitleOptions,
             selected = subs,
             onSelect = { subs = it },
-            label = { subtitleWords(it.ifEmpty { null }) },
+            label = { subtitleChoiceWords(it.ifEmpty { null }) },
         )
         Row(
             Modifier.padding(horizontal = IrisSpace.s4, vertical = IrisSpace.s4),

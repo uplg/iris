@@ -69,7 +69,6 @@ import studio.kahn.iris.tv.ui.screens.settings.DialogField
 import studio.kahn.iris.tv.ui.screens.settings.FormDialog
 import studio.kahn.iris.tv.ui.screens.settings.PASSWORD_MIN
 import studio.kahn.iris.tv.ui.screens.settings.RailItem
-import studio.kahn.iris.tv.ui.screens.settings.SUBTITLES_OFF
 import studio.kahn.iris.tv.ui.screens.settings.SettingsActions
 import studio.kahn.iris.tv.ui.screens.settings.SettingsDialog
 import studio.kahn.iris.tv.ui.screens.settings.SettingsSection
@@ -79,11 +78,12 @@ import studio.kahn.iris.tv.ui.screens.settings.SettingsViewModel
 import studio.kahn.iris.tv.ui.screens.settings.TvFacts
 import studio.kahn.iris.tv.ui.screens.settings.UpdateUiState
 import studio.kahn.iris.tv.ui.screens.settings.UpdateViewModel
-import studio.kahn.iris.tv.ui.screens.settings.audioWords
+import studio.kahn.iris.tv.ui.format.audioChoiceWords
 import studio.kahn.iris.tv.ui.screens.settings.languageChoice
+import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
 import studio.kahn.iris.tv.ui.screens.settings.languageOptions
 import studio.kahn.iris.tv.ui.screens.settings.name
-import studio.kahn.iris.tv.ui.screens.settings.subtitleWords
+import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
 import studio.kahn.iris.tv.ui.state.irisViewModel
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
@@ -436,7 +436,7 @@ private fun SettingsDialogs(state: SettingsUiState, actions: SettingsActions) {
             title = "Audio language",
             current = languageChoice(state.playback.valueOrNull?.audioLanguage),
             withOff = false,
-            words = ::audioWords,
+            words = ::audioChoiceWords,
             error = error?.text,
             onPick = actions.onSaveAudio,
             onDismiss = actions.onCloseDialog,
@@ -445,7 +445,7 @@ private fun SettingsDialogs(state: SettingsUiState, actions: SettingsActions) {
             title = "Subtitle language",
             current = languageChoice(state.playback.valueOrNull?.subtitleLanguage),
             withOff = true,
-            words = ::subtitleWords,
+            words = ::subtitleChoiceWords,
             error = error?.text,
             onPick = actions.onSaveSubtitles,
             onDismiss = actions.onCloseDialog,
@@ -487,7 +487,7 @@ private fun LanguagePanel(
 ) {
     val options: List<String?> = buildList {
         add(null)
-        if (withOff) add(SUBTITLES_OFF)
+        if (withOff) add(NO_SUBTITLES)
         addAll(languageOptions(current))
     }
     SidePanel(title = title, onDismiss = onDismiss, footer = "Saved for every device at once.") {

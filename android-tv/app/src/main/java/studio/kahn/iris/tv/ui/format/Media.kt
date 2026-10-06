@@ -118,6 +118,19 @@ fun normalizeLanguage(code: String?): String? {
     return ISO_639_2_TO_1[base] ?: if (base.length == 3) ISO3[base] ?: base else base
 }
 
+/** The saved subtitle language meaning "no subtitles" (`playback_preferences.subtitle_language`). */
+const val NO_SUBTITLES = "off"
+
+/** A saved audio language in words (Settings, a series' languages): none saved plays the file's own. */
+fun audioChoiceWords(choice: String?): String = choice?.let { languageName(it) ?: it } ?: "The file’s own"
+
+/** A saved subtitle language in words: none saved keeps the file's own, [NO_SUBTITLES] none at all. */
+fun subtitleChoiceWords(choice: String?): String = when (choice) {
+    null -> "The file’s own"
+    NO_SUBTITLES -> "No subtitles"
+    else -> languageName(choice) ?: choice
+}
+
 /** `fr`, `fre`, `fr-FR` → "French", always in English; an unknown code in capitals; absent → null. */
 fun languageName(tag: String?): String? {
     val code = normalizeLanguage(tag) ?: return null

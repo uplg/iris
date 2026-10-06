@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.audioChoiceWords
+import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.CollectionDetail
@@ -317,7 +320,7 @@ class CollectionViewModel(private val container: AppContainer, private val colle
         )
         prefs.refresh()
         val title = detail.value?.displayTitle ?: "this series"
-        "Saved for $title: audio ${audioWords(audio)}, subtitles ${subtitleWords(subtitles)}."
+        "Saved for $title: audio ${audioChoiceWords(audio)}, subtitles ${subtitleChoiceWords(subtitles)}."
     }
 
     private fun act(key: String, onSuccess: (() -> Unit)?, block: suspend CoroutineScope.() -> String?) {
@@ -341,18 +344,10 @@ class CollectionViewModel(private val container: AppContainer, private val colle
 /** The busy key of the title's watched toggle. */
 const val WATCHED_KEY = "title-watched"
 
-fun audioWords(code: String?): String = code?.let { languageName(it) ?: it } ?: "Each file’s own default"
-
-fun subtitleWords(code: String?): String = when (code) {
-    null -> "Each file’s own default"
-    "off" -> "Off"
-    else -> languageName(code) ?: code
-}
-
 fun languagesUi(p: PlaybackPrefsResponse, c: CollectionDetail?, m: MediaMetadata?): LanguagesUi {
     val known = releaseCodes(c?.episodes.orEmpty().map { it.language } + c?.availableEpisodes.orEmpty().map { it.language }) +
         listOfNotNull(m?.originalLanguage)
-    fun options(current: String?) = (known + listOf("en", "fr") + listOfNotNull(current?.takeIf { it != "off" })).distinct()
+    fun options(current: String?) = (known + listOf("en", "fr") + listOfNotNull(current?.takeIf { it != NO_SUBTITLES })).distinct()
     return LanguagesUi(p.audioLanguage, p.subtitleLanguage, p.forCollection == true, options(p.audioLanguage), options(p.subtitleLanguage))
 }
 
