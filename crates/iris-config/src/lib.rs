@@ -390,6 +390,14 @@ pub struct StorageConfig {
     pub torrent_port: u16,
 }
 
+impl StorageConfig {
+    /// `max_storage_gb` in bytes (GiB).
+    #[must_use]
+    pub fn max_storage_bytes(&self) -> u64 {
+        self.max_storage_gb.saturating_mul(1 << 30)
+    }
+}
+
 fn default_max_storage() -> u64 {
     500
 }

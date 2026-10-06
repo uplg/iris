@@ -548,7 +548,7 @@ pub(crate) async fn storage_stats(
     _admin: AdminUser,
 ) -> ApiResult<Json<StorageStats>> {
     let cfg = &state.cfg().storage;
-    let max = cfg.max_storage_gb.saturating_mul(1_073_741_824);
+    let max = cfg.max_storage_bytes();
     let used = iris_torrent::gc::dir_size(&cfg.download_dir)
         .await
         .unwrap_or(0);
@@ -556,12 +556,10 @@ pub(crate) async fn storage_stats(
         .fetch_one(state.db())
         .await
         .unwrap_or((0,));
-    let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
-        .await
-        .unwrap_or(0);
-    let total_downloaded_bytes = iris_db::torrents::total_downloaded_bytes(state.db())
-        .await
-        .unwrap_or(0);
+    let (total_uploaded_bytes, total_downloaded_bytes) =
+        iris_db::torrents::lifetime_bytes(state.db())
+            .await
+            .unwrap_or((0, 0));
     Ok(Json(StorageStats {
         used_bytes: used,
         max_storage_bytes: max,

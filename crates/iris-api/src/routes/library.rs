@@ -230,12 +230,10 @@ pub(crate) async fn list_library(
             .into_iter()
             .filter_map(|row| TorrentView::live(&state, &user, row))
             .collect();
-        let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
-            .await
-            .unwrap_or(0);
-        let total_downloaded_bytes = iris_db::torrents::total_downloaded_bytes(state.db())
-            .await
-            .unwrap_or(0);
+        let (total_uploaded_bytes, total_downloaded_bytes) =
+            iris_db::torrents::lifetime_bytes(state.db())
+                .await
+                .unwrap_or((0, 0));
         return Ok(Json(LibraryResponse::Torrents {
             items: out,
             total_uploaded_bytes,

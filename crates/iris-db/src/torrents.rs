@@ -327,25 +327,18 @@ pub async fn clamp_uploaded_ratios(pool: &SqlitePool, max_ratio: u32) -> Result<
     Ok(res.rows_affected())
 }
 
-/// Sum of `downloaded_bytes_total` across every torrent ever ingested,
-/// including soft-deleted ones — the "since the beginning" denominator
-/// matching [`total_uploaded_bytes`], so the global ratio compares two
+/// Lifetime `(uploaded, downloaded)` byte totals across every torrent ever
+/// ingested, soft-deleted ones included: an evicted torrent still represents
+/// work the seedbox did for the swarm, and the global ratio must compare two
 /// lifetime quantities instead of lifetime upload vs current disk.
-pub async fn total_downloaded_bytes(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
-    let row: (Option<i64>,) = sqlx::query_as("SELECT SUM(downloaded_bytes_total) FROM torrents")
-        .fetch_one(pool)
-        .await?;
-    Ok(u64::try_from(row.0.unwrap_or(0)).unwrap_or(0))
-}
-
-/// Sum of `uploaded_bytes_total` across every torrent ever ingested,
-/// including soft-deleted ones (a torrent we've already evicted still
-/// represents work the seedbox did for the swarm).
-pub async fn total_uploaded_bytes(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
-    let row: (Option<i64>,) = sqlx::query_as("SELECT SUM(uploaded_bytes_total) FROM torrents")
-        .fetch_one(pool)
-        .await?;
-    Ok(u64::try_from(row.0.unwrap_or(0)).unwrap_or(0))
+pub async fn lifetime_bytes(pool: &SqlitePool) -> Result<(u64, u64), sqlx::Error> {
+    let (up, down): (Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT SUM(uploaded_bytes_total), SUM(downloaded_bytes_total) FROM torrents",
+    )
+    .fetch_one(pool)
+    .await?;
+    let bytes = |v: Option<i64>| u64::try_from(v.unwrap_or(0)).unwrap_or(0);
+    Ok((bytes(up), bytes(down)))
 }
 
 /// Stamp `finished_at` (idempotent — only fills a NULL slot; `upsert`
@@ -477,7 +470,37 @@ pub async fn dismiss_gone_release(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::migrated_pool;
+    use crate::test_support::{make_user, migrated_pool};
+
+    #[tokio::test]
+    async fn lifetime_bytes_sum_deleted_torrents_too() {
+        let pool = migrated_pool().await;
+        assert_eq!(lifetime_bytes(&pool).await.unwrap(), (0, 0));
+        let user = make_user(&pool).await;
+        for (hash, up, down) in [("aa", 300, 100), ("bb", 50, 200)] {
+            let row = upsert(
+                &pool,
+                NewTorrent {
+                    infohash: hash.repeat(20),
+                    name: hash.into(),
+                    total_size_bytes: 1024,
+                    source_provider: None,
+                    source_external_id: None,
+                    added_by: user,
+                },
+            )
+            .await
+            .unwrap();
+            reconcile_uploaded(&pool, &row.infohash, up).await.unwrap();
+            reconcile_downloaded(&pool, &row.infohash, down)
+                .await
+                .unwrap();
+            if hash == "bb" {
+                soft_delete(&pool, TorrentId(row.id)).await.unwrap();
+            }
+        }
+        assert_eq!(lifetime_bytes(&pool).await.unwrap(), (350, 300));
+    }
 
     /// Re-grabbing an evicted torrent must reset `finished_at`: the payload
     /// is gone from disk, and endpoints (`play_asset` & co) trust

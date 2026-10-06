@@ -124,7 +124,7 @@ fn setup_gc(
         engine.clone(),
         pool.clone(),
         iris_torrent::GcConfig {
-            max_storage_bytes: cfg.storage.max_storage_gb.saturating_mul(1_073_741_824),
+            max_storage_bytes: cfg.storage.max_storage_bytes(),
             cleanup_threshold_pct: cfg.storage.cleanup_threshold_pct,
             cleanup_target_pct: cfg.storage.cleanup_target_pct,
             interval: std::time::Duration::from_mins(15),
