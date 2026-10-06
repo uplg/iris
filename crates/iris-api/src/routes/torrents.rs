@@ -891,7 +891,7 @@ fn build_remux_plan(
             AudioCodec::Aac
         };
         renditions.push(AudioRendition {
-            source_idx: a.index,
+            source_stream: a.absolute_index,
             codec,
             name,
             language,
@@ -2694,6 +2694,37 @@ mod video_mode_tests {
             audio: Vec::new(),
             subtitle: Vec::new(),
         }
+    }
+
+    #[test]
+    fn audio_renditions_map_the_file_stream_not_the_probe_position() {
+        let audio = |index, absolute_index, language: &str| iris_media::AudioStream {
+            index,
+            absolute_index,
+            codec: "aac".into(),
+            channels: 2,
+            channel_layout: None,
+            sample_rate: None,
+            language: Some(language.into()),
+            title: None,
+            default: false,
+            forced: false,
+            browser_compatible: true,
+        };
+        // Streams 0:1 jpn, 0:2 jpn (duplicate, dropped by the probe), 0:3 fre.
+        let mut p = probe("h264", 1920, 1080, 8);
+        p.audio = vec![audio(0, 1, "jpn"), audio(1, 3, "fre")];
+        let plan = super::build_remux_plan(
+            &p,
+            &ClientCapabilities::default(),
+            &TranscodeConfig::default(),
+        );
+        let streams: Vec<_> = plan
+            .audio
+            .iter()
+            .map(|a| (a.language.as_str(), a.source_stream))
+            .collect();
+        assert_eq!(streams, [("jpn", 1), ("fre", 3)]);
     }
 
     // A 1440p H.264 file a TV-class decoder (level 4.2 = 1080p) rejects: the

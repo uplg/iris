@@ -242,8 +242,10 @@ impl RemuxPlan {
 
 #[derive(Debug, Clone)]
 pub struct AudioRendition {
-    /// `0:a:N` source index.
-    pub source_idx: usize,
+    /// Absolute input stream index, mapped as `0:N`. Not `0:a:N`: the probe
+    /// drops duplicate audio streams, so a probe position isn't the file's
+    /// audio position.
+    pub source_stream: u32,
     /// `Copy` is only safe for codecs the browser decodes natively
     /// (AAC / MP3 / Opus / Vorbis). Otherwise pick `Aac` to transcode.
     pub codec: AudioCodec,
@@ -261,27 +263,6 @@ pub struct AudioRendition {
 pub enum AudioCodec {
     Copy,
     Aac,
-}
-
-impl RemuxPlan {
-    pub fn copy_only_with_languages(audio_languages: &[Option<String>]) -> Self {
-        Self {
-            audio: audio_languages
-                .iter()
-                .enumerate()
-                .map(|(i, lang)| AudioRendition {
-                    source_idx: i,
-                    codec: AudioCodec::Copy,
-                    name: format!("audio_{i}"),
-                    language: lang.clone().unwrap_or_else(|| "und".into()),
-                    default: i == 0,
-                })
-                .collect(),
-            source_video_codec: None,
-            source_duration_secs: None,
-            video: VideoMode::Copy,
-        }
-    }
 }
 
 /// Server-wide encoder settings for the transcode (catch-up) path, sourced
@@ -954,7 +935,7 @@ async fn run_ffmpeg(
         // option, so without this the audio MP4s would still inherit
         // chapters and the parasitic chapter-text track they generate.
         cmd.args(["-map_chapters", "-1"])
-            .args(["-map", &format!("0:a:{}?", a.source_idx)]);
+            .args(["-map", &format!("0:{}?", a.source_stream)]);
         match a.codec {
             AudioCodec::Copy => {
                 cmd.args(["-c:a", "copy"]);
@@ -1040,7 +1021,7 @@ async fn run_ffmpeg_hls(
     // transcoded to AAC stereo. Per-stream codec specifiers (`-c:a:<n>`)
     // because everything goes into one HLS output context.
     for (i, a) in plan.audio.iter().enumerate() {
-        cmd.args(["-map", &format!("0:a:{}", a.source_idx)]);
+        cmd.args(["-map", &format!("0:{}", a.source_stream)]);
         match a.codec {
             AudioCodec::Copy => {
                 cmd.arg(format!("-c:a:{i}")).arg("copy");
