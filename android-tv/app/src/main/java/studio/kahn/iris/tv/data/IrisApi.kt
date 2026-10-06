@@ -97,8 +97,8 @@ interface IrisApi {
     @GET("api/me/moods/{id}")
     suspend fun moodResults(@Path("id") id: String, @Query("kind") kind: String): MoodResults
 
-    /** The user's preferred audio + subtitle language (applied across episodes
-     *  / devices). */
+    /** The preferred audio + subtitle language: one series' own choice when it has one
+     *  ([collectionId]), else the account's (applied across episodes / devices). */
     @GET("api/me/playback-preferences")
     suspend fun playbackPreferences(
         /** The series whose choice to read (falls back to the account's). */
@@ -340,10 +340,6 @@ interface IrisApi {
     /** The home's "Right now" facts: downloads, new episodes, disk, seeding. */
     @GET("api/me/summary")
     suspend fun homeSummary(): HomeSummary
-
-    /** One series' audio + subtitle choice when it has its own, else the account's. */
-    @GET("api/me/playback-preferences")
-    suspend fun seriesPlaybackPreferences(@Query("collection_id") collectionId: String): PlaybackPrefsResponse
 
     /** The account's last searches, newest first (shared with the web). */
     @GET("api/me/recent-searches")

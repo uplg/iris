@@ -25,6 +25,7 @@ import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.libraryCollections
 import studio.kahn.iris.tv.data.libraryTorrents
 import studio.kahn.iris.tv.ui.state.BusyActions
+import studio.kahn.iris.tv.ui.screens.library.moving
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.DismissCwRequest
@@ -198,7 +199,7 @@ class HomeViewModel(
     private fun olderThan(at: Long?, ttlMs: Long): Boolean = at == null || now() - at >= ttlMs
 
     private fun somethingMoves(): Boolean =
-        data.value.torrents.any(::isMoving) || (data.value.summary.valueOrNull?.downloading ?: 0) > 0
+        data.value.torrents.any(::moving) || (data.value.summary.valueOrNull?.downloading ?: 0) > 0
 
     private suspend fun refreshRows(force: Boolean = false) = coroutineScope {
         launch { readContinueWatching() }
@@ -284,7 +285,7 @@ class HomeViewModel(
         viewModelScope.launch {
             val prefs = bestEffort {
                 val api = container.api()
-                item.collectionId?.let { api.seriesPlaybackPreferences(it.toString()) } ?: api.playbackPreferences()
+                api.playbackPreferences(item.collectionId?.toString())
             } ?: return@launch
             data.update { it.copy(heroPrefs = key to prefs) }
         }

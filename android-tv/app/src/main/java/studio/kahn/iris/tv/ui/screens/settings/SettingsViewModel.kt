@@ -3,7 +3,6 @@ package studio.kahn.iris.tv.ui.screens.settings
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -191,8 +190,8 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             val a = api()
             val (prefs, languages, genres) = coroutineScope3(
                 { a.preferences() },
-                { orNone { a.languages().languages } },
-                { orNone { a.genres().genres } },
+                { bestEffort { a.languages().languages }.orEmpty() },
+                { bestEffort { a.genres().genres }.orEmpty() },
             )
             RecoOptions(prefs, languages, genres)
         }
@@ -435,12 +434,3 @@ private suspend fun <A, B, C> coroutineScope3(
     Triple(da.await(), db.await(), dc.await())
 }
 
-/** The choices offered beside the preferences: none when they can't be read (the picks still save). */
-private suspend fun <T> orNone(read: suspend () -> List<T>): List<T> =
-    try {
-        read()
-    } catch (e: CancellationException) {
-        throw e
-    } catch (_: Exception) {
-        emptyList()
-    }

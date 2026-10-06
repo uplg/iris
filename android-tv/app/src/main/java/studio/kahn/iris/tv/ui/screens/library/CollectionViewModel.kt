@@ -155,7 +155,7 @@ class CollectionViewModel(private val container: AppContainer, private val colle
     private val meta = MutableStateFlow<MediaMetadata?>(null)
     private val watching = MutableStateFlow<List<ContinueWatchingItem>>(emptyList())
     private val prefs = LiveRead({ _: PlaybackPrefsResponse? -> 10 * 60_000L }) {
-        container.api().seriesPlaybackPreferences(collectionId)
+        container.api().playbackPreferences(collectionId)
     }
     private val season = MutableStateFlow<Long?>(null)
     private val actions = BusyActions(viewModelScope)
