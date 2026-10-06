@@ -12,6 +12,7 @@ import { isHevc } from './codec';
 import { capsHeader, hevcMseNeedsIdrStart, isMobileLike, mseSupportsType, probeCapabilities } from './caps';
 import { libavCanDecode } from './decode/libav-audio-decoder';
 import { cheapProbeVideoCodec } from './decode/webcodecs-probe';
+import { irisFetch } from './stream-fetch';
 
 // The manifest wire format is owned by the Rust `iris-media::manifest`
 // module and emitted into the OpenAPI contract; these are thin aliases over
@@ -56,7 +57,7 @@ export class ManifestNotReadyError extends Error {
 
 export async function fetchManifest(infohash: string, fileIdx: number): Promise<Manifest> {
 	const caps = await probeCapabilities();
-	const res = await fetch(`/api/torrents/${infohash}/files/${fileIdx}/manifest.json`, {
+	const res = await irisFetch(`/api/torrents/${infohash}/files/${fileIdx}/manifest.json`, {
 		credentials: 'include',
 		headers: { 'Iris-Caps': capsHeader(caps) }
 	});
@@ -256,7 +257,7 @@ export function postSeekHint(manifest: Manifest, playheadSeconds: number): void 
 	const url = `/api/torrents/${manifest.infohash}/files/${manifest.file_idx}/seek`;
 	const body = JSON.stringify({ byte_offset: byteOffset, playhead_s: playheadSeconds });
 	// Use keepalive so a fast subsequent navigation doesn't cancel the hint.
-	void fetch(url, {
+	void irisFetch(url, {
 		method: 'POST',
 		credentials: 'include',
 		headers: { 'Content-Type': 'application/json' },

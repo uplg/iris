@@ -47,14 +47,14 @@ import {
 	Mp4OutputFormat,
 	Output,
 	StreamTarget,
-	type StreamTargetChunk,
-	UrlSource
+	type StreamTargetChunk
 } from 'mediabunny';
 
 import { isFirefox } from '../caps';
 import { planAudioTrack, transcodeSampleSource, type AudioPlan } from '../decode/audio-plan';
 import { bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
 import { relaxMediabunnyGopCheck } from '../mse/output';
+import { irisUrlSource } from '../stream-fetch';
 
 /** How far behind the playlist's end we aim the first keyframe. */
 const LIVE_EDGE_BACKOFF_S = 12;
@@ -791,19 +791,8 @@ export const mountTierBLive: EngineMount = async (opts) => {
 	const mount0 = performance.now();
 	try {
 		input = new Input({
-			source: new UrlSource(streamUrl, {
-				// 5xx → transient: reject so mediabunny's retry kicks in (a source
-				// rotation briefly 502s while the backend elects the next feed).
-				fetchFn: async (fetchInput, init) => {
-					const res = await fetch(fetchInput, init);
-					if (res.status >= 500) {
-						throw new Error(`iris-live-transient-5xx ${res.status}`);
-					}
-					return res;
-				},
-				getRetryDelay: (attempts) => (attempts >= 6 ? null : Math.min(4, 0.5 * 2 ** attempts)),
-				maxCacheSize: 32 * 1024 * 1024
-			}),
+			// a source rotation briefly 502s while the backend elects the next feed
+			source: irisUrlSource(streamUrl, { cacheBytes: 32 * 1024 * 1024, attempts: 6, maxDelayS: 4 }),
 			formats: ALL_FORMATS,
 			// Gapless continuous timeline — see the module header. Wall-clock
 			// times stay reachable via `InputTrack.getUnixTimeForTimestamp`.

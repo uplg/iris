@@ -49,15 +49,14 @@ import {
 	Mp4OutputFormat,
 	Output,
 	StreamTarget,
-	type StreamTargetChunk,
-	UrlSource
+	type StreamTargetChunk
 } from 'mediabunny';
 
-import { refreshSessionForFetch } from '@iris/api/client';
 import { encoderBitrate, planAudioTrack, type AudioPlan } from '../decode/audio-plan';
 import { configWithFreshDescription } from '../decode/webcodecs-probe';
 import { bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
 import { relaxMediabunnyGopCheck } from '../mse/output';
+import { irisUrlSource } from '../stream-fetch';
 
 /** How far behind the playlist's end we aim the first keyframe. */
 const LIVE_EDGE_BACKOFF_S = 12;
@@ -252,28 +251,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 
 	try {
 		input = new Input({
-			source: new UrlSource(streamUrl, {
-				fetchFn: async (fetchInput, init) => {
-					let res = await fetch(fetchInput, init);
-					// 401/403: the access token expired mid-stream. These raw
-					// fetches don't ride the api client's 401-retry, so refresh the
-					// session OURSELVES (single-flight, shared with the app) and
-					// replay once.
-					if (res.status === 401 || res.status === 403) {
-						if (await refreshSessionForFetch()) {
-							res = await fetch(fetchInput, init);
-						}
-					}
-					// 5xx (and an auth failure that survived the refresh): transient
-					// — reject so mediabunny's retry ladder takes over.
-					if (res.status >= 500 || res.status === 401 || res.status === 403) {
-						throw new Error(`iris-live-transient-${res.status}`);
-					}
-					return res;
-				},
-				getRetryDelay: (attempts) => (attempts >= 12 ? null : Math.min(8, 0.5 * 2 ** attempts)),
-				maxCacheSize: 32 * 1024 * 1024
-			}),
+			source: irisUrlSource(streamUrl, { cacheBytes: 32 * 1024 * 1024, attempts: 12, maxDelayS: 8 }),
 			formats: ALL_FORMATS,
 			formatOptions: { hls: { offsetTimestampsByDateTime: false } }
 		});

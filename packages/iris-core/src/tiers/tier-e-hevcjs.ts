@@ -37,7 +37,6 @@ import {
 	Output,
 	type StreamTargetChunk,
 	StreamTarget,
-	UrlSource,
 	type EncodedAudioPacketSource
 } from 'mediabunny';
 
@@ -45,6 +44,7 @@ import { appendNativeTrack, bindVideoCallbacks, videoBackedHandle, type EngineHa
 import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
 import { pickAudioEncoder, transcodeSampleSource } from '../decode/audio-plan';
 import { relaxMediabunnyGopCheck } from '../mse/output';
+import { irisUrlSource, VOD_RETRY } from '../stream-fetch';
 
 /** `subscribeSegmentStat` from `@hevcjs/core`, captured on first load. The lib
  *  publishes one stat per transcoded segment, `speedX` being media-seconds
@@ -101,6 +101,8 @@ const REBUFFER_CUSHION_S = 4;
 /** Rolling window over per-segment throughput, in segments. At the forced
  *  boundary cadence that is roughly the last 12 s of media. */
 const SPEED_WINDOW = 8;
+/** Mediabunny's read cache, capped well under its 64 MiB default. */
+const SOURCE_CACHE_BYTES = 16 * 1024 * 1024;
 
 let intercept: { install: () => void; uninstall: () => void } | null = null;
 let installed = false;
@@ -548,16 +550,7 @@ export const mountTierE: EngineMount = async (opts) => {
 
 	const makeInput = (): Input =>
 		new Input({
-			source: new UrlSource(streamUrl, {
-				// Same 5xx-is-transient treatment as Tier B: a redeploy must pause
-				// playback, not demote the tier.
-				fetchFn: async (url, init) => {
-					const res = await fetch(url, init);
-					if (res.status >= 500) throw new Error(`iris-stream-transient-5xx ${res.status}`);
-					return res;
-				},
-				getRetryDelay: (attempts) => (attempts >= 12 ? null : Math.min(8, 0.5 * 2 ** attempts))
-			}),
+			source: irisUrlSource(streamUrl, { cacheBytes: SOURCE_CACHE_BYTES, ...VOD_RETRY }),
 			formats: ALL_FORMATS
 		});
 

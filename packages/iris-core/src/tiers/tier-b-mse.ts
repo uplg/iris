@@ -31,8 +31,7 @@ import {
 	Mp4OutputFormat,
 	Output,
 	StreamTarget,
-	type StreamTargetChunk,
-	UrlSource
+	type StreamTargetChunk
 } from 'mediabunny';
 
 import { hevcMseNeedsIdrStart, isFirefox, isMobileLike } from '../caps';
@@ -41,6 +40,7 @@ import { HevcCraSplicer, descriptionBytes, splicePacket } from '../decode/hevc-c
 import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
 import { appendNativeTrack, bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
 import { relaxMediabunnyGopCheck } from '../mse/output';
+import { irisUrlSource, VOD_RETRY } from '../stream-fetch';
 
 // Live SourceBuffer window
 //
@@ -93,10 +93,11 @@ const BEHIND_SECONDS_CEILING_MOBILE = 15;
 const AHEAD_BYTES_BUDGET = 64 * 1024 * 1024;
 const AHEAD_BYTES_BUDGET_MOBILE = 20 * 1024 * 1024;
 
-/** Cap for Mediabunny's `UrlSource` read cache (default is 64 MiB, which
- *  stacked on the SourceBuffer budget blew the memory budget). A self-hosted
- *  seedbox is low-latency, so a small cache costs little. */
-const SOURCE_CACHE_BYTES = 64 * 1024 * 1024;
+/** Mediabunny's `UrlSource` read cache. Its default (64 MiB) stacked on the SourceBuffer
+ *  budget was the bulk of the resident memory; a self-hosted seedbox is low-latency, so a small
+ *  cache costs little. */
+const SOURCE_CACHE_BYTES = 16 * 1024 * 1024;
+const SOURCE_CACHE_BYTES_MOBILE = 8 * 1024 * 1024;
 
 /** Firefox-specific desktop budgets. The 96/48 MB desktop window is
  *  tuned for Chrome, whose SourceBuffer quota is generous and whose MSE
@@ -1513,34 +1514,7 @@ export const mountTierB: EngineMount = async (opts) => {
 	// connections when the live UrlSource is stuck on a half-dead read.
 	const makeInput = (): Input =>
 		new Input({
-			source: new UrlSource(streamUrl, {
-				// Treat a 5xx as a transient, retryable failure instead of a fatal
-				// pipeline error. When the user redeploys, in-flight /stream range
-				// requests come back 500/502/503/504. `fetch()` does NOT reject on
-				// a bad status, so Mediabunny's default retry (which only fires on
-				// a rejected `fetch()`) never kicks in — it throws immediately and
-				// the player demotes to Tier F. That's useless (the server is down
-				// for F too) and sticky (we stay on the worse tier after recovery).
-				// Throwing on 5xx converts it into a rejection that `getRetryDelay`
-				// then retries until the backend comes back: playback just pauses
-				// (buffer drains, `waiting` fires) and resumes on its own.
-				fetchFn: async (url, init) => {
-					const res = await fetch(url, init);
-					if (res.status >= 500) {
-						throw new Error(`iris-stream-transient-5xx ${res.status}`);
-					}
-					return res;
-				},
-				// Capped exponential backoff (~0.5,1,2,4,8,8,… s) covering a typical
-				// deploy/restart window, then give up so a genuinely broken stream
-				// still surfaces (and the WatchPage backstop probe can react). The
-				// default never gives up; we bound it to ~12 attempts (~70s).
-				getRetryDelay: (attempts) => (attempts >= 12 ? null : Math.min(8, 0.5 * 2 ** attempts)),
-				// Cap the source read-ahead cache (default 64 MiB). Stacked on the
-				// SourceBuffer budget this was the bulk of the ~160 MB resident that
-				// tanked memory; a local seedbox makes a small cache cheap.
-				maxCacheSize: SOURCE_CACHE_BYTES
-			}),
+			source: irisUrlSource(streamUrl, { cacheBytes: mobile ? SOURCE_CACHE_BYTES_MOBILE : SOURCE_CACHE_BYTES, ...VOD_RETRY }),
 			formats: ALL_FORMATS
 		});
 	input = makeInput();

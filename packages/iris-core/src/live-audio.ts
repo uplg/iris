@@ -25,9 +25,10 @@
  */
 
 import type Hls from 'hls.js';
-import { ALL_FORMATS, AudioSampleSink, Input, UrlSource } from 'mediabunny';
+import { ALL_FORMATS, AudioSampleSink, Input } from 'mediabunny';
 
 import { ensureLibavAudioDecoderRegistered } from './decode/libav-audio-decoder';
+import { irisUrlSource } from './stream-fetch';
 
 /** Minimum headroom: never schedule a buffer to start closer than this to
  *  "now" (WebAudio needs a beat of lead to start a source cleanly). */
@@ -69,7 +70,7 @@ export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUr
 	let releaseThrottle: (() => void) | null = null;
 	const input = new Input({
 		formats: ALL_FORMATS,
-		source: new UrlSource(masterUrl, { requestInit: { credentials: 'include' } })
+		source: irisUrlSource(masterUrl, { cacheBytes: 32 * 1024 * 1024, attempts: 12, maxDelayS: 8 })
 	});
 	const ctx = new AudioContext();
 	const gain = ctx.createGain();

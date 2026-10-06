@@ -14,13 +14,14 @@
  *   - `setVolume` / `setMuted` — scheduler `GainNode`.
  */
 
-import { ALL_FORMATS, Input, UrlSource, type InputAudioTrack, type InputVideoTrack } from 'mediabunny';
+import { ALL_FORMATS, Input, type InputAudioTrack, type InputVideoTrack } from 'mediabunny';
 
 import { isHevc } from '../codec';
 import { startAudioPipeline, type AudioPipelineHandle } from '../decode/audio-pipeline';
 import { startVideoPipeline, type VideoPipelineHandle } from '../decode/video-pipeline';
 import { probeVideoTrack } from '../decode/webcodecs-probe';
 import { createAudioScheduler, type AudioScheduler } from '../audio/audio-scheduler';
+import { irisUrlSource, VOD_RETRY } from '../stream-fetch';
 import { mountRenderer, type VideoRenderer } from '../render/renderer-factory';
 import type { EngineAudioTrack, EngineHandle, EngineMount } from '../engine';
 
@@ -31,7 +32,7 @@ export const mountTierC: EngineMount = async (opts) => {
 	container.innerHTML = '';
 
 	const input = new Input({
-		source: new UrlSource(streamUrl, {}),
+		source: irisUrlSource(streamUrl, { cacheBytes: 16 * 1024 * 1024, ...VOD_RETRY }),
 		formats: ALL_FORMATS
 	});
 
