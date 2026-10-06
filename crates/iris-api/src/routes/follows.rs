@@ -452,6 +452,9 @@ pub(crate) struct EpisodePoint {
     infohash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     file_idx: Option<i64>,
+    /// TMDB's episode title, when the series is known there. Additive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 #[utoipa::path(
@@ -505,6 +508,7 @@ pub(crate) async fn episode_context(
         status: EpisodeStatus::Downloaded,
         infohash: Some(current_row.infohash.clone()),
         file_idx: Some(current_row.file_idx),
+        name: None,
     };
 
     // 1. Try the next episode within the same season.
@@ -567,12 +571,36 @@ pub(crate) async fn episode_context(
         None => None,
     };
 
+    let mut current = current;
+    let (mut next, mut prev) = (next, prev);
+    if let Some(c) = collection.as_ref().filter(|c| c.kind == "tv") {
+        name_episodes(
+            &state,
+            c.tmdb_id,
+            [Some(&mut current), next.as_mut(), prev.as_mut()],
+        )
+        .await;
+    }
+
     Ok(Json(EpisodeContext {
         followed: follow.is_some(),
         current: Some(current),
         next,
         prev,
     }))
+}
+
+/// Fills each point's TMDB title (the season lists are cached, so the chain costs one read).
+async fn name_episodes(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    points: [Option<&mut EpisodePoint>; 3],
+) {
+    for p in points.into_iter().flatten() {
+        p.name =
+            crate::routes::library::episode_name(state, tmdb_id, Some(p.season), Some(p.episode))
+                .await;
+    }
 }
 
 /// Resolve `(season, episode)` for `normalized_name` to an
@@ -599,6 +627,7 @@ async fn lookup_next_episode(
             status: EpisodeStatus::Downloaded,
             infohash: Some(row.infohash),
             file_idx: Some(row.file_idx),
+            name: None,
         });
     }
     let follow = follow?;
@@ -616,6 +645,7 @@ async fn lookup_next_episode(
             status: EpisodeStatus::Available,
             infohash: None,
             file_idx: None,
+            name: None,
         });
     }
     None
@@ -642,6 +672,7 @@ async fn same_torrent_next(
         status: EpisodeStatus::Downloaded,
         infohash: Some(row.infohash),
         file_idx: Some(row.file_idx),
+        name: None,
     }))
 }
 

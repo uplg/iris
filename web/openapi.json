@@ -5091,6 +5091,13 @@
             ],
             "description": "Physical location for `status == Downloaded`. Lets the TV\nplayer navigate directly to the next episode without a\nround-trip through `/grab`. `None` for `Available` (the file\ndoesn't exist on disk yet)."
           },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB's episode title, when the series is known there. Additive."
+          },
           "season": {
             "type": "integer",
             "format": "int64"

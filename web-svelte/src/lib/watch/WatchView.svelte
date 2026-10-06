@@ -334,8 +334,15 @@
 	}
 
 	const heading = $derived(collectionQ.data?.display_title ?? prettySceneName(fileName));
+	const episodeTitle = $derived(episodeContextQ.data?.current?.name ?? null);
 	const subheading = $derived(
-		currentEpisode ? episodeCode(currentEpisode.season, currentEpisode.episode) : isTv ? null : fileName !== heading ? fileName : null
+		currentEpisode
+			? [episodeCode(currentEpisode.season, currentEpisode.episode), episodeTitle].filter(Boolean).join(' · ')
+			: isTv
+				? null
+				: fileName !== heading
+					? fileName
+					: null
 	);
 	const back = $derived(
 		collectionId
