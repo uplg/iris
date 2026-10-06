@@ -54,7 +54,9 @@ rehearsal db mode="local":
     repo=$PWD
     vol=iris-rehearsal-data
     port=18080
-    # a rehearsal-only config (a tracker turned off, say) wins over the repo's
+    # rehearsal-only settings: ~/iris-prod-rehearsal/config replaces the repo's config, and
+    # ~/iris-prod-rehearsal/env (IRIS_* overrides) is passed when present
+    [ -f ~/iris-prod-rehearsal/env ] && export IRIS_REHEARSAL_ENV=~/iris-prod-rehearsal/env
     cfg="$repo/config"
     [ -d ~/iris-prod-rehearsal/config ] && cfg=~/iris-prod-rehearsal/config
     if [ "$mode" = lan ]; then
@@ -95,6 +97,7 @@ rehearsal db mode="local":
       -e IRIS_STORAGE__DOWNLOAD_DIR=/data/downloads \
       -e IRIS_AUTH__JWT_SECRET="$(cat "$secret_file")" \
       -e RUST_LOG=info,iris_api=debug,tower_http=info,html5ever=error \
+      ${IRIS_REHEARSAL_ENV:+--env-file "$IRIS_REHEARSAL_ENV"} \
       -v "$cfg:/srv/iris/config:ro" \
       -v $vol:/data \
       -p "$bind:$port:8080" \
