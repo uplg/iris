@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -15,8 +15,6 @@ use crate::error::{ApiError, ApiResult};
 use crate::live_tv::{LiveTvError, LiveTvService, ProxiedResponse, proxy};
 use crate::routes::extract::{AuthUser, Path};
 use crate::state::AppState;
-
-use axum::routing::post;
 
 pub fn router() -> Router<AppState> {
     Router::new()

@@ -223,6 +223,21 @@ type StreamsDb = HashMap<String, Vec<channels::StreamSource>>;
 /// Folded channel name → logo URL, from iptv-org's channels + logos DBs.
 type NameLogos = HashMap<String, String>;
 
+/// One row of iptv-org's channels database.
+#[derive(Deserialize)]
+struct ApiChannel {
+    id: String,
+    name: String,
+    #[serde(default)]
+    alt_names: Vec<String>,
+    #[serde(default)]
+    country: String,
+    #[serde(default)]
+    is_nsfw: bool,
+    #[serde(default)]
+    closed: Option<String>,
+}
+
 /// One row of the cross-country search index. `channel_id` uses the SAME
 /// slug derivation as `build_channels` (`normalize(tvg_id_base(id))`), so a
 /// hit is directly openable as `(country, channel_id)` by every client.
@@ -469,11 +484,28 @@ pub struct CountrySnapshot {
     active_source: Vec<AtomicUsize>,
     /// Parallel to `channels[i].sources`: shared per-URL health records.
     health: Vec<Vec<Arc<SourceHealth>>>,
+    /// Channel id → index into `channels`, for the per-segment lookups.
+    by_id: HashMap<String, usize>,
 }
 
 impl CountrySnapshot {
     fn channel_index(&self, id: &str) -> Option<usize> {
-        self.channels.iter().position(|c| c.id == id)
+        self.by_id.get(id).copied()
+    }
+
+    /// The elected source of channel `i`.
+    fn active(&self, i: usize) -> usize {
+        self.active_source[i].load(Ordering::Relaxed) % self.channels[i].sources.len().max(1)
+    }
+
+    /// Elect the best-ranked electable source of channel `i`; `None` (the
+    /// election left alone) when every feed cools down or is DRM-locked.
+    fn reelect(&self, i: usize, now_ms: u64) -> Option<usize> {
+        let next = self.health[i].iter().position(|h| h.electable(now_ms));
+        if let Some(si) = next {
+            self.active_source[i].store(si, Ordering::Relaxed);
+        }
+        next
     }
 
     /// Every feed of channel `i` failed its last check (the probe, a zap) and
@@ -503,7 +535,7 @@ struct ServiceInner {
     cfg: iris_config::LiveTvConfig,
     http: reqwest::Client,
     signer: proxy::Signer,
-    countries: RwLock<Option<(Arc<Vec<Country>>, Instant)>>,
+    countries: RefreshCell<Vec<Country>>,
     /// Channels per country, sizing the picker (see [`channel_counts`]).
     channel_counts: RefreshCell<ChannelCounts>,
     snapshots: RwLock<HashMap<String, Arc<CountrySnapshot>>>,
@@ -560,17 +592,16 @@ struct ServiceInner {
 /// A cached logo — the bytes + content-type on success, or just the forwarded
 /// status on failure (so the negative result also short-circuits refetching).
 struct CachedLogo {
-    status: u16,
-    content_type: String,
-    bytes: Vec<u8>,
+    logo: LogoResponse,
     fetched_at: Instant,
 }
 
 impl CachedLogo {
     fn is_fresh(&self, now: Instant) -> bool {
-        let ttl = if self.status == 200 {
+        let status = self.logo.status;
+        let ttl = if status == 200 {
             LOGO_CACHE_TTL
-        } else if logo_status_retryable(self.status) {
+        } else if logo_status_retryable(status) {
             LOGO_RETRY_TTL
         } else {
             LOGO_NEG_TTL
@@ -581,10 +612,21 @@ impl CachedLogo {
 
 /// Served logo — bytes + content-type on success, or the upstream error status
 /// to forward (empty body → the client's letter-tile fallback).
+#[derive(Clone)]
 pub struct LogoResponse {
     pub status: u16,
     pub content_type: String,
-    pub bytes: Vec<u8>,
+    pub bytes: axum::body::Bytes,
+}
+
+impl LogoResponse {
+    fn failed(status: u16) -> Self {
+        Self {
+            status,
+            content_type: String::new(),
+            bytes: axum::body::Bytes::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -622,7 +664,7 @@ impl LiveTvService {
                 signer: proxy::Signer::new(jwt_secret),
                 cfg,
                 http,
-                countries: RwLock::new(None),
+                countries: RefreshCell::default(),
                 channel_counts: RefreshCell::default(),
                 snapshots: RwLock::new(HashMap::new()),
                 epg: RwLock::new(HashMap::new()),
@@ -642,6 +684,11 @@ impl LiveTvService {
         })
     }
 
+    /// How long a country's playlists and iptv-org's databases are kept.
+    fn playlist_ttl(&self) -> Duration {
+        Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1))
+    }
+
     pub fn default_country(&self) -> &str {
         &self.inner.cfg.default_country
     }
@@ -652,23 +699,27 @@ impl LiveTvService {
 
     /// Country picker catalogue, cached for a day.
     pub async fn countries(&self) -> Result<Arc<Vec<Country>>, LiveTvError> {
-        if let Some((cached, at)) = self.inner.countries.read().expect("poisoned").clone()
-            && at.elapsed() < Duration::from_hours(24)
-        {
-            return Ok(cached);
-        }
-        let fetched = self
-            .inner
-            .http
-            .get(&self.inner.cfg.countries_url)
-            .send()
+        self.inner
+            .countries
+            .get(Duration::from_hours(24), FAILED_LOAD_RETRY, || async {
+                let loaded = async {
+                    let resp = self
+                        .inner
+                        .http
+                        .get(&self.inner.cfg.countries_url)
+                        .send()
+                        .await
+                        .and_then(reqwest::Response::error_for_status)
+                        .map_err(upstream_err)?;
+                    read_json::<Vec<Country>>(resp).await
+                }
+                .await;
+                loaded
+                    .inspect_err(|e| tracing::warn!(error = %e, "live tv countries fetch failed"))
+                    .ok()
+            })
             .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(upstream_err)?;
-        let fetched: Vec<Country> = read_json(fetched).await?;
-        let fetched = Arc::new(fetched);
-        *self.inner.countries.write().expect("poisoned") = Some((fetched.clone(), Instant::now()));
-        Ok(fetched)
+            .ok_or_else(|| LiveTvError::Upstream("country catalogue unavailable".into()))
     }
 
     /// The countries worth offering, with their channel counts (see
@@ -946,18 +997,23 @@ impl LiveTvService {
             .iter()
             .map(|sources| AtomicUsize::new(elect_seed(sources, now_ms)))
             .collect();
+        let mut by_id = HashMap::with_capacity(built.len());
+        for (i, c) in built.iter().enumerate() {
+            by_id.entry(c.id.clone()).or_insert(i);
+        }
         CountrySnapshot {
             channels: Arc::new(built),
             fetched_at: Instant::now(),
             active_source,
             health,
+            by_id,
         }
     }
 
     /// iptv-org stream database, cached with the playlist TTL. Best-effort:
     /// `None` disables the merge, never fails a channel load.
     async fn streams_db(&self) -> Option<Arc<StreamsDb>> {
-        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
+        let ttl = self.playlist_ttl();
         self.inner
             .streams_db
             .get(ttl, FAILED_LOAD_RETRY, || self.load_streams_db())
@@ -1438,77 +1494,22 @@ impl LiveTvService {
     }
 
     async fn load_search_index(&self) -> Option<Vec<SearchEntry>> {
-        #[derive(serde::Deserialize)]
-        struct ApiChannel {
-            id: String,
-            name: String,
-            #[serde(default)]
-            alt_names: Vec<String>,
-            country: String,
-            #[serde(default)]
-            is_nsfw: bool,
-            #[serde(default)]
-            closed: Option<String>,
-        }
-        // Logos moved out of channels.json into a sibling logos.json
-        // (one or more per channel id) — join them in.
-        #[derive(serde::Deserialize)]
-        struct ApiLogo {
-            channel: String,
-            url: String,
-        }
-
         // Playability filter — a name hit without any stream is a dead card.
         let streams = self.streams_db().await?;
-        let logos_url = self
-            .inner
-            .cfg
-            .channels_url
-            .replace("channels.json", "logos.json");
-        let mut logo_by_channel: HashMap<String, String> = HashMap::new();
-        if let Ok(resp) = self.inner.http.get(&logos_url).send().await
-            && let Ok(logos) = read_json::<Vec<ApiLogo>>(resp).await
-        {
-            for l in logos {
-                logo_by_channel.entry(l.channel).or_insert(l.url);
-            }
-        }
-
-        let fetched: Vec<ApiChannel> = match self
-            .inner
-            .http
-            .get(&self.inner.cfg.channels_url)
-            .send()
+        let logo_by_channel = self
+            .fetch_logo_db()
             .await
-            .and_then(reqwest::Response::error_for_status)
-        {
-            Ok(resp) => match read_json(resp).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(error = %e, "live tv channels db parse failed");
-                    return None;
-                }
-            },
-            Err(e) => {
-                tracing::warn!(error = %upstream_err(e), "live tv channels db fetch failed");
-                return None;
-            }
-        };
-
-        // Folded channel-name → logo, built from the same DB, to give Vavoo
-        // search cards a logo (they carry none of their own).
-        let name_logo: HashMap<String, String> = fetched
-            .iter()
-            .filter_map(|c| {
-                let logo = logo_by_channel.get(&c.id)?;
-                let key = channels::normalize(&c.name);
-                (!key.is_empty()).then(|| (key, logo.clone()))
-            })
-            .collect();
+            .inspect_err(|e| tracing::warn!(error = %e, "live tv logos db unavailable"))
+            .unwrap_or_default();
+        let fetched = self
+            .fetch_channels_db()
+            .await
+            .inspect_err(|e| tracing::warn!(error = %e, "live tv channels db unavailable"))
+            .ok()?;
 
         let mut index: Vec<SearchEntry> = fetched
             .into_iter()
-            .filter(|c| c.closed.is_none() && !c.is_nsfw)
+            .filter(|c| c.closed.is_none() && !c.is_nsfw && !c.country.is_empty())
             .filter(|c| streams.contains_key(&c.id.to_lowercase()))
             .filter_map(|c| {
                 let channel_id = channels::normalize(channels::tvg_id_base(&c.id));
@@ -1534,6 +1535,7 @@ impl LiveTvService {
         // lives in an extra playlist (ParaTV, schumijo, Free-TV…) or in Vavoo —
         // yet those channels ARE playable (they land in the country snapshot),
         // so a real search must surface them too.
+        let name_logo = self.name_logo_index().await.unwrap_or_default();
         self.augment_search_index(&name_logo, &mut index).await;
         tracing::info!(channels = index.len(), "live tv search index built");
         Some(index)
@@ -1591,7 +1593,7 @@ impl LiveTvService {
     /// feeds that carry no logo — chiefly Vavoo. Cached; best-effort (`None`
     /// on any fetch/parse failure just skips the back-fill).
     async fn name_logo_index(&self) -> Option<Arc<NameLogos>> {
-        let ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
+        let ttl = self.playlist_ttl();
         self.inner
             .name_logos
             .get(ttl, FAILED_LOAD_RETRY, || self.load_name_logo_index())
@@ -1599,47 +1601,12 @@ impl LiveTvService {
     }
 
     async fn load_name_logo_index(&self) -> Option<NameLogos> {
-        #[derive(serde::Deserialize)]
-        struct ApiChannel {
-            id: String,
-            name: String,
-            #[serde(default)]
-            alt_names: Vec<String>,
+        let loaded = async {
+            Ok::<_, LiveTvError>((self.fetch_logo_db().await?, self.fetch_channels_db().await?))
         }
-        #[derive(serde::Deserialize)]
-        struct ApiLogo {
-            channel: String,
-            url: String,
-        }
-
-        let logos_url = self
-            .inner
-            .cfg
-            .channels_url
-            .replace("channels.json", "logos.json");
-        let logos = self
-            .inner
-            .http
-            .get(&logos_url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .ok()?;
-        let logos: Vec<ApiLogo> = read_json(logos).await.ok()?;
-        let mut logo_by_id: HashMap<String, String> = HashMap::new();
-        for l in logos {
-            logo_by_id.entry(l.channel).or_insert(l.url);
-        }
-
-        let channels = self
-            .inner
-            .http
-            .get(&self.inner.cfg.channels_url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .ok()?;
-        let channels: Vec<ApiChannel> = read_json(channels).await.ok()?;
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, "live tv name→logo index unavailable"));
+        let (logo_by_id, channels) = loaded.ok()?;
         let mut map: HashMap<String, String> = HashMap::new();
         for c in channels {
             let Some(logo) = logo_by_id.get(&c.id) else {
@@ -1656,6 +1623,47 @@ impl LiveTvService {
         Some(map)
     }
 
+    /// iptv-org's channels database.
+    async fn fetch_channels_db(&self) -> Result<Vec<ApiChannel>, LiveTvError> {
+        let resp = self
+            .inner
+            .http
+            .get(&self.inner.cfg.channels_url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(upstream_err)?;
+        read_json(resp).await
+    }
+
+    /// iptv-org's logos database, beside the channels one: the first logo of
+    /// each channel id.
+    async fn fetch_logo_db(&self) -> Result<HashMap<String, String>, LiveTvError> {
+        #[derive(serde::Deserialize)]
+        struct ApiLogo {
+            channel: String,
+            url: String,
+        }
+        let url = self
+            .inner
+            .cfg
+            .channels_url
+            .replace("channels.json", "logos.json");
+        let resp = self
+            .inner
+            .http
+            .get(&url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(upstream_err)?;
+        let mut by_id = HashMap::new();
+        for logo in read_json::<Vec<ApiLogo>>(resp).await? {
+            by_id.entry(logo.channel).or_insert(logo.url);
+        }
+        Ok(by_id)
+    }
+
     /// Last-resort transcoded playlist for a channel (see [`transcode`]).
     /// Reuses the CURRENT elected source — the client already exercised the
     /// normal proxy path (that's how it learned it can't decode the feed), so
@@ -1665,7 +1673,7 @@ impl LiveTvService {
         let snap = self.channels(&country).await?;
         let idx = snap.channel_index(id).ok_or(LiveTvError::UnknownChannel)?;
         let channel = &snap.channels[idx];
-        let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
+        let active = snap.active(idx);
         // ffmpeg reads the upstream directly, which dlive sources defeat
         // (image-wrapped segments, 5-minute tokens baked into every URI):
         // transcode the best other source instead.
@@ -1752,73 +1760,49 @@ impl LiveTvService {
         // card's letter-tile fallback), rather than a 502 that spams the error
         // log for a purely cosmetic asset. A transport error is cached as a
         // 502 so we don't retry it on every tile this minute.
-        let cached = match self.inner.logo_http.get(upstream).send().await {
-            Ok(resp) => {
+        let logo = match self.inner.logo_http.get(upstream).send().await {
+            Ok(resp) if resp.status().is_success() => {
                 let status = resp.status().as_u16();
-                if resp.status().is_success() {
-                    let content_type = resp
-                        .headers()
-                        .get(reqwest::header::CONTENT_TYPE)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("image/png")
-                        .to_string();
-                    match read_capped(resp, LOGO_FETCH_MAX_BYTES).await {
-                        Ok(bytes) if bytes.len() <= LOGO_MAX_BYTES => CachedLogo {
+                let content_type = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("image/png")
+                    .to_string();
+                match read_capped(resp, LOGO_FETCH_MAX_BYTES).await {
+                    Ok(bytes) => {
+                        let logo = LogoResponse {
                             status,
                             content_type,
-                            bytes,
-                            fetched_at: now,
-                        },
+                            bytes: bytes.into(),
+                        };
                         // Oversized — serve once, don't cache the blob.
-                        Ok(bytes) => {
-                            return Ok(LogoResponse {
-                                status,
-                                content_type,
-                                bytes,
-                            });
+                        if logo.bytes.len() > LOGO_MAX_BYTES {
+                            return Ok(logo);
                         }
-                        Err(_) => CachedLogo {
-                            status: 502,
-                            content_type: String::new(),
-                            bytes: Vec::new(),
-                            fetched_at: now,
-                        },
+                        logo
                     }
-                } else {
-                    CachedLogo {
-                        status,
-                        content_type: String::new(),
-                        bytes: Vec::new(),
-                        fetched_at: now,
-                    }
+                    Err(_) => LogoResponse::failed(502),
                 }
             }
-            Err(_) => CachedLogo {
-                status: 502,
-                content_type: String::new(),
-                bytes: Vec::new(),
+            Ok(resp) => LogoResponse::failed(resp.status().as_u16()),
+            Err(_) => LogoResponse::failed(502),
+        };
+        self.store_logo(
+            key,
+            Arc::new(CachedLogo {
+                logo: logo.clone(),
                 fetched_at: now,
-            },
-        };
-
-        let response = LogoResponse {
-            status: cached.status,
-            content_type: cached.content_type.clone(),
-            bytes: cached.bytes.clone(),
-        };
-        self.store_logo(key, Arc::new(cached));
-        Ok(response)
+            }),
+        );
+        Ok(logo)
     }
 
     /// Return a fresh cached logo for `key`, if any.
     fn cached_logo(&self, key: &str, now: Instant) -> Option<LogoResponse> {
         let cache = self.inner.logo_cache.read().ok()?;
         let entry = cache.get(key)?;
-        entry.is_fresh(now).then(|| LogoResponse {
-            status: entry.status,
-            content_type: entry.content_type.clone(),
-            bytes: entry.bytes.clone(),
-        })
+        entry.is_fresh(now).then(|| entry.logo.clone())
     }
 
     /// Insert a cached logo, wholesale-clearing if the cache got too big.
@@ -1851,16 +1835,11 @@ impl LiveTvService {
         let country = validate_country(country)?;
         let snap = self.channels(&country).await?;
         let idx = snap.channel_index(id).ok_or(LiveTvError::UnknownChannel)?;
-        let channel = &snap.channels[idx];
         let now_ms = epoch_ms();
 
-        let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
+        let active = snap.active(idx);
         snap.health[idx][active].mark_playback_failure(now_ms);
-        // Re-elect: first source not cooling down, if any.
-        let next = (0..channel.sources.len()).find(|&si| snap.health[idx][si].electable(now_ms));
-        if let Some(si) = next {
-            snap.active_source[idx].store(si, Ordering::Relaxed);
-        }
+        let next = snap.reelect(idx, now_ms);
         tracing::info!(
             channel = %format!("{country}:{id}"),
             demoted = active,
@@ -1925,11 +1904,8 @@ impl LiveTvService {
             // Election: first non-cooldown source in quality order.
             let now_ms = epoch_ms();
             let mut alive = 0usize;
-            for (ci, channel) in snap.channels.iter().enumerate() {
-                let elected =
-                    (0..channel.sources.len()).find(|&si| snap.health[ci][si].electable(now_ms));
-                if let Some(si) = elected {
-                    snap.active_source[ci].store(si, Ordering::Relaxed);
+            for ci in 0..snap.channels.len() {
+                if snap.reelect(ci, now_ms).is_some() {
                     alive += 1;
                 }
             }
@@ -2178,17 +2154,10 @@ impl LiveTvService {
     /// client's next master reload lands on a working feed — the automatic
     /// "sanity check → fallback" the household expects.
     pub async fn note_segment_result(&self, channel_key: &str, ok: bool) {
-        let Some((country, id)) = channel_key.split_once(':') else {
+        let Some((snap, idx)) = self.locate(channel_key).await else {
             return;
         };
-        let Ok(snap) = self.channels(country).await else {
-            return;
-        };
-        let Some(idx) = snap.channel_index(id) else {
-            return;
-        };
-        let active = snap.active_source[idx].load(Ordering::Relaxed)
-            % snap.channels[idx].sources.len().max(1);
+        let active = snap.active(idx);
         let health = &snap.health[idx][active];
         if ok {
             health.segment_failures.store(0, Ordering::Relaxed);
@@ -2214,12 +2183,7 @@ impl LiveTvService {
         if is_dlive {
             self.inner.dlive.note_outage();
         }
-        let now_ms = epoch_ms();
-        let next = (0..snap.channels[idx].sources.len())
-            .find(|&si| si != active && snap.health[idx][si].electable(now_ms));
-        if let Some(si) = next {
-            snap.active_source[idx].store(si, Ordering::Relaxed);
-        }
+        let next = snap.reelect(idx, epoch_ms());
         tracing::info!(
             channel = channel_key,
             demoted = active,
@@ -2239,17 +2203,10 @@ impl LiveTvService {
         scheme: &'static str,
     ) -> Option<LiveTvError> {
         let locked = || Some(LiveTvError::Upstream(format!("encrypted with {scheme}")));
-        let Some((country, id)) = channel_key.split_once(':') else {
+        let Some((snap, idx)) = self.locate(channel_key).await else {
             return locked();
         };
-        let Ok(snap) = self.channels(country).await else {
-            return locked();
-        };
-        let Some(idx) = snap.channel_index(id) else {
-            return locked();
-        };
-        let n = snap.channels[idx].sources.len().max(1);
-        let active = snap.active_source[idx].load(Ordering::Relaxed) % n;
+        let active = snap.active(idx);
         if snap.channels[idx]
             .sources
             .get(active)
@@ -2261,11 +2218,7 @@ impl LiveTvService {
         if let Some(health) = snap.health[idx].get(active) {
             health.mark_encrypted(now_ms);
         }
-        let next = (0..snap.channels[idx].sources.len())
-            .find(|&si| snap.health[idx][si].electable(now_ms));
-        if let Some(si) = next {
-            snap.active_source[idx].store(si, Ordering::Relaxed);
-        }
+        let next = snap.reelect(idx, now_ms);
         tracing::info!(
             channel = channel_key,
             demoted = active,
@@ -2280,24 +2233,22 @@ impl LiveTvService {
         }
     }
 
+    /// The snapshot and index of the channel a proxy `channel_key`
+    /// (`country:id`) names.
+    async fn locate(&self, channel_key: &str) -> Option<(Arc<CountrySnapshot>, usize)> {
+        let (country, id) = channel_key.split_once(':')?;
+        let snap = self.channels(country).await.ok()?;
+        let idx = snap.channel_index(id)?;
+        Some((snap, idx))
+    }
+
     /// Headers (and dlive identity) of the channel's active source, for its
     /// proxied requests. A dlive source's headers come from its resolution.
     async fn active_upstream(&self, channel_key: &str) -> ActiveUpstream {
-        let Some((country, id)) = channel_key.split_once(':') else {
+        let Some((snap, idx)) = self.locate(channel_key).await else {
             return ActiveUpstream::default();
         };
-        let Ok(snap) = self.channels(country).await else {
-            return ActiveUpstream::default();
-        };
-        let Some(idx) = snap.channel_index(id) else {
-            return ActiveUpstream::default();
-        };
-        let active = snap.active_source[idx].load(Ordering::Relaxed);
-        let Some(source) = snap.channels[idx]
-            .sources
-            .get(active)
-            .or_else(|| snap.channels[idx].sources.first())
-        else {
+        let Some(source) = snap.channels[idx].sources.get(snap.active(idx)) else {
             return ActiveUpstream::default();
         };
         if let Some((id, player)) = dlive::parse_sentinel(&source.url) {
@@ -2351,14 +2302,22 @@ impl LiveTvService {
     /// [`Self::epg_index`], reloading a guide older than `ttl`.
     async fn epg_index_within(&self, country: &str, ttl: Duration) -> Option<Arc<epg::EpgIndex>> {
         let url = self.inner.cfg.epg_urls.get(country)?;
-        let cell = self
+        let known = self
             .inner
             .epg
-            .write()
+            .read()
             .expect("poisoned")
-            .entry(country.to_string())
-            .or_default()
-            .clone();
+            .get(country)
+            .cloned();
+        let cell = known.unwrap_or_else(|| {
+            self.inner
+                .epg
+                .write()
+                .expect("poisoned")
+                .entry(country.to_string())
+                .or_default()
+                .clone()
+        });
         cell.get(ttl, FAILED_LOAD_RETRY, || async {
             self.fetch_epg(url)
                 .await
@@ -2444,7 +2403,7 @@ impl LiveTvService {
     /// Background refresh: re-fetch loaded playlists / guides past their
     /// TTL. Runs forever; spawn once at boot.
     pub fn spawn_refresh_loop(self) {
-        let playlist_ttl = Duration::from_hours(self.inner.cfg.playlist_refresh_hours.max(1));
+        let playlist_ttl = self.playlist_ttl();
         let epg_ttl = Duration::from_hours(self.inner.cfg.epg_refresh_hours.max(1));
         // Transcode idle reaper: its 60 s idle window needs a much faster
         // cadence than the 15 min refresh ticker below.
@@ -2478,8 +2437,11 @@ impl LiveTvService {
         {
             let svc = self.clone();
             tokio::spawn(async move {
-                svc.channel_counts(Duration::MAX).await;
-                svc.search_index(Duration::MAX).await;
+                crate::supervise::tick("live tv boot warm-up", async {
+                    svc.channel_counts(Duration::MAX).await;
+                    svc.search_index(Duration::MAX).await;
+                })
+                .await;
             });
         }
         // Hydrate the configured tuner channels at boot and keep their remux
@@ -2497,55 +2459,8 @@ impl LiveTvService {
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     ticker.tick().await; // first tick fires immediately = boot hydration
-                    // Expand each configured id to its WHOLE MUX: a tuned
-                    // adapter serves every channel of its frequency anyway
-                    // (tunerd unions the PID filters), so warming the
-                    // siblings costs one `-c copy` ffmpeg each — and the
-                    // entire mux zaps instantly.
-                    for id in svc
-                        .mux_siblings(&country, &svc.inner.cfg.tuner.prewarm)
-                        .await
-                    {
-                        let key = format!("{country}:{id}");
-                        // Already running → leave it alone. Deliberately no
-                        // touch: session heat must mean "a viewer is here",
-                        // it's what shields watched muxes from reclaim.
-                        if svc.inner.transcode.is_warm(Mode::Remux, &key).await {
-                            continue;
-                        }
-                        // Viewers outrank warmth — never steal an adapter
-                        // from watched muxes to re-pin a cold channel. The
-                        // next tick retries once a mux cools down.
-                        let freq = {
-                            let snap = svc.channels(&country).await.ok();
-                            snap.as_ref().and_then(|s| {
-                                s.channel_index(&id)
-                                    .and_then(|i| channel_tuner_freq(&s.channels[i]))
-                            })
-                        };
-                        if let Some(freq) = &freq
-                            && !svc.inner.transcode.mux_available(freq).await
-                        {
-                            tracing::debug!(
-                                channel = %id,
-                                freq = %freq,
-                                "tuner adapters busy with watched muxes — left cold"
-                            );
-                            continue;
-                        }
-                        match svc.master_playlist(&country, &id).await {
-                            Ok(mp) if mp.upstream_host == "tuner" => {
-                                tracing::info!(channel = %id, "tuner session warm");
-                            }
-                            Ok(_) => tracing::debug!(
-                                channel = %id,
-                                "prewarm lost the adapter race — left cold"
-                            ),
-                            Err(e) => {
-                                tracing::warn!(channel = %id, error = %e, "tuner prewarm failed");
-                            }
-                        }
-                    }
+                    crate::supervise::tick("live tv tuner prewarm", svc.prewarm_tuner(&country))
+                        .await;
                 }
             });
         }
@@ -2562,6 +2477,51 @@ impl LiveTvService {
                 .await;
             }
         });
+    }
+
+    /// One pass of the tuner prewarm: every configured channel expanded to
+    /// its WHOLE MUX (a tuned adapter serves every channel of its frequency
+    /// anyway — tunerd unions the PID filters — so warming the siblings costs
+    /// one `-c copy` ffmpeg each, and the entire mux zaps instantly).
+    async fn prewarm_tuner(&self, country: &str) {
+        for id in self
+            .mux_siblings(country, &self.inner.cfg.tuner.prewarm)
+            .await
+        {
+            let key = format!("{country}:{id}");
+            // Already running → leave it alone. Deliberately no touch: session
+            // heat must mean "a viewer is here", it's what shields watched
+            // muxes from reclaim.
+            if self.inner.transcode.is_warm(Mode::Remux, &key).await {
+                continue;
+            }
+            // Viewers outrank warmth — never steal an adapter from watched
+            // muxes to re-pin a cold channel. The next tick retries once a mux
+            // cools down.
+            let freq = self.channels(country).await.ok().and_then(|s| {
+                s.channel_index(&id)
+                    .and_then(|i| channel_tuner_freq(&s.channels[i]))
+            });
+            if let Some(freq) = &freq
+                && !self.inner.transcode.mux_available(freq).await
+            {
+                tracing::debug!(
+                    channel = %id,
+                    freq = %freq,
+                    "tuner adapters busy with watched muxes — left cold"
+                );
+                continue;
+            }
+            match self.master_playlist(country, &id).await {
+                Ok(mp) if mp.upstream_host == "tuner" => {
+                    tracing::info!(channel = %id, "tuner session warm");
+                }
+                Ok(_) => {
+                    tracing::debug!(channel = %id, "prewarm lost the adapter race — left cold");
+                }
+                Err(e) => tracing::warn!(channel = %id, error = %e, "tuner prewarm failed"),
+            }
+        }
     }
 
     async fn refresh_stale(&self, playlist_ttl: Duration, epg_ttl: Duration) {
@@ -2618,12 +2578,6 @@ impl LiveTvService {
     }
 }
 
-/// Prefix every URI of an HLS media playlist — ffmpeg's on-disk playlist
-/// references bare `mux000001.m4s` names, but the master is served from
-/// `.../channels/{id}/master.m3u8` while tuner segments live under the
-/// sibling `.../channels/{id}/transcode/{segment}` route. Besides the plain
-/// URI lines, the fMP4 init segment is referenced from an `#EXT-X-MAP` tag
-/// (a comment-shaped line) and must be rewritten too.
 /// Finalize a successful tuner election: record stickiness + health and
 /// point the returned playlist at the tuner segment route.
 fn tuner_elected(
@@ -2693,6 +2647,12 @@ fn channel_tuner_freq(ch: &Channel) -> Option<String> {
         .and_then(|s| transcode::tuner_freq(&s.url))
 }
 
+/// Prefix every URI of an HLS media playlist — ffmpeg's on-disk playlist
+/// references bare `mux000001.m4s` names, but the master is served from
+/// `.../channels/{id}/master.m3u8` while tuner segments live under the
+/// sibling `.../channels/{id}/transcode/{segment}` route. Besides the plain
+/// URI lines, the fMP4 init segment is referenced from an `#EXT-X-MAP` tag
+/// (a comment-shaped line) and must be rewritten too.
 fn prefix_segment_uris(body: &str, prefix: &str) -> String {
     body.lines()
         .map(|line| {
@@ -2764,7 +2724,7 @@ async fn read_json<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&bytes).map_err(|e| LiveTvError::Upstream(format!("bad json: {e}")))
 }
 
-fn epoch_ms() -> u64 {
+pub(crate) fn epoch_ms() -> u64 {
     u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
 
@@ -3128,6 +3088,176 @@ https://a/x.m3u8
             svc.note_encrypted("ie:c", "FairPlay").await,
             Some(LiveTvError::Encrypted)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_failed_country_catalogue_is_not_refetched_per_request() {
+        use axum::routing::get;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let app = axum::Router::new().route(
+            "/countries.json",
+            get(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async { axum::http::StatusCode::BAD_GATEWAY }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let cfg = iris_config::LiveTvConfig {
+            countries_url: format!("http://{addr}/countries.json"),
+            ..Default::default()
+        };
+        let svc = LiveTvService::new(cfg, "test-secret").unwrap();
+        assert!(svc.countries().await.is_err());
+        assert!(svc.countries().await.is_err());
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn logos_and_their_misses_are_served_from_the_cache() {
+        use axum::routing::get;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let app = axum::Router::new()
+            .route(
+                "/logo.png",
+                get(move || {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    async { ([(http::header::CONTENT_TYPE, "image/png")], vec![1u8, 2, 3]) }
+                }),
+            )
+            .route(
+                "/gone.png",
+                get(|| async { axum::http::StatusCode::NOT_FOUND }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let fetch = |path: &str| {
+            let signed = svc.logo_proxy_url(&format!("http://{addr}{path}")).unwrap();
+            let query = Url::parse(&format!("http://iris{signed}")).unwrap();
+            let param = |k: &str| {
+                query
+                    .query_pairs()
+                    .find(|(n, _)| n == k)
+                    .map(|(_, v)| v.into_owned())
+                    .unwrap()
+            };
+            let (u, s) = (param("u"), param("s"));
+            let svc = svc.clone();
+            async move { svc.fetch_logo(&u, &s).await.unwrap() }
+        };
+        for _ in 0..3 {
+            let logo = fetch("/logo.png").await;
+            assert_eq!(
+                (logo.status, logo.content_type.as_str()),
+                (200, "image/png")
+            );
+            assert_eq!(&logo.bytes[..], &[1, 2, 3]);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let miss = fetch("/gone.png").await;
+        assert_eq!(miss.status, 404);
+        assert!(miss.bytes.is_empty());
+        assert!(
+            svc.inner
+                .logo_cache
+                .read()
+                .unwrap()
+                .values()
+                .any(|c| c.logo.status == 404)
+        );
+    }
+
+    #[tokio::test]
+    async fn search_and_logo_back_fill_read_the_same_channel_databases() {
+        use axum::routing::get;
+        let app = axum::Router::new()
+            .route(
+                "/api/channels.json",
+                get(|| async {
+                    axum::Json(serde_json::json!([
+                        {"id": "TF1.fr", "name": "TF1", "alt_names": ["Television Francaise 1"], "country": "FR"},
+                        {"id": "Gone.fr", "name": "Gone", "country": "FR", "closed": "2020-01-01"},
+                        {"id": "Adult.fr", "name": "Adult", "country": "FR", "is_nsfw": true},
+                        {"id": "Nowhere.int", "name": "Nowhere"},
+                    ]))
+                }),
+            )
+            .route(
+                "/api/logos.json",
+                get(|| async {
+                    axum::Json(serde_json::json!([
+                        {"channel": "TF1.fr", "url": "https://logo.example/tf1.png"},
+                        {"channel": "TF1.fr", "url": "https://logo.example/tf1-old.png"},
+                    ]))
+                }),
+            )
+            .route(
+                "/api/streams.json",
+                get(|| async {
+                    axum::Json(serde_json::json!(
+                        ["TF1.fr", "Gone.fr", "Adult.fr", "Nowhere.int"]
+                            .map(|c| serde_json::json!({"channel": c, "url": "https://s.example/a.m3u8"}))
+                    ))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let cfg = iris_config::LiveTvConfig {
+            channels_url: format!("http://{addr}/api/channels.json"),
+            streams_url: format!("http://{addr}/api/streams.json"),
+            extra_playlists: HashMap::new(),
+            vavoo_enabled: false,
+            ..Default::default()
+        };
+        let svc = LiveTvService::new(cfg, "test-secret").unwrap();
+
+        let hits = svc.search("tf", 10).await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            (hits[0].country.as_str(), hits[0].channel_id.as_str()),
+            ("fr", "tf1")
+        );
+        assert_eq!(
+            hits[0].logo_url.as_deref(),
+            Some("https://logo.example/tf1.png")
+        );
+        assert!(svc.search("gone", 10).await.is_empty(), "closed");
+        assert!(svc.search("adult", 10).await.is_empty(), "nsfw");
+        assert!(svc.search("nowhere", 10).await.is_empty(), "no country");
+
+        let names = svc.name_logo_index().await.unwrap();
+        assert_eq!(
+            names.get("tf1").map(String::as_str),
+            Some("https://logo.example/tf1.png")
+        );
+        assert!(names.contains_key("televisionfrancaise1"), "alt names too");
+        assert!(!names.contains_key("gone"), "no logo, no entry");
+    }
+
+    #[test]
+    fn a_snapshot_finds_its_channels_and_reelects_past_dead_feeds() {
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let mut second = channel_with(&["http://r/1", "http://r/2", "http://r/3"]);
+        second.id = "d".into();
+        let snap = svc.build_snapshot(vec![channel_with(&["http://r/0"]), second]);
+        assert_eq!(snap.channel_index("c"), Some(0));
+        assert_eq!(snap.channel_index("d"), Some(1));
+        assert_eq!(snap.channel_index("nope"), None);
+
+        let now = epoch_ms();
+        snap.health[1][0].mark_failure(now);
+        assert_eq!(snap.reelect(1, now), Some(1));
+        assert_eq!(snap.active(1), 1);
+        snap.health[1][1].mark_encrypted(now);
+        snap.health[1][2].mark_failure(now);
+        assert_eq!(snap.reelect(1, now), None, "nothing electable");
+        assert_eq!(snap.active(1), 1, "the election is left alone");
     }
 
     #[test]
