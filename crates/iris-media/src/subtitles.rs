@@ -221,32 +221,17 @@ pub async fn stream_subtitle(
 
     tokio::spawn(async move {
         let mut cache = cache_file;
-        let mut buf = vec![0u8; 8 * 1024];
-        let mut had_io_error = false;
-        loop {
-            match stdout.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    if let Err(e) = cache.write_all(&buf[..n]).await {
-                        tracing::warn!(error = %e, "subtitle cache write failed");
-                        had_io_error = true;
-                    }
-                    let chunk = Bytes::copy_from_slice(&buf[..n]);
-                    if tx.send(Ok(chunk)).await.is_err() {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(e)).await;
-                    had_io_error = true;
-                    break;
-                }
-            }
-        }
+        let outcome = pump(&mut stdout, &mut cache, &tx, mark_complete).await;
         let _ = cache.shutdown().await;
         drop(cache);
+        drop(stdout);
+        if outcome == Pump::Abandoned {
+            // Nobody reads the rest and it would never be promoted: stop
+            // ffmpeg rather than wait on it (it may be blocked on a full pipe).
+            let _ = child.start_kill();
+        }
         match child.wait().await {
-            Ok(status) if status.success() && !had_io_error && mark_complete => {
+            Ok(status) if status.success() && outcome == Pump::Complete && mark_complete => {
                 if let Err(e) = tokio::fs::rename(&tmp_path, &cache_path).await {
                     tracing::warn!(error = %e, "subtitle cache promote failed");
                 } else {
@@ -259,7 +244,10 @@ pub async fn stream_subtitle(
                     }
                 }
             }
-            Ok(status) if status.success() && !had_io_error => {
+            Ok(_) if outcome == Pump::Abandoned => {
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+            }
+            Ok(status) if status.success() && outcome == Pump::Complete => {
                 // Successful extraction but source wasn't fully
                 // downloaded — output is potentially truncated, do not
                 // poison the cache. The client got the partial bytes
@@ -280,6 +268,57 @@ pub async fn stream_subtitle(
     Ok(Box::pin(ReceiverStream::new(rx)))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Pump {
+    /// ffmpeg's output reached EOF and every byte reached the cache file.
+    Complete,
+    /// A read or cache write failed: the cache file is not trustworthy.
+    Failed,
+    /// The client went away and the output wasn't worth finishing.
+    Abandoned,
+}
+
+/// Tee ffmpeg's output to the client and the cache file. When the client
+/// disconnects, a cacheable extraction keeps draining into the cache (the
+/// track is then complete for the next request); any other one stops.
+async fn pump(
+    stdout: &mut (impl tokio::io::AsyncRead + Unpin),
+    cache: &mut (impl tokio::io::AsyncWrite + Unpin),
+    tx: &mpsc::Sender<Result<Bytes, std::io::Error>>,
+    keep_without_client: bool,
+) -> Pump {
+    let mut buf = vec![0u8; 8 * 1024];
+    let mut failed = false;
+    let mut client = true;
+    loop {
+        match stdout.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => {
+                if let Err(e) = cache.write_all(&buf[..n]).await {
+                    tracing::warn!(error = %e, "subtitle cache write failed");
+                    failed = true;
+                }
+                if client
+                    && tx
+                        .send(Ok(Bytes::copy_from_slice(&buf[..n])))
+                        .await
+                        .is_err()
+                {
+                    client = false;
+                }
+                if !client && (failed || !keep_without_client) {
+                    return Pump::Abandoned;
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(Err(e)).await;
+                return Pump::Failed;
+            }
+        }
+    }
+    if failed { Pump::Failed } else { Pump::Complete }
+}
+
 /// Computed cache path for a given (`infohash`, `file_idx`, `sub_idx`,
 /// format). Files of different formats coexist (e.g., a track can be
 /// served as both `WebVTT` and ASS).
@@ -294,4 +333,46 @@ pub fn cache_path(
         "{infohash}_{file_idx}_{sub_idx}.{}",
         format.extension()
     ))
+}
+
+#[cfg(test)]
+mod pump_tests {
+    use super::{Pump, pump};
+    use tokio::sync::mpsc;
+
+    const TRACK: &[u8] = &[b'x'; 40 * 1024];
+
+    #[tokio::test]
+    async fn a_cacheable_track_is_drained_whole_after_the_client_leaves() {
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let mut cache = Vec::new();
+        let outcome = pump(&mut &TRACK[..], &mut cache, &tx, true).await;
+        assert_eq!(outcome, Pump::Complete);
+        assert_eq!(cache.len(), TRACK.len());
+    }
+
+    #[tokio::test]
+    async fn any_other_track_stops_when_the_client_leaves() {
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let mut cache = Vec::new();
+        let outcome = pump(&mut &TRACK[..], &mut cache, &tx, false).await;
+        assert_eq!(outcome, Pump::Abandoned);
+        assert!(cache.len() < TRACK.len());
+    }
+
+    #[tokio::test]
+    async fn a_connected_client_gets_every_byte() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let mut cache = Vec::new();
+        let outcome = pump(&mut &TRACK[..], &mut cache, &tx, false).await;
+        drop(tx);
+        let mut got = 0;
+        while let Some(chunk) = rx.recv().await {
+            got += chunk.unwrap().len();
+        }
+        assert_eq!(outcome, Pump::Complete);
+        assert_eq!(got, TRACK.len());
+    }
 }
