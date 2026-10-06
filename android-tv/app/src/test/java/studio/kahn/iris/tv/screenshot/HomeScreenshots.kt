@@ -18,7 +18,7 @@ import studio.kahn.iris.tv.ui.screens.DiscoverContent
 import studio.kahn.iris.tv.ui.screens.HomeContent
 import studio.kahn.iris.tv.ui.screens.OnboardingContent
 import studio.kahn.iris.tv.ui.screens.home.CardAction
-import studio.kahn.iris.tv.ui.screens.home.CardMenu
+import studio.kahn.iris.tv.ui.components.ActionSheet
 import studio.kahn.iris.tv.ui.screens.home.CardModel
 import studio.kahn.iris.tv.ui.screens.home.DiscoverUiState
 import studio.kahn.iris.tv.ui.screens.home.HeroAction
@@ -155,13 +155,15 @@ class HomeScreenshots {
     }
 
     @Test
-    fun cardMenu() = shots.snap("home_card_menu") {
+    fun cardMenu() = shots.snapEverySize("home_card_menu") {
         Home(home) {
-            CardMenu(
-                eyebrow = "Continue watching",
+            ActionSheet(
                 title = "Severance",
+                eyebrow = "Continue watching",
                 actions = listOf(CardAction.Play, CardAction.StartOver, CardAction.OpenSeries, CardAction.MarkWatched, CardAction.RemoveFromContinue),
-                busy = CardAction.MarkWatched,
+                label = { it.label },
+                busyLabel = { it.busyLabel },
+                inFlight = { it == CardAction.MarkWatched },
                 onAction = {},
                 onDismiss = {},
             )

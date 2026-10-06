@@ -57,6 +57,7 @@ fun SidePanel(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
     footer: String? = null,
+    eyebrow: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     BackHandler(onBack = onDismiss)
@@ -82,6 +83,7 @@ fun SidePanel(
                 .padding(start = 24.dp, end = 24.dp, top = layout.safeVertical, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s1),
         ) {
+            if (eyebrow != null) Eyebrow(eyebrow, Modifier.padding(horizontal = 10.dp))
             Text(
                 title,
                 style = IrisType.panel,

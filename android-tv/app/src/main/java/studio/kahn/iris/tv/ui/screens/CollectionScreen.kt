@@ -52,6 +52,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionSheet
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.Artwork
@@ -648,44 +649,21 @@ internal fun EpisodeSheet(
     onAction: (EpisodeRowUi, EpisodeAction) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val first = remember { FocusRequester() }
-    var waiting by remember { mutableStateOf<String?>(null) }
-    var seen by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
-    LaunchedEffect(busy, waiting) {
-        val key = waiting ?: return@LaunchedEffect
-        if (key in busy) seen = true else if (seen) onDismiss()
-    }
-    SidePanel(title = row.title, onDismiss = onDismiss, footer = "Back closes this panel") {
-        Column(Modifier.padding(horizontal = IrisSpace.s4), verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
-            ToneLine(row.state.tone, row.state.text)
-            row.aired?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
-            row.overview?.let { Text(it, style = IrisType.reading, color = IrisColor.ink, maxLines = 6, overflow = TextOverflow.Ellipsis) }
-            row.details.forEach { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
-            if (row.actions.isEmpty()) Hint("Nothing to do yet: no release of this episode is known.")
-            Spacer(Modifier.height(IrisSpace.s2))
-            row.actions.forEachIndexed { i, action ->
-                val key = action.busyKey()
-                ActionButton(
-                    action.label,
-                    {
-                        if (action is EpisodeAction.Play) {
-                            onDismiss()
-                        } else {
-                            waiting = key
-                            seen = false
-                        }
-                        onAction(row, action)
-                    },
-                    style = if (i == 0) ActionStyle.Primary else ActionStyle.Secondary,
-                    busy = key in busy,
-                    busyText = "Asking the server…",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(if (i == 0) Modifier.focusRequester(first) else Modifier),
-                )
-            }
-        }
+    ActionSheet(
+        title = row.title,
+        actions = row.actions,
+        label = { it.label },
+        busyLabel = { "Asking the server…" },
+        waits = { it !is EpisodeAction.Play },
+        inFlight = { it.busyKey() in busy },
+        onAction = { onAction(row, it) },
+        onDismiss = onDismiss,
+    ) {
+        ToneLine(row.state.tone, row.state.text)
+        row.aired?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
+        row.overview?.let { Text(it, style = IrisType.reading, color = IrisColor.ink, maxLines = 6, overflow = TextOverflow.Ellipsis) }
+        row.details.forEach { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
+        if (row.actions.isEmpty()) Hint("Nothing to do yet: no release of this episode is known.")
     }
 }
 

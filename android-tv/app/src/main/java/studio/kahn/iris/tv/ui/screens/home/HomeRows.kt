@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionSheet
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.CardRow
@@ -46,53 +47,26 @@ import studio.kahn.iris.tv.ui.theme.IrisType
 data class OpenMenu(val card: CardModel, val eyebrow: String, val rowKeys: List<String>)
 
 /**
- * The cards of a screen and their menu: one focus requester per card key (so the focus
- * can come back to a card, or its neighbour once the card left its row), and the open
- * [CardMenu]. A menu action that goes to the server keeps the menu open, busy, until the
- * screen's busy key clears ([settle]).
+ * The cards of a screen and their "Hold OK" menu: one focus requester per card key (so the
+ * focus can come back to a card, or its neighbour once the card left its row), and the open
+ * menu, drawn by [CardMenuHost].
  */
 @Stable
 class CardFocus {
     private val requesters = HashMap<String, FocusRequester>()
     var menu by mutableStateOf<OpenMenu?>(null)
         private set
-    var pending by mutableStateOf<CardAction?>(null)
-        private set
-    private var sawBusy = false
     private var refocus: OpenMenu? = null
 
     fun requester(key: String): FocusRequester = requesters.getOrPut(key) { FocusRequester() }
 
     fun open(card: CardModel, eyebrow: String, row: List<CardModel>) {
         menu = OpenMenu(card, eyebrow, row.map { it.key })
-        pending = null
-        sawBusy = false
-    }
-
-    /** The menu's action: [serverSide] ones keep it open until the server answered. */
-    fun chose(action: CardAction, serverSide: Boolean) {
-        if (serverSide) {
-            pending = action
-            sawBusy = false
-        } else {
-            dismiss()
-        }
     }
 
     fun dismiss() {
         refocus = menu
         menu = null
-        pending = null
-    }
-
-    /** Fed the screen's busy key: closes a pending menu once its action is over. */
-    fun settle(busy: String?) {
-        if (pending == null) return
-        if (busy != null) {
-            sawBusy = true
-        } else if (sawBusy) {
-            dismiss()
-        }
     }
 
     /** After the menu closed: back to its card, or the nearest one left in its row, else [fallback]. */
@@ -121,10 +95,17 @@ val SERVER_ACTIONS = setOf(
     CardAction.NotInterested,
 )
 
+/** The screen's busy key while [action] of the card [key] travels: what `act` of the home and discover models set. */
+fun busyKeyOf(key: String, action: CardAction): String = when (action) {
+    CardAction.GetAndPlay -> "get:${key.removePrefix(CW_PREFIX)}"
+    CardAction.StartOver -> "over:${key.removePrefix(CW_PREFIX)}"
+    else -> key
+}
+
 /**
- * The open menu of [focus], if any, wired to [onCardAction]; [busy] is the screen's action
- * in flight. [present] says whether a card key is still on screen, [fallback] takes the
- * focus when its row emptied.
+ * The open menu of [focus], if any, as an [ActionSheet] wired to [onCardAction]; [busy] is the
+ * screen's action in flight ([busyKeyOf]). [present] says whether a card key is still on
+ * screen, [fallback] takes the focus when its row emptied.
  */
 @Composable
 fun CardMenuHost(
@@ -134,19 +115,18 @@ fun CardMenuHost(
     fallback: FocusRequester?,
     onCardAction: (String, CardAction) -> Unit,
 ) {
-    LaunchedEffect(busy) { focus.settle(busy) }
     val menu = focus.menu
     LaunchedEffect(menu) { if (menu == null) focus.restore(present, fallback) }
     if (menu != null) {
-        CardMenu(
-            eyebrow = menu.eyebrow,
+        ActionSheet(
             title = menu.card.title,
+            eyebrow = menu.eyebrow,
             actions = menu.card.menu,
-            busy = focus.pending,
-            onAction = { action ->
-                focus.chose(action, serverSide = action in SERVER_ACTIONS)
-                onCardAction(menu.card.key, action)
-            },
+            label = { it.label },
+            busyLabel = { it.busyLabel },
+            waits = { it in SERVER_ACTIONS },
+            inFlight = { busy != null && busy == busyKeyOf(menu.card.key, it) },
+            onAction = { onCardAction(menu.card.key, it) },
             onDismiss = focus::dismiss,
         )
     }
