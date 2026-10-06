@@ -22,6 +22,7 @@ pub mod routes;
 pub mod seed_stats;
 pub mod simkl;
 pub mod state;
+pub mod supervise;
 pub mod tmdb;
 pub mod tmdb_backfill;
 pub mod tmdb_resolve;
@@ -56,7 +57,9 @@ fn setup_remuxer(
         ticker.tick().await; // skip immediate boot tick
         loop {
             ticker.tick().await;
-            let (count, _) = evictor.evict_to(cap_bytes).await;
+            let count = supervise::tick("remux evictor", evictor.evict_to(cap_bytes))
+                .await
+                .map_or(0, |(count, _)| count);
             if count > 0 {
                 tracing::info!(count, "remuxer cache eviction pass complete");
             }
@@ -308,14 +311,17 @@ fn spawn_background_jobs(
         ticker.tick().await; // skip the immediate fire
         loop {
             ticker.tick().await;
-            collection_assign::run_backfill(
-                &bf_pool,
-                collection_assign::EnrichDeps {
-                    tmdb: bf_tmdb.as_ref(),
-                    anilist: bf_anilist.as_ref(),
-                    providers: Some(&bf_providers),
-                },
-                &bf_engine,
+            supervise::tick(
+                "collection backfill",
+                collection_assign::run_backfill(
+                    &bf_pool,
+                    collection_assign::EnrichDeps {
+                        tmdb: bf_tmdb.as_ref(),
+                        anilist: bf_anilist.as_ref(),
+                        providers: Some(&bf_providers),
+                    },
+                    &bf_engine,
+                ),
             )
             .await;
         }

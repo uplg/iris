@@ -32,7 +32,7 @@ pub fn spawn(pool: SqlitePool, engine: Arc<Engine>, providers: ProviderRegistry)
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            reconcile_once(&pool, &engine, &providers).await;
+            crate::supervise::tick("seed stats", reconcile_once(&pool, &engine, &providers)).await;
         }
     });
 }

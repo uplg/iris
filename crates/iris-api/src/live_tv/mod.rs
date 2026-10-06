@@ -1720,7 +1720,7 @@ impl LiveTvService {
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     ticker.tick().await;
-                    svc.inner.transcode.reap_idle().await;
+                    crate::supervise::tick("live tv reaper", svc.inner.transcode.reap_idle()).await;
                 }
             });
         }
@@ -1806,7 +1806,11 @@ impl LiveTvService {
             ticker.tick().await; // skip immediate boot tick
             loop {
                 ticker.tick().await;
-                self.refresh_stale(playlist_ttl, epg_ttl).await;
+                crate::supervise::tick(
+                    "live tv refresh",
+                    self.refresh_stale(playlist_ttl, epg_ttl),
+                )
+                .await;
             }
         });
     }

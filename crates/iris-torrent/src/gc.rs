@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use futures::FutureExt;
 use futures::future::BoxFuture;
 use iris_core::ids::TorrentId;
 use sqlx::SqlitePool;
@@ -101,8 +102,14 @@ impl Gc {
             ticker.tick().await;
             loop {
                 ticker.tick().await;
-                if let Err(e) = self.run_once().await {
-                    tracing::error!(error = %e, "gc cycle failed");
+                // A panic in one pass must not end the GC until the next restart.
+                match std::panic::AssertUnwindSafe(self.run_once())
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => tracing::error!(error = %e, "gc cycle failed"),
+                    Err(_) => tracing::error!("gc cycle panicked; the loop carries on"),
                 }
             }
         });

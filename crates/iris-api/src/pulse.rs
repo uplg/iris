@@ -197,7 +197,7 @@ pub fn spawn(
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            run_cycle(&deps).await;
+            crate::supervise::tick("pulse", run_cycle(&deps)).await;
         }
     });
     tracing::info!("pulse scheduler started");

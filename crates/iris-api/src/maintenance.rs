@@ -21,7 +21,7 @@ pub fn spawn(pool: SqlitePool) {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            run_once(&pool).await;
+            crate::supervise::tick("maintenance", run_once(&pool)).await;
         }
     });
 }

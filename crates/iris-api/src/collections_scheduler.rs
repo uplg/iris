@@ -83,7 +83,8 @@ pub fn spawn(pool: SqlitePool, providers: ProviderRegistry) {
         ticker.tick().await; // skip the immediate firing
         loop {
             ticker.tick().await;
-            run_pass(&pool, providers.clone()).await;
+            crate::supervise::tick("collections scheduler", run_pass(&pool, providers.clone()))
+                .await;
         }
     });
     tracing::info!(

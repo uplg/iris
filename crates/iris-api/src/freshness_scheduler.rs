@@ -83,14 +83,17 @@ pub fn spawn(
         loop {
             ticker.tick().await; // first tick fires immediately (after warm-up)
             let (provider_id, kind) = &slices[idx % slices.len()];
-            run_slice(
-                &pool,
-                &tmdb,
-                anilist.as_ref(),
-                &providers,
-                provider_id,
-                *kind,
-                &cfg,
+            crate::supervise::tick(
+                "freshness scheduler",
+                run_slice(
+                    &pool,
+                    &tmdb,
+                    anilist.as_ref(),
+                    &providers,
+                    provider_id,
+                    *kind,
+                    &cfg,
+                ),
             )
             .await;
             idx += 1;
