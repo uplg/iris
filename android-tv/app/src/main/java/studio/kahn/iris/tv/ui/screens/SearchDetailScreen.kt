@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -336,19 +337,19 @@ fun SearchDetailScreen(
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             }
 
-            // Synopsis: prefer TMDB (clean text) over the markup-laden
-            // tracker description on TV. We strip whatever markup the
-            // tracker uses (BBCode for torr9, HTML for c411) as a backup
-            // so we never show raw tags on a 10-foot screen.
-            val synopsis = meta?.overview ?: details?.let { d ->
-                d.description?.let { desc ->
-                    when (d.descriptionFormat) {
-                        DescriptionFormat.bbcode -> stripBBCode(desc)
+            // The title's synopsis (TMDB, clean text) and the uploader's own
+            // release notes are two different things: show both. The notes
+            // lose their markup (BBCode for torr9, HTML for c411) so no raw
+            // tags reach a 10-foot screen; stripped once per details load.
+            val synopsis = meta?.overview
+            val releaseNotes = remember(details) {
+                details?.description?.let { desc ->
+                    when (details?.descriptionFormat) {
                         DescriptionFormat.html -> stripHtml(desc)
                         DescriptionFormat.plain -> desc
                         else -> stripBBCode(desc)
                     }
-                }
+                }?.trim()?.takeIf { it.isNotEmpty() }
             }
             if (!synopsis.isNullOrBlank()) {
                 Text(
@@ -360,6 +361,22 @@ fun SearchDetailScreen(
             }
 
             details?.mediaInfo?.let { FactsGrid(it) }
+
+            if (releaseNotes != null && releaseNotes != synopsis) {
+                Text(
+                    "Release notes from ${details?.providerId ?: providerId}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                // Focusable so the D-pad can reach it: a long note scrolls
+                // into view as it takes the focus.
+                Text(
+                    releaseNotes,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth(0.8f).focusable(),
+                )
+            }
         }
         }
 

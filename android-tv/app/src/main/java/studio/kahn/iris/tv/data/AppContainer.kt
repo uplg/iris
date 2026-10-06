@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.data
 
 import android.content.Context
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -83,14 +84,20 @@ class DefaultAppContainer(context: Context) : AppContainer {
         serializersModule = irisSerializersModule
     }
 
+    // One Retrofit + interface proxy per server URL: building them is costly
+    // (reflection over every endpoint) and the URL only changes at pairing.
+    private val apis = ConcurrentHashMap<String, IrisApi>()
+
     @OptIn(ExperimentalSerializationApi::class)
     override fun apiFor(baseUrl: String): IrisApi =
-        Retrofit.Builder()
-            .baseUrl(normalize(baseUrl))
-            .client(okHttpClient)
-            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
-            .build()
-            .create(IrisApi::class.java)
+        apis.getOrPut(normalize(baseUrl)) {
+            Retrofit.Builder()
+                .baseUrl(normalize(baseUrl))
+                .client(okHttpClient)
+                .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+                .build()
+                .create(IrisApi::class.java)
+        }
 
     private fun normalize(url: String): String =
         if (url.endsWith("/")) url else "$url/"
