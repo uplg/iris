@@ -24,6 +24,8 @@
 	);
 	const g = new Gesture();
 	let step = $state<Step>({ name: 'signin' });
+	// why the session ended here, when the server ended it (a password change)
+	const notice = $derived(session.state.status === 'signed_out' ? session.state.notice : undefined);
 	let email = $state('');
 	let password = $state('');
 	let reveal = $state(false);
@@ -89,6 +91,7 @@
 				<h1 id="signin-title" tabindex="-1">Sign in</h1>
 				<p class="lead">Use your email and password, or a passkey if you made one.</p>
 			</div>
+			{#if notice}<p class="callout">{notice}</p>{/if}
 			<form class="stack" onsubmit={withPassword}>
 				<div class="field">
 					<label for="email">Email</label>

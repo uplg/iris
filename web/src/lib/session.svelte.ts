@@ -34,6 +34,7 @@ class SessionView {
 	signedIn = (...a: Parameters<Session['signedIn']>) => this.#core.signedIn(...a);
 	login = (...a: Parameters<Session['login']>) => this.#core.login(...a);
 	register = (...a: Parameters<Session['register']>) => this.#core.register(...a);
+	revoked = (notice: string) => this.#core.revoked(notice);
 	logout = () => this.out.run(() => this.#core.logout(), undefined, 'logout');
 }
 
