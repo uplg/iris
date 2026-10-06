@@ -36,6 +36,7 @@ import studio.kahn.iris.tv.ui.screens.DiscoverScreen
 import studio.kahn.iris.tv.ui.screens.HistoryScreen
 import studio.kahn.iris.tv.ui.screens.HomeScreen
 import studio.kahn.iris.tv.ui.screens.LibraryScreen
+import studio.kahn.iris.tv.ui.screens.library.LibraryView
 import studio.kahn.iris.tv.ui.screens.LiveTvScreen
 import studio.kahn.iris.tv.ui.screens.LiveTvWatchScreen
 import studio.kahn.iris.tv.ui.screens.PairingScreen
@@ -44,7 +45,6 @@ import studio.kahn.iris.tv.ui.screens.SearchScreen
 import studio.kahn.iris.tv.ui.screens.SeriesScreen
 import studio.kahn.iris.tv.ui.screens.SettingsScreen
 import studio.kahn.iris.tv.ui.screens.SetupScreen
-import studio.kahn.iris.tv.ui.screens.TorrentsScreen
 import studio.kahn.iris.tv.ui.screens.WatchScreen
 import studio.kahn.iris.tv.ui.screens.settings.SettingsSection
 import studio.kahn.iris.tv.ui.state.irisViewModel
@@ -205,10 +205,10 @@ fun IrisRoot(
             section<Routes.Library>(TopTab.Library, shellHost) {
                 LibraryScreen(
                     container = container,
-                    onOpenCollection = { collectionId ->
-                        navController.navigate(Routes.Collection(collectionId))
-                    },
-                    onBack = { navController.popBackStack() },
+                    initialView = LibraryView.Titles,
+                    onOpenCollection = { collectionId -> navController.navigate(Routes.Collection(collectionId)) },
+                    onOpenTorrent = { infohash -> navController.navigate(Routes.Detail(infohash)) },
+                    onPlay = { infohash, fileIdx -> navController.navigate(Routes.Watch(infohash, fileIdx)) },
                 )
             }
             composable<Routes.Collection> { backStackEntry ->
@@ -216,9 +216,14 @@ fun IrisRoot(
                 CollectionScreen(
                     container = container,
                     collectionId = route.collectionId,
-                    onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.Watch(infohash, fileIdx))
+                    onPlay = { infohash, fileIdx -> navController.navigate(Routes.Watch(infohash, fileIdx)) },
+                    onReplaceWithPlayer = { infohash, fileIdx ->
+                        navController.navigate(Routes.Watch(infohash, fileIdx)) {
+                            popUpTo<Routes.Collection> { inclusive = true }
+                        }
                     },
+                    onOpenTorrent = { infohash -> navController.navigate(Routes.Detail(infohash)) },
+                    onManageReleases = { navController.navigate(Routes.Torrents) },
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -230,16 +235,17 @@ fun IrisRoot(
                     onPickFile = { infohash, fileIdx ->
                         navController.navigate(Routes.Watch(infohash, fileIdx))
                     },
+                    onOpenCollection = { collectionId -> navController.navigate(Routes.Collection(collectionId)) },
                     onBack = { navController.popBackStack() },
                 )
             }
             composable<Routes.Torrents> {
-                TorrentsScreen(
+                LibraryScreen(
                     container = container,
-                    onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.Watch(infohash, fileIdx))
-                    },
-                    onBack = { navController.popBackStack() },
+                    initialView = LibraryView.Downloads,
+                    onOpenCollection = { collectionId -> navController.navigate(Routes.Collection(collectionId)) },
+                    onOpenTorrent = { infohash -> navController.navigate(Routes.Detail(infohash)) },
+                    onPlay = { infohash, fileIdx -> navController.navigate(Routes.Watch(infohash, fileIdx)) },
                 )
             }
             composable<Routes.Settings> {
@@ -328,12 +334,12 @@ fun IrisRoot(
             composable<Routes.Series> { backStackEntry ->
                 val route = backStackEntry.toRoute<Routes.Series>()
                 SeriesScreen(
-                    container = container,
                     followId = route.followId,
-                    onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.Watch(infohash, fileIdx))
+                    onOpenCollection = { collectionId ->
+                        navController.navigate(Routes.Collection(collectionId)) {
+                            popUpTo<Routes.Series> { inclusive = true }
+                        }
                     },
-                    onBack = { navController.popBackStack() },
                 )
             }
             composable<Routes.Watch> { backStackEntry ->

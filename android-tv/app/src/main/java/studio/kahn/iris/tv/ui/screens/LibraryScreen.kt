@@ -1,516 +1,640 @@
 package studio.kahn.iris.tv.ui.screens
 
-import studio.kahn.iris.tv.ui.formatSize
-import androidx.compose.foundation.BorderStroke
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ColorMatrix
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.tv.material3.Border
-import androidx.tv.material3.Card
-import androidx.tv.material3.CardDefaults
-import androidx.tv.material3.ClickableSurfaceDefaults
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Surface
-import androidx.tv.material3.SurfaceDefaults
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.CollectionListItem
-import studio.kahn.iris.tv.data.DismissGoneRequest
-import studio.kahn.iris.tv.data.LibraryResponse
-import studio.kahn.iris.tv.data.MediaMetadata
-import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
-import studio.kahn.iris.tv.ui.components.ActionButton
-import studio.kahn.iris.tv.ui.components.ActionStyle
+import studio.kahn.iris.tv.ui.components.EmptyState
+import studio.kahn.iris.tv.ui.components.ErrorState
+import studio.kahn.iris.tv.ui.components.KeyHint
+import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.LoadingState
+import studio.kahn.iris.tv.ui.components.PanelLabel
+import studio.kahn.iris.tv.ui.components.Pill
+import studio.kahn.iris.tv.ui.components.PillChoice
+import studio.kahn.iris.tv.ui.components.PosterCard
+import studio.kahn.iris.tv.ui.components.PosterGrid
 import studio.kahn.iris.tv.ui.components.SectionTitle
-import studio.kahn.iris.tv.ui.components.irisPosterPlaceholder
-import studio.kahn.iris.tv.ui.theme.FontMono
-import studio.kahn.iris.tv.ui.theme.Focus
-import studio.kahn.iris.tv.ui.theme.IrisColors
-import studio.kahn.iris.tv.ui.theme.LocalTvLayout
-import studio.kahn.iris.tv.ui.theme.Radius
-import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.components.touchClick
+import studio.kahn.iris.tv.ui.components.SidePanel
+import studio.kahn.iris.tv.ui.components.StaleNotice
+import studio.kahn.iris.tv.ui.components.TextInput
+import studio.kahn.iris.tv.ui.screens.library.ChosenPanelOptions
+import studio.kahn.iris.tv.ui.screens.library.DownloadsUi
+import studio.kahn.iris.tv.ui.screens.library.FocusKeys
+import studio.kahn.iris.tv.ui.screens.library.LibraryUiState
+import studio.kahn.iris.tv.ui.screens.library.LibraryView
+import studio.kahn.iris.tv.ui.screens.library.LibraryViewModel
+import studio.kahn.iris.tv.ui.screens.library.NoticeLine
+import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
+import studio.kahn.iris.tv.ui.screens.library.ReleaseItem
+import studio.kahn.iris.tv.ui.screens.library.ReleaseRow
+import studio.kahn.iris.tv.ui.screens.library.neighbourOf
+import studio.kahn.iris.tv.ui.screens.library.ShowFilter
+import studio.kahn.iris.tv.ui.screens.library.Sort
+import studio.kahn.iris.tv.ui.screens.library.TitleCard
+import studio.kahn.iris.tv.ui.screens.library.TitleFilters
+import studio.kahn.iris.tv.ui.screens.library.TitlesUi
+import studio.kahn.iris.tv.ui.screens.library.TypeFilter
+import studio.kahn.iris.tv.ui.screens.library.cardTone
+import studio.kahn.iris.tv.ui.state.Loadable
+import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
+import studio.kahn.iris.tv.ui.state.irisViewModel
+import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.theme.IrisLayout
+import studio.kahn.iris.tv.ui.theme.IrisSize
+import studio.kahn.iris.tv.ui.theme.IrisSpace
+import studio.kahn.iris.tv.ui.theme.IrisType
 
-private enum class LibKind(val label: String, val kind: String?) {
-    All("All", null),
-    Movies("Movies", "movie"),
-    Series("Series", "tv"),
-}
+/** Everything the library screen hands back to its ViewModel and to navigation. */
+@Immutable
+data class LibraryActions(
+    val onView: (LibraryView) -> Unit = {},
+    val onFilters: (TitleFilters) -> Unit = {},
+    val onReleaseQuery: (String) -> Unit = {},
+    val onOpenTitle: (TitleCard) -> Unit = {},
+    val onHide: (TitleCard) -> Unit = {},
+    val onRelease: ReleaseActions = ReleaseActions(),
+    val onRetry: () -> Unit = {},
+)
 
 /**
- * Sort presets (web `/library`). "Recent" keeps the server's native list
- * order (it returns collections newest-first); A-Z and Size re-sort
- * client-side.
+ * The library (TVLibrary board, web `/library`): Titles (a poster grid with type and state
+ * filters, a find field and a sort) or Downloads and seeding (every release by what it is
+ * doing, with play, pause or resume and delete). In the Library section the shell draws the
+ * header above it; the `Torrents` route opens it alone ([initialView] Downloads), with its own
+ * top margin.
  */
-private enum class LibrarySort(val label: String) {
-    Recent("Recent"),
-    Alpha("A-Z"),
-    Size("Size"),
-}
-
-/**
- * Full library — the dedicated 2D grid the Home "My Library" shelf links
- * into. A single horizontal shelf is painful to D-pad through once the
- * household's library grows; this mirrors the web `/library` page: a
- * vertical poster grid with a search box, kind chips and sort presets so a
- * large collection collapses to what the user is actually after.
- */
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     container: AppContainer,
     onOpenCollection: (collectionId: String) -> Unit,
-    onBack: () -> Unit,
+    onOpenTorrent: (infohash: String) -> Unit,
+    onPlay: (infohash: String, fileIdx: Int) -> Unit,
+    initialView: LibraryView = LibraryView.Titles,
 ) {
-    val layout = LocalTvLayout.current
-    val scope = rememberCoroutineScope()
-    var all by remember { mutableStateOf<List<CollectionListItem>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    var search by rememberSaveable { mutableStateOf("") }
-    var kind by rememberSaveable { mutableStateOf(LibKind.All) }
-    var sort by rememberSaveable { mutableStateOf(LibrarySort.Recent) }
-    // Ghost card pending hide (confirmed via dialog).
-    var confirmGhost by remember { mutableStateOf<CollectionListItem?>(null) }
-    // Search must NOT be focusable while the hide dialog is up /
-    // refocusing: the dialog teardown would drop focus on it and
-    // pop the leanback keyboard.
-    var suppressSearchFocus by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        loading = true
-        error = null
-        try {
-            val url = container.sessionStore.serverUrl.first()
-                ?: run { error = "Not signed in"; loading = false; return@LaunchedEffect }
-            val res = container.apiFor(url).library("collections")
-            all = (res as? LibraryResponse.CollectionsWrapper)?.value?.items.orEmpty()
-        } catch (e: Exception) {
-            error = e.message ?: "Failed to load library"
-        } finally {
-            loading = false
-        }
-    }
-
-    val visible = remember(all, search, kind, sort) {
-        val q = search.trim().lowercase()
-        val filtered = all.asSequence()
-            .filter { kind.kind == null || it.kind.value == kind.kind }
-            .filter { q.isEmpty() || it.displayTitle.lowercase().contains(q) }
-            .toList()
-        when (sort) {
-            LibrarySort.Recent -> filtered // server order (newest-first)
-            LibrarySort.Alpha -> filtered.sortedBy { it.displayTitle.lowercase() }
-            LibrarySort.Size -> filtered.sortedByDescending { it.totalSizeBytes }
-        }
-    }
-
-    // Land initial focus on a poster, NOT the search field — otherwise the
-    // leanback keyboard pops open on entry. On return-from-detail we restore
-    // focus to the card the user opened; on a fresh entry it's the first card.
-    val gridState = rememberLazyGridState()
-    val restoreFocus = remember { FocusRequester() }
-    var didInitialFocus by remember { mutableStateOf(false) }
-    // The collection the user opened. `rememberSaveable` survives navigation
-    // (the NavBackStackEntry's SaveableStateHolder), so pressing Back from a
-    // detail lands focus on THAT card instead of snapping to the first one.
-    var lastOpenedId by rememberSaveable { mutableStateOf<String?>(null) }
-    // Card to focus: the one we came from when it's still present under the
-    // current filter, else the first card.
-    val targetIndex = remember(visible, lastOpenedId) {
-        lastOpenedId?.let { id -> visible.indexOfFirst { it.id.toString() == id } }?.takeIf { it >= 0 } ?: 0
-    }
-    LaunchedEffect(visible.isNotEmpty()) {
-        if (didInitialFocus || visible.isEmpty()) return@LaunchedEffect
-        // Bring the target into view first — a card far down the grid isn't
-        // composed (so isn't focusable) until scrolled to. Then wait for it to
-        // be laid out and request focus (a too-early request no-ops and the
-        // text field wins the default focus).
-        if (targetIndex > 0) runCatching { gridState.scrollToItem(targetIndex) }
-        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex } }
-            .first { it }
-        runCatching { restoreFocus.requestFocus() }
-        didInitialFocus = true
-    }
-
-    // The search field must NOT be focusable during the window where we're
-    // about to land initial focus on the first card. Otherwise it's the first
-    // focusable in the layout, grabs the default focus during the load+layout
-    // gap, and pops the leanback IME before the card-focus request lands. This
-    // hit on return-from-detail too: Back re-mounts the screen and re-fetches,
-    // re-creating the gap (and `didInitialFocus` resets, so we re-lock). It
-    // STAYS focusable when there's genuinely no card to focus — still loading
-    // is locked, but an empty library / zero search matches keeps it usable so
-    // the user can edit the query. Device-independent: removes the timing race
-    // (a fast TV just never noticed the IME flash).
-    val searchFocusable =
-        !loading && (visible.isEmpty() || didInitialFocus) && !suppressSearchFocus
-
-    Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
-        Column(
-            Modifier.fillMaxSize().padding(
-                horizontal = layout.gutterHorizontal,
-                vertical = layout.gutterVertical,
+    val vm = irisViewModel(container) { c, _ -> LibraryViewModel(c, initialView) }
+    val state by vm.state.collectAsStateWithLifecycle()
+    RepeatWhileStarted(Unit) { vm.pollWhileStarted() }
+    LibraryContent(
+        state = state,
+        lastOpened = vm.lastOpened,
+        standalone = initialView == LibraryView.Downloads,
+        actions = LibraryActions(
+            onView = vm::choose,
+            onFilters = vm::setFilters,
+            onReleaseQuery = vm::setReleaseQuery,
+            onOpenTitle = {
+                vm.lastOpened = it.id
+                onOpenCollection(it.id)
+            },
+            onHide = vm::hide,
+            onRelease = ReleaseActions(
+                onPlay = onPlay,
+                onFiles = onOpenTorrent,
+                onOpenTitle = onOpenCollection,
+                onPause = vm::pause,
+                onResume = vm::resume,
+                onDelete = vm::delete,
             ),
-            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+            onRetry = vm::retry,
+        ),
+    )
+}
+
+private enum class Panel { None, Find, Sort, FindRelease }
+
+@Composable
+fun LibraryContent(
+    state: LibraryUiState,
+    actions: LibraryActions,
+    lastOpened: String? = null,
+    standalone: Boolean = false,
+) {
+    val layout = IrisLayout.current
+    val top = remember { FocusRequester() }
+    var contentFocused by remember { mutableStateOf(false) }
+    var topFocused by remember { mutableStateOf(false) }
+    var panel by remember { mutableStateOf(Panel.None) }
+    var hiding by remember { mutableStateOf<TitleCard?>(null) }
+    var deleting by remember { mutableStateOf<ReleaseRow?>(null) }
+    val focusedIndex = remember { mutableIntStateOf(-1) }
+    val grid = rememberLazyGridState()
+    val list = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val keys = remember { FocusKeys() }
+    // Where focus goes back once a dialog or a panel closes: the first of these keys on screen.
+    var refocus by remember { mutableStateOf<List<String>?>(null) }
+    LaunchedEffect(refocus) {
+        val wanted = refocus ?: return@LaunchedEffect
+        refocus = null
+        if (!keys.focus(*wanted.toTypedArray())) runCatching { top.requestFocus() }
+    }
+
+    // The Titles view places its own focus (the title opened last); Downloads starts at the top.
+    LaunchedEffect(Unit) {
+        if (state.view != LibraryView.Downloads) return@LaunchedEffect
+        snapshotFlow { list.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
+        runCatching { top.requestFocus() }
+    }
+    // Back from deep in the view goes to its top first; from there the shell (or the back stack) takes over.
+    BackHandler(enabled = contentFocused && !topFocused && panel == Panel.None && hiding == null && deleting == null) {
+        scope.launch {
+            if (state.view == LibraryView.Titles) grid.scrollToItem(0) else list.scrollToItem(0)
+            runCatching { top.requestFocus() }
+        }
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(IrisColor.ground),
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(top = if (standalone) layout.safeVertical else 0.dp)
+                .onFocusChanged { contentFocused = it.hasFocus },
         ) {
-            // Header — title + Back only (no eyebrow; the count lives on the
-            // filter line).
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                SectionTitle("Library")
-                ActionButton("← Back", onBack, style = ActionStyle.Secondary)
-            }
-
-            // One compact filter line: search + Type chips + Sort chips + count.
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-            ) {
-                OutlinedTextField(
-                    value = search,
-                    onValueChange = { search = it },
-                    singleLine = true,
-                    placeholder = {
-                        androidx.compose.material3.Text("Search…", color = IrisColors.FgDim)
-                    },
-                    // Same TV-IME colour pinning as SearchScreen — without an
-                    // explicit textStyle colour the typed text renders in the
-                    // light-theme black on the leanback keyboard.
-                    textStyle = LocalTextStyle.current.copy(
-                        color = IrisColors.Foreground,
-                        fontSize = 16.sp,
-                    ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = IrisColors.Foreground,
-                        unfocusedTextColor = IrisColors.Foreground,
-                        focusedBorderColor = IrisColors.Brand,
-                        unfocusedBorderColor = IrisColors.Elev2,
-                        focusedContainerColor = IrisColors.Card,
-                        unfocusedContainerColor = IrisColors.Card,
-                        cursorColor = IrisColors.Brand,
-                    ),
+            val heading: @Composable () -> Unit = {
+                PageHeading(
+                    state = state,
+                    onView = actions.onView,
                     modifier = Modifier
-                        .width(260.dp)
-                        .focusProperties { canFocus = searchFocusable },
-                )
-                LibKind.entries.forEach { k ->
-                    FilterChip(label = k.label, selected = kind == k) { kind = k }
-                }
-                Box(Modifier.width(Spacing.sm))
-                LibrarySort.entries.forEach { s ->
-                    FilterChip(label = s.label, selected = sort == s) { sort = s }
-                }
-                Box(Modifier.weight(1f))
-                Text(
-                    "${visible.size}/${all.size}",
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontMono),
-                    color = IrisColors.FgDim,
+                        .focusRequester(top)
+                        .onFocusChanged { topFocused = it.hasFocus },
                 )
             }
-
-            // Grid / status.
-            when {
-                loading && all.isEmpty() -> Text(
-                    "Loading library…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = IrisColors.MutedForeground,
+            when (state.view) {
+                LibraryView.Titles -> TitlesPane(
+                    state = state,
+                    grid = grid,
+                    heading = heading,
+                    lastOpened = lastOpened,
+                    focusedIndex = focusedIndex,
+                    top = top,
+                    keys = keys,
+                    actions = actions,
+                    onFind = { panel = Panel.Find },
+                    onSort = { panel = Panel.Sort },
+                    onHold = { hiding = it },
                 )
-                error != null -> Text(error!!, color = MaterialTheme.colorScheme.error)
-                visible.isEmpty() -> Text(
-                    if (all.isEmpty()) "Nothing in the library yet." else "No matches. Adjust the search or filters.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = IrisColors.MutedForeground,
+                LibraryView.Downloads -> DownloadsPane(
+                    state = state,
+                    list = list,
+                    keys = keys,
+                    heading = heading,
+                    actions = actions.copy(onRelease = actions.onRelease.copy(onDelete = { deleting = it })),
+                    onFind = { panel = Panel.FindRelease },
                 )
-                else -> LazyVerticalGrid(
-                    // Denser than the home shelves: more columns, smaller
-                    // posters so a big library fits more per screenful.
-                    columns = GridCells.Adaptive(minSize = 116.dp),
-                    state = gridState,
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.lg),
-                    contentPadding = PaddingValues(vertical = Spacing.sm),
-                ) {
-                    itemsIndexed(visible, key = { _, it -> it.id }) { index, c ->
-                        LibraryGridCard(
-                            container = container,
-                            collection = c,
-                            // Remember which card we leave from so Back can
-                            // restore focus to it.
-                            onClick = {
-                                lastOpenedId = c.id.toString()
-                                onOpenCollection(c.id.toString())
-                            },
-                            // Long-press a GONE card → confirm → per-user hide.
-                            onDismissGhost = {
-                                suppressSearchFocus = true
-                                confirmGhost = c
-                            },
-                            modifier = if (index == targetIndex) {
-                                Modifier.focusRequester(restoreFocus)
-                            } else {
-                                Modifier
-                            },
-                        )
-                    }
-                }
             }
         }
+        LibraryHints(state, focusedIndex, Modifier.align(Alignment.BottomStart))
 
-        confirmGhost?.let { c ->
-            // Hand focus back to a card once the dialog goes away (the
-            // long-pressed one on cancel, its neighbour after a hide),
-            // retrying a few frames until its node exists.
-            fun refocusCard(id: java.util.UUID?) {
-                lastOpenedId = id?.toString()
-                scope.launch {
-                    repeat(6) {
-                        withFrameNanos { }
-                        if (runCatching { restoreFocus.requestFocus() }.isSuccess) {
-                            suppressSearchFocus = false
-                            return@launch
-                        }
-                    }
-                    suppressSearchFocus = false
-                }
-            }
+        when (panel) {
+            Panel.None -> Unit
+            Panel.Find, Panel.Sort -> FindAndSortPanel(
+                state = state,
+                focusSort = panel == Panel.Sort,
+                onFilters = actions.onFilters,
+                onDismiss = {
+                    panel = Panel.None
+                    refocus = listOf(FIND_KEY)
+                },
+            )
+            Panel.FindRelease -> FindReleasePanel(
+                query = state.releaseQuery,
+                onQuery = actions.onReleaseQuery,
+                onDismiss = {
+                    panel = Panel.None
+                    refocus = listOf(FIND_KEY)
+                },
+            )
+        }
+        hiding?.let { card ->
             ConfirmDialog(
                 eyebrow = "Hide from my library",
-                title = prettify(c.displayTitle),
-                body = "Hidden for you only. Your watch history is kept, and " +
-                    "the card returns if you watch this again.",
+                title = "Hide ${card.title}?",
+                body = "Hidden for you only. Your watch history is kept, and the title comes back if you watch it again.",
                 confirmLabel = "Hide",
                 onConfirm = {
-                    confirmGhost = null
-                    scope.launch {
-                        val url = container.sessionStore.serverUrl.first()
-                        var focusTarget: java.util.UUID? = c.id
-                        if (url != null) {
-                            runCatching {
-                                container.apiFor(url)
-                                    .dismissGone(DismissGoneRequest(collectionId = c.id))
-                            }.onSuccess {
-                                // Optimistic removal; focus the previous (or next) card.
-                                val removedIdx = visible.indexOfFirst { it.id == c.id }
-                                val neighbor = visible.getOrNull(removedIdx - 1)
-                                    ?: visible.getOrNull(removedIdx + 1)
-                                all = all.filter { it.id != c.id }
-                                focusTarget = neighbor?.id
-                            }
-                        }
-                        refocusCard(focusTarget)
-                    }
+                    hiding = null
+                    actions.onHide(card)
+                    val ids = state.titles.valueOrNull?.cards?.map { it.id }.orEmpty()
+                    refocus = listOfNotNull(neighbourOf(ids, card.id), card.id)
                 },
                 onCancel = {
-                    confirmGhost = null
-                    refocusCard(c.id)
+                    hiding = null
+                    refocus = listOf(card.id)
+                },
+            )
+        }
+        deleting?.let { row ->
+            ConfirmDialog(
+                eyebrow = "Delete ${row.title}",
+                title = "Delete ${row.release}?",
+                body = row.deleteBody,
+                confirmLabel = "Delete release",
+                onConfirm = {
+                    deleting = null
+                    actions.onRelease.onDelete(row)
+                    val ids = state.downloads.valueOrNull?.groups?.flatMap { g -> g.rows.map { it.infohash } }.orEmpty()
+                    refocus = listOfNotNull(neighbourOf(ids, row.infohash), row.infohash)
+                },
+                onCancel = {
+                    deleting = null
+                    refocus = listOf(row.infohash)
                 },
             )
         }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+/** `Library` and its facts, the action notice, and the view choice. */
 @Composable
-private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val pill = RoundedCornerShape(Radius.pill)
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.touchClick(onClick = onClick),
-        shape = ClickableSurfaceDefaults.shape(shape = pill),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = Focus.controlScale),
-        colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (selected) IrisColors.Elev2 else IrisColors.Overlay06,
-            contentColor = if (selected) IrisColors.Foreground else IrisColors.MutedForeground,
-            focusedContainerColor = if (selected) IrisColors.Elev2 else IrisColors.Overlay12,
-            focusedContentColor = IrisColors.Foreground,
+private fun PageHeading(state: LibraryUiState, onView: (LibraryView) -> Unit, modifier: Modifier = Modifier) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            SectionTitle(
+                "Library",
+                meta = state.facts,
+                style = IrisType.page,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(IrisSpace.s6))
+            PillChoice(
+                options = LibraryView.entries,
+                selected = state.view,
+                onSelect = onView,
+                label = { it.label },
+                modifier = modifier,
+            )
+        }
+        NoticeLine(state.notice)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TitlesPane(
+    state: LibraryUiState,
+    grid: LazyGridState,
+    heading: @Composable () -> Unit,
+    lastOpened: String?,
+    focusedIndex: MutableIntState,
+    top: FocusRequester,
+    keys: FocusKeys,
+    actions: LibraryActions,
+    onFind: () -> Unit,
+    onSort: () -> Unit,
+    onHold: (TitleCard) -> Unit,
+) {
+    val layout = IrisLayout.current
+    val titles = state.titles
+    val ui = titles.valueOrNull
+    if (ui == null || ui.all == 0) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = layout.safeHorizontal)
+                .padding(top = IrisSpace.s1, bottom = FOOTER),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s6),
+        ) {
+            heading()
+            when {
+                titles is Loadable.Failed -> ErrorState(titles.error.message, actions.onRetry)
+                ui == null -> LoadingState(label = "Loading the library…")
+                else -> EmptyState("Nothing in the library yet", body = "Search for a title to add the first one.")
+            }
+        }
+        return
+    }
+    val indexOf = remember(ui.cards) { ui.cards.withIndex().associate { it.value.id to it.index } }
+    val target = ui.cards.indexOfFirst { it.id == lastOpened }.takeIf { it >= 0 } ?: 0
+    var placed by remember { mutableStateOf(false) }
+    // A phone shows a row at most: entering there starts at the top, not on a poster.
+    val startOnCard = lastOpened != null || layout.height >= 500.dp
+    LaunchedEffect(ui.cards.isNotEmpty()) {
+        if (placed || ui.cards.isEmpty()) return@LaunchedEffect
+        placed = true
+        if (!startOnCard) {
+            runCatching { top.requestFocus() }
+            return@LaunchedEffect
+        }
+        val index = target + HEADER_ITEMS
+        if (grid.layoutInfo.visibleItemsInfo.none { it.index == index }) grid.scrollToItem(index)
+        snapshotFlow { grid.layoutInfo.visibleItemsInfo.any { it.index == index } }.first { it }
+        keys.focus(ui.cards[target].id)
+    }
+    PosterGrid(
+        items = ui.cards,
+        key = { it.id },
+        state = grid,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = layout.safeHorizontal,
+            end = layout.safeHorizontal,
+            top = IrisSpace.s1,
+            bottom = FOOTER + IrisSpace.s6,
         ),
-        border = ClickableSurfaceDefaults.border(
-            border = Border.None,
-            focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = pill),
-        ),
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+        header = {
+            item(key = "heading", span = { GridItemSpan(maxLineSpan) }) { heading() }
+            item(key = "filters", span = { GridItemSpan(maxLineSpan) }) {
+                Filters(state, ui, actions, keys, onFind, onSort)
+            }
+        },
+    ) { card ->
+        val index = indexOf[card.id] ?: 0
+        PosterCard(
+            title = card.title,
+            imageUrl = card.posterUrl,
+            onClick = { actions.onOpenTitle(card) },
+            onLongClick = if (card.ghost) ({ onHold(card) }) else null,
+            width = null,
+            kind = card.kind,
+            progress = card.progress,
+            meta = card.meta,
+            status = card.status.text,
+            statusTone = card.status.tone.cardTone(),
+            modifier = Modifier
+                .focusRequester(keys.of(card.id))
+                .onFocusChanged { if (it.hasFocus) focusedIndex.intValue = index },
         )
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+private const val HEADER_ITEMS = 2
+private const val FIND_KEY = "find"
+private val FOOTER = 46.dp
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun LibraryGridCard(
-    container: AppContainer,
-    collection: CollectionListItem,
-    onClick: () -> Unit,
-    onDismissGhost: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun Filters(
+    state: LibraryUiState,
+    ui: TitlesUi,
+    actions: LibraryActions,
+    keys: FocusKeys,
+    onFind: () -> Unit,
+    onSort: () -> Unit,
 ) {
-    var meta by remember(collection.tmdbId) { mutableStateOf<MediaMetadata?>(null) }
-    LaunchedEffect(collection.tmdbId, collection.kind.value) {
-        val id = collection.tmdbId ?: return@LaunchedEffect
-        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
-        meta = runCatching { container.apiFor(url).tmdbMetadata(id, collection.kind.value) }.getOrNull()
-    }
-    val poster = tmdbPosterUrl(meta?.posterPath, "w342")
-    val title = prettify(collection.displayTitle)
-    // Ghost = every torrent reclaimed by the GC, but the CALLER watched
-    // this (the server only sends *your* ghosts). Kept in the grid,
-    // greyed. Clicking only NAVIGATES to the collection page — any
-    // re-download stays a deliberate user action there.
-    // The generated field is `Boolean?` (additive spec field, absent on
-    // older payloads) — absent means "not a ghost".
-    val isGhost = collection.ghost == true
-    val subtitle = if (isGhost) {
-        "No longer on disk · hold to hide"
-    } else {
-        buildString {
-            if (collection.kind == MediaKind.tv && collection.episodeCount > 0) {
-                append("${collection.episodeCount} ep")
-            } else {
-                append(formatSize(collection.totalSizeBytes))
+    val f = state.filters
+    Column(Modifier.padding(bottom = IrisSpace.s2), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
+        FlowRow(
+            Modifier.focusGroup(),
+            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
+            PillChoice(
+                options = TypeFilter.entries,
+                selected = f.type,
+                onSelect = { actions.onFilters(f.copy(type = it)) },
+                label = { it.label },
+            )
+            if (ui.showChoices.size > 1) {
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .height(IrisSize.chip)
+                        .background(IrisColor.line),
+                )
+                PillChoice(
+                    options = ui.showChoices.map { it.first },
+                    selected = ui.showing,
+                    onSelect = { actions.onFilters(f.copy(show = it)) },
+                    label = { choice -> ui.showChoices.first { it.first == choice }.second },
+                )
             }
-            if (collection.torrentCount > 1) append(" · ${collection.torrentCount}×")
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .focusGroup(),
+            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(ui.countWords, style = IrisType.meta, color = IrisColor.inkMuted)
+            if (f.filtered) {
+                Pill("Clear filters", selected = false, onClick = { actions.onFilters(f.copy(query = "", type = TypeFilter.All, show = ShowFilter.All)) })
+            }
+            state.titles.errorOrNull?.let { StaleNotice(it) }
+            Spacer(Modifier.weight(1f))
+            Pill(
+                text = if (f.query.isBlank()) "Find a title" else "Finding “${f.query.trim()}”",
+                selected = f.query.isNotBlank(),
+                onClick = onFind,
+                modifier = Modifier.focusRequester(keys.of(FIND_KEY)),
+            )
+            Pill(text = f.sort.words, selected = false, onClick = onSort)
+        }
+        if (ui.cards.isEmpty()) {
+            EmptyState(
+                "No title matches these filters",
+                modifier = Modifier.height(180.dp),
+                actionLabel = "Clear filters",
+                onAction = { actions.onFilters(f.copy(query = "", type = TypeFilter.All, show = ShowFilter.All)) },
+            )
         }
     }
-    val shape = RoundedCornerShape(Radius.poster)
+}
 
-    Card(
-        onClick = onClick,
-        // Long-press only means something on a ghost.
-        onLongClick = { if (isGhost) onDismissGhost() },
-        modifier = modifier
-            .fillMaxWidth()
-            .touchClick(onLongClick = { if (isGhost) onDismissGhost() }, onClick = onClick),
-        shape = CardDefaults.shape(shape = shape),
-        // Gentle pop only — the grid is dense, a big scale clips at the edges.
-        scale = CardDefaults.scale(focusedScale = 1.03f),
-        colors = CardDefaults.colors(containerColor = IrisColors.Card),
-        border = CardDefaults.border(
-            focusedBorder = Border(BorderStroke(Focus.ring, IrisColors.Brand), shape = shape),
+@Composable
+private fun DownloadsPane(
+    state: LibraryUiState,
+    list: LazyListState,
+    keys: FocusKeys,
+    heading: @Composable () -> Unit,
+    actions: LibraryActions,
+    onFind: () -> Unit,
+) {
+    val layout = IrisLayout.current
+    val downloads = state.downloads
+    val ui: DownloadsUi? = downloads.valueOrNull
+    LazyColumn(
+        state = list,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = layout.safeHorizontal,
+            end = layout.safeHorizontal,
+            top = IrisSpace.s1,
+            bottom = FOOTER + IrisSpace.s6,
         ),
     ) {
-        Column {
-            Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f)) {
-                if (poster != null) {
-                    AsyncImage(
-                        model = poster,
-                        contentDescription = title,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .let { if (isGhost) it.alpha(0.45f) else it },
-                        contentScale = ContentScale.Crop,
-                        colorFilter = if (isGhost) {
-                            ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
-                        } else {
-                            null
-                        },
-                    )
-                } else {
-                    Box(Modifier.fillMaxSize().background(irisPosterPlaceholder()))
-                    Box(
-                        Modifier.fillMaxSize().padding(12.dp),
-                        contentAlignment = Alignment.BottomStart,
-                    ) {
-                        Text(
-                            title,
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = androidx.compose.ui.graphics.Color.White.copy(
-                                alpha = if (isGhost) 0.5f else 0.92f,
-                            ),
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                if (isGhost) {
-                    Surface(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(6.dp),
-                        shape = RoundedCornerShape(6.dp),
-                        colors = SurfaceDefaults.colors(
-                            containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.65f),
-                        ),
-                    ) {
-                        Text(
-                            "GONE",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = IrisColors.MutedForeground,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                    }
-                }
+        item(key = "heading") { heading() }
+        when {
+            downloads is Loadable.Failed -> item(key = "failed") {
+                ErrorState(downloads.error.message, actions.onRetry, Modifier.height(240.dp))
             }
-            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (isGhost) IrisColors.MutedForeground else androidx.compose.ui.graphics.Color.Unspecified,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+            ui == null -> item(key = "loading") { LoadingState(Modifier.height(240.dp), "Loading the releases…") }
+            ui.all == 0 -> item(key = "empty") {
+                EmptyState(
+                    "Nothing is downloading or seeding",
+                    Modifier.height(240.dp),
+                    body = "Releases appear here once a title is added.",
                 )
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontMono),
-                    color = IrisColors.FgDim,
-                )
+            }
+            else -> {
+                item(key = "totals") {
+                    Column(Modifier.padding(top = IrisSpace.s5), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
+                        Text(ui.totals, style = IrisType.meta, color = IrisColor.inkMuted)
+                        Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5), verticalAlignment = Alignment.CenterVertically) {
+                            Pill(
+                                text = if (state.releaseQuery.isBlank()) "Find a release" else "Finding “${state.releaseQuery.trim()}”",
+                                selected = state.releaseQuery.isNotBlank(),
+                                onClick = onFind,
+                                modifier = Modifier.focusRequester(keys.of(FIND_KEY)),
+                            )
+                            Text(ui.countWords, style = IrisType.meta, color = IrisColor.inkMuted)
+                            if (state.releaseQuery.isNotBlank()) Pill("Clear the search", selected = false, onClick = { actions.onReleaseQuery("") })
+                            downloads.errorOrNull?.let { StaleNotice(it) }
+                        }
+                    }
+                }
+                if (ui.groups.isEmpty()) {
+                    item(key = "no-match") {
+                        EmptyState("No release matches “${state.releaseQuery.trim()}”", Modifier.height(180.dp))
+                    }
+                }
+                ui.groups.forEach { g ->
+                    item(key = "group:${g.group}") {
+                        SectionTitle(g.group.title, meta = g.fact, modifier = Modifier.padding(top = IrisSpace.s7))
+                    }
+                    items(g.rows, key = { it.infohash }) { row ->
+                        ReleaseItem(
+                            row,
+                            actions.onRelease,
+                            state.busy,
+                            Modifier.focusRequester(keys.of(row.infohash)),
+                            actionsBeside = layout.width >= 840.dp,
+                        )
+                    }
+                }
             }
         }
     }
 }
 
-private fun prettify(raw: String): String =
-    raw.substringBeforeLast('.', raw).replace('.', ' ').replace('_', ' ').trim()
+@Composable
+private fun LibraryHints(state: LibraryUiState, focusedIndex: MutableIntState, modifier: Modifier = Modifier) {
+    val layout = IrisLayout.current
+    val titles = state.titles.valueOrNull
+    val hints = buildList {
+        add(KeyHint(Keys.OK, if (state.view == LibraryView.Titles) "Open" else "Choose"))
+        if (state.view == LibraryView.Titles && titles?.cards?.any { it.ghost } == true) {
+            add(KeyHint(Keys.HOLD_OK, "Hide a title no longer on disk"))
+        }
+        add(KeyHint(Keys.BACK, "To the top, then the menu"))
+    }
+    val columns = layout.columns(IrisSize.posterGridMin, IrisSpace.s6)
+    val trailing = if (state.view == LibraryView.Titles && titles != null && titles.cards.isNotEmpty()) {
+        val rows = (titles.cards.size + columns - 1) / columns
+        val at = focusedIndex.intValue.coerceAtLeast(0) / columns + 1
+        "Row ${at.coerceAtMost(rows)} of $rows"
+    } else {
+        null
+    }
+    KeyHints(hints, modifier, trailing = trailing, framed = true)
+}
 
+@Composable
+internal fun FindAndSortPanel(
+    state: LibraryUiState,
+    focusSort: Boolean,
+    onFilters: (TitleFilters) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val first = remember { FocusRequester() }
+    val sortFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { (if (focusSort) sortFocus else first).requestFocus() } }
+    val f = state.filters
+    SidePanel(title = "Find and sort", onDismiss = onDismiss, footer = "Back closes this panel") {
+        PanelLabel("Find a title")
+        TextInput(
+            value = f.query,
+            onValueChange = { onFilters(f.copy(query = it)) },
+            label = "Title or TMDB id",
+            leadingIcon = Icons.Rounded.Search,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onDismiss() }),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = IrisSpace.s4)
+                .focusRequester(first),
+        )
+        PanelLabel("Sort")
+        ChosenPanelOptions(
+            options = Sort.entries,
+            selected = f.sort,
+            onSelect = { onFilters(f.copy(sort = it)) },
+            label = { it.label },
+            selectedFocus = sortFocus,
+        )
+    }
+}
+
+@Composable
+private fun FindReleasePanel(query: String, onQuery: (String) -> Unit, onDismiss: () -> Unit) {
+    val field = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { field.requestFocus() } }
+    SidePanel(title = "Find a release", onDismiss = onDismiss, footer = "By title, release name, hash or who added it") {
+        TextInput(
+            value = query,
+            onValueChange = onQuery,
+            label = "Find a release",
+            leadingIcon = Icons.Rounded.Search,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onDismiss() }),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = IrisSpace.s4)
+                .focusRequester(field),
+        )
+    }
+}
