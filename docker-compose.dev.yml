@@ -1,0 +1,7 @@
+# Local-only override, used by `just dev`: publishes the HTTP port on the
+# loopback interface so the stack is reachable from this machine and nowhere
+# else. `just deploy` never loads it.
+services:
+  iris:
+    ports:
+      - "127.0.0.1:${IRIS_BIND_PORT:-8080}:8080"

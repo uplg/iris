@@ -23,10 +23,11 @@ deploy *ARGS:
     docker compose {{ ARGS }} --profile cloudflared up -d --build
 
 # Local docker deploy (no tunnel/proxy profile), build-id stamped.
-# `just dev` serves on :8080; `just dev 18080` picks another host port
-# (container keeps 8080 internally — only the mapping changes).
+# `just dev` serves on 127.0.0.1:8080; `just dev 18080` picks another host
+# port (container keeps 8080 internally — only the mapping changes). The
+# port mapping lives in docker-compose.dev.yml only: production publishes none.
 dev port="8080":
-    IRIS_BIND_PORT={{ port }} docker compose up -d --build
+    IRIS_BIND_PORT={{ port }} docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 # --- Backend (Rust workspace) -----------------------------------------------
 
