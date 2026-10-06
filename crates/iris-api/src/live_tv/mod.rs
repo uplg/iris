@@ -2482,8 +2482,11 @@ impl LiveTvService {
         {
             let svc = self.clone();
             tokio::spawn(async move {
-                svc.channel_counts(Duration::MAX).await;
-                svc.search_index(Duration::MAX).await;
+                crate::supervise::tick("live tv boot warm-up", async {
+                    svc.channel_counts(Duration::MAX).await;
+                    svc.search_index(Duration::MAX).await;
+                })
+                .await;
             });
         }
         // Hydrate the configured tuner channels at boot and keep their remux
@@ -2501,55 +2504,8 @@ impl LiveTvService {
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     ticker.tick().await; // first tick fires immediately = boot hydration
-                    // Expand each configured id to its WHOLE MUX: a tuned
-                    // adapter serves every channel of its frequency anyway
-                    // (tunerd unions the PID filters), so warming the
-                    // siblings costs one `-c copy` ffmpeg each — and the
-                    // entire mux zaps instantly.
-                    for id in svc
-                        .mux_siblings(&country, &svc.inner.cfg.tuner.prewarm)
-                        .await
-                    {
-                        let key = format!("{country}:{id}");
-                        // Already running → leave it alone. Deliberately no
-                        // touch: session heat must mean "a viewer is here",
-                        // it's what shields watched muxes from reclaim.
-                        if svc.inner.transcode.is_warm(Mode::Remux, &key).await {
-                            continue;
-                        }
-                        // Viewers outrank warmth — never steal an adapter
-                        // from watched muxes to re-pin a cold channel. The
-                        // next tick retries once a mux cools down.
-                        let freq = {
-                            let snap = svc.channels(&country).await.ok();
-                            snap.as_ref().and_then(|s| {
-                                s.channel_index(&id)
-                                    .and_then(|i| channel_tuner_freq(&s.channels[i]))
-                            })
-                        };
-                        if let Some(freq) = &freq
-                            && !svc.inner.transcode.mux_available(freq).await
-                        {
-                            tracing::debug!(
-                                channel = %id,
-                                freq = %freq,
-                                "tuner adapters busy with watched muxes — left cold"
-                            );
-                            continue;
-                        }
-                        match svc.master_playlist(&country, &id).await {
-                            Ok(mp) if mp.upstream_host == "tuner" => {
-                                tracing::info!(channel = %id, "tuner session warm");
-                            }
-                            Ok(_) => tracing::debug!(
-                                channel = %id,
-                                "prewarm lost the adapter race — left cold"
-                            ),
-                            Err(e) => {
-                                tracing::warn!(channel = %id, error = %e, "tuner prewarm failed");
-                            }
-                        }
-                    }
+                    crate::supervise::tick("live tv tuner prewarm", svc.prewarm_tuner(&country))
+                        .await;
                 }
             });
         }
@@ -2566,6 +2522,51 @@ impl LiveTvService {
                 .await;
             }
         });
+    }
+
+    /// One pass of the tuner prewarm: every configured channel expanded to
+    /// its WHOLE MUX (a tuned adapter serves every channel of its frequency
+    /// anyway — tunerd unions the PID filters — so warming the siblings costs
+    /// one `-c copy` ffmpeg each, and the entire mux zaps instantly).
+    async fn prewarm_tuner(&self, country: &str) {
+        for id in self
+            .mux_siblings(country, &self.inner.cfg.tuner.prewarm)
+            .await
+        {
+            let key = format!("{country}:{id}");
+            // Already running → leave it alone. Deliberately no touch: session
+            // heat must mean "a viewer is here", it's what shields watched
+            // muxes from reclaim.
+            if self.inner.transcode.is_warm(Mode::Remux, &key).await {
+                continue;
+            }
+            // Viewers outrank warmth — never steal an adapter from watched
+            // muxes to re-pin a cold channel. The next tick retries once a mux
+            // cools down.
+            let freq = self.channels(country).await.ok().and_then(|s| {
+                s.channel_index(&id)
+                    .and_then(|i| channel_tuner_freq(&s.channels[i]))
+            });
+            if let Some(freq) = &freq
+                && !self.inner.transcode.mux_available(freq).await
+            {
+                tracing::debug!(
+                    channel = %id,
+                    freq = %freq,
+                    "tuner adapters busy with watched muxes — left cold"
+                );
+                continue;
+            }
+            match self.master_playlist(country, &id).await {
+                Ok(mp) if mp.upstream_host == "tuner" => {
+                    tracing::info!(channel = %id, "tuner session warm");
+                }
+                Ok(_) => {
+                    tracing::debug!(channel = %id, "prewarm lost the adapter race — left cold");
+                }
+                Err(e) => tracing::warn!(channel = %id, error = %e, "tuner prewarm failed"),
+            }
+        }
     }
 
     async fn refresh_stale(&self, playlist_ttl: Duration, epg_ttl: Duration) {
@@ -2622,12 +2623,6 @@ impl LiveTvService {
     }
 }
 
-/// Prefix every URI of an HLS media playlist — ffmpeg's on-disk playlist
-/// references bare `mux000001.m4s` names, but the master is served from
-/// `.../channels/{id}/master.m3u8` while tuner segments live under the
-/// sibling `.../channels/{id}/transcode/{segment}` route. Besides the plain
-/// URI lines, the fMP4 init segment is referenced from an `#EXT-X-MAP` tag
-/// (a comment-shaped line) and must be rewritten too.
 /// Finalize a successful tuner election: record stickiness + health and
 /// point the returned playlist at the tuner segment route.
 fn tuner_elected(
@@ -2697,6 +2692,12 @@ fn channel_tuner_freq(ch: &Channel) -> Option<String> {
         .and_then(|s| transcode::tuner_freq(&s.url))
 }
 
+/// Prefix every URI of an HLS media playlist — ffmpeg's on-disk playlist
+/// references bare `mux000001.m4s` names, but the master is served from
+/// `.../channels/{id}/master.m3u8` while tuner segments live under the
+/// sibling `.../channels/{id}/transcode/{segment}` route. Besides the plain
+/// URI lines, the fMP4 init segment is referenced from an `#EXT-X-MAP` tag
+/// (a comment-shaped line) and must be rewritten too.
 fn prefix_segment_uris(body: &str, prefix: &str) -> String {
     body.lines()
         .map(|line| {
