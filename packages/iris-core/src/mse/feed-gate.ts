@@ -45,23 +45,3 @@ export class FeedGate {
 		w.resolve();
 	}
 }
-
-/** Pipeline generations: bumped on every (re)start, so an async loop compares the value it
- *  started with after each await and bows out once it is stale. */
-export class Generation {
-	#current = 0;
-
-	get current(): number {
-		return this.#current;
-	}
-
-	/** Starts a new generation and returns it. */
-	next(): number {
-		this.#current += 1;
-		return this.#current;
-	}
-
-	isStale(gen: number): boolean {
-		return gen !== this.#current;
-	}
-}

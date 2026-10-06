@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FeedGate, Generation } from './feed-gate';
+import { FeedGate } from './feed-gate';
 
 const settled = async (p: Promise<void>) => {
 	let done = false;
@@ -41,17 +41,5 @@ describe('FeedGate', () => {
 		expect(await settled(a)).toBe(true);
 		expect(await settled(b)).toBe(true);
 		expect(gate.size).toBe(0);
-	});
-});
-
-describe('Generation', () => {
-	it('marks every earlier generation stale', () => {
-		const gen = new Generation();
-		const first = gen.next();
-		expect(gen.isStale(first)).toBe(false);
-		const second = gen.next();
-		expect(gen.isStale(first)).toBe(true);
-		expect(gen.isStale(second)).toBe(false);
-		expect(gen.current).toBe(second);
 	});
 });
