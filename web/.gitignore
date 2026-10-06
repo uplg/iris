@@ -9,3 +9,8 @@ static/libass/
 static/hevcjs/
 static/libpgs/
 static/libavjs/
+# The playback bench's generated media, run state and reports (bun run e2e).
+e2e/.media/
+e2e/.results/
+e2e/.report/
+e2e/.state.json
