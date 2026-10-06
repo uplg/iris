@@ -347,6 +347,21 @@ kbd {
 .whole-card .card-link:focus-visible {
 	outline: none;
 }
+/* a card with artwork marks it: the pointer over the card outlines the art, the keyboard focus
+   rings the art instead of the whole card */
+@media (hover: hover) {
+	.whole-card:hover .art {
+		outline: var(--mark-ring);
+		outline-offset: var(--focus-offset);
+	}
+}
+.whole-card:has(.art):has(.card-link:focus-visible) {
+	outline: none;
+}
+.whole-card:has(.card-link:focus-visible) .art {
+	outline: var(--focus-ring);
+	outline-offset: var(--focus-offset);
+}
 /* a secondary line: a hint, a fact under a title */
 .hint,
 .page-head .sub {

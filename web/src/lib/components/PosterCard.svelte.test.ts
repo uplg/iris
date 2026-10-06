@@ -36,11 +36,17 @@ describe('PosterCard', () => {
 		expect(run).toHaveBeenCalledOnce();
 	});
 
-	it('the focus ring goes around the whole card', async () => {
+	it('the focus ring goes around the art, the pointer outlines it', async () => {
 		const { container } = await render(PosterCard, { href: '/title/1', title: 'Andor', art: null });
-		await userEvent.tab();
 		const card = container.querySelector('li')!;
-		await expect.poll(() => getComputedStyle(card).outlineStyle).toBe('solid');
-		expect(getComputedStyle(card).outlineWidth).toBe('3px');
+		const art = container.querySelector<HTMLElement>('.art')!;
+		const link = page.getByRole('link', { name: 'Andor' });
+		await userEvent.hover(link);
+		await expect.poll(() => getComputedStyle(art).outlineWidth).toBe('2px');
+		await userEvent.unhover(link);
+		await userEvent.tab();
+		await expect.poll(() => getComputedStyle(art).outlineWidth).toBe('3px');
+		expect(getComputedStyle(art).outlineStyle).toBe('solid');
+		expect(getComputedStyle(card).outlineStyle).toBe('none');
 	});
 });
