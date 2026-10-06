@@ -12,6 +12,9 @@ import type { EngineHandle } from '../engine';
 import type { Manifest } from '../manifest-client';
 
 export type MediaSessionWiring = {
+	/** Pushes the play state and the position to the OS. Called on what changes them (play,
+	 *  pause, seek, duration, rate): the OS extrapolates the position in between. */
+	sync: () => void;
 	dispose: () => void;
 };
 
@@ -21,7 +24,7 @@ export function attachMediaSession(
 	meta: { title: string; artwork?: MediaImage[] }
 ): MediaSessionWiring {
 	if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
-		return { dispose: () => undefined };
+		return { sync: () => undefined, dispose: () => undefined };
 	}
 	const ms = navigator.mediaSession;
 
@@ -66,32 +69,36 @@ export function attachMediaSession(
 		}
 	}
 
-	// Position-state ticks at 4 Hz so the OS scrubber tracks the actual
-	// playhead. setPositionState was added incrementally; guard the call.
-	let positionTimer: ReturnType<typeof setInterval> | null = null;
-	const updatePosition = () => {
+	// the element's own events, for the engines that have one; the canvas engines' callbacks
+	// reach `sync` through the player
+	const video = handle.videoElement();
+	// setPositionState was added incrementally; guard the call.
+	const sync = () => {
+		try {
+			ms.playbackState = handle.paused() ? 'paused' : 'playing';
+		} catch {
+			/* torn down */
+		}
 		const duration = handle.duration();
-		if (duration === null || duration === undefined || duration <= 0) return;
+		if (duration === null || duration === undefined || !Number.isFinite(duration) || duration <= 0) return;
 		try {
 			ms.setPositionState({
 				duration,
-				playbackRate: 1,
+				playbackRate: video?.playbackRate || 1,
 				position: Math.max(0, Math.min(duration, handle.currentTime()))
 			});
 		} catch {
 			/* unsupported: noop */
 		}
 	};
-	positionTimer = setInterval(updatePosition, 250);
-
-	const playbackPoll = setInterval(() => {
-		ms.playbackState = handle.paused() ? 'paused' : 'playing';
-	}, 500);
+	const EVENTS = ['play', 'pause', 'playing', 'seeked', 'ratechange', 'durationchange', 'loadedmetadata'] as const;
+	for (const e of EVENTS) video?.addEventListener(e, sync);
+	sync();
 
 	return {
+		sync,
 		dispose: () => {
-			if (positionTimer) clearInterval(positionTimer);
-			clearInterval(playbackPoll);
+			for (const e of EVENTS) video?.removeEventListener(e, sync);
 			try {
 				ms.metadata = null;
 				for (const [action] of actions) ms.setActionHandler(action, null);

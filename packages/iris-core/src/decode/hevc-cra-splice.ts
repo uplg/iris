@@ -170,18 +170,83 @@ export function unescapeRbsp(payload: Uint8Array): Uint8Array {
 
 /** Insert emulation-prevention bytes wherever `00 00 0x` (x ≤ 3) would appear. */
 export function escapeRbsp(rbsp: Uint8Array): Uint8Array {
-	const out: number[] = [];
+	// at most one emulation byte per two input bytes
+	const out = new Uint8Array(rbsp.length + (rbsp.length >> 1) + 1);
+	let n = 0;
 	let zeros = 0;
 	for (let i = 0; i < rbsp.length; i += 1) {
 		const b = rbsp[i] as number;
 		if (zeros >= 2 && b <= 3) {
-			out.push(3);
+			out[n] = 3;
+			n += 1;
 			zeros = 0;
 		}
-		out.push(b);
+		out[n] = b;
+		n += 1;
 		zeros = b === 0 ? zeros + 1 : 0;
 	}
-	return Uint8Array.from(out);
+	return out.subarray(0, n);
+}
+
+/** RBSP bytes unescaped from the head of a NAL unit: the slice header a splice rewrites sits
+ *  in its first few dozen bytes, and the slice data after it never changes. */
+const HEADER_WINDOW = 96;
+
+/** `patchNalPrefix`'s answer when its window can't settle the rewrite. */
+export const NEEDS_WHOLE_NAL = Symbol('needs the whole NAL');
+
+/**
+ * Rewrites bits near the start of a NAL unit without unescaping and re-escaping all of it.
+ * Up to `window` RBSP bytes are unescaped; `patch` edits them in place and returns the end
+ * (exclusive byte index) of what it changed, or null for no change. The changed head is
+ * re-escaped up to an unchanged non-zero byte (after one, the emulation-prevention state is
+ * the same with or without the edit), and the untouched escaped tail is appended as is.
+ * `NEEDS_WHOLE_NAL` when the window was too short (the header ran past it, or no such byte
+ * follows the edit inside it): the caller then does the whole NAL.
+ */
+export function patchNalPrefix(
+	nal: Uint8Array,
+	window: number,
+	patch: (rbsp: Uint8Array) => number | null
+): Uint8Array | null | typeof NEEDS_WHOLE_NAL {
+	const rbsp = new Uint8Array(Math.min(window, nal.length));
+	const src = new Int32Array(rbsp.length);
+	let n = 0;
+	let zeros = 0;
+	let i = 0;
+	for (; i < nal.length && n < rbsp.length; i += 1) {
+		const b = nal[i] as number;
+		if (zeros >= 2 && b === 3) {
+			zeros = 0;
+			continue;
+		}
+		rbsp[n] = b;
+		src[n] = i;
+		n += 1;
+		zeros = b === 0 ? zeros + 1 : 0;
+	}
+	const head = rbsp.subarray(0, n);
+	let end: number | null;
+	try {
+		end = patch(head);
+	} catch (e) {
+		if (i < nal.length && e instanceof HevcSpliceUnsupported) return NEEDS_WHOLE_NAL;
+		throw e;
+	}
+	if (end === null) return null;
+	// the byte before the cut must be unchanged as well as non-zero: the original escaping
+	// may have put an emulation byte after a zero the patch overwrote
+	let cut = Math.max(end + 1, 3);
+	while (cut <= n && head[cut - 1] === 0) cut += 1;
+	if (cut > n) return NEEDS_WHOLE_NAL;
+	const escaped = escapeRbsp(head.subarray(2, cut));
+	const tail = nal.subarray((src[cut - 1] as number) + 1);
+	const out = new Uint8Array(2 + escaped.length + tail.length);
+	out[0] = head[0] as number;
+	out[1] = head[1] as number;
+	out.set(escaped, 2);
+	out.set(tail, 2 + escaped.length);
+	return out;
 }
 
 type StRps = {
@@ -836,12 +901,21 @@ export class HevcCraSplicer {
 		return { nal: this.escapeNal(merged), pocLsb };
 	}
 
-	/** Subtract the run's shift from `slice_pic_order_cnt_lsb`, in place in the
-	 *  RBSP; null when the segment has no POC field. */
+	/** Subtract the run's shift from `slice_pic_order_cnt_lsb`; null when the segment has
+	 *  no POC field. This runs on every picture of a run after a seek (open-GOP rips have one
+	 *  IDR, at t=0), so only the header bytes are rewritten: the slice data is copied as is. */
 	private shiftPoc(nal: Uint8Array): Uint8Array | null {
+		const type = nalType(nal);
+		const fast = patchNalPrefix(nal, HEADER_WINDOW, (rbsp) => this.shiftPocBits(rbsp, type));
+		if (fast !== NEEDS_WHOLE_NAL) return fast;
 		const rbsp = unescapeRbsp(nal);
+		return this.shiftPocBits(rbsp, type) === null ? null : this.escapeNal(rbsp);
+	}
+
+	/** The POC field rewritten in place in `rbsp`; the end byte of the change, or null. */
+	private shiftPocBits(rbsp: Uint8Array, type: number): number | null {
 		const r = new BitReader(rbsp);
-		const prefix = parseSlicePrefix(r, nalType(nal), this.sps, this.pps);
+		const prefix = parseSlicePrefix(r, type, this.sps, this.pps);
 		if (prefix.dependent) return null;
 		const bits = prefix.sps.log2MaxPocLsb;
 		const max = 1 << bits;
@@ -856,7 +930,7 @@ export class HevcCraSplicer {
 			const mask = 0x80 >> (pos & 7);
 			rbsp[idx] = bit ? (rbsp[idx] as number) | mask : (rbsp[idx] as number) & ~mask;
 		}
-		return this.escapeNal(rbsp);
+		return Math.ceil((prefix.pocBit + bits) / 8);
 	}
 
 	/** RBSP (with its 2-byte NAL header in front) back to a NAL unit. */

@@ -39,22 +39,26 @@
 import {
 	ALL_FORMATS,
 	AudioSampleSink,
-	AudioSampleSource,
+	type AudioSampleSource,
 	EncodedAudioPacketSource,
 	EncodedPacketSink,
 	EncodedVideoPacketSource,
 	Input,
 	Mp4OutputFormat,
 	Output,
-	Quality,
 	StreamTarget,
-	type StreamTargetChunk,
-	UrlSource
+	type StreamTargetChunk
 } from 'mediabunny';
 
-import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
+import { isFirefox } from '../caps';
+import { planAudioTrack, transcodeSampleSource, type AudioPlan } from '../decode/audio-plan';
 import { bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
-import { pickAudioEncoder, relaxMediabunnyGopCheck } from './tier-b-mse';
+import { AppendQueue } from '../mse/append-queue';
+import { FeedGate } from '../mse/feed-gate';
+import { endStream, openMediaSource, releaseVideo } from '../mse/media-source';
+import { relaxMediabunnyGopCheck } from '../mse/output';
+import { bufferedAhead, evictionSpan, forwardGapTarget } from '../mse/ranges';
+import { irisUrlSource } from '../stream-fetch';
 
 /** How far behind the playlist's end we aim the first keyframe. */
 const LIVE_EDGE_BACKOFF_S = 12;
@@ -67,6 +71,8 @@ const BEHIND_KEEP_S = 30;
 const TRACK_LEAD_CAP = 4;
 /** Cap on undrained append chunks held in RAM. */
 const MAX_QUEUED_CHUNKS = 16;
+/** Played-out media trimmed in steps of at least this much (not a remove() per timeupdate). */
+const EVICT_STEP_S = 5;
 /** In-place pipeline restarts allowed within the rolling window before the
  *  error surfaces to the page (which then rotates sources). */
 const RESTART_BUDGET = 3;
@@ -76,15 +82,9 @@ const RESTART_WINDOW_MS = 90_000;
  *  ≈ several seconds of media landing with zero playback progress. */
 const WEDGE_APPEND_LIMIT = 16;
 
-/** Codecs MSE plays inside fMP4 without help — passthrough, no re-encode. */
-const MSE_NATIVE_AUDIO = new Set(['aac', 'opus', 'mp3']);
 /** Key packets to walk while hunting a true IDR anchor. At broadcast IDR
  *  cadence (~1-4 s) this covers the whole live window and then some. */
 const IDR_HUNT_LIMIT = 24;
-
-function isFirefox(): boolean {
-	return typeof navigator !== 'undefined' && /Firefox\/\d+/.test(navigator.userAgent);
-}
 
 /** NAL length-prefix size from the avcC description (defaults to 4). */
 function nalLengthSize(description: BufferSource | undefined): number {
@@ -145,7 +145,6 @@ export const mountTierBLive: EngineMount = async (opts) => {
 	let sourceBuffer: SourceBuffer | null = null;
 	let output: Output | null = null;
 	let input: Input | null = null;
-	const appendQueue: Uint8Array[] = [];
 	/** Wall-clock stamps of recent in-place restarts (budget window). */
 	const restartStamps: number[] = [];
 	/** Anchor of the CURRENT cycle (playlist-relative seconds). */
@@ -165,126 +164,57 @@ export const mountTierBLive: EngineMount = async (opts) => {
 
 	// waiters (all flushed on dispose AND on restart)
 
-	const trackWaiters = new Set<() => void>();
-	const notifyTrackProgress = () => {
-		for (const w of trackWaiters) w();
-	};
-	const bufferRoomWaiters = new Set<() => void>();
-	const notifyBufferRoom = () => {
-		for (const w of bufferRoomWaiters) w();
-	};
+	const gate = new FeedGate();
 	const sinkWaiters = new Set<() => void>();
 	const flushAllWaiters = () => {
-		for (const w of trackWaiters) w();
-		trackWaiters.clear();
-		for (const w of bufferRoomWaiters) w();
-		bufferRoomWaiters.clear();
+		gate.flush();
 		for (const w of sinkWaiters) w();
 		sinkWaiters.clear();
 	};
 
 	const waitTrackBalance = (gen: number, ts: number, otherFedMax: () => number): Promise<void> =>
-		new Promise<void>((resolve) => {
-			const ready = () => disposed || gen !== generation || ts <= otherFedMax() + TRACK_LEAD_CAP;
-			if (ready()) {
-				resolve();
-				return;
-			}
-			const w = () => {
-				if (!ready()) return;
-				trackWaiters.delete(w);
-				resolve();
-			};
-			trackWaiters.add(w);
-		});
+		gate.wait(() => disposed || gen !== generation || ts <= otherFedMax() + TRACK_LEAD_CAP);
 
 	const waitBufferRoom = (gen: number, ts: number): Promise<void> =>
-		new Promise<void>((resolve) => {
-			const ready = () => disposed || gen !== generation || ts - video.currentTime <= AHEAD_TARGET_S;
-			if (ready()) {
-				resolve();
-				return;
-			}
-			const w = () => {
-				if (!ready()) return;
-				bufferRoomWaiters.delete(w);
-				resolve();
-			};
-			bufferRoomWaiters.add(w);
-		});
+		gate.wait(() => disposed || gen !== generation || ts - video.currentTime <= AHEAD_TARGET_S);
 
 	// buffer plumbing
 
-	const bufferedAheadSeconds = (): number => {
-		if (!sourceBuffer || sourceBuffer.buffered.length === 0) return 0;
-		const t = video.currentTime;
-		const b = sourceBuffer.buffered;
-		let coveredEnd = Number.NEGATIVE_INFINITY;
-		for (let i = 0; i < b.length; i += 1) {
-			const start = b.start(i);
-			const end = b.end(i);
-			if (coveredEnd === Number.NEGATIVE_INFINITY) {
-				if (start <= t + 0.5 && end >= t) coveredEnd = end;
-			} else if (start - coveredEnd <= 2) {
-				coveredEnd = end; // bridge non-coalescing fMP4 fragment ranges
-			} else {
-				break;
-			}
-		}
-		return coveredEnd === Number.NEGATIVE_INFINITY ? 0 : Math.max(0, coveredEnd - t);
-	};
+	const bufferedAheadSeconds = (): number => (sourceBuffer ? bufferedAhead(sourceBuffer.buffered, video.currentTime) : 0);
 
-	const evictPlayedRange = (): void => {
+	const evictPlayedRange = (minSpan: number): void => {
 		// Firefox: never run our own remove() — it can wedge `updating=true`
 		// forever (VOD Tier B lore); FF's native eviction handles the shallow
 		// live window fine.
 		if (firefox || !sourceBuffer || sourceBuffer.updating) return;
-		const evictBefore = video.currentTime - BEHIND_KEEP_S;
-		if (evictBefore <= 0 || sourceBuffer.buffered.length === 0) return;
-		const firstStart = sourceBuffer.buffered.start(0);
-		if (firstStart >= evictBefore) return;
+		const span = evictionSpan(sourceBuffer.buffered, video.currentTime, BEHIND_KEEP_S, minSpan);
+		if (!span) return;
 		try {
-			sourceBuffer.remove(firstStart, evictBefore);
+			sourceBuffer.remove(span[0], span[1]);
 		} catch {
 			/* retried on the next tick */
 		}
 	};
 
-	const drainQueue = () => {
-		if (disposed || !sourceBuffer || sourceBuffer.updating) return;
-		const next = appendQueue.shift();
-		if (!next) return;
-		try {
-			sourceBuffer.appendBuffer(next.slice().buffer);
-		} catch (e) {
-			if (e instanceof DOMException && e.name === 'QuotaExceededError') {
-				appendQueue.unshift(next);
-				evictPlayedRange();
-				return;
-			}
-			fail(e instanceof Error ? e : new Error(String(e)));
-		}
-	};
+	const appendQueue = new AppendQueue({
+		alive: () => !disposed,
+		onQuota: () => evictPlayedRange(0),
+		onError: (e) => fail(e)
+	});
 
 	/** Jump the playhead across a small forward gap. True when it moved. */
 	const jumpForwardGap = (): boolean => {
 		if (!sourceBuffer) return false;
 		const t = video.currentTime;
-		for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
-			const start = sourceBuffer.buffered.start(i);
-			const end = sourceBuffer.buffered.end(i);
-			if (end - start < 0.05) continue;
-			if (start > t && start - t < 8) {
-				console.warn(`[iris-core] live: jumping gap ${t.toFixed(2)} → ${start.toFixed(2)}`);
-				try {
-					video.currentTime = start + 0.01;
-				} catch {
-					/* swallow */
-				}
-				return true;
-			}
+		const start = forwardGapTarget(sourceBuffer.buffered, t);
+		if (start === null) return false;
+		console.warn(`[iris-core] live: jumping gap ${t.toFixed(2)} → ${start.toFixed(2)}`);
+		try {
+			video.currentTime = start + 0.01;
+		} catch {
+			/* swallow */
 		}
-		return false;
+		return true;
 	};
 
 	// in-place restart
@@ -310,7 +240,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
 		);
 		generation += 1;
 		flushAllWaiters();
-		appendQueue.length = 0;
+		appendQueue.clear();
 		const oldOutput = output;
 		output = null;
 		try {
@@ -350,9 +280,9 @@ export const mountTierBLive: EngineMount = async (opts) => {
 	// Playhead advanced → trim behind, retry queued appends, release feeds.
 	const onTimeUpdate = () => {
 		if (disposed) return;
-		evictPlayedRange();
-		if (appendQueue.length > 0) drainQueue();
-		notifyBufferRoom();
+		evictPlayedRange(EVICT_STEP_S);
+		if (appendQueue.length > 0) appendQueue.pump();
+		gate.notify();
 	};
 	video.addEventListener('timeupdate', onTimeUpdate);
 
@@ -367,7 +297,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
 				/* MediaSource not open — dispose path owns it */
 			}
 		}
-		drainQueue();
+		appendQueue.pump();
 		jumpForwardGap();
 	};
 	video.addEventListener('waiting', onWaiting);
@@ -395,28 +325,16 @@ export const mountTierBLive: EngineMount = async (opts) => {
 		} catch {
 			/* idempotent */
 		}
-		if (objectUrl) URL.revokeObjectURL(objectUrl);
-		try {
-			if (mediaSource && mediaSource.readyState === 'open') mediaSource.endOfStream();
-		} catch {
-			/* idempotent */
-		}
-		try {
-			video.pause();
-		} catch {
-			/* idempotent */
-		}
+		endStream(mediaSource);
+		appendQueue.detach();
+		releaseVideo(video, objectUrl);
 	};
 
 	// stream probing (once per mount)
 
 	let mime = '';
 	let videoDecoderConfigCodec = '';
-	type AudioPlan =
-		| { kind: 'passthrough'; mp4Codec: string }
-		| { kind: 'transcode'; mp4Codec: string; targetCodec: 'aac' | 'opus'; channels: number }
-		| null;
-	let audioPlan: AudioPlan = null;
+	let audioPlan: AudioPlan | null = null;
 
 	/** (Re)create the MediaSource + SourceBuffer on the `<video>`, wire the
 	 *  per-cycle listeners, then anchor at the live edge and spawn the feed
@@ -443,28 +361,16 @@ export const mountTierBLive: EngineMount = async (opts) => {
 		wedgeLastT = -1;
 		wedgeAppends = 0;
 
-		await new Promise<void>((resolve, reject) => {
-			const onOpen = () => {
-				ms.removeEventListener('sourceopen', onOpen);
-				ms.removeEventListener('error', onMseErr);
-				resolve();
-			};
-			const onMseErr = () => {
-				ms.removeEventListener('sourceopen', onOpen);
-				ms.removeEventListener('error', onMseErr);
-				reject(new Error('MediaSource emitted error before opening'));
-			};
-			ms.addEventListener('sourceopen', onOpen);
-			ms.addEventListener('error', onMseErr);
-		});
+		await openMediaSource(ms, 'live');
 		if (disposed || gen !== generation) return;
 
 		const sb = ms.addSourceBuffer(mime);
 		sb.mode = 'segments';
 		sourceBuffer = sb;
+		appendQueue.attach(sb);
 		sb.addEventListener('updateend', () => {
 			if (disposed || gen !== generation) return;
-			drainQueue();
+			appendQueue.pump();
 			if (sb.buffered.length === 0) return;
 			if (!playbackStarted) {
 				// First media landed → anchor the playhead + (re)start playback.
@@ -591,7 +497,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
 							console.log(`[iris-core] live: muxer chunk #${sinkChunks} (${chunk.data.byteLength} bytes)`);
 						}
 						appendQueue.push(chunk.data);
-						drainQueue();
+						appendQueue.pump();
 						// Park until an append lands or playback drains the buffer —
 						// event-driven; dispose/restart flushes `sinkWaiters`.
 						while (!disposed && gen === generation && (bufferedAheadSeconds() > AHEAD_TARGET_S || appendQueue.length > MAX_QUEUED_CHUNKS)) {
@@ -619,11 +525,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
 						// ENDLIST (the backend session died) → let the element end; the
 						// page's onEnded handler rotates to the next source.
 						if (disposed || gen !== generation) return;
-						try {
-							if (ms.readyState === 'open') ms.endOfStream();
-						} catch {
-							/* idempotent */
-						}
+						endStream(ms);
 					},
 					abort: (reason) => {
 						if (disposed || gen !== generation) return;
@@ -643,14 +545,10 @@ export const mountTierBLive: EngineMount = async (opts) => {
 		let audioFeed: AudioFeed | null = null;
 		if (audioTrack && audioPlan) {
 			if (audioPlan.kind === 'transcode') {
-				const srcChannels = await audioTrack.getNumberOfChannels();
-				const source = new AudioSampleSource({
-					codec: audioPlan.targetCodec,
-					// `new Quality(<number>)` means a 0..1 qualitative level, NOT
-					// a bitrate — the explicit `{ bitrate }` form is required.
-					quality: new Quality({ bitrate: audioPlan.targetCodec === 'opus' ? 128_000 : 192_000 }),
-					...(audioPlan.channels !== srcChannels ? { transform: { numberOfChannels: audioPlan.channels } } : {})
-				});
+				const source = transcodeSampleSource(
+					{ codec: audioPlan.targetCodec, channels: audioPlan.channels },
+					await audioTrack.getNumberOfChannels()
+				);
 				newOutput.addAudioTrack(source);
 				audioFeed = { kind: 'transcode', source };
 			} else {
@@ -684,6 +582,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
 				if (disposed || gen !== generation) break;
 				await videoSrc.add(packet.clone({ timestamp: rel }), firstMeta ? { decoderConfig: videoDecoderConfig } : undefined);
 				firstMeta = false;
+				if (disposed || gen !== generation) break;
 				if (rel > videoFedMax) videoFedMax = rel;
 				if (rel - lastLogged >= 5) {
 					lastLogged = rel;
@@ -695,20 +594,21 @@ export const mountTierBLive: EngineMount = async (opts) => {
 							(q ? ` frames=${q.totalVideoFrames}/drop=${q.droppedVideoFrames}` : '')
 					);
 				}
-				notifyTrackProgress();
+				gate.notify();
 			}
 			try {
 				await videoSrc.close();
 			} catch {
 				/* output cancelled mid-flush — teardown noise */
 			}
+			if (disposed || gen !== generation) return;
 			videoFedMax = Number.POSITIVE_INFINITY;
-			notifyTrackProgress();
+			gate.notify();
 		})();
 
 		if (!(audioTrack && audioFeed)) {
 			audioFedMax = Number.POSITIVE_INFINITY;
-			notifyTrackProgress();
+			gate.notify();
 		}
 		const audioP =
 			audioTrack && audioFeed
@@ -720,16 +620,13 @@ export const mountTierBLive: EngineMount = async (opts) => {
 							if (!start) start = await packetSink.getFirstKeyPacket();
 							if (!start) {
 								try {
-									try {
-										await feed.source.close();
-									} catch {
-										/* output cancelled mid-flush — teardown noise */
-									}
+									await feed.source.close();
 								} catch {
 									/* output cancelled mid-flush — teardown noise */
 								}
+								if (disposed || gen !== generation) return;
 								audioFedMax = Number.POSITIVE_INFINITY;
-								notifyTrackProgress();
+								gate.notify();
 								return;
 							}
 							const decoderConfig = await audioTrack.getDecoderConfig();
@@ -747,8 +644,9 @@ export const mountTierBLive: EngineMount = async (opts) => {
 									firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined
 								);
 								firstMeta = false;
+								if (disposed || gen !== generation) break;
 								if (rel > audioFedMax) audioFedMax = rel;
-								notifyTrackProgress();
+								gate.notify();
 							}
 							try {
 								await feed.source.close();
@@ -771,8 +669,9 @@ export const mountTierBLive: EngineMount = async (opts) => {
 									if (disposed || gen !== generation) break;
 									sample.setTimestamp(rel);
 									await feed.source.add(sample);
+									if (disposed || gen !== generation) break;
 									if (rel > audioFedMax) audioFedMax = rel;
-									notifyTrackProgress();
+									gate.notify();
 								} finally {
 									sample.close();
 								}
@@ -783,8 +682,9 @@ export const mountTierBLive: EngineMount = async (opts) => {
 								/* output cancelled mid-flush — teardown noise */
 							}
 						}
+						if (disposed || gen !== generation) return;
 						audioFedMax = Number.POSITIVE_INFINITY;
-						notifyTrackProgress();
+						gate.notify();
 					})()
 				: Promise.resolve();
 
@@ -805,19 +705,8 @@ export const mountTierBLive: EngineMount = async (opts) => {
 	const mount0 = performance.now();
 	try {
 		input = new Input({
-			source: new UrlSource(streamUrl, {
-				// 5xx → transient: reject so mediabunny's retry kicks in (a source
-				// rotation briefly 502s while the backend elects the next feed).
-				fetchFn: async (fetchInput, init) => {
-					const res = await fetch(fetchInput, init);
-					if (res.status >= 500) {
-						throw new Error(`iris-live-transient-5xx ${res.status}`);
-					}
-					return res;
-				},
-				getRetryDelay: (attempts) => (attempts >= 6 ? null : Math.min(4, 0.5 * 2 ** attempts)),
-				maxCacheSize: 32 * 1024 * 1024
-			}),
+			// a source rotation briefly 502s while the backend elects the next feed
+			source: irisUrlSource(streamUrl, { cacheBytes: 32 * 1024 * 1024, attempts: 6, maxDelayS: 4 }),
 			formats: ALL_FORMATS,
 			// Gapless continuous timeline — see the module header. Wall-clock
 			// times stay reachable via `InputTrack.getUnixTimeForTimestamp`.
@@ -832,26 +721,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
 
 		const audioTrack = (await input.getAudioTracks())[0] ?? null;
 		const audioCodec = audioTrack ? await audioTrack.getCodec() : null;
-		if (audioTrack && audioCodec) {
-			if (MSE_NATIVE_AUDIO.has(audioCodec)) {
-				const cfg = await audioTrack.getDecoderConfig();
-				audioPlan = { kind: 'passthrough', mp4Codec: cfg?.codec ?? 'mp4a.40.2' };
-			} else if (libavCanDecode(audioCodec)) {
-				ensureLibavAudioDecoderRegistered();
-				const channels = await audioTrack.getNumberOfChannels();
-				const sampleRate = await audioTrack.getSampleRate();
-				const choice = await pickAudioEncoder(channels, sampleRate);
-				if (!choice) throw new Error(`live: cannot re-encode ${audioCodec} in this browser`);
-				audioPlan = {
-					kind: 'transcode',
-					mp4Codec: choice.mp4Codec,
-					targetCodec: choice.codec,
-					channels: choice.channels
-				};
-			} else {
-				console.warn(`[iris-core] live: audio codec ${audioCodec} undecodable — video only`);
-			}
-		}
+		audioPlan = audioTrack ? await planAudioTrack(audioTrack, 'live') : null;
 
 		const codecs = [videoDecoderConfigCodec, audioPlan?.mp4Codec].filter(Boolean).join(',');
 		mime = `video/mp4; codecs="${codecs}"`;

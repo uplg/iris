@@ -8,6 +8,7 @@
 
 import { EncodedPacketSink, type InputAudioTrack } from 'mediabunny';
 
+import { DECODE_QUEUE_POLL_MS, PACING_POLL_MS } from './video-pipeline';
 import { configWithFreshDescription } from './webcodecs-probe';
 
 export type AudioPipelineOptions = {
@@ -17,6 +18,9 @@ export type AudioPipelineOptions = {
 	onData: (data: AudioData) => void;
 	onError: (err: Error) => void;
 	onEnd?: () => void;
+	/** Whether the packet at this timestamp (seconds) may be decoded now: the ring the
+	 *  scheduler plays from holds a few seconds, so the decode is paced on its clock. */
+	canDecode?: (timestampSeconds: number) => boolean;
 };
 
 export type AudioPipelineHandle = {
@@ -69,7 +73,10 @@ export function startAudioPipeline(opts: AudioPipelineOptions): AudioPipelineHan
 			for await (const packet of sink.packets(startPacket)) {
 				if (stopped) break;
 				while (decoder.decodeQueueSize > 32 && !stopped) {
-					await new Promise<void>((r) => setTimeout(r, 4));
+					await new Promise<void>((r) => setTimeout(r, DECODE_QUEUE_POLL_MS));
+				}
+				while (opts.canDecode && !opts.canDecode(packet.timestamp) && !stopped) {
+					await new Promise<void>((r) => setTimeout(r, PACING_POLL_MS));
 				}
 				if (stopped) break;
 				try {

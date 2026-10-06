@@ -29,6 +29,8 @@ export type VideoRenderer = {
 	enqueue: (frame: VideoFrame) => void;
 	/** Frames queued waiting to render. */
 	queueDepth: () => number;
+	/** Drops every queued frame (a seek: they belong to the old timeline). */
+	clear: () => void;
 	/** Timestamp (seconds) of the last frame actually drawn — ground
 	 *  truth for what the viewer's eye is seeing right now. */
 	lastDrawnTs: () => number;
@@ -70,6 +72,7 @@ async function mountCanvas2d(opts: VideoRendererOptions): Promise<VideoRenderer>
 	return {
 		enqueue: inner.enqueue,
 		queueDepth: inner.queueDepth,
+		clear: inner.clear,
 		lastDrawnTs: inner.lastDrawnTs,
 		intrinsicSize: inner.intrinsicSize,
 		canvas,

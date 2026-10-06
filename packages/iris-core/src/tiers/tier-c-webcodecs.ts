@@ -3,25 +3,31 @@
  *
  * "Bypass MSE entirely": Mediabunny demux → `VideoDecoder` /
  * `AudioDecoder` → renderer (Canvas2D today, WebGPU when available).
- * Audio scheduler is the master clock; renderer chases it.
+ * The audio scheduler is the master clock (a wall clock when the file has
+ * no audio); the renderer chases it, and both decoders are paced on it:
+ * they decode a short lead ahead of the clock, never the file flat out.
  *
  * Implements full `EngineHandle`:
- *   - `play` / `pause` — pause the AV master clock (audio gain → 0,
- *     decoder loops paused via a flag observed by the pipelines).
- *   - `seek` — drain decoders, reset scheduler clock, re-spin
- *     pipelines from a new keyframe. Frame-accurate to the nearest
- *     key packet.
+ *   - `play` / `pause` — resume / suspend the clock: the AudioContext stops
+ *     consuming, so the renderer and the decode pacing park with it.
+ *   - `seek` — drain decoders, reset the clock, re-spin pipelines from a new
+ *     keyframe. Frame-accurate to the nearest key packet.
  *   - `setVolume` / `setMuted` — scheduler `GainNode`.
+ *   - `onEnded` — when the clock reaches the end, not when the decoder does.
  */
 
-import { ALL_FORMATS, Input, UrlSource, type InputAudioTrack, type InputVideoTrack } from 'mediabunny';
+import { ALL_FORMATS, Input, type InputAudioTrack, type InputVideoTrack } from 'mediabunny';
 
+import { isHevc } from '../codec';
 import { startAudioPipeline, type AudioPipelineHandle } from '../decode/audio-pipeline';
+import { AUDIO_LEAD_S, MAX_QUEUED_FRAMES, playbackEnded, VIDEO_LEAD_S, withinLead, type EndState } from '../decode/pacing';
 import { startVideoPipeline, type VideoPipelineHandle } from '../decode/video-pipeline';
 import { probeVideoTrack } from '../decode/webcodecs-probe';
 import { createAudioScheduler, type AudioScheduler } from '../audio/audio-scheduler';
+import { WallClock } from '../audio/wall-clock';
+import { irisUrlSource, VOD_RETRY } from '../stream-fetch';
 import { mountRenderer, type VideoRenderer } from '../render/renderer-factory';
-import type { EngineAudioTrack, EngineHandle, EngineMount } from '../engine';
+import { defaultAudioIndex, manifestAudioTracks, type EngineAudioTrack, type EngineHandle, type EngineMount } from '../engine';
 
 export const mountTierC: EngineMount = async (opts) => {
 	const { container, streamUrl, startPosition, audioTrackIndex } = opts;
@@ -30,26 +36,26 @@ export const mountTierC: EngineMount = async (opts) => {
 	container.innerHTML = '';
 
 	const input = new Input({
-		source: new UrlSource(streamUrl, {}),
+		source: irisUrlSource(streamUrl, { cacheBytes: 16 * 1024 * 1024, ...VOD_RETRY }),
 		formats: ALL_FORMATS
 	});
-
-	const videoTrack = (await input.getPrimaryVideoTrack()) ?? null;
-	if (!videoTrack) {
-		const err = new Error('Tier C: no primary video track');
-		onError(err);
-		throw err;
-	}
-	const probe = await probeVideoTrack(videoTrack);
-	if (!probe || !probe.decodes) {
-		const err = new Error('Tier C probe: decoder rejected the keyframe');
+	const disposeInput = async () => {
 		try {
 			await input.dispose();
 		} catch {
 			/* idempotent */
 		}
-		onError(err);
-		throw err;
+	};
+
+	const videoTrack = (await input.getPrimaryVideoTrack()) ?? null;
+	if (!videoTrack) {
+		await disposeInput();
+		throw new Error('Tier C: no primary video track');
+	}
+	const probe = await probeVideoTrack(videoTrack);
+	if (!probe || !probe.decodes) {
+		await disposeInput();
+		throw new Error('Tier C probe: decoder rejected the keyframe');
 	}
 
 	// Pick the audio track. The chrome's audio picker writes
@@ -62,14 +68,34 @@ export const mountTierC: EngineMount = async (opts) => {
 			? (allAudio[audioTrackIndex] ?? null)
 			: ((await input.getPrimaryAudioTrack()) ?? null);
 	const audioConfig = audioTrack ? await audioTrack.getDecoderConfig() : null;
+	const hasAudio = !!(audioTrack && audioConfig);
 
-	const scheduler: AudioScheduler = await createAudioScheduler();
-	const renderer: VideoRenderer = await mountRenderer({
-		container,
-		clockSeconds: () => scheduler.currentMediaTimeSeconds(),
-		hdr: probe.config.codec?.startsWith('hev1') || probe.config.codec?.startsWith('hvc1') ? 'auto' : 'sdr',
-		onError
-	});
+	const scheduler: AudioScheduler = await createAudioScheduler({ sampleRate: audioConfig?.sampleRate });
+	const wall = new WallClock(() => performance.now());
+
+	let currentSeekTarget = startPosition;
+	/** Where playback is: the master clock once it is anchored (the first audio buffer, or the
+	 *  first frame without audio), the seek target until then — never the 0 an unanchored
+	 *  clock reads, which flashed the scrubber to the start and made a relative seek land
+	 *  near 0:00. */
+	const currentMediaTime = (): number => {
+		if (hasAudio) return scheduler.isAnchored() ? scheduler.currentMediaTimeSeconds() : currentSeekTarget;
+		return wall.anchored ? wall.time() : currentSeekTarget;
+	};
+
+	let renderer: VideoRenderer;
+	try {
+		renderer = await mountRenderer({
+			container,
+			clockSeconds: currentMediaTime,
+			hdr: isHevc(probe.config.codec) ? 'auto' : 'sdr',
+			onError
+		});
+	} catch (e) {
+		await scheduler.dispose();
+		await disposeInput();
+		throw e;
+	}
 
 	let readyFired = false;
 	const fireReady = () => {
@@ -81,32 +107,43 @@ export const mountTierC: EngineMount = async (opts) => {
 	// Pipeline state that survives across seeks.
 	let videoHandle: VideoPipelineHandle | null = null;
 	let audioHandle: AudioPipelineHandle | null = null;
-	let currentSeekTarget = startPosition;
 	let seekGeneration = 0;
 	let paused = false;
 	let disposed = false;
+	let endedFired = false;
+	const end: EndState = { videoDone: false, lastVideoTs: null, hasAudio, audioDone: false, audioEndTs: null };
 	// Debug-panel counters. Cheap: two increments on paths that already run
 	// per frame and per audio buffer.
 	let framesRendered = 0;
 	let audioBuffers = 0;
 
 	const spinPipelines = (fromSeconds: number, generation: number): void => {
+		end.videoDone = false;
+		end.lastVideoTs = null;
+		end.audioDone = false;
+		end.audioEndTs = null;
+		endedFired = false;
 		videoHandle = startVideoPipeline({
 			track: videoTrack as InputVideoTrack,
 			config: probe.config,
 			startSeconds: fromSeconds,
+			canDecode: (ts) => withinLead(ts, currentMediaTime(), VIDEO_LEAD_S) && renderer.queueDepth() < MAX_QUEUED_FRAMES,
 			onFrame: (frame) => {
 				if (generation !== seekGeneration || disposed) {
 					frame.close();
 					return;
 				}
+				const ts = frame.timestamp / 1_000_000;
+				if (end.lastVideoTs === null || ts > end.lastVideoTs) end.lastVideoTs = ts;
+				// without audio the first frame starts the clock, paused or not
+				if (!hasAudio && !wall.anchored) wall.anchor(Math.max(ts, currentSeekTarget));
 				renderer.enqueue(frame);
 				framesRendered += 1;
 				fireReady();
 			},
 			onError,
 			onEnd: () => {
-				if (generation === seekGeneration) opts.onEnded?.();
+				if (generation === seekGeneration) end.videoDone = true;
 			}
 		});
 		if (audioTrack && audioConfig) {
@@ -114,15 +151,21 @@ export const mountTierC: EngineMount = async (opts) => {
 				track: audioTrack as InputAudioTrack,
 				config: audioConfig,
 				startSeconds: fromSeconds,
+				canDecode: (ts) => withinLead(ts, currentMediaTime(), AUDIO_LEAD_S),
 				onData: (data) => {
 					if (generation !== seekGeneration || disposed) {
 						data.close();
 						return;
 					}
+					const endTs = (data.timestamp + data.duration) / 1_000_000;
+					if (end.audioEndTs === null || endTs > end.audioEndTs) end.audioEndTs = endTs;
 					scheduler.enqueue(data);
 					audioBuffers += 1;
 				},
-				onError
+				onError,
+				onEnd: () => {
+					if (generation === seekGeneration) end.audioDone = true;
+				}
 			});
 		}
 	};
@@ -130,18 +173,15 @@ export const mountTierC: EngineMount = async (opts) => {
 	spinPipelines(startPosition, seekGeneration);
 
 	// 4 Hz time-update broadcast so the parent can save resume position
-	// and the chrome can update its display.
+	// and the chrome can update its display; the end is noticed here too.
 	const tickInterval = setInterval(() => {
-		opts.onTimeUpdate?.(currentMediaTime());
+		const t = currentMediaTime();
+		opts.onTimeUpdate?.(t);
+		if (!endedFired && !disposed && playbackEnded(end, t)) {
+			endedFired = true;
+			opts.onEnded?.();
+		}
 	}, 250);
-
-	// The scheduler's clock is anchored to absolute media time on first
-	// enqueue post-reset (data.timestamp is absolute, not seek-relative).
-	// So `currentMediaTimeSeconds()` already returns the right value.
-	const currentMediaTime = (): number => {
-		if (audioTrack) return scheduler.currentMediaTimeSeconds();
-		return currentSeekTarget;
-	};
 
 	const handle: EngineHandle = {
 		dispose: async () => {
@@ -150,21 +190,14 @@ export const mountTierC: EngineMount = async (opts) => {
 			await Promise.allSettled([videoHandle?.stop() ?? Promise.resolve(), audioHandle?.stop() ?? Promise.resolve()]);
 			renderer.dispose();
 			await scheduler.dispose();
-			try {
-				await input.dispose();
-			} catch {
-				/* idempotent */
-			}
+			await disposeInput();
 		},
 		stats: () => [
 			['time', `${currentMediaTime().toFixed(2)} / ${opts.manifest.duration_s?.toFixed(1) ?? '?'}`],
 			['state', paused ? 'paused' : 'playing'],
-			['render', `canvas, ${framesRendered} frame(s) enqueued`],
+			['render', `canvas, ${framesRendered} frame(s) enqueued, ${renderer.queueDepth()} waiting`],
 			['decode', `${probe.config.codec ?? '?'} via WebCodecs${probe.hardware ? ', hardware' : ', software'}`],
-			[
-				'audio',
-				audioTrack ? `${audioBuffers} buffer(s), clock at ${scheduler.currentMediaTimeSeconds().toFixed(2)}s` : 'none, video clock'
-			],
+			['audio', hasAudio ? `${audioBuffers} buffer(s), clock at ${scheduler.currentMediaTimeSeconds().toFixed(2)}s` : 'none, wall clock'],
 			['pipeline', `seek generation ${seekGeneration}, target ${currentSeekTarget.toFixed(1)}s`]
 		],
 		currentTime: () => currentMediaTime(),
@@ -174,15 +207,20 @@ export const mountTierC: EngineMount = async (opts) => {
 		muted: () => scheduler.getMuted(),
 		buffered: () => [],
 		play: async () => {
+			// resume even when already playing: an AudioContext created without a user
+			// gesture starts suspended, and this is the gesture
+			scheduler.resume();
+			wall.resume();
 			if (!paused) return;
 			paused = false;
-			scheduler.setMuted(false);
 			opts.onPlayingChange?.(true);
 		},
 		pause: () => {
 			if (paused) return;
 			paused = true;
-			scheduler.setMuted(true);
+			// the clock freezes; the renderer and the decode pacing park with it
+			scheduler.suspend();
+			wall.pause();
 			opts.onPlayingChange?.(false);
 			opts.onPause?.(currentMediaTime());
 		},
@@ -199,29 +237,21 @@ export const mountTierC: EngineMount = async (opts) => {
 			const prevAudio = audioHandle;
 			videoHandle = null;
 			audioHandle = null;
+			// the old timeline goes now: queued frames would hold the new run's pacing back
+			// (a backward seek leaves them all "early"), and the clock reads the target again
+			scheduler.resetClock();
+			wall.reset();
+			renderer.clear();
 			void (async () => {
 				await Promise.allSettled([prevVideo?.stop() ?? Promise.resolve(), prevAudio?.stop() ?? Promise.resolve()]);
 				if (disposed || gen !== seekGeneration) return;
-				scheduler.resetClock();
 				opts.onSeeking?.(target);
 				spinPipelines(target, gen);
 			})();
 		},
 		setVolume: (v) => scheduler.setVolume(v),
 		setMuted: (m) => scheduler.setMuted(m),
-		audioTracks: (): EngineAudioTrack[] => {
-			const defaultIdx = Math.max(
-				0,
-				opts.manifest.audio.findIndex((x) => x.default)
-			);
-			const activeIdx = audioTrackIndex ?? defaultIdx;
-			return opts.manifest.audio.map((a, i) => ({
-				id: String(i),
-				label: a.title ?? a.lang?.toUpperCase() ?? `Audio ${i + 1}`,
-				lang: a.lang ?? undefined,
-				active: i === activeIdx
-			}));
-		},
+		audioTracks: (): EngineAudioTrack[] => manifestAudioTracks(opts.manifest, audioTrackIndex ?? defaultAudioIndex(opts.manifest)),
 		// Tier C audio switch needs a remount (the decoder is bound to a
 		// single Mediabunny track). `IrisPlayer` triggers that via the
 		// mount-key including `audioTrackIndex`.

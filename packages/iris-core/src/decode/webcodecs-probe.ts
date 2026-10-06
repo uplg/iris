@@ -14,10 +14,12 @@
  *      says yes, **actually decode** a key packet. If a `VideoFrame`
  *      comes out, return that exact config — it's guaranteed to
  *      configure later.
- *   3. The decision (any-decodes / hardware) is cached in
- *      localStorage so subsequent plays can short-circuit a *failed*
- *      probe (no point retrying). Positive results re-test every
- *      mount because the config object can't be cached safely.
+ *   3. Failures are remembered in localStorage so later plays can
+ *      short-circuit a codec this browser can't decode — but only once
+ *      it failed twice, and only for a day: one failure may be a busy
+ *      machine or a decoder pool the previous tier still held, and a
+ *      timeout is never remembered at all. Positive results re-test
+ *      every mount because the config object can't be cached safely.
  */
 
 import type { InputVideoTrack } from 'mediabunny';
@@ -58,7 +60,36 @@ export async function cheapProbeVideoCodec(codec: string): Promise<{
 	return { supportedHardware: false, supportedAny: sw.supported ?? false };
 }
 
-const CACHE_PREFIX = 'iris-core.wc-probe.v2.';
+const CACHE_PREFIX = 'iris-core.wc-probe.v3.';
+/** Failures before a codec is skipped without a test. */
+const FAILS_TO_SKIP = 2;
+/** How long a remembered failure holds. */
+const FAIL_TTL_MS = 24 * 60 * 60 * 1000;
+
+type FailEntry = { fails: number; at: number };
+
+function parseEntry(raw: string | null): FailEntry | null {
+	if (!raw) return null;
+	try {
+		const v = JSON.parse(raw) as Partial<FailEntry>;
+		return typeof v.fails === 'number' && typeof v.at === 'number' ? { fails: v.fails, at: v.at } : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Whether a stored failure record says to skip the test (pure, for the tests). */
+export function skipsProbe(raw: string | null, now: number): boolean {
+	const e = parseEntry(raw);
+	return !!e && e.fails >= FAILS_TO_SKIP && now - e.at < FAIL_TTL_MS;
+}
+
+/** The record after one more failure (an expired one starts over). */
+export function recordFailure(raw: string | null, now: number): string {
+	const e = parseEntry(raw);
+	const fails = e && now - e.at < FAIL_TTL_MS ? e.fails + 1 : 1;
+	return JSON.stringify({ fails, at: now } satisfies FailEntry);
+}
 
 function cacheKey(codec: string): string {
 	const ua = navigator.userAgent.replace(/[^A-Za-z0-9]/g, '_').slice(0, 64);
@@ -67,7 +98,7 @@ function cacheKey(codec: string): string {
 
 function readNegativeCache(codec: string): boolean {
 	try {
-		return localStorage.getItem(cacheKey(codec)) === 'fail';
+		return skipsProbe(localStorage.getItem(cacheKey(codec)), Date.now());
 	} catch {
 		return false;
 	}
@@ -75,7 +106,8 @@ function readNegativeCache(codec: string): boolean {
 
 function writeNegativeCache(codec: string): void {
 	try {
-		localStorage.setItem(cacheKey(codec), 'fail');
+		const key = cacheKey(codec);
+		localStorage.setItem(key, recordFailure(localStorage.getItem(key), Date.now()));
 	} catch {
 		/* quota */
 	}
@@ -89,32 +121,38 @@ function clearNegativeCache(codec: string): void {
 	}
 }
 
+type DecodeOutcome = 'decodes' | 'fails' | 'timeout';
+
 /**
- * Real-decode test for a given config. Resolves to true iff a
- * `VideoFrame` actually comes out within 5s of configure+decode.
- * Closes the decoder on the way out. Logs the failing config to
- * `console.debug` so the developer can inspect the bytes that broke.
+ * Real-decode test for a given config: `decodes` iff a `VideoFrame`
+ * actually comes out within 5s of configure+decode. The decoder is
+ * closed whatever happens (it holds a hardware slot until GC
+ * otherwise). Logs the failing config to `console.debug` so the
+ * developer can inspect the bytes that broke.
  */
-async function realDecodeTest(config: VideoDecoderConfig, keyPacketChunk: EncodedVideoChunk): Promise<boolean> {
-	return new Promise<boolean>((resolve) => {
+async function realDecodeTest(config: VideoDecoderConfig, keyPacketChunk: EncodedVideoChunk): Promise<DecodeOutcome> {
+	return new Promise<DecodeOutcome>((resolve) => {
 		let settled = false;
+		const timer = setTimeout(() => settle('timeout'), 5000);
+		const settle = (outcome: DecodeOutcome) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			try {
+				decoder.close();
+			} catch {
+				/* idempotent */
+			}
+			resolve(outcome);
+		};
 		const decoder = new VideoDecoder({
 			output: (frame) => {
 				frame.close();
-				if (settled) return;
-				settled = true;
-				try {
-					decoder.close();
-				} catch {
-					/* idempotent */
-				}
-				resolve(true);
+				settle('decodes');
 			},
 			error: (err) => {
-				if (settled) return;
-				settled = true;
-				console.debug('[iris-core] probe decode error', err, 'config:', summariseConfig(config));
-				resolve(false);
+				if (!settled) console.debug('[iris-core] probe decode error', err, 'config:', summariseConfig(config));
+				settle('fails');
 			}
 		});
 		try {
@@ -124,23 +162,9 @@ async function realDecodeTest(config: VideoDecoderConfig, keyPacketChunk: Encode
 				/* error handler covers it */
 			});
 		} catch (e) {
-			if (!settled) {
-				settled = true;
-				console.debug('[iris-core] probe configure threw', e, 'config:', summariseConfig(config));
-				resolve(false);
-			}
+			if (!settled) console.debug('[iris-core] probe configure threw', e, 'config:', summariseConfig(config));
+			settle('fails');
 		}
-		setTimeout(() => {
-			if (!settled) {
-				settled = true;
-				try {
-					decoder.close();
-				} catch {
-					/* idempotent */
-				}
-				resolve(false);
-			}
-		}, 5000);
 	});
 }
 
@@ -251,6 +275,7 @@ export async function probeVideoTrack(track: InputVideoTrack): Promise<WebCodecs
 		{ hwAcc: 'prefer-software', hardware: false },
 		{ hwAcc: undefined, hardware: false }
 	];
+	let timedOut = false;
 	for (const { hwAcc, hardware } of attempts) {
 		const tryConfig: VideoDecoderConfig = {
 			...baseConfig,
@@ -259,8 +284,9 @@ export async function probeVideoTrack(track: InputVideoTrack): Promise<WebCodecs
 		};
 		const support = await VideoDecoder.isConfigSupported(tryConfig).catch(() => ({ supported: false }) as VideoDecoderSupport);
 		if (!support.supported) continue;
-		const decodes = await realDecodeTest(tryConfig, chunk);
-		if (decodes) {
+		const outcome = await realDecodeTest(tryConfig, chunk);
+		if (outcome === 'timeout') timedOut = true;
+		if (outcome === 'decodes') {
 			// Success — clear any stale negative entry from a previous
 			// session and return a config with a *fresh* description so the
 			// caller's `configure()` doesn't hit a buffer the test decoder
@@ -278,9 +304,9 @@ export async function probeVideoTrack(track: InputVideoTrack): Promise<WebCodecs
 		}
 	}
 
-	// No path produced a frame. Remember it so future plays of the
-	// same codec skip the test.
-	writeNegativeCache(baseConfig.codec);
+	// No path produced a frame. Remember it (unless it only ran out of
+	// time: a busy machine, not a verdict on the codec).
+	if (!timedOut) writeNegativeCache(baseConfig.codec);
 	return {
 		decodes: false,
 		hardware: false,

@@ -49,15 +49,18 @@ import {
 	Mp4OutputFormat,
 	Output,
 	StreamTarget,
-	type StreamTargetChunk,
-	UrlSource
+	type StreamTargetChunk
 } from 'mediabunny';
 
-import { refreshSessionForFetch } from '@iris/api/client';
-import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
+import { encoderBitrate, planAudioTrack, type AudioPlan } from '../decode/audio-plan';
 import { configWithFreshDescription } from '../decode/webcodecs-probe';
 import { bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
-import { pickAudioEncoder, relaxMediabunnyGopCheck } from './tier-b-mse';
+import { StampQueue } from '../decode/stamp-queue';
+import { AppendQueue } from '../mse/append-queue';
+import { endStream, openMediaSource, releaseVideo } from '../mse/media-source';
+import { relaxMediabunnyGopCheck } from '../mse/output';
+import { evictionSpan, forwardGapTarget } from '../mse/ranges';
+import { irisUrlSource } from '../stream-fetch';
 
 /** How far behind the playlist's end we aim the first keyframe. */
 const LIVE_EDGE_BACKOFF_S = 12;
@@ -96,9 +99,8 @@ const RESET_BUDGET = 12;
 const RESET_WINDOW_MS = 60_000;
 /** Pacing poll interval — tier C's established backpressure pattern. */
 const PACE_MS = 100;
-
-/** Codecs MSE plays inside fMP4 without help — audio passthrough. */
-const MSE_NATIVE_AUDIO = new Set(['aac', 'opus', 'mp3']);
+/** Played-out media trimmed in steps of at least this much (not a remove() per timeupdate). */
+const EVICT_STEP_S = 5;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -132,7 +134,6 @@ export const mountTierCLive: EngineMount = async (opts) => {
 	let mediaSrc: MediaSource | null = null;
 	let sourceBuffer: SourceBuffer | null = null;
 	let objectUrl: string | null = null;
-	const appendQueue: Uint8Array[] = [];
 	let anchor = 0;
 	/** Element-relative feed positions, for pacing + interleave caps. */
 	let videoFedRel = 0;
@@ -142,53 +143,35 @@ export const mountTierCLive: EngineMount = async (opts) => {
 	 *  browser owns actual A/V presentation; this only throttles work. */
 	const playheadRel = (): number => video.currentTime;
 
-	const drainQueue = () => {
-		if (disposed || !sourceBuffer || sourceBuffer.updating) return;
-		const next = appendQueue.shift();
-		if (!next) return;
-		try {
-			sourceBuffer.appendBuffer(next.slice().buffer);
-		} catch (e) {
-			if (e instanceof DOMException && e.name === 'QuotaExceededError') {
-				appendQueue.unshift(next);
-				evictPlayed();
-				return;
-			}
-			fail(e instanceof Error ? e : new Error(String(e)));
-		}
-	};
-
-	const evictPlayed = () => {
+	const evictPlayed = (minSpan: number) => {
 		if (!sourceBuffer || sourceBuffer.updating) return;
-		const evictBefore = video.currentTime - KEEP_BEHIND_S;
-		if (evictBefore <= 0 || sourceBuffer.buffered.length === 0) return;
-		const first = sourceBuffer.buffered.start(0);
-		if (first >= evictBefore) return;
+		const span = evictionSpan(sourceBuffer.buffered, video.currentTime, KEEP_BEHIND_S, minSpan);
+		if (!span) return;
 		try {
-			sourceBuffer.remove(first, evictBefore);
+			sourceBuffer.remove(span[0], span[1]);
 		} catch {
 			/* retried next tick */
 		}
 	};
+
+	const appendQueue = new AppendQueue({
+		alive: () => !disposed,
+		onQuota: () => evictPlayed(0),
+		onError: (e) => fail(e)
+	});
 
 	/** Jump small forward holes (a decoder-reset gap leaves a video hole
 	 *  in the muxed stream; the element parks at its edge). */
 	const jumpForwardGap = () => {
 		if (!sourceBuffer) return;
 		const t = video.currentTime;
-		for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
-			const start = sourceBuffer.buffered.start(i);
-			const end = sourceBuffer.buffered.end(i);
-			if (end - start < 0.05) continue;
-			if (start > t && start - t < 8) {
-				console.warn(`[iris-core] live-c: gap jump ${t.toFixed(2)} → ${start.toFixed(2)}`);
-				try {
-					video.currentTime = start + 0.01;
-				} catch {
-					/* swallow */
-				}
-				break;
-			}
+		const start = forwardGapTarget(sourceBuffer.buffered, t);
+		if (start === null) return;
+		console.warn(`[iris-core] live-c: gap jump ${t.toFixed(2)} → ${start.toFixed(2)}`);
+		try {
+			video.currentTime = start + 0.01;
+		} catch {
+			/* swallow */
 		}
 	};
 	const onWaiting = () => {
@@ -200,15 +183,15 @@ export const mountTierCLive: EngineMount = async (opts) => {
 				/* MediaSource not open */
 			}
 		}
-		drainQueue();
+		appendQueue.pump();
 		jumpForwardGap();
 	};
 	video.addEventListener('waiting', onWaiting);
 	video.addEventListener('stalled', onWaiting);
 	const onTimeUpdate = () => {
 		if (disposed) return;
-		evictPlayed();
-		if (appendQueue.length > 0) drainQueue();
+		evictPlayed(EVICT_STEP_S);
+		if (appendQueue.length > 0) appendQueue.pump();
 	};
 	video.addEventListener('timeupdate', onTimeUpdate);
 
@@ -234,18 +217,9 @@ export const mountTierCLive: EngineMount = async (opts) => {
 		} catch {
 			/* idempotent */
 		}
-		try {
-			video.pause();
-		} catch {
-			/* idempotent */
-		}
-		if (objectUrl) URL.revokeObjectURL(objectUrl);
-		video.removeAttribute('src');
-		try {
-			if (mediaSrc && mediaSrc.readyState === 'open') mediaSrc.endOfStream();
-		} catch {
-			/* idempotent */
-		}
+		endStream(mediaSrc);
+		appendQueue.detach();
+		releaseVideo(video, objectUrl);
 		try {
 			input?.dispose();
 		} catch {
@@ -255,28 +229,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 
 	try {
 		input = new Input({
-			source: new UrlSource(streamUrl, {
-				fetchFn: async (fetchInput, init) => {
-					let res = await fetch(fetchInput, init);
-					// 401/403: the access token expired mid-stream. These raw
-					// fetches don't ride the api client's 401-retry, so refresh the
-					// session OURSELVES (single-flight, shared with the app) and
-					// replay once.
-					if (res.status === 401 || res.status === 403) {
-						if (await refreshSessionForFetch()) {
-							res = await fetch(fetchInput, init);
-						}
-					}
-					// 5xx (and an auth failure that survived the refresh): transient
-					// — reject so mediabunny's retry ladder takes over.
-					if (res.status >= 500 || res.status === 401 || res.status === 403) {
-						throw new Error(`iris-live-transient-${res.status}`);
-					}
-					return res;
-				},
-				getRetryDelay: (attempts) => (attempts >= 12 ? null : Math.min(8, 0.5 * 2 ** attempts)),
-				maxCacheSize: 32 * 1024 * 1024
-			}),
+			source: irisUrlSource(streamUrl, { cacheBytes: 32 * 1024 * 1024, attempts: 12, maxDelayS: 8 }),
 			formats: ALL_FORMATS,
 			formatOptions: { hls: { offsetTimestampsByDateTime: false } }
 		});
@@ -313,30 +266,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 
 		const audioTrack = (await input.getAudioTracks())[0] ?? null;
 		const audioCodec = audioTrack ? await audioTrack.getCodec() : null;
-		type AudioPlan =
-			| { kind: 'passthrough'; mp4Codec: string }
-			| { kind: 'transcode'; mp4Codec: string; targetCodec: 'aac' | 'opus'; channels: number };
-		let audioPlan: AudioPlan | null = null;
-		if (audioTrack && audioCodec) {
-			if (MSE_NATIVE_AUDIO.has(audioCodec)) {
-				const cfg = await audioTrack.getDecoderConfig();
-				audioPlan = { kind: 'passthrough', mp4Codec: cfg?.codec ?? 'mp4a.40.2' };
-			} else if (libavCanDecode(audioCodec)) {
-				ensureLibavAudioDecoderRegistered();
-				const channels = await audioTrack.getNumberOfChannels();
-				const sampleRate = await audioTrack.getSampleRate();
-				const choice = await pickAudioEncoder(channels, sampleRate);
-				if (!choice) throw new Error(`live: cannot re-encode ${audioCodec} in this browser`);
-				audioPlan = {
-					kind: 'transcode',
-					mp4Codec: choice.mp4Codec,
-					targetCodec: choice.codec,
-					channels: choice.channels
-				};
-			} else {
-				console.warn(`[iris-core] live-c: audio codec ${audioCodec} undecodable — video only`);
-			}
-		}
+		const audioPlan: AudioPlan | null = audioTrack ? await planAudioTrack(audioTrack, 'live-c') : null;
 
 		// Anchor near the live edge from playlist metadata (never the client
 		// clock); wait out fresh sessions' thin window. skipLiveWait is
@@ -366,20 +296,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 		mediaSrc = ms;
 		objectUrl = URL.createObjectURL(ms);
 		video.src = objectUrl;
-		await new Promise<void>((resolve, reject) => {
-			const onOpen = () => {
-				ms.removeEventListener('sourceopen', onOpen);
-				ms.removeEventListener('error', onMseErr);
-				resolve();
-			};
-			const onMseErr = () => {
-				ms.removeEventListener('sourceopen', onOpen);
-				ms.removeEventListener('error', onMseErr);
-				reject(new Error('live: MediaSource errored before opening'));
-			};
-			ms.addEventListener('sourceopen', onOpen);
-			ms.addEventListener('error', onMseErr);
-		});
+		await openMediaSource(ms, 'live');
 		if (disposed) throw new Error('live: disposed during MediaSource open');
 
 		const mime = `video/mp4; codecs="${[encConfig.codec, audioPlan?.mp4Codec].filter(Boolean).join(', ')}"`;
@@ -389,6 +306,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 		const sb = ms.addSourceBuffer(mime);
 		sb.mode = 'segments';
 		sourceBuffer = sb;
+		appendQueue.attach(sb);
 		let playbackStarted = false;
 		let playheadAnchored = false;
 		let firstBufferedWall = 0;
@@ -403,7 +321,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 		const START_MAX_WAIT_MS = 8_000;
 		sb.addEventListener('updateend', () => {
 			if (disposed) return;
-			drainQueue();
+			appendQueue.pump();
 			if (playbackStarted || sb.buffered.length === 0) return;
 			if (!playheadAnchored) {
 				playheadAnchored = true;
@@ -437,15 +355,11 @@ export const mountTierCLive: EngineMount = async (opts) => {
 					write: (chunk) => {
 						if (disposed) return;
 						appendQueue.push(chunk.data);
-						drainQueue();
+						appendQueue.pump();
 					},
 					close: () => {
 						if (disposed) return;
-						try {
-							if (ms.readyState === 'open') ms.endOfStream();
-						} catch {
-							/* idempotent */
-						}
+						endStream(ms);
 					},
 					abort: (reason) => {
 						if (disposed) return;
@@ -552,7 +466,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 						codec: targetCodec === 'aac' ? 'mp4a.40.2' : 'opus',
 						sampleRate: srcRate,
 						numberOfChannels: srcChannels,
-						bitrate: targetCodec === 'opus' ? 128_000 : 192_000,
+						bitrate: encoderBitrate(targetCodec),
 						...(targetCodec === 'aac' ? { aac: { format: 'aac' } } : { opus: { format: 'opus' } })
 					} as AudioEncoderConfig);
 
@@ -659,15 +573,15 @@ export const mountTierCLive: EngineMount = async (opts) => {
 		let encoderBroken: Error | null = null;
 		const resetStamps: number[] = [];
 		let decOut = 0;
-		/** FIFO of rel timestamps of frames fed to the ENCODER — its output
-		 *  chunks are 1:1 and in order (realtime mode, no B-frames), so the
-		 *  n-th chunk IS the n-th frame. Encoder stamps are never trusted. */
-		const encTsFifo: number[] = [];
+		/** Rel timestamps of the frames fed to the ENCODER, matched back to its output
+		 *  chunks by the input timestamp they echo (see StampQueue). The chunk's own stamp
+		 *  never lands in the muxer. */
+		const encStamps = new StampQueue();
 		let videoPacketMeta: { decoderConfig?: VideoDecoderConfig } | undefined;
 		let vFirstMeta = true;
 		let vOutIndex = 0;
 		let vPumping = false;
-		type VChunkOut = { data: Uint8Array; type: 'key' | 'delta' };
+		type VChunkOut = { data: Uint8Array; type: 'key' | 'delta'; ts: number };
 		const vChunkQueue: VChunkOut[] = [];
 		const pumpVideo = async () => {
 			if (vPumping) return;
@@ -675,8 +589,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 			try {
 				while (vChunkQueue.length > 0 && !disposed) {
 					const out = vChunkQueue.shift()!;
-					const ts = encTsFifo.shift();
-					if (ts === null || ts === undefined) break; // desynced FIFO — shouldn't happen
+					const ts = out.ts;
 					const packet = new EncodedPacket(out.data, out.type, ts, 1 / 50, vOutIndex);
 					await videoSrc.add(packet, vFirstMeta ? videoPacketMeta : undefined);
 					vFirstMeta = false;
@@ -696,9 +609,11 @@ export const mountTierCLive: EngineMount = async (opts) => {
 				if (meta?.decoderConfig && !videoPacketMeta) {
 					videoPacketMeta = { decoderConfig: meta.decoderConfig };
 				}
+				const ts = encStamps.take(chunk.timestamp);
+				if (ts === null) return; // nothing was fed: can't place it on the timeline
 				const buf = new Uint8Array(chunk.byteLength);
 				chunk.copyTo(buf);
-				vChunkQueue.push({ data: buf, type: chunk.type === 'key' ? 'key' : 'delta' });
+				vChunkQueue.push({ data: buf, type: chunk.type === 'key' ? 'key' : 'delta', ts });
 				void pumpVideo();
 			},
 			error: (e) => {
@@ -748,7 +663,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 							toEncode = new VideoFrame(scaleCanvas, { timestamp: frame.timestamp });
 						}
 						try {
-							encTsFifo.push(rel);
+							encStamps.push(toEncode.timestamp, rel);
 							vEncoder.encode(toEncode, { keyFrame: key });
 						} finally {
 							if (toEncode !== frame) toEncode.close();
@@ -826,7 +741,8 @@ export const mountTierCLive: EngineMount = async (opts) => {
 					console.log(
 						`[iris-core] live-c: fed v=${videoFedRel.toFixed(1)}s a=${audioFedRel === Number.POSITIVE_INFINITY ? '-' : audioFedRel.toFixed(1)}s ` +
 							`t=${video.currentTime.toFixed(1)}s dec=${decOut} encQ=${vEncoder.encodeQueueSize} ` +
-							`resets=${resetStamps.length} aQ=${appendQueue.length} rs=${video.readyState} ` +
+							`resets=${resetStamps.length} encDrop=${encStamps.dropped} encUnmatched=${encStamps.unmatched} ` +
+							`aQ=${appendQueue.length} rs=${video.readyState} ` +
 							`buf=${sourceBuffer && sourceBuffer.buffered.length > 0 ? (sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1) - video.currentTime).toFixed(1) : '-'}s`
 					);
 				}

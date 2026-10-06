@@ -25,9 +25,10 @@
  */
 
 import type Hls from 'hls.js';
-import { ALL_FORMATS, AudioSampleSink, Input, UrlSource } from 'mediabunny';
+import { ALL_FORMATS, AudioSampleSink, Input } from 'mediabunny';
 
 import { ensureLibavAudioDecoderRegistered } from './decode/libav-audio-decoder';
+import { irisUrlSource } from './stream-fetch';
 
 /** Minimum headroom: never schedule a buffer to start closer than this to
  *  "now" (WebAudio needs a beat of lead to start a source cleanly). */
@@ -69,7 +70,7 @@ export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUr
 	let releaseThrottle: (() => void) | null = null;
 	const input = new Input({
 		formats: ALL_FORMATS,
-		source: new UrlSource(masterUrl, { requestInit: { credentials: 'include' } })
+		source: irisUrlSource(masterUrl, { cacheBytes: 32 * 1024 * 1024, attempts: 12, maxDelayS: 8 })
 	});
 	const ctx = new AudioContext();
 	const gain = ctx.createGain();
@@ -91,6 +92,11 @@ export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUr
 		void input.dispose?.();
 		void ctx.close().catch(() => {});
 		resumeCleanup();
+		// every return path hands this out: the early ones (no audio, no PDT) too
+		video.removeEventListener('playing', onPlaying);
+		video.removeEventListener('pause', onStall);
+		video.removeEventListener('waiting', onStall);
+		video.removeEventListener('volumechange', applyVolume);
 	};
 
 	// AudioContext often starts "suspended" without a user gesture. The
@@ -111,6 +117,9 @@ export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUr
 	// on resume we force a re-anchor (the video may have jumped to the live
 	// edge after a stall).
 	let needAnchor = true;
+	const applyVolume = () => {
+		gain.gain.value = video.muted ? 0 : video.volume;
+	};
 	const onPlaying = () => {
 		needAnchor = true;
 		void ctx.resume().catch(() => {});
@@ -130,9 +139,6 @@ export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUr
 	// `<video>` element is silent — no doubling possible. Mirror its
 	// volume/mute into our gain node instead, so the player's volume controls
 	// (which write to the element) drive the sidecar transparently.
-	const applyVolume = () => {
-		gain.gain.value = video.muted ? 0 : video.volume;
-	};
 	applyVolume();
 	video.addEventListener('volumechange', applyVolume);
 
@@ -274,13 +280,5 @@ export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUr
 		}
 	})();
 
-	return {
-		dispose: () => {
-			video.removeEventListener('playing', onPlaying);
-			video.removeEventListener('pause', onStall);
-			video.removeEventListener('waiting', onStall);
-			video.removeEventListener('volumechange', applyVolume);
-			dispose();
-		}
-	};
+	return { dispose };
 }

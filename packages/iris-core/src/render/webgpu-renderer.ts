@@ -9,6 +9,7 @@
  * frames without crushing the highlights.
  */
 
+import { drawLoop, FrameQueue } from './frame-queue';
 import type { VideoRenderer, VideoRendererOptions } from './renderer-factory';
 
 type WebGpuNavigator = Navigator & { gpu: GPU };
@@ -20,14 +21,24 @@ export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<V
 	const adapter = await nav.gpu.requestAdapter();
 	if (!adapter) throw new Error('WebGPU adapter request returned null');
 	const device = await adapter.requestDevice();
+	const canvas = document.createElement('canvas');
+	try {
+		return setUp(opts, nav, device, canvas);
+	} catch (e) {
+		// the Canvas2D fallback mounts its own canvas: release this attempt's
+		device.destroy();
+		canvas.remove();
+		throw e;
+	}
+}
 
+function setUp(opts: VideoRendererOptions, nav: WebGpuNavigator, device: GPUDevice, canvas: HTMLCanvasElement): VideoRenderer {
 	// HDR detection: Chrome 129+ exposes extended-range canvases. The
 	// `colorSpace` field can be set to `'display-p3'` or `'rec2100-hlg'`.
 	// For Phase 2-polish we keep the canvas in linear sRGB; the shader
 	// performs PQ/HLG → linear → BT.709 → sRGB display-encoded output.
 	// HDR-aware canvas configuration lands as a follow-up once we have
 	// a reliable HDR-source detection (frame's color space metadata).
-	const canvas = document.createElement('canvas');
 	canvas.className = 'h-full w-full object-contain bg-black';
 	opts.container.appendChild(canvas);
 	const context = canvas.getContext('webgpu');
@@ -73,9 +84,11 @@ export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<V
 	// uniform buffer are stable.
 
 	let intrinsic: { width: number; height: number } | null = null;
-	const queue: VideoFrame[] = [];
+	const queue = new FrameQueue<VideoFrame>();
 	let lastDrawn = 0;
 	let disposed = false;
+	/** The tone-map mode the uniform holds (-1: none written yet). */
+	let writtenMode = -1;
 
 	void (async () => {
 		const info = await device.lost;
@@ -109,7 +122,10 @@ export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<V
 		let mode = 0;
 		if (transfer === 'smpte2084') mode = 1;
 		else if (transfer === 'arib-std-b67') mode = 2;
-		device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([mode, 0, 0, 0]));
+		if (mode !== writtenMode) {
+			writtenMode = mode;
+			device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([mode, 0, 0, 0]));
+		}
 
 		let externalTexture: GPUExternalTexture;
 		try {
@@ -149,46 +165,28 @@ export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<V
 		frame.close();
 	};
 
+	const loop = drawLoop(() => {
+		const frame = queue.take(opts.clockSeconds());
+		if (frame) {
+			lastDrawn = frame.timestamp / 1_000_000;
+			draw(frame);
+		}
+		return queue.depth > 0;
+	});
+
 	const enqueue = (frame: VideoFrame): void => {
 		if (disposed) {
 			frame.close();
 			return;
 		}
 		queue.push(frame);
-		while (queue.length > 32) {
-			const dropped = queue.shift();
-			dropped?.close();
-		}
+		loop.kick();
 	};
-
-	const tick = (): void => {
-		if (disposed) return;
-		const now = opts.clockSeconds();
-		while (queue.length > 0) {
-			const head = queue[0];
-			if (!head) break;
-			const headTs = head.timestamp / 1_000_000;
-			if (headTs > now + 0.001) break;
-			const lateBy = (now - headTs) * 1000;
-			if (lateBy > 80 && queue.length > 1) {
-				const dropped = queue.shift();
-				dropped?.close();
-				continue;
-			}
-			const drawn = queue.shift();
-			if (drawn) {
-				lastDrawn = drawn.timestamp / 1_000_000;
-				draw(drawn);
-			}
-			break;
-		}
-		if (!disposed) requestAnimationFrame(tick);
-	};
-	requestAnimationFrame(tick);
 
 	return {
 		enqueue,
-		queueDepth: () => queue.length,
+		queueDepth: () => queue.depth,
+		clear: () => queue.clear(),
 		lastDrawnTs: () => lastDrawn,
 		intrinsicSize: () => intrinsic,
 		canvas,
@@ -196,8 +194,8 @@ export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<V
 		dispose: () => {
 			if (disposed) return;
 			disposed = true;
-			for (const f of queue) f.close();
-			queue.length = 0;
+			loop.stop();
+			queue.clear();
 			try {
 				device.destroy();
 			} catch {

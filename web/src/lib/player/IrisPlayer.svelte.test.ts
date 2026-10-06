@@ -4,6 +4,7 @@ import { render } from 'vitest-browser-svelte';
 import { flushSync } from 'svelte';
 import { stubApi } from '#lib/test/api.ts';
 import { PlaybackChoices } from '#lib/watch/prefs.ts';
+import type { EngineMount } from '@iris/core/engine';
 import IrisPlayer from './IrisPlayer.svelte';
 import { fakeEngine, fakeMount, testManifest } from './testing.ts';
 
@@ -101,6 +102,36 @@ describe('IrisPlayer', () => {
 		// a second one is a real failure
 		mounts[1].onError(new Error('media error 3 (decode)'));
 		expect(onError).toHaveBeenCalledWith('media error 3 (decode)');
+	});
+
+	it('no longer listens to a mount it tore down', async () => {
+		const onEnded = vi.fn();
+		const { mounts, onError, key } = await mountPlayer({ onEnded });
+		key('c');
+		await page.getByRole('radio', { name: 'French (VF)' }).click();
+		await expect.poll(() => mounts.length).toBe(2);
+		mounts[0].onError(new Error('media error 4'));
+		mounts[0].onEnded?.();
+		expect(onError).not.toHaveBeenCalled();
+		expect(onEnded).not.toHaveBeenCalled();
+	});
+
+	it('reports a failed mount once, though the engine both says it and throws', async () => {
+		const onError = vi.fn();
+		const failing: EngineMount = async (opts) => {
+			const err = new Error('Tier B: MIME not supported');
+			opts.onError(err);
+			throw err;
+		};
+		const box = document.createElement('div');
+		document.body.append(box);
+		await render(IrisPlayer, {
+			target: box,
+			props: { tier: 'B', src: '/stream', title: 'Severance', manifest: testManifest(), startPosition: 0, onError, mountOverride: failing }
+		});
+		await expect.poll(() => onError.mock.calls.length).toBe(1);
+		await new Promise((r) => requestAnimationFrame(r));
+		expect(onError).toHaveBeenCalledTimes(1);
 	});
 
 	it('says a waiting engine in words', async () => {

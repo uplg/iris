@@ -77,7 +77,10 @@
 	const videoHost = document.createElement('div');
 	videoHost.className = 'video-host';
 
-	let handle = $state<EngineHandle | null>(null);
+	// raw: the handle is a plain object of methods, not state to deep-proxy
+	let handle = $state.raw<EngineHandle | null>(null);
+	/** Pushes the play state and position to the OS media session (set while one is wired). */
+	let syncSession = () => undefined as void;
 	let controlsVisible = $state(true);
 	let volume: number | null = untrack(() => props.initialVolume ?? null);
 	let currentTime = untrack(() => props.startPosition);
@@ -113,6 +116,13 @@
 		let cancelled = false;
 		let mounted: EngineHandle | null = null;
 		let unfollow = () => undefined as void;
+		// one report per failure: engines both call `onError` and throw while mounting
+		let reported = false;
+		const report = (message: string) => {
+			if (cancelled || reported) return;
+			reported = true;
+			props.onError(message);
+		};
 		void (async () => {
 			try {
 				const { mount: mountFn } = await loader();
@@ -128,7 +138,10 @@
 					nativeSubs: subs.native,
 					audioTrackIndex: audioIndex,
 					live,
+					// a mount being torn down (a remount, a demotion) speaks no more: its late error
+					// would be charged to the next tier, its late end would mark the file watched
 					onTimeUpdate: (t) => {
+						if (cancelled) return;
 						// a final 0 while tearing down would poison the resume position
 						if (t > 0) currentTime = t;
 						if (decodeRetryAt !== null && performance.now() - decodeRetryAt > RETRY_REARM_MS) decodeRetryAt = null;
@@ -136,21 +149,40 @@
 						media.time = t;
 						props.onTimeUpdate?.(t);
 					},
-					onBusyChange: (b) => (media.busy = b),
+					onBusyChange: (b) => {
+						if (!cancelled) media.busy = b;
+					},
 					// canvas tiers have no element for `onBusyChange`: ready clears the spinner
-					onReady: () => (media.busy = false),
+					onReady: () => {
+						if (!cancelled) media.busy = false;
+					},
 					onDurationChange: (d) => {
+						if (cancelled) return;
 						if (d > 0) media.duration = d;
+						syncSession();
 						props.onDurationChange?.(d);
 					},
-					onPlayingChange: () => media.read(mounted),
-					onSeeking: (t) => props.onSeeking?.(t),
-					onPause: (t) => {
+					onPlayingChange: () => {
+						if (cancelled) return;
 						media.read(mounted);
+						syncSession();
+					},
+					onSeeking: (t) => {
+						if (cancelled) return;
+						syncSession();
+						props.onSeeking?.(t);
+					},
+					onPause: (t) => {
+						if (cancelled) return;
+						media.read(mounted);
+						syncSession();
 						props.onPause?.(t);
 					},
-					onEnded: () => props.onEnded?.(),
+					onEnded: () => {
+						if (!cancelled) props.onEnded?.();
+					},
 					onError: (err) => {
+						if (cancelled) return;
 						const sinceReturn = performance.now() - lastVisibleReturn;
 						if (/media error 3\b/.test(err.message) && sinceReturn < TAB_RETURN_WINDOW_MS && decodeRetryAt === null) {
 							decodeRetryAt = performance.now();
@@ -162,7 +194,7 @@
 							remountVersion += 1;
 							return;
 						}
-						props.onError(err.message);
+						report(err.message);
 					}
 				});
 				if (cancelled) {
@@ -180,7 +212,7 @@
 					void h.play().catch(() => undefined);
 				}
 			} catch (e) {
-				if (!cancelled) props.onError(e instanceof Error ? e.message : String(e));
+				report(e instanceof Error ? e.message : String(e));
 			}
 		})();
 		return () => {
@@ -239,7 +271,11 @@
 		const h = handle;
 		if (!h) return;
 		const wire = attachMediaSession(h, props.manifest, { title: props.title });
-		return wire.dispose;
+		syncSession = wire.sync;
+		return () => {
+			syncSession = () => undefined;
+			wire.dispose();
+		};
 	});
 
 	const activeOverlay = $derived.by(() => {
@@ -341,7 +377,17 @@
 		get pipOpen() {
 			return pip.active;
 		},
-		getCurrentTime: () => currentTime,
+		// the engine's live clock (the overlays read it every frame), the last reported time
+		// between engines
+		getCurrentTime: () => {
+			try {
+				const t = handle?.currentTime();
+				if (t !== undefined && Number.isFinite(t)) return t;
+			} catch {
+				// an engine mid-teardown
+			}
+			return currentTime;
+		},
 		onSubtitlePick,
 		onAudioPick,
 		onVolumeChange: (v, m) => {
@@ -362,6 +408,9 @@
 			void unmount(stage);
 		};
 	});
+
+	// the player going away (navigation, the next episode) takes its window along
+	$effect(() => () => pip.close());
 </script>
 
 <div class="player">

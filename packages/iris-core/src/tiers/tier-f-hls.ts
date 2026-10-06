@@ -11,6 +11,8 @@
 import HlsJs, { ErrorTypes, Events } from 'hls.js';
 
 import { isMobileLike } from '../caps';
+import { normalizeLang } from '../lang';
+import { releaseVideo } from '../mse/media-source';
 import {
 	appendNativeTrack,
 	bindVideoCallbacks,
@@ -107,13 +109,7 @@ export const mountTierF: EngineMount = async (opts) => {
 			dispose: async () => {
 				unbind();
 				video.removeEventListener('error', onErr);
-				try {
-					video.pause();
-				} catch {
-					/* idempotent */
-				}
-				video.removeAttribute('src');
-				video.load();
+				releaseVideo(video);
 			},
 			audioTracks: () => collectNativeAudioTracks(video),
 			setAudioTrack: (id) => setNativeAudioTrack(video, id, opts.manifest.audio)
@@ -162,6 +158,9 @@ export const mountTierF: EngineMount = async (opts) => {
 		renderTextTracksNatively: false,
 		// Evict played-out media; 30 s of scrub-back is plenty.
 		backBufferLength: 30,
+		// VOD resume: the first fragments loaded are the ones at the resume point (seeking at
+		// `canplay` fetched the head of the remux first, to throw it away)
+		...(!live && opts.startPosition > 0 ? { startPosition: opts.startPosition } : {}),
 		// Forward buffer caps. Live keeps both buffers tight — there is no
 		// scrubbing and the stream runs for hours (an unbounded buffer would
 		// OOM the tab). VOD: mobile gets a tighter ceiling (both the duration
@@ -180,6 +179,8 @@ export const mountTierF: EngineMount = async (opts) => {
 					maxBufferSize: mobile ? 20 * 1000 * 1000 : 60 * 1000 * 1000
 				})
 	});
+
+	if (!live && opts.startPosition > 0) initialSeek.done = true;
 
 	// Live-only state: the E-AC-3 WebAudio sidecar and the bounded
 	// master-reload budget for fatal network errors (a dying upstream 502s
@@ -445,11 +446,7 @@ export const mountTierF: EngineMount = async (opts) => {
 			} catch {
 				/* idempotent */
 			}
-			try {
-				video.pause();
-			} catch {
-				/* idempotent */
-			}
+			releaseVideo(video);
 		},
 		audioTracks: () => collectHlsAudioTracks(hls),
 		setAudioTrack: (id) => {
@@ -524,51 +521,6 @@ function collectNativeAudioTracks(video: HTMLVideoElement): EngineAudioTrack[] {
 		});
 	}
 	return out;
-}
-
-/** ISO 639-2 (ffprobe / `manifest.audio[].lang`) → 639-1 (what Safari
- *  reports from the playlist's `LANGUAGE` attribute, normalised by
- *  shaka-packager). Mirrors the server's `iso639_2to1` in remuxer.rs. */
-const ISO639_2TO1: Record<string, string> = {
-	fre: 'fr',
-	fra: 'fr',
-	eng: 'en',
-	spa: 'es',
-	ger: 'de',
-	deu: 'de',
-	ita: 'it',
-	por: 'pt',
-	rus: 'ru',
-	jpn: 'ja',
-	kor: 'ko',
-	chi: 'zh',
-	zho: 'zh',
-	ara: 'ar',
-	dut: 'nl',
-	nld: 'nl',
-	pol: 'pl',
-	swe: 'sv',
-	tur: 'tr',
-	ukr: 'uk',
-	heb: 'he',
-	hin: 'hi',
-	vie: 'vi',
-	ces: 'cs',
-	cze: 'cs',
-	dan: 'da',
-	fin: 'fi',
-	nor: 'no',
-	ron: 'ro',
-	rum: 'ro',
-	gre: 'el',
-	ell: 'el'
-};
-
-function normalizeLang(lang: string | null | undefined): string | null {
-	if (!lang) return null;
-	const primary = lang.toLowerCase().split('-')[0] ?? '';
-	if (primary === '' || primary === 'und') return null;
-	return ISO639_2TO1[primary] ?? primary;
 }
 
 /** `id` is an index into `manifest.audio` (the chrome menu's namespace).

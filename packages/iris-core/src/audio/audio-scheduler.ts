@@ -33,6 +33,9 @@ export type AudioScheduler = {
 	setMuted: (muted: boolean) => void;
 	getMuted: () => boolean;
 	resetClock: () => void;
+	/** False from a `resetClock` until the first buffer after it: the clock reads 0 meanwhile,
+	 *  so callers show their seek target instead. */
+	isAnchored: () => boolean;
 	/** Resume the underlying AudioContext (autoplay policy leaves it
 	 *  suspended until a user gesture). Safe to call repeatedly. */
 	resume: () => void;
@@ -54,25 +57,37 @@ export type AudioScheduler = {
 };
 
 export type AudioSchedulerOptions = {
+	/** The source's rate: the context runs at it, so nothing is resampled (the device default,
+	 *  often 44.1 kHz, would play a 48 kHz track at the wrong pitch and speed). */
 	sampleRate?: number;
-	channels?: number;
 };
 
-const DEFAULT_CHANNELS = 2;
 const DEFAULT_CAPACITY_SECONDS = 4;
 
+function makeContext(sampleRate: number | undefined): AudioContext {
+	if (sampleRate) {
+		try {
+			return new AudioContext({ sampleRate });
+		} catch (e) {
+			console.warn(`[iris-core] audio-scheduler: no AudioContext at ${sampleRate} Hz, using the device rate`, e);
+		}
+	}
+	return new AudioContext();
+}
+
 export async function createAudioScheduler(opts: AudioSchedulerOptions = {}): Promise<AudioScheduler> {
-	const ctx = new AudioContext(opts.sampleRate ? { sampleRate: opts.sampleRate } : undefined);
+	const ctx = makeContext(opts.sampleRate);
 	const gain = ctx.createGain();
 	gain.connect(ctx.destination);
 	let currentVolume = 1;
 	let muted = false;
+	let rateWarned = false;
 
 	const useWorklet = typeof SharedArrayBuffer !== 'undefined' && 'audioWorklet' in ctx;
 
 	if (useWorklet) {
 		try {
-			const sched = await buildWorkletScheduler(ctx, gain, opts);
+			const sched = await buildWorkletScheduler(ctx, gain);
 			console.log(
 				`[iris-core] audio-scheduler: worklet path, sr=${ctx.sampleRate} state=${ctx.state} ` +
 					`baseLatency=${(ctx.baseLatency * 1000).toFixed(0)}ms outputLatency=${(readOutputLatency(ctx) * 1000).toFixed(0)}ms`
@@ -87,6 +102,13 @@ export async function createAudioScheduler(opts: AudioSchedulerOptions = {}): Pr
 			`baseLatency=${(ctx.baseLatency * 1000).toFixed(0)}ms outputLatency=${(readOutputLatency(ctx) * 1000).toFixed(0)}ms`
 	);
 	return buildLegacyScheduler(ctx, gain);
+
+	/** One warning per scheduler, not one per AudioData (~47/s). */
+	function warnRateOnce(dataRate: number, ctxRate: number): void {
+		if (rateWarned) return;
+		rateWarned = true;
+		console.warn(`[iris-core] AudioData sampleRate ${dataRate} ≠ ctx ${ctxRate}; pitch will be wrong until resampler lands`);
+	}
 
 	function buildLegacyScheduler(ctx2: AudioContext, gain2: GainNode): AudioScheduler {
 		let playbackOrigin: number | null = null;
@@ -144,6 +166,7 @@ export async function createAudioScheduler(opts: AudioSchedulerOptions = {}): Pr
 				gain2.gain.setTargetAtTime(m ? 0 : currentVolume, ctx2.currentTime, 0.01);
 			},
 			getMuted: () => muted,
+			isAnchored: () => playbackOrigin !== null,
 			resetClock: () => {
 				for (const node of pendingSources) {
 					try {
@@ -182,15 +205,14 @@ export async function createAudioScheduler(opts: AudioSchedulerOptions = {}): Pr
 		};
 	}
 
-	async function buildWorkletScheduler(ctx2: AudioContext, gain2: GainNode, schedOpts: AudioSchedulerOptions): Promise<AudioScheduler> {
+	async function buildWorkletScheduler(ctx2: AudioContext, gain2: GainNode): Promise<AudioScheduler> {
 		await ctx2.audioWorklet.addModule(PROCESSOR_URL);
-		const channels = schedOpts.channels ?? DEFAULT_CHANNELS;
 		const capacityFrames = Math.ceil(ctx2.sampleRate * DEFAULT_CAPACITY_SECONDS);
-		const ring: RingBuffer = createRingBuffer(channels, capacityFrames);
+		const ring: RingBuffer = createRingBuffer(capacityFrames);
 		const node = new AudioWorkletNode(ctx2, 'iris-ring', {
 			numberOfInputs: 0,
 			numberOfOutputs: 1,
-			outputChannelCount: [channels]
+			outputChannelCount: [ring.channels]
 		});
 		node.port.postMessage({
 			type: 'init',
@@ -255,17 +277,18 @@ export async function createAudioScheduler(opts: AudioSchedulerOptions = {}): Pr
 						`at media=${mediaTimeSec.toFixed(2)}s — clock shifted`
 				);
 			}
-			lastPushedEnd = mediaTimeSec + data.numberOfFrames / data.sampleRate;
-			// If the data's sampleRate differs from the AudioContext's, we
-			// skip resampling for Phase 2 polish — most files are 48 kHz
-			// and ctx defaults match. A proper resampler (OfflineAudioContext
-			// or libsamplerate) is a follow-up.
-			if (data.sampleRate !== ctx2.sampleRate) {
+			// The context runs at the source rate (see `makeContext`); a mismatch is a browser
+			// that refused it. No resampler yet.
+			if (data.sampleRate !== ctx2.sampleRate) warnRateOnce(data.sampleRate, ctx2.sampleRate);
+			// A full ring keeps what it had: the frames that didn't fit count as a content gap
+			// at the next push, which shifts the clock instead of letting it drift.
+			const written = ring.push(data);
+			if (written < data.numberOfFrames) {
 				console.warn(
-					`[iris-core] AudioData sampleRate ${data.sampleRate} ≠ ctx ${ctx2.sampleRate}; pitch will be wrong until resampler lands`
+					`[iris-core] audio-scheduler: ring full, dropped ${data.numberOfFrames - written} frame(s) at media=${mediaTimeSec.toFixed(2)}s`
 				);
 			}
-			ring.push(data);
+			lastPushedEnd = mediaTimeSec + written / data.sampleRate;
 			data.close();
 		};
 
@@ -296,6 +319,7 @@ export async function createAudioScheduler(opts: AudioSchedulerOptions = {}): Pr
 				gain2.gain.setTargetAtTime(m ? 0 : currentVolume, ctx2.currentTime, 0.01);
 			},
 			getMuted: () => muted,
+			isAnchored: () => firstMediaTime !== null,
 			resetClock: () => {
 				ring.reset();
 				// Re-init the worklet so its read pointer aligns with our
