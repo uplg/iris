@@ -274,7 +274,7 @@ private fun SettingsDialogs(state: SettingsUiState, actions: SettingsActions) {
         null -> Unit
         SettingsDialog.Rename -> {
             val current = state.account.valueOrNull?.displayName.orEmpty()
-            var name by remember { mutableStateOf(current) }
+            var name by remember(current) { mutableStateOf(current) }
             val first = remember { FocusRequester() }
             FormDialog(
                 eyebrow = "You",

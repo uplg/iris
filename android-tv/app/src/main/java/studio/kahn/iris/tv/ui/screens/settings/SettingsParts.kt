@@ -1,7 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.settings
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -217,7 +216,7 @@ fun FormDialog(
         Modifier
             .fillMaxSize()
             .dialogScrim()
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onCancel),
+            .touchClick(onClick = onCancel),
         contentAlignment = Alignment.Center,
     ) {
         Column(

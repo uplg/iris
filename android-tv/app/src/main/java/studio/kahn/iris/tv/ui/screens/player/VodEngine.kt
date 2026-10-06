@@ -391,6 +391,8 @@ fun VodEngine(
         val retryWindowMs = 30_000L
         var retryCount = 0
         var firstRetryAt = 0L
+        // Goes with this player: a rebuilt one (the remux) must not see the old one's re-prepare.
+        var pendingRetry: Job? = null
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 val (message, transient) = humanizePlaybackError(error)
@@ -404,7 +406,8 @@ fun VodEngine(
                     ErrorStep.Retry -> {
                         retryCount++
                         Log.i("iris-core", "auto-retry #$retryCount after transient error")
-                        scope.launch {
+                        pendingRetry?.cancel()
+                        pendingRetry = scope.launch {
                             delay(1_500L * retryCount)
                             bestEffort { player.prepare() }
                         }
@@ -527,7 +530,10 @@ fun VodEngine(
             }
         }
         player.addListener(listener)
-        onDispose { player.removeListener(listener) }
+        onDispose {
+            pendingRetry?.cancel()
+            player.removeListener(listener)
+        }
     }
 
     // The progress tick (1 s) feeds the heartbeat; the last save, the
