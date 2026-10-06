@@ -459,13 +459,11 @@ async fn reconcile_scene_episodes(pool: &SqlitePool, infohash: &str, files: &[(u
 ///   new match replaces the old one, a trusted old one stays without one,
 ///   a weak one (it came from the old title) goes; TMDB unreachable defers
 ///   the whole re-key to a later tick.
-async fn heal_tv_collection_identity(pool: &SqlitePool, deps: EnrichDeps<'_>, infohash: &str) {
-    let Ok(Some(torrent)) = iris_db::torrents::find_by_infohash(pool, infohash).await else {
-        return;
-    };
-    let Some(collection_id) = torrent.collection_id else {
-        return;
-    };
+async fn heal_tv_collection_identity(
+    pool: &SqlitePool,
+    deps: EnrichDeps<'_>,
+    collection_id: uuid::Uuid,
+) {
     let Ok(Some(collection)) = iris_db::collections::get(pool, collection_id).await else {
         return;
     };
@@ -1153,6 +1151,9 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
         }
     };
     let mut done = 0;
+    // The identity heal reads every sibling of a collection: once per
+    // collection and tick, not once per member torrent.
+    let mut tv_to_heal: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
     for row in rows {
         if row.collection_id.is_some() {
             // Self-heal stale episode numbers from a since-improved
@@ -1189,7 +1190,7 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
                 // ("Silicon Valley - 1x01 - … Multi Papaya") AND kept
                 // truncated file titles ("Goblin") over the richer torrent
                 // name. Re-derives from torrent-name consensus.
-                heal_tv_collection_identity(pool, deps, &row.infohash).await;
+                tv_to_heal.extend(row.collection_id);
             }
             continue;
         }
@@ -1204,6 +1205,9 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
             snap.files.into_iter().map(|f| (f.index, f.path)).collect();
         assign_after_ingest(pool, deps, &row.infohash, &row.name, &files).await;
         done += 1;
+    }
+    for id in tv_to_heal {
+        heal_tv_collection_identity(pool, deps, id).await;
     }
     if done > 0 {
         tracing::info!(count = done, "collection backfill complete");
@@ -1350,9 +1354,9 @@ mod tests {
             iris_db::follows::add(&pool, fan, "dr", "Dr", None)
                 .await
                 .unwrap();
-            let infohash = attach(&pool, col.id, "Dr. Stone S03E01 1080p WEB").await;
+            attach(&pool, col.id, "Dr. Stone S03E01 1080p WEB").await;
 
-            heal_tv_collection_identity(&pool, NO_DEPS, &infohash).await;
+            heal_tv_collection_identity(&pool, NO_DEPS, col.id).await;
 
             let healed = collections::get(&pool, col.id).await.unwrap().unwrap();
             assert_eq!(healed.parsed_title_normalized.as_deref(), Some("dr stone"));
@@ -1371,6 +1375,22 @@ mod tests {
                 ["dr stone"]
             );
         }
+    }
+
+    #[tokio::test]
+    async fn the_backfill_heals_each_collection_once_from_all_its_members() {
+        let pool = iris_db::test_support::migrated_pool().await;
+        let col = collections::find_or_create(&pool, "dr", "Dr", Kind::Tv, false)
+            .await
+            .unwrap();
+        attach(&pool, col.id, "Dr. Stone S03E01 1080p WEB").await;
+        attach(&pool, col.id, "Dr. Stone S03E02 1080p WEB").await;
+        let dir = std::env::temp_dir().join(format!("iris-backfill-{}", uuid::Uuid::new_v4()));
+        let engine = iris_torrent::Engine::offline(dir.clone()).await.unwrap();
+        run_backfill(&pool, NO_DEPS, &engine).await;
+        let healed = collections::get(&pool, col.id).await.unwrap().unwrap();
+        assert_eq!(healed.parsed_title_normalized.as_deref(), Some("dr stone"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
