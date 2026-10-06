@@ -50,7 +50,7 @@ use url::Url;
 
 use crate::SearchProvider;
 use crate::cache::{DetailsCache, FifoCache};
-use crate::login_gate::{LoginGate, SessionGeneration};
+use crate::login_gate::{LoginFailure, LoginGate, SessionGeneration};
 use crate::nfo;
 use crate::util::{
     BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, KindCategories, base_url, extract_year, field_or_env,
@@ -155,11 +155,10 @@ impl HdTorrents {
         }))
     }
 
-    async fn login(&self) -> Result<()> {
-        let url = self
-            .base_url
-            .join("login.php")
-            .map_err(|e| Error::Provider(format!("hdtorrents join login url: {e}")))?;
+    async fn login(&self) -> std::result::Result<(), LoginFailure> {
+        let url = self.base_url.join("login.php").map_err(|e| {
+            LoginFailure::Rejected(Error::Provider(format!("hdtorrents join login url: {e}")))
+        })?;
 
         let res = self
             .http
@@ -168,13 +167,12 @@ impl HdTorrents {
             .form(&[("uid", self.username.as_str()), ("pwd", &self.password)])
             .send()
             .await
-            .map_err(|e| crate::util::http_error("hdtorrents login", e))?;
+            .map_err(|e| LoginFailure::Transient(crate::util::http_error("hdtorrents login", e)))?;
 
         let status = res.status();
-        let body = res
-            .text()
-            .await
-            .map_err(|e| crate::util::http_error("hdtorrents login body", e))?;
+        let body = res.text().await.map_err(|e| {
+            LoginFailure::Transient(crate::util::http_error("hdtorrents login body", e))
+        })?;
 
         if body.to_ascii_lowercase().contains(LOGIN_OK_MARKER) {
             tracing::debug!(provider = %self.id, "hdtorrents login succeeded");
@@ -182,9 +180,10 @@ impl HdTorrents {
         }
         let reason = extract_login_error(&body)
             .unwrap_or_else(|| format!("no success marker in response (HTTP {status})"));
-        Err(Error::Provider(format!(
-            "hdtorrents login failed: {reason}"
-        )))
+        Err(LoginFailure::by_status(
+            status,
+            Error::Provider(format!("hdtorrents login failed: {reason}")),
+        ))
     }
 
     async fn ensure_login(&self) -> Result<SessionGeneration> {

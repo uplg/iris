@@ -1,8 +1,11 @@
 //! Single-flight cookie-session login shared by the scraped trackers.
 //!
-//! A failed login is remembered for [`LOGIN_RETRY_AFTER`]: private trackers
-//! lock or ban an account after a few bad posts, and search-as-you-type would
-//! otherwise re-post a stale password on every keystroke.
+//! A login the tracker REJECTED is remembered for [`LOGIN_RETRY_AFTER`]:
+//! private trackers lock or ban an account after a few bad posts, and
+//! search-as-you-type would otherwise re-post a stale password on every
+//! keystroke. A login that never reached a verdict (network down, tracker
+//! 5xx) is not: nothing was held against the account, and the next search
+//! tries again.
 
 use std::time::{Duration, Instant};
 
@@ -10,6 +13,27 @@ use iris_core::{Error, Result};
 use tokio::sync::Mutex;
 
 pub(crate) const LOGIN_RETRY_AFTER: Duration = Duration::from_mins(5);
+
+/// Why a login post failed.
+#[derive(Debug)]
+pub(crate) enum LoginFailure {
+    /// The tracker said no (credentials, 2FA, a ban): don't post again soon.
+    Rejected(Error),
+    /// No verdict (unreachable, 5xx, unreadable answer): retry on the next call.
+    Transient(Error),
+}
+
+impl LoginFailure {
+    /// A failure by HTTP status: 5xx is the tracker's trouble, anything else
+    /// a refusal of these credentials.
+    pub(crate) fn by_status(status: reqwest::StatusCode, error: Error) -> Self {
+        if status.is_server_error() {
+            Self::Transient(error)
+        } else {
+            Self::Rejected(error)
+        }
+    }
+}
 
 /// Identifies one successful login; see [`LoginGate::invalidate`].
 pub(crate) type SessionGeneration = u64;
@@ -43,7 +67,7 @@ impl LoginGate {
     pub(crate) async fn ensure<F, Fut>(&self, login: F) -> Result<SessionGeneration>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<()>>,
+        Fut: Future<Output = std::result::Result<(), LoginFailure>>,
     {
         let mut st = self.state.lock().await;
         if st.logged_in {
@@ -64,10 +88,11 @@ impl LoginGate {
                 st.failure = None;
                 Ok(st.generation)
             }
-            Err(e) => {
+            Err(LoginFailure::Rejected(e)) => {
                 st.failure = Some((Instant::now(), e.to_string()));
                 Err(e)
             }
+            Err(LoginFailure::Transient(e)) => Err(e),
         }
     }
 
@@ -88,7 +113,7 @@ mod tests {
 
     use iris_core::Error;
 
-    use super::LoginGate;
+    use super::{LoginFailure, LoginGate};
 
     #[tokio::test]
     async fn a_failed_login_is_not_retried_inside_the_window() {
@@ -96,7 +121,9 @@ mod tests {
         let posts = AtomicU32::new(0);
         let failing = || async {
             posts.fetch_add(1, Ordering::SeqCst);
-            Err(Error::Provider("login failed: bad password".into()))
+            Err(LoginFailure::Rejected(Error::Provider(
+                "login failed: bad password".into(),
+            )))
         };
         assert!(gate.ensure(failing).await.is_err());
         let again = gate.ensure(failing).await.expect_err("still refused");
@@ -110,7 +137,7 @@ mod tests {
         let posts = AtomicU32::new(0);
         let failing = || async {
             posts.fetch_add(1, Ordering::SeqCst);
-            Err(Error::Provider("down".into()))
+            Err(LoginFailure::Rejected(Error::Provider("down".into())))
         };
         assert!(gate.ensure(failing).await.is_err());
         assert!(gate.ensure(failing).await.is_err());
@@ -119,12 +146,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_login_that_never_reached_the_tracker_is_retried_at_once() {
+        let gate = LoginGate::with_retry_after(Duration::from_hours(1));
+        let posts = AtomicU32::new(0);
+        let unreachable = || async {
+            posts.fetch_add(1, Ordering::SeqCst);
+            Err(LoginFailure::Transient(Error::Provider(
+                "connection refused".into(),
+            )))
+        };
+        assert!(gate.ensure(unreachable).await.is_err());
+        assert!(gate.ensure(unreachable).await.is_err());
+        assert_eq!(posts.load(Ordering::SeqCst), 2);
+        assert_eq!(gate.ensure(|| async { Ok(()) }).await.unwrap(), 1);
+        assert!(matches!(
+            LoginFailure::by_status(reqwest::StatusCode::BAD_GATEWAY, Error::Unauthorized),
+            LoginFailure::Transient(_)
+        ));
+        assert!(matches!(
+            LoginFailure::by_status(reqwest::StatusCode::UNAUTHORIZED, Error::Unauthorized),
+            LoginFailure::Rejected(_)
+        ));
+    }
+
+    #[tokio::test]
     async fn a_stale_invalidate_keeps_the_fresh_session() {
         let gate = LoginGate::new();
         let posts = AtomicU32::new(0);
         let ok = || async {
             posts.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+            Ok::<(), LoginFailure>(())
         };
         let seen_by_a = gate.ensure(ok).await.unwrap();
         let seen_by_b = gate.ensure(ok).await.unwrap();
