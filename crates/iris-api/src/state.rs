@@ -64,6 +64,7 @@ impl AppState {
             .live_tv
             .enabled
             .then(|| LiveTvService::new(cfg.live_tv.clone(), &cfg.auth.jwt_secret))
+            .map(|r| r.inspect(|svc| svc.persist_at(&cfg.storage.data_dir.join("live_tv"))))
             .and_then(|r| match r {
                 Ok(svc) => Some(svc),
                 Err(e) => {

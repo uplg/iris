@@ -21,8 +21,9 @@ mod parse;
 pub mod unwrap;
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use iris_config::DliveConfig;
@@ -289,7 +290,7 @@ impl Embed {
 
 /// Learned Player 1 edge: the playlist template and the embed page it came
 /// from (re-read first when the edge moves, before any dlive.sx load).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Edge {
     template: String,
     embed_url: String,
@@ -305,8 +306,11 @@ pub struct Dlive {
     /// Bumped whenever the edge template changes, so the service can clear
     /// the cooldowns earned on the old host.
     edge_generation: AtomicU64,
-    /// Scraped player iframes.
-    embeds: RwLock<HashMap<Key, (Embed, Instant)>>,
+    /// Scraped player iframes, with when (epoch seconds). Kept on disk
+    /// ([`Self::persist_at`]): the codes are stable, and re-scraping them
+    /// through the page budget after a restart took over an hour.
+    embeds: RwLock<HashMap<Key, (Embed, i64)>>,
+    state_file: OnceLock<PathBuf>,
     pending_embeds: Mutex<HashSet<Key>>,
     resolved: RwLock<HashMap<Key, Resolved>>,
     resolve_locks: Mutex<HashMap<Key, Arc<tokio::sync::Mutex<()>>>>,
@@ -343,6 +347,7 @@ impl Dlive {
             edge_attempt: Mutex::new(None),
             edge_generation: AtomicU64::new(0),
             embeds: RwLock::new(HashMap::new()),
+            state_file: OnceLock::new(),
             pending_embeds: Mutex::new(HashSet::new()),
             resolved: RwLock::new(HashMap::new()),
             resolve_locks: Mutex::new(HashMap::new()),
@@ -592,7 +597,63 @@ impl Dlive {
             tracing::info!(template = %edge.template, "dlive player 1 edge learned");
             *slot = Some(edge);
             self.edge_generation.fetch_add(1, Ordering::Relaxed);
+            drop(slot);
+            self.save();
         }
+    }
+
+    /// Keep the scraped embeds and the learned edge in `dir/dlive.json`, and
+    /// load what an earlier run left there. Unreadable state is ignored (it
+    /// only costs page loads).
+    pub fn persist_at(&self, dir: &Path) {
+        let file = dir.join("dlive.json");
+        if let Ok(bytes) = std::fs::read(&file) {
+            match serde_json::from_slice::<Persisted>(&bytes) {
+                Ok(p) => {
+                    let mut embeds = self.embeds.write().expect("poisoned");
+                    for e in p.embeds {
+                        let src = e.url.map_or(Embed::Absent, Embed::Found);
+                        embeds.insert((e.id, e.player), (src, e.at));
+                    }
+                    tracing::info!(embeds = embeds.len(), "dlive state loaded");
+                    drop(embeds);
+                    if let Some(edge) = p.edge {
+                        *self.edge.write().expect("poisoned") = Some(edge);
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "dlive state unreadable, starting empty"),
+            }
+        }
+        let _ = self.state_file.set(file);
+    }
+
+    fn save(&self) {
+        let Some(file) = self.state_file.get().cloned() else {
+            return;
+        };
+        let snapshot = Persisted {
+            edge: self.edge.read().expect("poisoned").clone(),
+            embeds: self
+                .embeds
+                .read()
+                .expect("poisoned")
+                .iter()
+                .map(|(&(id, player), (src, at))| PersistedEmbed {
+                    id,
+                    player,
+                    url: match src {
+                        Embed::Found(url) => Some(url.clone()),
+                        Embed::Absent => None,
+                    },
+                    at: *at,
+                })
+                .collect(),
+        };
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = write_atomically(&file, &snapshot) {
+                tracing::warn!(error = %e, "dlive state not saved");
+            }
+        });
     }
 
     async fn edge_from_embed(&self, embed_url: &str, probe: u32) -> Option<Edge> {
@@ -611,14 +672,21 @@ impl Dlive {
         tokio::spawn(async move { me.learn_edge().await });
     }
 
-    fn fresh_embed(&self, key: Key) -> Option<Embed> {
-        let ttl = Duration::from_hours(self.cfg.embed_cache_hours.max(1));
+    /// A known embed and whether it is past `embed_cache_hours`. A stale one
+    /// still serves (the codes rarely move) while a refresh is queued.
+    fn embed(&self, key: Key) -> Option<(Embed, bool)> {
+        let ttl = i64::try_from(self.cfg.embed_cache_hours.max(1) * 3600).unwrap_or(i64::MAX);
+        let now = epoch_s();
         self.embeds
             .read()
             .expect("poisoned")
             .get(&key)
-            .filter(|(_, at)| at.elapsed() < ttl)
-            .map(|(src, _)| src.clone())
+            .map(|(src, at)| (src.clone(), now - at >= ttl))
+    }
+
+    fn fresh_embed(&self, key: Key) -> Option<Embed> {
+        self.embed(key)
+            .and_then(|(src, stale)| (!stale).then_some(src))
     }
 
     /// Scrape one player page's iframe, once per key at a time: a caller
@@ -644,7 +712,8 @@ impl Dlive {
         self.embeds
             .write()
             .expect("poisoned")
-            .insert(key, (found.clone(), Instant::now()));
+            .insert(key, (found.clone(), epoch_s()));
+        self.save();
         found.into_url(key)
     }
 
@@ -694,16 +763,23 @@ impl Dlive {
         let mut ids: Vec<u32> = self.cfg.countries.values().flatten().copied().collect();
         ids.sort_unstable();
         ids.dedup();
-        let next = ids
+        let wanted: Vec<Key> = ids
             .into_iter()
             .filter(|id| index.names.contains_key(id))
             .flat_map(|id| self.cfg.players.iter().map(move |&p| (id, p)))
-            .find(|&key| {
+            .filter(|&key| {
                 key.1 != 1
                     && player_path(key.1).is_some()
                     && self.fresh_embed(key).is_none()
                     && !self.pending_embeds.lock().expect("poisoned").contains(&key)
-            });
+            })
+            .collect();
+        // a channel with no embed at all before one that only needs a refresh
+        let next = wanted
+            .iter()
+            .find(|&&key| self.embed(key).is_none())
+            .or_else(|| wanted.first())
+            .copied();
         if let Some(key) = next {
             let _ = self.fetch_embed(key).await;
         }
@@ -756,8 +832,13 @@ impl Dlive {
             self.store(key, &renewed);
             return Ok(renewed);
         }
-        let embed = match self.fresh_embed(key) {
-            Some(found) => found.into_url(key)?,
+        let embed = match self.embed(key) {
+            Some((found, stale)) => {
+                if stale {
+                    self.spawn_embed_fetch(key);
+                }
+                found.into_url(key)?
+            }
             None if mode.inline_embed => self.fetch_embed(key).await?,
             None => {
                 self.spawn_embed_fetch(key);
@@ -990,3 +1071,27 @@ fn entries_for(
 
 #[cfg(test)]
 mod tests;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Persisted {
+    edge: Option<Edge>,
+    embeds: Vec<PersistedEmbed>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedEmbed {
+    id: u32,
+    player: u8,
+    /// `None`: the channel is not on this player.
+    url: Option<String>,
+    at: i64,
+}
+
+fn write_atomically(file: &Path, state: &Persisted) -> std::io::Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = file.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(state)?)?;
+    std::fs::rename(tmp, file)
+}

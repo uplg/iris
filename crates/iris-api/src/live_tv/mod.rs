@@ -534,6 +534,12 @@ pub struct LiveTvService {
 }
 
 impl LiveTvService {
+    /// Keep runtime state that is costly to rebuild (dlive's scraped embeds)
+    /// under `dir`, and load what an earlier run left there.
+    pub fn persist_at(&self, dir: &std::path::Path) {
+        self.inner.dlive.persist_at(dir);
+    }
+
     pub fn new(cfg: iris_config::LiveTvConfig, jwt_secret: &str) -> anyhow::Result<Self> {
         let http = iris_providers::tls::client_builder()
             .user_agent(DEFAULT_UA)

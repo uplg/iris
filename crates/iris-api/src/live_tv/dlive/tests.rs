@@ -452,7 +452,7 @@ impl Rig {
             (id, player),
             (
                 Embed::Found(format!("http://{}/e/code{id}", self.addr)),
-                Instant::now(),
+                super::epoch_s(),
             ),
         );
     }
@@ -822,4 +822,90 @@ async fn dlive_live_resolve_and_segment() {
             assert_eq!(ts[0], 0x47);
         }
     }
+}
+
+fn scratch_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("iris-dlive-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+#[tokio::test]
+async fn scraped_embeds_and_the_edge_survive_a_restart() {
+    let dir = scratch_dir("persist");
+    let cfg = config("http://127.0.0.1:9".into()).dlive;
+    let first = Dlive::new(cfg.clone(), reqwest::Client::new());
+    first.persist_at(&dir);
+    first.embeds.write().unwrap().insert(
+        (469, 2),
+        (
+            Embed::Found("https://embed.example/e/abc".into()),
+            epoch_s(),
+        ),
+    );
+    first
+        .embeds
+        .write()
+        .unwrap()
+        .insert((469, 6), (Embed::Absent, epoch_s()));
+    *first.edge.write().unwrap() = Some(Edge {
+        template: "https://edge.example/premium{id}/index.m3u8".into(),
+        embed_url: "https://embed.example/daddy.php?id=51".into(),
+    });
+    first.save();
+    let file = dir.join("dlive.json");
+    for _ in 0..200 {
+        if file.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let second = Dlive::new(cfg, reqwest::Client::new());
+    second.persist_at(&dir);
+    assert!(
+        matches!(second.fresh_embed((469, 2)), Some(Embed::Found(url)) if url == "https://embed.example/e/abc")
+    );
+    assert!(matches!(second.fresh_embed((469, 6)), Some(Embed::Absent)));
+    assert_eq!(
+        second.edge_template().as_deref(),
+        Some("https://edge.example/premium{id}/index.m3u8"),
+        "Player 1 plays at once after a restart"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_stale_embed_still_serves_and_asks_for_a_refresh() {
+    let dlive = Dlive::new(
+        config("http://127.0.0.1:9".into()).dlive,
+        reqwest::Client::new(),
+    );
+    let old = epoch_s() - i64::try_from(dlive.cfg.embed_cache_hours * 3600 + 60).unwrap();
+    dlive.embeds.write().unwrap().insert(
+        (469, 2),
+        (Embed::Found("https://embed.example/e/abc".into()), old),
+    );
+    assert!(
+        dlive.fresh_embed((469, 2)).is_none(),
+        "past its age: the warm-up refreshes it"
+    );
+    assert!(
+        matches!(dlive.embed((469, 2)), Some((Embed::Found(_), true))),
+        "yet it still serves"
+    );
+}
+
+#[test]
+fn an_unreadable_state_file_starts_empty() {
+    let dir = scratch_dir("bad");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("dlive.json"), b"{not json").unwrap();
+    let dlive = Dlive::new(
+        config("http://127.0.0.1:9".into()).dlive,
+        reqwest::Client::new(),
+    );
+    dlive.persist_at(&dir);
+    assert!(dlive.embed((469, 2)).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
 }
