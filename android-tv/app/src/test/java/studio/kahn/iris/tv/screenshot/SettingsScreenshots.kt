@@ -32,7 +32,7 @@ import studio.kahn.iris.tv.ui.screens.settings.SettingsSection
 import studio.kahn.iris.tv.ui.screens.settings.SettingsUiState
 import studio.kahn.iris.tv.ui.screens.settings.SetupUiState
 import studio.kahn.iris.tv.ui.screens.settings.TvFacts
-import studio.kahn.iris.tv.ui.screens.settings.UpdateUiState
+import studio.kahn.iris.tv.data.UpdateState
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
 
@@ -76,11 +76,11 @@ class SettingsScreenshots {
         devices = Loadable.Ready(devices),
         passkeys = Loadable.Ready(passkeys),
     )
-    private val update = UpdateUiState(installed = "1.5.0", installedCode = 33, latest = AppUpdater.VersionStatus.UpdateAvailable("1.6.0"), checking = false)
+    private val update = UpdateState(installed = "1.5.0", installedCode = 33, latest = AppUpdater.VersionStatus.UpdateAvailable("1.6.0"), checking = false)
     private val facts = TvFacts("1.5.0 (33) · build 20261006-1400", "Google Chromecast HD", "14 (API 34)")
 
     @Composable
-    private fun Settings(state: SettingsUiState = ready, section: SettingsSection, up: UpdateUiState = update) {
+    private fun Settings(state: SettingsUiState = ready, section: SettingsSection, up: UpdateState = update) {
         SettingsContent(state, up, SettingsActions(), initialSection = section, now = now, facts = facts)
     }
 
@@ -167,8 +167,23 @@ class SettingsScreenshots {
     fun updateFailed() = shots.snap("settings_update_failed") {
         Settings(
             section = SettingsSection.App,
-            up = UpdateUiState(installed = "1.5.0", installedCode = 33, checking = false, progress = AppUpdater.Progress.Failed("server returned HTTP 404")),
+            up = UpdateState(installed = "1.5.0", installedCode = 33, checking = false, progress = AppUpdater.Progress.Failed("synthe.se answered HTTP 404")),
         )
+    }
+
+    @Test
+    fun updateCurrent() = shots.snap("settings_update_current") {
+        Settings(section = SettingsSection.App, up = update.copy(latest = AppUpdater.VersionStatus.UpToDate("1.5.0")))
+    }
+
+    @Test
+    fun updateChecking() = shots.snap("settings_update_checking") {
+        Settings(section = SettingsSection.App, up = UpdateState(installed = "1.5.0", installedCode = 33, checking = true))
+    }
+
+    @Test
+    fun updateUnknown() = shots.snap("settings_update_unknown") {
+        Settings(section = SettingsSection.App, up = UpdateState(installed = "1.5.0", installedCode = 33))
     }
 
     @Test

@@ -2,6 +2,7 @@ package studio.kahn.iris.tv.ui.components
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -121,7 +122,8 @@ fun NavTab(
  * Entering the header with the D-pad lands on the [current] tab
  * (focusRestorer falls back to it), then on whichever tab was focused last.
  * [onAccount] makes the account focusable (it opens Settings); null shows it
- * as plain words.
+ * as plain words. [updateAvailable] marks it (a dot on the avatar and
+ * "Update" after the name): Settings holds the update.
  */
 @Composable
 fun TvHeader(
@@ -130,6 +132,7 @@ fun TvHeader(
     accountName: String?,
     modifier: Modifier = Modifier,
     onAccount: (() -> Unit)? = null,
+    updateAvailable: Boolean = false,
 ) {
     val currentTab = remember { FocusRequester() }
     Row(
@@ -162,33 +165,59 @@ fun TvHeader(
                     shape = IrisShape.pill,
                     colors = FocusColors.Quiet.copy(content = IrisColor.inkMuted),
                 ) { focused ->
-                    Account(accountName, focused, Modifier.padding(start = 3.dp, end = 12.dp))
+                    Account(
+                        accountName,
+                        focused,
+                        updateAvailable,
+                        Modifier
+                            .padding(start = 3.dp, end = 12.dp)
+                            .clearAndSetSemantics {
+                                contentDescription = if (updateAvailable) {
+                                    "Settings, update available, $accountName"
+                                } else {
+                                    "Settings, $accountName"
+                                }
+                            },
+                    )
                 }
             } else {
-                Account(accountName, focused = false)
+                Account(accountName, focused = false, update = false)
             }
         }
     }
 }
 
 @Composable
-private fun Account(name: String, focused: Boolean, modifier: Modifier = Modifier) {
+private fun Account(name: String, focused: Boolean, update: Boolean, modifier: Modifier = Modifier) {
     Row(
         modifier,
         horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .size(IrisSize.avatar)
-                .background(IrisColor.accentWash, IrisShape.circle),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                name.trim().take(1).uppercase(),
-                style = IrisType.chip.copy(fontWeight = FontWeight.Bold),
-                color = IrisColor.accent,
-            )
+        Box(Modifier.size(IrisSize.avatar)) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(IrisColor.accentWash, IrisShape.circle),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    name.trim().take(1).uppercase(),
+                    style = IrisType.chip.copy(fontWeight = FontWeight.Bold),
+                    color = IrisColor.accent,
+                )
+            }
+            if (update) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 2.dp, y = (-2).dp)
+                        .size(IrisSpace.s3)
+                        .border(1.5.dp, IrisColor.ground, IrisShape.circle)
+                        .padding(1.5.dp)
+                        .background(IrisColor.accent, IrisShape.circle),
+                )
+            }
         }
         Text(
             name,
@@ -197,5 +226,13 @@ private fun Account(name: String, focused: Boolean, modifier: Modifier = Modifie
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        if (update) {
+            Text(
+                "Update",
+                style = IrisType.meta.copy(fontWeight = FontWeight.Bold),
+                color = if (focused) IrisColor.ground else IrisColor.accent,
+                maxLines = 1,
+            )
+        }
     }
 }

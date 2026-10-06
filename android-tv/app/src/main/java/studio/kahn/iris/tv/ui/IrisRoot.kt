@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -20,7 +21,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
-import studio.kahn.iris.tv.BuildConfig
+import studio.kahn.iris.tv.ui.update.UpdateInstaller
+import studio.kahn.iris.tv.ui.update.actions
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.components.TopTab
 import studio.kahn.iris.tv.ui.nav.ClientOutdatedOverlay
@@ -107,11 +109,14 @@ fun IrisRoot(
     }
 
     val clientOutdated by container.clientOutdated.collectAsStateWithLifecycle()
+    val update = container.updates.state.collectAsStateWithLifecycle()
+    val updateAvailable = remember { derivedStateOf { update.value.available != null } }
+    LaunchedEffect(Unit) { container.updates.check() }
     val openSettings = {
         navController.navigate(Routes.Settings) { launchSingleTop = true }
     }
     val shellHost = remember(navController) {
-        ShellHost(accountName = accountName, onSelect = navController::openTab, onAccount = openSettings)
+        ShellHost(accountName = accountName, updateAvailable = updateAvailable, onSelect = navController::openTab, onAccount = openSettings)
     }
 
     Box(
@@ -354,10 +359,20 @@ fun IrisRoot(
             }
         }
 
+        UpdateInstaller(container.updates)
+
         // Everything but Settings (where the updater lives) is locked once the
         // server answered 426; the updater downloads from outside the server.
         if (locked) {
-            ClientOutdatedOverlay(installedVersion = BuildConfig.VERSION_NAME, onOpenSettings = openSettings)
+            UpdateLock(container, openSettings)
         }
     }
+}
+
+/** The [ClientOutdatedOverlay], in its own scope: the download it shows moves often. */
+@Composable
+private fun UpdateLock(container: AppContainer, onOpenSettings: () -> Unit) {
+    val update by container.updates.state.collectAsStateWithLifecycle()
+    val actions = remember(container) { container.updates.actions() }
+    ClientOutdatedOverlay(update, actions, onOpenSettings = onOpenSettings)
 }

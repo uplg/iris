@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,10 +45,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.AppUpdater
+import studio.kahn.iris.tv.data.UpdateNotice
+import studio.kahn.iris.tv.data.updateNotice
+import studio.kahn.iris.tv.ui.components.FramedBlock
+import studio.kahn.iris.tv.ui.theme.IrisSize
+import studio.kahn.iris.tv.ui.update.UpdateActions
+import studio.kahn.iris.tv.ui.update.UpdateButton
+import studio.kahn.iris.tv.ui.update.UpdateProgress
+import studio.kahn.iris.tv.ui.update.actions
+import studio.kahn.iris.tv.ui.update.versionsLine
 import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
@@ -113,9 +125,13 @@ fun HomeScreen(
             }
         }
     }
+    val updates by container.updates.state.collectAsStateWithLifecycle()
+    val updateActions = remember(container) { container.updates.actions() }
     Box(Modifier.fillMaxSize()) {
         HomeContent(
             state = state,
+            update = updateNotice(updates),
+            updateActions = updateActions,
             onHeroAction = vm::onHeroAction,
             onCardAction = vm::onCardAction,
             onRetry = vm::retry,
@@ -138,6 +154,8 @@ fun HomeContent(
     onOpenDiscover: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenSearch: () -> Unit,
+    update: UpdateNotice? = null,
+    updateActions: UpdateActions = UpdateActions(),
 ) {
     val layout = IrisLayout.current
     val header = LocalShellHeader.current
@@ -180,7 +198,7 @@ fun HomeContent(
                 }
             }
         }
-        FooterLayout(footer = { Footer(state.notice, state.updateAvailable) }, Modifier.fillMaxSize()) { footer ->
+        FooterLayout(footer = { Footer(state.notice) }, Modifier.fillMaxSize()) { footer ->
             LazyColumn(
                 Modifier
                     .padding(top = LocalShellTopInset.current, bottom = footer)
@@ -189,6 +207,12 @@ fun HomeContent(
                 contentPadding = PaddingValues(bottom = IrisSpace.s7),
                 verticalArrangement = Arrangement.spacedBy(IrisSpace.s7),
             ) {
+                // Above the hero, out of the first focus's way: D-pad up or a tap reaches it.
+                if (update != null) {
+                    item(key = "update", contentType = "update") {
+                        UpdateBanner(update, updateActions, Modifier.padding(horizontal = layout.safeHorizontal))
+                    }
+                }
                 if (hero != null) {
                     item(key = "hero", contentType = "hero") {
                         Hero(hero, state.busy, heroFocus, onHeroAction, Modifier.padding(horizontal = layout.safeHorizontal))
@@ -409,9 +433,41 @@ private fun RightNow(facts: Loadable<List<String>>) {
     }
 }
 
+/**
+ * A newer Iris, one press from installing (the same download as Settings → App update), or
+ * put off until the app starts again; then the download as it goes.
+ */
 @Composable
-private fun Footer(notice: Notice?, updateAvailable: Boolean) {
-    ScreenFooter(HOME_HINTS, trailing = if (updateAvailable) "An app update is waiting in Settings" else null) {
+private fun UpdateBanner(notice: UpdateNotice, actions: UpdateActions, modifier: Modifier = Modifier) {
+    val progress = notice.progress
+    val title = when {
+        progress is AppUpdater.Progress.Ready -> notice.latest?.let { "Iris $it is downloaded" } ?: "The Iris update is downloaded"
+        progress != null && progress !is AppUpdater.Progress.Failed -> notice.latest?.let { "Updating Iris to $it" } ?: "Updating Iris"
+        else -> versionsLine(notice.latest, notice.installed)
+    }
+    val canPutOff = notice.latest != null && (progress == null || progress is AppUpdater.Progress.Failed)
+    FramedBlock(modifier.widthIn(max = UPDATE_BANNER_MAX)) {
+        Row(
+            Modifier.focusGroup(),
+            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Rounded.SystemUpdate, contentDescription = null, tint = IrisColor.accent, modifier = Modifier.size(IrisSize.icon))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
+                Text(title, style = IrisType.bodyStrong, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                UpdateProgress(progress)
+            }
+            UpdateButton(progress, actions, size = ActionSize.Small)
+            if (canPutOff) ActionButton("Later", actions.later, style = ActionStyle.Secondary, size = ActionSize.Small)
+        }
+    }
+}
+
+private val UPDATE_BANNER_MAX = 760.dp
+
+@Composable
+private fun Footer(notice: Notice?) {
+    ScreenFooter(HOME_HINTS) {
         NoticeLine(notice)
     }
 }

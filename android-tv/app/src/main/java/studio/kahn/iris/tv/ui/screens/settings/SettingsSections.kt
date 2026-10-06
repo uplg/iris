@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -39,6 +38,10 @@ import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.ui.format.audioChoiceWords
 import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
 import studio.kahn.iris.tv.data.AppUpdater
+import studio.kahn.iris.tv.data.UpdateState
+import studio.kahn.iris.tv.ui.update.UpdateActions
+import studio.kahn.iris.tv.ui.update.UpdateButton
+import studio.kahn.iris.tv.ui.update.UpdateProgress
 import studio.kahn.iris.tv.data.DeviceView
 import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionSize
@@ -49,7 +52,6 @@ import studio.kahn.iris.tv.ui.components.ChipTone
 import studio.kahn.iris.tv.ui.components.EmptyState
 import studio.kahn.iris.tv.ui.components.FactRow
 import studio.kahn.iris.tv.ui.components.LoadableContent
-import studio.kahn.iris.tv.ui.components.Meter
 import studio.kahn.iris.tv.ui.components.Pill
 import studio.kahn.iris.tv.ui.components.Spinner
 import studio.kahn.iris.tv.ui.components.StaleNotice
@@ -62,7 +64,6 @@ import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
-import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.components.NoticeLine
 
 /** Every action Settings offers, so the stateless body takes one parameter for them. */
@@ -86,9 +87,7 @@ class SettingsActions(
     val onSignOut: () -> Unit = {},
     val onOpenHistory: () -> Unit = {},
     val onOpenTorrents: () -> Unit = {},
-    val onDownloadUpdate: () -> Unit = {},
-    val onCancelUpdate: () -> Unit = {},
-    val onReopenInstaller: () -> Unit = {},
+    val update: UpdateActions = UpdateActions(),
 )
 
 /** What this TV runs, for "This TV" (fixed in screenshots). */
@@ -108,7 +107,7 @@ data class TvFacts(val iris: String, val device: String, val android: String) {
 fun SettingsSectionContent(
     section: SettingsSection,
     state: SettingsUiState,
-    update: UpdateUiState,
+    update: UpdateState,
     actions: SettingsActions,
     now: ZonedDateTime,
     facts: TvFacts,
@@ -356,7 +355,7 @@ private fun PasswordSection(state: SettingsUiState, actions: SettingsActions) {
 }
 
 @Composable
-private fun UpdateSection(update: UpdateUiState, actions: SettingsActions) {
+private fun UpdateSection(update: UpdateState, actions: SettingsActions) {
     SettingsGroup(
         "App update",
         "Downloads the latest Iris from ${AppUpdater.APK_URL} and hands it to the TV’s installer, which asks you to confirm.",
@@ -366,60 +365,21 @@ private fun UpdateSection(update: UpdateUiState, actions: SettingsActions) {
             FactRow("Latest") { LatestLine(update) }
         }
         UpdateProgress(update.progress)
-        Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
-            // One button that changes: the focus stays on it from "Download" to "Cancel" and back.
-            ActionButton(
-                if (update.downloading) "Cancel the download" else "Download and install",
-                if (update.downloading) actions.onCancelUpdate else actions.onDownloadUpdate,
-                icon = if (update.downloading) null else Icons.Rounded.SystemUpdate,
-                style = if (update.downloading) ActionStyle.Secondary else ActionStyle.Primary,
-            )
-            if (update.progress is AppUpdater.Progress.Ready) {
-                ActionButton("Reopen the installer", actions.onReopenInstaller, style = ActionStyle.Secondary)
-            }
-        }
+        UpdateButton(update.progress, actions.update, idle = "Download and install")
     }
 }
 
 @Composable
-private fun LatestLine(update: UpdateUiState) {
+private fun LatestLine(update: UpdateState) {
     when (val latest = update.latest) {
         AppUpdater.VersionStatus.Unknown ->
             if (update.checking) {
-                StatusLine("Checking…")
+                StatusLine("Checking…", tone = StatusTone.Busy)
             } else {
-                StatusLine("The version check is unavailable; the download still works.", tone = StatusTone.Warn)
+                StatusLine("The version check is unavailable; the download still works.", tone = StatusTone.Warn, maxLines = 2)
             }
         is AppUpdater.VersionStatus.UpToDate -> StatusLine("Up to date (latest: ${latest.latest})", tone = StatusTone.Ok)
-        is AppUpdater.VersionStatus.UpdateAvailable -> StatusLine("Update available: ${latest.latest}", tone = StatusTone.Warn)
-    }
-}
-
-@Composable
-private fun UpdateProgress(progress: AppUpdater.Progress?) {
-    val live = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-    when (progress) {
-        null -> Unit
-        AppUpdater.Progress.Connecting -> StatusLine("Connecting…", live)
-        is AppUpdater.Progress.Downloading -> Column(live, verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
-            val share = if (progress.total > 0) (progress.bytes.toFloat() / progress.total).coerceIn(0f, 1f) else null
-            Text(
-                if (share != null) {
-                    "Downloading · ${(share * 100).toInt()} % (${formatSize(progress.bytes)} of ${formatSize(progress.total)})"
-                } else {
-                    "Downloading · ${formatSize(progress.bytes)}, size unknown"
-                },
-                style = IrisType.meta,
-                color = IrisColor.ink,
-            )
-            if (share != null) Meter(share)
-        }
-        is AppUpdater.Progress.Ready -> StatusLine(
-            "Downloaded. Opening the installer; if nothing shows in a few seconds, press Reopen the installer.",
-            live,
-            tone = StatusTone.Ok,
-        )
-        is AppUpdater.Progress.Failed -> StatusLine("The update failed: ${progress.message}", live, tone = StatusTone.Down)
+        is AppUpdater.VersionStatus.UpdateAvailable -> StatusLine("Update available: ${latest.latest}", tone = StatusTone.Available)
     }
 }
 

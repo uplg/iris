@@ -1,6 +1,5 @@
 package studio.kahn.iris.tv.ui.screens
 
-import android.app.Application
 import java.time.ZonedDateTime
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.focusGroup
@@ -21,13 +20,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -38,21 +35,13 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
@@ -77,8 +66,8 @@ import studio.kahn.iris.tv.ui.screens.settings.SettingsSectionContent
 import studio.kahn.iris.tv.ui.screens.settings.SettingsUiState
 import studio.kahn.iris.tv.ui.screens.settings.SettingsViewModel
 import studio.kahn.iris.tv.ui.screens.settings.TvFacts
-import studio.kahn.iris.tv.ui.screens.settings.UpdateUiState
-import studio.kahn.iris.tv.ui.screens.settings.UpdateViewModel
+import studio.kahn.iris.tv.data.UpdateState
+import studio.kahn.iris.tv.ui.update.actions
 import studio.kahn.iris.tv.ui.format.audioChoiceWords
 import studio.kahn.iris.tv.ui.screens.settings.languageChoice
 import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
@@ -115,16 +104,14 @@ fun SettingsScreen(
     initialSection: SettingsSection = SettingsSection.You,
 ) {
     val vm = irisViewModel(container) { c, _ -> SettingsViewModel(c) }
-    val app = LocalContext.current.applicationContext as Application
-    val updater = irisViewModel(container) { c, _ -> UpdateViewModel(c, app) }
     val state by vm.state.collectAsStateWithLifecycle()
     // The wait for a paired TV reads only while Settings is in front.
     RepeatWhileStarted(state.waitingForDevice) { if (state.waitingForDevice) vm.waitForDeviceWhileStarted() }
-    val update by updater.state.collectAsStateWithLifecycle()
+    val update by container.updates.state.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { container.updates.check(force = true) }
 
     LaunchedEffect(state.signedOut) { if (state.signedOut) onSignOut() }
     LaunchedEffect(state.nameChanges) { if (state.nameChanges > 0) onAccountChanged() }
-    val reopenInstaller = installerLauncher(update, updater)
 
     SettingsContent(
         state = state,
@@ -150,71 +137,10 @@ fun SettingsScreen(
             onSignOut = vm::signOut,
             onOpenHistory = onOpenHistory,
             onOpenTorrents = onOpenTorrents,
-            onDownloadUpdate = reopenInstaller.download,
-            onCancelUpdate = updater::cancel,
-            onReopenInstaller = reopenInstaller.reopen,
+            update = container.updates.actions(),
         ),
     )
 }
-
-private class InstallerActions(val download: () -> Unit, val reopen: () -> Unit)
-
-/**
- * Hands the downloaded APK to the system installer. The installer needs us
- * in front: a file ready while the TV was on its home screen or the
- * screensaver waits for the next resume. A launch the system dropped
- * without covering us is fired again, twice at most; once the installer
- * covered us, never again (that would reopen it over a cancel).
- */
-@Composable
-private fun installerLauncher(update: UpdateUiState, updater: UpdateViewModel): InstallerActions {
-    val context = LocalContext.current
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val view = LocalView.current
-    val ready = (update.progress as? AppUpdater.Progress.Ready)?.file
-
-    val active = update.downloading || ready != null
-    DisposableEffect(active) {
-        view.keepScreenOn = active
-        onDispose { view.keepScreenOn = false }
-    }
-
-    var covered by remember(ready) { mutableStateOf(false) }
-    DisposableEffect(lifecycle, ready) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) covered = true
-        }
-        lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
-    }
-    LaunchedEffect(ready) {
-        val file = ready ?: return@LaunchedEffect
-        lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.RESUMED) }
-        AppUpdater.requestInstall(context, file)
-        repeat(INSTALL_RETRIES) {
-            delay(INSTALL_RETRY_MS)
-            if (covered) return@LaunchedEffect
-            AppUpdater.requestInstall(context, file)
-        }
-    }
-    val current by rememberUpdatedState(ready)
-    return remember(updater) {
-        InstallerActions(
-            download = {
-                if (AppUpdater.canInstallPackages(context)) {
-                    updater.download()
-                } else {
-                    AppUpdater.openInstallPermissionSettings(context)
-                    updater.needsInstallPermission()
-                }
-            },
-            reopen = { current?.let { AppUpdater.requestInstall(context, it) } },
-        )
-    }
-}
-
-private const val INSTALL_RETRIES = 2
-private const val INSTALL_RETRY_MS = 2_500L
 
 /**
  * The stateless body: a page title with the account's words and the
@@ -225,7 +151,7 @@ private const val INSTALL_RETRY_MS = 2_500L
 @Composable
 fun SettingsContent(
     state: SettingsUiState,
-    update: UpdateUiState,
+    update: UpdateState,
     actions: SettingsActions,
     onBack: () -> Unit = {},
     initialSection: SettingsSection = SettingsSection.You,
@@ -274,7 +200,7 @@ fun SettingsContent(
                 ) {
                     SettingsSection.entries.forEach { s ->
                         RailItem(
-                            s.label,
+                            if (s == SettingsSection.App && update.available != null) "App update · new" else s.label,
                             selected = s == section,
                             onClick = { section = s },
                             modifier = Modifier
