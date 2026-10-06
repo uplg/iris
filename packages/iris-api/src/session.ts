@@ -66,6 +66,9 @@ export class Session {
 		try {
 			verdict = { status: 'signed_in', user: await auth.me() };
 		} catch {
+			// the client already refreshed once and found the session dead (AUTH_EXPIRED_EVENT,
+			// said): asking again would only send a second refresh
+			if (this.state.status === 'signed_out') return;
 			try {
 				verdict = { status: 'signed_in', user: await auth.refresh() };
 			} catch (e) {

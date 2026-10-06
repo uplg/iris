@@ -4,10 +4,29 @@ import { KEYS } from '#lib/queries.ts';
 import { backToResults, rememberSearch } from '#lib/search/cache.ts';
 import { stubApi } from '#lib/test/api.ts';
 import { ui } from '#lib/ui.svelte.ts';
+import { Session } from '@iris/api/session';
 import { accountChanged, session } from './session.svelte.ts';
 
 const user = (id: string) => ({ id, email: `${id}@example.com`, display_name: id, is_admin: false });
 const signedIn = (id: string) => ({ status: 'signed_in', user: user(id) }) as const;
+
+describe('the session bootstrap', () => {
+	it('a signed-out visitor costs one refresh, and is said signed out once', async () => {
+		const api = stubApi({
+			'GET /me': () => new Response(null, { status: 401 }),
+			'POST /auth/refresh': () => new Response(null, { status: 401 })
+		});
+		const core = new Session();
+		const said: string[] = [];
+		core.subscribe((s) => said.push(s.status));
+		core.start();
+		await expect.poll(() => core.state.status).toBe('signed_out');
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+		core.stop();
+		expect(api.sent('POST', '/auth/refresh')).toHaveLength(1);
+		expect(said).toEqual(['loading', 'signed_out']);
+	});
+});
 
 describe('the session forgets an account’s answers', () => {
 	it('when it leaves or another one comes in, never on the first answer', () => {
