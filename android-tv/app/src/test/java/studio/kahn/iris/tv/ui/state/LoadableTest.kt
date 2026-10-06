@@ -14,6 +14,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import retrofit2.HttpException
 import retrofit2.Response
+import studio.kahn.iris.tv.data.irisError
 import studio.kahn.iris.tv.ui.screens.nextBackoff
 import studio.kahn.iris.tv.ui.theme.columnsFor
 
@@ -72,6 +73,16 @@ class LoadableTest {
         val bare = HttpException(Response.error<Unit>(503, "".toResponseBody())).toUiError()
         assertEquals("The Iris server had a problem. Try again in a moment.", bare.message)
         assertEquals(503, bare.status)
+    }
+
+    @Test
+    fun anEnvelopeReadToBranchOnStillSaysItsMessage() {
+        // The grab reads the code (duplicate_in_library?), then rethrows a full leech slot.
+        val e = HttpException(
+            Response.error<Unit>(409, """{"error":"leech_slots","message":"Seedpool's slot is held by Dune."}""".toResponseBody()),
+        )
+        assertEquals("leech_slots", e.irisError()?.error)
+        assertEquals("Seedpool's slot is held by Dune.", e.toUiError().message)
     }
 
     @Test
