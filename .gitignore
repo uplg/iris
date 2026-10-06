@@ -1,4 +1,6 @@
 /target
+/node_modules
+/packages/*/node_modules
 /web/node_modules
 /web/dist
 /web/.vite

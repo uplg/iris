@@ -8,9 +8,9 @@ the bug, which is how we learned the fault was not in Tier B.
 The conclusion and the bug report live in [`UPSTREAM-REPORT.md`](UPSTREAM-REPORT.md).
 The minimal reproducer Mozilla can run is in [`upstream/`](upstream/).
 
-    bun build ../../src/lib/iris-core/tiers/tier-b-mse.ts --outfile tierb.js \
+    bun build ../../../packages/iris-core/src/tiers/tier-b-mse.ts --outfile tierb.js \
       --format esm --target browser --external mediabunny --external libav.js
-    bun build ../../src/lib/iris-core/decode/libav-audio-decoder.ts --outfile libavdec.js \
+    bun build ../../../packages/iris-core/src/decode/libav-audio-decoder.ts --outfile libavdec.js \
       --format esm --external mediabunny --external libav.js
 
     node serve.mjs &
@@ -78,7 +78,7 @@ at the buffering stage; relabelling to IDR gets past buffering and then breaks
 decode, because an IDR slice header omits `slice_pic_order_cnt_lsb`. Converting
 a CRA to a real IDR means rewriting that slice header and shifting the POC of
 every following picture in the run. That is what
-`src/lib/iris-core/decode/hevc-cra-splice.ts` does on this Gecko, so Tier B
+`packages/iris-core/src/decode/hevc-cra-splice.ts` does on this Gecko, so Tier B
 keeps the platform decoder; `tools/hevc-splice/check.ts` verifies the rewrite
 offline against any file (ffmpeg decodes the spliced run frame-for-frame
 identical to the original).

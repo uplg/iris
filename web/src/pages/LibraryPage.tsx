@@ -34,8 +34,8 @@ import {
   type ContinueWatchingItem,
   type MediaKind,
   type TorrentView,
-} from "@/lib/api";
-import { formatSize } from "@/lib/format";
+} from "@iris/api/client";
+import { formatSize } from "@iris/api/format";
 import { cn } from "@/lib/utils";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;

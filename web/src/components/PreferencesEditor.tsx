@@ -1,6 +1,6 @@
 import { Check } from "lucide-react";
 
-import type { GenreOption, LanguageOption } from "@/lib/api";
+import type { GenreOption, LanguageOption } from "@iris/api/client";
 import { cn } from "@/lib/utils";
 
 type Props = {

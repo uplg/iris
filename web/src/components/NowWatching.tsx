@@ -6,8 +6,8 @@ import { Poster } from "@/components/Poster";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { admin, type ActiveSession, type WatchHistoryEntry } from "@/lib/api";
-import { formatRecentTime } from "@/lib/format";
+import { admin, type ActiveSession, type WatchHistoryEntry } from "@iris/api/client";
+import { formatRecentTime } from "@iris/api/format";
 
 /** Max rows shown in "Recent activity". The list is scrollable, so this
  *  bounds the request, not the page height. */

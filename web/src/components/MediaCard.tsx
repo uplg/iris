@@ -3,7 +3,7 @@ import { Link, type LinkProps } from "@tanstack/react-router";
 import { Film, Tv } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { metadata, tmdbImage, type MediaKind } from "@/lib/api";
+import { metadata, tmdbImage, type MediaKind } from "@iris/api/client";
 import { cn } from "@/lib/utils";
 
 type Size = "sm" | "md" | "lg";

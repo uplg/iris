@@ -6,7 +6,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { MediaCard } from "@/components/MediaCard";
 import { PreviewDialog } from "@/components/PreviewDialog";
 import { Tag } from "@/components/Tag";
-import { me as meApi, type CatalogCard } from "@/lib/api";
+import { me as meApi, type CatalogCard } from "@iris/api/client";
 
 /**
  * A discovery card (For You shelves, mood results). Cards name a title, not

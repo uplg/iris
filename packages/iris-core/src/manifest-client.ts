@@ -7,7 +7,7 @@
  * the dual of `iris-media::manifest::Manifest` in Rust.
  */
 
-import type { components } from "../api-types";
+import type { components } from "@iris/api/api-types";
 import {
   capsHeader,
   hevcMseNeedsIdrStart,

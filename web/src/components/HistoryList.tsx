@@ -3,8 +3,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRight, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Poster } from "@/components/Poster";
-import type { HistoryItem, UserHistoryItem } from "@/lib/api";
-import { formatRecentTime, formatTimecode } from "@/lib/format";
+import type { HistoryItem, UserHistoryItem } from "@iris/api/client";
+import { formatRecentTime, formatTimecode } from "@iris/api/format";
 import { cn } from "@/lib/utils";
 
 type Item = HistoryItem | UserHistoryItem;

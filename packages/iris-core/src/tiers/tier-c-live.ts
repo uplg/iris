@@ -53,7 +53,7 @@ import {
   UrlSource,
 } from "mediabunny";
 
-import { refreshSessionForFetch } from "../../api";
+import { refreshSessionForFetch } from "@iris/api/client";
 import { ensureLibavAudioDecoderRegistered, libavCanDecode } from "../decode/libav-audio-decoder";
 import { configWithFreshDescription } from "../decode/webcodecs-probe";
 import {

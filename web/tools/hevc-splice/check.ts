@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { ALL_FORMATS, EncodedPacketSink, FilePathSource, Input } from "mediabunny";
 
-import { HevcCraSplicer, descriptionBytes } from "../../src/lib/iris-core/decode/hevc-cra-splice";
+import { HevcCraSplicer, descriptionBytes } from "../../../packages/iris-core/src/decode/hevc-cra-splice";
 
 const [file, seekArg, runArg] = process.argv.slice(2);
 if (!file || !seekArg) {

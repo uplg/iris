@@ -31,9 +31,9 @@ import {
   VolumeX,
 } from "lucide-react";
 
-import type { EngineAudioTrack, EngineHandle } from "./engine";
-import type { Manifest, SubtitleTrack } from "./manifest-client";
-import { subtitleOverlayKind } from "./subs/subtitle-overlay";
+import type { EngineAudioTrack, EngineHandle } from "@iris/core/engine";
+import type { Manifest, SubtitleTrack } from "@iris/core/manifest-client";
+import { subtitleOverlayKind } from "./subtitle-overlay";
 
 export type ChromePipControl = {
   supported: boolean;

@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ApiError, AUTH_EXPIRED_EVENT, auth as authApi, type User } from "./api";
+import { ApiError, AUTH_EXPIRED_EVENT, auth as authApi, type User } from "@iris/api/client";
 
 type AuthState =
   | { status: "loading"; retrying: boolean }

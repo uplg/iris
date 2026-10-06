@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { CLIENT_OUTDATED_EVENT, IRIS_WEB_VERSION } from "@/lib/api";
+import { CLIENT_OUTDATED_EVENT, IRIS_WEB_VERSION } from "@iris/api/client";
 
 /**
  * Listens for [CLIENT_OUTDATED_EVENT] (dispatched by `api.ts` on any

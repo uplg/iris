@@ -5,7 +5,7 @@ import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Container } from "@/components/Container";
 import { HistoryList } from "@/components/HistoryList";
-import { admin } from "@/lib/api";
+import { admin } from "@iris/api/client";
 
 // The list is virtualized, so there's no rendering reason to paginate —
 // just ask for the backend's max in one shot.

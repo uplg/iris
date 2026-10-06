@@ -15,9 +15,9 @@
 
 import { useEffect, useRef } from "react";
 
-import type { SubtitleTrack } from "../manifest-client";
-import { mountAssOverlay, type AssOverlayHandle } from "./ass-overlay";
-import { mountPgsOverlay, type PgsOverlayHandle } from "./pgs-overlay";
+import type { SubtitleTrack } from "@iris/core/manifest-client";
+import { mountAssOverlay, type AssOverlayHandle } from "@iris/core/subs/ass-overlay";
+import { mountPgsOverlay, type PgsOverlayHandle } from "@iris/core/subs/pgs-overlay";
 
 type OverlayHandle = AssOverlayHandle | PgsOverlayHandle;
 

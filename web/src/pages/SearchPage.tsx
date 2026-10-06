@@ -35,7 +35,7 @@ import {
   type SortField,
   type SortOrder,
   type TmdbSuggestion,
-} from "@/lib/api";
+} from "@iris/api/client";
 
 /**
  * UI-level sort presets. `relevance` is the default: it lets the
@@ -76,7 +76,7 @@ function apiSort(mode: SortMode): {
   }
 }
 
-import { formatRelative, formatSize } from "@/lib/format";
+import { formatRelative, formatSize } from "@iris/api/format";
 import { cn } from "@/lib/utils";
 
 /** "S04E11" / "S04 pack" / "Season 4" depending on which parts the

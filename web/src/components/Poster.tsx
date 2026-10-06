@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Film, Tv } from "lucide-react";
-import { metadata, tmdbImage, type MediaKind } from "@/lib/api";
+import { metadata, tmdbImage, type MediaKind } from "@iris/api/client";
 
 type Size = "xs" | "sm" | "md" | "lg";
 

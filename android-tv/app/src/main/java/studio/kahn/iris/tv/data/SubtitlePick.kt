@@ -5,7 +5,7 @@ import androidx.media3.common.util.Util
 
 /**
  * Cross-episode subtitle pick, shared rule with the web client
- * (`web/src/lib/iris-core/subs/pick-subtitle.ts`): keep the two in step.
+ * (`packages/iris-core/src/subs/pick-subtitle.ts`): keep the two in step.
  *
  * Per-file progress restores an exact track. Without one, the per-user
  * preferred LANGUAGE decides, and a language usually maps to several

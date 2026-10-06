@@ -4,7 +4,7 @@
 //! (`#[utoipa::path]`) and types (`#[derive(ToSchema)]`). The spec is the
 //! source of truth for the BE↔FE↔TV contract — generated clients consume it
 //! instead of hand-maintained types:
-//!   - web:     `bun run gen-api` → openapi-typescript → src/lib/api-types.ts
+//!   - web:     `bun run gen-api` → openapi-typescript → packages/iris-api/src/api-types.ts
 //!   - Android: openapi-generator (kotlinx-serialization) → TV data layer
 //!
 //! Emit the spec WITHOUT a running server via the `gen-openapi` bin:
@@ -218,7 +218,7 @@ pub struct ApiDoc;
 
 /// On-disk location of the committed spec (`web/openapi.json`), resolved
 /// relative to this crate so it's cwd-independent. The web build regenerates
-/// `src/lib/api-types.ts` from it (bun-only, no Rust toolchain), and the
+/// `packages/iris-api/src/api-types.ts` from it (bun-only, no Rust toolchain), and the
 /// snapshot test below keeps it in lockstep with the Rust types.
 #[must_use]
 pub fn spec_path() -> std::path::PathBuf {

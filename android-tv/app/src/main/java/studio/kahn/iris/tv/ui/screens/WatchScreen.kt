@@ -727,7 +727,7 @@ private fun ReadyPlayer(
     }
 
     // Seek hint posting. Mirror of the web client's `postSeekHint`
-    // (`web/src/lib/iris-core/manifest-client.ts`). On every user-
+    // (`packages/iris-core/src/manifest-client.ts`). On every user-
     // initiated seek we fire a fire-and-forget POST so the server can
     // bias librqbit's piece priority toward ~30 s of bytes forward of
     // the new playhead. Without this, a rewind to a piece librqbit

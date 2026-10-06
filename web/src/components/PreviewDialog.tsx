@@ -20,8 +20,8 @@ import {
   type MediaInfoSummary,
   type TorrentDetails,
   type TorrentPreview,
-} from "@/lib/api";
-import { formatSize } from "@/lib/format";
+} from "@iris/api/client";
+import { formatSize } from "@iris/api/format";
 import { cn } from "@/lib/utils";
 
 /** Above this total size the grab needs an explicit second click — born

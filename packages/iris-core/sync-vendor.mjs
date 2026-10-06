@@ -20,15 +20,31 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const NODE_MODULES = join(WEB_ROOT, "node_modules");
-const PUBLIC = join(WEB_ROOT, "public");
+// Packages are resolved from this package (they are its dependencies);
+// `--out <dir>` names the app's static dir the copies go to.
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+/** The installed dir of `pkg`, found the way Node resolves it: the nearest
+ *  `node_modules` up from this package (bun hoists or links per package). */
+function packageDir(pkg) {
+  for (let dir = HERE; ; dir = dirname(dir)) {
+    const candidate = join(dir, "node_modules", pkg);
+    if (existsSync(join(candidate, "package.json"))) return candidate;
+    if (dirname(dir) === dir) return join(HERE, "node_modules", pkg);
+  }
+}
+const outFlag = process.argv.indexOf("--out");
+if (outFlag < 0 || !process.argv[outFlag + 1]) {
+  console.error("sync-vendor: pass --out <the app's static dir>");
+  process.exit(1);
+}
+const PUBLIC = resolve(process.cwd(), process.argv[outFlag + 1]);
 
 /** @type {{pkg: string, expectMajor: number, files: [string, string][]}[]} */
 const VENDOR = [
   {
     // libass-wasm — ASS/SSA subtitle overlay (subtitles-octopus worker).
-    // Loader: src/lib/iris-core/subs/* via /libass/*.
+    // Loader: packages/iris-core/src/subs/* via /libass/*.
     pkg: "@jellyfin/libass-wasm",
     expectMajor: 4,
     files: [
@@ -43,7 +59,7 @@ const VENDOR = [
     // hevc.js — Tier E WASM HEVC transcode. The worker and the main-thread
     // client share a versioned protocol, so the worker MUST match the
     // installed decoder (this is the file that previously drifted).
-    // Loader: src/lib/iris-core/tiers/tier-e-hevcjs.ts via /hevcjs/*.
+    // Loader: packages/iris-core/src/tiers/tier-e-hevcjs.ts via /hevcjs/*.
     pkg: "@hevcjs/core",
     expectMajor: 1,
     files: [
@@ -54,7 +70,7 @@ const VENDOR = [
   },
   {
     // libpgs — PGS (BluRay) subtitle overlay worker.
-    // Loader: src/lib/iris-core/subs/pgs-overlay.ts via /libpgs/*.
+    // Loader: packages/iris-core/src/subs/pgs-overlay.ts via /libpgs/*.
     pkg: "libpgs",
     expectMajor: 0,
     files: [["dist/libpgs.worker.js", "libpgs/libpgs.worker.js"]],
@@ -65,7 +81,7 @@ const VENDOR = [
     // Dockerfile via emscripten, NOT shipped on npm) isn't present. We only
     // sync `-default`; the Docker-built `-iris` files sit alongside it and are
     // left untouched (copyFileSync never wipes the dir).
-    // Loader: src/lib/iris-core/decode/libav-audio-decoder.ts via /libavjs/*.
+    // Loader: packages/iris-core/src/decode/libav-audio-decoder.ts via /libavjs/*.
     //
     // The version is embedded in the filename, so a libav.js bump makes these
     // source paths vanish — the existence assertion then fails the build until
@@ -85,7 +101,8 @@ const checkOnly = process.argv.includes("--check");
 const problems = [];
 
 for (const { pkg, expectMajor, files } of VENDOR) {
-  const pkgJsonPath = join(NODE_MODULES, pkg, "package.json");
+  const pkgRoot = packageDir(pkg);
+  const pkgJsonPath = join(pkgRoot, "package.json");
   if (!existsSync(pkgJsonPath)) {
     problems.push(`${pkg}: not installed (run \`bun install\`)`);
     continue;
@@ -96,13 +113,13 @@ for (const { pkg, expectMajor, files } of VENDOR) {
     problems.push(
       `${pkg}@${version}: major ${major} ≠ expected ${expectMajor} — review the ` +
         `loader (the worker↔client protocol may have changed) then bump ` +
-        `\`expectMajor\` in web/scripts/sync-vendor.mjs.`,
+        `\`expectMajor\` in packages/iris-core/sync-vendor.mjs.`,
     );
     continue;
   }
 
   for (const [srcRel, destRel] of files) {
-    const src = join(NODE_MODULES, pkg, srcRel);
+    const src = join(pkgRoot, srcRel);
     const dest = join(PUBLIC, destRel);
     if (!existsSync(src)) {
       problems.push(

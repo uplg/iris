@@ -5,7 +5,7 @@ import { ArrowLeft } from "lucide-react";
 import { CatalogCardView } from "@/components/CatalogCardView";
 import { Container } from "@/components/Container";
 import { Shelf } from "@/components/Shelf";
-import { me as meApi, type MediaKind, type MoodTile } from "@/lib/api";
+import { me as meApi, type MediaKind, type MoodTile } from "@iris/api/client";
 import { cn } from "@/lib/utils";
 
 const discoverApi = getRouteApi("/auth/shell/discover");

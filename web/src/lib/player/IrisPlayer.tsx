@@ -12,16 +12,16 @@
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import { isWindowsChromium } from "./caps";
+import { isWindowsChromium } from "@iris/core/caps";
 import { IrisChrome, toggleFullscreen } from "./IrisChrome";
-import type { EngineHandle, EngineMount, NativeSubtitleTrack } from "./engine";
-import type { DecodeTier, Manifest, SubtitleTrack } from "./manifest-client";
-import { nativeSubtitleUrl } from "./manifest-client";
-import { attachMediaSession } from "./os/media-session";
-import { useDocumentPip } from "./os/document-pip";
-import { SubtitleOverlay, subtitleOverlayKind } from "./subs/subtitle-overlay";
-import { normalizeLang, pickPreferredSubtitle } from "./subs/pick-subtitle";
-import { mountTierA } from "./tiers/tier-a-native";
+import type { EngineHandle, EngineMount, NativeSubtitleTrack } from "@iris/core/engine";
+import type { DecodeTier, Manifest, SubtitleTrack } from "@iris/core/manifest-client";
+import { nativeSubtitleUrl } from "@iris/core/manifest-client";
+import { attachMediaSession } from "@iris/core/os/media-session";
+import { useDocumentPip } from "./document-pip";
+import { SubtitleOverlay, subtitleOverlayKind } from "./subtitle-overlay";
+import { normalizeLang, pickPreferredSubtitle } from "@iris/core/subs/pick-subtitle";
+import { mountTierA } from "@iris/core/tiers/tier-a-native";
 
 /**
  * Dynamic-import map for the heavy engines. Tier A is statically
@@ -31,11 +31,11 @@ import { mountTierA } from "./tiers/tier-a-native";
  */
 const ENGINE_LOADERS: Record<DecodeTier, () => Promise<{ mount: EngineMount }>> = {
   A: () => Promise.resolve({ mount: mountTierA }),
-  B: () => import("./tiers/tier-b-mse").then((m) => ({ mount: m.mountTierB })),
-  C: () => import("./tiers/tier-c-webcodecs").then((m) => ({ mount: m.mountTierC })),
-  D: () => import("./tiers/tier-c-webcodecs").then((m) => ({ mount: m.mountTierC })),
-  E: () => import("./tiers/tier-e-hevcjs").then((m) => ({ mount: m.mountTierE })),
-  F: () => import("./tiers/tier-f-hls").then((m) => ({ mount: m.mountTierF })),
+  B: () => import("@iris/core/tiers/tier-b-mse").then((m) => ({ mount: m.mountTierB })),
+  C: () => import("@iris/core/tiers/tier-c-webcodecs").then((m) => ({ mount: m.mountTierC })),
+  D: () => import("@iris/core/tiers/tier-c-webcodecs").then((m) => ({ mount: m.mountTierC })),
+  E: () => import("@iris/core/tiers/tier-e-hevcjs").then((m) => ({ mount: m.mountTierE })),
+  F: () => import("@iris/core/tiers/tier-f-hls").then((m) => ({ mount: m.mountTierF })),
 };
 
 export type IrisPlayerProps = {
@@ -337,9 +337,9 @@ export function IrisPlayer(props: IrisPlayerProps) {
     // variant, kept for A/B debugging via ?tier=B.
     const loader =
       props.live && props.tier === "C"
-        ? () => import("./tiers/tier-c-live").then((m) => ({ mount: m.mountTierCLive }))
+        ? () => import("@iris/core/tiers/tier-c-live").then((m) => ({ mount: m.mountTierCLive }))
         : props.live && props.tier === "B"
-          ? () => import("./tiers/tier-b-live").then((m) => ({ mount: m.mountTierBLive }))
+          ? () => import("@iris/core/tiers/tier-b-live").then((m) => ({ mount: m.mountTierBLive }))
           : ENGINE_LOADERS[props.tier];
     if (!loader) {
       props.onError(`No engine wired for tier ${props.tier}`);

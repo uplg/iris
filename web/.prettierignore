@@ -12,4 +12,4 @@ dist/
 # asserts the committed file equals that exact rendering, so any oxfmt
 # reflow would break the build. `api-types.ts` is regenerated from it.
 openapi.json
-src/lib/api-types.ts
+../packages/iris-api/src/api-types.ts

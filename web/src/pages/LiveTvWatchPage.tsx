@@ -3,9 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ArrowLeft, Shuffle } from "lucide-react";
 
-import { livetv } from "@/lib/api";
-import { IrisPlayer } from "@/lib/iris-core/IrisPlayer";
-import type { DecodeTier, Manifest } from "@/lib/iris-core/manifest-client";
+import { livetv } from "@iris/api/client";
+import { IrisPlayer } from "@/lib/player/IrisPlayer";
+import type { DecodeTier, Manifest } from "@iris/core/manifest-client";
 import { readStoredVolume, writeStoredVolume } from "@/lib/player-volume";
 import { programmeProgress } from "@/pages/LiveTvPage";
 

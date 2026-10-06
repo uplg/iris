@@ -4,7 +4,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Radio as LiveIcon } from "lucide-react";
 
 import { Container } from "@/components/Container";
-import { livetv, type LiveChannel, type LiveNowNext } from "@/lib/api";
+import { livetv, type LiveChannel, type LiveNowNext } from "@iris/api/client";
 import { logoTone, type LogoTone } from "@/lib/logo-tone";
 
 /** Refetch cadence for the now/next strip — the guide only changes on

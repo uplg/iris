@@ -28,8 +28,8 @@ import {
   type CollectionEpisodeEntry,
   type GoneEpisodeEntry,
   type GoneReleaseEntry,
-} from "@/lib/api";
-import { formatRecentTime, formatSize, formatTimecode } from "@/lib/format";
+} from "@iris/api/client";
+import { formatRecentTime, formatSize, formatTimecode } from "@iris/api/format";
 import { cn } from "@/lib/utils";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;

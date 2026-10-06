@@ -22,8 +22,8 @@ import {
   type SearchResult,
   type TorrentView,
   type WatchlistItem,
-} from "@/lib/api";
-import { formatSize, prettySceneName } from "@/lib/format";
+} from "@iris/api/client";
+import { formatSize, prettySceneName } from "@iris/api/format";
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 

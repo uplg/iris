@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 
 import { Container } from "@/components/Container";
 import { HistoryList } from "@/components/HistoryList";
-import { me, torrents, type HistoryItem } from "@/lib/api";
+import { me, torrents, type HistoryItem } from "@iris/api/client";
 
 // The list is virtualized, so there's no rendering reason to paginate —
 // just ask for the backend's max in one shot.

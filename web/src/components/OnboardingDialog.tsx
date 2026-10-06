@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { discover, me as meApi, type Preferences } from "@/lib/api";
+import { discover, me as meApi, type Preferences } from "@iris/api/client";
 
 /**
  * First-login onboarding. Mounted on the Home page; opens itself when

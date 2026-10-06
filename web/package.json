@@ -5,15 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "sync-vendor": "bun scripts/sync-vendor.mjs",
-    "sync-vendor:check": "bun scripts/sync-vendor.mjs --check",
+    "sync-vendor": "bun ../packages/iris-core/sync-vendor.mjs --out public",
+    "sync-vendor:check": "bun ../packages/iris-core/sync-vendor.mjs --out public --check",
     "predev": "bun run sync-vendor && bun run gen-types",
     "prebuild": "bun run sync-vendor && bun run gen-types",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
-    "lint:fix": "oxlint --fix",
-    "format": "oxfmt",
-    "format:check": "oxfmt --check",
+    "lint": "cd .. && web/node_modules/.bin/oxlint -c web/.oxlintrc.json web packages",
+    "lint:fix": "cd .. && web/node_modules/.bin/oxlint -c web/.oxlintrc.json --fix web packages",
+    "format": "cd .. && web/node_modules/.bin/oxfmt -c web/.oxfmtrc.json web packages",
+    "format:check": "cd .. && web/node_modules/.bin/oxfmt -c web/.oxfmtrc.json --check web packages",
     "gen-types": "bun install --cwd tools/api-gen && bun run --cwd tools/api-gen gen",
     "gen-api": "cargo run -q -p iris-api --bin gen-openapi -- --write && bun run gen-types",
     "preview": "vite preview"
@@ -23,8 +23,8 @@
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource/cal-sans": "^5.3.0",
-    "@hevcjs/core": "^1.4.5",
-    "@jellyfin/libass-wasm": "^4.2.4",
+    "@iris/api": "workspace:*",
+    "@iris/core": "workspace:*",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.104.1",
     "@tanstack/react-router": "^1.170.41",
@@ -32,11 +32,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dompurify": "^3.4.16",
-    "hls.js": "^1.7.3",
-    "libav.js": "^6.10.9",
-    "libpgs": "^0.9.0",
     "lucide-react": "^1.52.0",
-    "mediabunny": "1.61.3",
     "next-themes": "^0.4.6",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -56,8 +52,5 @@
     "oxlint": "^1.87.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.2"
-  },
-  "patchedDependencies": {
-    "mediabunny@1.61.3": "patches/mediabunny@1.61.3.patch"
   }
 }

@@ -5,8 +5,8 @@ import { ScrollText } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { admin, type AuditLogEntry } from "@/lib/api";
-import { formatRecentTime } from "@/lib/format";
+import { admin, type AuditLogEntry } from "@iris/api/client";
+import { formatRecentTime } from "@iris/api/format";
 
 /** Max rows shown. The list is virtualized, so this bounds the request, not
  *  the render cost. */

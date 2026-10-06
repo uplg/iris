@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/lib/auth";
-import { ApiError, IRIS_WEB_VERSION } from "@/lib/api";
+import { ApiError, IRIS_WEB_VERSION } from "@iris/api/client";
 
 /** Clean accent-gradient panel for the auth pages (login + register). */
 export function AuthVisual() {

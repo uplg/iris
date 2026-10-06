@@ -39,9 +39,9 @@ import {
   type GcReport,
   type Invitation,
   type UserView,
-} from "@/lib/api";
+} from "@iris/api/client";
 import { useAuth } from "@/lib/auth";
-import { formatSize } from "@/lib/format";
+import { formatSize } from "@iris/api/format";
 
 function status(inv: Invitation) {
   if (inv.consumed_at) return "consumed";

@@ -29,8 +29,8 @@ import {
   type PlaybackPrefs,
   type PlayStatus,
   type TorrentView,
-} from "@/lib/api";
-import { formatSize, prettySceneName } from "@/lib/format";
+} from "@iris/api/client";
+import { formatSize, prettySceneName } from "@iris/api/format";
 import {
   Dialog,
   DialogContent,
@@ -46,9 +46,9 @@ import {
   postSeekHint,
   rawStreamUrl,
   type DecodeTier,
-} from "@/lib/iris-core/manifest-client";
-import { hevcMseNeedsIdrStart } from "@/lib/iris-core/caps";
-import { IrisPlayer } from "@/lib/iris-core/IrisPlayer";
+} from "@iris/core/manifest-client";
+import { hevcMseNeedsIdrStart } from "@iris/core/caps";
+import { IrisPlayer } from "@/lib/player/IrisPlayer";
 import { readStoredVolume, writeStoredVolume } from "@/lib/player-volume";
 import { readLocal, writeLocal } from "@/lib/safe-storage";
 

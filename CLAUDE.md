@@ -76,8 +76,8 @@ DTOs** — every client generates them:
 - **Backend** emits the spec: `bun run gen-api` (or `cargo run -p iris-api
 --bin gen-openapi -- --write`). The `committed_spec_is_current` test fails
   until you regenerate + commit `web/openapi.json`.
-- **Web** generates TS types: `openapi-typescript` → `src/lib/api-types.ts`
-  (auto via `predev`/`prebuild`). `api.ts` wraps them with the fetch client.
+- **Web** generates TS types: `openapi-typescript` → `packages/iris-api/src/api-types.ts`
+  (auto via `predev`/`prebuild`). `packages/iris-api/src/client.ts` wraps them with the fetch client.
   The generator lives in its own mini-package (`web/tools/api-gen/`) pinned
   to TypeScript 6: it needs the TS compiler API (`ts.factory`), which the
   TS 7 native compiler used by the main build no longer ships. Don't
@@ -237,7 +237,7 @@ client on every request:
 
 - Android TV: `studio.kahn.iris.tv.data.HttpClient` interceptor, value
   built from `BuildConfig.VERSION_NAME`.
-- Web: `web/src/lib/api.ts` `clientHeaders()`, value baked at build
+- Web: `packages/iris-api/src/client.ts` `clientHeaders()`, value baked at build
   time from `package.json` via the Vite `define` (`__IRIS_WEB_VERSION__`).
 
 The backend middleware

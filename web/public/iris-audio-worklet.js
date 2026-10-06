@@ -1,6 +1,6 @@
 /* Iris ring-buffer AudioWorklet processor.
  * Vendored as plain JS to sidestep Vite's TS/worker bundling rules.
- * Pairs with `web/src/lib/iris-core/audio/ring-buffer.ts`.
+ * Pairs with `packages/iris-core/src/audio/ring-buffer.ts`.
  *
  * SAB layout:
  *   Int32 header at offset 0: [read_idx, write_idx, channels, capacity]

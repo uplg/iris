@@ -1,0 +1,11 @@
+{
+  "name": "iris",
+  "private": true,
+  "workspaces": [
+    "web",
+    "packages/*"
+  ],
+  "patchedDependencies": {
+    "mediabunny@1.61.3": "patches/mediabunny@1.61.3.patch"
+  }
+}

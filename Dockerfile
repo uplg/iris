@@ -55,18 +55,21 @@ RUN --mount=type=cache,target=/build/libav.js/build,sharing=locked \
 
 # Frontend build (bun + Vite)
 FROM oven/bun:1.4.2 AS web-builder
-WORKDIR /app/web
-# Copy lockfiles AND the patches directory before installing — bun
-# resolves `patchedDependencies` paths during `install`, so the patch
-# files must already exist on disk by the time we run it. Without
-# this the build fails with `Couldn't find patch file:
-# patches/<pkg>@<ver>.patch`. The `patches/` directory is created
-# under `web/` by `bun patch --commit`.
-COPY web/package.json web/bun.lock* ./
-COPY web/patches ./patches
+WORKDIR /app
+# A bun workspace: the root lockfile, every member's manifest, AND the
+# patches directory before installing — bun resolves `patchedDependencies`
+# paths during `install`, so the patch files must already exist on disk
+# (else `Couldn't find patch file: patches/<pkg>@<ver>.patch`).
+COPY package.json bun.lock ./
+COPY patches ./patches
+COPY web/package.json ./web/
+COPY packages/iris-core/package.json ./packages/iris-core/
+COPY packages/iris-api/package.json ./packages/iris-api/
 RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
     bun install --frozen-lockfile
-COPY web/ ./
+COPY packages/ ./packages/
+COPY web/ ./web/
+WORKDIR /app/web
 # Drop the iris-variant WASM into public/ so Vite copies it into dist.
 # (The npm-package libav.js wasm files in public/libavjs/ stay as the
 # fallback when the iris variant isn't present.)

@@ -18,7 +18,7 @@ import {
   me as meApi,
   type DeviceView,
   type Preferences,
-} from "@/lib/api";
+} from "@iris/api/client";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
