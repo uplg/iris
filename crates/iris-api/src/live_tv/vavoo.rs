@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use super::m3u::M3uEntry;
+use super::refresh_cell::RefreshCell;
 
 const PING_URL: &str = "https://www.vavoo.tv/api/box/ping2";
 const RESOLVE_URL: &str = "https://www.vavoo.to/mediahubmx-resolve.json";
@@ -46,6 +47,9 @@ const VEC: &str = "9frjpxPjxSNilxJPCJ0XGYs6scej3dW/h/VWlnKUiLSG8IP7mfyDU7NirOlld
 
 /// How long a fetched signing signature stays reusable.
 const SIGNATURE_TTL: Duration = Duration::from_mins(30);
+/// How long a failed signing call is remembered before the next caller may
+/// retry it.
+const SIGNATURE_RETRY: Duration = Duration::from_secs(10);
 /// How long a resolved playlist URL is reused (the token rotates fast — keep
 /// this short so a stale URL self-heals on the next zap rather than 403ing).
 const RESOLVE_TTL: Duration = Duration::from_secs(90);
@@ -96,7 +100,7 @@ struct CatalogIds {
 /// inherits the same TLS / timeout / redirect knobs as every other upstream.
 #[derive(Default)]
 pub struct Vavoo {
-    signature: RwLock<Option<(String, Instant)>>,
+    signature: RefreshCell<String>,
     resolved: RwLock<HashMap<String, (String, Instant)>>,
 }
 
@@ -105,25 +109,30 @@ impl Vavoo {
     /// when the signing endpoint is unreachable — every caller degrades to
     /// "no Vavoo channels this round" rather than failing.
     async fn signature(&self, http: &reqwest::Client) -> Option<String> {
-        if let Some((sig, at)) = self.signature.read().expect("poisoned").clone()
-            && at.elapsed() < SIGNATURE_TTL
-        {
-            return Some(sig);
-        }
-        let body = serde_json::json!({ "vec": VEC });
-        let resp = http
-            .post(PING_URL)
-            .header(reqwest::header::USER_AGENT, API_UA)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .json(&body)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .ok()?;
-        let parsed: PingResponse = resp.json().await.ok()?;
-        let sig = parsed.response.and_then(|r| r.signed)?;
-        *self.signature.write().expect("poisoned") = Some((sig.clone(), Instant::now()));
-        Some(sig)
+        self.signature_from(http, PING_URL).await
+    }
+
+    /// One signing call at a time: a zap burst or a country load past the
+    /// TTL shares a single `ping2`.
+    async fn signature_from(&self, http: &reqwest::Client, ping_url: &str) -> Option<String> {
+        let sig = self
+            .signature
+            .get(SIGNATURE_TTL, SIGNATURE_RETRY, || async {
+                let body = serde_json::json!({ "vec": VEC });
+                let resp = http
+                    .post(ping_url)
+                    .header(reqwest::header::USER_AGENT, API_UA)
+                    .header(reqwest::header::ACCEPT, "application/json")
+                    .json(&body)
+                    .send()
+                    .await
+                    .and_then(reqwest::Response::error_for_status)
+                    .ok()?;
+                let parsed: PingResponse = resp.json().await.ok()?;
+                parsed.response.and_then(|r| r.signed)
+            })
+            .await?;
+        Some(sig.as_ref().clone())
     }
 
     /// Resolve `vavoo://<id>` to a live `index.m3u8`. Cached for
@@ -320,6 +329,38 @@ fn clean_name(raw: &str) -> (String, Option<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn concurrent_callers_share_one_signing_call() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let app = axum::Router::new().route(
+            "/ping2",
+            axum::routing::post(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    axum::Json(serde_json::json!({ "response": { "signed": "SIG" } }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ping = format!("http://{}/ping2", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let vavoo = Vavoo::default();
+        let http = reqwest::Client::new();
+        let sigs =
+            futures::future::join_all((0..8).map(|_| vavoo.signature_from(&http, &ping))).await;
+        assert!(sigs.iter().all(|s| s.as_deref() == Some("SIG")));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            vavoo.signature_from(&http, &ping).await.as_deref(),
+            Some("SIG")
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "reused within its TTL");
+    }
 
     #[test]
     fn stream_id_extracts_sentinel() {
