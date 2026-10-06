@@ -590,6 +590,17 @@ pub struct StorageConfig {
     /// firewall / docker for inbound peer connections.
     #[serde(default = "default_torrent_port")]
     pub torrent_port: u16,
+    /// Free space (GiB) the filesystem holding `download_dir` must keep,
+    /// whatever the budget says: below it the GC evicts until 1.5× this is
+    /// free. 0 turns the floor off.
+    #[serde(default = "default_min_free_gb")]
+    pub min_free_gb: u64,
+    /// Files in `download_dir` no torrent references (and untouched for
+    /// `orphan_min_age_hours`) are only logged unless this is on.
+    #[serde(default)]
+    pub delete_orphan_files: bool,
+    #[serde(default = "default_orphan_min_age_hours")]
+    pub orphan_min_age_hours: u64,
 }
 
 impl StorageConfig {
@@ -597,6 +608,12 @@ impl StorageConfig {
     #[must_use]
     pub fn max_storage_bytes(&self) -> u64 {
         self.max_storage_gb.saturating_mul(1 << 30)
+    }
+
+    /// `min_free_gb` in bytes (GiB).
+    #[must_use]
+    pub fn min_free_bytes(&self) -> u64 {
+        self.min_free_gb.saturating_mul(1 << 30)
     }
 }
 
@@ -611,6 +628,12 @@ fn default_cleanup_target() -> u8 {
 }
 fn default_torrent_port() -> u16 {
     45100
+}
+fn default_min_free_gb() -> u64 {
+    10
+}
+fn default_orphan_min_age_hours() -> u64 {
+    24
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

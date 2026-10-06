@@ -513,18 +513,11 @@ pub(crate) async fn summary(
 /// Size and free space of the filesystem holding `dir`, as an unprivileged
 /// user sees it.
 fn disk_space(dir: &std::path::Path) -> Option<DiskSpace> {
-    let st = rustix::fs::statvfs(dir).ok()?;
-    let block = to_u64(st.f_frsize);
+    let (total_bytes, free_bytes) = iris_torrent::disk_space(dir)?;
     Some(DiskSpace {
-        total_bytes: to_u64(st.f_blocks).saturating_mul(block),
-        free_bytes: to_u64(st.f_bavail).saturating_mul(block),
+        total_bytes,
+        free_bytes,
     })
-}
-
-/// `statvfs` field widths differ across platforms (`u32` on macOS, `u64`
-/// or `c_long` on Linux).
-fn to_u64<T: TryInto<u64>>(v: T) -> u64 {
-    v.try_into().unwrap_or(0)
 }
 
 #[derive(Debug, serde::Deserialize, ToSchema)]

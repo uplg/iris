@@ -11,6 +11,12 @@ download_dir = "./data/downloads"
 max_storage_gb = 500
 cleanup_threshold_pct = 90
 cleanup_target_pct = 75
+# Free space the disk must keep whatever the budget says (GiB, 0 = off).
+min_free_gb = 10
+# Files in download_dir no torrent references, untouched for this long, are
+# logged by the GC; set delete_orphan_files = true to delete them.
+orphan_min_age_hours = 24
+delete_orphan_files = false
 # BitTorrent listen port (TCP + UDP). Pin so you can forward it in your
 # router/firewall.
 torrent_port = 45100

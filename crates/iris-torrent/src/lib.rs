@@ -13,7 +13,7 @@ pub mod metadata;
 pub mod removal;
 
 pub use engine::{Engine, EngineError, FileEntry, IngestResult, TorrentSnapshot, TorrentState};
-pub use gc::{DerivedCache, DerivedTrimFn, Gc, GcConfig, GcReport};
+pub use gc::{DerivedCache, DerivedTrimFn, Gc, GcConfig, GcReport, disk_space};
 pub use locks::InfohashLock;
 pub use metadata::{
     TorrentFilePreview, TorrentPreview, is_main_video, is_streamable, is_video_path,

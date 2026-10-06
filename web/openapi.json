@@ -5609,7 +5609,9 @@
           "threshold_bytes",
           "target_bytes",
           "derived_freed_bytes",
-          "evicted"
+          "evicted",
+          "min_free_bytes",
+          "orphans"
         ],
         "properties": {
           "derived_freed_bytes": {
@@ -5623,6 +5625,23 @@
             "items": {
               "$ref": "#/components/schemas/EvictedEntry"
             }
+          },
+          "free_bytes_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Free space on the download dir's filesystem before the pass (`None`:\nunreadable).",
+            "minimum": 0
+          },
+          "min_free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "orphans": {
+            "$ref": "#/components/schemas/OrphanReport"
           },
           "target_bytes": {
             "type": "integer",
@@ -7072,6 +7091,39 @@
           "label": {
             "type": "string",
             "description": "Display label (`Chills`)."
+          }
+        }
+      },
+      "OrphanReport": {
+        "type": "object",
+        "description": "Files under the download dir no torrent references.",
+        "required": [
+          "files",
+          "bytes",
+          "deleted",
+          "examples"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "They were deleted (`storage.delete_orphan_files`), not only counted."
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A few of their paths, for the dry run."
+          },
+          "files": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

@@ -123,6 +123,13 @@ fn setup_gc(
             cleanup_target_pct: cfg.storage.cleanup_target_pct,
             interval: std::time::Duration::from_mins(15),
             active_window: std::time::Duration::from_hours(1),
+            min_free_bytes: cfg.storage.min_free_bytes(),
+            orphan_min_age: std::time::Duration::from_hours(cfg.storage.orphan_min_age_hours),
+            delete_orphans: cfg.storage.delete_orphan_files,
+            orphan_exclude: vec![
+                cfg.storage.data_dir.clone(),
+                cfg.storage.data_dir.join("librqbit"),
+            ],
         },
         cfg.storage.download_dir.clone(),
         Some(derived),
