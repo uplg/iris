@@ -43,3 +43,27 @@ id_type!(UserId);
 id_type!(InvitationId);
 id_type!(TorrentId);
 id_type!(SessionId);
+
+/// A v1 `BitTorrent` infohash in hex: 40 hex digits, either case.
+#[must_use]
+pub fn is_infohash_hex(s: &str) -> bool {
+    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_infohash_hex;
+
+    #[test]
+    fn validates_infohash() {
+        assert!(is_infohash_hex("98259ba623eec5f33167c083b51b30122c7fa068"));
+        assert!(is_infohash_hex("ABCDEF0123456789abcdef0123456789ABCDEF01"));
+        // Wrong length.
+        assert!(!is_infohash_hex("98259ba6"));
+        assert!(!is_infohash_hex(""));
+        // Non-hex char.
+        assert!(!is_infohash_hex("98259ba623eec5f33167c083b51b30122c7fa06z"));
+        // Numeric guid (e.g. UNIT3D torrent id) — not an infohash.
+        assert!(!is_infohash_hex("12345"));
+    }
+}

@@ -560,7 +560,7 @@ struct TorrentAttributes {
 ///     a clean 40-char hex string.
 fn normalize_infohash(raw: &str) -> Option<String> {
     let s = raw.trim().to_ascii_lowercase();
-    if s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if iris_core::ids::is_infohash_hex(&s) {
         return Some(s);
     }
     if s.len() == 80 && s.bytes().all(|b| b.is_ascii_hexdigit()) {

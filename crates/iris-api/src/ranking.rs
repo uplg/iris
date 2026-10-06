@@ -111,7 +111,7 @@ fn infohash_from_magnet(magnet: &str) -> Option<String> {
     let lower = magnet.to_ascii_lowercase();
     let start = lower.find("xt=urn:btih:")? + "xt=urn:btih:".len();
     let hash: String = lower[start..].chars().take_while(|c| *c != '&').collect();
-    (hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit())).then_some(hash)
+    iris_core::ids::is_infohash_hex(&hash).then_some(hash)
 }
 
 /// Project the parsed-query summary the frontend renders as a banner

@@ -29,6 +29,7 @@ use async_trait::async_trait;
 use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::Result;
+use iris_core::ids::is_infohash_hex;
 use iris_core::search::{
     DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
     TorrentDetails, TorrentSource,
@@ -112,7 +113,7 @@ impl C411 {
     }
 
     async fn fetch_details(&self, infohash: &str) -> Result<Option<TorrentDetails>> {
-        if !is_infohash(infohash) {
+        if !is_infohash_hex(infohash) {
             // Featured items expose the infohash as `external_id`; if a
             // caller hands us something else (e.g. a numeric Torznab guid
             // from another indexer mistakenly routed here), the c411 API
@@ -330,7 +331,7 @@ impl SearchProvider for C411 {
         // we cached at homepage-fetch time. The search side-effects
         // the link cache, then resolve() finishes through the normal
         // path.
-        if is_infohash(external_id)
+        if is_infohash_hex(external_id)
             && let Some(title) = self.featured_title_for(external_id).await
         {
             tracing::debug!(
@@ -445,13 +446,6 @@ struct HomepageItem {
     tmdb_id: Option<u64>,
     #[serde(default, rename = "uploaderUsername")]
     uploader_username: String,
-}
-
-/// Cheap check: c411 indexes torrents by their 40-char hex SHA-1
-/// infohash. Anything else is wrong-API or a stale id from another
-/// indexer that got mistakenly routed to us — skip the HTTP call.
-fn is_infohash(s: &str) -> bool {
-    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 // /api/torrents/{infohash} response
@@ -614,19 +608,6 @@ mod tests {
             classify_title("Un.simple.accident.2025.MULTi.AD"),
             MediaKind::Movie,
         );
-    }
-
-    #[test]
-    fn validates_infohash() {
-        assert!(is_infohash("98259ba623eec5f33167c083b51b30122c7fa068"));
-        assert!(is_infohash("ABCDEF0123456789abcdef0123456789ABCDEF01"));
-        // Wrong length.
-        assert!(!is_infohash("98259ba6"));
-        assert!(!is_infohash(""));
-        // Non-hex char.
-        assert!(!is_infohash("98259ba623eec5f33167c083b51b30122c7fa06z"));
-        // Numeric guid (e.g. UNIT3D torrent id) — not an infohash.
-        assert!(!is_infohash("12345"));
     }
 
     #[test]

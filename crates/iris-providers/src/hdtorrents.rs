@@ -774,9 +774,8 @@ fn parse_search_page(provider_id: &str, base_url: &Url, html: &str) -> Vec<Searc
         // The site keys everything on the torrent's infohash: details.php,
         // download.php and peers.php all take the 40-hex hash as `id`.
         // Surfacing it enables the infohash-only "In library" matching.
-        let infohash = (external_id.len() == 40
-            && external_id.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then(|| external_id.to_ascii_lowercase());
+        let infohash =
+            iris_core::ids::is_infohash_hex(&external_id).then(|| external_id.to_ascii_lowercase());
 
         let download_url = tds[4]
             .select(&a_sel)
