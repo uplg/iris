@@ -12,6 +12,7 @@ import HlsJs, { ErrorTypes, Events } from 'hls.js';
 
 import { isMobileLike } from '../caps';
 import { normalizeLang } from '../lang';
+import { releaseVideo } from '../mse/media-source';
 import {
 	appendNativeTrack,
 	bindVideoCallbacks,
@@ -108,13 +109,7 @@ export const mountTierF: EngineMount = async (opts) => {
 			dispose: async () => {
 				unbind();
 				video.removeEventListener('error', onErr);
-				try {
-					video.pause();
-				} catch {
-					/* idempotent */
-				}
-				video.removeAttribute('src');
-				video.load();
+				releaseVideo(video);
 			},
 			audioTracks: () => collectNativeAudioTracks(video),
 			setAudioTrack: (id) => setNativeAudioTrack(video, id, opts.manifest.audio)
@@ -163,6 +158,9 @@ export const mountTierF: EngineMount = async (opts) => {
 		renderTextTracksNatively: false,
 		// Evict played-out media; 30 s of scrub-back is plenty.
 		backBufferLength: 30,
+		// VOD resume: the first fragments loaded are the ones at the resume point (seeking at
+		// `canplay` fetched the head of the remux first, to throw it away)
+		...(!live && opts.startPosition > 0 ? { startPosition: opts.startPosition } : {}),
 		// Forward buffer caps. Live keeps both buffers tight — there is no
 		// scrubbing and the stream runs for hours (an unbounded buffer would
 		// OOM the tab). VOD: mobile gets a tighter ceiling (both the duration
@@ -181,6 +179,8 @@ export const mountTierF: EngineMount = async (opts) => {
 					maxBufferSize: mobile ? 20 * 1000 * 1000 : 60 * 1000 * 1000
 				})
 	});
+
+	if (!live && opts.startPosition > 0) initialSeek.done = true;
 
 	// Live-only state: the E-AC-3 WebAudio sidecar and the bounded
 	// master-reload budget for fatal network errors (a dying upstream 502s
@@ -446,11 +446,7 @@ export const mountTierF: EngineMount = async (opts) => {
 			} catch {
 				/* idempotent */
 			}
-			try {
-				video.pause();
-			} catch {
-				/* idempotent */
-			}
+			releaseVideo(video);
 		},
 		audioTracks: () => collectHlsAudioTracks(hls),
 		setAudioTrack: (id) => {

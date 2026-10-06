@@ -131,15 +131,16 @@ function getLibav(): Promise<LibavLike> {
 			(mod as unknown as { LibAV?: (opts: object) => Promise<LibavLike> }).LibAV ??
 			(mod as unknown as { default?: { LibAV?: (opts: object) => Promise<LibavLike> } }).default?.LibAV;
 		if (!factory) throw new Error('libav.js: LibAV factory not found');
-		return factory({
-			base: '/libavjs',
-			// Run on the main thread for now. AudioWorklet-thread or
-			// dedicated-Worker variants are a later polish — the audio
-			// decode path runs at < 1 % CPU on a laptop so it's fine here.
-			noworker: true,
-			nothreads: true,
-			variant
-		});
+		// libav.js runs in its own worker: AC-3 / E-AC-3 / DTS decode off the UI thread, where
+		// it competed with the chrome, the animation frames and the MSE appends (phones on Tier
+		// B included). A browser that can't start that module worker keeps the main thread.
+		const config = { base: '/libavjs', nothreads: true, variant };
+		try {
+			return await factory(config);
+		} catch (e) {
+			console.warn('[iris-core] libav.js worker unavailable, decoding on the main thread:', e);
+			return factory({ ...config, noworker: true });
+		}
 	})();
 	return libavSingleton;
 }
@@ -184,11 +185,15 @@ class LibavAudioDecoder extends CustomAudioDecoder {
 		const pts = Math.round(packet.timestamp * 1_000_000);
 		const ptsLo = pts >>> 0;
 		const ptsHi = Math.floor(pts / 4_294_967_296);
+		// The packet crosses to libav's worker by structured clone, which copies a view's
+		// WHOLE underlying buffer (a demuxer read chunk): hand it just the packet's bytes.
+		const d = packet.data;
+		const data = d.byteOffset === 0 && d.byteLength === d.buffer.byteLength ? d : d.slice();
 		const frames = await this.libav.ff_decode_multi(
 			this.c,
 			this.pkt,
 			this.frame,
-			[{ data: packet.data, pts: ptsLo, ptshi: ptsHi, dts: ptsLo, dtshi: ptsHi }],
+			[{ data, pts: ptsLo, ptshi: ptsHi, dts: ptsLo, dtshi: ptsHi }],
 			false
 		);
 		for (const f of frames) {
@@ -240,9 +245,11 @@ class LibavAudioDecoder extends CustomAudioDecoder {
 				off += view.byteLength;
 			}
 		} else {
+			// libav.js hands back its own copy (out of the WASM heap, or across the worker);
+			// slice only a view onto a larger buffer, which AudioSample can't take as is
 			const view = (Array.isArray(f.data) ? f.data[0]! : f.data) as ArrayBufferView;
 			bytes = new Uint8Array(view.buffer as ArrayBuffer, view.byteOffset, view.byteLength);
-			bytes = bytes.slice();
+			if (view.byteOffset !== 0 || view.byteLength !== view.buffer.byteLength) bytes = bytes.slice();
 		}
 		// Reconstruct a SIGNED 64-bit pts. libav.js returns the high word as a
 		// 32-bit int that can be negative and the low word as unsigned. Doing an

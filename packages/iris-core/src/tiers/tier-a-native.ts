@@ -7,6 +7,7 @@
  */
 
 import { appendNativeTrack, bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
+import { releaseVideo } from '../mse/media-source';
 
 export const mountTierA: EngineMount = async (opts) => {
 	const { container, streamUrl, nativeSubs } = opts;
@@ -22,7 +23,9 @@ export const mountTierA: EngineMount = async (opts) => {
 	container.appendChild(video);
 	video.src = streamUrl;
 
-	const initialSeek = { done: false };
+	// seek as soon as the duration is known: at `canplay` the element has already buffered
+	// from 0 (preload=auto) only to throw it away
+	const initialSeek = { done: false, on: 'loadedmetadata' as const };
 	const unbind = bindVideoCallbacks(video, opts, initialSeek);
 
 	let firstPlayable = false;
@@ -51,13 +54,7 @@ export const mountTierA: EngineMount = async (opts) => {
 			unbind();
 			video.removeEventListener('loadeddata', onLoadedData);
 			video.removeEventListener('error', onErr);
-			try {
-				video.pause();
-			} catch {
-				/* idempotent */
-			}
-			video.removeAttribute('src');
-			video.load();
+			releaseVideo(video);
 		}
 	});
 	return handle;

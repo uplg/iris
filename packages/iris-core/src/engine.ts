@@ -144,7 +144,11 @@ export function manifestAudioTracks(manifest: Manifest, activeIdx: number): Engi
 /** Convenience: build the standard set of `<video>` event listeners
  *  that forward to the unified callbacks. Engines that wrap a `<video>`
  *  (A/B/F) all use this. */
-export function bindVideoCallbacks(video: HTMLVideoElement, opts: EngineMountOptions, initialSeek: { done: boolean }): () => void {
+/** The resume seek `bindVideoCallbacks` applies once. `on` is when: `canplay` by default;
+ *  `loadedmetadata` lets a plain `<video src>` seek before it buffers from 0. */
+export type InitialSeek = { done: boolean; on?: 'canplay' | 'loadedmetadata' };
+
+export function bindVideoCallbacks(video: HTMLVideoElement, opts: EngineMountOptions, initialSeek: InitialSeek): () => void {
 	const onTime = () => {
 		opts.onTimeUpdate?.(video.currentTime);
 		// A moving playhead is the one proof nobody is waiting. It closes any
@@ -175,6 +179,7 @@ export function bindVideoCallbacks(video: HTMLVideoElement, opts: EngineMountOpt
 	const onStalled = () => {
 		if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) onBusy();
 	};
+	const seekEvent = initialSeek.on ?? 'canplay';
 	const onCanPlay = () => {
 		if (initialSeek.done) return;
 		initialSeek.done = true;
@@ -192,7 +197,7 @@ export function bindVideoCallbacks(video: HTMLVideoElement, opts: EngineMountOpt
 	video.addEventListener('pause', onPause);
 	video.addEventListener('playing', onPlaying);
 	video.addEventListener('ended', onEnded);
-	video.addEventListener('canplay', onCanPlay);
+	video.addEventListener(seekEvent, onCanPlay);
 	// Busy while the element is starved or repositioning, idle once it can
 	// actually show something. `seeking`/`seeked` matter for Tier E, where a
 	// reposition means a fresh transcode rather than an instant jump.
@@ -209,7 +214,7 @@ export function bindVideoCallbacks(video: HTMLVideoElement, opts: EngineMountOpt
 		video.removeEventListener('pause', onPause);
 		video.removeEventListener('playing', onPlaying);
 		video.removeEventListener('ended', onEnded);
-		video.removeEventListener('canplay', onCanPlay);
+		video.removeEventListener(seekEvent, onCanPlay);
 		video.removeEventListener('waiting', onBusy);
 		video.removeEventListener('stalled', onStalled);
 		video.removeEventListener('seeking', onBusy);
