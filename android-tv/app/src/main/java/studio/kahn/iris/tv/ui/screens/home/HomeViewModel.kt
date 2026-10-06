@@ -154,8 +154,9 @@ internal fun homeUi(d: HomeData): HomeUiState {
 
 internal fun heroPrefsKey(item: ContinueWatchingItem): String = item.collectionId?.toString() ?: ""
 
+// Only the server's title match, which it sets when it trusts it: the tracker's raw id is never shown.
 internal fun featuredMetaKey(r: studio.kahn.iris.tv.data.SearchResult): MetaKey? =
-    (r.titleMatch?.tmdbId ?: r.tmdbId)?.let { MetaKey(it, r.titleMatch?.kind ?: r.kind) }
+    r.titleMatch?.let { MetaKey(it.tmdbId, it.kind) }
 
 /**
  * The home (TV.dc.html): reads every row when the screen starts (so coming back from the

@@ -9,7 +9,7 @@
 //!
 //! For each fresh release in the window we:
 //!   1. drop non-video + dead (0-seeder) releases,
-//!   2. reconcile the SCENE name to TMDB (persistent-cached `resolve_release_name`),
+//!   2. reconcile the SCENE name to TMDB (persistent-cached `suggest_release_name`),
 //!   3. keep the best release per title (shared `recommended_cmp`),
 //!   4. enrich with full TMDB metadata and upsert into `catalog_items` with
 //!      `availability='available'` + the grab facts.
@@ -116,6 +116,7 @@ async fn run_slice(
             return;
         }
     };
+    providers.remember_tracker_ids(&page.results);
     if page.results.is_empty() {
         return;
     }
@@ -166,7 +167,7 @@ async fn collect_best(
         // Reconcile to TMDB (persistent-cached). Releases TMDB can't identify
         // are skipped — a poster-driven shelf has nothing to show for them.
         let Some(resolved) =
-            tmdb_resolve::resolve_release_name(pool, tmdb, &r.title, Some(tk)).await
+            tmdb_resolve::suggest_release_name(pool, tmdb, &r.title, Some(tk)).await
         else {
             continue;
         };

@@ -135,6 +135,20 @@ pub async fn prune(pool: &SqlitePool, before: DateTime<Utc>) -> Result<u64, sqlx
     Ok(res.rows_affected())
 }
 
+/// Drop every entry the TMDB trust gate can't vouch for: negative answers
+/// and anything outside the `strict_prefix` namespace (the fuzzy
+/// suggestions, re-fetched on demand). Run by `tmdb-trust --apply`.
+pub async fn flush_untrusted(pool: &SqlitePool, strict_prefix: &str) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        "DELETE FROM tmdb_resolve_cache \
+         WHERE tmdb_id IS NULL OR substr(cleaned_name, 1, length(?1)) <> ?1",
+    )
+    .bind(strict_prefix)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::test_support::migrated_pool;

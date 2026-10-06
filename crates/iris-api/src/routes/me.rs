@@ -766,7 +766,7 @@ async fn append_grabbable_next_up(
             infohash: String::new(),
             torrent_name: f.display_title,
             tmdb_id: f.tmdb_id,
-            tmdb_verified: f.tmdb_id.is_some(),
+            tmdb_verified: f.tmdb_verified,
             file_idx: 0,
             position_seconds: 0.0,
             duration_seconds: None,

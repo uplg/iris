@@ -350,10 +350,9 @@ pub(crate) async fn mark_watched(
 pub struct ResolveBody {
     pub provider_id: String,
     pub external_id: String,
-    /// Optional TMDB id, captured at search time. We persist it on ingest so
-    /// the library/continue-watching endpoints can ship posters without a
-    /// fuzzy title-year lookup. Frontends are expected to pass this through
-    /// from the search hit when available.
+    /// Ignored, kept for shipped clients. Clients send their own guess
+    /// here, so the server records the tracker's id from the search it
+    /// served instead (`ProviderRegistry::tracker_tmdb_id`).
     #[serde(default)]
     pub tmdb_id: Option<i64>,
     /// Explicit consent to ingest a movie whose collection already holds a
@@ -671,9 +670,8 @@ pub(crate) async fn ingest_core(
     .map_err(map_engine_err)?;
     reject_unstreamable(state, &result).await?;
 
-    // No torrent-level tmdb resolution: the collection's id is the single
-    // source of truth, resolved from the collection's SCENE identity in
-    // `collection_assign::resolve_collection_tmdb` once the torrent is assigned.
+    // The tracker's own TMDB id is recorded on the torrent (trust signal T1);
+    // the collection's id is settled by the trust gate once it is assigned.
     let row = match record_ingest(
         state,
         &result.snapshot,
@@ -956,15 +954,19 @@ fn tmdb_kind_hint(collection_kind: Option<&str>) -> Option<crate::tmdb::TmdbKind
     collection_kind.and_then(crate::tmdb::TmdbKind::from_wire)
 }
 
-/// Confirm or reject the torrent's *collection* `tmdb_id` by matching its
-/// declared runtime against the file's probed duration. Idempotent: once
-/// verified, never re-checked. No-op when the collection has no id yet or the
-/// runtime is unknown.
+/// The legacy runtime check: confirm or reject a LEGACY collection's
+/// `tmdb_id` (one `tmdb-trust --apply` hasn't evaluated yet) by matching its
+/// declared runtime against the file's probed duration, so such rows keep
+/// today's behaviour until the apply step. It is no gate for a trusted
+/// collection — `tmdb_verified` is derived from the trust there — and no
+/// veto either: kind is already part of every trust signal, and episode
+/// runtimes on TMDB are too loose to overrule one. Idempotent: once
+/// verified, never re-checked.
 async fn verify_tmdb_match(state: &AppState, infohash: &str, probed_duration_secs: Option<f64>) {
     let Ok(Some(row)) = iris_db::torrents::find_by_infohash(state.db(), infohash).await else {
         return;
     };
-    if row.tmdb_verified {
+    if row.tmdb_verified || row.collection_tmdb_trust.is_some() {
         return;
     }
     let Some(tmdb_id) = row.collection_tmdb_id.filter(|id| *id > 0) else {
@@ -1003,8 +1005,6 @@ async fn verify_tmdb_match(state: &AppState, infohash: &str, probed_duration_sec
         verified,
         "tmdb verification result",
     );
-    // The id lives on the collection already (resolved from its SCENE identity);
-    // this only flips the per-torrent `tmdb_verified` flag the UI trusts.
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1020,10 +1020,11 @@ pub struct TorrentView {
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
     pub tmdb_id: Option<i64>,
-    /// True only when we've matched the TMDB runtime against the file's
-    /// probed duration within ±15 %. Frontends use the `(tmdb_id,
-    /// tmdb_verified=true)` pair to decide whether to fetch posters /
-    /// titles from TMDB; otherwise they stick with the filename.
+    /// True when the collection's TMDB match is trusted (see `tmdb_trust`);
+    /// for a legacy collection not yet re-evaluated, the old runtime check.
+    /// Frontends use the `(tmdb_id, tmdb_verified=true)` pair to decide
+    /// whether to fetch posters / titles from TMDB; otherwise they stick
+    /// with the filename.
     pub tmdb_verified: bool,
     /// `"movie"` / `"tv"` from the parent collection. Clients pass
     /// this to `/api/metadata/tmdb/{id}?kind=` so TMDB's separate
@@ -2595,6 +2596,10 @@ pub(crate) async fn record_ingest(
             infohash: snapshot.infohash.clone(),
             name: snapshot.name.clone().unwrap_or_else(fallback_name),
             total_size_bytes: snapshot.total_size_bytes,
+            tracker_tmdb_id: state
+                .providers()
+                .tracker_tmdb_id(&source_provider, &source_external_id)
+                .and_then(|id| i64::try_from(id).ok()),
             source_provider: Some(source_provider),
             source_external_id: Some(source_external_id),
             added_by,

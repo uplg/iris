@@ -195,31 +195,51 @@ pub(crate) async fn search(
     }))
 }
 
-/// Resolve every release to its TMDB title (cached: DB, then memory, then
-/// TMDB), and settle the poster each card shows, in one place:
+/// Settle the TMDB title and poster each card shows, through the trust
+/// gate (`tmdb_trust`): the release's own tracker id cross-checked with
+/// the strict SCENE match. `title_match` is set only for a trusted match.
+/// The poster:
 ///
-/// 1. the tracker's own poster, when it ships one: the uploader picked it
-///    for this exact release (resized when it is a tiny TMDB thumbnail);
-/// 2. else the poster of the title the SCENE name resolves to.
-async fn match_titles(state: &AppState, results: &mut [iris_core::search::SearchResult]) {
+/// 1. trusted match: the tracker's own poster when it ships one (picked by
+///    the uploader for this release, resized when a tiny TMDB thumbnail),
+///    else the trusted title's TMDB poster;
+/// 2. no trusted match: the tracker's poster only when the tracker made no
+///    TMDB claim at all — a poster riding on a rejected id goes with it.
+pub(crate) async fn match_titles(
+    state: &AppState,
+    results: &mut [iris_core::search::SearchResult],
+) {
     let Some(tmdb) = state.tmdb() else {
         return;
     };
-    let wanted: Vec<_> = results.iter().map(|r| (r.title.clone(), r.kind)).collect();
-    let matches = crate::fanout::map_ordered(wanted, |(title, kind)| async move {
-        crate::tmdb_resolve::resolve_release_name(state.db(), tmdb, &title, kind.map(Into::into))
-            .await
+    let wanted: Vec<_> = results
+        .iter()
+        .map(|r| (r.title.clone(), r.kind, r.tmdb_id))
+        .collect();
+    let matches = crate::fanout::map_ordered(wanted, |(title, kind, tracker)| async move {
+        crate::tmdb_trust::trusted_release_match(
+            state.db(),
+            tmdb,
+            &title,
+            kind.map(Into::into),
+            tracker,
+        )
+        .await
     })
     .await;
     for (r, m) in results.iter_mut().zip(matches) {
-        r.poster_url = r
+        let tracker_poster = r
             .poster_url
-            .as_deref()
-            .map(|url| crate::tmdb::resized_poster(url, crate::tmdb::POSTER_SIZE))
-            .or_else(|| {
-                let path = m.as_ref()?.poster_path.as_deref()?;
+            .take()
+            .map(|url| crate::tmdb::resized_poster(&url, crate::tmdb::POSTER_SIZE));
+        r.poster_url = match m.as_ref() {
+            Some(m) => tracker_poster.or_else(|| {
+                let path = m.poster_path.as_deref()?;
                 Some(crate::tmdb::image_url(path, crate::tmdb::POSTER_SIZE))
-            });
+            }),
+            None if r.tmdb_id.is_none() => tracker_poster,
+            None => None,
+        };
         r.title_match = m.map(title_match_of);
     }
 }
@@ -494,7 +514,17 @@ fn details_failure(e: iris_core::Error) -> ApiError {
 async fn release_details(state: &AppState, details: TorrentDetails) -> ReleaseDetails {
     let matched = match state.tmdb() {
         Some(tmdb) => {
-            crate::tmdb_resolve::resolve_release_name(state.db(), tmdb, &details.title, None).await
+            let tracker = state
+                .providers()
+                .tracker_tmdb_id(&details.provider_id, &details.external_id);
+            crate::tmdb_trust::trusted_release_match(
+                state.db(),
+                tmdb,
+                &details.title,
+                None,
+                tracker,
+            )
+            .await
         }
         None => None,
     };

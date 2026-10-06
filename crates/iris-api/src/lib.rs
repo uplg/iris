@@ -24,8 +24,9 @@ pub mod simkl;
 pub mod state;
 pub mod supervise;
 pub mod tmdb;
-pub mod tmdb_backfill;
 pub mod tmdb_resolve;
+pub mod tmdb_trust;
+pub mod tmdb_trust_audit;
 pub mod ttl_cache;
 
 use std::path::{Path, PathBuf};
@@ -252,14 +253,6 @@ fn spawn_background_jobs(
     if let Some(live_tv) = app_state.live_tv() {
         live_tv.clone().spawn_refresh_loop();
     }
-
-    // One-shot TMDB id migration: legacy torrents were ingested with
-    // the indexer's (often wrong) tmdb_id; this sweep re-resolves each
-    // one from its SCENE-cleaned name and re-runs runtime verification
-    // against the corrected id. New ingests already go through the
-    // override path in `routes::torrents::ingest`, so this only needs
-    // to run once at boot.
-    tmdb_backfill::spawn(app_state.clone());
 
     // One-shot at boot: complete episodes left stuck in-progress (e.g. "97 %")
     // because the viewer skipped the credits and jumped ahead before the

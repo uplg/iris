@@ -56,6 +56,8 @@ time = "0.3.55"
 reqwest = { workspace = true }
 rand = { workspace = true }
 semver = { workspace = true }
+# Accent folding for the TMDB trust gate's title comparison.
+unicode-normalization = "0.1.25"
 utoipa = { workspace = true }
 
 # Live TV: playlist proxy signing + XMLTV guide decoding

@@ -125,6 +125,10 @@ pub struct TmdbSuggestion {
     pub kind: TmdbKind,
     pub tmdb_id: u64,
     pub title: String,
+    /// TMDB's `original_title` / `original_name`, when it differs from
+    /// `title`. The strict SCENE match accepts either. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_title: Option<String>,
     pub year: Option<u32>,
     pub overview: Option<String>,
     pub poster_path: Option<String>,
@@ -276,11 +280,16 @@ impl TmdbMultiResult {
     /// The suggestion for this result, typed as `kind`.
     fn into_suggestion(self, kind: TmdbKind) -> Option<TmdbSuggestion> {
         let title = self.title.or(self.name)?;
+        let original_title = self
+            .original_title
+            .or(self.original_name)
+            .filter(|o| *o != title);
         let date = self.release_date.or(self.first_air_date);
         Some(TmdbSuggestion {
             kind,
             tmdb_id: self.id,
             title,
+            original_title,
             year: year_of(date.as_deref()),
             overview: self.overview.filter(|s| !s.is_empty()),
             poster_path: self.poster_path,
@@ -603,6 +612,19 @@ impl TmdbClient {
         tmdb_id: u64,
         kind_hint: Option<TmdbKind>,
     ) -> Option<MediaMetadata> {
+        self.try_lookup_with_kind(tmdb_id, kind_hint)
+            .await
+            .flatten()
+    }
+
+    /// [`Self::lookup_with_kind`] telling the two misses apart: `None` when
+    /// TMDB couldn't be asked, `Some(None)` when it answered that the id
+    /// exists in neither namespace.
+    pub async fn try_lookup_with_kind(
+        &self,
+        tmdb_id: u64,
+        kind_hint: Option<TmdbKind>,
+    ) -> Option<Option<MediaMetadata>> {
         // Cache key includes the kind so a /movie/X lookup doesn't
         // serve a stale /tv/X entry from a previous call.
         let cache_key = (tmdb_id, kind_hint.map(TmdbKind::as_wire));
@@ -630,10 +652,10 @@ impl TmdbClient {
                 Some(CacheEntry::NotFound)
             })
             .await?;
-        match entry {
+        Some(match entry {
             CacheEntry::Found(m) => Some(*m),
             CacheEntry::NotFound => None,
-        }
+        })
     }
 
     async fn fetch(&self, tmdb_id: u64, kind: TmdbKind) -> Result<MediaMetadata, Miss> {
@@ -784,6 +806,8 @@ struct TmdbMultiResult {
     media_type: Option<String>,
     title: Option<String>,          // movies
     name: Option<String>,           // tv
+    original_title: Option<String>, // movies
+    original_name: Option<String>,  // tv
     release_date: Option<String>,   // movies
     first_air_date: Option<String>, // tv
     overview: Option<String>,
