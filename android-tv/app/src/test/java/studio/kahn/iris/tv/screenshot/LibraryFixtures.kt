@@ -18,6 +18,7 @@ import studio.kahn.iris.tv.data.HistoryItem
 import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.SeasonPackEntry
+import studio.kahn.iris.tv.data.TitleWatch
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 
@@ -38,6 +39,7 @@ object LibraryFixtures {
         size: Long = 4 * GB,
         torrents: Long = 1,
         ghost: Boolean = false,
+        watch: TitleWatch? = null,
     ) = CollectionListItem(
         displayTitle = name,
         episodeCount = episodes,
@@ -47,7 +49,31 @@ object LibraryFixtures {
         totalSizeBytes = size,
         ghost = ghost,
         isAnime = anime,
+        watch = watch,
     )
+
+    fun watch(
+        infohash: String,
+        position: Double,
+        duration: Double? = 3_000.0,
+        season: Long? = null,
+        episode: Long? = null,
+        completed: Boolean = false,
+        watchedEpisodes: Long = 0,
+        fileIdx: Long = 0,
+    ) = TitleWatch(
+        completed = completed,
+        fileIdx = fileIdx,
+        infohash = infohash,
+        lastWatchedAt = at.minusHours(3),
+        positionSeconds = position,
+        watchedEpisodes = watchedEpisodes,
+        durationSeconds = duration,
+        episode = episode,
+        season = season,
+    )
+
+    private val severanceWatch = watch("aa04", 1_200.0, season = 2, episode = 4, watchedEpisodes = 12, fileIdx = 4)
 
     fun torrent(
         infohash: String,
@@ -90,19 +116,19 @@ object LibraryFixtures {
     )
 
     val titles = listOf(
-        title(1, "Severance", MediaKind.tv, episodes = 19, size = 38 * GB, torrents = 2),
-        title(2, "Dune: Part Two", size = 14 * GB),
-        title(3, "The Bear", MediaKind.tv, episodes = 28, size = 22 * GB),
+        title(1, "Severance", MediaKind.tv, episodes = 19, size = 38 * GB, torrents = 2, watch = severanceWatch),
+        title(2, "Dune: Part Two", size = 14 * GB, watch = watch("aa03", 9_000.0, 9_000.0, completed = true, watchedEpisodes = 1)),
+        title(3, "The Bear", MediaKind.tv, episodes = 28, size = 22 * GB, watch = watch("aa01", 600.0, season = 4, episode = 1)),
         title(4, "Shōgun", MediaKind.tv, episodes = 10, size = 30 * GB),
-        title(5, "Perfect Days", size = 6 * GB),
+        title(5, "Perfect Days", size = 6 * GB, watch = watch("aa05", 2_400.0, 7_400.0)),
         title(6, "Frieren", MediaKind.tv, anime = true, episodes = 28, size = 18 * GB),
         title(7, "Andor", MediaKind.tv, episodes = 24, size = 40 * GB),
         title(8, "Anatomy of a Fall", size = 9 * GB),
         title(9, "Arcane", MediaKind.tv, episodes = 9, size = 12 * GB),
         title(10, "Past Lives", ghost = true),
-        title(11, "Slow Horses", MediaKind.tv, episodes = 30),
+        title(11, "Slow Horses", MediaKind.tv, episodes = 30, watch = watch("ff11", 2_900.0, season = 3, episode = 2, completed = true, watchedEpisodes = 14)),
         title(12, "The Zone of Interest"),
-        title(13, "Fallout", MediaKind.tv, episodes = 8),
+        title(13, "Fallout", MediaKind.tv, episodes = 8, watch = watch("ff13", 3_000.0, season = 1, episode = 8, completed = true, watchedEpisodes = 8)),
         title(14, "Aftersun"),
     )
 
@@ -175,6 +201,8 @@ object LibraryFixtures {
         hasNewSinceLastVisit = 2,
         numbering = "seasonal",
         onWatchlist = true,
+        normalizedName = "severance",
+        watch = severanceWatch,
         seasonPacks = listOf(
             SeasonPackEntry(foundAt = at, indexerProvider = "torr9", indexerTorrentId = "p2", season = 2, language = "french", quality = "1080p", seeders = 88, sizeBytes = 21 * GB),
         ),
@@ -185,6 +213,7 @@ object LibraryFixtures {
         episodes = emptyList(),
         id = id(2),
         kind = MediaKind.movie,
+        watch = watch("aa03", 9_000.0, 9_000.0, completed = true, watchedEpisodes = 1),
         torrents = listOf(torrents[2], torrent("aa06", "Dune.Part.Two.2024.MULTi.1080p.BluRay.x264", collection = 2, canDelete = false, addedBy = "Camille")),
     )
 

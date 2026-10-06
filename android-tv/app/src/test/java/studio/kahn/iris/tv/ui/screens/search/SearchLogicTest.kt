@@ -8,6 +8,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import studio.kahn.iris.tv.data.LibraryMatch
+import studio.kahn.iris.tv.data.TitleWatch
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.ParsedQueryInfo
 import studio.kahn.iris.tv.data.ProviderResultMeta
@@ -126,5 +127,26 @@ class SearchLogicTest {
         val play = matchTarget(m.copy(episodeInfohash = "abc", episodeFileIdx = 2, episodeSeason = 3, episodeNumber = 4))
         assertEquals(MatchTarget.Play("abc", 2, "Play S3:E4", "The episode you asked for is on disk"), play)
         assertEquals("2 releases on disk", matchTarget(m.copy(kind = "movie", torrentCount = 2)).facts)
+    }
+
+    @Test
+    fun libraryMatchResumesWhereThePersonStopped() {
+        val m = LibraryMatch(collectionId = "c", displayTitle = "Show", episodeCount = 9, isAnime = false, kind = "tv", torrentCount = 1)
+        val watch = TitleWatch(
+            completed = false,
+            fileIdx = 4,
+            infohash = "def",
+            lastWatchedAt = OffsetDateTime.parse("2026-10-06T10:00:00Z"),
+            positionSeconds = 1_620.0,
+            watchedEpisodes = 3,
+            durationSeconds = 3_000.0,
+            episode = 4,
+            season = 2,
+        )
+        assertEquals(MatchTarget.Play("def", 4, "Resume S2:E4", "23 min left"), matchTarget(m.copy(watch = watch)))
+        assertEquals(MatchTarget.Play("def", 4, "Resume", "In progress"), matchTarget(m.copy(watch = watch.copy(season = null, episode = null, durationSeconds = null))))
+        val asked = matchTarget(m.copy(watch = watch, episodeInfohash = "abc", episodeFileIdx = 2, episodeSeason = 3, episodeNumber = 1))
+        assertEquals(MatchTarget.Play("abc", 2, "Resume S3:E1", "23 min left"), asked)
+        assertEquals(MatchTarget.Open("c", "9 episodes on disk"), matchTarget(m.copy(watch = watch.copy(completed = true))))
     }
 }

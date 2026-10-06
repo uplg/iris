@@ -55,6 +55,17 @@ object SearchFixtures {
         isAnime = false,
         kind = "tv",
         torrentCount = 2,
+        watch = TitleWatch(
+            completed = false,
+            fileIdx = 3,
+            infohash = "abc",
+            lastWatchedAt = at(1),
+            positionSeconds = 1_620.0,
+            watchedEpisodes = 12,
+            durationSeconds = 3_000.0,
+            episode = 4,
+            season = 2,
+        ),
     )
 
     private fun release(

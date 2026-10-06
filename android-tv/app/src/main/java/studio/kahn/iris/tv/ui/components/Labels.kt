@@ -142,6 +142,7 @@ fun StatusLine(
     tone: StatusTone = StatusTone.Muted,
     style: TextStyle = IrisType.meta,
     icon: ImageVector? = tone.icon,
+    maxLines: Int = 1,
 ) {
     Row(
         modifier,
@@ -151,7 +152,7 @@ fun StatusLine(
         if (icon != null) {
             Icon(icon, contentDescription = null, tint = tone.color, modifier = Modifier.size(IrisSize.iconSmall))
         }
-        Text(text, style = style, color = tone.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text, style = style, color = tone.color, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
     }
 }
 

@@ -28,8 +28,8 @@ class LibraryModelTest {
         val ghost = F.titles.first { it.ghost == true }
         assertEquals(Status(StatusTone.Info, "No longer on disk"), titleStatus(ghost, null))
         val severance = F.titles.first()
-        assertEquals("19 episodes on disk", titleStatus(severance, null).text)
-        assertEquals("On disk", titleStatus(F.titles[1], null).text)
+        assertEquals("19 episodes on disk", titleStatus(severance.copy(watch = null), null).text)
+        assertEquals("On disk", titleStatus(F.titles[1].copy(watch = null), null).text)
     }
 
     @Test
@@ -102,11 +102,18 @@ class LibraryModelTest {
     }
 
     @Test
-    fun titlesUiPutsInProgressInWords() {
-        val ui = titlesUi(F.titles, F.torrents, F.watching, emptyList(), TitleFilters())
-        val perfect = ui.cards.first { it.title == "Perfect Days" }
-        assertEquals("1 h 23 min left", perfect.status.text)
-        assertEquals(2_400f / 7_400f, perfect.progress!!, 0.001f)
+    fun titlesUiSaysWhereThePersonIs() {
+        val ui = titlesUi(F.titles, F.torrents, emptyList(), TitleFilters())
+        fun card(title: String) = ui.cards.first { it.title == title }
+        assertEquals("In progress · 1 h 23 min left", card("Perfect Days").status.text)
+        assertEquals(2_400f / 7_400f, card("Perfect Days").progress!!, 0.001f)
+        assertEquals(Status(StatusTone.Ok, "In progress · S2:E4 · 30 min left"), card("Severance").status)
+        assertEquals(Status(StatusTone.Info, "Watched"), card("Fallout").status)
+        assertTrue(card("Fallout").watched)
+        assertNull(card("Fallout").progress)
+        assertEquals("Last watched S3:E2", card("Slow Horses").status.text)
+        assertEquals(StatusTone.Busy, card("The Bear").status.tone)
+        assertNull(card("The Bear").progress)
         assertEquals("14 titles", ui.countWords)
     }
 }

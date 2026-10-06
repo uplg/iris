@@ -177,7 +177,8 @@ private fun ArtCard(
             if (meta != null) {
                 Text(meta, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (status != null) StatusLine(status, tone = statusTone)
+            // A narrow poster cuts "In progress · S1:E7 · 30 min left" short on one line.
+            if (status != null) StatusLine(status, tone = statusTone, maxLines = 2)
         }
     }
 }
