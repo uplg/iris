@@ -111,7 +111,8 @@ export const isWatched = (t: number, dur: number | null): boolean => dur !== nul
 export const isNearEnd = (t: number, dur: number | null): boolean => dur !== null && dur > 0 && t / dur >= NEXT_EPISODE_FRACTION;
 
 /** A heartbeat is due past 5 s of media, 7 s after the last one. */
-export const heartbeatDue = (t: number, lastSaved: number): boolean => t > 5 && t - lastSaved > 7;
+/** A position worth saving: past the opening seconds, and 7 s away from the last save, either way (a seek back counts). */
+export const heartbeatDue = (t: number, lastSaved: number): boolean => t > 5 && Math.abs(t - lastSaved) > 7;
 
 /** The probe and manifest polls: the « not on disk yet » answer means try again. */
 export const notOnDisk = (e: unknown): boolean => e instanceof Error && e.message.includes('not yet on disk');

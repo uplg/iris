@@ -60,7 +60,7 @@
 {#snippet season(n: number)}
 	{@const s = seasons.find((x) => x.season === n)}
 	{#if s}
-		{#each s.packs as p (`${p.season}-${p.language ?? '_'}-${p.indexer_torrent_id}`)}
+		{#each s.packs as p (`${p.season}-${p.language ?? '_'}-${p.indexer_provider}-${p.indexer_torrent_id}`)}
 			<SeasonPack collectionId={c.id} pack={p} />
 		{/each}
 		{#if s.items.length}

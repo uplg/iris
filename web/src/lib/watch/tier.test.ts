@@ -122,5 +122,7 @@ describe('progress', () => {
 		expect(heartbeatDue(8, 0)).toBe(true);
 		expect(heartbeatDue(14, 8)).toBe(false);
 		expect(heartbeatDue(15.5, 8)).toBe(true);
+		expect(heartbeatDue(300, 2700)).toBe(true);
+		expect(heartbeatDue(2695, 2700)).toBe(false);
 	});
 });

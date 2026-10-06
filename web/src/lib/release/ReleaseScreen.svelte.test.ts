@@ -61,6 +61,15 @@ describe('ReleaseScreen', () => {
 		expect(api.sent('POST', '/torrents')[0].body).toMatchObject({ provider_id: 'torr9', external_id: '1', allow_duplicate: false });
 	});
 
+	it('on disk: plays from disk even when the torrent preview fails (a full leech slot)', async () => {
+		backend({
+			'POST /torrents/preview': json({ error: 'provider_slot_limit', message: 'Download slots are full' }, 409),
+			'GET /search/details?provider=torr9&id=1': { ...details(), library_infohash: 'abc', library_file_idx: 0 }
+		});
+		await show();
+		await expect.element(screen.getByRole('link', { name: 'Play from disk' })).toHaveAttribute('href', '/watch/abc/0');
+	});
+
 	it('nobody seeds it: the grab is not operable and says why', async () => {
 		const api = backend({ 'GET /search/details?provider=torr9&id=1': details({ seeders: 0 }) });
 		await show();

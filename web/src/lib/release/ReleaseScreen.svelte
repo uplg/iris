@@ -149,12 +149,16 @@
 			</ul>
 		{/if}
 
+		<!-- what is on disk plays whatever the torrent preview answers (a full leech slot fails it) -->
+		{#if owned}
+			<p class="callout">
+				<span><Icon name="circle-check" /> This release is already in your library: it plays from disk, nothing to download.</span>
+			</p>
+			<div class="actions">
+				<a class="btn primary big" href={watchHref(owned.infohash, owned.idx)}><Icon name="play" />Play from disk</a>
+			</div>
+		{/if}
 		<Loaded value={loadable(preview)}>
-			{#if owned}
-				<p class="callout">
-					<span><Icon name="circle-check" /> This release is already in your library: it plays from disk, nothing to download.</span>
-				</p>
-			{/if}
 			{#if dead}
 				<p class="warn-text reason" id="{uid}-dead">
 					<Icon name="triangle-alert" />{DEAD}: this release cannot be downloaded. Try another one.
@@ -168,7 +172,6 @@
 
 			<div class="actions">
 				{#if owned}
-					<a class="btn primary big" href={watchHref(owned.infohash, owned.idx)}><Icon name="play" />Play from disk</a>
 					<button class="btn big" {...pending(grab.busy)} {...unavailable(reason)} onclick={play}>
 						<Icon name="download" busy={grab.busy} />Download anyway
 					</button>
