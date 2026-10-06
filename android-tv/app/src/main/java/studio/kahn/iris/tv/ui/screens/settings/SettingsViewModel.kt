@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.absentAs
 import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.ChangeDisplayNameRequest
@@ -164,7 +165,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             launch { readReco() }
             launch { readDevices() }
             launch {
-                val next = load(mutable.value.passkeys) { api().listPasskeys() }
+                val next = load(mutable.value.passkeys) { absentAs(emptyList()) { api().listPasskeys() } }
                 mutable.update { it.copy(passkeys = next) }
             }
         }

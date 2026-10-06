@@ -29,3 +29,14 @@ fun HttpException.irisError(): ApiErrorEnvelope? = runCatching {
         envelopeJson.decodeFromString<ApiErrorEnvelope>(it)
     }
 }.getOrNull()
+
+/**
+ * [read], or [absent] when the server has no such endpoint (404): one older than this app. Only
+ * for reads whose path names no resource, where a 404 can mean nothing else.
+ */
+suspend fun <T> absentAs(absent: T, read: suspend () -> T): T =
+    try {
+        read()
+    } catch (e: HttpException) {
+        if (e.code() == 404) absent else throw e
+    }

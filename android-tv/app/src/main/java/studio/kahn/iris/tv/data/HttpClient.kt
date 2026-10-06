@@ -11,6 +11,7 @@ import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.Response
 import okhttp3.Route
 import okhttp3.logging.HttpLoggingInterceptor
@@ -74,7 +75,7 @@ fun buildOkHttpClient(
             if (response.code == HTTP_UPGRADE_REQUIRED) {
                 onOutdated()
             }
-            response
+            spaFallbackAsNotFound(response)
         }
         .apply {
             if (BuildConfig.DEBUG) addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
@@ -141,6 +142,25 @@ fun buildUpdateOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .readTimeout(30, TimeUnit.SECONDS)
     .callTimeout(0, TimeUnit.MILLISECONDS)
     .build()
+
+/**
+ * An `/api/` path the server does not route falls through to the web app's `index.html` (200,
+ * HTML): a server older than this app answers a newer endpoint that way. Said as the 404 it is,
+ * so the screens degrade instead of failing to decode a web page as JSON.
+ */
+internal fun spaFallbackAsNotFound(response: Response): Response {
+    val type = response.body.contentType()
+    val html = type?.type == "text" && type.subtype == "html"
+    if (!response.isSuccessful || !html || "/api/" !in response.request.url.encodedPath) return response
+    response.close()
+    return response.newBuilder()
+        .code(HTTP_NOT_FOUND)
+        .message("Not Found")
+        .body(ByteArray(0).toResponseBody())
+        .build()
+}
+
+private const val HTTP_NOT_FOUND = 404
 
 /** The refresh generation when a request left: its 401 is older than any refresh since. */
 private class SentAtRefresh(val generation: Int)

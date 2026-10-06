@@ -82,7 +82,7 @@ fun WatchScreen(
                 playback = playback,
                 chrome = chrome,
                 header = header,
-                keptFor = keptForText(ready.collectionId, collection?.kind ?: if (header.isMovie) MediaKind.movie else MediaKind.tv),
+                keptFor = keptForText(ready.ownLanguages.collectionId, collection?.kind ?: if (header.isMovie) MediaKind.movie else MediaKind.tv),
                 onBack = onBack,
                 onNavigateToFile = onNavigateToFile,
             )

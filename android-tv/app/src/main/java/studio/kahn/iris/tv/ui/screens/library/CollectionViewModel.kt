@@ -34,6 +34,7 @@ import studio.kahn.iris.tv.data.ResolveBody
 import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.screens.player.LanguageChoices
+import studio.kahn.iris.tv.ui.screens.player.perTitle
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
@@ -177,7 +178,8 @@ class CollectionViewModel(private val container: AppContainer, private val colle
         val series = d.valueOrNull?.kind == MediaKind.tv
         CollectionUiState(
             page = d.map { collectionPage(it, m, cw, chosen) },
-            languages = if (series) pr.map { languagesUi(it, d.valueOrNull, m, UUID.fromString(collectionId)) } else null,
+            // A server older than per-title choices would save them as the account's: no panel there.
+            languages = if (series && pr.valueOrNull?.perTitle != false) pr.map { languagesUi(it, d.valueOrNull, m, UUID.fromString(collectionId)) } else null,
             busy = a.busy,
             notice = a.notice,
         )

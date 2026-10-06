@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.absentAs
 import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.TmdbMetadataCache
 import studio.kahn.iris.tv.data.bestEffort
@@ -89,7 +90,8 @@ internal data class HomeData(
     val forYou: Loadable<ForYou> = Loadable.Loading,
     val collections: Loadable<List<CollectionListItem>> = Loadable.Loading,
     val torrents: List<TorrentView> = emptyList(),
-    val summary: Loadable<HomeSummary> = Loadable.Loading,
+    /** Null when the server has no such read (one older than this app). */
+    val summary: Loadable<HomeSummary?> = Loadable.Loading,
     val featured: Loadable<FeaturedResponse>? = null,
     val meta: Map<MetaKey, MediaMetadata> = emptyMap(),
     val heroPrefs: Pair<String, PlaybackPrefsResponse>? = null,
@@ -132,7 +134,7 @@ internal fun homeUi(d: HomeData): HomeUiState {
     return HomeUiState(
         hero = hero,
         heroPending = heroPending,
-        rightNow = d.summary.map(::rightNow),
+        rightNow = d.summary.map { it?.let(::rightNow).orEmpty() },
         continueWatching = d.continueWatching.map { list -> list.map { continueCard(it, it.metaKey()?.let(d.meta::get)) } },
         watchlist = d.watchlist.map { list ->
             list.sortedByDescending { it.newCount }.map { watchlistCard(it, downloads[it.id.toString()]) }
@@ -207,7 +209,7 @@ class HomeViewModel(
     }
 
     private suspend fun refreshLive() = coroutineScope {
-        val summary = async { load(data.value.summary) { container.api().homeSummary() } }
+        val summary = async { load(data.value.summary) { absentAs(null) { container.api().homeSummary() } } }
         val torrents = async { bestEffort { container.api().libraryTorrents().items } }
         val s = summary.await()
         val t = torrents.await()
