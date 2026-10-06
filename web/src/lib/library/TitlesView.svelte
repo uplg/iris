@@ -199,10 +199,14 @@
 		min-height: var(--control-h);
 	}
 	/* a long library: cards out of view are neither laid out nor painted (no timer, no
-	   windowing script), their place kept at a card's height */
+	   windowing script), their place kept at a card's height. That containment clips paint to
+	   the card's box, so the card holds the art's outline inside its padding (the margin gives
+	   the room back to the grid) */
 	.poster-grid > :global(li) {
 		content-visibility: auto;
 		contain-intrinsic-size: auto 22rem;
+		padding: var(--s-2);
+		margin: calc(var(--s-2) * -1);
 	}
 	/* a ghost: greyed, its state said in words under it */
 	.poster-grid > :global(li:has(.ghost-card) .art) {

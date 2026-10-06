@@ -153,9 +153,12 @@
 	.rows {
 		display: grid;
 	}
-	/* a long list: rows out of view are neither laid out nor painted, their place kept */
+	/* a long list: rows out of view are neither laid out nor painted, their place kept. That
+	   clips paint to the row, so its side padding holds the art's outline */
 	.rows > :global(li) {
 		content-visibility: auto;
 		contain-intrinsic-size: auto 10rem;
+		padding-inline: var(--s-2);
+		margin-inline: calc(var(--s-2) * -1);
 	}
 </style>

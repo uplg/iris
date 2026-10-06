@@ -102,9 +102,13 @@
 		align-items: flex-start;
 		padding-block: var(--s-3);
 		border-bottom: 1px solid var(--line);
-		/* out of view, a row is not laid out nor painted: a long history scrolls light */
+		/* out of view, a row is not laid out nor painted: a long history scrolls light. That
+		   clips paint to the row, so its side padding holds the art's outline (the margin gives
+		   the width back) */
 		content-visibility: auto;
 		contain-intrinsic-size: auto 9rem;
+		padding-inline: var(--s-2);
+		margin-inline: calc(var(--s-2) * -1);
 	}
 	.series {
 		flex: 1;
