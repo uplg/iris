@@ -64,11 +64,17 @@ pub async fn iris_caps_layer(
             .get::<axum::extract::OriginalUri>()
             .map_or_else(|| req.uri().path(), |u| u.path())
             .to_owned();
-        let pool = state.db().clone();
-        let caps_for_log = caps.clone();
-        tokio::spawn(async move {
-            log_caps(&pool, &path, &caps_for_log, user_agent.as_deref()).await;
-        });
+        let range = req
+            .headers()
+            .get(header::RANGE)
+            .and_then(|h| h.to_str().ok());
+        if starts_playback(&path, range) {
+            let pool = state.db().clone();
+            let caps_for_log = caps.clone();
+            tokio::spawn(async move {
+                log_caps(&pool, &path, &caps_for_log, user_agent.as_deref()).await;
+            });
+        }
         req.extensions_mut().insert(IrisCaps(caps));
     }
     next.run(req).await
@@ -103,6 +109,20 @@ async fn log_caps(
 ///
 /// `/api/torrents/<hash>/files/<idx>/manifest.json` → `(Some(hash), Some(idx), Some("manifest.json"))`
 /// Anything else → leading components present, trailing `None`.
+/// Whether a request is worth one telemetry row: the clients send `Iris-Caps`
+/// on every request, and a row per HLS segment or per stream range would be
+/// one write per few seconds per viewer. Segments are skipped (their master
+/// playlist is logged) and a stream counts only from its first byte.
+fn starts_playback(path: &str, range: Option<&str>) -> bool {
+    let (_, _, route) = parse_torrent_path(path);
+    match route.as_deref() {
+        Some("play") => path.ends_with("/master.m3u8"),
+        Some("stream") => range.is_none_or(|r| r.starts_with("bytes=0-")),
+        Some("sub") => false,
+        _ => true,
+    }
+}
+
 fn parse_torrent_path(path: &str) -> (Option<String>, Option<i64>, Option<String>) {
     let mut segs = path.split('/').filter(|s| !s.is_empty());
     if segs.next() != Some("api") || segs.next() != Some("torrents") {
@@ -213,6 +233,21 @@ mod tests {
             super::pick_static_cache_policy("/_app/version.json"),
             "no-cache, must-revalidate"
         );
+    }
+
+    #[test]
+    fn caps_are_logged_once_per_playback_not_per_segment() {
+        use super::starts_playback;
+        let base = "/api/torrents/abc/files/0";
+        assert!(starts_playback(&format!("{base}/manifest.json"), None));
+        assert!(starts_playback(&format!("{base}/play/master.m3u8"), None));
+        assert!(!starts_playback(&format!("{base}/play/v_12.m4s"), None));
+        assert!(starts_playback(&format!("{base}/stream"), Some("bytes=0-")));
+        assert!(!starts_playback(
+            &format!("{base}/stream"),
+            Some("bytes=1048576-")
+        ));
+        assert!(!starts_playback(&format!("{base}/sub/3/track.vtt"), None));
     }
 
     #[test]
