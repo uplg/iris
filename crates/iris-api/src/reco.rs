@@ -245,12 +245,20 @@ async fn affinity(
     };
     let watched =
         iris_db::catalog::recent_watched_titles(state.db(), user_id, HISTORY_TITLES).await?;
-    let lookups = watched.iter().filter_map(|w| {
-        let id = u64::try_from(w.tmdb_id).ok()?;
-        let kind = TmdbKind::from(MediaKind::from_stored(&w.kind));
-        Some(tmdb.lookup_with_kind(id, Some(kind)))
-    });
-    let metas = futures::future::join_all(lookups).await;
+    // One key per watched row (None for an id TMDB can't hold), so the
+    // results zip back onto `watched` row for row.
+    let keys: Vec<_> = watched
+        .iter()
+        .map(|w| {
+            let id = u64::try_from(w.tmdb_id).ok()?;
+            Some((id, TmdbKind::from(MediaKind::from_stored(&w.kind))))
+        })
+        .collect();
+    let metas = crate::fanout::map_ordered(keys, |key| async move {
+        let (id, kind) = key?;
+        tmdb.lookup_with_kind(id, Some(kind)).await
+    })
+    .await;
     let now = Utc::now();
     for (w, meta) in watched.iter().zip(metas) {
         let Some(meta) = meta else {
