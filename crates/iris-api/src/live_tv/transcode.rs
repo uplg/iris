@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::{LiveTvError, epoch_ms};
@@ -145,6 +145,28 @@ impl Session {
 #[derive(Default)]
 pub struct TranscodeManager {
     sessions: tokio::sync::Mutex<HashMap<String, Arc<Session>>>,
+    /// Per-session-key start locks (see [`Self::ensure`]).
+    starts: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Starts past the cap check, not in `sessions` yet: they count toward
+    /// [`MAX_SESSIONS`].
+    pending: AtomicUsize,
+}
+
+/// A [`TranscodeManager::pending`] slot, given back however the start ends
+/// (spawned, failed, or its request dropped).
+struct PendingStart<'a>(&'a AtomicUsize);
+
+impl<'a> PendingStart<'a> {
+    fn new(pending: &'a AtomicUsize) -> Self {
+        pending.fetch_add(1, Ordering::Relaxed);
+        Self(pending)
+    }
+}
+
+impl Drop for PendingStart<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl TranscodeManager {
@@ -232,144 +254,60 @@ impl TranscodeManager {
         pinned: bool,
     ) -> Result<Arc<Session>, LiveTvError> {
         let session_key = mode.key(channel_key);
-        let mut sessions = self.sessions.lock().await;
+        // One start per session key at a time; `sessions` itself is only held
+        // for map reads and writes, never across the disk work or the spawn.
+        let start = self
+            .starts
+            .lock()
+            .expect("poisoned")
+            .entry(session_key.clone())
+            .or_default()
+            .clone();
+        let _start = start.lock().await;
 
         // Existing live session → reuse (also for a second household viewer).
-        if let Some(existing) = sessions.get(&session_key) {
-            if existing
+        let existing = self.sessions.lock().await.get(&session_key).cloned();
+        if let Some(existing) = existing {
+            let alive = existing
                 .child
                 .lock()
                 .await
                 .try_wait()
                 .ok()
                 .flatten()
-                .is_none()
-            {
+                .is_none();
+            if alive {
                 if pinned {
                     existing.pinned.store(true, Ordering::Relaxed);
                 }
-                return Ok(existing.clone());
+                return Ok(existing);
             }
             // ffmpeg died (upstream hiccup) — clean up and respawn below.
-            let dead = sessions.remove(&session_key);
-            if let Some(dead) = dead {
-                let _ = tokio::fs::remove_dir_all(&dead.dir).await;
+            self.remove_session(&session_key, &existing).await;
+        }
+
+        let _slot = {
+            let sessions = self.sessions.lock().await;
+            let taken = sessions.len() + self.pending.load(Ordering::Relaxed);
+            if taken >= MAX_SESSIONS {
+                // See MAX_SESSIONS — this is a bug tripwire, log it loudly.
+                tracing::warn!(
+                    sessions = taken,
+                    "live transcode session cap hit — likely a client retry loop"
+                );
+                return Err(LiveTvError::Upstream(
+                    "live transcoder session cap reached".into(),
+                ));
             }
-        }
-
-        if sessions.len() >= MAX_SESSIONS {
-            // See MAX_SESSIONS — this is a bug tripwire, log it loudly.
-            tracing::warn!(
-                sessions = sessions.len(),
-                "live transcode session cap hit — likely a client retry loop"
-            );
-            return Err(LiveTvError::Upstream(
-                "live transcoder session cap reached".into(),
-            ));
-        }
-
-        let dir = std::env::temp_dir()
-            .join("iris-livetv")
-            .join(session_key.replace([':', '/'], "_"));
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-        tokio::fs::create_dir_all(&dir)
-            .await
-            .map_err(|e| LiveTvError::Upstream(format!("transcode dir: {e}")))?;
-
-        let mut cmd = tokio::process::Command::new("ffmpeg");
-        cmd.arg("-nostdin")
-            .args(["-hide_banner", "-loglevel", "warning"])
-            .args(["-user_agent", user_agent]);
-        if let Some(referrer) = referrer {
-            cmd.args(["-headers", &format!("Referer: {referrer}\r\n")]);
-        }
-        cmd.args(["-i", input]);
-        // Explicit stream mapping. Tuner inputs (tunerd v2) carry the UNION
-        // of every concurrent viewer's services in one TS — the service
-        // MUST be picked by PID (the tune URL lists them in mux-survey
-        // order: PAT, SDT, PMT, video, audio…). Internet feeds keep the
-        // positional first-video/first-audio mapping.
-        if let Some((vpid, apid)) = tuner_pids(input) {
-            cmd.args(["-map", &format!("0:i:{vpid}")])
-                .args(["-map", &format!("0:i:{apid}?")]);
-        } else {
-            cmd.args(["-map", "0:v:0", "-map", "0:a:0?"]);
-        }
-        match mode {
-            Mode::Reencode => {
-                // Deinterlace to 25p + clamp to 720 lines: the whole point
-                // is a stream every hardware decoder eats; 1080p50 output
-                // would just trade a decode wedge for an encode/decode CPU
-                // wall.
-                cmd.args(["-vf", "yadif=0:-1:0,scale=-2:720"])
-                    .args([
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        iris_config::DEFAULT_TRANSCODE_PRESET,
-                    ])
-                    .args(["-crf", "23"])
-                    .args(["-g", "50", "-sc_threshold", "0"])
-                    .args(["-pix_fmt", "yuv420p"])
-                    // Audio passes through — eac3 was never the problem (the
-                    // TV's ffmpeg extension decodes it fine in VOD).
-                    .args(["-c:a", "copy"]);
-            }
-            Mode::Remux => {
-                // The tuner's TS is clean broadcast H.264 — repackage only,
-                // `-c copy` for BOTH streams into **MPEG-TS segments**. Audio
-                // stays broadcast E-AC-3/AC-3: the TV decodes it natively and
-                // the web player consumes this feed through the mediabunny
-                // live engine (client decode), NOT through hls.js.
-                //
-                // NOT fMP4 — that was tried and is a measured trap for this
-                // stream: a live join starts video 0.5-1.3 s after audio
-                // (leading video is dropped until the first keyframe), and
-                // ffmpeg's mp4 muxer encodes that offset as a video EDIT
-                // LIST, which fragmented-MP4 consumers (mediabunny, VLC,
-                // MSE) ignore — video then presents early by exactly the
-                // join offset (the live A/V desync saga of 2026-07-23). TS
-                // segments carry absolute PTS shared by both tracks:
-                // alignment is intrinsic, nothing to interpret.
-                cmd.args(["-c", "copy"]);
-            }
-        }
-        cmd.args(["-f", "hls"])
-            .args(["-hls_time", &HLS_TIME_S.to_string()])
-            .args(["-hls_list_size", &HLS_LIST_SIZE.to_string()])
-            .args(["-hls_delete_threshold", &HLS_DELETE_THRESHOLD.to_string()])
-            // program_date_time: the web player's E-AC-3 WebAudio sidecar
-            // (used on re-encoded feeds whose audio stays E-AC-3) syncs audio
-            // to video through EXT-X-PROGRAM-DATE-TIME — without the tags the
-            // sidecar has no clock and those streams play mute.
-            .args([
-                "-hls_flags",
-                "delete_segments+independent_segments+program_date_time",
-            ])
-            .arg("-hls_segment_filename")
-            .arg(dir.join(format!("{}%06d.ts", mode.seg_prefix())))
-            .arg(dir.join("live.m3u8"))
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            // The reaper kills idle sessions; kill_on_drop covers server
-            // shutdown so no orphan encoder outlives the process.
-            .kill_on_drop(true);
-
-        let child = cmd
-            .spawn()
-            .map_err(|e| LiveTvError::Upstream(format!("spawn ffmpeg: {e}")))?;
+            PendingStart::new(&self.pending)
+        };
+        let session =
+            spawn_session(mode, &session_key, input, user_agent, referrer, pinned).await?;
         tracing::info!(channel = %channel_key, ?mode, "live transcode session started");
-
-        let session = Arc::new(Session {
-            dir,
-            child: tokio::sync::Mutex::new(child),
-            last_access_ms: AtomicU64::new(epoch_ms()),
-            mode,
-            // A re-encode of a tuner feed holds an adapter too.
-            freq: tuner_freq(input),
-            pinned: std::sync::atomic::AtomicBool::new(pinned),
-        });
-        sessions.insert(session_key, session.clone());
+        self.sessions
+            .lock()
+            .await
+            .insert(session_key, session.clone());
         Ok(session)
     }
 
@@ -490,6 +428,116 @@ impl TranscodeManager {
     }
 }
 
+/// Prepare a fresh session dir and start ffmpeg on `input` into it.
+async fn spawn_session(
+    mode: Mode,
+    session_key: &str,
+    input: &str,
+    user_agent: &str,
+    referrer: Option<&str>,
+    pinned: bool,
+) -> Result<Arc<Session>, LiveTvError> {
+    let dir = std::env::temp_dir()
+        .join("iris-livetv")
+        .join(session_key.replace([':', '/'], "_"));
+    let _ = tokio::fs::remove_dir_all(&dir).await;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| LiveTvError::Upstream(format!("transcode dir: {e}")))?;
+
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.arg("-nostdin")
+        .args(["-hide_banner", "-loglevel", "warning"])
+        .args(["-user_agent", user_agent]);
+    if let Some(referrer) = referrer {
+        cmd.args(["-headers", &format!("Referer: {referrer}\r\n")]);
+    }
+    cmd.args(["-i", input]);
+    // Explicit stream mapping. Tuner inputs (tunerd v2) carry the UNION
+    // of every concurrent viewer's services in one TS — the service
+    // MUST be picked by PID (the tune URL lists them in mux-survey
+    // order: PAT, SDT, PMT, video, audio…). Internet feeds keep the
+    // positional first-video/first-audio mapping.
+    if let Some((vpid, apid)) = tuner_pids(input) {
+        cmd.args(["-map", &format!("0:i:{vpid}")])
+            .args(["-map", &format!("0:i:{apid}?")]);
+    } else {
+        cmd.args(["-map", "0:v:0", "-map", "0:a:0?"]);
+    }
+    match mode {
+        Mode::Reencode => {
+            // Deinterlace to 25p + clamp to 720 lines: the whole point
+            // is a stream every hardware decoder eats; 1080p50 output
+            // would just trade a decode wedge for an encode/decode CPU
+            // wall.
+            cmd.args(["-vf", "yadif=0:-1:0,scale=-2:720"])
+                .args([
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    iris_config::DEFAULT_TRANSCODE_PRESET,
+                ])
+                .args(["-crf", "23"])
+                .args(["-g", "50", "-sc_threshold", "0"])
+                .args(["-pix_fmt", "yuv420p"])
+                // Audio passes through — eac3 was never the problem (the
+                // TV's ffmpeg extension decodes it fine in VOD).
+                .args(["-c:a", "copy"]);
+        }
+        Mode::Remux => {
+            // The tuner's TS is clean broadcast H.264 — repackage only,
+            // `-c copy` for BOTH streams into **MPEG-TS segments**. Audio
+            // stays broadcast E-AC-3/AC-3: the TV decodes it natively and
+            // the web player consumes this feed through the mediabunny
+            // live engine (client decode), NOT through hls.js.
+            //
+            // NOT fMP4 — that was tried and is a measured trap for this
+            // stream: a live join starts video 0.5-1.3 s after audio
+            // (leading video is dropped until the first keyframe), and
+            // ffmpeg's mp4 muxer encodes that offset as a video EDIT
+            // LIST, which fragmented-MP4 consumers (mediabunny, VLC,
+            // MSE) ignore — video then presents early by exactly the
+            // join offset (the live A/V desync saga of 2026-07-23). TS
+            // segments carry absolute PTS shared by both tracks:
+            // alignment is intrinsic, nothing to interpret.
+            cmd.args(["-c", "copy"]);
+        }
+    }
+    cmd.args(["-f", "hls"])
+        .args(["-hls_time", &HLS_TIME_S.to_string()])
+        .args(["-hls_list_size", &HLS_LIST_SIZE.to_string()])
+        .args(["-hls_delete_threshold", &HLS_DELETE_THRESHOLD.to_string()])
+        // program_date_time: the web player's E-AC-3 WebAudio sidecar
+        // (used on re-encoded feeds whose audio stays E-AC-3) syncs audio
+        // to video through EXT-X-PROGRAM-DATE-TIME — without the tags the
+        // sidecar has no clock and those streams play mute.
+        .args([
+            "-hls_flags",
+            "delete_segments+independent_segments+program_date_time",
+        ])
+        .arg("-hls_segment_filename")
+        .arg(dir.join(format!("{}%06d.ts", mode.seg_prefix())))
+        .arg(dir.join("live.m3u8"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        // The reaper kills idle sessions; kill_on_drop covers server
+        // shutdown so no orphan encoder outlives the process.
+        .kill_on_drop(true);
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| LiveTvError::Upstream(format!("spawn ffmpeg: {e}")))?;
+    Ok(Arc::new(Session {
+        dir,
+        child: tokio::sync::Mutex::new(child),
+        last_access_ms: AtomicU64::new(epoch_ms()),
+        mode,
+        // A re-encode of a tuner feed holds an adapter too.
+        freq: tuner_freq(input),
+        pinned: std::sync::atomic::AtomicBool::new(pinned),
+    }))
+}
+
 /// Mux frequency (`f=` query param) of a tunerd `/tune` URL — the unit of
 /// adapter contention. `None` when the input isn't a tune URL.
 pub fn tuner_freq(input: &str) -> Option<String> {
@@ -574,6 +622,57 @@ mod tests {
         assert!(Arc::ptr_eq(&kept, &fresh));
         manager.remove_session(&key, &fresh).await;
         assert!(manager.sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_session_start_blocks_only_its_own_channel() {
+        let manager = Arc::new(TranscodeManager::default());
+        let key = Mode::Reencode.key("zz:slow");
+        let start = manager
+            .starts
+            .lock()
+            .unwrap()
+            .entry(key.clone())
+            .or_default()
+            .clone();
+        let in_progress = start.lock().await;
+        let joining = tokio::spawn({
+            let manager = manager.clone();
+            async move {
+                manager
+                    .ensure(
+                        Mode::Reencode,
+                        "zz:slow",
+                        "http://127.0.0.1:9/x.m3u8",
+                        "ua",
+                        None,
+                        false,
+                    )
+                    .await
+                    .map(|_| ())
+            }
+        });
+        let other = tokio::time::timeout(
+            Duration::from_secs(2),
+            manager.segment(Mode::Reencode, "zz:other", "seg000001.ts"),
+        )
+        .await
+        .expect("another channel is not held up");
+        assert!(matches!(other, Err(LiveTvError::UnknownChannel)));
+        assert!(!manager.is_warm(Mode::Reencode, "zz:other").await);
+        assert!(
+            !joining.is_finished(),
+            "the same channel waits for its start"
+        );
+        drop(in_progress);
+        let _ = tokio::time::timeout(Duration::from_secs(10), joining)
+            .await
+            .expect("the start goes on once the first ends");
+        assert_eq!(manager.pending.load(Ordering::Relaxed), 0);
+        let started = manager.sessions.lock().await.get(&key).cloned();
+        if let Some(session) = started {
+            manager.remove_session(&key, &session).await;
+        }
     }
 
     #[tokio::test]
