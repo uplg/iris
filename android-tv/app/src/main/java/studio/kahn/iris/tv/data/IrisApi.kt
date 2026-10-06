@@ -242,6 +242,8 @@ interface IrisApi {
         @Query("sort_by") sortBy: String? = null,
         @Query("order") order: String? = null,
         @Query("kind") kind: String? = null,
+        /** Only the releases of this TMDB title (a title picked in the Titles view). */
+        @Query("tmdb_id") tmdbId: Long? = null,
     ): SearchResponse
 
     @GET("api/search/details")
@@ -357,6 +359,21 @@ interface IrisApi {
         @Path("episode") episode: Int,
         @Query("language") language: String? = null,
     ): GrabResponse
+
+    // Search, from the field to a grabbed release.
+
+    /** What the words could mean on TMDB, library titles flagged (the Titles view). */
+    @GET("api/search/titles")
+    suspend fun searchTitles(@Query("q") q: String): List<TitleCard>
+
+    /** Forget one recent search, or all of them when [q] is null. */
+    @DELETE("api/me/recent-searches")
+    suspend fun forgetRecentSearches(@Query("q") q: String? = null)
+
+    /** Reads the release's `.torrent` (files, size, whether it streams) without grabbing it.
+     *  409 when the tracker's download slots are full (the message names what holds them). */
+    @POST("api/torrents/preview")
+    suspend fun previewTorrent(@Body body: ResolveBody): TorrentPreview
 
     // ------------------------------ Live TV ------------------------------
     // Channels play via `api/livetv/{country}/channels/{id}/master.m3u8`

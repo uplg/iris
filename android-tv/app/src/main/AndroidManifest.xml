@@ -23,6 +23,14 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <!-- Search's "Speak" button: package visibility (API 30+) hides the
+         speech recognizer unless it is declared here. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
     <application
         android:name=".IrisApp"
         android:allowBackup="false"

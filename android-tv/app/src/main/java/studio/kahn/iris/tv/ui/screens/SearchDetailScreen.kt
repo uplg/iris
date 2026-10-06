@@ -1,664 +1,423 @@
 package studio.kahn.iris.tv.ui.screens
 
-import studio.kahn.iris.tv.data.GrabOutcome
-import studio.kahn.iris.tv.data.grabRelease
-import studio.kahn.iris.tv.ui.formatSize
-import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.List
+import androidx.compose.material.icons.rounded.BookmarkAdd
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.VideoFile
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Surface
-import androidx.tv.material3.SurfaceDefaults
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import coil3.compose.AsyncImage
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import studio.kahn.iris.tv.data.CreateFollowRequest
-import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.AudioInfo
-import studio.kahn.iris.tv.data.DescriptionFormat
-import studio.kahn.iris.tv.data.ResolveBody
-import studio.kahn.iris.tv.data.MediaInfoSummary
-import studio.kahn.iris.tv.data.SubInfo
-import studio.kahn.iris.tv.data.MediaMetadata
-import studio.kahn.iris.tv.data.TorrentDetails
-import studio.kahn.iris.tv.data.VideoInfo
-import studio.kahn.iris.tv.data.tmdbBackdropUrl
-import studio.kahn.iris.tv.data.tmdbPosterUrl
-import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
-import studio.kahn.iris.tv.ui.components.IconAction
-import studio.kahn.iris.tv.ui.theme.IrisColors
-import studio.kahn.iris.tv.ui.theme.LocalTvLayout
-import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.components.Artwork
+import studio.kahn.iris.tv.ui.components.Chip
+import studio.kahn.iris.tv.ui.components.ChipTone
+import studio.kahn.iris.tv.ui.components.ErrorState
+import studio.kahn.iris.tv.ui.components.FactRow
+import studio.kahn.iris.tv.ui.components.FramedBlock
+import studio.kahn.iris.tv.ui.components.KeyHint
+import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.LoadingState
+import studio.kahn.iris.tv.ui.components.PanelOptions
+import studio.kahn.iris.tv.ui.components.SidePanel
+import studio.kahn.iris.tv.ui.components.StatusLine
+import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.focusRing
+import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.ui.formatSize
+import studio.kahn.iris.tv.ui.screens.search.FollowState
+import studio.kahn.iris.tv.ui.screens.search.GrabAsk
+import studio.kahn.iris.tv.ui.screens.search.GrabRefusal
+import studio.kahn.iris.tv.ui.screens.search.GrabUi
+import studio.kahn.iris.tv.ui.screens.search.ReleaseSheet
+import studio.kahn.iris.tv.ui.screens.search.ReleaseUiState
+import studio.kahn.iris.tv.ui.screens.search.ReleaseViewModel
+import studio.kahn.iris.tv.ui.state.Loadable
+import studio.kahn.iris.tv.ui.state.irisViewModel
+import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.theme.IrisFocus
+import studio.kahn.iris.tv.ui.theme.IrisLayout
+import studio.kahn.iris.tv.ui.theme.IrisShape
+import studio.kahn.iris.tv.ui.theme.IrisSize
+import studio.kahn.iris.tv.ui.theme.IrisSpace
+import studio.kahn.iris.tv.ui.theme.IrisType
 
-/** Above this size the grab needs an explicit confirm — mirrors the web
- *  PreviewDialog guard. Born from a user grabbing a complete-series pack
- *  right after grabbing the one season they actually wanted; huge packs
- *  hog the shared disk and get everyone's library GC-evicted sooner. */
-private const val HUGE_GRAB_BYTES = 50L * 1024 * 1024 * 1024
+/** What the release page can ask for; the defaults do nothing (screenshots). */
+@Immutable
+data class ReleaseActions(
+    val onGrab: () -> Unit = {},
+    val onPlayOwned: () -> Unit = {},
+    val onRetry: () -> Unit = {},
+    val onPickFile: (Int) -> Unit = {},
+    val onFollow: () -> Unit = {},
+    val onOtherReleases: ((title: String, tmdbId: Long) -> Unit)? = null,
+    val onConfirmGrab: () -> Unit = {},
+    val onDismissGrab: () -> Unit = {},
+)
 
 /**
- * Full-screen detail view for a search hit. Shown when the user picks a
- * card on [SearchScreen]; lets them check what they're about to grab
- * before committing (audio/sub langs, video format, uploader, age, NFO
- * facts) and confirms with a big "Download" button. Modals are
- * awkward with a D-pad on TV — we push a screen instead.
+ * A release before grabbing it (TVRelease): its title and part, the main
+ * action (download and play, or play from disk), following the series,
+ * the swarm and the technical sheet as facts, the file to play, and the
+ * tracker's own notes and NFO, readable in full in a side panel.
  */
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SearchDetailScreen(
     container: AppContainer,
     providerId: String,
     externalId: String,
-    /** Optional TMDB id for the hero poster + backdrop. Caller passes
-     *  this from the search result; if null, the hero falls back to a
-     *  gradient placeholder. */
     tmdbId: Long?,
-    /** `"tv"` or `"movie"` from the originating SearchResult. Drives
-     *  whether the explicit "Follow series" action is rendered. */
-    kind: String? = null,
-    onPickFile: (infohash: String, fileIdx: Int) -> Unit,
-    onPickTorrent: (infohash: String) -> Unit,
-    /** Invoked after a successful follow create — navigates to the
-     *  newly-created Series page. Only fires when [kind] is `"tv"`. */
-    onOpenSeries: (followId: String) -> Unit = {},
-    onBack: () -> Unit,
+    kind: String?,
+    onPlay: (infohash: String, fileIdx: Int) -> Unit,
+    onOtherReleases: (title: String, tmdbId: Long) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-    var details by remember { mutableStateOf<TorrentDetails?>(null) }
-    var meta by remember { mutableStateOf<MediaMetadata?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(true) }
-    var ingesting by remember { mutableStateOf(false) }
-    var following by remember { mutableStateOf(false) }
-    // 409 duplicate_in_library: the same movie already has a live copy.
-    // Holds the server message; renders a ConfirmDialog whose CONFIRM
-    // retries the grab with allowDuplicate.
-    var dupMessage by remember { mutableStateOf<String?>(null) }
-    // >50 GB guard: the Download press opens a ConfirmDialog instead of
-    // grabbing; only the explicit confirm proceeds.
-    var hugeConfirm by remember { mutableStateOf(false) }
-
-    fun grab(allowDuplicate: Boolean) {
-        if (ingesting) return
-        ingesting = true
-        error = null
-        dupMessage = null
-        scope.launch {
-            val outcome = container.grabRelease(
-                ResolveBody(
-                    providerId = providerId,
-                    externalId = externalId,
-                    tmdbId = tmdbId,
-                    allowDuplicate = allowDuplicate,
-                )
-            )
-            when (outcome) {
-                is GrabOutcome.Play -> onPickFile(outcome.infohash, outcome.fileIdx)
-                is GrabOutcome.Choose -> onPickTorrent(outcome.infohash)
-                is GrabOutcome.Duplicate -> {
-                    dupMessage = outcome.message
-                    ingesting = false
-                }
-                is GrabOutcome.Failed -> {
-                    error = outcome.message
-                    ingesting = false
-                }
-            }
+    val vm = irisViewModel(container) { c, _ -> ReleaseViewModel(c, providerId, externalId, tmdbId, kind) }
+    val state by vm.state.collectAsStateWithLifecycle()
+    val grab by vm.grabber.state.collectAsStateWithLifecycle()
+    val play by vm.grabber.play.collectAsStateWithLifecycle()
+    LaunchedEffect(play) {
+        play?.let {
+            vm.grabber.played()
+            onPlay(it.infohash, it.fileIdx)
         }
     }
+    val actions = remember(vm) {
+        ReleaseActions(
+            onGrab = vm::grab,
+            onPlayOwned = vm::playOwned,
+            onRetry = vm::loadPreview,
+            onPickFile = vm::pickFile,
+            onFollow = vm::follow,
+            onOtherReleases = onOtherReleases,
+            onConfirmGrab = vm.grabber::confirm,
+            onDismissGrab = vm.grabber::dismiss,
+        )
+    }
+    ReleaseContent(state, grab, actions)
+}
 
-    LaunchedEffect(providerId, externalId, tmdbId) {
-        loading = true
-        error = null
-        val url = container.sessionStore.serverUrl.first()
-        if (url == null) {
-            error = "Not signed in"
-            loading = false
-            return@LaunchedEffect
-        }
-        val api = container.apiFor(url)
-        val (det, m) = withContext(Dispatchers.IO) {
-            val det = runCatching { api.torrentDetails(providerId, externalId) }
-            val m = if (tmdbId != null) {
-                runCatching { api.tmdbMetadata(tmdbId, kind) }.getOrNull()
-            } else null
-            det to m
-        }
-        det.onSuccess { details = it }
-        // Details are best-effort, as on web: a 404 means the provider has no
-        // detail page (or forgot this id), and the grab doesn't need one.
-        det.onFailure {
-            if ((it as? retrofit2.HttpException)?.code() != 404) {
-                error = it.message ?: "Failed to load details"
-            }
-        }
-        meta = m
-        loading = false
+/** A side panel of the release page: the notes or the NFO in full, the file to play. */
+enum class ReleasePanel { Notes, Nfo, Files }
+
+@Composable
+fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions, initialPanel: ReleasePanel? = null) {
+    val layout = IrisLayout.current
+    val sheet = remember(state) { state.sheet }
+    val narrow = layout.width < 900.dp
+    var panel by rememberSaveable { mutableStateOf(initialPanel) }
+    val primary = remember { FocusRequester() }
+    val ready = state.preview is Loadable.Ready || state.preview is Loadable.Stale
+    LaunchedEffect(ready, panel) {
+        if (!ready || panel != null) return@LaunchedEffect
+        withFrameNanos { }
+        runCatching { primary.requestFocus() }
     }
 
-    val layout = LocalTvLayout.current
-
-    // Park initial focus on the top-left Back (overlaid on the hero) so the
-    // screen opens at the TOP with the title fully readable, and pressing ↑
-    // from the Download action returns here. Auto-focusing the Download button
-    // instead scrolled the title off-screen and trapped focus at the bottom
-    // with nothing focusable above to scroll back up to.
-    val backFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { backFocus.requestFocus() } }
-
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
-        item(key = "hero") {
-            Hero(
-                meta = meta,
-                tmdbId = tmdbId,
-                fallbackTitle = details?.title ?: externalId,
-                onBack = onBack,
-                backFocus = backFocus,
-                // Keep the hero to under half the viewport so the title +
-                // Download action sit together on screen — no scrolling the
-                // title out of view to reach the button.
-                modifier = Modifier.fillParentMaxHeight(0.46f),
-            )
-        }
-
-        item(key = "body") {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(IrisColor.ground),
+    ) {
+        Row(
+            Modifier
+                .fillMaxSize()
+                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = HINTS_BAND),
+            horizontalArrangement = Arrangement.spacedBy(if (narrow) IrisSpace.s8 else IrisSpace.s9),
+        ) {
+            Column(Modifier.width(if (narrow) 110.dp else IrisSize.posterAside), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
+                Text("${sheet.title} · releases", style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Artwork(title = sheet.title, imageUrl = sheet.posterUrl, width = if (narrow) 110.dp else IrisSize.posterAside)
+                sheet.kindLine?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
+            }
             Column(
-                Modifier.padding(
-                    horizontal = layout.gutterHorizontal,
-                    vertical = Spacing.xxl,
-                ),
-                verticalArrangement = Arrangement.spacedBy(Spacing.xl),
-            ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    details?.title ?: if (loading) "Loading…" else meta?.title ?: externalId,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    // tv-material3 Text with no color falls back to a
-                    // black LocalContentColor here (no enclosing Surface
-                    // sets it) → black-on-dark. Every other Text on this
-                    // screen sets it explicitly; the title was the one
-                    // that didn't.
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (details?.freeleech == true) {
-                    BadgeChip("Freeleech", color = IrisColors.Success)
-                }
-                if (details?.exclusive == true) {
-                    BadgeChip("Exclusive", color = IrisColors.Warn)
-                }
-            }
-
-            details?.let { d ->
-                if (d.tags.orEmpty().isNotEmpty() || d.uploader != null || d.age != null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        d.uploader?.let {
-                            Text(
-                                "Uploaded by $it${d.age?.let { age -> " · $age" } ?: ""}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (d.tags.orEmpty().isNotEmpty()) {
-                            Text(
-                                d.tags.orEmpty().take(6).joinToString(" · "),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Dead-torrent guard: a confirmed 0-seeder release can't be
-            // grabbed (its pieces never fully assemble). The server blocks it
-            // too; the UI just reflects that. 1 seeder is fine — no warning.
-            val dead = details?.seeders == 0
-
-            // Stats line + action buttons.
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                details?.let { d ->
-                    Text(
-                        "↑ ${d.seeders ?: 0}   ↓ ${d.leechers ?: 0}" +
-                            (d.fileSizeBytes?.let { "   ·   ${formatSize(it)}" } ?: ""),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Box(Modifier.weight(1f))
-                if (kind == "tv") {
-                    ActionButton(
-                        if (following) "Following…" else "♥  Follow",
-                        {
-                            if (following) return@ActionButton
-                            val title = details?.title ?: meta?.title
-                            if (title.isNullOrBlank()) return@ActionButton
-                            following = true
-                            error = null
-                            scope.launch {
-                                try {
-                                    val url = container.sessionStore.serverUrl.first()
-                                        ?: return@launch run {
-                                            error = "Not signed in"
-                                            following = false
-                                        }
-                                    val api = container.apiFor(url)
-                                    val created = withContext(Dispatchers.IO) {
-                                        api.addFollow(
-                                            CreateFollowRequest(
-                                                name = title,
-                                                tmdbId = tmdbId,
-                                            ),
-                                        )
-                                    }
-                                    onOpenSeries(created.id.toString())
-                                } catch (e: Exception) {
-                                    error = e.message ?: "Follow failed"
-                                    following = false
-                                }
-                            }
-                        },
-                        style = ActionStyle.Secondary,
-                        enabled = (details != null || meta != null) && !following && !ingesting,
-                    )
-                }
-                ActionButton(
-                    if (dead) "Dead torrent" else if (ingesting) "Starting…" else "▶  Download & play",
-                    {
-                        if (ingesting || dead) return@ActionButton
-                        val size = details?.fileSizeBytes
-                        if (size != null && size > HUGE_GRAB_BYTES) {
-                            hugeConfirm = true
-                            return@ActionButton
-                        }
-                        grab(allowDuplicate = false)
-                    },
-                    enabled = !loading && !ingesting && !dead,
-                )
-            }
-
-            if (loading) {
-                Text("Reading details…", style = MaterialTheme.typography.bodyMedium)
-            }
-            error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-            }
-
-            // The title's synopsis (TMDB, clean text) and the uploader's own
-            // release notes are two different things: show both. The notes
-            // lose their markup (BBCode for torr9, HTML for c411) so no raw
-            // tags reach a 10-foot screen; stripped once per details load.
-            val synopsis = meta?.overview
-            val releaseNotes = remember(details) {
-                details?.description?.let { desc ->
-                    when (details?.descriptionFormat) {
-                        DescriptionFormat.html -> stripHtml(desc)
-                        DescriptionFormat.plain -> desc
-                        else -> stripBBCode(desc)
-                    }
-                }?.trim()?.takeIf { it.isNotEmpty() }
-            }
-            if (!synopsis.isNullOrBlank()) {
-                Text(
-                    synopsis,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.fillMaxWidth(0.8f),
-                )
-            }
-
-            details?.mediaInfo?.let { FactsGrid(it) }
-
-            if (releaseNotes != null && releaseNotes != synopsis) {
-                Text(
-                    "Release notes from ${details?.providerId ?: providerId}",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                // Focusable so the D-pad can reach it: a long note scrolls
-                // into view as it takes the focus.
-                Text(
-                    releaseNotes,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth(0.8f).focusable(),
-                )
-            }
-        }
-        }
-
-        item(key = "trailing") { Box(Modifier.padding(vertical = Spacing.xl)) }
-    }
-
-    if (hugeConfirm) {
-        val size = details?.fileSizeBytes ?: 0L
-        ConfirmDialog(
-            eyebrow = "Huge release",
-            title = details?.title ?: "This release",
-            body = "This release is ${formatSize(size)} — over 50 GB. Huge packs (complete series, " +
-                "full box sets) eat the shared disk and get everyone's library cleaned up sooner. " +
-                "Are you really sure you want it?",
-            confirmLabel = "Yes, download ${formatSize(size)}",
-            onConfirm = {
-                hugeConfirm = false
-                grab(allowDuplicate = false)
-            },
-            onCancel = { hugeConfirm = false },
-        )
-    }
-
-    dupMessage?.let { msg ->
-        ConfirmDialog(
-            eyebrow = "Already in library",
-            title = details?.title ?: "This movie",
-            body = "$msg. Download another copy anyway?",
-            confirmLabel = "Download another copy",
-            onConfirm = { grab(allowDuplicate = true) },
-            onCancel = { dupMessage = null },
-        )
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun Hero(
-    meta: MediaMetadata?,
-    tmdbId: Long?,
-    fallbackTitle: String,
-    onBack: () -> Unit,
-    backFocus: FocusRequester,
-    modifier: Modifier = Modifier,
-) {
-    val backdrop = tmdbBackdropUrl(meta?.backdropPath, "w1280")
-    val poster = tmdbPosterUrl(meta?.posterPath, "w342")
-    val layout = LocalTvLayout.current
-    Box(modifier.fillMaxWidth()) {
-        if (backdrop != null) {
-            AsyncImage(
-                model = backdrop,
-                contentDescription = fallbackTitle,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
-            // Dark gradient at the bottom so overlaid text stays legible.
-            Box(
                 Modifier
-                    .fillMaxSize()
-                    .background(
-                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                            0.5f to androidx.compose.ui.graphics.Color.Transparent,
-                            1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.85f),
-                        ),
-                    ),
-            )
-        } else {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                            colors = listOf(
-                                IrisColors.Brand.copy(alpha = 0.30f),
-                                IrisColors.BackgroundDeep,
-                            ),
-                        ),
-                    ),
-            )
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(4.dp),
+                verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
+            ) {
+                Heading(sheet)
+                when (val preview = state.preview) {
+                    Loadable.Loading -> LoadingState(Modifier.height(80.dp), "Reading the torrent…")
+                    is Loadable.Failed -> ErrorState(
+                        preview.error.message,
+                        actions.onRetry,
+                        Modifier.height(140.dp),
+                        title = "Couldn't read this release",
+                        retryFocus = primary,
+                    )
+                    else -> Actions(state, sheet, grab, actions, primary) { panel = it }
+                }
+                Details(state, sheet, narrow) { panel = it }
+            }
         }
-        if (poster != null) {
-            AsyncImage(
-                model = poster,
-                contentDescription = null,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = layout.gutterHorizontal, bottom = Spacing.xl)
-                    .width(if (layout.gutterHorizontal >= 32.dp) 104.dp else 84.dp)
-                    .aspectRatio(2f / 3f),
-                contentScale = ContentScale.Crop,
-            )
-        }
-        // Focusable Back at the top-left — holds initial focus so the screen
-        // opens at the top (title readable) and ↑ from the actions returns here.
-        IconAction(
-            icon = Icons.AutoMirrored.Filled.ArrowBack,
-            contentDescription = "Back",
-            onClick = onBack,
+        KeyHints(
+            hints = listOf(
+                KeyHint(Keys.OK, if (sheet.owned != null) "Play from disk" else "Download and play"),
+                KeyHint(Keys.DOWN, "Read the details"),
+                KeyHint(Keys.BACK, "To the releases"),
+            ),
             modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(start = layout.gutterHorizontal, top = Spacing.lg)
-                .focusRequester(backFocus),
+                .align(Alignment.BottomStart)
+                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, bottom = 15.dp),
         )
+        when (panel) {
+            ReleasePanel.Notes -> state.notes?.let { notes ->
+                SidePanel("Release notes from ${state.providerId}", onDismiss = { panel = null }, footer = "Written by the uploader") {
+                    Paragraphs(paragraphsOf(notes), IrisType.reading)
+                }
+            }
+            ReleasePanel.Nfo -> state.details?.nfo?.let { nfo ->
+                SidePanel("Technical sheet (NFO)", onDismiss = { panel = null }) {
+                    Paragraphs(nfoChunks(nfo), IrisType.mono)
+                }
+            }
+            ReleasePanel.Files -> SidePanel("File to play", onDismiss = { panel = null }) {
+                PanelOptions(
+                    options = sheet.videos,
+                    selected = sheet.videos.firstOrNull { it.index == sheet.chosenFile },
+                    onSelect = {
+                        actions.onPickFile(it.index)
+                        panel = null
+                    },
+                    label = { "${it.path.substringAfterLast('/')} · ${formatSize(it.sizeBytes)}" },
+                )
+            }
+            null -> Unit
+        }
+        GrabAsk(grab, onConfirm = actions.onConfirmGrab, onCancel = actions.onDismissGrab)
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FactsGrid(mi: MediaInfoSummary) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        mi.video?.let { VideoFacts(it) }
-        if (mi.audio.orEmpty().isNotEmpty()) AudioFacts(mi.audio.orEmpty())
-        if (mi.subtitles.orEmpty().isNotEmpty()) SubFacts(mi.subtitles.orEmpty())
+private fun Heading(sheet: ReleaseSheet) {
+    Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+        Text(sheet.heading, style = IrisType.title, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (sheet.name.isNotEmpty()) Text(sheet.name, style = IrisType.mono, color = IrisColor.inkMuted)
+        if (sheet.chips.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
+                sheet.chips.forEach { c -> Chip(c, tone = if (c == "Freeleech") ChipTone.Ok else ChipTone.Neutral) }
+            }
+        }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun VideoFacts(v: VideoInfo) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        SectionLabel("Video")
-        v.codec?.let { ChipText(it) }
-        v.resolution?.let { ChipText(it) }
-        v.fps?.let { ChipText("${"%.2f".format(it)} fps") }
-        v.bitrateKbps?.let { ChipText("${it.formatThousands()} kb/s") }
-        // HDR/DV: keep just the format name (the raw field can be
-        // "Dolby Vision, Version 1.0, dvhe.08…") and render it as a normal
-        // chip — the old amber accent looked garish on a 10-foot screen.
-        v.hdr?.takeIf { it.isNotBlank() }?.let { ChipText(it.substringBefore(",").trim()) }
-        v.durationSecs?.let {
+private fun Actions(
+    state: ReleaseUiState,
+    sheet: ReleaseSheet,
+    grab: GrabUi,
+    actions: ReleaseActions,
+    primary: FocusRequester,
+    onPanel: (ReleasePanel) -> Unit,
+) {
+    val busy = grab is GrabUi.Busy
+    Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
+        if (sheet.owned != null) {
+            StatusLine("This release is already in your library: it plays from disk, nothing to download.", tone = StatusTone.Ok)
+        }
+        sheet.blocked?.let { reason ->
+            StatusLine(reason, tone = if (sheet.dead) StatusTone.Warn else StatusTone.Down)
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5), verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+            if (sheet.owned != null) {
+                ActionButton("Play from disk", actions.onPlayOwned, icon = Icons.Rounded.PlayArrow, size = ActionSize.Large, modifier = Modifier.focusRequester(primary))
+                ActionButton(
+                    "Download anyway",
+                    actions.onGrab,
+                    icon = Icons.Rounded.Download,
+                    style = ActionStyle.Secondary,
+                    size = ActionSize.Large,
+                    enabled = sheet.blocked == null,
+                    busy = busy,
+                    busyText = "Starting the download…",
+                )
+            } else {
+                ActionButton(
+                    sheet.playLabel,
+                    actions.onGrab,
+                    icon = Icons.Rounded.Download,
+                    size = ActionSize.Large,
+                    enabled = sheet.blocked == null,
+                    busy = busy,
+                    busyText = "Starting the download…",
+                    modifier = Modifier.focusRequester(primary),
+                )
+            }
+            when (val follow = state.follow) {
+                is FollowState.Can -> ActionButton(
+                    "Follow the series",
+                    actions.onFollow,
+                    icon = Icons.Rounded.BookmarkAdd,
+                    style = ActionStyle.Secondary,
+                    size = ActionSize.Large,
+                    busy = follow.busy,
+                    busyText = "Following…",
+                )
+                FollowState.Following, FollowState.Hidden -> Unit
+            }
+            val other = actions.onOtherReleases
+            val tmdbId = sheet.tmdbId
+            if (other != null && tmdbId != null) {
+                ActionButton(
+                    "Other releases",
+                    { other(sheet.title, tmdbId) },
+                    icon = Icons.AutoMirrored.Rounded.List,
+                    style = ActionStyle.Secondary,
+                    size = ActionSize.Large,
+                )
+            }
+        }
+        val follow = state.follow
+        if (follow == FollowState.Following) StatusLine("You follow this series: new episodes show on your home screen.", tone = StatusTone.Ok)
+        if (follow is FollowState.Can && follow.error != null) StatusLine("Not followed: ${follow.error.message}", tone = StatusTone.Down)
+        if (sheet.owned == null && sheet.blocked == null) {
             Text(
-                "· ${formatRuntime(it)}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                "Playback starts once the first minutes are on disk. The rest keeps downloading while you watch.",
+                style = IrisType.meta,
+                color = IrisColor.inkMuted,
             )
         }
+        GrabRefusal(grab, actions.onDismissGrab)
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun AudioFacts(audio: List<AudioInfo>) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-        SectionLabel("Audio")
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            audio.forEach { a ->
-                Text(
-                    listOfNotNull(
-                        a.lang ?: "?",
-                        a.commercialName ?: a.codec,
-                        a.channels?.let { channelLabel(it) },
-                        a.bitrateKbps?.let { "${it} kb/s" },
-                        if (a.default == true) "default" else null,
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodyMedium,
-                    // No explicit color → black LocalContentColor on a
-                    // dark screen. VideoFacts dodges this via ChipText;
-                    // the plain Audio/Subtitles rows did not.
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+private fun Details(state: ReleaseUiState, sheet: ReleaseSheet, narrow: Boolean, onPanel: (ReleasePanel) -> Unit) {
+    val facts: @Composable (Modifier) -> Unit = { modifier ->
+        if (sheet.facts.isNotEmpty()) {
+            Column(modifier) {
+                sheet.facts.forEach { (label, value) -> FactRow(label, value) }
+                val chosen = sheet.videos.firstOrNull { it.index == sheet.chosenFile }
+                if (sheet.videos.size > 1 && chosen != null) {
+                    FactRow("Plays") {
+                        Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
+                            Text(chosen.path.substringAfterLast('/'), style = IrisType.mono, color = IrisColor.ink)
+                            ActionButton(
+                                "Choose another file",
+                                { onPanel(ReleasePanel.Files) },
+                                icon = Icons.Rounded.VideoFile,
+                                style = ActionStyle.Secondary,
+                                size = ActionSize.Small,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun SubFacts(subs: List<SubInfo>) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-        SectionLabel("Subtitles")
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            subs.forEach { s ->
-                Text(
-                    listOfNotNull(
-                        s.lang ?: "?",
-                        s.format,
-                        if (s.forced == true) "forced" else null,
-                        if (s.title?.contains("SDH", ignoreCase = true) == true) "SDH" else null,
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
+    val notes: @Composable (Modifier) -> Unit = { modifier -> Notes(state, modifier, onPanel) }
+    if (narrow) {
+        facts(Modifier.fillMaxWidth())
+        notes(Modifier.fillMaxWidth())
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s8), verticalAlignment = Alignment.Top) {
+            facts(Modifier.width(320.dp))
+            notes(Modifier.weight(1f))
         }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun SectionLabel(label: String) {
-    Text(
-        label.uppercase(),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.width(120.dp).padding(top = 2.dp),
-    )
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun ChipText(text: String, accent: Boolean = false) {
-    val bg = if (accent) IrisColors.Warn else MaterialTheme.colorScheme.surfaceVariant
-    Surface(
-        shape = RoundedCornerShape(6.dp),
-        colors = SurfaceDefaults.colors(containerColor = bg),
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (accent) IrisColors.OnBrand else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-        )
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun BadgeChip(text: String, color: androidx.compose.ui.graphics.Color) {
-    Surface(
-        shape = RoundedCornerShape(4.dp),
-        colors = SurfaceDefaults.colors(containerColor = color),
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelSmall,
-            color = androidx.compose.ui.graphics.Color.White,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-    }
-}
-
-private fun channelLabel(n: Int): String = when (n) {
-    1 -> "1.0"
-    2 -> "2.0"
-    6 -> "5.1"
-    8 -> "7.1"
-    else -> "${n}ch"
-}
-
-private fun formatRuntime(secs: Int): String {
-    val h = secs / 3600
-    val m = (secs % 3600) / 60
-    return if (h > 0) "${h}h${m.toString().padStart(2, '0')}" else "${m}min"
-}
-
-
-private fun Int.formatThousands(): String =
-    "%,d".format(this).replace(',', ' ')
-
-/**
- * Minimal BBCode stripper for the synopsis fallback. We don't try to
- * render colours / images on TV — too noisy on a 10-foot UI — just yank
- * the markup so the raw text is readable. Used only when TMDB doesn't
- * have a synopsis (very rare; nearly every torr9 listing has one).
- */
-private fun stripBBCode(input: String): String {
-    var out = input.replace(Regex("\\[/?[a-zA-Z]+(=[^\\]]+)?]"), "")
-    // Drop pure-decoration lines.
-    out = out.lineSequence()
-        .filter { line ->
-            val trimmed = line.trim()
-            if (trimmed.isEmpty()) return@filter true
-            val deco = trimmed.count { it in "━—–·•⋯" }
-            deco.toDouble() / trimmed.length < 0.5
+private fun Notes(state: ReleaseUiState, modifier: Modifier, onPanel: (ReleasePanel) -> Unit) {
+    val notes = state.notes
+    val nfo = state.details?.nfo?.takeIf { it.isNotBlank() }
+    if (notes == null && nfo == null) return
+    FramedBlock(modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Release notes from ${state.providerId}", style = IrisType.group, color = IrisColor.ink, modifier = Modifier.weight(1f))
+            Text("Written by the uploader", style = IrisType.metaSmall, color = IrisColor.inkMuted)
         }
-        .joinToString("\n")
-        .trim()
-    return out
+        if (notes != null) {
+            Text(notes, style = IrisType.reading, color = IrisColor.ink, maxLines = 10, overflow = TextOverflow.Ellipsis)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+            if (notes != null) ActionButton("Read all", { onPanel(ReleasePanel.Notes) }, style = ActionStyle.Secondary, size = ActionSize.Small)
+            if (nfo != null) ActionButton("Technical sheet (NFO)", { onPanel(ReleasePanel.Nfo) }, style = ActionStyle.Secondary, size = ActionSize.Small)
+        }
+    }
 }
 
-/**
- * Minimal HTML-to-plain-text for the c411 description fallback. Strips
- * all tags, decodes the handful of entities indexers actually emit, and
- * collapses runs of whitespace. We do NOT try to preserve table layout
- * or images — TV synopsis is plain text only.
- */
-private fun stripHtml(input: String): String {
-    // Drop block-level tags as newlines so paragraphs don't collide.
-    val withBreaks = input
-        .replace(Regex("(?i)<(br|/p|/h[1-6]|/div|/li|/tr)\\b[^>]*>"), "\n")
-    // Then drop all remaining tags.
-    val noTags = withBreaks.replace(Regex("<[^>]+>"), "")
-    // Decode the common entities. Anything else stays escaped — better
-    // than a half-decoded mess.
-    val decoded = noTags
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&apos;", "'")
-    // Collapse runs of whitespace, preserve paragraph breaks.
-    return decoded
-        .lineSequence()
-        .map { it.replace(Regex("[ \\t]+"), " ").trim() }
-        .joinToString("\n")
-        .replace(Regex("\\n{3,}"), "\n\n")
-        .trim()
+/** Long text in a side panel, one focusable block at a time so the D-pad scrolls it. */
+@Composable
+private fun Paragraphs(blocks: List<AnnotatedString>, style: androidx.compose.ui.text.TextStyle) {
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    blocks.forEachIndexed { i, block ->
+        var focused by remember { mutableStateOf(false) }
+        Text(
+            block,
+            style = style,
+            color = IrisColor.ink,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(IrisFocus.ringWidth + IrisFocus.ringOffset)
+                .then(if (i == 0) Modifier.focusRequester(first) else Modifier)
+                .onFocusChanged { focused = it.isFocused }
+                .focusRing(focused, IrisShape.key)
+                .focusable()
+                .padding(horizontal = 10.dp, vertical = IrisSpace.s1),
+        )
+        Spacer(Modifier.height(IrisSpace.s1))
+    }
 }
+
+/** A text's paragraphs (blank-line separated), styles kept. */
+fun paragraphsOf(text: AnnotatedString): List<AnnotatedString> {
+    val out = mutableListOf<AnnotatedString>()
+    var start = 0
+    val s = text.text
+    while (start < s.length) {
+        val end = s.indexOf("\n\n", start).let { if (it < 0) s.length else it }
+        if (end > start) out += text.subSequence(start, end)
+        start = end + 2
+    }
+    return out.ifEmpty { listOf(text) }
+}
+
+/** An NFO in blocks of a dozen lines (it has no paragraphs to speak of). */
+fun nfoChunks(nfo: String): List<AnnotatedString> =
+    nfo.replace("\r\n", "\n").trimEnd().lines().chunked(NFO_LINES).map { AnnotatedString(it.joinToString("\n")) }
+
+private const val NFO_LINES = 12
+
+/** The room the key hints take at the bottom (board: content ends 110 px above the edge). */
+private val HINTS_BAND = 55.dp
