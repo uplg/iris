@@ -467,6 +467,14 @@ pub(crate) struct EpisodeEntry {
     /// `"absolute"`. Additive — older clients ignore it.
     #[serde(default)]
     absolute_episode: Option<i64>,
+    /// The caller's progress on this file, when they started it — saves a
+    /// progress read per row.
+    #[serde(default)]
+    position_seconds: Option<f64>,
+    #[serde(default)]
+    duration_seconds: Option<f64>,
+    #[serde(default)]
+    last_watched_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -980,7 +988,7 @@ async fn build_tv_episode_view(
     let mut infohashes: Vec<&str> = files.iter().map(|f| f.infohash.as_str()).collect();
     infohashes.sort_unstable();
     infohashes.dedup();
-    let completed = iris_db::playback::completed_files(state.db(), user_id, &infohashes)
+    let progress = iris_db::playback::progress_for_files(state.db(), user_id, &infohashes)
         .await
         .unwrap_or_default();
     for f in files {
@@ -1000,16 +1008,19 @@ async fn build_tv_episode_view(
                 .or_default()
                 .push(lang);
         }
-        let watched = completed.contains(&(f.infohash.clone(), f.file_idx));
+        let progress = progress.get(&(f.infohash.clone(), f.file_idx));
         let language = Some(lang.as_str().to_string());
         episodes_out.push(EpisodeEntry {
             season: f.season,
             episode: f.episode,
             infohash: f.infohash,
             file_idx: f.file_idx,
-            watched,
+            watched: progress.is_some_and(|p| p.completed),
             language,
             absolute_episode: f.absolute_episode,
+            position_seconds: progress.map(|p| p.position_seconds),
+            duration_seconds: progress.and_then(|p| p.duration_seconds),
+            last_watched_at: progress.map(|p| p.last_watched_at),
         });
     }
     episodes_out.sort_by_key(|e| (e.season, e.episode, e.file_idx));

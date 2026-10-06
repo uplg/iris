@@ -5000,6 +5000,13 @@
             "format": "int64",
             "description": "Absolute episode number for fleuve anime (`One Piece S01E1156` →\n1156). `null` for ordinary seasonal episodes. The client renders\n\"Episode N\" from this when the collection's `numbering` is\n`\"absolute\"`. Additive — older clients ignore it."
           },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
           "episode": {
             "type": "integer",
             "format": "int64"
@@ -5017,6 +5024,21 @@
               "null"
             ],
             "description": "Language tag derived from the parent torrent's SCENE name so\nusers can tell a French / English / `MULTi` episode apart at a\nglance. Same string form as `AvailableEpisodeEntry.language`\n(`\"french\"` / `\"english\"` / `\"multi\"` / `\"unknown\"`). `null`\nwhen the parent torrent is no longer registered in the\nengine (shouldn't happen but defensive)."
+          },
+          "last_watched_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "position_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The caller's progress on this file, when they started it — saves a\nprogress read per row."
           },
           "season": {
             "type": "integer",

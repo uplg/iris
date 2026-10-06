@@ -315,7 +315,7 @@ pub(crate) async fn episodes(
     let mut infohashes: Vec<&str> = downloaded.iter().map(|d| d.infohash.as_str()).collect();
     infohashes.sort_unstable();
     infohashes.dedup();
-    let completed = iris_db::playback::completed_files(state.db(), user.id, &infohashes)
+    let progress = iris_db::playback::progress_for_files(state.db(), user.id, &infohashes)
         .await
         .unwrap_or_default();
     for d in &downloaded {
@@ -324,7 +324,9 @@ pub(crate) async fn episodes(
         {
             continue;
         }
-        let watched = completed.contains(&(d.infohash.clone(), d.file_idx));
+        let watched = progress
+            .get(&(d.infohash.clone(), d.file_idx))
+            .is_some_and(|p| p.completed);
         by_key.insert(
             (d.season, d.episode),
             EpisodeItem {

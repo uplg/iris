@@ -49,28 +49,33 @@ pub async fn get(
     .await
 }
 
-/// The `(infohash, file_idx)` pairs among `infohashes` the user has
-/// finished, in one query — the episode lists' "watched" ticks.
-pub async fn completed_files(
+/// The user's progress on every file of `infohashes`, keyed by
+/// `(infohash, file_idx)`, in one query — the episode lists' watched ticks
+/// and resume positions.
+pub async fn progress_for_files(
     pool: &SqlitePool,
     user_id: UserId,
     infohashes: &[&str],
-) -> Result<std::collections::HashSet<(String, i64)>, sqlx::Error> {
+) -> Result<std::collections::HashMap<(String, i64), ProgressRow>, sqlx::Error> {
     if infohashes.is_empty() {
-        return Ok(std::collections::HashSet::new());
+        return Ok(std::collections::HashMap::new());
     }
     let user: Uuid = user_id.into();
     let list = serde_json::to_string(infohashes).map_err(|e| sqlx::Error::Encode(e.into()))?;
-    let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT infohash, file_idx FROM playback_progress \
-         WHERE user_id = ?1 AND completed = 1 \
-           AND infohash IN (SELECT value FROM json_each(?2))",
+    let rows: Vec<ProgressRow> = sqlx::query_as(
+        "SELECT user_id, infohash, file_idx, position_seconds, duration_seconds, \
+         audio_track_idx, subtitle_track_idx, completed, last_watched_at \
+         FROM playback_progress \
+         WHERE user_id = ?1 AND infohash IN (SELECT value FROM json_each(?2))",
     )
     .bind(user)
     .bind(list)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| ((r.infohash.clone(), r.file_idx), r))
+        .collect())
 }
 
 pub async fn list_for_torrent(
@@ -873,7 +878,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_files_lists_only_the_users_finished_files() {
+    async fn progress_for_files_reads_only_the_users_rows() {
         let pool = migrated_pool().await;
         let user = make_user(&pool).await;
         let other = crate::test_support::make_named_user(&pool, "Other").await;
@@ -893,11 +898,20 @@ mod tests {
             .await
             .unwrap();
 
-        let got = completed_files(&pool, user, &[&done.infohash, &halfway.infohash])
+        let got = progress_for_files(&pool, user, &[&done.infohash, &halfway.infohash])
             .await
             .unwrap();
-        assert_eq!(got, [(done.infohash.clone(), 0)].into_iter().collect());
-        assert!(completed_files(&pool, user, &[]).await.unwrap().is_empty());
+        assert_eq!(got.len(), 2, "the other torrent and user are left out");
+        assert!(got[&(done.infohash.clone(), 0)].completed);
+        let partial = &got[&(halfway.infohash.clone(), 0)];
+        assert!(!partial.completed, "the user's own row, not the other's");
+        assert!((partial.position_seconds - 120.0).abs() < f64::EPSILON);
+        assert!(
+            progress_for_files(&pool, user, &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// Watch-order shapes at the SQL level: only `(s, e+1)` and `(s+1, 1)`
