@@ -9,8 +9,8 @@
 
 	let { result }: { result: SearchResult } = $props();
 	const match = $derived(result.title_match ?? null);
-	// the server's title match first: an indexer's own tmdb id is often wrong
-	const md = tmdbMeta(() => ({ id: match?.tmdb_id ?? result.tmdb_id, kind: match?.kind ?? result.kind, trusted: true }));
+	// only the server's title match, set when it trusts it: the indexer's raw id is never shown
+	const md = tmdbMeta(() => ({ id: match?.tmdb_id, kind: match?.kind, trusted: match !== null }));
 	const title = $derived(md.data?.title ?? match?.title ?? prettySceneName(result.title));
 </script>
 
