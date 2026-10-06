@@ -5,7 +5,7 @@
 //! signed `MediaHubMX` API — including the channels `iptv-org` and the official
 //! CDNs no longer carry (the whole M6 group DMCAs its restreams, so M6 / W9 /
 //! 6ter vanished from every static playlist). We surface them as extra
-//! `Community`-tier sources: each catalog entry becomes an [`M3uEntry`] whose
+//! sources (origin `Vavoo`): each catalog entry becomes an [`M3uEntry`] whose
 //! URL is a `vavoo://<id>` sentinel, resolved to a fresh tokenised
 //! `index.m3u8` only when a viewer actually tunes the channel — the token and
 //! the edge host both rotate, so resolution is deferred to playback and never
@@ -341,7 +341,10 @@ mod tests {
         // Folding check: the raw catalog lists M6 several times (.c/.s/HD/FHD);
         // after build_channels they must collapse into ONE M6 channel with
         // multiple ranked sources, not several near-dup rows.
-        let built = super::super::channels::build_channels(std::slice::from_ref(&entries), None);
+        let built = super::super::channels::build_channels(
+            &[(super::super::channels::SourceOrigin::Vavoo, entries.clone())],
+            None,
+        );
         let m6: Vec<_> = built
             .iter()
             .filter(|c| c.name.eq_ignore_ascii_case("M6"))

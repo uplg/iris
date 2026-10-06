@@ -40,6 +40,43 @@ pub struct StreamSource {
     /// the election order — the proxy prefers a stable origin and only rotates
     /// to a community restream when the officials fail.
     pub tier: SourceTier,
+    /// Who supplies the source — the first election key, ahead of the tier.
+    pub origin: SourceOrigin,
+}
+
+/// Which builder supplied a source. The election order across origins is
+/// Tuner → dlive's first player → Vavoo → dlive's other players → iptv-org →
+/// the extra playlists; [`SourceTier`] only orders sources inside an origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceOrigin {
+    Tuner,
+    Vavoo,
+    /// `rank` is the player's position in `[live_tv.dlive] players`.
+    Dlive {
+        rank: u8,
+    },
+    IptvOrg,
+    Extra,
+}
+
+impl SourceOrigin {
+    fn rank(self) -> u8 {
+        match self {
+            Self::Tuner => 0,
+            Self::Dlive { rank: 0 } => 1,
+            Self::Vavoo => 2,
+            Self::Dlive { .. } => 3,
+            Self::IptvOrg => 4,
+            Self::Extra => 5,
+        }
+    }
+
+    fn player_rank(self) -> u8 {
+        match self {
+            Self::Dlive { rank } => rank,
+            _ => 0,
+        }
+    }
 }
 
 /// Stream-source reliability tiers, best first (lower sorts first). Derived
@@ -151,11 +188,16 @@ pub fn classify_source(url: &str) -> SourceTier {
     SourceTier::Community
 }
 
-/// Election sort key: best tier first, then best quality (unknown quality
-/// last). The single source-ordering rule, shared by every builder so the
-/// pre-election order can't drift between them.
-fn source_order_key(s: &StreamSource) -> (SourceTier, std::cmp::Reverse<u32>) {
-    (s.tier, std::cmp::Reverse(s.quality.unwrap_or(0)))
+/// Election sort key: origin first, then best tier, best quality (unknown
+/// quality last), dlive player rank. The single source-ordering rule, shared
+/// by every builder so the pre-election order can't drift between them.
+fn source_order_key(s: &StreamSource) -> (u8, SourceTier, std::cmp::Reverse<u32>, u8) {
+    (
+        s.origin.rank(),
+        s.tier,
+        std::cmp::Reverse(s.quality.unwrap_or(0)),
+        s.origin.player_rank(),
+    )
 }
 
 /// Official TNT numbering (Arcom, effective 2025-06-06). Keys are normalized
@@ -196,15 +238,15 @@ const TNT_CHANNELS: &[(u16, &[&str])] = &[
     (25, &["cherie25"]),
 ];
 
-/// Build the channel list from one or more parsed playlists. Later playlists
-/// merge into channels discovered by earlier ones (extra fallback sources)
-/// rather than duplicating them. `tnt_overrides` is `Some` only for the
+/// Build the channel list from one or more parsed playlists, each tagged with
+/// the origin of its sources. Later playlists merge into channels discovered
+/// by earlier ones (extra fallback sources) rather than duplicating them. `tnt_overrides` is `Some` only for the
 /// French list — the Arcom numbering table means nothing elsewhere.
 // Config hands us a concrete std HashMap; generalizing the hasher here buys
 // nothing for an internal fn.
 #[allow(clippy::implicit_hasher)]
 pub fn build_channels(
-    playlists: &[Vec<M3uEntry>],
+    playlists: &[(SourceOrigin, Vec<M3uEntry>)],
     tnt_overrides: Option<&HashMap<String, u16>>,
 ) -> Vec<Channel> {
     let mut channels: Vec<Channel> = Vec::new();
@@ -215,7 +257,7 @@ pub fn build_channels(
     // channels both numbered N — one of them typically dead.
     let mut by_tnt: HashMap<u16, usize> = HashMap::new();
 
-    for playlist in playlists {
+    for (origin, playlist) in playlists {
         for entry in playlist {
             if entry.url.is_empty() {
                 continue;
@@ -236,6 +278,7 @@ pub fn build_channels(
                 quality,
                 user_agent: entry.header("http-user-agent").map(str::to_string),
                 referrer: entry.header("http-referrer").map(str::to_string),
+                origin: *origin,
             };
 
             let tnt_number = tnt_number_for(&identity, &normalize(&name), tnt_overrides);
@@ -424,6 +467,7 @@ pub fn merge_tuner_sources(channels: &mut [Channel], base_url: &str, grid: &[Tun
                 user_agent: None,
                 referrer: None,
                 tier: SourceTier::Tuner,
+                origin: SourceOrigin::Tuner,
             });
             ch.sources.sort_by_key(source_order_key);
         }
@@ -562,6 +606,74 @@ mod tests {
         }
     }
 
+    /// Every list as iptv-org's own: these tests are about identity and the
+    /// tier order inside one origin.
+    fn iptv(lists: &[Vec<M3uEntry>]) -> Vec<(SourceOrigin, Vec<M3uEntry>)> {
+        lists
+            .iter()
+            .map(|l| (SourceOrigin::IptvOrg, l.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn origins_order_tuner_dlive_vavoo_iptv_org_then_extra() {
+        let lists = vec![
+            (
+                SourceOrigin::IptvOrg,
+                vec![
+                    entry("TF1.fr", "TF1 (1080p)", "http://random.example/tf1", ""),
+                    entry("TF1.fr", "TF1 (720p)", "https://live.tf1.fr/tf1.m3u8", ""),
+                ],
+            ),
+            (
+                SourceOrigin::Extra,
+                vec![entry("", "TF1", "https://official.tf1.fr/extra.m3u8", "")],
+            ),
+            (
+                SourceOrigin::Vavoo,
+                vec![entry("", "TF1 (1080p)", "vavoo://tf1", "")],
+            ),
+            (
+                SourceOrigin::Dlive { rank: 2 },
+                vec![entry("", "TF1", "dlive://469/6", "")],
+            ),
+            (
+                SourceOrigin::Dlive { rank: 1 },
+                vec![entry("", "TF1", "dlive://469/2", "")],
+            ),
+            (
+                SourceOrigin::Dlive { rank: 0 },
+                vec![entry("", "TF1", "dlive://469/1", "")],
+            ),
+        ];
+        let mut channels = build_channels(&lists, Some(&HashMap::new()));
+        assert_eq!(channels.len(), 1);
+        let grid = vec![TunerChannelInfo {
+            name: "TF1".to_string(),
+            aliases: vec![],
+            adapter: 0,
+            freq_hz: 1,
+            pids: vec![0],
+        }];
+        merge_tuner_sources(&mut channels, "http://box", &grid);
+        let urls: Vec<&str> = channels[0].sources.iter().map(|s| s.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            vec![
+                "http://box/tune?a=0&f=1&pids=0x0",
+                "dlive://469/1",
+                "vavoo://tf1",
+                "dlive://469/2",
+                "dlive://469/6",
+                // Official before community inside iptv-org, whatever the
+                // quality; an official extra-playlist feed still comes after.
+                "https://live.tf1.fr/tf1.m3u8",
+                "http://random.example/tf1",
+                "https://official.tf1.fr/extra.m3u8",
+            ]
+        );
+    }
+
     #[test]
     fn clean_name_strips_quality_and_markers() {
         assert_eq!(
@@ -601,7 +713,7 @@ mod tests {
                 "General",
             )],
         ];
-        let channels = build_channels(&playlists, Some(&HashMap::new()));
+        let channels = build_channels(&iptv(&playlists), Some(&HashMap::new()));
         let equipe: Vec<_> = channels
             .iter()
             .filter(|c| c.tnt_number == Some(21))
@@ -609,7 +721,7 @@ mod tests {
         assert_eq!(equipe.len(), 1);
         assert_eq!(equipe[0].sources.len(), 2);
         // Without TNT overrides (non-FR countries) the ids stay distinct.
-        let separate = build_channels(&playlists, None);
+        let separate = build_channels(&iptv(&playlists), None);
         assert_eq!(separate.len(), 2);
     }
 
@@ -630,7 +742,7 @@ mod tests {
             entry("Aardvark.fr", "Aardvark", "http://x/aard", "General"),
             entry("", "Mystery Channel", "http://x/mystery", ""),
         ]];
-        let channels = build_channels(&playlists, Some(&HashMap::new()));
+        let channels = build_channels(&iptv(&playlists), Some(&HashMap::new()));
         let names: Vec<&str> = channels.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(
             names,
@@ -645,7 +757,7 @@ mod tests {
     fn tuner_matches_by_name_when_tvg_id_is_absent() {
         // vavoo-style entry: no tvg-id at all, display name only
         let playlists = vec![vec![entry("", "M6", "http://vavoo.example/m6", "")]];
-        let mut channels = build_channels(&playlists, None);
+        let mut channels = build_channels(&iptv(&playlists), None);
         let grid = vec![TunerChannelInfo {
             name: "M6".to_string(),
             aliases: vec![],
@@ -669,7 +781,7 @@ mod tests {
             entry("M6.fr", "M6 (1080p)", "http://official.m6.fr/live.m3u8", ""),
             entry("TF1.fr", "TF1", "http://mirror.example/tf1.m3u8", ""),
         ]];
-        let mut channels = build_channels(&playlists, None);
+        let mut channels = build_channels(&iptv(&playlists), None);
 
         let grid = vec![TunerChannelInfo {
             // discovered names match normalized: "M-6" ≡ tvg-id base "M6"
@@ -697,7 +809,7 @@ mod tests {
         );
 
         // Empty grid / base URL are no-ops.
-        let mut untouched = build_channels(&playlists, None);
+        let mut untouched = build_channels(&iptv(&playlists), None);
         merge_tuner_sources(&mut untouched, "", &grid);
         merge_tuner_sources(&mut untouched, "http://x", &[]);
         assert!(
@@ -723,7 +835,7 @@ mod tests {
             // second playlist: same channel via name match → extra fallback
             vec![entry("", "Gulli (1080p)", "http://y/gulli", "Kids")],
         ];
-        let channels = build_channels(&playlists, Some(&HashMap::new()));
+        let channels = build_channels(&iptv(&playlists), Some(&HashMap::new()));
         assert_eq!(channels.len(), 1);
         let ch = &channels[0];
         assert_eq!(ch.tnt_number, Some(12));
@@ -735,7 +847,7 @@ mod tests {
         // duplicate URL is not re-added
         let playlists2 = vec![playlists[0].clone(), playlists[0].clone()];
         assert_eq!(
-            build_channels(&playlists2, Some(&HashMap::new()))[0]
+            build_channels(&iptv(&playlists2), Some(&HashMap::new()))[0]
                 .sources
                 .len(),
             2
@@ -752,10 +864,10 @@ mod tests {
         )]];
         let mut overrides = HashMap::new();
         overrides.insert("CanalPlus".to_string(), 4u16);
-        let channels = build_channels(&playlists, Some(&overrides));
+        let channels = build_channels(&iptv(&playlists), Some(&overrides));
         assert_eq!(channels[0].tnt_number, Some(4));
         assert_eq!(
-            build_channels(&playlists, Some(&HashMap::new()))[0].tnt_number,
+            build_channels(&iptv(&playlists), Some(&HashMap::new()))[0].tnt_number,
             None
         );
     }
@@ -768,7 +880,7 @@ mod tests {
             "http://dead/M6.m3u8",
             "Entertainment",
         )]];
-        let mut channels = build_channels(&playlists, Some(&HashMap::new()));
+        let mut channels = build_channels(&iptv(&playlists), Some(&HashMap::new()));
         let mut db: HashMap<String, Vec<StreamSource>> = HashMap::new();
         db.insert(
             "m6.fr".to_string(),
@@ -780,6 +892,7 @@ mod tests {
                     user_agent: None,
                     referrer: None,
                     tier: SourceTier::Community,
+                    origin: SourceOrigin::IptvOrg,
                 },
                 StreamSource {
                     url: "http://alt/M6-HD/index.m3u8".to_string(),
@@ -787,6 +900,7 @@ mod tests {
                     user_agent: None,
                     referrer: None,
                     tier: SourceTier::Community,
+                    origin: SourceOrigin::IptvOrg,
                 },
             ],
         );
@@ -798,7 +912,7 @@ mod tests {
         );
         // channel without tvg-id or without db entry is untouched
         let playlists2 = vec![vec![entry("", "Mystery", "http://x/mys.m3u8", "")]];
-        let mut channels2 = build_channels(&playlists2, None);
+        let mut channels2 = build_channels(&iptv(&playlists2), None);
         merge_db_sources(&mut channels2, &db);
         assert_eq!(channels2[0].sources.len(), 1);
     }
@@ -862,7 +976,7 @@ mod tests {
                 "General",
             )],
         ];
-        let ch = &build_channels(&playlists, Some(&HashMap::new()))[0];
+        let ch = &build_channels(&iptv(&playlists), Some(&HashMap::new()))[0];
         let urls: Vec<&str> = ch.sources.iter().map(|s| s.url.as_str()).collect();
         assert_eq!(
             urls,
@@ -886,14 +1000,14 @@ mod tests {
     #[test]
     fn no_tnt_pinning_outside_france() {
         let playlists = vec![vec![entry("TF1.fr@SD", "TF1", "http://x/tf1", "General")]];
-        assert_eq!(build_channels(&playlists, None)[0].tnt_number, None);
+        assert_eq!(build_channels(&iptv(&playlists), None)[0].tnt_number, None);
     }
 
     #[test]
     fn legacy_alias_matches_tfx() {
         let playlists = vec![vec![entry("NT1.fr", "TFX", "http://x/tfx", "Series")]];
         assert_eq!(
-            build_channels(&playlists, Some(&HashMap::new()))[0].tnt_number,
+            build_channels(&iptv(&playlists), Some(&HashMap::new()))[0].tnt_number,
             Some(11)
         );
     }

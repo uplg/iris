@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use url::Url;
 
-use channels::{Channel, SourceTier};
+use channels::{Channel, SourceOrigin, SourceTier};
 use refresh_cell::RefreshCell;
 use transcode::Mode;
 
@@ -161,7 +161,7 @@ fn channel_counts(entries: Vec<m3u::M3uEntry>) -> ChannelCounts {
     groups
         .into_iter()
         .map(|(name, entries)| {
-            let n = channels::build_channels(&[entries], None).len();
+            let n = channels::build_channels(&[(SourceOrigin::IptvOrg, entries)], None).len();
             (name, n)
         })
         .collect()
@@ -640,21 +640,21 @@ impl LiveTvService {
                 // iptv-org publishes no playlist for a country without streams:
                 // that country is empty, not an error.
                 if let Some(body) = self.fetch_primary_playlist(url).await? {
-                    playlists.push(m3u::parse(&body));
+                    playlists.push((SourceOrigin::IptvOrg, m3u::parse(&body)));
                 }
                 continue;
             }
             match self.fetch_text(url, PLAYLIST_TIMEOUT).await {
-                Ok((body, _)) => playlists.push(m3u::parse(&body)),
+                Ok((body, _)) => playlists.push((SourceOrigin::Extra, m3u::parse(&body))),
                 Err(e) => {
                     tracing::warn!(url, error = %e, "live tv extra playlist fetch failed");
                 }
             }
         }
 
-        // Vavoo channels for this country (resolved lazily on zap), folded in
-        // as extra Community-tier sources. Best-effort — a Vavoo outage just
-        // means no Vavoo channels this round, never a failed country load.
+        // Vavoo channels for this country (resolved lazily on zap). Best-effort
+        // — a Vavoo outage just means no Vavoo channels this round, never a
+        // failed country load.
         if self.inner.cfg.vavoo_enabled
             && let Some(groups) = self.inner.cfg.vavoo_countries.get(country)
         {
@@ -669,7 +669,7 @@ impl LiveTvService {
                     vavoo_channels = entries.len(),
                     "live tv vavoo channels merged"
                 );
-                playlists.push(entries);
+                playlists.push((SourceOrigin::Vavoo, entries));
             }
         }
 
@@ -843,6 +843,7 @@ impl LiveTvService {
                     quality: s.quality.as_deref().and_then(channels::parse_quality),
                     user_agent: s.user_agent.filter(|v| !v.is_empty()),
                     referrer: s.referrer.filter(|v| !v.is_empty()),
+                    origin: SourceOrigin::IptvOrg,
                 });
         }
         tracing::info!(channels = map.len(), "live tv streams db loaded");
@@ -966,6 +967,7 @@ impl LiveTvService {
                         tracing::info!(
                             channel = %channel_key,
                             source = si,
+                            origin = ?source.origin,
                             tier = ?source.tier,
                             host = %base.host_str().unwrap_or("unknown"),
                             "live tv source elected"
@@ -2168,6 +2170,7 @@ mod tests {
                     user_agent: None,
                     referrer: None,
                     tier: channels::classify_source(u),
+                    origin: SourceOrigin::IptvOrg,
                 })
                 .collect(),
         }
