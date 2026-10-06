@@ -42,6 +42,47 @@ pub struct StreamSource {
     pub tier: SourceTier,
     /// Who supplies the source — the first election key, ahead of the tier.
     pub origin: SourceOrigin,
+    /// DRM licence the playlist entry brings, if any. A DRM-locked feed with
+    /// one stays electable: a player given the licence can decrypt it.
+    pub licence: Option<Licence>,
+}
+
+/// A DRM licence carried by a playlist entry: Kodi's inputstream.adaptive
+/// properties (`license_type` + `license_key`, or the newer `drm_legacy`
+/// `type|key`), or the same as `#EXTINF` attributes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Licence {
+    /// `com.widevine.alpha`, `com.microsoft.playready`, `org.w3.clearkey`,
+    /// `clearkey`… as the playlist names it.
+    pub system: Option<String>,
+    /// A licence server URL, or `ClearKey` `kid:key` pairs.
+    pub key: String,
+}
+
+impl Licence {
+    pub fn from_entry(entry: &M3uEntry) -> Option<Self> {
+        let prop = |name: &str| {
+            entry
+                .kodi_props
+                .get(&format!("inputstream.adaptive.{name}"))
+                .or_else(|| entry.attrs.get(name))
+                .or_else(|| entry.attrs.get(&name.replace('_', "-")))
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| v.trim().to_string())
+        };
+        if let Some(key) = prop("license_key") {
+            return Some(Self {
+                system: prop("license_type"),
+                key,
+            });
+        }
+        let legacy = prop("drm_legacy")?;
+        let (system, key) = legacy.split_once('|')?;
+        (!key.trim().is_empty()).then(|| Self {
+            system: Some(system.trim().to_string()).filter(|s| !s.is_empty()),
+            key: key.trim().to_string(),
+        })
+    }
 }
 
 /// Which builder supplied a source. The election order across origins is
@@ -279,6 +320,7 @@ pub fn build_channels(
                 user_agent: entry.header("http-user-agent").map(str::to_string),
                 referrer: entry.header("http-referrer").map(str::to_string),
                 origin: *origin,
+                licence: Licence::from_entry(entry),
             };
 
             let tnt_number = tnt_number_for(&identity, &normalize(&name), tnt_overrides);
@@ -468,6 +510,7 @@ pub fn merge_tuner_sources(channels: &mut [Channel], base_url: &str, grid: &[Tun
                 referrer: None,
                 tier: SourceTier::Tuner,
                 origin: SourceOrigin::Tuner,
+                licence: None,
             });
             ch.sources.sort_by_key(source_order_key);
         }
@@ -602,6 +645,7 @@ mod tests {
             name: name.to_string(),
             attrs,
             vlc_opts: HashMap::new(),
+            kodi_props: HashMap::new(),
             url: url.to_string(),
         }
     }
@@ -893,6 +937,7 @@ mod tests {
                     referrer: None,
                     tier: SourceTier::Community,
                     origin: SourceOrigin::IptvOrg,
+                    licence: None,
                 },
                 StreamSource {
                     url: "http://alt/M6-HD/index.m3u8".to_string(),
@@ -901,6 +946,7 @@ mod tests {
                     referrer: None,
                     tier: SourceTier::Community,
                     origin: SourceOrigin::IptvOrg,
+                    licence: None,
                 },
             ],
         );

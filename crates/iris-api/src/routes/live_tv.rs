@@ -109,8 +109,8 @@ pub(crate) struct LiveChannel {
     /// now. Sent only when true.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unreachable: bool,
-    /// Every feed is DRM-locked by its broadcaster (Apple, Google or
-    /// Microsoft DRM): no Iris client can play it. Sent only when true.
+    /// Every feed is DRM-locked with no licence Iris can obtain (the
+    /// playlists bring none): it can't be played. Sent only when true.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub encrypted: bool,
 }
@@ -513,8 +513,10 @@ pub(crate) async fn live_proxy(
     // same rewrite treatment as the master itself.
     if is_playlist {
         let body = crate::live_tv::read_playlist(resp).await?;
-        if let Some(scheme) = proxy::drm_scheme(&body) {
-            return Err(svc.note_encrypted(&params.c, scheme).await.into());
+        if let Some(scheme) = proxy::drm_scheme(&body)
+            && let Some(locked) = svc.note_encrypted(&params.c, scheme).await
+        {
+            return Err(locked.into());
         }
         let rewritten = proxy::rewrite_playlist(&body, &final_url, &params.c, svc.signer());
         return playlist_response(rewritten);

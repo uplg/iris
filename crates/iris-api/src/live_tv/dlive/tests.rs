@@ -123,6 +123,7 @@ fn dlive_entries_merge_into_iptv_org_channels_or_stand_alone() {
         name: name.to_string(),
         attrs: HashMap::from([("tvg-id".to_string(), tvg.to_string())]),
         vlc_opts: HashMap::new(),
+        kodi_props: HashMap::new(),
         url: url.to_string(),
     };
     let mut lists = vec![(
@@ -477,6 +478,7 @@ impl Rig {
                     referrer: None,
                     tier: classify_source(url),
                     origin: *origin,
+                    licence: None,
                 })
                 .collect(),
         };

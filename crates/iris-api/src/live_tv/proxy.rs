@@ -194,9 +194,9 @@ pub fn is_playlist(url: &Url, content_type: Option<&str>) -> bool {
 
 /// The DRM a playlist's content is locked with, named for the logs; `None`
 /// when it plays in the clear or under plain `AES-128` (whose http(s) key the
-/// proxy fetches like a segment). Apple, Google and Microsoft DRM licences
-/// are only granted to the broadcaster's own player, so no Iris client can
-/// ever decrypt such a feed.
+/// proxy fetches like a segment). Such a feed needs a licence from the
+/// broadcaster's server (and Apple's DRM plays on Apple devices only), so it
+/// is electable only when its playlist entry brings one ([`super::channels::Licence`]).
 pub fn drm_scheme(playlist: &str) -> Option<&'static str> {
     playlist.lines().find_map(|line| {
         let attrs = line
