@@ -307,7 +307,7 @@ works fine for once-a-day.)
 
 ### TMDB trust re-evaluation (`tmdb-trust`)
 
-Since migration 0044, a collection's TMDB id (poster, synopsis, titles) is
+Since migration 0045, a collection's TMDB id (poster, synopsis, titles) is
 written only when a trusted signal backs it: the tracker's own id agreeing
 with a strict SCENE match, a strict SCENE match alone (exact normalised
 title or original title, same kind, same year — ±1 for movies), or a

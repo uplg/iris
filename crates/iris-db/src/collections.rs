@@ -63,7 +63,7 @@ pub struct CollectionRow {
     #[serde(default)]
     pub anilist_id: Option<i64>,
     /// Which signal backs `tmdb_id` (`admin` / `tracker_scene` / `scene` /
-    /// `tracker`, see migration 0044). `None` with an id = legacy row, not
+    /// `tracker`, see migration 0045). `None` with an id = legacy row, not
     /// yet re-evaluated by `tmdb-trust --apply`.
     #[serde(default)]
     pub tmdb_trust: Option<String>,
@@ -499,10 +499,10 @@ pub struct CollectionSummary {
 /// What the household watched last comes first (anyone's latest play in the
 /// series; opening a page doesn't count), then the newest series.
 pub async fn list_tv_with_episodes(pool: &SqlitePool) -> Result<Vec<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT c.id, c.tmdb_id, c.parsed_title_normalized, c.display_title, c.kind, \
-                c.created_at, c.last_indexer_scan_at, c.last_visited_at, c.is_anime, c.anilist_id \
-         FROM collections c \
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections c \
          WHERE c.kind = 'tv' \
            AND c.parsed_title_normalized IS NOT NULL \
            AND EXISTS ( \
@@ -514,8 +514,8 @@ pub async fn list_tv_with_episodes(pool: &SqlitePool) -> Result<Vec<CollectionRo
              (SELECT MAX(p.last_watched_at) FROM playback_progress p \
               JOIN torrents t ON t.infohash = p.infohash \
               WHERE t.collection_id = c.id), \
-             c.created_at) DESC, c.created_at DESC",
-    )
+             c.created_at) DESC, c.created_at DESC"
+    ))
     .fetch_all(pool)
     .await
 }
@@ -1007,6 +1007,7 @@ mod tests {
                     total_size_bytes: 1,
                     source_provider: None,
                     source_external_id: None,
+                    tracker_tmdb_id: None,
                     added_by: user,
                 },
             )

@@ -37,7 +37,7 @@ pub struct TorrentRow {
     /// The TMDB id the TRACKER shipped for this release (trust signal T1),
     /// captured at grab time. Never displayed as is: it only feeds the
     /// collection's trust evaluation (`tmdb_trust`). Legacy values of the
-    /// column (mixed provenance, before migration 0044) read as `None` —
+    /// column (mixed provenance, before migration 0045) read as `None` —
     /// only rows marked `tmdb_id_source = 'tracker'` surface here.
     pub tmdb_id: Option<i64>,
     /// Whether clients may show the collection's TMDB artwork for this
