@@ -76,9 +76,10 @@
 	$effect(() => () => clearTimeout(clickTimer));
 	function click(e: MouseEvent) {
 		if (onControl(e)) return;
-		// this click closed a panel (IrisChrome): it does not also toggle playback
-		if (wrapper?.dataset.panelDismissed !== undefined) {
-			delete wrapper.dataset.panelDismissed;
+		// this press was the chrome's (IrisChrome: it closed a panel, or a tap brought the hidden
+		// controls back): it does not also toggle playback
+		if (wrapper?.dataset.pressConsumed !== undefined) {
+			delete wrapper.dataset.pressConsumed;
 			return;
 		}
 		const h = view.handle;

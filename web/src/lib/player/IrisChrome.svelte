@@ -212,11 +212,16 @@
 		const el = fullscreenTarget;
 		if (!el) return;
 		const onDown = (e: PointerEvent) => {
-			wake();
 			outside(e);
+			// a touch has no hover: a tap on hidden controls only brings them back (the stage's
+			// click that follows does not also toggle playback)
+			if (e.pointerType === 'touch' && !visible) el.dataset.pressConsumed = '';
+			wake();
 		};
-		const onLeave = () => {
-			if (media.paused) return;
+		// a lifted finger leaves too (touch pointers end in pointerleave): only a mouse leaving
+		// the stage hides the controls at once
+		const onLeave = (e: PointerEvent) => {
+			if (media.paused || e.pointerType === 'touch') return;
 			clearTimeout(hideTimer);
 			recent = false;
 		};
@@ -242,15 +247,15 @@
 	});
 
 	// a pointer press outside an open panel closes it, and only that: the stage's click that
-	// follows does not also toggle playback (`data-panel-dismissed`, read by PlayerStage)
+	// follows does not also toggle playback (`data-press-consumed`, read by PlayerStage)
 	function outside(e: PointerEvent) {
 		const el = fullscreenTarget;
-		if (el) delete el.dataset.panelDismissed;
+		if (el) delete el.dataset.pressConsumed;
 		if (panel === 'none') return;
 		const t = e.target as Element | null;
 		if (t?.closest('.stage-panel, [data-panel-trigger]')) return;
 		panel = 'none';
-		if (el) el.dataset.panelDismissed = '';
+		if (el) el.dataset.pressConsumed = '';
 	}
 
 	const stats = $derived.by(() => {
