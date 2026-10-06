@@ -571,17 +571,7 @@ pub async fn dismiss_ghost(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
-
-    async fn migrated_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
-    }
+    use crate::test_support::{make_user, migrated_pool};
 
     async fn ef_count(pool: &SqlitePool, cid: Uuid) -> i64 {
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM episode_files WHERE collection_id = ?1")
@@ -635,21 +625,6 @@ mod tests {
         assert!(get(&pool, plain.id).await.unwrap().is_none());
         // The survivor keeps the moved episode file (no cascade wipe).
         assert_eq!(ef_count(&pool, anime.id).await, 1);
-    }
-
-    async fn make_user(pool: &SqlitePool) -> iris_core::ids::UserId {
-        let id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO users (id, email, password_hash, display_name, is_admin, created_at) \
-             VALUES (?1, ?2, '', 'T', 0, ?3)",
-        )
-        .bind(id)
-        .bind(format!("{id}@t.test"))
-        .bind(Utc::now())
-        .execute(pool)
-        .await
-        .expect("insert user");
-        iris_core::ids::UserId::from(id)
     }
 
     /// Ghosts are scoped to the user who watched them: a fully-GC'd

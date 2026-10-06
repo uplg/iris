@@ -143,17 +143,7 @@ pub async fn prune(pool: &SqlitePool, before: DateTime<Utc>) -> Result<u64, sqlx
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
-
-    async fn migrated_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
-    }
+    use crate::test_support::migrated_pool;
 
     fn sig(tmdb_id: i64) -> NewSignal {
         NewSignal {

@@ -19,6 +19,8 @@ pub mod pulse;
 pub mod recent_searches;
 pub mod reco_feedback;
 pub mod refresh_tokens;
+#[cfg(test)]
+mod test_support;
 pub mod tmdb_cache;
 pub mod torrents;
 pub mod users;

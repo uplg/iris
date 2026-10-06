@@ -217,18 +217,7 @@ pub async fn prune(pool: &SqlitePool, before: DateTime<Utc>) -> Result<u64, sqlx
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
-
-    /// Single-connection in-memory pool, migrated through the latest schema.
-    async fn migrated_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
-    }
+    use crate::test_support::migrated_pool;
 
     #[tokio::test]
     async fn prune_keeps_live_sessions_only() {

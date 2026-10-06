@@ -128,20 +128,10 @@ pub async fn put(
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::migrated_pool;
     use chrono::{Duration, Utc};
-    use sqlx::SqlitePool;
 
     use super::{ResolveEntry, get, put};
-
-    async fn migrated_pool() -> SqlitePool {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
-    }
 
     fn entry(tmdb_id: i64) -> ResolveEntry {
         ResolveEntry {

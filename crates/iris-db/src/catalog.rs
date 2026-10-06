@@ -446,8 +446,8 @@ pub async fn prune_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::migrated_pool;
     use chrono::Utc;
-    use sqlx::sqlite::SqlitePoolOptions;
 
     fn movie(tmdb_id: i64, title: &str, lang: &str, popularity: f64) -> NewCatalogItem {
         NewCatalogItem {
@@ -496,18 +496,6 @@ mod tests {
             released_at: Some(released_at),
             ..movie(tmdb_id, title, "fr", 10.0)
         }
-    }
-
-    /// Single-connection in-memory pool so every query hits the same DB,
-    /// migrated through the latest schema.
-    async fn migrated_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
     }
 
     #[tokio::test]
