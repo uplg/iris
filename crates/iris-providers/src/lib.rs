@@ -16,7 +16,6 @@ pub mod hdtorrents;
 pub mod nyaa;
 pub mod registry;
 pub mod tls;
-pub mod torr9;
 pub mod torrentleech;
 pub mod torznab;
 pub mod tr4ker;
@@ -55,7 +54,7 @@ pub trait SearchProvider: Send + Sync {
     /// Default: a query-less `search()`, which trackers whose search returns
     /// the newest items on an empty query (UNIT3D's empty `name=` sorted
     /// `created_at desc`, generic Torznab) satisfy directly. Providers with a
-    /// dedicated RSS/latest endpoint (torr9) or that need the query omitted
+    /// dedicated latest endpoint (nyaa's RSS) or that need the query omitted
     /// entirely (Torznab) override this.
     async fn latest(&self, kind: Option<MediaKind>, page: u32) -> Result<ProviderPage> {
         self.search(&SearchQuery {

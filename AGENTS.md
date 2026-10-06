@@ -287,7 +287,7 @@ older client. Discipline:
 - Backend: when adding a field whose old payloads won't carry, use
   `#[serde(default)]` so missing values deserialise to the type's
   default. (`TorrentDetails::description_format` is the canonical
-  example — defaults to `Bbcode` for legacy torr9.)
+  example — defaults to `Bbcode` for payloads written before the field.)
 
 **Adding an enum variant** — needs forward-compat config:
 

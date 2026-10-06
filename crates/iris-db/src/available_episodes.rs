@@ -51,7 +51,7 @@ pub struct AvailableEpisodeRow {
     /// cache — that cache evaporates on restart and pre-0.4.0
     /// installs would 500 on the first grab attempt after each
     /// reboot. `None` for providers that don't surface a URL
-    /// (torr9's JSON API), or on legacy rows pre-migration 0018.
+    /// (they resolve per id), or on legacy rows pre-migration 0018.
     #[serde(default)]
     pub download_url: Option<String>,
     /// Absolute episode number for fleuve anime offers

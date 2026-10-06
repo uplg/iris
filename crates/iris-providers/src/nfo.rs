@@ -317,7 +317,7 @@ mod tests {
     const SAMPLE_NFO: &str = "General\r\nComplete name                            : My.Dearest.Assassin\r\nFormat                                   : Matroska\r\nDuration                                 : 2 h 8 min\r\nOverall bit rate                         : 4 151 kb/s\r\n\r\nVideo\r\nFormat                                   : HEVC\r\nDuration                                 : 2 h 8 min\r\nBit rate                                 : 2 100 kb/s\r\nWidth                                    : 1 920 pixels\r\nHeight                                   : 1 080 pixels\r\nFrame rate                               : 24.000 FPS\r\nDefault                                  : Yes\r\n\r\nAudio #1\r\nFormat                                   : E-AC-3\r\nCommercial name                          : Dolby Digital Plus\r\nDuration                                 : 2 h 8 min\r\nBit rate                                 : 640 kb/s\r\nChannel(s)                               : 6 channels\r\nTitle                                    : VFF\r\nLanguage                                 : French (FR)\r\nDefault                                  : Yes\r\n\r\nAudio #2\r\nFormat                                   : E-AC-3 JOC\r\nCommercial name                          : Dolby Digital Plus with Dolby Atmos\r\nBit rate                                 : 768 kb/s\r\nChannel(s)                               : 6 channels\r\nLanguage                                 : Thai\r\nDefault                                  : No\r\n\r\nText #1\r\nFormat                                   : UTF-8\r\nLanguage                                 : French (FR)\r\nTitle                                    : VFF (Forced)\r\nDefault                                  : Yes\r\nForced                                   : Yes\r\n\r\nText #2\r\nFormat                                   : UTF-8\r\nLanguage                                 : English (US)\r\nTitle                                    : (SDH)\r\nDefault                                  : No\r\nForced                                   : No\r\n";
 
     #[test]
-    fn parses_real_world_torr9_nfo() {
+    fn parses_real_world_nfo() {
         let mi = parse(SAMPLE_NFO).expect("MediaInfo summary");
         let v = mi.video.as_ref().expect("video block");
         assert_eq!(v.codec.as_deref(), Some("HEVC"));
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn season_pack_only_parses_first_file() {
-        // Real-world torr9 season pack shape: each episode appears as
+        // Real-world season pack shape: each episode appears as
         // its own General/Video/Audio/Text block separated by ######
         // dividers. Without the per-file boundary detection we'd
         // accumulate audio/subs across all 12 episodes (60 audio, 120

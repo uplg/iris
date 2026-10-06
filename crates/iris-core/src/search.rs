@@ -26,7 +26,7 @@ pub struct SearchQuery {
     pub parsed_title: Option<String>,
     /// SCENE-parsed season number from `q`. `Some(0)` is the in-band
     /// sentinel for a season-pack query (e.g. `Show.Name.S04`).
-    /// Torznab maps this to `season=`; UNIT3D/Torr9 append it to the
+    /// Torznab maps this to `season=`; UNIT3D appends it to the
     /// name filter as `SxxExx` / `Sxx`.
     #[serde(default)]
     pub season: Option<u32>,
@@ -217,7 +217,7 @@ pub struct SearchResult {
     /// onto `available_episodes.download_url` so the grab path
     /// survives process restarts that wipe the in-memory link
     /// caches. `None` for providers that fetch URLs on demand
-    /// (torr9's JSON API resolves per-id at grab time).
+    /// (they resolve per id at grab time).
     #[serde(skip_serializing, default)]
     pub download_url: Option<String>,
     /// SCENE-parsed season number from the release title. Lets the
@@ -310,12 +310,12 @@ pub enum TorrentSource {
 /// agree on a format. The frontend dispatches the right renderer
 /// (`BBCode` parser, sanitised HTML, raw text) off this. Defaults to
 /// [`DescriptionFormat::Bbcode`] when absent so older provider payloads
-/// (torr9 was the only source originally) keep working unchanged.
+/// (written before the field existed) keep working unchanged.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DescriptionFormat {
-    /// torr9 dialect: `[b]`, `[center]`, `[size=N]`, `[color=#xxx]`,
-    /// `[url=…]`, `[img]…[/img]`. Custom renderer in
+    /// Tracker `BBCode` (the `UNIT3D` dialect): `[b]`, `[center]`, `[size=N]`,
+    /// `[color=#xxx]`, `[url=…]`, `[img]…[/img]`. Custom renderer in
     /// `web/src/components/PreviewDialog.tsx`.
     #[default]
     Bbcode,

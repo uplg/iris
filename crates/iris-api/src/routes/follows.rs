@@ -1577,7 +1577,7 @@ async fn ingest_picked(
     //      evaporates on restart and caused real 500s when c411 /
     //      UNIT3D dropped older releases off the search top page.
     //   3. provider.resolve() — last resort: per-id round-trip to
-    //      the indexer. Works for torr9-style providers that don't
+    //      the indexer. Works for providers that don't
     //      ship a URL in the search payload, and as a fallback when
     //      the persisted URL has expired.
     // Same slot guard as the manual grab (`torrents::check_leech_slots`):

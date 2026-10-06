@@ -356,7 +356,6 @@ fn policy_of(entry: &ProviderEntry) -> ProviderPolicy {
 /// New tracker types plug in here.
 pub fn build_provider(entry: &ProviderEntry) -> Result<Arc<dyn SearchProvider>> {
     match entry.kind.as_str() {
-        "torr9" => Ok(crate::torr9::Torr9::from_config(entry)?),
         "torznab" => Ok(crate::torznab::TorznabProvider::from_config(entry)?),
         "tr4ker" => Ok(crate::tr4ker::Tr4ker::from_config(entry)?),
         "unit3d" => Ok(crate::unit3d::Unit3dProvider::from_config(entry)?),
@@ -379,6 +378,18 @@ mod policy_tests {
 
     fn entry(toml_body: &str) -> ProviderEntry {
         toml::from_str(toml_body).expect("valid provider entry")
+    }
+
+    /// A `providers.toml` still listing a removed tracker (torr9) must boot:
+    /// the unknown kind is logged and skipped, the rest still load.
+    #[test]
+    fn unknown_kind_is_skipped_not_fatal() {
+        let entries = [
+            entry("id = \"torr9\"\nkind = \"torr9\"\n"),
+            entry("id = \"nyaa\"\nkind = \"nyaa\"\n"),
+        ];
+        let registry = super::ProviderRegistry::from_entries(&entries).expect("registry");
+        assert_eq!(registry.ids(), vec!["nyaa".to_string()]);
     }
 
     #[test]
