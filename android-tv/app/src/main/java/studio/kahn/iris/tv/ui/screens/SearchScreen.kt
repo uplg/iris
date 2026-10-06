@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.format.AgoStyle
+import studio.kahn.iris.tv.ui.format.ago
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -114,7 +116,6 @@ import studio.kahn.iris.tv.ui.screens.search.label
 import studio.kahn.iris.tv.ui.format.languageLabel
 import studio.kahn.iris.tv.ui.screens.search.pageWords
 import studio.kahn.iris.tv.ui.screens.search.parsedWords
-import studio.kahn.iris.tv.ui.screens.search.recentWhen
 import studio.kahn.iris.tv.ui.screens.search.releaseKey
 import studio.kahn.iris.tv.ui.screens.search.releaseRows
 import studio.kahn.iris.tv.ui.components.FocusReturn
@@ -489,7 +490,7 @@ private fun RecentRow(item: RecentSearchView, forgetting: String?, actions: Sear
             modifier = Modifier.weight(1f),
         )
         Text(
-            if (forgetting == item.query) "Forgetting…" else recentWhen(item.searchedAt, now),
+            if (forgetting == item.query) "Forgetting…" else ago(item.searchedAt, AgoStyle.Short, now),
             style = IrisType.meta,
             color = muted,
         )

@@ -1,5 +1,9 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.format.kindLabel
+import studio.kahn.iris.tv.data.sceneMark
+import studio.kahn.iris.tv.ui.format.AgoStyle
+import studio.kahn.iris.tv.ui.format.ago
 import studio.kahn.iris.tv.ui.format.fromProvider
 import studio.kahn.iris.tv.ui.format.etaWords
 import studio.kahn.iris.tv.ui.format.ratioWords
@@ -20,7 +24,6 @@ import studio.kahn.iris.tv.ui.format.formatSpeed
 import studio.kahn.iris.tv.ui.format.percent
 import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.format.prettySceneName
-import studio.kahn.iris.tv.ui.format.recentTime
 import studio.kahn.iris.tv.ui.format.watchWords
 import studio.kahn.iris.tv.ui.components.StatusTone
 
@@ -76,20 +79,12 @@ fun bytesPct(list: List<TorrentView>): Double {
     return if (total > 0) list.sumOf { it.progressBytes } * 100.0 / total else 0.0
 }
 
-private val SEASON_IN_NAME = Regex("(?:^|[^a-z0-9])s(\\d{1,2})(?:e(\\d{1,3}))?(?![a-z0-9])", RegexOption.IGNORE_CASE)
-
-/** The season or episode a release carries (`S4`, `S4:E2`), when its name says it. */
-fun seasonOf(name: String?): String? {
-    val m = SEASON_IN_NAME.find(name.orEmpty()) ?: return null
-    val season = m.groupValues[1]
-    val episode = m.groupValues[2].takeIf { it.isNotEmpty() }?.toLong()
-    val code = episodeCode(season.toLong(), episode)
-    return if (code?.startsWith("Season") == true) "S${season.removePrefix("0")}" else code
-}
+/** The season or episode a release carries (`Season 4`, `S4:E2`), when its name says it. */
+fun seasonOf(name: String?): String? = sceneMark(name.orEmpty())?.let { episodeCode(it.season, it.episode) }
 
 /** A title's facts: `Series · 4.2 GB`. */
 fun titleMeta(c: CollectionListItem): String =
-    if (c.ghost == true) kindOf(c).word else "${kindOf(c).word} · ${formatSize(c.totalSizeBytes)}"
+    kindLabel(c.kind, c.isAnime == true).let { if (c.ghost == true) it else "$it · ${formatSize(c.totalSizeBytes)}" }
 
 /** A title's state in words: downloading, needs a hand, gone, else where the person is in it, else on disk. */
 fun titleStatus(c: CollectionListItem, a: Activity?): Status {
@@ -178,9 +173,31 @@ enum class ReleaseGroup(val title: String) {
 
 private fun done(t: TorrentView) = t.finished || t.progressPct >= 100.0
 
-/** A release still fetching data (not finished, not stopped): what makes the screens poll fast. */
+/** Still fetching data, running or not (a paused or failed one is still short): web `isFetching`. */
+fun isFetching(t: TorrentView?): Boolean = t != null && !done(t)
+
+/** What a release is doing, in one word each (web `PHASE_WORDS`). */
+enum class Phase(val words: String) {
+    Checking("Checking files"),
+    Downloading("Downloading"),
+    Stalled("Stalled"),
+    Seeding("Seeding"),
+    Paused("Paused"),
+    Error("Stopped with an error"),
+}
+
+fun phaseOf(t: TorrentView): Phase = when {
+    t.state == TorrentState.error -> Phase.Error
+    t.state == TorrentState.paused -> Phase.Paused
+    done(t) -> Phase.Seeding
+    t.state == TorrentState.initializing -> Phase.Checking
+    stalled(t) -> Phase.Stalled
+    else -> Phase.Downloading
+}
+
+/** Fetching and running: something moves, what makes the screens poll fast. */
 fun moving(t: TorrentView): Boolean =
-    !t.finished && t.progressPct < 100.0 && (t.state == TorrentState.live || t.state == TorrentState.initializing)
+    isFetching(t) && (t.state == TorrentState.live || t.state == TorrentState.initializing)
 
 /** How long a fresh grab may sit without peers before it counts as stalled: finding them takes a while. */
 val STALL_GRACE: Duration = Duration.ofMinutes(2)
@@ -218,25 +235,27 @@ fun ratioOf(sent: Long, received: Long?): Double? =
 /** A release's state line, in words. */
 fun releaseStatus(t: TorrentView): Status {
     val pct = percent(min(100.0, max(0.0, t.progressPct)))
-    if (t.state == TorrentState.error) {
-        return Status(StatusTone.Warn, t.error?.let { "Error · $it" } ?: "Error · the engine stopped this release")
-    }
-    if (t.state == TorrentState.paused) {
-        if (done(t)) {
+    val phase = phaseOf(t)
+    return when (phase) {
+        Phase.Error -> Status(StatusTone.Warn, listOfNotNull(phase.words, t.error).joinToString(" · "))
+        Phase.Paused -> if (done(t)) {
             val from = t.sourceProvider?.let { "$it releases never seed" } ?: "its tracker does not seed"
-            return Status(StatusTone.Info, "Paused after download · $from")
+            Status(StatusTone.Info, "Paused after download · $from")
+        } else {
+            Status(StatusTone.Warn, "${phase.words} · $pct")
         }
-        return Status(StatusTone.Warn, "Paused · $pct")
+        Phase.Seeding -> {
+            val who = if (t.peers == 0) "nobody downloading now" else "${plural(t.peers, "peer")} downloading"
+            Status(StatusTone.Ok, "${phase.words} · $who · ${formatSpeed(t.uploadSpeedBps)} up")
+        }
+        Phase.Checking -> Status(StatusTone.Busy, "${phase.words} · $pct")
+        Phase.Stalled -> Status(StatusTone.Warn, "${phase.words} · no peers · $pct")
+        Phase.Downloading -> {
+            val parts = mutableListOf("${phase.words} · $pct", formatSpeed(t.downloadSpeedBps), plural(t.peers, "peer"))
+            etaSeconds(t)?.let { parts += etaWords(it) }
+            Status(StatusTone.Busy, parts.joinToString(" · "))
+        }
     }
-    if (done(t)) {
-        val who = if (t.peers == 0) "nobody downloading now" else "${plural(t.peers, "peer")} downloading"
-        return Status(StatusTone.Ok, "Seeding · $who · ${formatSpeed(t.uploadSpeedBps)} up")
-    }
-    if (t.state == TorrentState.initializing) return Status(StatusTone.Busy, "Checking files · $pct")
-    if (groupOf(t) == ReleaseGroup.Attention) return Status(StatusTone.Warn, "Stalled · no peers · $pct")
-    val parts = mutableListOf("Downloading · $pct", formatSpeed(t.downloadSpeedBps), plural(t.peers, "peer"))
-    etaSeconds(t)?.let { parts += etaWords(it) }
-    return Status(StatusTone.Busy, parts.joinToString(" · "))
 }
 
 /** What a release's delete removes, named. */
@@ -273,12 +292,12 @@ fun watchState(w: ContinueWatchingItem?): WatchState {
 fun releaseTitle(t: TorrentView, c: CollectionListItem?): String =
     c?.displayTitle ?: t.name?.let(::prettySceneName) ?: t.infohash
 
-/** `Added by Leonard · 2d ago · from torr9 · 12 GB sent · ratio 1.20`. */
+/** `Added by Leonard · yesterday 21:04 · from torr9 · 12 GB sent · ratio 1.20`. */
 fun releaseFacts(t: TorrentView, now: java.time.Instant = java.time.Instant.now()): String {
     val ratio = ratioOf(t.uploadedBytesTotal, t.downloadedBytesTotal)
     return listOfNotNull(
         "Added by ${t.addedByName}",
-        recentTime(t.addedAt, now),
+        ago(t.addedAt, AgoStyle.Short, now),
         t.sourceProvider?.let(::fromProvider),
         "${formatSize(t.uploadedBytesTotal)} sent",
         ratio?.let(::ratioWords),

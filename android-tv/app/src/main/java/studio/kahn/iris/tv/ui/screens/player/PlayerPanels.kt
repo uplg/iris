@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.player
 
+import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
 import studio.kahn.iris.tv.ui.format.languageChipWords
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -71,7 +72,7 @@ fun TracksPanel(
     onDismiss: () -> Unit,
 ) {
     val initial = remember { FocusRequester() }
-    val focusId = menu.subtitles.firstOrNull { it.selected && it.id != SUBTITLES_OFF }?.id
+    val focusId = menu.subtitles.firstOrNull { it.selected && it.id != SUBTITLES_OFF_ID }?.id
         ?: menu.audio.firstOrNull { it.selected }?.id
         ?: menu.subtitles.firstOrNull()?.id
     LaunchedEffect(Unit) { runCatching { initial.requestFocus() } }
@@ -83,7 +84,11 @@ fun TracksPanel(
                 ChoiceGroup(menu.audio, focusId, initial, onChoose)
             }
             PanelLabel("Subtitles", Modifier.padding(top = IrisSpace.s3))
-            ChoiceGroup(menu.subtitles, focusId, initial, onChoose)
+            if (menu.subtitles.isEmpty()) {
+                Text(NO_SUBTITLES, style = IrisType.meta, color = IrisColor.inkMuted, modifier = Modifier.padding(horizontal = IrisSpace.s4))
+            } else {
+                ChoiceGroup(menu.subtitles, focusId, initial, onChoose)
+            }
         }
     }
 }

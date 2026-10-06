@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens.player
 
+import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.SUBTITLES_OFF
 import java.util.Locale
 import studio.kahn.iris.tv.ui.format.languageName
 import studio.kahn.iris.tv.ui.format.normalizeLanguage
@@ -117,11 +119,11 @@ object TrackNaming {
         ),
     )
 
-    /** The bottom bar's summary: "English audio · English subtitles (SDH)", "French audio · No subtitles". */
-    fun summary(audio: AudioTrackInfo?, subtitle: SubtitleTrackInfo?): String {
+    /** The bottom bar's summary: "English audio · English subtitles (SDH)", "French audio · Subtitles off". */
+    fun summary(audio: AudioTrackInfo?, subtitle: SubtitleTrackInfo?, hasSubtitles: Boolean = subtitle != null): String {
         val audioWords = audio?.let { languageName(it.language) }?.let { "$it audio" }
         val subWords = when {
-            subtitle == null -> "No subtitles"
+            subtitle == null -> if (hasSubtitles) SUBTITLES_OFF else NO_SUBTITLES
             else -> {
                 val lang = languageName(subtitle.language) ?: "Other"
                 if (isSdh(subtitle.title)) "$lang subtitles (SDH)" else "$lang subtitles"

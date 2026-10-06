@@ -1,6 +1,5 @@
 package studio.kahn.iris.tv.ui.format
 
-import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
@@ -47,16 +46,20 @@ class FormatTest {
     }
 
     @Test
-    fun recentAndRelativeTimes() {
-        val now = Instant.parse("2026-10-06T12:00:00Z")
-        fun ago(seconds: Long) = OffsetDateTime.ofInstant(now.minusSeconds(seconds), ZoneOffset.UTC)
-        assertEquals("just now", recentTime(ago(5), now))
-        assertEquals("5m ago", recentTime(ago(300), now))
-        assertEquals("2d ago", recentTime(ago(2 * 86_400 + 3_600), now))
-        assertEquals("today", formatRelative(ago(0), now))
-        assertEquals("3d ago", formatRelative(ago(3 * 86_400), now))
-        assertEquals("2mo ago", formatRelative(ago(65 * 86_400), now))
-        assertEquals("1y ago", formatRelative(ago(400 * 86_400), now))
+    fun aPastMomentIsSaidOneWay() {
+        val now = ZonedDateTime.of(2026, 10, 6, 21, 0, 0, 0, ZoneOffset.UTC)
+        fun back(seconds: Long) = OffsetDateTime.ofInstant(now.toInstant().minusSeconds(seconds), ZoneOffset.UTC)
+        assertEquals("just now", ago(back(5), now = now))
+        assertEquals("12 min ago", ago(back(12 * 60 + 30), now = now))
+        assertEquals("today at 19:00", ago(back(2 * 3_600), now = now))
+        assertEquals("today 19:00", ago(back(2 * 3_600), AgoStyle.Short, now))
+        assertEquals("yesterday at 21:04", ago(OffsetDateTime.of(2026, 10, 5, 21, 4, 0, 0, ZoneOffset.UTC), now = now))
+        assertEquals("yesterday 21:04", ago(OffsetDateTime.of(2026, 10, 5, 21, 4, 0, 0, ZoneOffset.UTC), AgoStyle.Short, now))
+        assertEquals("on Saturday", ago(back(3 * 86_400), now = now))
+        assertEquals("Saturday", ago(back(3 * 86_400), AgoStyle.Short, now))
+        assertEquals("on 3 Oct 2025", ago(OffsetDateTime.of(2025, 10, 3, 12, 0, 0, 0, ZoneOffset.UTC), now = now))
+        assertEquals("3 Oct 2025", ago(OffsetDateTime.of(2025, 10, 3, 12, 0, 0, 0, ZoneOffset.UTC), AgoStyle.Short, now))
+        assertEquals("tomorrow at 08:00", onDay(OffsetDateTime.of(2026, 10, 7, 8, 0, 0, 0, ZoneOffset.UTC), now))
     }
 
     @Test

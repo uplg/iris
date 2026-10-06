@@ -1,5 +1,8 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.format.languagesPhrase
+import studio.kahn.iris.tv.ui.format.AgoStyle
+import studio.kahn.iris.tv.ui.format.ago
 import studio.kahn.iris.tv.ui.format.fromProvider
 import studio.kahn.iris.tv.data.playFileOf
 import androidx.compose.runtime.Immutable
@@ -17,9 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
-import studio.kahn.iris.tv.ui.format.audioChoiceWords
-import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
+import studio.kahn.iris.tv.ui.format.OFF
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.TmdbMetadataCache
@@ -44,7 +45,6 @@ import studio.kahn.iris.tv.ui.format.allWatched
 import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.markedWatchedWords
-import studio.kahn.iris.tv.ui.format.recentTime
 import studio.kahn.iris.tv.ui.components.Notice
 import studio.kahn.iris.tv.ui.state.LiveRead
 import studio.kahn.iris.tv.ui.state.BusyActions
@@ -328,8 +328,7 @@ class CollectionViewModel(private val container: AppContainer, private val colle
         container.api().savePlaybackPreferences(LanguageChoices(UUID.fromString(collectionId), audio, subtitles).body())
         prefs.refresh()
         val title = detail.value?.displayTitle ?: "this series"
-        "Saved for $title: audio ${audio?.let(::audioChoiceWords) ?: USUAL_CHOICE}, " +
-            "subtitles ${subtitles?.let(::subtitleChoiceWords) ?: USUAL_CHOICE}."
+        "Saved for $title: ${languagesPhrase(audio, subtitles, usual = true)}."
     }
 
     private fun act(key: String, onSuccess: (() -> Unit)?, block: suspend CoroutineScope.() -> String?) {
@@ -337,16 +336,13 @@ class CollectionViewModel(private val container: AppContainer, private val colle
     }
 }
 
-/** A series field it never chose itself: it inherits the account's (the web's « your usual choice »). */
-const val USUAL_CHOICE = "your usual choice"
-
 /** The busy key of the title's watched toggle. */
 const val WATCHED_KEY = "title-watched"
 
 fun languagesUi(p: PlaybackPrefsResponse, c: CollectionDetail?, m: MediaMetadata?, collectionId: UUID): LanguagesUi {
     val known = releaseCodes(c?.episodes.orEmpty().map { it.language } + c?.availableEpisodes.orEmpty().map { it.language }) +
         listOfNotNull(m?.originalLanguage)
-    fun options(current: String?) = (known + listOf("en", "fr") + listOfNotNull(current?.takeIf { it != NO_SUBTITLES })).distinct()
+    fun options(current: String?) = (known + listOf("en", "fr") + listOfNotNull(current?.takeIf { it != OFF })).distinct()
     val own = LanguageChoices.of(p, collectionId)
     return LanguagesUi(p.audioLanguage, p.subtitleLanguage, p.forCollection == true, own, options(p.audioLanguage), options(p.subtitleLanguage))
 }
@@ -417,7 +413,7 @@ fun collectionPage(
         },
         onDisk = c.torrents.map { t ->
             val row = releaseRow(t, c.displayTitle, c.posterPath, watched[t.infohash], now)
-            val facts = listOfNotNull(qualityWords(t.name ?: t.infohash), formatSize(t.totalSizeBytes), "added by ${t.addedByName} ${recentTime(t.addedAt, now)}")
+            val facts = listOfNotNull(qualityWords(t.name ?: t.infohash), formatSize(t.totalSizeBytes), "added by ${t.addedByName} ${ago(t.addedAt, AgoStyle.Sentence, now)}")
                 .joinToString(" · ")
             row.copy(
                 facts = facts,
@@ -431,7 +427,7 @@ fun collectionPage(
                 name = r.name,
                 watchLine = goneWatchLine(r.watched, r.positionSeconds, r.durationSeconds, r.lastWatchedAt, now),
                 watched = r.watched == true,
-                facts = listOfNotNull(formatSize(r.totalSizeBytes), fromProvider(r.sourceProvider), r.deletedAt?.let { "removed ${recentTime(it, now)}" })
+                facts = listOfNotNull(formatSize(r.totalSizeBytes), fromProvider(r.sourceProvider), r.deletedAt?.let { "removed ${ago(it, AgoStyle.Sentence, now)}" })
                     .joinToString(" · "),
                 provider = r.sourceProvider,
                 externalId = r.sourceExternalId,

@@ -61,7 +61,7 @@ class ReleaseWordsTest {
         assertEquals("v3x:2", releaseKey(r))
         assertEquals("Severance", titleOf(r))
         assertEquals("Season 2 · Original with subtitles (VOSTFR)", gridWhat(r))
-        assertEquals("61 seeders · 14.8 GB · v3x · 7d ago", factsLine(r, Instant.parse("2026-10-06T12:00:00Z")))
+        assertEquals("61 seeders · 14.8 GB · v3x · 29 Sept", factsLine(r, Instant.parse("2026-10-06T12:00:00Z")))
         val movie = r.copy(titleMatch = tv.copy(kind = MediaKind.movie, year = 2006), parsedSeason = null, parsedEpisode = null, languageTag = "multi")
         assertEquals("Movie 2006 · Several (MULTI)", gridWhat(movie))
         assertNull(ownedFile(r))

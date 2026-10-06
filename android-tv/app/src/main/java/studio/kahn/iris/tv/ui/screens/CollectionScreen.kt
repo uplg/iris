@@ -51,7 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.OFF
 import studio.kahn.iris.tv.ui.format.audioChoiceWords
 import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
 import studio.kahn.iris.tv.data.AppContainer
@@ -702,15 +702,15 @@ internal fun LanguagesPanel(
             options = listOf("") + langs.audioOptions,
             selected = audio,
             onSelect = { audio = it },
-            label = { if (it.isEmpty()) "Your usual choice" else audioChoiceWords(it) },
+            label = { if (it.isEmpty()) "Your usual audio" else audioChoiceWords(it) },
             selectedFocus = first,
         )
         PanelLabel("Subtitles")
         PanelOptions(
-            options = listOf("", NO_SUBTITLES) + langs.subtitleOptions,
+            options = listOf("", OFF) + langs.subtitleOptions,
             selected = subs,
             onSelect = { subs = it },
-            label = { if (it.isEmpty()) "Your usual choice" else subtitleChoiceWords(it) },
+            label = { if (it.isEmpty()) "Your usual subtitles" else subtitleChoiceWords(it) },
         )
         Row(
             Modifier.padding(horizontal = IrisSpace.s4, vertical = IrisSpace.s4),

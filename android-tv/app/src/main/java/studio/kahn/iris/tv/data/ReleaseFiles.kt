@@ -14,16 +14,14 @@ fun FileEntry.asReleaseFile() = ReleaseFile(index, path, sizeBytes, isVideoPath(
 /** A season and episode a release or file name carries; a season alone (`S02`) is episode 0. */
 data class SceneMark(val season: Int, val episode: Int)
 
-private val SEASON_EPISODE = Regex("""\bS(\d{1,4})[._ -]*E(\d{1,4})\b""", RegexOption.IGNORE_CASE)
-private val SEASON_ONLY = Regex("""\bS(\d{1,2})\b""", RegexOption.IGNORE_CASE)
+// Seasons 1 or 2 digits, episodes up to 4 (long anime runs); the mark stands apart from
+// letters and digits, so an underscore is a boundary (web `sceneEpisode`).
+private val SCENE_MARK = Regex("""(?:^|[^a-z0-9])s(\d{1,2})(?:[._ -]*e(\d{1,4}))?(?![a-z0-9])""", RegexOption.IGNORE_CASE)
 
-/** `S01E02`, `S1E2`, `S01.E02`; a bare `S02` is the whole season. */
+/** `S01E02`, `S1E2`, `S01.E02`, `Show_S01E02_1080p`; a bare `S02` is the whole season (episode 0). */
 fun sceneMark(name: String): SceneMark? {
-    val base = name.substringAfterLast('/')
-    SEASON_EPISODE.find(base)?.let { m ->
-        return SceneMark(m.groupValues[1].toInt(), m.groupValues[2].toInt())
-    }
-    return SEASON_ONLY.find(base)?.let { SceneMark(it.groupValues[1].toInt(), 0) }
+    val m = SCENE_MARK.find(name.substringAfterLast('/')) ?: return null
+    return SceneMark(m.groupValues[1].toInt(), m.groupValues[2].toIntOrNull() ?: 0)
 }
 
 private fun episodeOf(path: String): SceneMark? = sceneMark(path)?.takeIf { it.episode > 0 }

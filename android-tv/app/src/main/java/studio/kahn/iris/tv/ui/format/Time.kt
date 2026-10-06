@@ -36,33 +36,11 @@ fun duration(seconds: Double): String {
     return if (m == 0L) "$h h" else "$h h $m min"
 }
 
-/** How long until a download is done: `about 6 min`. */
-fun etaWords(seconds: Double): String = "about ${duration(seconds)}"
+/** How long until a download is done: `done in about 6 min`. */
+fun etaWords(seconds: Double): String = "done in about ${duration(seconds)}"
 
 /** What is left to watch: `23 min left`. */
 fun timeLeft(seconds: Double): String = "${duration(seconds)} left"
-
-/** Recent activity, finer than a day: `just now`, `5m ago`, `3h ago`, `2d ago` (web `formatRecentTime`). */
-fun recentTime(at: OffsetDateTime, now: Instant = Instant.now()): String {
-    val secs = max(0L, Duration.between(at.toInstant(), now).seconds)
-    return when {
-        secs < 10 -> "just now"
-        secs < 60 -> "${secs}s ago"
-        secs < 3600 -> "${secs / 60}m ago"
-        secs < 86_400 -> "${secs / 3600}h ago"
-        else -> "${secs / 86_400}d ago"
-    }
-}
-
-/** An upload's age in whole days: `today`, `3d ago`, `2mo ago`, `1y ago` (web `formatRelative`). */
-fun formatRelative(at: OffsetDateTime, now: Instant = Instant.now()): String {
-    val days = ChronoUnit.DAYS.between(at.toInstant(), now)
-    if (days < 1) return "today"
-    if (days < 30) return "${days}d ago"
-    val months = days / 30
-    if (months < 12) return "${months}mo ago"
-    return "${months / 12}y ago"
-}
 
 private val TIME = DateTimeFormatter.ofPattern("HH:mm", Locale.UK)
 private val DAY_MONTH = DateTimeFormatter.ofPattern("d MMM", Locale.UK)
@@ -73,19 +51,44 @@ fun clockTime(at: OffsetDateTime, zone: ZoneId = ZoneId.systemDefault()): String
 fun clockTime(at: Instant, zone: ZoneId = ZoneId.systemDefault()): String = at.atZone(zone).format(TIME)
 private val DAY_MONTH_YEAR = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.UK)
 
+/** Whether a past moment follows a verb (`Added yesterday at 21:04`) or stands in a line of facts (`yesterday 21:04`). */
+enum class AgoStyle { Sentence, Short }
+
 /**
- * A moment as people say it, past or future, in [now]'s zone: `today at 21:04`,
- * `yesterday at 09:12`, `tomorrow at 08:00`, `on Monday`, `on 2 Oct`, `on 2 Oct 2025`.
+ * A moment's day, past or future, in [now]'s zone (web `dayWords`): `today at 21:04`,
+ * `yesterday at 09:12`, `tomorrow at 08:00`, `on Monday`, `on 2 Oct`, `on 2 Oct 2025`;
+ * [short] drops the "at" and the "on" (`yesterday 21:04`, `Monday`, `2 Oct`).
  */
-fun onDay(at: OffsetDateTime, now: ZonedDateTime = ZonedDateTime.now()): String {
+private fun dayWords(at: OffsetDateTime, now: ZonedDateTime, short: Boolean): String {
     val local = at.atZoneSameInstant(now.zone)
     val days = ChronoUnit.DAYS.between(now.toLocalDate(), local.toLocalDate())
+    val time = if (short) " ${local.format(TIME)}" else " at ${local.format(TIME)}"
+    val on = if (short) "" else "on "
     return when {
-        days == 0L -> "today at ${local.format(TIME)}"
-        days == -1L -> "yesterday at ${local.format(TIME)}"
-        days == 1L -> "tomorrow at ${local.format(TIME)}"
-        abs(days) < 7 -> "on ${local.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.UK)}"
-        local.year == now.year -> "on ${local.format(DAY_MONTH)}"
-        else -> "on ${local.format(DAY_MONTH_YEAR)}"
+        days == 0L -> "today$time"
+        days == -1L -> "yesterday$time"
+        days == 1L -> "tomorrow$time"
+        abs(days) < 7 -> on + local.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.UK)
+        local.year == now.year -> on + local.format(DAY_MONTH)
+        else -> on + local.format(DAY_MONTH_YEAR)
     }
 }
+
+/** A moment in a sentence, mostly an upcoming one: `Signed in until tomorrow at 08:00`. A past one is [ago]. */
+fun onDay(at: OffsetDateTime, now: ZonedDateTime = ZonedDateTime.now()): String = dayWords(at, now, short = false)
+
+/**
+ * A past moment, the one way the app says it (web `ago`): to the minute within the hour
+ * (`just now`, `12 min ago`), then by its day ([AgoStyle]).
+ */
+fun ago(at: OffsetDateTime, style: AgoStyle = AgoStyle.Sentence, now: ZonedDateTime = ZonedDateTime.now()): String {
+    val secs = Duration.between(at.toInstant(), now.toInstant()).seconds
+    return when {
+        secs in 0 until 60 -> "just now"
+        secs in 0 until 3600 -> "${secs / 60} min ago"
+        else -> dayWords(at, now, style == AgoStyle.Short)
+    }
+}
+
+fun ago(at: OffsetDateTime, style: AgoStyle, now: Instant, zone: ZoneId = ZoneId.systemDefault()): String =
+    ago(at, style, now.atZone(zone))

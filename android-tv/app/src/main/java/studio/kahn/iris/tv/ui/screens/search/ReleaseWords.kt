@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens.search
 
+import studio.kahn.iris.tv.ui.format.AgoStyle
+import studio.kahn.iris.tv.ui.format.ago
 import studio.kahn.iris.tv.ui.format.languageLabel
 import studio.kahn.iris.tv.ui.format.seedersWords
 import java.time.Instant
@@ -14,7 +16,6 @@ import studio.kahn.iris.tv.data.SubInfo
 import studio.kahn.iris.tv.data.TitleCard
 import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.episodeCode
-import studio.kahn.iris.tv.ui.format.formatRelative
 import studio.kahn.iris.tv.ui.format.IN_PROGRESS
 import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.kindWord
@@ -62,12 +63,12 @@ fun gridWhat(r: SearchResult): String? {
     return listOfNotNull(part, languageLabel(r.languageTag, long = false)).joinToString(" · ").ifEmpty { null }
 }
 
-/** "142 seeders · 12.4 GB · torr9 · 3d ago" */
+/** "142 seeders · 12.4 GB · torr9 · yesterday 21:04" */
 fun factsLine(r: SearchResult, now: Instant = Instant.now()): String = listOfNotNull(
     seedersWords(r.seeders),
     r.sizeBytes?.let(::formatSize),
     r.providerId,
-    r.uploadedAt?.let { formatRelative(it, now) },
+    r.uploadedAt?.let { ago(it, AgoStyle.Short, now) },
 ).joinToString(" · ")
 
 /** Already on disk, with the file to play: the release plays from there. */

@@ -89,7 +89,7 @@ fun prettyName(raw: String?): String? = raw
 
 /** "S2:E4 · Woe's Hollow" (the name when the server knows it). */
 fun episodeLine(point: EpisodePoint?): String? = point?.let {
-    listOfNotNull(episodeCode(it.season, it.episode), it.name?.takeIf(String::isNotBlank)).joinToString(" · ")
+    listOfNotNull(episodeCode(it.season, it.episode, long = true), it.name?.takeIf(String::isNotBlank)).joinToString(" · ")
 }
 
 /**

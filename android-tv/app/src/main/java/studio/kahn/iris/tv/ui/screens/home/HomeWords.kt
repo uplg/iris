@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.home
 
+import studio.kahn.iris.tv.ui.format.languagesPhrase
 import studio.kahn.iris.tv.ui.format.isResumable
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.HomeSummary
@@ -8,8 +9,6 @@ import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.ui.format.episodeCode
 import studio.kahn.iris.tv.ui.format.formatSize
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
-import studio.kahn.iris.tv.ui.format.languageName
 import studio.kahn.iris.tv.ui.format.percent
 import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.format.thisTitle
@@ -61,15 +60,7 @@ fun isResuming(item: ContinueWatchingItem): Boolean = !item.grabbable && !item.n
 /** The languages a play will use, when the account (or the title) chose them. */
 fun languagesLine(p: PlaybackPrefsResponse?, kind: MediaKind?): String? {
     if (p == null) return null
-    val parts = buildList {
-        p.audioLanguage?.takeIf { it.isNotBlank() }?.let { add("audio in ${languageName(it) ?: it}") }
-        val subs = p.subtitleLanguage?.takeIf { it.isNotBlank() }
-        when {
-            subs == NO_SUBTITLES -> add("subtitles off")
-            subs != null -> add("subtitles in ${languageName(subs) ?: subs}")
-        }
-    }
-    if (parts.isEmpty()) return null
+    val phrase = languagesPhrase(p.audioLanguage, p.subtitleLanguage) ?: return null
     val chosen = if (p.forCollection == true) ", as chosen for ${thisTitle(kind)}" else ""
-    return "Plays with ${parts.joinToString(", ")}$chosen."
+    return "Plays with $phrase$chosen."
 }

@@ -1,8 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.search
 
 import java.time.OffsetDateTime
-import java.time.ZoneOffset
-import java.time.ZonedDateTime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -81,22 +79,13 @@ class SearchLogicTest {
     @Test
     fun parsedQueryInWords() {
         assertEquals(
-            "Showing results for Classroom of the Elite · Season 4, episode 11.",
+            "Showing results for Classroom of the Elite · Season 4 · Episode 11.",
             parsedWords(ParsedQueryInfo(title = "Classroom of the Elite", season = 4, episode = 11)),
         )
         assertEquals("Showing results for Dune · 2024.", parsedWords(ParsedQueryInfo(title = "Dune", year = 2024)))
         assertNull(parsedWords(null))
     }
 
-    @Test
-    fun recentSearchTimes() {
-        val now = ZonedDateTime.of(2026, 10, 6, 21, 0, 0, 0, ZoneOffset.UTC)
-        fun at(days: Long) = OffsetDateTime.of(2026, 10, 6, 20, 41, 0, 0, ZoneOffset.UTC).minusDays(days)
-        assertEquals("Today, 20:41", recentWhen(at(0), now))
-        assertEquals("Yesterday", recentWhen(at(1), now))
-        assertEquals("Saturday", recentWhen(at(3), now))
-        assertEquals("28 Sep", recentWhen(at(8), now))
-    }
 
     @Test
     fun titlesSayWhatIsKnown() {

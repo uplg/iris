@@ -138,7 +138,7 @@ class CollectionModelTest {
     fun goneReleasesInlineAreNotRepeated() {
         val below = goneReleasesBelow(F.series)
         assertEquals(listOf("dd01"), below.map { it.infohash })
-        assertEquals("Watched 30d ago", goneWatchLine(true, null, null, F.at.minusDays(30), F.now))
+        assertEquals("Watched on 6 Sept", goneWatchLine(true, null, null, F.at.minusDays(30), F.now))
         assertEquals("Stopped at 10:00 (50%)", goneWatchLine(false, 600.0, 1_200.0, null, F.now))
     }
 }

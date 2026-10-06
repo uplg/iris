@@ -20,7 +20,7 @@ class LibraryModelTest {
     @Test
     fun titleStatusSaysWhatIsHappening() {
         val bear = F.titles.first { it.displayTitle == "The Bear" }
-        assertEquals(Status(StatusTone.Busy, "Downloading S4 · 42%"), titleStatus(bear, activity[bear.id.toString()]))
+        assertEquals(Status(StatusTone.Busy, "Downloading Season 4 · 42%"), titleStatus(bear, activity[bear.id.toString()]))
         val arcane = F.titles.first { it.displayTitle == "Arcane" }
         assertEquals(Status(StatusTone.Warn, "Download stuck · 61%"), titleStatus(arcane, activity[arcane.id.toString()]))
         val ghost = F.titles.first { it.ghost == true }
@@ -65,12 +65,12 @@ class LibraryModelTest {
 
     @Test
     fun releaseStatusInWords() {
-        assertEquals("Downloading · 42% · 6.1 MB/s · 18 peers · about 13 min", releaseStatus(F.torrents[0]).text)
+        assertEquals("Downloading · 42% · 6.1 MB/s · 18 peers · done in about 13 min", releaseStatus(F.torrents[0]).text)
         assertEquals("Stalled · no peers · 61%", releaseStatus(F.torrents[1]).text)
         assertEquals("Seeding · 3 peers downloading · 117 KB/s up", releaseStatus(F.torrents[2]).text)
         assertEquals("Paused after download · nyaa releases never seed", releaseStatus(F.torrents[4]).text)
         val broken = F.torrent("x", "X", state = TorrentState.error).copy(error = "disk full")
-        assertEquals(Status(StatusTone.Warn, "Error · disk full"), releaseStatus(broken))
+        assertEquals(Status(StatusTone.Warn, "Stopped with an error · disk full"), releaseStatus(broken))
     }
 
     @Test
@@ -88,7 +88,7 @@ class LibraryModelTest {
 
     @Test
     fun seasonOfReadsTheName() {
-        assertEquals("S4", seasonOf("The.Bear.S04.1080p"))
+        assertEquals("Season 4", seasonOf("The.Bear.S04.1080p"))
         assertEquals("S1:E3", seasonOf("Show.S01E03.720p"))
         assertNull(seasonOf("Dune.Part.Two.2024"))
     }

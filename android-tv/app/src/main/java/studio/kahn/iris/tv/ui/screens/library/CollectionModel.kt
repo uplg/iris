@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.format.AgoStyle
+import studio.kahn.iris.tv.ui.format.ago
 import studio.kahn.iris.tv.ui.format.languageWord
 import studio.kahn.iris.tv.ui.format.etaWords
 import studio.kahn.iris.tv.ui.format.fromProvider
@@ -25,7 +27,6 @@ import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.languageLabel
 import studio.kahn.iris.tv.ui.format.percent
 import studio.kahn.iris.tv.ui.format.plural
-import studio.kahn.iris.tv.ui.format.recentTime
 import studio.kahn.iris.tv.ui.format.timeLeft
 import studio.kahn.iris.tv.ui.components.StatusTone
 
@@ -334,13 +335,12 @@ fun heroChips(c: CollectionDetail, originalLanguage: String?): List<String> {
 /** `Downloading · 42% · done in about 6 min`, or why it is not moving. */
 fun eta(t: TorrentView): String {
     if (t.state == TorrentState.paused) return "paused"
-    if (t.state == TorrentState.error) return t.error?.let { "stopped: $it" } ?: "stopped by an error"
+    if (t.state == TorrentState.error) return t.error?.let { "stopped with an error: $it" } ?: "stopped with an error"
     val left = max(0L, t.totalSizeBytes - t.progressBytes)
     if (t.downloadSpeedBps <= 0) return if (t.peers > 0) "starting" else "waiting for peers"
-    return "done in ${etaWords(left.toDouble() / t.downloadSpeedBps)}"
+    return etaWords(left.toDouble() / t.downloadSpeedBps)
 }
 
-fun downloading(t: TorrentView?): Boolean = t != null && !t.finished
 
 /** What the row's first downloaded release does when pressed. */
 enum class Verb(val words: String) {
@@ -367,7 +367,7 @@ fun rowState(
         val t = torrent(first.infohash)
         val length = first.durationSeconds?.takeIf { it > 0 } ?: runtime
         val at = first.positionSeconds ?: 0.0
-        if (t != null && downloading(t)) {
+        if (t != null && isFetching(t)) {
             return RowState(
                 if (t.state == TorrentState.error) StatusTone.Warn else StatusTone.Busy,
                 "Downloading · ${percent(t.progressPct)} · ${eta(t)}",
@@ -436,7 +436,7 @@ fun episodeActions(ep: Episode, state: RowState, torrent: (String) -> TorrentVie
     disk.forEachIndexed { i, v ->
         val verb = when {
             i == 0 && state.verb != null -> state.verb
-            downloading(torrent(v.infohash)) -> Verb.PlayWhileDownloading
+            isFetching(torrent(v.infohash)) -> Verb.PlayWhileDownloading
             v.watched -> Verb.WatchAgain
             else -> Verb.Play
         }
@@ -503,7 +503,7 @@ fun openingIndex(items: List<Episode>, lead: Int = 1): Int {
     return if (at <= lead) 0 else at - lead
 }
 
-/** The watch line of a gone release: `Watched 2d ago`, `Stopped at 32:10 (42%) 3d ago`. */
+/** The watch line of a gone release: `Watched on Monday`, `Stopped at 32:10 (42%) yesterday at 21:04`. */
 fun goneWatchLine(
     watched: Boolean?,
     position: Double?,
@@ -511,9 +511,9 @@ fun goneWatchLine(
     lastWatched: java.time.OffsetDateTime?,
     now: java.time.Instant = java.time.Instant.now(),
 ): String? {
-    if (watched == true) return lastWatched?.let { "Watched ${recentTime(it, now)}" } ?: "Watched"
+    if (watched == true) return lastWatched?.let { "Watched ${ago(it, AgoStyle.Sentence, now)}" } ?: "Watched"
     val pos = position ?: 0.0
     if (!isResumable(pos)) return null
     val share = duration?.takeIf { it > 0 }?.let { percent(minOf(100.0, pos / it * 100)) }
-    return listOfNotNull("Stopped at", clock(pos), share?.let { "($it)" }, lastWatched?.let { recentTime(it, now) }).joinToString(" ")
+    return listOfNotNull("Stopped at", clock(pos), share?.let { "($it)" }, lastWatched?.let { ago(it, AgoStyle.Sentence, now) }).joinToString(" ")
 }

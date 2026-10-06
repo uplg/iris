@@ -2,6 +2,7 @@
 
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.format.languagesPhrase
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,8 +39,7 @@ import studio.kahn.iris.tv.ui.screens.player.playWords
 import studio.kahn.iris.tv.ui.screens.player.readiness
 import studio.kahn.iris.tv.ui.state.irisViewModel
 import studio.kahn.iris.tv.ui.theme.IrisColor
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
-import studio.kahn.iris.tv.ui.format.languageName
+import studio.kahn.iris.tv.ui.format.OFF
 
 /**
  * One file, watched: getting ready (each step in words, until the first
@@ -142,7 +142,7 @@ private fun GettingReadyLayer(
     )
 }
 
-/** The languages it starts in, as the engine will pick them: "English audio, French subtitles". */
+/** The languages it starts in, as the engine will pick them: "audio in English, subtitles in French". */
 private fun startLanguages(setup: WatchSetup, route: PlayRoute): String? {
     val probe = setup.probe
     val tracks = RouteTracks.of(probe, route)
@@ -153,11 +153,9 @@ private fun startLanguages(setup: WatchSetup, route: PlayRoute): String? {
     val subLang = when (val saved = setup.savedSubIdx) {
         -1 -> null
         null -> setup.prefSubLang
-            ?.takeIf { it != NO_SUBTITLES }
+            ?.takeIf { it != OFF }
             ?.let { pref -> SubtitlePick.preferredOrdinal(tracks.subtitles, pref)?.let { tracks.subtitles[it].language } }
         else -> tracks.subtitleLanguage(saved)
     }
-    val audio = languageName(audioLang)?.let { "$it audio" } ?: return null
-    val subs = languageName(subLang)?.let { "$it subtitles" } ?: "no subtitles"
-    return "$audio, $subs"
+    return languagesPhrase(audioLang, if (setup.savedSubIdx == -1) OFF else subLang)
 }

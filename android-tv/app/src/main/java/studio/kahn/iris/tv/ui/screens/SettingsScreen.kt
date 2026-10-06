@@ -69,7 +69,7 @@ import studio.kahn.iris.tv.data.UpdateState
 import studio.kahn.iris.tv.ui.update.actions
 import studio.kahn.iris.tv.ui.format.audioChoiceWords
 import studio.kahn.iris.tv.ui.screens.settings.languageChoice
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.OFF
 import studio.kahn.iris.tv.ui.screens.settings.languageOptions
 import studio.kahn.iris.tv.ui.screens.settings.name
 import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
@@ -431,7 +431,7 @@ private fun LanguagePanel(
 ) {
     val options: List<String?> = buildList {
         add(null)
-        if (withOff) add(NO_SUBTITLES)
+        if (withOff) add(OFF)
         addAll(languageOptions(current))
     }
     SidePanel(title = title, onDismiss = onDismiss, footer = "Saved for every device at once.") {

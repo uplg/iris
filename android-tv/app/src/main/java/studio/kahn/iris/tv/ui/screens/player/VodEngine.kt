@@ -56,7 +56,7 @@ import studio.kahn.iris.tv.data.isRemuxableError
 import studio.kahn.iris.tv.data.serverBase
 import studio.kahn.iris.tv.data.webVttSubtitle
 import studio.kahn.iris.tv.ui.components.buildMediaSession
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.OFF
 import studio.kahn.iris.tv.ui.state.Owned
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
 
@@ -299,7 +299,7 @@ fun VodEngine(
     // No per-file pick: the track the preferred language maps to (non-forced
     // before forced, plain before SDH: `SubtitlePick`).
     val preferredSubOrdinal: Int? = remember(player, routeTracks, prefSubLang) {
-        if (pinSubIdx != null || prefSubLang == NO_SUBTITLES) null
+        if (pinSubIdx != null || prefSubLang == OFF) null
         else SubtitlePick.preferredOrdinal(routeTracks.subtitles, prefSubLang)
     }
 
@@ -321,7 +321,7 @@ fun VodEngine(
                 params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             }
             pinSubIdx == -1 -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-            prefSubLang == NO_SUBTITLES -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            prefSubLang == OFF -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             // Enable only when the preferred language is present: never force a
             // different language onto the viewer.
             preferredSubOrdinal != null -> {

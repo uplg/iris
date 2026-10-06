@@ -6,7 +6,7 @@ import org.junit.Test
 import studio.kahn.iris.tv.data.AudioStream
 import studio.kahn.iris.tv.data.MediaProbe
 import studio.kahn.iris.tv.data.SubtitleStream
-import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.OFF
 
 class RouteTracksTest {
     private fun audio(index: Int, lang: String) = AudioStream(
@@ -59,7 +59,7 @@ class RouteTracksTest {
         val t = RouteTracks.of(probe, PlayRoute.Direct)
         assertEquals(-1, t.subtitleOrdinal(-1))
         assertNull(t.subtitleOrdinal(null))
-        assertEquals(NO_SUBTITLES, t.subtitleLanguage(-1))
+        assertEquals(OFF, t.subtitleLanguage(-1))
         assertEquals("eng", t.audioLanguage(1))
     }
 }

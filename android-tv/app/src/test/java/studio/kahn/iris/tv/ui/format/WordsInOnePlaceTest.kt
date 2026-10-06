@@ -21,7 +21,7 @@ class WordsInOnePlaceTest {
     @Test
     fun ratioEtaAndSource() {
         assertEquals("ratio 1.42", ratioWords(1.4249))
-        assertEquals("about 6 min", etaWords(360.0))
+        assertEquals("done in about 6 min", etaWords(360.0))
         assertEquals("from torr9", fromProvider("torr9"))
     }
 
@@ -30,6 +30,27 @@ class WordsInOnePlaceTest {
         val paris = ZoneId.of("Europe/Paris")
         assertEquals("21:05", clockTime(OffsetDateTime.parse("2026-10-06T19:05:00Z"), paris))
         assertEquals("09:00", clockTime(Instant.parse("2026-10-06T07:00:00Z"), paris))
+    }
+
+    @Test
+    fun subtitlesOffIsAChoiceNoSubtitlesAFact() {
+        assertEquals("Subtitles off", subtitleChoiceWords(OFF))
+        assertEquals("The file’s own", subtitleChoiceWords(null))
+        assertEquals("The file’s own", audioChoiceWords(null))
+        assertEquals("audio in French, subtitles off", languagesPhrase("fr", OFF))
+        assertEquals("audio in English", languagesPhrase("en", null))
+        assertEquals("your usual audio, subtitles in French", languagesPhrase(null, "fr", usual = true))
+        assertNull(languagesPhrase(null, null))
+    }
+
+    @Test
+    fun episodesShortInRowsLongInHeadings() {
+        assertEquals("S2:E4", episodeCode(2L, 4L))
+        assertEquals("Season 2 · Episode 4", episodeCode(2L, 4L, long = true))
+        assertEquals("E19", episodeCode(null, 19L))
+        assertEquals("Episode 19", episodeCode(null, 19L, long = true))
+        assertEquals("Season 2", episodeCode(2L, 0L, long = true))
+        assertEquals("Anime · Series", kindLabel(studio.kahn.iris.tv.data.MediaKind.tv, anime = true))
     }
 
     @Test
