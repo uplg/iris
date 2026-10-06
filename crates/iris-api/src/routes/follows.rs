@@ -1864,15 +1864,6 @@ async fn ingest_pack_and_pick_episode(
     })
 }
 
-/// View a live search result through the shared ranking lens.
-fn result_candidate(r: &iris_core::search::SearchResult) -> iris_core::ranking::Candidate {
-    iris_core::ranking::Candidate {
-        seeders: r.seeders.map(i64::from),
-        size_bytes: r.size_bytes.and_then(|s| i64::try_from(s).ok()),
-        is_multi: detect_language(&r.title) == Language::Multi,
-    }
-}
-
 /// One live indexer sweep for a `(season, episode)` — or the season's
 /// pack shape when `episode` is `None`. The grab path runs this before
 /// trusting the offer cache: cached seeder counts are scan-time
@@ -2012,7 +2003,7 @@ async fn pick_live_singleton(
     )> = results
         .into_iter()
         .map(|r| {
-            let cand = result_candidate(&r);
+            let cand = crate::ranking::candidate(&r);
             let quality = iris_media::filename::parse(&r.title).and_then(|p| p.quality);
             let codec = detect_codec(&r.title);
             let qr = tag_rank(quality.as_deref(), q_pref);

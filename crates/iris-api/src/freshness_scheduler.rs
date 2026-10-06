@@ -40,15 +40,7 @@ const KINDS: [MediaKind; 2] = [MediaKind::Movie, MediaKind::Tv];
 /// without a refresh.
 const UNDATED_TTL_DAYS: i64 = 14;
 
-/// View a search result through the shared "recommended" ordering lens
-/// (smallest sane size first, seeders only as a garde-fou, `MULTi` discounted).
-pub(crate) fn candidate_of(r: &SearchResult, is_multi: bool) -> iris_core::ranking::Candidate {
-    iris_core::ranking::Candidate {
-        seeders: r.seeders.map(i64::from),
-        size_bytes: r.size_bytes.and_then(|b| i64::try_from(b).ok()),
-        is_multi,
-    }
-}
+use crate::ranking::candidate_of;
 
 pub fn spawn(
     pool: SqlitePool,

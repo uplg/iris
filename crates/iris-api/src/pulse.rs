@@ -26,7 +26,8 @@ use iris_media::filename::Language;
 use iris_providers::ProviderRegistry;
 
 use crate::anilist::AniListClient;
-use crate::freshness_scheduler::{candidate_of, upsert_window_rows};
+use crate::freshness_scheduler::upsert_window_rows;
+use crate::ranking::candidate_of;
 use crate::simkl::SimklClient;
 use crate::tmdb::{DiscoverFilter, MediaMetadata, TmdbClient, TmdbKind};
 
