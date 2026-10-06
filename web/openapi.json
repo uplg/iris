@@ -2817,6 +2817,9 @@
           },
           "404": {
             "description": "Provider exposes no detail page for this id"
+          },
+          "502": {
+            "description": "The tracker's detail endpoint failed"
           }
         }
       }
