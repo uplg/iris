@@ -1,5 +1,7 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
+
+use chrono::{DateTime, Utc};
 
 use iris_config::ProviderEntry;
 use iris_core::Error;
@@ -121,6 +123,8 @@ impl Default for ProviderPolicy {
 #[derive(Clone, Default)]
 pub struct ProviderRegistry {
     providers: Arc<HashMap<String, Arc<dyn SearchProvider>>>,
+    /// Provider-id → its `kind`, for every entry of the config, built or not.
+    kinds: Arc<HashMap<String, String>>,
     /// Provider-id → its declared [`ProviderPolicy`].
     policies: Arc<HashMap<String, ProviderPolicy>>,
     /// Provider-id → semaphore bounding concurrent `search` calls
@@ -130,7 +134,35 @@ pub struct ProviderRegistry {
     /// from the searches and feeds that passed through so a grab can
     /// record it (trust signal T1) — the grab request only carries
     /// `(provider_id, external_id)`.
-    tracker_tmdb: Arc<std::sync::Mutex<TrackerTmdbIds>>,
+    tracker_tmdb: Arc<Mutex<TrackerTmdbIds>>,
+    /// Built providers an admin turned off at runtime (`provider_overrides`).
+    /// Every fan-out and lookup skips them; the policies stay readable so
+    /// seeding of what they already delivered is untouched.
+    switched_off: Arc<RwLock<HashSet<String>>>,
+    /// Provider-id → how its last aggregated search went.
+    last_search: Arc<Mutex<HashMap<String, SearchOutcome>>>,
+}
+
+/// How a provider's last aggregated search went, for the admin view.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SearchOutcome {
+    pub at: DateTime<Utc>,
+    pub latency_ms: u64,
+    /// `None` when it answered.
+    pub error: Option<String>,
+}
+
+/// One `providers.toml` entry, as the admin sees it.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ProviderStatus {
+    pub id: String,
+    pub kind: String,
+    /// Asked by searches and feeds right now.
+    pub enabled: bool,
+    /// Built at boot: enabled in the config and constructed. Only these can
+    /// be switched at runtime.
+    pub configured: bool,
+    pub last_search: Option<SearchOutcome>,
 }
 
 /// Bounded FIFO of `(provider_id, external_id) → tmdb_id`.
@@ -159,6 +191,10 @@ impl ProviderRegistry {
     pub fn from_entries(entries: &[ProviderEntry]) -> Result<Self> {
         let mut map: HashMap<String, Arc<dyn SearchProvider>> = HashMap::new();
         let mut policies: HashMap<String, ProviderPolicy> = HashMap::new();
+        let mut kinds: HashMap<String, String> = HashMap::new();
+        for entry in entries {
+            kinds.insert(entry.id.clone(), entry.kind.clone());
+        }
         for entry in entries.iter().filter(|e| e.enabled) {
             policies.insert(entry.id.clone(), policy_of(entry));
             match build_provider(entry) {
@@ -184,10 +220,102 @@ impl ProviderRegistry {
             .collect();
         Ok(Self {
             providers: Arc::new(map),
+            kinds: Arc::new(kinds),
             policies: Arc::new(policies),
             search_permits: Arc::new(permits),
             tracker_tmdb: Arc::default(),
+            switched_off: Arc::default(),
+            last_search: Arc::default(),
         })
+    }
+
+    /// Whether `provider_id` was built from the config, on or off.
+    pub fn is_configured(&self, provider_id: &str) -> bool {
+        self.providers.contains_key(provider_id)
+    }
+
+    /// Whether `provider_id` is built and not turned off by an admin.
+    pub fn is_enabled(&self, provider_id: &str) -> bool {
+        self.is_configured(provider_id) && !self.is_switched_off(provider_id)
+    }
+
+    /// Whether an admin turned `provider_id` off (only a built provider can be).
+    pub fn is_switched_off(&self, provider_id: &str) -> bool {
+        self.off_set().contains(provider_id)
+    }
+
+    /// Turn a built provider on or off at runtime. `false` when the id was
+    /// not built from the config (nothing to switch).
+    pub fn set_enabled(&self, provider_id: &str, enabled: bool) -> bool {
+        if !self.is_configured(provider_id) {
+            return false;
+        }
+        let mut off = self
+            .switched_off
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        if enabled {
+            off.remove(provider_id);
+        } else {
+            off.insert(provider_id.to_owned());
+        }
+        true
+    }
+
+    /// Every config entry with its runtime state, sorted by id.
+    pub fn statuses(&self) -> Vec<ProviderStatus> {
+        let off = self.off_set();
+        let last = self
+            .last_search
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut out: Vec<ProviderStatus> = self
+            .kinds
+            .iter()
+            .map(|(id, kind)| {
+                let configured = self.providers.contains_key(id);
+                ProviderStatus {
+                    id: id.clone(),
+                    kind: kind.clone(),
+                    enabled: configured && !off.contains(id),
+                    configured,
+                    last_search: last.get(id).cloned(),
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
+    }
+
+    fn record_outcome(&self, id: &str, took: std::time::Duration, error: Option<&Error>) {
+        let outcome = SearchOutcome {
+            at: Utc::now(),
+            latency_ms: u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
+            error: error.map(ToString::to_string),
+        };
+        self.last_search
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.to_owned(), outcome);
+    }
+
+    fn off_set(&self) -> std::sync::RwLockReadGuard<'_, HashSet<String>> {
+        self.switched_off
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The enabled providers, sorted by id so fan-outs are deterministic.
+    fn enabled(&self) -> Vec<(String, Arc<dyn SearchProvider>)> {
+        let off = self.off_set();
+        let mut out: Vec<_> = self
+            .providers
+            .iter()
+            .filter(|(id, _)| !off.contains(*id))
+            .map(|(id, p)| (id.clone(), p.clone()))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     /// Remember the TMDB ids the trackers shipped with `results`. Called
@@ -197,7 +325,7 @@ impl ProviderRegistry {
         let mut map = self
             .tracker_tmdb
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         for r in results {
             if let Some(id) = r.tmdb_id.filter(|id| *id > 0) {
                 map.insert((r.provider_id.clone(), r.external_id.clone()), id);
@@ -210,7 +338,7 @@ impl ProviderRegistry {
     pub fn tracker_tmdb_id(&self, provider_id: &str, external_id: &str) -> Option<u64> {
         self.tracker_tmdb
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .ids
             .get(&(provider_id.to_owned(), external_id.to_owned()))
             .copied()
@@ -241,14 +369,11 @@ impl ProviderRegistry {
     /// Ids the freshness scheduler may pull `latest()` from — see
     /// [`ProviderPolicy::catalog`].
     pub fn catalog_ids(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .providers
-            .keys()
+        self.enabled()
+            .into_iter()
+            .map(|(id, _)| id)
             .filter(|id| self.policy(id).catalog)
-            .cloned()
-            .collect();
-        out.sort();
-        out
+            .collect()
     }
 
     /// Whether torrents grabbed from `provider_id` should keep seeding once
@@ -264,24 +389,26 @@ impl ProviderRegistry {
         self.policy(provider_id).leech_slots
     }
 
+    /// The enabled providers' ids, sorted.
     pub fn ids(&self) -> Vec<String> {
-        self.providers.keys().cloned().collect()
+        self.enabled().into_iter().map(|(id, _)| id).collect()
     }
 
     pub fn info(&self) -> Vec<ProviderInfo> {
-        let mut out: Vec<_> = self
-            .providers
-            .iter()
+        self.enabled()
+            .into_iter()
             .map(|(id, p)| ProviderInfo {
-                id: id.clone(),
                 capabilities: p.capabilities(),
+                id,
             })
-            .collect();
-        out.sort_by(|a, b| a.id.cmp(&b.id));
-        out
+            .collect()
     }
 
+    /// The provider, when it is enabled.
     pub fn get(&self, id: &str) -> Option<Arc<dyn SearchProvider>> {
+        if self.is_switched_off(id) {
+            return None;
+        }
         self.providers.get(id).cloned()
     }
 
@@ -316,9 +443,7 @@ impl ProviderRegistry {
         use futures::stream::{FuturesUnordered, StreamExt};
 
         let mut futs = FuturesUnordered::new();
-        for (id, p) in self.providers.iter().filter(|(id, _)| include(id)) {
-            let p = p.clone();
-            let id = id.clone();
+        for (id, p) in self.enabled().into_iter().filter(|(id, _)| include(id)) {
             let q = q.clone();
             let sem = self.search_permits.get(&id).cloned();
             futs.push(async move {
@@ -334,7 +459,7 @@ impl ProviderRegistry {
                             "skipped: queued behind concurrent searches for {}s",
                             SEARCH_DEADLINE.as_secs()
                         ));
-                        return (id, Err(err));
+                        return (id, started.elapsed(), Err(err));
                     };
                     permit.ok()
                 } else {
@@ -348,14 +473,15 @@ impl ProviderRegistry {
                         SEARCH_DEADLINE.as_secs()
                     ))),
                 };
-                (id, res)
+                (id, started.elapsed(), res)
             });
         }
 
         let mut agg = AggregatedResults::default();
         let limit = q.limit.unwrap_or(25);
         let page = q.page.unwrap_or(1);
-        while let Some((id, res)) = futs.next().await {
+        while let Some((id, took, res)) = futs.next().await {
+            self.record_outcome(&id, took, res.as_ref().err());
             match res {
                 Ok(p) => {
                     agg.providers.push(ProviderResultMeta {
@@ -486,6 +612,55 @@ mod policy_tests {
             asked(registry.search_all(&q).await),
             ["search_only", "shelf"]
         );
+    }
+
+    #[tokio::test]
+    async fn a_switched_off_provider_is_never_asked() {
+        let dead = "base_url = \"http://127.0.0.1:1\"\n";
+        let entries = [
+            entry(&format!("id = \"on\"\nkind = \"nyaa\"\n{dead}")),
+            entry(&format!("id = \"off\"\nkind = \"nyaa\"\n{dead}")),
+            entry("id = \"unbuilt\"\nkind = \"nyaa\"\nenabled = false\n"),
+        ];
+        let registry = super::ProviderRegistry::from_entries(&entries).expect("registry");
+        assert!(registry.set_enabled("off", false));
+        assert!(
+            !registry.set_enabled("absent", false),
+            "only built providers switch"
+        );
+        assert!(
+            !registry.set_enabled("unbuilt", true),
+            "the config has the last word"
+        );
+
+        let q = iris_core::search::SearchQuery {
+            q: "x".into(),
+            ..Default::default()
+        };
+        let asked = |agg: super::AggregatedResults| -> Vec<String> {
+            agg.providers.into_iter().map(|m| m.id).collect()
+        };
+        assert_eq!(asked(registry.search_all(&q).await), ["on"]);
+        assert_eq!(asked(registry.search_catalog(&q).await), ["on"]);
+        assert_eq!(registry.ids(), ["on"]);
+        assert_eq!(registry.catalog_ids(), ["on"]);
+        assert_eq!(registry.info().len(), 1);
+        assert!(registry.get("off").is_none());
+        assert!(registry.is_configured("off") && !registry.is_enabled("off"));
+        assert!(registry.seeds("off"), "seeding policy outlives the switch");
+
+        let statuses = registry.statuses();
+        let off = statuses.iter().find(|s| s.id == "off").expect("listed");
+        assert!(!off.enabled && off.configured && off.last_search.is_none());
+        let unbuilt = statuses.iter().find(|s| s.id == "unbuilt").expect("listed");
+        assert!(!unbuilt.enabled && !unbuilt.configured);
+        let on = statuses.iter().find(|s| s.id == "on").expect("listed");
+        assert!(on.enabled && on.configured && on.kind == "nyaa");
+        assert!(on.last_search.as_ref().is_some_and(|o| o.error.is_some()));
+
+        assert!(registry.set_enabled("off", true));
+        assert!(registry.get("off").is_some());
+        assert_eq!(registry.ids(), ["off", "on"]);
     }
 
     #[test]

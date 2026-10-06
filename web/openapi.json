@@ -200,6 +200,82 @@
         }
       }
     },
+    "/api/admin/providers": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_list_providers",
+        "responses": {
+          "200": {
+            "description": "Every providers.toml entry with its runtime state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderStatus"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          }
+        }
+      }
+    },
+    "/api/admin/providers/{id}": {
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Turn a tracker on or off without a restart. Off, it is asked for nothing\n(searches, feeds, sweeps, grabs); what it already delivered keeps seeding\nand its cached offers come back when it is on again.",
+        "operationId": "admin_set_provider_enabled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetProviderEnabled"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The provider's new state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          },
+          "404": {
+            "description": "No such provider in providers.toml"
+          },
+          "409": {
+            "description": "Disabled in providers.toml: only the config can turn it on"
+          }
+        }
+      }
+    },
     "/api/admin/remux": {
       "get": {
         "tags": [
@@ -2644,7 +2720,7 @@
         "operationId": "list_providers",
         "responses": {
           "200": {
-            "description": "Registered search providers and their capabilities",
+            "description": "Enabled search providers and their capabilities",
             "content": {
               "application/json": {
                 "schema": {
@@ -7309,6 +7385,42 @@
           }
         }
       },
+      "ProviderStatus": {
+        "type": "object",
+        "description": "One `providers.toml` entry, as the admin sees it.",
+        "required": [
+          "id",
+          "kind",
+          "enabled",
+          "configured"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "Built at boot: enabled in the config and constructed. Only these can\nbe switched at runtime."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Asked by searches and feeds right now."
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_search": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SearchOutcome"
+              }
+            ]
+          }
+        }
+      },
       "RecentSearchView": {
         "type": "object",
         "required": [
@@ -7550,6 +7662,32 @@
             ],
             "format": "int64",
             "description": "Ignored, kept for shipped clients. Clients send their own guess\nhere, so the server records the tracker's id from the search it\nserved instead (`ProviderRegistry::tracker_tmdb_id`)."
+          }
+        }
+      },
+      "SearchOutcome": {
+        "type": "object",
+        "description": "How a provider's last aggregated search went, for the admin view.",
+        "required": [
+          "at",
+          "latency_ms"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`None` when it answered."
+          },
+          "latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -7844,6 +7982,17 @@
         "properties": {
           "display_name": {
             "type": "string"
+          }
+        }
+      },
+      "SetProviderEnabled": {
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
           }
         }
       },

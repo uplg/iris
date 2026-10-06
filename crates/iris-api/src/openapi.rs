@@ -145,6 +145,8 @@ use utoipa::OpenApi;
         crate::routes::admin::list_remux_jobs,
         crate::routes::admin::wipe_remux_job,
         crate::routes::admin::diagnose_tmdb,
+        crate::routes::providers::admin_list,
+        crate::routes::providers::admin_set,
         crate::routes::health::get,
     ),
     components(schemas(

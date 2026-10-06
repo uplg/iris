@@ -218,6 +218,31 @@ impl Engine {
             client_name_and_version: Some(client_ua()),
             ..Default::default()
         };
+        Self::with_opts(download_dir, listen_port, opts).await
+    }
+
+    /// An engine that never touches the network (no listener, no peer
+    /// discovery, no persistence): for other crates' tests that need an
+    /// `Arc<Engine>` without one torrent.
+    ///
+    /// # Errors
+    /// When the download dir can't be created or the session fails to start.
+    #[cfg(feature = "test-support")]
+    pub async fn offline(download_dir: PathBuf) -> anyhow::Result<Arc<Self>> {
+        std::fs::create_dir_all(&download_dir)?;
+        let opts = SessionOptions {
+            dht: None,
+            disable_local_service_discovery: true,
+            ..Default::default()
+        };
+        Self::with_opts(download_dir, 0, opts).await
+    }
+
+    async fn with_opts(
+        download_dir: PathBuf,
+        listen_port: u16,
+        opts: SessionOptions,
+    ) -> anyhow::Result<Arc<Self>> {
         let session = Session::new_with_opts(download_dir.clone(), opts).await?;
         // Same identity librqbit announces with: some private trackers run a
         // UA regex on announces and bounce anything unfamiliar. TLS trust is

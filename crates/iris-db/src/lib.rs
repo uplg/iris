@@ -20,6 +20,18 @@ macro_rules! tmdb_verified_sql {
     };
 }
 
+/// SQL predicate keeping the `available_episodes` rows (column prefix `$p`)
+/// whose tracker an admin has not switched off (`provider_overrides`). The
+/// rows of a tracker turned off stay cached and come back when it is on again.
+macro_rules! offer_tracker_on_sql {
+    ($p:literal) => {
+        concat!(
+            $p,
+            "indexer_provider NOT IN (SELECT provider_id FROM provider_overrides WHERE enabled = 0)"
+        )
+    };
+}
+
 pub mod audit;
 pub mod available_episodes;
 pub mod catalog;
@@ -35,6 +47,7 @@ pub mod playback_caps;
 pub mod playback_preferences;
 pub mod pool;
 pub mod preferences;
+pub mod provider_overrides;
 pub mod pulse;
 pub mod recent_searches;
 pub mod reco_feedback;

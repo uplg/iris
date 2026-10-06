@@ -1666,6 +1666,9 @@ async fn add_picked(
     pick: &PickedAvailability,
     reprime: ReprimeHint<'_>,
 ) -> ApiResult<iris_torrent::IngestResult> {
+    if state.providers().is_switched_off(&pick.indexer_provider) {
+        return Err(ApiError::ProviderOff);
+    }
     // Resolution order:
     //   1. Magnet — pre-resolved magnet URI, hand straight to librqbit.
     //   2. Persisted download_url — scheduler stashed a pre-signed

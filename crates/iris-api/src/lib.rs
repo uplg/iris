@@ -135,6 +135,8 @@ fn setup_gc(
 /// Scoped to config-disabled/removed providers only: an enabled
 /// provider that failed to build (missing env var) is a transient
 /// deployment problem, not an operator decision, and keeps its cache.
+/// So does a tracker turned off in Admin: its offers are only hidden
+/// while it is off.
 fn spawn_disabled_provider_offer_purge(
     pool: iris_db::SqlitePool,
     entries: &[iris_config::ProviderEntry],
@@ -358,6 +360,7 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         iris_providers::ProviderRegistry::default()
     });
 
+    routes::providers::load_overrides(&pool, &provider_registry).await;
     spawn_disabled_provider_offer_purge(pool.clone(), &providers_cfg.providers);
 
     let engine = iris_torrent::Engine::new(

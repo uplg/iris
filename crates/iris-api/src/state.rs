@@ -112,6 +112,44 @@ impl AppState {
         }
     }
 
+    /// A state over `db` and `providers` whose engine never touches the
+    /// network, for route tests. Its files live in a fresh temp dir.
+    #[cfg(test)]
+    pub(crate) async fn for_tests(db: SqlitePool, providers: ProviderRegistry) -> Self {
+        let dir = std::env::temp_dir().join(format!("iris-state-{}", uuid::Uuid::new_v4()));
+        let cfg: AppConfig = serde_json::from_value(serde_json::json!({
+            "server": {},
+            "storage": { "data_dir": dir.join("data"), "download_dir": dir.join("downloads") },
+            "auth": { "jwt_secret": "test-secret-test-secret-test-secret" },
+        }))
+        .expect("test config");
+        let engine = Engine::offline(cfg.storage.download_dir.clone())
+            .await
+            .expect("offline engine");
+        let remuxer = RemuxManager::with_encode_config(
+            dir.join("remux"),
+            iris_media::EncodeConfig {
+                preset: cfg.transcode.preset.clone(),
+                crf: cfg.transcode.crf,
+            },
+        );
+        let gc = Gc::new(
+            engine.clone(),
+            db.clone(),
+            iris_torrent::GcConfig {
+                max_storage_bytes: cfg.storage.max_storage_bytes(),
+                cleanup_threshold_pct: cfg.storage.cleanup_threshold_pct,
+                cleanup_target_pct: cfg.storage.cleanup_target_pct,
+                interval: std::time::Duration::from_mins(15),
+                active_window: std::time::Duration::from_hours(1),
+            },
+            cfg.storage.download_dir.clone(),
+            None,
+            |_| {},
+        );
+        Self::new(cfg, db, providers, engine, remuxer, gc)
+    }
+
     /// The passkey service, or 404 when this server can't offer passkeys.
     pub fn passkeys(&self) -> crate::error::ApiResult<&crate::passkeys::Passkeys> {
         self.inner
@@ -128,14 +166,19 @@ impl AppState {
     pub fn providers(&self) -> &ProviderRegistry {
         &self.inner.providers
     }
-    /// The configured provider `id`, or a `400` naming it.
+    /// The enabled provider `id`: a `409 provider_off` when an admin turned
+    /// it off, a `400` naming it when the config doesn't build it.
     pub fn provider(
         &self,
         id: &str,
     ) -> Result<std::sync::Arc<dyn iris_providers::SearchProvider>, crate::error::ApiError> {
-        self.providers()
-            .get(id)
-            .ok_or_else(|| crate::error::ApiError::BadRequest(format!("unknown provider `{id}`")))
+        self.providers().get(id).ok_or_else(|| {
+            if self.providers().is_switched_off(id) {
+                crate::error::ApiError::ProviderOff
+            } else {
+                crate::error::ApiError::BadRequest(format!("unknown provider `{id}`"))
+            }
+        })
     }
     pub fn jwt(&self) -> &Issuer {
         &self.inner.jwt
