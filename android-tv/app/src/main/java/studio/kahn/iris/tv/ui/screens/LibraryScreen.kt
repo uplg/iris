@@ -404,6 +404,7 @@ private fun TitlesPane(
             meta = card.meta,
             status = card.status.text,
             statusTone = card.status.tone.cardTone(),
+            dimmed = card.ghost,
             modifier = Modifier
                 .focusRequester(keys.requester(card.id))
                 .onFocusChanged { if (it.hasFocus) focusedIndex.intValue = index },
