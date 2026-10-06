@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
-import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.data.GrabOutcome
+import studio.kahn.iris.tv.data.grabRelease
 import studio.kahn.iris.tv.ui.formatSize
 import android.app.Activity
 import android.content.Intent
@@ -104,7 +105,6 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Warning
-import studio.kahn.iris.tv.data.irisError
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.IrisButton
@@ -1899,35 +1899,19 @@ private fun ingestAndPlay(
     onError: (String) -> Unit,
 ) {
     scope.launch {
-        try {
-            val url = container.sessionStore.serverUrl.first()
-                ?: return@launch onError("Not signed in")
-            val api = container.apiFor(url)
-            val res = api.ingest(
-                studio.kahn.iris.tv.data.ResolveBody(
-                    providerId = hit.providerId,
-                    externalId = hit.externalId,
-                    tmdbId = hit.tmdbId,
-                    allowDuplicate = allowDuplicate,
-                )
+        val outcome = container.grabRelease(
+            studio.kahn.iris.tv.data.ResolveBody(
+                providerId = hit.providerId,
+                externalId = hit.externalId,
+                tmdbId = hit.tmdbId,
+                allowDuplicate = allowDuplicate,
             )
-            val videos = res.snapshot.files
-                .filter { f -> isVideoPath(f.path) }
-            if (videos.size <= 1) {
-                val idx = videos.maxByOrNull { f -> f.sizeBytes }?.index ?: 0
-                onPickFile(res.snapshot.infohash, idx)
-            } else {
-                onPickTorrent(res.snapshot.infohash)
-            }
-        } catch (e: retrofit2.HttpException) {
-            val env = e.irisError()
-            if (env?.error == "duplicate_in_library") {
-                onDuplicate(env.message ?: "This movie is already in the library")
-            } else {
-                onError(env?.message ?: e.message ?: "Ingest failed")
-            }
-        } catch (e: Exception) {
-            onError(e.message ?: "Ingest failed")
+        )
+        when (outcome) {
+            is GrabOutcome.Play -> onPickFile(outcome.infohash, outcome.fileIdx)
+            is GrabOutcome.Choose -> onPickTorrent(outcome.infohash)
+            is GrabOutcome.Duplicate -> onDuplicate(outcome.message)
+            is GrabOutcome.Failed -> onError(outcome.message)
         }
     }
 }

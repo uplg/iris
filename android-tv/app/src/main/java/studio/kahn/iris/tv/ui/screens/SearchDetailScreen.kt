@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
-import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.data.GrabOutcome
+import studio.kahn.iris.tv.data.grabRelease
 import studio.kahn.iris.tv.ui.formatSize
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.background
@@ -51,7 +52,6 @@ import studio.kahn.iris.tv.data.SubInfo
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.TorrentDetails
 import studio.kahn.iris.tv.data.VideoInfo
-import studio.kahn.iris.tv.data.irisError
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
@@ -116,40 +116,25 @@ fun SearchDetailScreen(
         error = null
         dupMessage = null
         scope.launch {
-            try {
-                val url = container.sessionStore.serverUrl.first()
-                    ?: return@launch run {
-                        error = "Not signed in"
-                        ingesting = false
-                    }
-                val api = container.apiFor(url)
-                val res = api.ingest(
-                    ResolveBody(
-                        providerId = providerId,
-                        externalId = externalId,
-                        tmdbId = tmdbId,
-                        allowDuplicate = allowDuplicate,
-                    )
+            val outcome = container.grabRelease(
+                ResolveBody(
+                    providerId = providerId,
+                    externalId = externalId,
+                    tmdbId = tmdbId,
+                    allowDuplicate = allowDuplicate,
                 )
-                val videos = res.snapshot.files
-                    .filter { f -> isVideoPath(f.path) }
-                if (videos.size <= 1) {
-                    val idx = videos.maxByOrNull { f -> f.sizeBytes }?.index ?: 0
-                    onPickFile(res.snapshot.infohash, idx)
-                } else {
-                    onPickTorrent(res.snapshot.infohash)
+            )
+            when (outcome) {
+                is GrabOutcome.Play -> onPickFile(outcome.infohash, outcome.fileIdx)
+                is GrabOutcome.Choose -> onPickTorrent(outcome.infohash)
+                is GrabOutcome.Duplicate -> {
+                    dupMessage = outcome.message
+                    ingesting = false
                 }
-            } catch (e: retrofit2.HttpException) {
-                val env = e.irisError()
-                if (env?.error == "duplicate_in_library") {
-                    dupMessage = env.message ?: "This movie is already in the library"
-                } else {
-                    error = env?.message ?: e.message ?: "Ingest failed"
+                is GrabOutcome.Failed -> {
+                    error = outcome.message
+                    ingesting = false
                 }
-                ingesting = false
-            } catch (e: Exception) {
-                error = e.message ?: "Ingest failed"
-                ingesting = false
             }
         }
     }
