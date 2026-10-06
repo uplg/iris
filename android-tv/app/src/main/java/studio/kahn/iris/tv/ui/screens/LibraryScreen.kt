@@ -51,6 +51,7 @@ import androidx.tv.material3.Text
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.ui.components.ActionSheet
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.EmptyState
 import studio.kahn.iris.tv.ui.components.ErrorState
@@ -67,11 +68,14 @@ import studio.kahn.iris.tv.ui.components.PosterGrid
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StaleNotice
+import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.TextInput
 import studio.kahn.iris.tv.ui.screens.library.DownloadsUi
 import studio.kahn.iris.tv.ui.components.FocusReturn
 import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.screens.library.LibraryUiState
+import studio.kahn.iris.tv.ui.screens.library.watchedKey
+import studio.kahn.iris.tv.ui.format.markWatchedLabel
 import studio.kahn.iris.tv.ui.screens.library.LibraryView
 import studio.kahn.iris.tv.ui.screens.library.LibraryViewModel
 import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
@@ -103,6 +107,7 @@ data class LibraryActions(
     val onReleaseQuery: (String) -> Unit = {},
     val onOpenTitle: (TitleCard) -> Unit = {},
     val onHide: (TitleCard) -> Unit = {},
+    val onToggleWatched: (TitleCard) -> Unit = {},
     val onRelease: ReleaseActions = ReleaseActions(),
     val onRetry: () -> Unit = {},
 )
@@ -138,6 +143,7 @@ fun LibraryScreen(
                 onOpenCollection(it.id)
             },
             onHide = vm::hide,
+            onToggleWatched = vm::toggleWatched,
             onRelease = ReleaseActions(
                 onPlay = onPlay,
                 onFiles = onOpenTorrent,
@@ -159,6 +165,7 @@ fun LibraryContent(
     actions: LibraryActions,
     lastOpened: String? = null,
     standalone: Boolean = false,
+    initialMenu: String? = null,
 ) {
     val layout = IrisLayout.current
     val top = remember { FocusRequester() }
@@ -166,6 +173,8 @@ fun LibraryContent(
     var topFocused by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf(Panel.None) }
     var hiding by remember { mutableStateOf<TitleCard?>(null) }
+    var menuFor by remember { mutableStateOf(initialMenu) }
+    val menu = menuFor?.let { id -> state.titles.valueOrNull?.cards?.firstOrNull { it.id == id } }
     var deleting by remember { mutableStateOf<ReleaseRow?>(null) }
     val focusedIndex = remember { mutableIntStateOf(-1) }
     val grid = rememberLazyGridState()
@@ -181,7 +190,7 @@ fun LibraryContent(
         runCatching { top.requestFocus() }
     }
     // Back from deep in the view goes to its top first; from there the shell (or the back stack) takes over.
-    BackHandler(enabled = contentFocused && !topFocused && panel == Panel.None && hiding == null && deleting == null) {
+    BackHandler(enabled = contentFocused && !topFocused && panel == Panel.None && hiding == null && deleting == null && menu == null) {
         scope.launch {
             if (state.view == LibraryView.Titles) grid.scrollToItem(0) else list.scrollToItem(0)
             runCatching { top.requestFocus() }
@@ -222,7 +231,7 @@ fun LibraryContent(
                     actions = actions,
                     onFind = { panel = Panel.Find },
                     onSort = { panel = Panel.Sort },
-                    onHold = { hiding = it },
+                    onHold = { if (it.ghost) hiding = it else menuFor = it.id },
                 )
                 LibraryView.Downloads -> DownloadsPane(
                     state = state,
@@ -255,6 +264,24 @@ fun LibraryContent(
                     keys.returnTo(FIND_KEY)
                 },
             )
+        }
+        menu?.let { card ->
+            ActionSheet(
+                title = card.title,
+                eyebrow = "Library",
+                actions = listOf(card.watched),
+                label = ::markWatchedLabel,
+                busyLabel = { "Asking the server…" },
+                waits = { true },
+                inFlight = { watchedKey(card) in state.busy },
+                onAction = { actions.onToggleWatched(card) },
+                onDismiss = {
+                    menuFor = null
+                    keys.returnTo(card.id)
+                },
+            ) {
+                StatusLine(card.status.text, tone = card.status.tone)
+            }
         }
         hiding?.let { card ->
             ConfirmDialog(
@@ -397,7 +424,7 @@ private fun TitlesPane(
             title = card.title,
             imageUrl = card.posterUrl,
             onClick = { actions.onOpenTitle(card) },
-            onLongClick = if (card.ghost) ({ onHold(card) }) else null,
+            onLongClick = { onHold(card) },
             width = null,
             kind = card.kind,
             progress = card.progress,
@@ -571,8 +598,10 @@ private fun LibraryHints(state: LibraryUiState, focusedIndex: MutableIntState, m
     val titles = state.titles.valueOrNull
     val hints = buildList {
         add(KeyHint(Keys.OK, if (state.view == LibraryView.Titles) "Open" else "Choose"))
-        if (state.view == LibraryView.Titles && titles?.cards?.any { it.ghost } == true) {
-            add(KeyHint(Keys.HOLD_OK, "Hide a title no longer on disk"))
+        val cards = titles?.cards.orEmpty()
+        if (state.view == LibraryView.Titles && cards.isNotEmpty()) {
+            val gone = cards.any { it.ghost }
+            add(KeyHint(Keys.HOLD_OK, if (gone) "Mark watched, or hide a title gone from disk" else "Mark watched or not"))
         }
         add(KeyHint(Keys.BACK, "To the top, then the menu"))
     }

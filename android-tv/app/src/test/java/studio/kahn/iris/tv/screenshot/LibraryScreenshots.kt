@@ -57,9 +57,9 @@ class LibraryScreenshots {
     val shots = IrisScreenshotRule()
 
     @Composable
-    private fun ShelledLibrary(state: LibraryUiState, actions: LibraryActions) {
+    private fun ShelledLibrary(state: LibraryUiState, actions: LibraryActions, initialMenu: String? = null) {
         TopLevelShell(TopTab.Library, accountName = "Leonard", onSelect = {}, onAccount = {}) {
-            LibraryContent(state, actions)
+            LibraryContent(state, actions, initialMenu = initialMenu)
         }
     }
 
@@ -79,6 +79,11 @@ class LibraryScreenshots {
     @Test
     fun titlesFiltered() = shots.snap("library_titles_series") {
         ShelledLibrary(library(filters = TitleFilters(type = studio.kahn.iris.tv.ui.screens.library.TypeFilter.Series)), LibraryActions(onRelease = releaseActions))
+    }
+
+    @Test
+    fun titleMenu() = shots.snap("library_title_menu") {
+        ShelledLibrary(library(), LibraryActions(onRelease = releaseActions), initialMenu = F.titles[1].id.toString())
     }
 
     @Test

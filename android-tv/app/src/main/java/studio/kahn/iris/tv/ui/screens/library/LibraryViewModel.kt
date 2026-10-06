@@ -228,6 +228,14 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
         }
     }
 
+    fun toggleWatched(c: TitleCard) = act(watchedKey(c), markedWatchedWords(c.title, c.watched)) {
+        if (c.watched) container.api().markCollectionUnwatched(c.id) else container.api().markCollectionWatched(c.id)
+        coroutineScope {
+            launch { collections.refresh() }
+            launch { watching.refresh() }
+        }
+    }
+
     fun delete(r: ReleaseRow) = act("delete:${r.infohash}", "Deleted ${r.title}.") {
         container.api().deleteTorrent(r.infohash)
         refreshAll()
@@ -264,6 +272,9 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
         }
     }
 }
+
+/** The busy key of a title's watched toggle while the server answers. */
+fun watchedKey(c: TitleCard): String = "watched:${c.id}"
 
 fun titlesUi(
     items: List<CollectionListItem>,
