@@ -27,8 +27,10 @@ fun clock(seconds: Double?): String {
 fun duration(seconds: Double): String {
     val total = max(0L, seconds.roundToLong())
     if (total < 60) return "$total s"
-    val h = total / 3600
-    val m = ((total % 3600) / 60.0).roundToLong()
+    // The minutes rounded first, so 59 min 30 s is "1 h", never "60 min" (the web's rule).
+    val minutes = (total / 60.0).roundToLong()
+    val h = minutes / 60
+    val m = minutes % 60
     if (h == 0L) return "$m min"
     return if (m == 0L) "$h h" else "$h h $m min"
 }
