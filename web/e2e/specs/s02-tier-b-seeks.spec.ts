@@ -1,8 +1,12 @@
 // Scenario 2: Chrome, tier B (mediabunny → MSE), on the heavy clip so a seek leaves the buffer. Overlapping seek restarts (H3/H4): a held
 // arrow key or a burst of scrubber clicks never leaves playback paused, never jumps back to an
-// earlier target, never trips the frozen-feed watchdog.
+// earlier target, never trips the frozen-feed watchdog. And on Firefox, a feed that freezes before
+// the resume point buffered: the watchdog's restart keeps the resume point.
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Page } from '@playwright/test';
-import { expect, openWatch, play, seekSlider, stage, test, videoState } from '../lib/bench.ts';
+import { CATALOG } from '../harness/catalog.ts';
+import { expect, openWatch, play, playButton, seekSlider, stage, test, videoState } from '../lib/bench.ts';
 
 /** A seedbox across the internet, not a loopback: every byte range answers 150 ms late, which
  * keeps one restart's awaits open while the next seek arrives. */
@@ -44,6 +48,58 @@ test('a held arrow key: playing, forward, no frozen-feed restart', { tag: ['@chr
 	expect(logs.matching(/frozen/i), 'frozen-feed restart').toEqual([]);
 	expect(logs.has(/tier B → /)).toBe(false);
 });
+
+test(
+	'a feed frozen before the resume point buffered: the watchdog restarts at the resume point',
+	{ tag: ['@firefox'] },
+	async ({ page, state, logs }) => {
+		const RESUME = 80;
+		const size = statSync(join(import.meta.dirname, '..', '.media', CATALOG.heavy.file)).size;
+		// a half-dead connection, neither erroring nor delivering: a read in the resume region
+		// hands over its first bytes (the keyframe the mount reads), then hangs until thawed;
+		// the watchdog's fresh connections are served normally
+		await page.addInitScript(
+			({ lo, hi, pass }) => {
+				const w = window as unknown as { __benchThaw?: () => void };
+				let frozen = true;
+				const thawed = new Promise<void>((r) => (w.__benchThaw = () => ((frozen = false), r())));
+				const native = window.fetch.bind(window);
+				window.fetch = async (input, init) => {
+					const res = await native(input, init);
+					const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+					const range = new Headers(init?.headers).get('range') ?? (input instanceof Request ? input.headers.get('range') : null);
+					const start = Number(/bytes=(\d+)-/.exec(range ?? '')?.[1] ?? -1);
+					if (!frozen || !/\/files\/\d+\/stream/.test(url) || start < lo || start > hi || !res.body) return res;
+					const reader = res.body.getReader();
+					let sent = 0;
+					const body = new ReadableStream<Uint8Array>({
+						async pull(c) {
+							if (sent >= pass) await thawed;
+							const { done, value } = await reader.read();
+							if (done) return c.close();
+							sent += value.byteLength;
+							c.enqueue(value);
+						}
+					});
+					return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+				};
+			},
+			{ lo: size * 0.4, hi: size * 0.95, pass: 300_000 }
+		);
+		// Firefox defers the resume anchor until data covers it: the element reads 0 meanwhile
+		await openWatch(page, state, 'heavy', { tier: 'B', resume: RESUME });
+		await stage(page).hover();
+		if (await playButton(page).isVisible()) await playButton(page).click();
+		await expect.poll(() => logs.has(/Tier B frozen feed/), { timeout: 30_000, message: 'the watchdog never fired' }).toBe(true);
+		await page.evaluate(() => (window as unknown as { __benchThaw: () => void }).__benchThaw());
+		const { minAfter, last, samples } = await watch(page, 10_000, 1);
+		console.log(`[measure] frozen feed at resume ${RESUME}s: ${samples.map((s) => s.t.toFixed(1)).join(' ')}`);
+		expect(logs.matching(/frozen feed/)[0]).toMatch(/restarting at playhead/);
+		expect(last.paused).toBe(false);
+		expect(minAfter, 'the restart went back to the start').toBeGreaterThan(RESUME - 5);
+		expect(last.t).toBeGreaterThan(RESUME + 2);
+	}
+);
 
 test('a burst of scrubber clicks lands on the last one', { tag: ['@chrome'] }, async ({ page, state, logs }) => {
 	await slowStream(page);

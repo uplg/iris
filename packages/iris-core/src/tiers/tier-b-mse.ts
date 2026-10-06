@@ -554,7 +554,9 @@ export const mountTierB: EngineMount = async (opts) => {
 					/* idempotent */
 				}
 				input = makeInput();
-				void restartConversionFromSeek(video.currentTime);
+				// a deferred resume/seek anchor is where playback is heading: the element
+				// still reads 0 while nothing has buffered
+				void restartConversionFromSeek(effectivePlayhead());
 			}, STALL_WATCHDOG_MS);
 		}
 		// Diagnostic: a stall WITH a healthy forward buffer means the decoder
