@@ -43,6 +43,12 @@ describe('calls outside JSON still go through the client', () => {
 		await expect(livetv.masterHeaders('fr', 'gone')).rejects.toMatchObject({ status: 404 });
 	});
 
+	it('the live master: a DRM-locked channel says so by its code', async () => {
+		const body = JSON.stringify({ error: 'live_encrypted', message: "Encrypted by the broadcaster: it can't be played here." });
+		script(new Response(body, { status: 409, headers: { 'Content-Type': 'application/json' } }));
+		await expect(livetv.masterHeaders('ie', 'rteone')).rejects.toMatchObject({ status: 409, code: 'live_encrypted' });
+	});
+
 	it('a playback error report says who sends it and outlives the page', async () => {
 		const calls = script(new Response(null, { status: 204 }));
 		await torrents.reportPlaybackError('ih', 2, { tier: 'B', reason: 'decode', codec: 'hevc', browser: 'test' });

@@ -4,20 +4,25 @@
 	// picks the engine; a failure retries the same source once, then reports it (the backend
 	// cools it down and elects the next) and rotates, within the channel's source count.
 	import type { Snippet } from 'svelte';
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { livetv } from '@iris/api/client';
 	import IrisPlayer from '#lib/player/IrisPlayer.svelte';
 	import { readStoredVolume, writeStoredVolume } from '#lib/player/browser.ts';
+	import { KEYS } from '#lib/queries.ts';
 	import { forcedTier } from '#lib/watch/tier.ts';
 	import { liveManifest, liveTier, LiveRotation, sourceCount } from './live.ts';
+	import { ENCRYPTED, isEncryptedRefusal } from './guide.ts';
 
 	interface Props {
 		country: string;
 		channelId: string;
 		channelName: string;
 		top?: Snippet;
+		/** The channel list already says every feed is DRM-locked: nothing is asked. */
+		encrypted?: boolean;
 	}
-	let { country, channelId, channelName, top }: Props = $props();
+	let { country, channelId, channelName, top, encrypted = false }: Props = $props();
+	const queryClient = useQueryClient();
 
 	let attempt = $state(0);
 	let failed = $state(false);
@@ -37,9 +42,10 @@
 				sources: sourceCount(headers.get('x-iris-live-sources'))
 			};
 		},
+		enabled: !encrypted,
 		staleTime: 0,
 		gcTime: 0,
-		retry: 1,
+		retry: (count, error) => count < 1 && !isEncryptedRefusal(error),
 		// a return to the tab must not ask again: it would re-warm the election mid-watch
 		refetchOnWindowFocus: false
 	}));
@@ -60,10 +66,15 @@
 	// `?r=` makes the player remount on a rotation (the master route ignores it)
 	const src = $derived(attempt > 0 ? `${masterUrl}?r=${attempt}` : masterUrl);
 	const showFailed = $derived(failed || probeQ.isError);
+	const locked = $derived(encrypted || isEncryptedRefusal(probeQ.error));
+	// learnt on the zap: the channel list says it too from now on
+	$effect(() => {
+		if (locked && !encrypted) void queryClient.invalidateQueries({ queryKey: KEYS.liveChannels(country) });
+	});
 </script>
 
 <div class="screen">
-	{#if probeQ.data && !failed}
+	{#if probeQ.data && !failed && !locked}
 		<IrisPlayer
 			live
 			tier={probeQ.data.tier}
@@ -81,7 +92,12 @@
 		<div class="waiting">
 			{@render top?.()}
 			<div class="say">
-				{#if showFailed}
+				{#if locked}
+					<div class="failed" role="alert">
+						<h2 class="group-title">This channel can't be played</h2>
+						<p class="hint">{ENCRYPTED}</p>
+					</div>
+				{:else if showFailed}
 					<div class="failed" role="alert">
 						<h2 class="group-title">This channel is not playing</h2>
 						<p class="hint">

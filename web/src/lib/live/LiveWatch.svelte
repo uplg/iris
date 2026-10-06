@@ -53,12 +53,14 @@
 
 <div class="live-watch">
 	{#key epoch}
-		<LivePlayer {country} {channelId} channelName={name} {top} />
+		<LivePlayer {country} {channelId} channelName={name} {top} encrypted={!!channel?.encrypted} />
 	{/key}
 
-	<div class="actions">
-		<button class="btn" type="button" onclick={anotherSource}><Icon name="refresh-cw" />Try another source</button>
-	</div>
+	{#if !channel?.encrypted}
+		<div class="actions">
+			<button class="btn" type="button" onclick={anotherSource}><Icon name="refresh-cw" />Try another source</button>
+		</div>
+	{/if}
 
 	{#if now || next}
 		<section class="guide" aria-labelledby="guide-title">

@@ -171,12 +171,16 @@ async function send(method: string, path: string, body?: unknown, opts?: Request
 async function request<T>(method: string, path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
 	const res = await send(method, path, body, opts);
 	if (res.status === 204) return undefined as T;
-	const data = res.headers.get('content-type')?.includes('application/json') ? await res.json() : await res.text();
-	if (!res.ok) {
-		const err = data as { error?: string; message?: string };
-		throw new ApiError(res.status, err?.error ?? 'error', err?.message ?? res.statusText);
-	}
-	return data as T;
+	if (!res.ok) throw await failure(res);
+	return (res.headers.get('content-type')?.includes('application/json') ? await res.json() : await res.text()) as T;
+}
+
+/** A refused answer as an error, with the server's code and words when it sent them. */
+async function failure(res: Response): Promise<ApiError> {
+	const err = res.headers.get('content-type')?.includes('application/json')
+		? ((await res.json().catch(() => null)) as { error?: string; message?: string } | null)
+		: null;
+	return new ApiError(res.status, err?.error ?? 'error', err?.message ?? res.statusText);
 }
 
 export const api = {
@@ -713,7 +717,7 @@ export const livetv = {
 	 *  many it has (the GET also warms the election server-side). */
 	masterHeaders: async (country: string, channelId: string): Promise<Headers> => {
 		const res = await send('GET', `/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/master.m3u8`);
-		if (!res.ok) throw new ApiError(res.status, 'error', `master fetch failed (${res.status})`);
+		if (!res.ok) throw await failure(res);
 		return res.headers;
 	},
 	/** The served stream is unplayable client-side: the backend cools the

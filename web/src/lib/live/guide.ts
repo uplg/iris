@@ -2,7 +2,7 @@
 // name finds one, how a country's channels fall into sections, and what a channel that may
 // not play says about itself.
 
-import type { LiveChannel, LiveCountry } from '@iris/api/client';
+import { ApiError, type LiveChannel, type LiveCountry } from '@iris/api/client';
 import { plural } from '@iris/api/format';
 import { json, stored } from '#lib/stored.ts';
 import { STORAGE } from '#lib/storage.ts';
@@ -71,7 +71,7 @@ export function channelSections(channels: readonly LiveChannel[]): ChannelSectio
 		byCategory.set(title, [...(byCategory.get(title) ?? []), c]);
 	}
 	const titles = [...byCategory.keys()].toSorted((a, b) => (a === OTHER ? 1 : b === OTHER ? -1 : a.localeCompare(b)));
-	const sinking = (c: LiveChannel) => (c.unreachable || c.geo_blocked ? 1 : 0);
+	const sinking = (c: LiveChannel) => (dimmed(c) ? 1 : 0);
 	const sections: ChannelSection[] = titles.map((title) => ({
 		key: `cat:${title}`,
 		title,
@@ -84,8 +84,15 @@ export function channelSections(channels: readonly LiveChannel[]): ChannelSectio
 	return tnt.length ? [{ key: TNT, title: 'Free-to-air (TNT)', channels: tnt }, ...sections] : sections;
 }
 
+/** A channel whose every feed is DRM-locked with no licence Iris can obtain. */
+export const ENCRYPTED = "Encrypted by the broadcaster: it can't be played here.";
+
+/** The server's refusal of a channel whose every feed is DRM-locked. */
+export const isEncryptedRefusal = (e: unknown) => e instanceof ApiError && e.code === 'live_encrypted';
+
 /** Why a channel may not play, in words; null when nothing is known against it. */
-export function channelNotice(c: Pick<LiveChannel, 'unreachable' | 'geo_blocked' | 'not_24_7'>): string | null {
+export function channelNotice(c: Pick<LiveChannel, 'encrypted' | 'unreachable' | 'geo_blocked' | 'not_24_7'>): string | null {
+	if (c.encrypted) return ENCRYPTED;
 	if (c.unreachable) return 'Not answering right now';
 	if (c.geo_blocked) return 'May be blocked in your country';
 	if (c.not_24_7) return 'Not on air all day';
@@ -93,4 +100,5 @@ export function channelNotice(c: Pick<LiveChannel, 'unreachable' | 'geo_blocked'
 }
 
 /** Said less loudly: a channel that will likely not play. */
-export const dimmed = (c: Pick<LiveChannel, 'unreachable' | 'geo_blocked'>) => !!c.unreachable || c.geo_blocked;
+export const dimmed = (c: Pick<LiveChannel, 'encrypted' | 'unreachable' | 'geo_blocked'>) =>
+	!!c.encrypted || !!c.unreachable || c.geo_blocked;
