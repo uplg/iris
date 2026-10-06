@@ -286,7 +286,7 @@ interface IrisApi {
     @POST("api/me/password")
     suspend fun changePassword(@Body body: ChangePasswordRequest)
 
-    // ----------- Discovery + series follows (Phase 2 / Phase 4) -----------
+    // Discovery and series follows.
 
     @GET("api/discover/featured")
     suspend fun discoverFeatured(): FeaturedResponse
@@ -389,7 +389,7 @@ interface IrisApi {
     @POST("api/torrents/preview")
     suspend fun previewTorrent(@Body body: ResolveBody): TorrentPreview
 
-    // ------------------------------ Live TV ------------------------------
+    // Live TV.
     // Channels play via `api/livetv/{country}/channels/{id}/master.m3u8`
     // (built as a URL for Media3, not a Retrofit call) — the backend
     // rewrites every HLS URI to its signed proxy, so ExoPlayer only ever

@@ -267,13 +267,6 @@ fun releaseFacts(t: TorrentView, now: java.time.Instant = java.time.Instant.now(
     ).joinToString(" · ")
 }
 
-/** `42% overall · about 12 min`, or `Nothing downloading`. */
-fun downloadingLine(s: HomeSummary): String {
-    if (s.downloading == 0) return "Nothing downloading"
-    val eta = s.downloadingEtaSeconds
-    return if (eta != null) "${percent(s.downloadingPct)} overall · about ${duration(eta.toDouble())}" else "${percent(s.downloadingPct)} overall"
-}
-
 /** The library's facts line: `64 titles · 412 GB free of 2 TB · 2 downloading · 5 seeding`. */
 fun libraryFacts(counts: TitleCounts?, summary: HomeSummary?): String? {
     val parts = buildList {

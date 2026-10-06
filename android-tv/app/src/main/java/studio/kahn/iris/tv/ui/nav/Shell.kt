@@ -26,8 +26,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavBackStackEntry
-import androidx.navigation.NavDestination
-import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.NavOptionsBuilder
@@ -44,16 +42,6 @@ fun TopTab.route(): Any = when (this) {
     TopTab.Discover -> Routes.Discover
     TopTab.Library -> Routes.Library
     TopTab.LiveTv -> Routes.LiveTv
-}
-
-/** The header tab a destination belongs to; null off the five sections (a title, the player, Settings). */
-fun NavDestination.topTab(): TopTab? = when {
-    hasRoute<Routes.Home>() -> TopTab.Home
-    hasRoute<Routes.Search>() -> TopTab.Search
-    hasRoute<Routes.Discover>() -> TopTab.Discover
-    hasRoute<Routes.Library>() -> TopTab.Library
-    hasRoute<Routes.LiveTv>() -> TopTab.LiveTv
-    else -> null
 }
 
 /**
