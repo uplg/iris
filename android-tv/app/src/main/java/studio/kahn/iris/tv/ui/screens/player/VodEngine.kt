@@ -46,7 +46,6 @@ import studio.kahn.iris.tv.data.IrisCaps
 import studio.kahn.iris.tv.data.PlayStatus
 import studio.kahn.iris.tv.data.SeekHint
 import studio.kahn.iris.tv.data.SubtitlePick
-import studio.kahn.iris.tv.data.UpdatePlaybackPrefs
 import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
@@ -323,17 +322,12 @@ fun VodEngine(
     // A pick is saved at once (500 ms debounce), from the application scope so
     // a Back right after the pick doesn't drop it.
     val pendingTrackSaveJob = remember { AtomicReference<Job?>(null) }
-    val collectionId = setup.collectionId
+    // The chosen LANGUAGES too, for the next episode and device: the series'
+    // choice when the file belongs to one, only the fields picked in it.
+    val languages = remember(player) { AtomicReference(setup.ownLanguages) }
     val savePrefs: suspend () -> Unit = {
-        // The chosen LANGUAGES too, for the next episode and device: the
-        // series' choice when the file belongs to one (the web's rule).
-        val audioLang = routeTracks.audioLanguage(saver.audioIdx)
-        val subLang = routeTracks.subtitleLanguage(saver.subtitleIdx)
-        bestEffort {
-            container.apiFor(serverUrl).savePlaybackPreferences(
-                UpdatePlaybackPrefs(audioLanguage = audioLang, collectionId = collectionId, subtitleLanguage = subLang),
-            )
-        }
+        val body = languages.get().body()
+        bestEffort { container.apiFor(serverUrl).savePlaybackPreferences(body) }
     }
     val scheduleTrackSave = remember(player, routeTracks) {
         {
@@ -520,7 +514,13 @@ fun VodEngine(
                 } else {
                     -1
                 }
-                val changed = saver.audioIdx != newAudioIdx || saver.subtitleIdx != newSubIdx
+                val audioChanged = saver.audioIdx != newAudioIdx
+                val subChanged = saver.subtitleIdx != newSubIdx
+                val changed = audioChanged || subChanged
+                languages.updateAndGet { l ->
+                    l.audioPicked(if (audioChanged) routeTracks.audioLanguage(newAudioIdx) else null)
+                        .subtitlePicked(if (subChanged) routeTracks.subtitleLanguage(newSubIdx) else null)
+                }
                 saver.audioIdx = newAudioIdx
                 saver.subtitleIdx = newSubIdx
                 if (changed) scheduleTrackSave()

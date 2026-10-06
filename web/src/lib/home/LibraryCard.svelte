@@ -8,7 +8,7 @@
 	let { item, downloading }: { item: CollectionListItem; downloading?: number } = $props();
 
 	const meta = $derived(
-		`${kindLabel(item.kind, item.is_anime)} · ${item.kind === 'tv' ? plural(item.episode_count, 'episode') : formatSize(item.total_size_bytes)}`
+		`${kindLabel(item.kind, item.is_anime)} · ${item.kind === 'tv' && item.episode_count > 0 ? plural(item.episode_count, 'episode') : formatSize(item.total_size_bytes)}`
 	);
 	const status = $derived.by(() => {
 		if (item.ghost) return { tone: 'warn' as const, text: 'No longer on disk' };

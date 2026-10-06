@@ -29,6 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import java.util.Locale
+import java.util.UUID
+import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.FocusColors
@@ -44,6 +46,7 @@ import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.Spinner
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.format.thisTitle
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisShape
@@ -52,9 +55,14 @@ import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 
 /** Said under the track options: where the choice is kept (the web's `keptForText`). */
-fun keptForText(forSeries: Boolean): String =
-    (if (forSeries) "Kept for the whole series." else "Kept as your default.") +
-        " Subtitle size and colors follow the Android caption settings."
+fun keptForText(collectionId: UUID?, kind: MediaKind?): String {
+    val where = when {
+        collectionId == null -> "Kept as your default."
+        kind == MediaKind.movie -> "Kept for ${thisTitle(kind)}."
+        else -> "Kept for the whole series."
+    }
+    return "$where Subtitle size and colors follow the Android caption settings."
+}
 
 /**
  * Audio and subtitles (TVPlayerTracks): two radio groups in a side panel, the
@@ -64,7 +72,7 @@ fun keptForText(forSeries: Boolean): String =
 @Composable
 fun TracksPanel(
     menu: TrackMenu,
-    forSeries: Boolean,
+    keptFor: String,
     onChoose: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -75,7 +83,7 @@ fun TracksPanel(
     LaunchedEffect(Unit) { runCatching { initial.requestFocus() } }
     Box(Modifier.fillMaxSize()) {
         PanelKeyHints(listOf(KeyHint(Keys.OK, "Choose"), KeyHint(Keys.BACK, "Close, the video keeps playing")))
-        SidePanel(title = "Audio and subtitles", onDismiss = onDismiss, footer = keptForText(forSeries)) {
+        SidePanel(title = "Audio and subtitles", onDismiss = onDismiss, footer = keptFor) {
             if (menu.audio.isNotEmpty()) {
                 PanelLabel("Audio")
                 ChoiceGroup(menu.audio, focusId, initial, onChoose)

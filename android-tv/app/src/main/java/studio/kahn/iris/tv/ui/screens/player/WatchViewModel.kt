@@ -55,6 +55,8 @@ data class WatchSetup(
     val prefSubLang: String?,
     /** The series the file belongs to: track picks are kept for it. */
     val collectionId: UUID?,
+    /** What that scope chose itself: a pick saves only these, never the account's copied in. */
+    val ownLanguages: LanguageChoices = LanguageChoices(collectionId),
 )
 
 /** The words above the picture: the title, the episode line, the poster for getting ready. */
@@ -249,6 +251,7 @@ class WatchViewModel(
                     prefAudioLang = prefs?.audioLanguage,
                     prefSubLang = prefs?.subtitleLanguage,
                     collectionId = collectionId,
+                    ownLanguages = LanguageChoices.of(prefs, collectionId),
                 )
                 probeState.value = ProbePhase.Done
                 return

@@ -131,6 +131,11 @@ export function kindLabel(kind: string | null | undefined, anime = false): strin
 	return anime ? `Anime · ${k}` : k;
 }
 
+/** A title named in a sentence: `this film`, `this series` (a film is not a series). */
+export function thisTitle(kind: string | null | undefined): string {
+	return kind === 'movie' ? 'this film' : 'this series';
+}
+
 /** A count with its noun: `1 download`, `3 downloads`. */
 export function plural(n: number, one: string, many = `${one}s`): string {
 	return `${n} ${n === 1 ? one : many}`;

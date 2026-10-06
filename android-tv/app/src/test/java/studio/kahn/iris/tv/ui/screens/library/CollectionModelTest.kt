@@ -7,6 +7,7 @@ import org.junit.Test
 import studio.kahn.iris.tv.data.AvailableEpisodeEntry
 import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.GoneEpisodeEntry
+import studio.kahn.iris.tv.data.SeasonPackEntry
 import studio.kahn.iris.tv.screenshot.LibraryFixtures as F
 import studio.kahn.iris.tv.ui.components.StatusTone
 
@@ -66,6 +67,19 @@ class CollectionModelTest {
         assertEquals(1, two.packs.size)
         assertEquals("9 episodes · 6 on disk", two.seasonFact)
         assertEquals("Hello, Ms. Cobel", two.episodes.first().heading)
+    }
+
+    @Test
+    fun aSeasonOfPacksAloneNeverSaysZeroEpisodes() {
+        val pack = SeasonPackEntry(foundAt = F.at, indexerProvider = "torr9", indexerTorrentId = "p3", season = 3)
+        val onDiskPack = disk(4, 0)
+        val seasons = seasonsOf(mergeEpisodes(listOf(disk(1, 1), onDiskPack)), listOf(pack), listOf(disk(1, 1), onDiskPack))
+        assertEquals(listOf(1L, 3L, 4L), seasons.map { it.season })
+        assertEquals(listOf("Season 1 · 1 episode", "Season 3 · season pack", "Season 4 · season pack on disk"), seasons.map(::seasonLabel))
+
+        val page = collectionPage(F.series.copy(episodes = F.series.episodes + onDiskPack), null, emptyList(), 4L, F.now)
+        assertEquals("The season pack is on disk. Its episodes are not known one by one yet: play it from its files below.", page.emptyEpisodes)
+        assertTrue(page.showFiles)
     }
 
     @Test

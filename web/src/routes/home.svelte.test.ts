@@ -99,6 +99,20 @@ describe('home', () => {
 		await expect.poll(() => document.title).toBe('Iris');
 	});
 
+	it('resumes a film without episodes, its languages said for this film', async () => {
+		home({
+			'/me/continue-watching?include_grabbable=true': [
+				tile({ kind: 'movie', season: null, episode: null, tmdb_id: null, torrent_name: 'Avatar.2009.MULTi.1080p.BluRay.x264' })
+			],
+			'/me/playback-preferences?collection_id=c1': { audio_language: 'fr', subtitle_language: 'off', for_collection: true }
+		});
+		await show();
+		const hero = page.getByRole('region', { name: 'Avatar (2009)' });
+		await expect.element(hero.getByRole('link', { name: 'Resume at 32:10' })).toBeVisible();
+		await expect.element(hero.getByText('Plays with audio in French, subtitles off, as chosen for this film.')).toBeVisible();
+		expect(hero.getByRole('link', { name: 'All episodes' }).elements()).toHaveLength(0);
+	});
+
 	it('gets a next episode that is not on disk, then plays it', async () => {
 		const api = home({
 			'/me/continue-watching?include_grabbable=true': [

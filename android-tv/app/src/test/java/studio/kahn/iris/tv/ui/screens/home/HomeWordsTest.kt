@@ -46,13 +46,18 @@ class HomeWordsTest {
 
     @Test
     fun languagesAPlayWillUse() {
-        assertEquals("Plays with audio in French, subtitles off.", languagesLine(PlaybackPrefsResponse(audioLanguage = "fr", subtitleLanguage = "off")))
+        assertEquals("Plays with audio in French, subtitles off.", languagesLine(PlaybackPrefsResponse(audioLanguage = "fr", subtitleLanguage = "off"), MediaKind.tv))
         assertEquals(
             "Plays with subtitles in English, as chosen for this series.",
-            languagesLine(PlaybackPrefsResponse(subtitleLanguage = "eng", forCollection = true)),
+            languagesLine(PlaybackPrefsResponse(subtitleLanguage = "eng", forCollection = true), MediaKind.tv),
         )
-        assertNull(languagesLine(PlaybackPrefsResponse()))
-        assertNull(languagesLine(null))
+        assertNull(languagesLine(PlaybackPrefsResponse(), MediaKind.tv))
+        // A film is not a series.
+        assertEquals(
+            "Plays with audio in French, subtitles off, as chosen for this film.",
+            languagesLine(PlaybackPrefsResponse(audioLanguage = "fr", subtitleLanguage = "off", forCollection = true), MediaKind.movie),
+        )
+        assertNull(languagesLine(null, MediaKind.tv))
     }
 
     companion object {

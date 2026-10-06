@@ -702,8 +702,9 @@ internal fun LanguagesPanel(
     onSave: (String?, String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var audio by remember { mutableStateOf(langs.audio.orEmpty()) }
-    var subs by remember { mutableStateOf(langs.subtitles.orEmpty()) }
+    // The series' own choices: "" is « your usual choice », null on the wire (inherits the account's).
+    var audio by remember { mutableStateOf(langs.own.audio.orEmpty()) }
+    var subs by remember { mutableStateOf(langs.own.subtitles.orEmpty()) }
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
     SidePanel(title = "Languages for $title", onDismiss = onDismiss) {
@@ -718,7 +719,7 @@ internal fun LanguagesPanel(
             options = listOf("") + langs.audioOptions,
             selected = audio,
             onSelect = { audio = it },
-            label = { audioChoiceWords(it.ifEmpty { null }) },
+            label = { if (it.isEmpty()) "Your usual choice" else audioChoiceWords(it) },
             selectedFocus = first,
         )
         PanelLabel("Subtitles")
@@ -726,7 +727,7 @@ internal fun LanguagesPanel(
             options = listOf("", NO_SUBTITLES) + langs.subtitleOptions,
             selected = subs,
             onSelect = { subs = it },
-            label = { subtitleChoiceWords(it.ifEmpty { null }) },
+            label = { if (it.isEmpty()) "Your usual choice" else subtitleChoiceWords(it) },
         )
         Row(
             Modifier.padding(horizontal = IrisSpace.s4, vertical = IrisSpace.s4),

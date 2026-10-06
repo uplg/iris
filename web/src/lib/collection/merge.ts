@@ -11,7 +11,7 @@ import type {
 	SeasonPackEntry,
 	TorrentView
 } from '@iris/api/client';
-import { episodeCode, isVideo, languageLabel } from '@iris/api/format';
+import { episodeCode, isVideo, languageLabel, plural } from '@iris/api/format';
 
 export type Downloaded = {
 	status: 'downloaded';
@@ -164,19 +164,29 @@ export function episodesOf(c: CollectionDetail): Episode[] {
 	return merge(c.episodes, c.available_episodes, c.gone_episodes);
 }
 
-export type Season = { season: number; items: Episode[]; packs: SeasonPackEntry[] };
+/** A season: its episode rows, the packs offered for it, and whether a pack of it is on disk
+ * whose files are not known one by one (the episode-0 sentinel of `episodes`). */
+export type Season = { season: number; items: Episode[]; packs: SeasonPackEntry[]; packOnDisk: boolean };
 
 /** The seasons known, from episodes and from pack-only seasons (a pack the only signal yet). */
-export function seasonsOf(episodes: Episode[], packs: SeasonPackEntry[] = []): Season[] {
+export function seasonsOf(episodes: Episode[], packs: SeasonPackEntry[] = [], onDisk: CollectionEpisodeEntry[] = []): Season[] {
 	const by = new Map<number, Season>();
 	const ensure = (s: number) => {
 		let row = by.get(s);
-		if (!row) by.set(s, (row = { season: s, items: [], packs: [] }));
+		if (!row) by.set(s, (row = { season: s, items: [], packs: [], packOnDisk: false }));
 		return row;
 	};
 	for (const ep of episodes) ensure(ep.season).items.push(ep);
 	for (const p of packs) ensure(p.season).packs.push(p);
+	for (const d of onDisk) if (d.episode === 0) ensure(d.season).packOnDisk = true;
 	return [...by.values()].toSorted((a, b) => a.season - b.season);
+}
+
+/** What a season holds, in words: « 8 episodes », « watched », or its pack when no episode is
+ * known one by one (never « 0 episodes »). */
+export function seasonHolds(s: Season): string {
+	if (s.items.length > 0) return s.items.every(watchedEp) ? 'watched' : plural(s.items.length, 'episode');
+	return s.packOnDisk ? 'season pack on disk' : 'season pack';
 }
 
 /** Season 0 is « Specials »: a show opens on its first real season. */

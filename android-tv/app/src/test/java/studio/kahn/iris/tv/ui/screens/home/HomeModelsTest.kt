@@ -23,6 +23,16 @@ class HomeModelsTest {
     private val series = UUID.fromString("00000000-0000-0000-0000-000000000001")
 
     @Test
+    fun aResumedFilmHasNoEpisodes() {
+        val film = UUID.fromString("00000000-0000-0000-0000-000000000002")
+        val item = cw(position = 1930.0, duration = 3310.0, collection = film, kind = MediaKind.movie, name = "Avatar.2009.MULTi.1080p.BluRay.mkv")
+        val hero = resumeHero(item, null, PlaybackPrefsResponse(audioLanguage = "fr", subtitleLanguage = "off", forCollection = true))
+        assertEquals(listOf("Resume at 32:10", "Start over"), hero.actions.map { it.label })
+        assertEquals("Plays with audio in French, subtitles off, as chosen for this film.", hero.languages)
+        assertTrue(CardAction.OpenSeries !in continueCard(item, null).menu)
+    }
+
+    @Test
     fun aResumedEpisode() {
         val item = cw(position = 1930.0, duration = 3310.0, season = 2, episode = 4, collection = series, kind = MediaKind.tv)
             .copy(episodeName = "Woe's Hollow")

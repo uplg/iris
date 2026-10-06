@@ -1,8 +1,8 @@
 // The words the home and discover screens say about what they read: the "Right now" facts,
 // the downloads per collection, a title's kind and the playback languages, said once.
 
-import type { ContinueWatchingItem, HomeSummary, PlaybackPrefs, TorrentView } from '@iris/api/client';
-import { formatSize, percent, plural, timeLeft } from '@iris/api/format';
+import type { ContinueWatchingItem, HomeSummary, MediaKind, PlaybackPrefs, TorrentView } from '@iris/api/client';
+import { formatSize, percent, plural, thisTitle, timeLeft } from '@iris/api/format';
 import { languageName } from '#lib/language.ts';
 
 const known = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
@@ -43,13 +43,13 @@ export function watched(it: Pick<ContinueWatchingItem, 'duration_seconds' | 'pos
 	return known(it.duration_seconds) && it.duration_seconds > 0 ? Math.min(1, it.position_seconds / it.duration_seconds) : null;
 }
 
-/** The languages a play will use, when the account (or the series) chose them. */
-export function languagesLine(p: PlaybackPrefs | undefined): string | null {
+/** The languages a play will use, when the account (or the title) chose them. */
+export function languagesLine(p: PlaybackPrefs | undefined, kind: MediaKind | null | undefined): string | null {
 	if (!p) return null;
 	const parts: string[] = [];
 	if (p.audio_language) parts.push(`audio in ${languageName(p.audio_language) ?? p.audio_language}`);
 	if (p.subtitle_language === 'off') parts.push('subtitles off');
 	else if (p.subtitle_language) parts.push(`subtitles in ${languageName(p.subtitle_language) ?? p.subtitle_language}`);
 	if (parts.length === 0) return null;
-	return `Plays with ${parts.join(', ')}${p.for_collection ? ', as chosen for this series' : ''}.`;
+	return `Plays with ${parts.join(', ')}${p.for_collection ? `, as chosen for ${thisTitle(kind)}` : ''}.`;
 }

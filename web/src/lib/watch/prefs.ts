@@ -1,21 +1,35 @@
 // The audio and subtitle LANGUAGE the person prefers, carried to the next episode and device:
-// the series' own choice when the file belongs to one, else the account-wide default. Each pick
-// sends the whole current state (the endpoint replaces it), then the cache reads it again, so
-// the next episode starts in the language just picked.
+// the title's own choice when the file belongs to one, else the account-wide default. Under a
+// title, a pick saves only what was chosen for that title (a field it never chose goes as null
+// and keeps inheriting the account's); account-wide, the whole state. The cache then reads it
+// again, so the next episode starts in the language just picked.
 
-import { me, type PlaybackPrefs } from '@iris/api/client';
+import { me, type MediaKind, type PlaybackPrefs } from '@iris/api/client';
+import { thisTitle } from '@iris/api/format';
 import type { Manifest } from '@iris/core/manifest-client';
 import { playbackPrefsSaved } from '#lib/queries.ts';
 
 type Save = typeof me.savePlaybackPreferences;
+type Langs = { audio_language: string | null; subtitle_language: string | null };
 
 /** Said in the audio/subtitles panel. */
-export function keptForText(collectionId: string | null | undefined): string {
-	return collectionId ? 'Kept for the whole series' : 'Kept as your default';
+export function keptForText(collectionId: string | null | undefined, kind: MediaKind | null | undefined): string {
+	if (!collectionId) return 'Kept as your default';
+	return kind === 'movie' ? `Kept for ${thisTitle(kind)}` : 'Kept for the whole series';
+}
+
+/** What a title chose itself (null: inherits the account's). Account-wide, everything. */
+export function ownChoices(p: PlaybackPrefs | undefined, collectionId: string | null): Langs {
+	if (!p) return { audio_language: null, subtitle_language: null };
+	if (!collectionId) return { audio_language: p.audio_language ?? null, subtitle_language: p.subtitle_language ?? null };
+	return {
+		audio_language: p.audio_for_collection ? (p.audio_language ?? null) : null,
+		subtitle_language: p.subtitle_for_collection ? (p.subtitle_language ?? null) : null
+	};
 }
 
 export class PlaybackChoices {
-	#prefs: { audio_language: string | null; subtitle_language: string | null } = { audio_language: null, subtitle_language: null };
+	#own: Langs = { audio_language: null, subtitle_language: null };
 
 	constructor(
 		readonly collectionId: string | null,
@@ -25,11 +39,11 @@ export class PlaybackChoices {
 
 	/** The preferences as read from the server. */
 	adopt(p: PlaybackPrefs | undefined) {
-		if (p) this.#prefs = { audio_language: p.audio_language ?? null, subtitle_language: p.subtitle_language ?? null };
+		if (p) this.#own = ownChoices(p, this.collectionId);
 	}
 
 	async #send() {
-		await this.save({ ...this.#prefs, ...(this.collectionId ? { collection_id: this.collectionId } : {}) });
+		await this.save({ ...this.#own, ...(this.collectionId ? { collection_id: this.collectionId } : {}) });
 		void this.saved(this.collectionId);
 	}
 
@@ -37,7 +51,7 @@ export class PlaybackChoices {
 	audioPicked(manifest: Manifest, index: number): Promise<void> | null {
 		const lang = manifest.audio[index]?.lang;
 		if (!lang) return null;
-		this.#prefs = { ...this.#prefs, audio_language: lang };
+		this.#own = { ...this.#own, audio_language: lang };
 		return this.#send();
 	}
 
@@ -45,7 +59,7 @@ export class PlaybackChoices {
 	subtitlePicked(manifest: Manifest, streamIdx: number | null): Promise<void> | null {
 		const lang = streamIdx === null ? 'off' : (manifest.subtitles.find((s) => s.stream_idx === streamIdx)?.lang ?? null);
 		if (!lang) return null;
-		this.#prefs = { ...this.#prefs, subtitle_language: lang };
+		this.#own = { ...this.#own, subtitle_language: lang };
 		return this.#send();
 	}
 }

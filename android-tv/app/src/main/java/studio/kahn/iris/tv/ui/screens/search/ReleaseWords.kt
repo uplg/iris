@@ -118,7 +118,7 @@ fun matchTarget(m: LibraryMatch): MatchTarget {
     val season = m.episodeSeason
     val facts = when {
         seasonCount != null && season != null -> "Season $season: ${plural(seasonCount.toInt(), "episode")} on disk"
-        m.kind == "tv" -> "${plural(m.episodeCount.toInt(), "episode")} on disk"
+        m.kind == "tv" && m.episodeCount > 0 -> "${plural(m.episodeCount.toInt(), "episode")} on disk"
         m.torrentCount > 1 -> "${plural(m.torrentCount.toInt(), "release")} on disk"
         else -> "On disk"
     }

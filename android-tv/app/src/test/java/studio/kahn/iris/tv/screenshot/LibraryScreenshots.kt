@@ -118,7 +118,7 @@ class LibraryScreenshots {
 
     private fun series() = CollectionUiState(
         page = Loadable.Ready(collectionPage(F.series, null, emptyList(), 2L, F.now)),
-        languages = Loadable.Ready(languagesUi(PlaybackPrefsResponse(audioLanguage = "en", subtitleLanguage = "off", forCollection = true), F.series, null)),
+        languages = Loadable.Ready(languagesUi(PlaybackPrefsResponse(audioLanguage = "en", subtitleLanguage = "off", forCollection = true, audioForCollection = true, subtitleForCollection = true), F.series, null, F.series.id)),
     )
 
     @Test

@@ -36,10 +36,14 @@ describe('home words', () => {
 	});
 
 	it('says the languages a play will use, or nothing', () => {
-		expect(languagesLine({ audio_language: 'fr', subtitle_language: 'off' })).toBe('Plays with audio in French, subtitles off.');
-		expect(languagesLine({ subtitle_language: 'en', for_collection: true })).toBe(
+		expect(languagesLine({ audio_language: 'fr', subtitle_language: 'off' }, 'tv')).toBe('Plays with audio in French, subtitles off.');
+		expect(languagesLine({ subtitle_language: 'en', for_collection: true }, 'tv')).toBe(
 			'Plays with subtitles in English, as chosen for this series.'
 		);
-		expect(languagesLine({})).toBeNull();
+		// a film is not a series
+		expect(languagesLine({ audio_language: 'fr', subtitle_language: 'off', for_collection: true }, 'movie')).toBe(
+			'Plays with audio in French, subtitles off, as chosen for this film.'
+		);
+		expect(languagesLine({}, 'tv')).toBeNull();
 	});
 });

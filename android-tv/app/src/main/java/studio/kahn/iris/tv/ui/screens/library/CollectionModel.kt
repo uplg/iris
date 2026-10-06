@@ -154,13 +154,29 @@ fun mergeEpisodesAbsolute(
         .sortedWith(compareBy({ it.absolute == null }, { it.absolute ?: Long.MAX_VALUE }, { it.season }, { it.episode }))
 }
 
+/**
+ * A season: its episode rows, the packs offered for it, and whether a pack of it is on disk
+ * whose files are not known one by one (the episode-0 sentinel of `episodes`).
+ */
 @Immutable
-data class Season(val season: Long, val items: List<Episode>, val packs: List<SeasonPackEntry>)
+data class Season(val season: Long, val items: List<Episode>, val packs: List<SeasonPackEntry>, val packOnDisk: Boolean = false)
 
-/** The seasons known, from episodes and from pack-only seasons. */
-fun seasonsOf(episodes: List<Episode>, packs: List<SeasonPackEntry> = emptyList()): List<Season> {
-    val seasons = (episodes.map { it.season } + packs.map { it.season }).toSortedSet()
-    return seasons.map { s -> Season(s, episodes.filter { it.season == s }, packs.filter { it.season == s }) }
+/** The seasons known, from episodes and from pack-only seasons (the web's `seasonsOf`). */
+fun seasonsOf(
+    episodes: List<Episode>,
+    packs: List<SeasonPackEntry> = emptyList(),
+    onDisk: List<EpisodeEntry> = emptyList(),
+): List<Season> {
+    val packsOnDisk = onDisk.filter { it.episode == 0L }.map { it.season }.toSet()
+    val seasons = (episodes.map { it.season } + packs.map { it.season } + packsOnDisk).toSortedSet()
+    return seasons.map { s -> Season(s, episodes.filter { it.season == s }, packs.filter { it.season == s }, s in packsOnDisk) }
+}
+
+/** What a season holds, in words: `8 episodes`, `watched`, or its pack when no episode is known one by one (never `0 episodes`). */
+fun seasonHolds(s: Season): String = when {
+    s.items.isNotEmpty() -> if (s.items.all(::watchedEp)) "watched" else plural(s.items.size, "episode")
+    s.packOnDisk -> "season pack on disk"
+    else -> "season pack"
 }
 
 /** Season 0 is Specials: a show opens on its first real season. */
@@ -483,11 +499,8 @@ fun episodesOf(c: CollectionDetail): List<Episode> = if (c.kind != MediaKind.tv)
     mergeEpisodes(c.episodes, c.availableEpisodes.orEmpty(), c.goneEpisodes.orEmpty(), c.episodeInfo)
 }
 
-/** `Season 2 · 10 episodes` or `Season 2 · watched`. */
-fun seasonLabel(s: Season): String {
-    val all = s.items.isNotEmpty() && s.items.all(::watchedEp)
-    return "${seasonName(s.season)} · ${if (all) "watched" else plural(s.items.size, "episode")}"
-}
+/** `Season 2 · 10 episodes`, `Season 2 · watched`, `Season 3 · season pack`. */
+fun seasonLabel(s: Season): String = "${seasonName(s.season)} · ${seasonHolds(s)}"
 
 /** `10 episodes · 7 on disk`. */
 fun episodesFact(items: List<Episode>): String = "${plural(items.size, "episode")} · ${items.count(::ownedEp)} on disk"
