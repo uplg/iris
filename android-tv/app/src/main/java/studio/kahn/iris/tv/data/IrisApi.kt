@@ -266,6 +266,21 @@ interface IrisApi {
     @DELETE("api/me/devices/{jti}")
     suspend fun revokeDevice(@Path("jti") jti: String)
 
+    /** Accept the code another TV shows (the web's "Pair the TV"). 400 / 409 on a bad or used code. */
+    @POST("api/me/devices")
+    suspend fun linkDevice(@Body body: LinkRequest)
+
+    /** The account's passkeys, read only on a TV: they are made on a phone or computer. */
+    @GET("api/me/passkeys")
+    suspend fun listPasskeys(): List<PasskeyView>
+
+    @POST("api/me/display-name")
+    suspend fun changeDisplayName(@Body body: ChangeDisplayNameRequest)
+
+    /** 401 when [ChangePasswordRequest.oldPassword] is wrong, 400 when the new one is refused. Signs every device out. */
+    @POST("api/me/password")
+    suspend fun changePassword(@Body body: ChangePasswordRequest)
+
     // ----------- Discovery + series follows (Phase 2 / Phase 4) -----------
 
     @GET("api/discover/featured")

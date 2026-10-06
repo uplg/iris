@@ -1,38 +1,35 @@
 package studio.kahn.iris.tv.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Text
 import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.TopTab
+import studio.kahn.iris.tv.ui.nav.ClientOutdatedOverlay
+import studio.kahn.iris.tv.ui.nav.LaunchTarget
 import studio.kahn.iris.tv.ui.nav.Routes
+import studio.kahn.iris.tv.ui.nav.ShellHost
+import studio.kahn.iris.tv.ui.nav.ShellViewModel
+import studio.kahn.iris.tv.ui.nav.openTab
+import studio.kahn.iris.tv.ui.nav.section
 import studio.kahn.iris.tv.ui.screens.CollectionScreen
 import studio.kahn.iris.tv.ui.screens.DetailScreen
 import studio.kahn.iris.tv.ui.screens.DiscoverScreen
@@ -49,57 +46,80 @@ import studio.kahn.iris.tv.ui.screens.SettingsScreen
 import studio.kahn.iris.tv.ui.screens.SetupScreen
 import studio.kahn.iris.tv.ui.screens.TorrentsScreen
 import studio.kahn.iris.tv.ui.screens.WatchScreen
+import studio.kahn.iris.tv.ui.screens.settings.SettingsSection
+import studio.kahn.iris.tv.ui.state.irisViewModel
+import studio.kahn.iris.tv.ui.theme.IrisColor
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+/**
+ * The app: one NavHost over [Routes]. The five top-level sections are
+ * [section]s (header + Back rules); everything else is full
+ * screen. [launch] is a request from outside (Watch Next, voice search,
+ * the remote's search key), handled once the TV is paired and then
+ * acknowledged with [onLaunchHandled].
+ */
 @Composable
 fun IrisRoot(
     container: AppContainer,
     isAuthenticated: Boolean,
-    /** When non-null, the activity was launched via voice search (MEDIA_PLAY_FROM_SEARCH). */
-    pendingVoiceQuery: String? = null,
-    /** When non-null, the activity was launched via a TV channel deep-link. */
-    pendingWatch: Pair<String, Int>? = null,
+    launch: LaunchTarget? = null,
+    onLaunchHandled: () -> Unit = {},
 ) {
     val navController = rememberNavController()
-    val start = when {
-        !isAuthenticated -> Routes.Pairing
-        pendingWatch != null -> Routes.Watch(pendingWatch.first, pendingWatch.second)
-        pendingVoiceQuery != null -> Routes.Search(pendingVoiceQuery, autoPlay = true)
-        else -> Routes.Home
-    }
+    // Fixed for the graph's life: a changing start destination rebuilds the graph.
+    val start: Any = remember { if (isAuthenticated) Routes.Home else Routes.Pairing }
+    val shell = irisViewModel(container) { c, _ -> ShellViewModel(c) }
+    val accountName = shell.accountName.collectAsStateWithLifecycle()
+    val currentEntry by navController.currentBackStackEntryAsState()
 
-    // Session dropped underneath us — the refresh token died (expired / revoked)
-    // and the Authenticator cleared the stored session. `startDestination` is
-    // only honoured on first composition, so when `isAuthenticated` flips to
-    // false mid-session we must navigate explicitly; otherwise the TV is
-    // stranded on a screen that can only 401 (the "401 + Retry that never
-    // reconnects" report). Route back to pairing so the user can re-link.
+    // `startDestination` is only read once: when the session dies mid-use (the
+    // refresh token expired or was revoked) we must go to pairing ourselves,
+    // or the TV stays on a screen that can only answer 401.
     LaunchedEffect(isAuthenticated) {
-        if (!isAuthenticated) {
+        if (isAuthenticated) {
+            shell.refresh()
+        } else {
+            shell.clear()
             val current = navController.currentDestination
             if (current != null && !current.hasRoute<Routes.Pairing>()) {
                 navController.navigate(Routes.Pairing) {
-                    popUpTo(0) { inclusive = true }
+                    popUpTo(navController.graph.id) { inclusive = true }
                 }
             }
         }
     }
 
-    val clientOutdated by container.clientOutdated.collectAsState()
+    val pairing = currentEntry?.destination?.let { it.hasRoute<Routes.Pairing>() || it.hasRoute<Routes.Setup>() }
+    LaunchedEffect(launch, isAuthenticated, pairing) {
+        val target = launch ?: return@LaunchedEffect
+        if (!isAuthenticated) {
+            if (!target.keepsUntilPaired) onLaunchHandled()
+            return@LaunchedEffect
+        }
+        if (pairing != false) return@LaunchedEffect
+        navController.navigate(target.route()) {
+            popUpTo(Routes.Home)
+            launchSingleTop = true
+        }
+        onLaunchHandled()
+    }
+
+    val clientOutdated by container.clientOutdated.collectAsStateWithLifecycle()
+    val openSettings = {
+        navController.navigate(Routes.Settings) { launchSingleTop = true }
+    }
+    val shellHost = remember(navController) {
+        ShellHost(accountName = accountName, onSelect = navController::openTab, onAccount = openSettings)
+    }
 
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            // Phone safe zone: keep every screen clear of the system bars
-            // AND the soft keyboard (ime — text inputs resize above it; the
-            // manifest's adjustResize is ignored under edge-to-edge).
-            // Deliberately NOT safeDrawing: its displayCutout inset never
-            // zeroes, which kept a notch-sized dead band on the watch
-            // screen even in immersive mode. The status bar covers the
-            // cutout in portrait anyway, and the browsing gutters clear it
-            // in landscape. All-zero on TV. Playback hides the bars (see
-            // LockLandscape) → these insets collapse → true full-bleed.
+            .background(IrisColor.ground)
+            // Phone safe zone: clear of the system bars AND the soft keyboard
+            // (the manifest's adjustResize is ignored under edge-to-edge). Not
+            // safeDrawing: its displayCutout inset never zeroes, which left a
+            // notch-sized band on the player even in immersive mode. All-zero
+            // on TV; playback hides the bars (LockLandscape), so they collapse.
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.ime)),
     ) {
         NavHost(navController = navController, startDestination = start) {
@@ -124,9 +144,10 @@ fun IrisRoot(
                             popUpTo<Routes.Pairing> { inclusive = true }
                         }
                     },
+                    onUseCode = { navController.popBackStack() },
                 )
             }
-            composable<Routes.Home> {
+            section<Routes.Home>(TopTab.Home, shellHost) {
                 HomeScreen(
                     container = container,
                     onPickTorrent = { infohash ->
@@ -163,7 +184,7 @@ fun IrisRoot(
                     },
                 )
             }
-            composable<Routes.LiveTv> {
+            section<Routes.LiveTv>(TopTab.LiveTv, shellHost) {
                 LiveTvScreen(
                     container = container,
                     onOpenChannel = { country, channelId ->
@@ -181,7 +202,7 @@ fun IrisRoot(
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable<Routes.Discover> {
+            section<Routes.Discover>(TopTab.Discover, shellHost) {
                 DiscoverScreen(
                     container = container,
                     onOpenCollection = { collectionId ->
@@ -198,7 +219,7 @@ fun IrisRoot(
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable<Routes.Library> {
+            section<Routes.Library>(TopTab.Library, shellHost) {
                 LibraryScreen(
                     container = container,
                     onOpenCollection = { collectionId ->
@@ -249,9 +270,11 @@ fun IrisRoot(
                     },
                     onSignOut = {
                         navController.navigate(Routes.Pairing) {
-                            popUpTo<Routes.Home> { inclusive = true }
+                            popUpTo(navController.graph.id) { inclusive = true }
                         }
                     },
+                    onAccountChanged = shell::refresh,
+                    initialSection = if (clientOutdated) SettingsSection.App else SettingsSection.You,
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -267,7 +290,7 @@ fun IrisRoot(
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable<Routes.Search> { backStackEntry ->
+            section<Routes.Search>(TopTab.Search, shellHost) { backStackEntry ->
                 val route = backStackEntry.toRoute<Routes.Search>()
                 SearchScreen(
                     container = container,
@@ -349,67 +372,10 @@ fun IrisRoot(
             }
         }
 
-        // Server-driven version gate: once any request comes back with
-        // HTTP 426, the AppContainer flips the `clientOutdated` flow.
-        // We cover the UI with a "please update" lock-out everywhere
-        // EXCEPT on the Settings screen, where the in-app updater
-        // lives — otherwise the user would be stuck with no path to
-        // resolve the situation. AppUpdater downloads the APK from a
-        // fixed external URL (`synthe.se`), unaffected by the server
-        // gate, so the update flow keeps working.
-        val currentRoute by navController.currentBackStackEntryAsState()
-        if (clientOutdated && currentRoute?.destination?.hasRoute<Routes.Settings>() != true) {
-            ClientOutdatedOverlay(
-                onOpenSettings = {
-                    navController.navigate(Routes.Settings) {
-                        // Single Settings entry on the back stack — avoids
-                        // a tower of identical screens if the user keeps
-                        // hitting the button.
-                        launchSingleTop = true
-                    }
-                },
-            )
+        // Everything but Settings (where the updater lives) is locked once the
+        // server answered 426; the updater downloads from outside the server.
+        if (clientOutdated && currentEntry?.destination?.hasRoute<Routes.Settings>() != true) {
+            ClientOutdatedOverlay(installedVersion = BuildConfig.VERSION_NAME, onOpenSettings = openSettings)
         }
     }
 }
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun ClientOutdatedOverlay(
-    onOpenSettings: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            // Opaque scrim — the underlying NavHost is still composed (to
-            // keep its state warm for after the user updates) but visually
-            // hidden, and we capture all focus by being last in the stack.
-            .background(Color.Black.copy(alpha = 0.92f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(48.dp),
-        ) {
-            Text(
-                "Update Iris",
-                style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                "This Iris server requires a newer app. Open Settings to install the latest APK.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                "Installed version: ${BuildConfig.VERSION_NAME}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            ActionButton("Open Settings", onOpenSettings)
-        }
-    }
-}
-
