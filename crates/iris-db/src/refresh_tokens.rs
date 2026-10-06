@@ -222,17 +222,7 @@ mod tests {
     #[tokio::test]
     async fn prune_keeps_live_sessions_only() {
         let pool = migrated_pool().await;
-        let user = crate::users::create(
-            &pool,
-            crate::users::NewUser {
-                email: "p@example.com".into(),
-                password_hash: "x".into(),
-                is_admin: false,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let user = crate::test_support::make_user(&pool).await;
         let live = Uuid::new_v4();
         let expired = Uuid::new_v4();
         let revoked = Uuid::new_v4();
@@ -263,17 +253,7 @@ mod tests {
     #[tokio::test]
     async fn only_one_of_two_rotations_wins() {
         let pool = migrated_pool().await;
-        let user = crate::users::create(
-            &pool,
-            crate::users::NewUser {
-                email: "r@example.com".into(),
-                password_hash: "x".into(),
-                is_admin: false,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let user = crate::test_support::make_user(&pool).await;
         let jti = Uuid::new_v4();
         insert_with_device(
             &pool,
@@ -303,17 +283,7 @@ mod tests {
     #[tokio::test]
     async fn rotation_is_recoverable_within_grace_but_revocation_is_not() {
         let pool = migrated_pool().await;
-        let user = crate::users::create(
-            &pool,
-            crate::users::NewUser {
-                email: "tv@example.com".into(),
-                password_hash: "x".into(),
-                is_admin: false,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let user = crate::test_support::make_user(&pool).await;
 
         // A device-tagged token, active for an hour, then rotated.
         let rotated = Uuid::new_v4();

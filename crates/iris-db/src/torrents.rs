@@ -510,17 +510,7 @@ mod tests {
     #[tokio::test]
     async fn regrab_resets_finished_at() {
         let pool = migrated_pool().await;
-        let user = crate::users::create(
-            &pool,
-            crate::users::NewUser {
-                email: "t@example.com".into(),
-                password_hash: "x".into(),
-                is_admin: false,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let user = crate::test_support::make_user(&pool).await;
 
         let new = NewTorrent {
             infohash: "aa".repeat(20),
@@ -556,17 +546,7 @@ mod tests {
     #[tokio::test]
     async fn duplicate_grab_of_live_torrent_keeps_finished_at() {
         let pool = migrated_pool().await;
-        let user = crate::users::create(
-            &pool,
-            crate::users::NewUser {
-                email: "t2@example.com".into(),
-                password_hash: "x".into(),
-                is_admin: false,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let user = crate::test_support::make_user(&pool).await;
 
         let new = NewTorrent {
             infohash: "bb".repeat(20),
@@ -625,17 +605,7 @@ mod tests {
     #[tokio::test]
     async fn clamp_uploaded_ratios_repairs_only_outliers() {
         let pool = migrated_pool().await;
-        let user = crate::users::create(
-            &pool,
-            crate::users::NewUser {
-                email: "t3@example.com".into(),
-                password_hash: "x".into(),
-                is_admin: false,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let user = crate::test_support::make_user(&pool).await;
 
         let wild = set_counters(&pool, user, &"cc".repeat(20), 4_411_000, 1_000).await;
         let sane = set_counters(&pool, user, &"dd".repeat(20), 5_000, 1_000).await;
