@@ -129,3 +129,29 @@ default_country = "fr"
 # # reclaims an unwatched mux, or falls back to internet if both muxes have
 # # active viewers).
 # prewarm = ["m6", "rmcdecouverte"]
+# dlive.sx (a DaddyLiveHD mirror): extra sources for the listed channels,
+# chiefly the pay sports channels (beIN, Canal+, RMC Sport, Eurosport, DAZN)
+# plus a second feed for the big TNT networks. Per channel the election goes
+# tuner → dlive's first player → Vavoo → dlive's other players → iptv-org →
+# the extra playlists. Every dlive failure hands over to the next source: a
+# missing channel or a dead feed cools that source down, an outage run (or
+# dlive.sx unreachable) opens a breaker that skips every dlive source for
+# breaker_open_mins. dlive.sx bans an IP for ~10 min after ~100 page loads,
+# so Iris reads the list once a day and scrapes embed pages lazily under a
+# hard page_budget per page_budget_window_mins, never on a channel switch.
+# [live_tv.dlive]
+# enabled = false
+# base_url = "https://dlive.sx"      # DaddyLive moves domains; follow it here
+# players = [1, 2, 6]                # 1 premium edge, 2 signed edge, 6 5-min token; 3/4/5 flaky
+# index_refresh_hours = 24
+# page_budget = 20
+# page_budget_window_mins = 10
+# embed_cache_hours = 24
+# first_byte_timeout_secs = 5        # while another source could take over
+# cold_start_timeout_secs = 25       # when dlive is the channel's last option
+# breaker_failures = 4
+# breaker_open_mins = 15
+# [live_tv.dlive.countries]
+# fr = [469, 950, 951, 952, 953, 470, 958, 959, 955, 957, 964, 962, 645, 963, 954, 961, 965,
+#       121, 122, 463, 464, 271, 273, 116, 117, 118, 494, 495, 496, 497, 498, 499, 500,
+#       119, 120, 772, 773, 960]

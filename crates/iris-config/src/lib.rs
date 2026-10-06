@@ -111,6 +111,120 @@ pub struct LiveTvConfig {
     /// as automatic fallback when the box is unreachable.
     #[serde(default)]
     pub tuner: TunerConfig,
+    /// dlive.sx (a `DaddyLiveHD` mirror) as an extra source. Off by default.
+    #[serde(default)]
+    pub dlive: DliveConfig,
+}
+
+/// `[live_tv.dlive]` — dlive.sx channels as extra sources. dlive.sx bans an
+/// IP for ~10 min after ~100 page loads in ~17 min, so Iris reads it as a
+/// light client: the channel list at most once per `index_refresh_hours`,
+/// per-channel embed pages lazily under a hard `page_budget` per
+/// `page_budget_window_mins`, and never on a channel switch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DliveConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// `DaddyLive` changes domains (dlhd.*, daddylive.*, thedaddy.*).
+    #[serde(default = "default_dlive_base_url")]
+    pub base_url: String,
+    /// Players used, best first: the first ranks ahead of Vavoo, the others
+    /// behind it. 1 = premium edge, 2 = signed econfig edge, 6 = 5-min
+    /// token edge; 3/4/5 are flaky third-party embeds.
+    #[serde(default = "default_dlive_players")]
+    pub players: Vec<u8>,
+    #[serde(default = "default_dlive_index_refresh_hours")]
+    pub index_refresh_hours: u64,
+    /// dlive.sx page loads allowed per window, every kind together.
+    #[serde(default = "default_dlive_page_budget")]
+    pub page_budget: u32,
+    #[serde(default = "default_dlive_page_budget_window_mins")]
+    pub page_budget_window_mins: u64,
+    /// How long a scraped per-channel embed URL is reused.
+    #[serde(default = "default_dlive_embed_cache_hours")]
+    pub embed_cache_hours: u64,
+    /// Deadline for a dlive playlist's response headers while another
+    /// source could still take over.
+    #[serde(default = "default_dlive_first_byte_timeout_secs")]
+    pub first_byte_timeout_secs: u64,
+    /// The same deadline when a dlive source is the channel's last option:
+    /// a channel nobody watches needs the upstream worker to publish its
+    /// first segments (5 s and more).
+    #[serde(default = "default_dlive_cold_start_timeout_secs")]
+    pub cold_start_timeout_secs: u64,
+    /// Consecutive dlive outages (unreachable host, timeout, 5xx, decode
+    /// failure) that open the breaker. dlive.sx itself being unreachable
+    /// opens it at once.
+    #[serde(default = "default_dlive_breaker_failures")]
+    pub breaker_failures: u32,
+    /// While open, every dlive source is skipped (unless nothing else plays).
+    #[serde(default = "default_dlive_breaker_open_mins")]
+    pub breaker_open_mins: u64,
+    /// Country code → dlive channel ids folded into that country's list.
+    #[serde(default = "default_dlive_countries")]
+    pub countries: HashMap<String, Vec<u32>>,
+}
+
+impl Default for DliveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: default_dlive_base_url(),
+            players: default_dlive_players(),
+            index_refresh_hours: default_dlive_index_refresh_hours(),
+            page_budget: default_dlive_page_budget(),
+            page_budget_window_mins: default_dlive_page_budget_window_mins(),
+            embed_cache_hours: default_dlive_embed_cache_hours(),
+            first_byte_timeout_secs: default_dlive_first_byte_timeout_secs(),
+            cold_start_timeout_secs: default_dlive_cold_start_timeout_secs(),
+            breaker_failures: default_dlive_breaker_failures(),
+            breaker_open_mins: default_dlive_breaker_open_mins(),
+            countries: default_dlive_countries(),
+        }
+    }
+}
+
+fn default_dlive_base_url() -> String {
+    "https://dlive.sx".to_string()
+}
+fn default_dlive_players() -> Vec<u8> {
+    vec![1, 2, 6]
+}
+fn default_dlive_index_refresh_hours() -> u64 {
+    24
+}
+fn default_dlive_page_budget() -> u32 {
+    20
+}
+fn default_dlive_page_budget_window_mins() -> u64 {
+    10
+}
+fn default_dlive_embed_cache_hours() -> u64 {
+    24
+}
+fn default_dlive_first_byte_timeout_secs() -> u64 {
+    5
+}
+fn default_dlive_cold_start_timeout_secs() -> u64 {
+    25
+}
+fn default_dlive_breaker_failures() -> u32 {
+    4
+}
+fn default_dlive_breaker_open_mins() -> u64 {
+    15
+}
+fn default_dlive_countries() -> HashMap<String, Vec<u32>> {
+    // TNT networks, then the pay sports channels only dlive carries. C8
+    // (956) went off air in Feb 2025 and is left out.
+    HashMap::from([(
+        "fr".to_string(),
+        vec![
+            469, 950, 951, 952, 953, 470, 958, 959, 955, 957, 964, 962, 645, 963, 954, 961, 965,
+            121, 122, 463, 464, 271, 273, 116, 117, 118, 494, 495, 496, 497, 498, 499, 500, 119,
+            120, 772, 773, 960,
+        ],
+    )])
 }
 
 /// `[live_tv.tuner]` — the tunerd network-tuner appliance. That's the whole
@@ -254,6 +368,7 @@ impl Default for LiveTvConfig {
             epg_id_overrides: HashMap::new(),
             vavoo_enabled: true,
             vavoo_countries: default_livetv_vavoo_countries(),
+            dlive: DliveConfig::default(),
         }
     }
 }
@@ -566,5 +681,19 @@ mod tests {
         // serde field defaults fire, so a bare prod config.toml is covered.
         let bare: LiveTvConfig = toml::from_str("").unwrap();
         assert_eq!(bare.extra_playlists, cfg.extra_playlists);
+    }
+
+    #[test]
+    fn dlive_is_off_by_default_and_partial_tables_keep_defaults() {
+        let bare: LiveTvConfig = toml::from_str("").unwrap();
+        assert!(!bare.dlive.enabled);
+        assert_eq!(bare.dlive.players, vec![1, 2, 6]);
+        assert!(bare.dlive.countries["fr"].contains(&469));
+        let on: LiveTvConfig =
+            toml::from_str("[dlive]\nenabled = true\npage_budget = 8\n").unwrap();
+        assert!(on.dlive.enabled);
+        assert_eq!(on.dlive.page_budget, 8);
+        assert_eq!(on.dlive.base_url, "https://dlive.sx");
+        assert_eq!(on.dlive.index_refresh_hours, 24);
     }
 }
