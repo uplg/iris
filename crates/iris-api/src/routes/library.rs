@@ -176,17 +176,21 @@ pub(crate) async fn collection_artwork(
     }
 }
 
-/// The TMDB poster path for a watch row, trusted only once `verified`
-/// (a wrong poster is worse than none).
+/// A watch row's TMDB id, kept only once `verified`: every TMDB fact about
+/// a watch row (poster, episode name, season finale, next aired episode)
+/// goes through it, since a wrong one is worse than none.
+pub(crate) fn trusted_tmdb_id(tmdb_id: Option<i64>, verified: bool) -> Option<i64> {
+    tmdb_id.filter(|_| verified)
+}
+
+/// The TMDB poster path for a watch row, trusted only once `verified`.
 pub(crate) async fn verified_poster(
     state: &AppState,
     tmdb_id: Option<i64>,
     verified: bool,
     kind: Option<&str>,
 ) -> Option<String> {
-    if !verified {
-        return None;
-    }
+    trusted_tmdb_id(tmdb_id, verified)?;
     collection_artwork(state, tmdb_id, kind.unwrap_or_default())
         .await
         .0
@@ -210,7 +214,7 @@ pub(crate) async fn watch_facts(
     season: Option<i64>,
     episode: Option<i64>,
 ) -> WatchFacts {
-    let (Some(client), Some(tid), true) = (state.tmdb(), tmdb_id, verified) else {
+    let (Some(client), Some(tid)) = (state.tmdb(), trusted_tmdb_id(tmdb_id, verified)) else {
         return WatchFacts::default();
     };
     let (meta, episode_title) = tokio::join!(
@@ -1319,7 +1323,14 @@ async fn collection_or_404(
 mod tests {
     use chrono::{Duration, Utc};
 
-    use super::engaged_at;
+    use super::{engaged_at, trusted_tmdb_id};
+
+    #[test]
+    fn an_unverified_watch_row_has_no_tmdb_id_to_ask_about() {
+        assert_eq!(trusted_tmdb_id(Some(95_396), true), Some(95_396));
+        assert_eq!(trusted_tmdb_id(Some(95_396), false), None);
+        assert_eq!(trusted_tmdb_id(None, true), None);
+    }
 
     #[test]
     fn engaged_at_is_the_later_of_visit_and_watch() {

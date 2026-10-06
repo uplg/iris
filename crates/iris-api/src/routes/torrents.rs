@@ -578,18 +578,10 @@ async fn resolve_release(
     if let Some(url) =
         iris_db::catalog::download_url_for(state.db(), provider_id, external_id).await?
     {
-        match provider.fetch_bytes(&url).await {
-            Ok(bytes) => {
-                // Almost always a .torrent; tolerate a magnet body just in case.
-                if bytes.starts_with(b"magnet:")
-                    && let Ok(s) = std::str::from_utf8(&bytes)
-                {
-                    return Ok(TorrentSource::Magnet(s.trim().to_string()));
-                }
-                return Ok(TorrentSource::TorrentFile(bytes.to_vec()));
-            }
+        match provider.fetch_source(&url).await {
+            Ok(source) => return Ok(source),
             Err(e) => tracing::warn!(
-                url,
+                url = %iris_providers::url_origin(&url),
                 provider = provider_id,
                 error = %e,
                 "catalog download_url fetch failed; falling back to resolve()",
@@ -1197,9 +1189,11 @@ pub(crate) async fn resume(
         .engine()
         .get_by_infohash(&row.infohash)
         .is_some_and(|s| !s.finished);
-    if unfinished && let Some(provider) = row.source_provider.as_deref() {
-        check_leech_slots(&state, provider).await?;
-    }
+    // Held through the resume, as a grab holds it through its add.
+    let _slot = match row.source_provider.as_deref() {
+        Some(provider) if unfinished => take_leech_slot(&state, provider).await?,
+        _ => None,
+    };
     state
         .engine()
         .resume_by_infohash(&row.infohash)
@@ -1856,12 +1850,7 @@ pub(crate) async fn play_status(
         }
         // Not in flight: either the encode finished (master on disk → playable
         // + fully seekable) or it hasn't been kicked off yet.
-        let master = state.remuxer().master_path(&key);
-        let master_ready = matches!(
-            tokio::fs::metadata(&master).await,
-            Ok(m) if m.is_file() && m.len() > 0
-        );
-        if master_ready {
+        if state.remuxer().is_complete(&key).await {
             return Ok(Json(PlayStatus {
                 ready: true,
                 reason: None,
@@ -1893,11 +1882,7 @@ pub(crate) async fn play_status(
     // it's strictly lazy, firing only when someone requests
     // `/play/master.m3u8`. Report ready as soon as the master exists, else
     // fall through to ready — there's nothing to wait on.
-    let master = state.remuxer().master_path(&key);
-    if let Ok(meta) = tokio::fs::metadata(&master).await
-        && meta.is_file()
-        && meta.len() > 0
-    {
+    if state.remuxer().is_complete(&key).await {
         return Ok(Json(PlayStatus {
             ready: true,
             reason: None,

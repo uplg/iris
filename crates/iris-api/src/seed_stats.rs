@@ -58,13 +58,15 @@ async fn reconcile_once(pool: &SqlitePool, engine: &Engine, providers: &Provider
         tracing::warn!(error = %e, "seed_stats reconcile failed");
     }
     for snap in snapshots {
-        if !snap.finished {
-            continue;
-        }
         // Provider policy: this tracker's grabs don't seed. The download is
         // done, so leave the swarm. Files stay on disk and playback reads
-        // from disk, so pausing costs the viewer nothing.
-        if snap.state != TorrentState::Paused && no_seed.contains(&snap.infohash) {
+        // from disk, so pausing costs the viewer nothing. The DB stamp counts
+        // too: after a restart the re-check reports unfinished for minutes,
+        // and pausing then keeps the torrent from going live to seed at all.
+        let Some(&stamped_finished) = no_seed.get(&snap.infohash) else {
+            continue;
+        };
+        if leaves_swarm(snap.finished, stamped_finished, snap.state) {
             match engine.pause_by_infohash(&snap.infohash).await {
                 Ok(()) => tracing::info!(
                     infohash = %snap.infohash,
@@ -79,20 +81,20 @@ async fn reconcile_once(pool: &SqlitePool, engine: &Engine, providers: &Provider
     }
 }
 
-/// Infohashes of active torrents whose source provider declared
-/// `seed = false`. Derived from `torrents.source_provider` + the live
+/// Active torrents whose source provider declared `seed = false`, each with
+/// whether its row is stamped finished. Derived from `torrents.source_provider` + the live
 /// registry rather than a stored per-torrent flag, so flipping the config
 /// takes effect on the next tick for torrents already on disk — including
 /// un-pausing by simply removing the knob.
 async fn no_seed_infohashes(
     pool: &SqlitePool,
     providers: &ProviderRegistry,
-) -> std::collections::HashSet<String> {
+) -> HashMap<String, bool> {
     let rows = match iris_db::torrents::list_active(pool).await {
         Ok(rows) => rows,
         Err(e) => {
             tracing::warn!(error = %e, "seed_stats could not list torrents for the no-seed policy");
-            return std::collections::HashSet::new();
+            return HashMap::new();
         }
     };
     // One registry lookup per distinct provider instead of per row.
@@ -105,6 +107,27 @@ async fn no_seed_infohashes(
                     .or_insert_with(|| providers.seeds(id))
             })
         })
-        .map(|row| row.infohash)
+        .map(|row| (row.infohash, row.finished_at.is_some()))
         .collect()
+}
+
+/// Whether a no-seed torrent should be paused now: it is done downloading
+/// (per the session or the DB stamp) and not paused already.
+fn leaves_swarm(session_finished: bool, stamped_finished: bool, state: TorrentState) -> bool {
+    (session_finished || stamped_finished) && state != TorrentState::Paused
+}
+
+#[cfg(test)]
+mod tests {
+    use iris_torrent::TorrentState;
+
+    use super::leaves_swarm;
+
+    #[test]
+    fn a_stamped_torrent_is_paused_while_its_recheck_still_reports_unfinished() {
+        assert!(leaves_swarm(false, true, TorrentState::Initializing));
+        assert!(leaves_swarm(true, false, TorrentState::Live));
+        assert!(!leaves_swarm(false, false, TorrentState::Live));
+        assert!(!leaves_swarm(true, true, TorrentState::Paused));
+    }
 }

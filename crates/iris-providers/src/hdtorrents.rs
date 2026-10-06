@@ -392,7 +392,7 @@ impl SearchProvider for HdTorrents {
 
         let bytes = self.authed_get_bytes(url).await?;
         if bytes.first().copied() != Some(BENCODE_DICT_MARKER) {
-            let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned();
+            let preview = crate::util::body_preview(&bytes);
             tracing::warn!(
                 provider = %self.id,
                 external_id,

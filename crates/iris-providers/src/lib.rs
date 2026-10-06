@@ -128,7 +128,22 @@ pub trait SearchProvider: Send + Sync {
             .await
             .map_err(|e| crate::util::http_error("fetch_bytes body", e))
     }
+
+    /// [`Self::fetch_bytes`] read as a torrent: a bencoded `.torrent`, or a
+    /// magnet link some indexers answer with instead. Anything else (an
+    /// expired link's 200 HTML/XML error page) is an error, so the caller
+    /// falls back to [`Self::resolve`] instead of feeding librqbit garbage.
+    async fn fetch_source(&self, url: &str) -> Result<TorrentSource> {
+        let bytes = self.fetch_bytes(url).await?;
+        util::torrent_source_from_body(&bytes).ok_or_else(|| {
+            Error::Provider(format!(
+                "`{}` answered the .torrent download with a non-torrent body (first byte: {:?})",
+                self.id(),
+                bytes.first()
+            ))
+        })
+    }
 }
 
 pub use registry::ProviderRegistry;
-pub use util::redact;
+pub use util::{redact, url_origin};

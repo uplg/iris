@@ -6,7 +6,7 @@
 //! holds ~19 MiB, and under a login flood the blocking pool would otherwise
 //! grow to 512 of them.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use tokio::sync::{OnceCell, Semaphore};
 
@@ -14,21 +14,36 @@ use crate::error::{ApiError, ApiResult};
 
 pub const MIN_LEN: usize = 8;
 
-static ARGON2_SLOTS: LazyLock<Semaphore> = LazyLock::new(|| {
-    Semaphore::new(std::thread::available_parallelism().map_or(2, std::num::NonZero::get))
+static ARGON2_SLOTS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| {
+    Arc::new(Semaphore::new(
+        std::thread::available_parallelism().map_or(2, std::num::NonZero::get),
+    ))
 });
 
 async fn run_argon2<T: Send + 'static>(
     what: &'static str,
     job: impl FnOnce() -> T + Send + 'static,
 ) -> ApiResult<T> {
-    let _slot = ARGON2_SLOTS
-        .acquire()
+    run_in_slot(&ARGON2_SLOTS, what, job).await
+}
+
+async fn run_in_slot<T: Send + 'static>(
+    slots: &Arc<Semaphore>,
+    what: &'static str,
+    job: impl FnOnce() -> T + Send + 'static,
+) -> ApiResult<T> {
+    let slot = Arc::clone(slots)
+        .acquire_owned()
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("{what} slot: {e}")))?;
-    tokio::task::spawn_blocking(job)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("{what} task: {e}")))
+    // The slot rides with the job: a client hanging up drops this future,
+    // not the blocking run, so a borrowed permit would free the slot early.
+    tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        job()
+    })
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("{what} task: {e}")))
 }
 
 /// Reject a password the household policy doesn't accept.
@@ -74,7 +89,11 @@ pub async fn verify_nobody(password: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIN_LEN, check_policy, hash, verify, verify_nobody};
+    use std::sync::{Arc, mpsc};
+
+    use tokio::sync::Semaphore;
+
+    use super::{MIN_LEN, check_policy, hash, run_in_slot, verify, verify_nobody};
 
     #[test]
     fn policy_rejects_short_passwords() {
@@ -93,5 +112,28 @@ mod tests {
     async fn verify_nobody_hashes_its_dummy_once() {
         verify_nobody("whatever").await;
         verify_nobody("whatever").await;
+    }
+
+    #[tokio::test]
+    async fn a_dropped_caller_keeps_the_slot_until_the_job_ends() {
+        let slots = Arc::new(Semaphore::new(1));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let job_slots = Arc::clone(&slots);
+        let call = tokio::spawn(async move {
+            run_in_slot(&job_slots, "test", move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            })
+            .await
+        });
+        tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+            .await
+            .unwrap();
+        call.abort();
+        let _ = call.await;
+        assert_eq!(slots.available_permits(), 0);
+        release_tx.send(()).unwrap();
+        let _slot = slots.acquire().await.unwrap();
     }
 }

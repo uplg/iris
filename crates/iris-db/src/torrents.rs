@@ -134,7 +134,9 @@ pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sq
     let added_by: Uuid = new.added_by.into();
     // On a resurrect the payload is gone from disk (librqbit re-preallocates
     // zero-filled files), so `finished_at` is reset: `play_asset` trusts it
-    // as "complete on disk". `set_finished` re-stamps it later.
+    // as "complete on disk". `set_finished` re-stamps it later. `added_at`
+    // moves to the re-grab, else the GC ranks it its oldest candidate and
+    // evicts it mid-download; the engine's upload counter restarts at 0.
     sqlx::query(
         "INSERT INTO torrents (id, infohash, name, total_size_bytes, source_provider, \
          source_external_id, added_by, added_at, tmdb_id, tmdb_id_source) \
@@ -146,6 +148,8 @@ pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sq
             tmdb_id = COALESCE(excluded.tmdb_id, torrents.tmdb_id), \
             tmdb_id_source = COALESCE(excluded.tmdb_id_source, torrents.tmdb_id_source), \
             added_by = excluded.added_by, \
+            added_at = excluded.added_at, \
+            uploaded_bytes_session_seen = 0, \
             finished_at = NULL, \
             deleted_at = NULL \
          WHERE torrents.deleted_at IS NOT NULL",
@@ -647,8 +651,22 @@ mod tests {
         mark_finished(&pool, &row.infohash).await.unwrap();
         soft_delete(&pool, TorrentId(row.id)).await.unwrap();
 
+        sqlx::query("UPDATE torrents SET added_at = ?1, uploaded_bytes_session_seen = 500")
+            .bind(Utc::now() - chrono::Duration::days(30))
+            .execute(&pool)
+            .await
+            .unwrap();
         let regrabbed = upsert(&pool, new).await.unwrap();
         assert_eq!(regrabbed.id, row.id, "re-grab reuses the row");
+        assert!(
+            regrabbed.added_at > Utc::now() - chrono::Duration::minutes(1),
+            "a re-grab is a fresh add for the GC"
+        );
+        let seen: i64 = sqlx::query_scalar("SELECT uploaded_bytes_session_seen FROM torrents")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(seen, 0, "the new engine handle counts uploads from 0");
         assert!(regrabbed.deleted_at.is_none(), "re-grab un-soft-deletes");
         assert!(
             regrabbed.finished_at.is_none(),

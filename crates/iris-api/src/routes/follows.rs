@@ -1691,18 +1691,11 @@ async fn add_picked(
     if let Some(url) = pick.download_url.as_deref()
         && let Some(provider) = state.providers().get(&pick.indexer_provider)
     {
-        match provider.fetch_bytes(url).await {
-            Ok(bytes) => {
-                reject_archive_only(&bytes)?;
-                return state
-                    .engine()
-                    .add_from_bytes(bytes.to_vec())
-                    .await
-                    .map_err(super::torrents::map_engine_err);
-            }
+        match provider.fetch_source(url).await {
+            Ok(source) => return add_source(state, source).await,
             Err(e) => {
                 tracing::warn!(
-                    url,
+                    url = %iris_providers::url_origin(url),
                     provider = %pick.indexer_provider,
                     error = %e,
                     "persisted download_url fetch failed; falling back to provider.resolve()",
@@ -1750,6 +1743,13 @@ async fn add_picked(
                 })?
         }
     };
+    add_source(state, source).await
+}
+
+async fn add_source(
+    state: &AppState,
+    source: iris_core::search::TorrentSource,
+) -> ApiResult<iris_torrent::IngestResult> {
     match source {
         iris_core::search::TorrentSource::Magnet(m) => state.engine().add_from_magnet(&m).await,
         iris_core::search::TorrentSource::TorrentFile(b) => {

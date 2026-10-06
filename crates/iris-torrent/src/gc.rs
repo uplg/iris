@@ -5,8 +5,8 @@
 //! `cleanup_threshold_pct * max_storage`, we first trim the derived
 //! caches — those are regenerable from the source torrent on the next
 //! play, so dropping them is free compared to losing seed contribution.
-//! Only if that's not enough do we evict torrents (oldest
-//! `last_played_at` first, with `added_at` as fallback) until usage drops
+//! Only if that's not enough do we evict torrents (oldest activity first:
+//! the later of `last_played_at` and `added_at`) until usage drops
 //! below `cleanup_target_pct * max_storage`. Recently-played torrents
 //! (within `active_window`) are protected — we never yank a file out
 //! from under a viewer.
@@ -43,8 +43,8 @@ pub struct GcConfig {
     pub cleanup_threshold_pct: u8,
     pub cleanup_target_pct: u8,
     pub interval: Duration,
-    /// Torrents whose `last_played_at` (or, if never played, `added_at`) falls
-    /// within this window are protected from eviction.
+    /// Torrents whose last activity (see [`last_activity`]) falls within this
+    /// window are protected from eviction.
     pub active_window: Duration,
 }
 
@@ -214,10 +214,9 @@ impl Gc {
         let cutoff = Utc::now() - chrono::Duration::from_std(cfg.active_window).unwrap_or_default();
         let mut candidates: Vec<_> = rows
             .into_iter()
-            .filter(|r| r.last_played_at.unwrap_or(r.added_at) < cutoff)
+            .filter(|r| last_activity(r) < cutoff)
             .collect();
-        // Oldest activity first.
-        candidates.sort_by_key(|r| r.last_played_at.unwrap_or(r.added_at));
+        candidates.sort_by_key(last_activity);
 
         let mut current = start_used;
         for row in candidates {
@@ -226,10 +225,12 @@ impl Gc {
             }
             // Each eviction can wait seconds on a stopped announce: a torrent
             // whose playback started since the listing is no longer cold.
-            let fresh = iris_db::torrents::find_by_infohash(&self.inner.pool, &row.infohash)
-                .await?
-                .and_then(|r| r.last_played_at);
-            if fresh.is_some_and(|played| played >= cutoff) {
+            let Some(fresh) =
+                iris_db::torrents::find_by_infohash(&self.inner.pool, &row.infohash).await?
+            else {
+                continue;
+            };
+            if fresh.deleted_at.is_some() || last_activity(&fresh) >= cutoff {
                 continue;
             }
             tracing::info!(
@@ -248,27 +249,40 @@ impl Gc {
                 )
                 .await;
             }
-            match self
+            let files_deleted = match self
                 .inner
                 .engine
                 .delete_by_infohash(&row.infohash, true)
                 .await
             {
+                Ok(()) => true,
                 // Not in the engine: nothing left to delete there, and the
                 // row must not stay "active" for every later pass to retry.
-                Ok(()) | Err(crate::EngineError::NotFound) => {}
+                // Its files (if any) were not touched, so nothing is freed.
+                Err(crate::EngineError::NotFound) => false,
                 Err(e) => {
                     tracing::warn!(error = %e, "gc: engine delete failed, skipping");
                     continue;
                 }
-            }
+            };
             (self.inner.on_evict)(&row.infohash);
-            if let Err(e) =
-                iris_db::torrents::soft_delete(&self.inner.pool, TorrentId::from(row.id)).await
+            let row_was_live = match iris_db::torrents::soft_delete(
+                &self.inner.pool,
+                TorrentId::from(row.id),
+            )
+            .await
             {
-                tracing::warn!(error = %e, infohash = %row.infohash, "gc: soft delete failed");
-            }
-            let freed = u64::try_from(row.total_size_bytes).unwrap_or(0);
+                Ok(live) => live,
+                Err(e) => {
+                    tracing::warn!(error = %e, infohash = %row.infohash, "gc: soft delete failed");
+                    true
+                }
+            };
+            let freed = if files_deleted && row_was_live {
+                u64::try_from(row.total_size_bytes).unwrap_or(0)
+            } else {
+                0
+            };
             current = current.saturating_sub(freed);
             report.evicted.push(EvictedEntry {
                 infohash: row.infohash,
@@ -300,6 +314,19 @@ pub struct EvictedEntry {
     pub freed_bytes: u64,
 }
 
+/// When a torrent was last wanted: played, or (re-)grabbed, whichever is
+/// later. A re-grab of an old, once-played release is fresh activity.
+fn last_activity(row: &iris_db::torrents::TorrentRow) -> chrono::DateTime<Utc> {
+    later_of(row.last_played_at, row.added_at)
+}
+
+fn later_of(
+    played: Option<chrono::DateTime<Utc>>,
+    added: chrono::DateTime<Utc>,
+) -> chrono::DateTime<Utc> {
+    played.map_or(added, |p| p.max(added))
+}
+
 /// Bytes under `path`, recursively. A missing directory counts as empty.
 pub async fn dir_size(path: &Path) -> std::io::Result<u64> {
     let mut total = 0u64;
@@ -322,4 +349,20 @@ pub async fn dir_size(path: &Path) -> std::io::Result<u64> {
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, Utc};
+
+    use super::later_of;
+
+    #[test]
+    fn a_regrab_after_an_old_play_counts_as_fresh_activity() {
+        let now = Utc::now();
+        let month_ago = now - Duration::days(30);
+        assert_eq!(later_of(Some(month_ago), now), now);
+        assert_eq!(later_of(Some(now), month_ago), now);
+        assert_eq!(later_of(None, month_ago), month_ago);
+    }
 }

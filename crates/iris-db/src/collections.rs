@@ -276,10 +276,47 @@ pub async fn set_parsed_title_normalized(
     id: Uuid,
     normalized: &str,
 ) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let old: Option<String> =
+        sqlx::query_scalar("SELECT parsed_title_normalized FROM collections WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten();
     sqlx::query("UPDATE collections SET parsed_title_normalized = ?1 WHERE id = ?2")
         .bind(normalized)
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
+        .await?;
+    if let Some(old) = old.as_deref().filter(|old| *old != normalized) {
+        carry_name_keyed_rows(&mut tx, old, normalized).await?;
+    }
+    tx.commit().await
+}
+
+/// A collection's key moved from `from` to `to`: its follows go with it (a
+/// user already following `to` keeps that one), and the offers cached for
+/// the dead name go (the next scan repopulates `to`). Without it a renamed
+/// collection strands its Watchlist follows on a name nothing joins.
+async fn carry_name_keyed_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    from: &str,
+    to: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE OR IGNORE series_follows SET normalized_name = ?2 WHERE normalized_name = ?1",
+    )
+    .bind(from)
+    .bind(to)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query("DELETE FROM series_follows WHERE normalized_name = ?1")
+        .bind(from)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM available_episodes WHERE normalized_name = ?1")
+        .bind(from)
+        .execute(&mut **tx)
         .await?;
     Ok(())
 }
@@ -422,22 +459,7 @@ pub async fn merge_into(
         loser.parsed_title_normalized.as_deref(),
         winner.parsed_title_normalized.as_deref(),
     ) {
-        sqlx::query(
-            "UPDATE OR IGNORE series_follows SET normalized_name = ?2 WHERE normalized_name = ?1",
-        )
-        .bind(lnorm)
-        .bind(wnorm)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query("DELETE FROM series_follows WHERE normalized_name = ?1")
-            .bind(lnorm)
-            .execute(&mut *tx)
-            .await?;
-        // Keyed by the now-dead name; the winner's rescan repopulates.
-        sqlx::query("DELETE FROM available_episodes WHERE normalized_name = ?1")
-            .bind(lnorm)
-            .execute(&mut *tx)
-            .await?;
+        carry_name_keyed_rows(&mut tx, lnorm, wnorm).await?;
     }
     sqlx::query("DELETE FROM collections WHERE id = ?1")
         .bind(loser.id)
@@ -916,6 +938,58 @@ mod tests {
     /// Ghosts are scoped to the user who watched them: a fully-GC'd
     /// collection appears in the watcher's ghost list only, and stops
     /// being a ghost as soon as any live torrent re-attaches.
+    #[tokio::test]
+    async fn a_renamed_collection_takes_its_follows_along() {
+        let pool = migrated_pool().await;
+        let ana = make_user(&pool).await;
+        let bo = make_user(&pool).await;
+        let col = find_or_create(&pool, "dr", "Dr", Kind::Tv, false)
+            .await
+            .unwrap();
+        crate::follows::add(&pool, ana, "dr", "Dr", None)
+            .await
+            .unwrap();
+        crate::follows::add(&pool, bo, "dr", "Dr", None)
+            .await
+            .unwrap();
+        crate::follows::add(&pool, bo, "dr stone", "Dr. Stone", None)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO available_episodes (id, normalized_name, season, episode, \
+             indexer_provider, indexer_torrent_id, magnet, found_at) \
+             VALUES (?1, 'dr', 1, 1, 'p', 'x', '', ?2)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(Utc::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        set_parsed_title_normalized(&pool, col.id, "dr stone")
+            .await
+            .unwrap();
+
+        let keys = |user| {
+            let pool = pool.clone();
+            async move {
+                crate::follows::list_for_user(&pool, user)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|f| f.normalized_name)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(keys(ana).await, ["dr stone"]);
+        assert_eq!(keys(bo).await, ["dr stone"], "one follow per user and name");
+        let offers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM available_episodes")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(offers, 0, "offers for the dead name go");
+    }
+
     #[tokio::test]
     async fn ghost_summaries_are_scoped_to_the_watcher() {
         let pool = migrated_pool().await;

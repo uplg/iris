@@ -335,7 +335,7 @@ impl TorrentLeech {
             .await
             .map_err(|e| crate::util::http_error("torrentleech download body", e))?;
         if bytes.first().copied() != Some(BENCODE_DICT_MARKER) {
-            let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned();
+            let preview = crate::util::body_preview(&bytes);
             tracing::warn!(
                 provider = %self.id,
                 body_preview = %preview,

@@ -163,6 +163,11 @@ impl Unit3dProvider {
     /// `resolve()`'s stale-link recovery (the attributes carry a
     /// freshly-signed `download_link`).
     async fn fetch_envelope(&self, external_id: &str) -> Result<Option<TorrentEnvelope>> {
+        // A UNIT3D id is a number; anything else would reshape the request
+        // path that carries the API token.
+        if external_id.is_empty() || !external_id.bytes().all(|b| b.is_ascii_digit()) {
+            return Ok(None);
+        }
         let path = format!(
             "{}/torrents/{external_id}",
             self.api_path.trim_end_matches('/')
@@ -260,7 +265,7 @@ impl Unit3dProvider {
             .await
             .map_err(|e| crate::util::http_error("unit3d download body", e))?;
         if bytes.first().copied() != Some(BENCODE_DICT_MARKER) {
-            let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned();
+            let preview = crate::util::body_preview(&bytes);
             tracing::warn!(
                 provider = %self.id,
                 external_id,
@@ -493,11 +498,10 @@ struct TorrentAttributes {
     /// Freeleech state as a percentage string emitted by `UNIT3D`:
     /// `"0%"`, `"25%"`, `"50%"`, `"75%"`, or `"100%"`. We surface
     /// `freeleech = true` only at 100 % since anything below still
-    /// charges the user. Some forks emit a boolean here instead — we
-    /// tolerate that variant via the lazy parse in
-    /// `into_search_result`.
-    #[serde(default)]
-    freeleech: Option<String>,
+    /// charges the user. Some forks emit a boolean or a number instead,
+    /// read by [`flexible_freeleech`].
+    #[serde(default, deserialize_with = "flexible_freeleech")]
+    freeleech: bool,
     /// ISO 8601 (`"2026-05-15T07:07:24.000000Z"`) upload timestamp.
     /// Used to drive the "uploaded X hours ago" hint on the result
     /// row + sort-by-recent flows.
@@ -574,6 +578,31 @@ where
         Some(OneOf::Number(n)) => Some(n).filter(|n| *n > 0),
         Some(OneOf::Signed(n)) => u64::try_from(n).ok().filter(|n| *n > 0),
         Some(OneOf::String(s)) => s.trim().parse::<u64>().ok().filter(|n| *n > 0),
+    })
+}
+
+/// Freeleech as a flag, true only at 100 %: anything below still charges the
+/// user some download credit. `"100%"`, `"true"`/`"yes"`, `true` or `100`.
+fn flexible_freeleech<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOf {
+        Bool(bool),
+        Number(f64),
+        String(String),
+        Null,
+    }
+    Ok(match Option::<OneOf>::deserialize(deserializer)? {
+        None | Some(OneOf::Null) => false,
+        Some(OneOf::Bool(b)) => b,
+        Some(OneOf::Number(n)) => n >= 100.0,
+        Some(OneOf::String(s)) => {
+            let s = s.trim();
+            s == "100%" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
+        }
     })
 }
 
@@ -664,12 +693,6 @@ impl TorrentEnvelope {
             .as_deref()
             .and_then(crate::util::normalize_infohash);
 
-        // Freeleech: anything below 100 % still charges the user
-        // some download credit, so we only flag true at full.
-        let freeleech = attrs.freeleech.as_deref().map(str::trim).is_some_and(|s| {
-            s == "100%" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
-        });
-
         let uploaded_at = attrs
             .created_at
             .as_deref()
@@ -688,7 +711,7 @@ impl TorrentEnvelope {
             magnet: None,
             category: attrs.category,
             tags,
-            freeleech,
+            freeleech: attrs.freeleech,
             uploader: None,
             uploaded_at,
             tmdb_id,
@@ -735,9 +758,6 @@ impl TorrentEnvelope {
         let file_count = attrs
             .num_file
             .or_else(|| u32::try_from(attrs.files.len()).ok());
-        let freeleech = attrs.freeleech.as_deref().map(str::trim).is_some_and(|s| {
-            s == "100%" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
-        });
         let uploaded_at = attrs
             .created_at
             .as_deref()
@@ -788,7 +808,7 @@ impl TorrentEnvelope {
             leechers: attrs.leechers,
             times_completed: attrs.times_completed,
             views: None,
-            freeleech,
+            freeleech: attrs.freeleech,
             exclusive: false,
             file_count,
             file_size_bytes: attrs.size,
@@ -799,6 +819,21 @@ impl TorrentEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The id lands in the request path next to the API token: a non-numeric
+    /// one is unknown, never sent.
+    #[tokio::test]
+    async fn a_non_numeric_id_is_never_requested() {
+        let entry: ProviderEntry = toml::from_str(
+            "id = \"tos\"\nkind = \"unit3d\"\nbase_url = \"http://127.0.0.1:1\"\napi_key = \"k\"\n",
+        )
+        .unwrap();
+        let p = Unit3dProvider::from_config(&entry).unwrap();
+        for id in ["../users/1", "12?x=1", ""] {
+            assert!(p.fetch_envelope(id).await.unwrap().is_none(), "{id}");
+        }
+        assert!(p.fetch_envelope("12").await.is_err(), "a real id is asked");
+    }
 
     /// The refusal text is what the user reads in the preview dialog, so it
     /// has to name the tracker, the status, and the two things worth
@@ -1044,6 +1079,31 @@ mod tests {
         assert_eq!(tv.size_bytes, Some(4_300_630_576));
         assert!(tv.freeleech, "100% freeleech should map to freeleech=true");
         assert!(tv.uploaded_at.is_some(), "created_at should parse");
+    }
+
+    #[test]
+    fn a_fork_sending_freeleech_as_a_bool_or_number_still_parses() {
+        for (raw, want) in [
+            ("true", true),
+            ("false", false),
+            ("100", true),
+            ("50", false),
+        ] {
+            let json = format!(
+                r#"{{"data":[{{"type":"torrent","id":"1","attributes":{{
+                "name":"X","category":"Movie","tmdb_id":0,
+                "freeleech":{raw},"download_link":"https://x/1"
+            }}}}],"meta":{{}}}}"#
+            );
+            let resp: SearchResponse = serde_json::from_str(&json).unwrap();
+            let r = resp
+                .data
+                .into_iter()
+                .next()
+                .unwrap()
+                .into_search_result("tos");
+            assert_eq!(r.freeleech, want, "{raw}");
+        }
     }
 
     #[test]

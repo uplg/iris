@@ -252,6 +252,7 @@ pub async fn probe_file(path: &Path) -> Result<MediaProbe, ProbeError> {
             "-show_streams",
         ])
         .arg(path)
+        .kill_on_drop(true)
         .output()
         .await?;
 
@@ -551,7 +552,7 @@ fn content_light_level(side_data: Option<&[RawSideData]>) -> (Option<u32>, Optio
     (None, None)
 }
 
-// ---- raw ffprobe schema (only the fields we actually consume) ----
+// raw ffprobe schema (only the fields we actually consume)
 
 #[derive(Debug, Deserialize)]
 struct FfprobeOutput {

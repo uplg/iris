@@ -56,9 +56,11 @@ pub async fn list_devices_for_user(
         "SELECT jti, user_id, issued_at, expires_at, revoked_at, device_label, device_kind \
          FROM refresh_tokens \
          WHERE user_id = ?1 AND revoked_at IS NULL AND device_kind IS NOT NULL \
+           AND expires_at > ?2 \
          ORDER BY issued_at DESC",
     )
     .bind(user)
+    .bind(Utc::now())
     .fetch_all(pool)
     .await
 }
@@ -325,5 +327,22 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn an_expired_device_session_is_not_listed() {
+        let pool = migrated_pool().await;
+        let user = crate::test_support::make_user(&pool).await;
+        let live = Uuid::new_v4();
+        for (jti, expires_at) in [
+            (live, Utc::now() + Duration::days(1)),
+            (Uuid::new_v4(), Utc::now() - Duration::minutes(1)),
+        ] {
+            insert_with_device(&pool, jti, user, expires_at, None, Some("android-tv"))
+                .await
+                .unwrap();
+        }
+        let listed = list_devices_for_user(&pool, user).await.unwrap();
+        assert_eq!(listed.iter().map(|t| t.jti).collect::<Vec<_>>(), [live]);
     }
 }

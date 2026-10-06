@@ -309,18 +309,20 @@ async fn watchlist_item(
     )
     .await
     .unwrap_or(None);
-    let (display_title, tmdb_id, collection_id) = match collection {
-        Some(c) => (c.display_title, c.tmdb_id.or(f.tmdb_id), c.id),
+    // The poster is the collection's alone: the follow's own `tmdb_id` is
+    // whatever the client sent when following, decoration only.
+    let (display_title, tmdb_id, artwork_id, collection_id) = match collection {
+        Some(c) => (c.display_title, c.tmdb_id.or(f.tmdb_id), c.tmdb_id, c.id),
         // No collection yet → route the tile to a hypothetical
         // collection path. The user will see the empty-state
         // until first ingest; this stays consistent with the
         // collection routing the rest of the UI uses.
-        None => (f.name.clone(), f.tmdb_id, f.id),
+        None => (f.name.clone(), f.tmdb_id, None, f.id),
     };
     // Watchlist is TV-only by construction (we derive it from
     // `series_follows`). Hint the TMDB namespace so the same
     // numerical id can't collide with an unrelated movie.
-    let (poster_path, backdrop_path) = library::collection_artwork(state, tmdb_id, "tv").await;
+    let (poster_path, backdrop_path) = library::collection_artwork(state, artwork_id, "tv").await;
     // "New" cutoff = last ENGAGEMENT (max of page visit and watch)
     // — visit-only kept badging episodes that were already out when
     // the user watched, and badged the whole cache when they had
@@ -589,7 +591,12 @@ pub(crate) async fn continue_watching(
         let finale = if c.next_season == c.prev_season {
             None
         } else {
-            season_finale_episode(state_ref, c.row.tmdb_id, c.prev_season).await
+            season_finale_episode(
+                state_ref,
+                library::trusted_tmdb_id(c.row.tmdb_id, c.row.tmdb_verified),
+                c.prev_season,
+            )
+            .await
         };
         next_up_follows_watch_order(
             (c.prev_season, c.prev_episode),
@@ -656,17 +663,19 @@ pub(crate) async fn continue_watching(
 
     let state = &state;
     let out = crate::fanout::map_ordered(merged, |r| async move {
-        let tv = r.kind.as_deref() == Some("tv");
-        let (episode_name, poster_path) = tokio::join!(
-            async {
-                if tv {
-                    library::episode_name(state, r.tmdb_id, r.season, r.episode).await
-                } else {
-                    None
-                }
-            },
-            library::verified_poster(state, r.tmdb_id, r.tmdb_verified, r.kind.as_deref())
-        );
+        let library::WatchFacts {
+            poster_path,
+            episode_title: episode_name,
+            ..
+        } = library::watch_facts(
+            state,
+            r.tmdb_id,
+            r.tmdb_verified,
+            r.kind.as_deref(),
+            r.season,
+            r.episode,
+        )
+        .await;
         let file_path = state.engine().file_name(&r.infohash, r.file_idx);
         ContinueWatchingItem {
             infohash: r.infohash,
@@ -756,7 +765,8 @@ async fn append_grabbable_next_up(
         .into_iter()
         .filter(|f| !by_collection.contains_key(&f.collection_id) && seen.insert(f.collection_id));
     let aired = crate::fanout::map_ordered(fresh, |f| async move {
-        let next = next_aired_episode(state, f.tmdb_id, f.prev_season, f.prev_episode).await;
+        let tmdb_id = library::trusted_tmdb_id(f.tmdb_id, f.tmdb_verified);
+        let next = next_aired_episode(state, tmdb_id, f.prev_season, f.prev_episode).await;
         next.map(|e| (f, e))
     })
     .await;
