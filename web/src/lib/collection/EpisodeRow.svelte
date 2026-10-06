@@ -3,19 +3,16 @@
 	// action per release: play what is on disk, grab and play an offer in its language, download
 	// again what was reclaimed (or hide it). Every action is named with the episode.
 	import Meter from '#lib/components/Meter.svelte';
-	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { library, me, type TorrentView } from '@iris/api/client';
 	import { fetchAgain } from '#lib/regrab.ts';
 	import { formatSize } from '@iris/api/format';
-	import { queryClient } from '#lib/query.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { refocus, sectionHeading } from '#lib/focus.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import { refetchCollection } from './actions.ts';
-	import { read } from '#lib/queries.ts';
 	import { episodeName, episodeWords, languageWord, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
 	import { downloading, offersByLanguage, rowState, type Verb } from './status.ts';
 	import { watchHref } from '#lib/paths.ts';
@@ -37,16 +34,7 @@
 	const several = $derived(new Set(ep.variants.map((v) => v.language ?? '')).size > 1);
 
 	const first = $derived(disk[0]);
-	const watched = createQuery(
-		() => ({ ...read.progress(first?.infohash ?? ''), enabled: !!first }),
-		() => queryClient
-	);
-	const now = $derived(
-		rowState(ep, {
-			torrent: (ih) => torrents.get(ih),
-			progress: (ih, idx) => (ih === first?.infohash ? watched.data?.find((p) => p.file_idx === idx) : undefined)
-		})
-	);
+	const now = $derived(rowState(ep, { torrent: (ih) => torrents.get(ih) }));
 
 	const what = $derived(episodeWords(ep));
 	const inLanguage = (lang: string | null) => {

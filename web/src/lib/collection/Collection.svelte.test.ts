@@ -37,13 +37,21 @@ const torrent = (infohash: string, over: Partial<TorrentView> = {}): TorrentView
 	...over
 });
 
-const ep = (season: number, episode: number, infohash: string, file_idx: number, watched = false) => ({
+const ep = (
+	season: number,
+	episode: number,
+	infohash: string,
+	file_idx: number,
+	watched = false,
+	seen: { position_seconds?: number; duration_seconds?: number; last_watched_at?: string } = {}
+) => ({
 	season,
 	episode,
 	infohash,
 	file_idx,
 	watched,
-	language: 'english'
+	language: 'english',
+	...seen
 });
 
 const offer = (season: number, episode: number, language: string, id: string) => ({
@@ -83,9 +91,9 @@ function series(over: Partial<CollectionDetail> = {}): CollectionDetail {
 		episodes: [
 			ep(1, 1, 't1', 0, true),
 			ep(1, 2, 't1', 1, true),
-			ep(2, 1, 't2', 0),
-			ep(2, 2, 't2', 1),
-			ep(2, 3, 't2', 2),
+			ep(2, 1, 't2', 0, false, { position_seconds: 0, duration_seconds: 3120, last_watched_at: '2026-10-04T20:00:00Z' }),
+			ep(2, 2, 't2', 1, false, { position_seconds: 1800, duration_seconds: 3180, last_watched_at: '2026-10-05T20:00:00Z' }),
+			ep(2, 3, 't2', 2, true, { position_seconds: 3300, duration_seconds: 3300, last_watched_at: '2026-10-03T20:00:00Z' }),
 			ep(2, 4, 't3', 0)
 		],
 		available_episodes: [offer(2, 5, 'english', 'o1'), offer(2, 5, 'french', 'o2')],
@@ -100,13 +108,6 @@ function backend(c: CollectionDetail = series(), extra: Parameters<typeof stubAp
 	return stubApi({
 		...extra,
 		[`GET /library/collections/${c.id}`]: () => c,
-		'/torrents/t1/progress': [],
-		'/torrents/t3/progress': [],
-		'/torrents/t2/progress': [
-			{ file_idx: 0, completed: false, position_seconds: 0, duration_seconds: 3120, last_watched_at: '2026-10-04T20:00:00Z' },
-			{ file_idx: 1, completed: false, position_seconds: 1800, duration_seconds: 3180, last_watched_at: '2026-10-05T20:00:00Z' },
-			{ file_idx: 2, completed: true, position_seconds: 3300, duration_seconds: 3300, last_watched_at: '2026-10-03T20:00:00Z' }
-		],
 		'/me/continue-watching?include_grabbable=true': [
 			{
 				infohash: 't2',
@@ -178,8 +179,8 @@ describe('Collection', () => {
 		await vi.waitFor(() => expect(queryClient.getQueryState(KEYS.follows)?.isInvalidated).toBe(true));
 	});
 
-	it('names each season by what is left, and says each episode’s state in words', async () => {
-		backend();
+	it('names each season by what is left, and says each episode’s state in words, from the collection alone', async () => {
+		const api = backend();
 		await render(Collection, { id: 'c1' });
 		const s1 = page.getByRole('tab', { name: 'Season 1 · watched' });
 		await expect.element(s1).toHaveAttribute('aria-selected', 'true');
@@ -192,6 +193,8 @@ describe('Collection', () => {
 		await expect.element(panel.getByText('Available · 2 releases · English, French audio')).toBeVisible();
 		await expect.element(panel.getByRole('link', { name: 'Resume: season 2, episode 2' })).toHaveAttribute('href', '/watch/t2/1');
 		await expect.element(panel.getByRole('link', { name: 'Play while downloading: season 2, episode 4' })).toBeVisible();
+		// each row's place comes with the episodes: no progress read per release
+		expect(api.calls.filter((c) => c.path.endsWith('/progress'))).toEqual([]);
 	});
 
 	it('grabs an episode in the chosen language, reads the collection again, then plays it', async () => {
