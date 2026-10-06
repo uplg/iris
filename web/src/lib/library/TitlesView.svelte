@@ -129,7 +129,7 @@
 				<button class="btn" onclick={clear}>Clear filters</button>
 			</div>
 		{:else}
-			<ul class="grid">
+			<ul class="poster-grid">
 				{#each shown as c (c.id)}
 					<PosterCard
 						href="/collection/{c.id}"
@@ -196,27 +196,14 @@
 	.count .link-btn {
 		min-height: var(--control-h);
 	}
-	.grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(min(8.5rem, 100%), 1fr));
-		gap: var(--s-5) var(--s-4);
-		list-style: none;
-		margin: 0;
-		padding: 0;
-	}
-	@media (min-width: 600px) {
-		.grid {
-			grid-template-columns: repeat(auto-fill, minmax(var(--poster-w), 1fr));
-		}
-	}
 	/* a long library: cards out of view are neither laid out nor painted (no timer, no
 	   windowing script), their place kept at a card's height */
-	.grid > :global(li) {
+	.poster-grid > :global(li) {
 		content-visibility: auto;
 		contain-intrinsic-size: auto 22rem;
 	}
 	/* a ghost: greyed, its state said in words under it */
-	.grid > :global(li:has(.ghost-card) .art) {
+	.poster-grid > :global(li:has(.ghost-card) .art) {
 		opacity: var(--disabled-opacity);
 		filter: grayscale(1);
 	}

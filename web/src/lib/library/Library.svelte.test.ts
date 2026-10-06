@@ -95,7 +95,7 @@ describe('Library', () => {
 		await page.getByRole('button', { name: /^Sort/ }).click();
 		await page.getByRole('option', { name: 'Title A to Z' }).click();
 		await expect
-			.poll(() => [...document.querySelectorAll('.grid .name')].map((a) => a.textContent))
+			.poll(() => [...document.querySelectorAll('.poster-grid .name')].map((a) => a.textContent))
 			.toEqual(['Arrival', 'Dark', 'Frieren', 'Severance']);
 	});
 

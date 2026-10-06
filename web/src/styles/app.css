@@ -310,6 +310,20 @@ kbd {
 .muted {
 	color: var(--ink-muted);
 }
+/* posters side by side: two or three a row on a phone, the token width from medium screens */
+.poster-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(min(8.5rem, 100%), 1fr));
+	gap: var(--s-5) var(--s-4);
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+@media (min-width: 600px) {
+	.poster-grid {
+		grid-template-columns: repeat(auto-fill, minmax(var(--poster-w), 1fr));
+	}
+}
 /* a secondary line: a hint, a fact under a title */
 .hint,
 .page-head .sub {

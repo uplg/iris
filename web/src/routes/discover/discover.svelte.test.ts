@@ -71,7 +71,7 @@ describe('discover', () => {
 		await expect.element(results.getByText('2 movies')).toBeVisible();
 		await expect.element(results.getByRole('link', { name: 'The Thing' })).toHaveAttribute('href', '/search?q=The%20Thing');
 		await expect.element(results.getByRole('link', { name: 'All moods' })).toHaveAttribute('href', '/discover?kind=movie');
-		expect(document.querySelectorAll('ul.grid > li')).toHaveLength(2);
+		expect(document.querySelectorAll('ul.poster-grid > li')).toHaveLength(2);
 	});
 
 	it('a mood with nothing to get says so', async () => {

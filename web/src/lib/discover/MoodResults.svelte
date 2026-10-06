@@ -33,7 +33,7 @@
 		emptyText="Nothing to get for this mood right now."
 		emptyHint="Try another mood, or the other kind."
 	>
-		<ul class="grid">
+		<ul class="poster-grid">
 			{#each items as card (card.catalog_id)}<CatalogCard {card} />{/each}
 		</ul>
 	</Loaded>
@@ -56,13 +56,5 @@
 		flex-wrap: wrap;
 		align-items: baseline;
 		gap: var(--s-2) var(--s-3);
-	}
-	.grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(min(8.5rem, 100%), 1fr));
-		gap: var(--s-5) var(--s-4);
-		list-style: none;
-		margin: 0;
-		padding: 0;
 	}
 </style>

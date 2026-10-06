@@ -52,7 +52,7 @@
 		flex: 0 0 var(--still-w);
 		width: var(--still-w);
 	}
-	:global(.grid) > .card {
+	:global(.poster-grid) > .card {
 		width: auto;
 	}
 	.text {

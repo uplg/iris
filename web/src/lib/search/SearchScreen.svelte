@@ -273,7 +273,7 @@
 						{/if}
 					</div>
 				{:else if effective === 'grid'}
-					<ul class="grid plain-list">
+					<ul class="poster-grid">
 						{#each shown as r (releaseKey(r))}<ReleaseCard {r} />{/each}
 					</ul>
 				{:else}
@@ -331,11 +331,6 @@
 		gap: var(--s-1);
 		min-height: var(--control-h);
 		justify-self: start;
-	}
-	.grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40vw), 1fr));
-		gap: var(--s-5) var(--s-4);
 	}
 	.more {
 		justify-self: center;

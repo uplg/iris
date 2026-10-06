@@ -22,7 +22,7 @@
 	}
 </script>
 
-<ul class="grid plain-list">
+<ul class="poster-grid">
 	{#each titles as t (`${t.kind}-${t.tmdb_id}`)}
 		<PosterCard
 			href={href(t)}
@@ -33,11 +33,3 @@
 		/>
 	{/each}
 </ul>
-
-<style>
-	.grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(min(10rem, 40vw), 1fr));
-		gap: var(--s-5) var(--s-4);
-	}
-</style>
