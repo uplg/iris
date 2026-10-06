@@ -17,6 +17,16 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+/// `EpisodeFileRow` column list, shared so the reads can't drift from the
+/// struct. A macro so it stays a literal inside `concat!` (sqlx 0.9 only
+/// takes `&'static str`).
+macro_rules! episode_file_columns {
+    () => {
+        "id, collection_id, season, episode, infohash, file_idx, derived_from, \
+         created_at, absolute_episode"
+    };
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct EpisodeFileRow {
     pub id: Uuid,
@@ -43,14 +53,15 @@ pub async fn list_for_collection(
     pool: &SqlitePool,
     collection_id: Uuid,
 ) -> Result<Vec<EpisodeFileRow>, sqlx::Error> {
-    sqlx::query_as::<_, EpisodeFileRow>(
-        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at, absolute_episode \
-         FROM episode_files \
+    sqlx::query_as::<_, EpisodeFileRow>(concat!(
+        "SELECT ",
+        episode_file_columns!(),
+        " FROM episode_files \
          WHERE collection_id = ?1 \
            AND EXISTS (SELECT 1 FROM torrents t \
                        WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL) \
-         ORDER BY season, episode",
-    )
+         ORDER BY season, episode"
+    ))
     .bind(collection_id)
     .fetch_all(pool)
     .await
@@ -121,14 +132,15 @@ pub async fn list_for_collection_season(
     collection_id: Uuid,
     season: i64,
 ) -> Result<Vec<EpisodeFileRow>, sqlx::Error> {
-    sqlx::query_as::<_, EpisodeFileRow>(
-        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at, absolute_episode \
-         FROM episode_files \
+    sqlx::query_as::<_, EpisodeFileRow>(concat!(
+        "SELECT ",
+        episode_file_columns!(),
+        " FROM episode_files \
          WHERE collection_id = ?1 AND season = ?2 \
            AND EXISTS (SELECT 1 FROM torrents t \
                        WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL) \
-         ORDER BY episode",
-    )
+         ORDER BY episode"
+    ))
     .bind(collection_id)
     .bind(season)
     .fetch_all(pool)
@@ -171,16 +183,17 @@ pub async fn find_owned_episode(
     season: Option<i64>,
     episode: i64,
 ) -> Result<Option<EpisodeFileRow>, sqlx::Error> {
-    sqlx::query_as::<_, EpisodeFileRow>(
-        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at, absolute_episode \
-         FROM episode_files \
+    sqlx::query_as::<_, EpisodeFileRow>(concat!(
+        "SELECT ",
+        episode_file_columns!(),
+        " FROM episode_files \
          WHERE collection_id = ?1 \
            AND ((?2 IS NOT NULL AND season = ?2 AND episode = ?3) OR absolute_episode = ?3) \
            AND EXISTS (SELECT 1 FROM torrents t \
                        WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL) \
          ORDER BY (season IS ?2 AND episode = ?3) DESC \
-         LIMIT 1",
-    )
+         LIMIT 1"
+    ))
     .bind(collection_id)
     .bind(season)
     .bind(episode)
@@ -247,13 +260,14 @@ pub async fn find_by_file(
     infohash: &str,
     file_idx: i64,
 ) -> Result<Option<EpisodeFileRow>, sqlx::Error> {
-    sqlx::query_as::<_, EpisodeFileRow>(
-        "SELECT id, collection_id, season, episode, infohash, file_idx, derived_from, created_at, absolute_episode \
-         FROM episode_files \
+    sqlx::query_as::<_, EpisodeFileRow>(concat!(
+        "SELECT ",
+        episode_file_columns!(),
+        " FROM episode_files \
          WHERE infohash = ?1 AND file_idx = ?2 \
            AND EXISTS (SELECT 1 FROM torrents t \
-                       WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL)",
-    )
+                       WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL)"
+    ))
     .bind(infohash)
     .bind(file_idx)
     .fetch_optional(pool)

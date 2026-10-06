@@ -21,6 +21,16 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+/// `CollectionRow` column list, shared so the reads can't drift from the
+/// struct. A macro so it stays a literal inside `concat!` (sqlx 0.9 only
+/// takes `&'static str`).
+macro_rules! collection_columns {
+    () => {
+        "id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
+         last_indexer_scan_at, last_visited_at, is_anime, anilist_id"
+    };
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct CollectionRow {
     pub id: Uuid,
@@ -78,11 +88,11 @@ pub async fn list_by_tmdb(
     pool: &SqlitePool,
     tmdb_id: i64,
 ) -> Result<Vec<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
-         FROM collections WHERE tmdb_id = ?1 ORDER BY created_at",
-    )
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections WHERE tmdb_id = ?1 ORDER BY created_at"
+    ))
     .bind(tmdb_id)
     .fetch_all(pool)
     .await
@@ -93,12 +103,12 @@ pub async fn find_by_parsed_title(
     normalized: &str,
     kind: Kind,
 ) -> Result<Option<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
-         FROM collections \
-         WHERE parsed_title_normalized = ?1 AND kind = ?2",
-    )
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections \
+         WHERE parsed_title_normalized = ?1 AND kind = ?2"
+    ))
     .bind(normalized)
     .bind(kind.as_str())
     .fetch_optional(pool)
@@ -110,22 +120,22 @@ pub async fn find_by_parsed_title(
 /// rather than re-deriving the title from individual member torrents
 /// (one of which could be poorly named and resolve to garbage).
 pub async fn list_all(pool: &SqlitePool) -> Result<Vec<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
-         FROM collections \
-         ORDER BY created_at",
-    )
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections \
+         ORDER BY created_at"
+    ))
     .fetch_all(pool)
     .await
 }
 
 pub async fn get(pool: &SqlitePool, id: Uuid) -> Result<Option<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
-         FROM collections WHERE id = ?1",
-    )
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections WHERE id = ?1"
+    ))
     .bind(id)
     .fetch_optional(pool)
     .await
@@ -386,16 +396,16 @@ pub async fn list_due_for_scan(
     pool: &SqlitePool,
     cooldown_seconds: i64,
 ) -> Result<Vec<CollectionRow>, sqlx::Error> {
-    sqlx::query_as::<_, CollectionRow>(
-        "SELECT id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-                last_indexer_scan_at, last_visited_at, is_anime, anilist_id \
-         FROM collections \
+    sqlx::query_as::<_, CollectionRow>(concat!(
+        "SELECT ",
+        collection_columns!(),
+        " FROM collections \
          WHERE kind = 'tv' \
            AND parsed_title_normalized IS NOT NULL \
            AND (last_indexer_scan_at IS NULL \
                 OR last_indexer_scan_at < datetime('now', '-' || ?1 || ' seconds')) \
-         ORDER BY last_indexer_scan_at IS NOT NULL, last_indexer_scan_at",
-    )
+         ORDER BY last_indexer_scan_at IS NOT NULL, last_indexer_scan_at"
+    ))
     .bind(cooldown_seconds)
     .fetch_all(pool)
     .await

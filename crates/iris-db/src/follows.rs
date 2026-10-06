@@ -13,6 +13,16 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+/// `FollowRow` column list, shared so the reads can't drift from the
+/// struct. A macro so it stays a literal inside `concat!` (sqlx 0.9 only
+/// takes `&'static str`).
+macro_rules! follow_columns {
+    () => {
+        "id, user_id, normalized_name, name, tmdb_id, last_checked_at, last_visited_at, \
+         created_at"
+    };
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct FollowRow {
     pub id: Uuid,
@@ -39,13 +49,13 @@ pub async fn list_for_user(
     user_id: UserId,
 ) -> Result<Vec<FollowRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
-    sqlx::query_as::<_, FollowRow>(
-        "SELECT id, user_id, normalized_name, name, tmdb_id, last_checked_at, \
-                last_visited_at, created_at \
-         FROM series_follows \
+    sqlx::query_as::<_, FollowRow>(concat!(
+        "SELECT ",
+        follow_columns!(),
+        " FROM series_follows \
          WHERE user_id = ?1 \
-         ORDER BY created_at DESC",
-    )
+         ORDER BY created_at DESC"
+    ))
     .bind(user)
     .fetch_all(pool)
     .await
@@ -57,12 +67,12 @@ pub async fn get_by_id(
     id: Uuid,
 ) -> Result<Option<FollowRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
-    sqlx::query_as::<_, FollowRow>(
-        "SELECT id, user_id, normalized_name, name, tmdb_id, last_checked_at, \
-                last_visited_at, created_at \
-         FROM series_follows \
-         WHERE user_id = ?1 AND id = ?2",
-    )
+    sqlx::query_as::<_, FollowRow>(concat!(
+        "SELECT ",
+        follow_columns!(),
+        " FROM series_follows \
+         WHERE user_id = ?1 AND id = ?2"
+    ))
     .bind(user)
     .bind(id)
     .fetch_optional(pool)
@@ -75,12 +85,12 @@ pub async fn get_by_normalized(
     normalized_name: &str,
 ) -> Result<Option<FollowRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
-    sqlx::query_as::<_, FollowRow>(
-        "SELECT id, user_id, normalized_name, name, tmdb_id, last_checked_at, \
-                last_visited_at, created_at \
-         FROM series_follows \
-         WHERE user_id = ?1 AND normalized_name = ?2",
-    )
+    sqlx::query_as::<_, FollowRow>(concat!(
+        "SELECT ",
+        follow_columns!(),
+        " FROM series_follows \
+         WHERE user_id = ?1 AND normalized_name = ?2"
+    ))
     .bind(user)
     .bind(normalized_name)
     .fetch_optional(pool)
