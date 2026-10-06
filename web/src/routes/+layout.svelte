@@ -12,6 +12,8 @@
 	import AuthShell from '#lib/components/AuthShell.svelte';
 	import SignIn from '#lib/components/SignIn.svelte';
 	import Toasts from '#lib/components/Toasts.svelte';
+	import Outdated from '#lib/components/Outdated.svelte';
+	import { harmlessReload, outdated } from '#lib/update.svelte.ts';
 
 	let { children } = $props();
 
@@ -19,6 +21,13 @@
 	const door = $derived(page.url.pathname.startsWith('/register'));
 
 	$effect(() => session.start());
+	$effect(() => outdated.listen());
+
+	// refused by the server (426): locked until a reload, the account page aside
+	const locked = $derived(outdated.locked && !page.url.pathname.startsWith('/account'));
+	$effect(() => {
+		if (locked) void refocus('#outdated-title');
+	});
 
 	$effect(() => {
 		const root = document.documentElement;
@@ -41,15 +50,15 @@
 		void refocus('main h1');
 	});
 
-	// a new version deployed: taken at the next harmless moment, never under the fingers
+	// a new version deployed: taken at the next harmless moment (a navigation, or back on a page
+	// where nothing plays), never under the fingers nor mid-playback
 	beforeNavigate(({ willUnload, to }) => {
 		if (updated.current && !willUnload && to?.url) location.href = to.url.href;
 	});
 	$effect(() => {
-		const typing = () => !!document.activeElement?.closest('input, textarea, select, [contenteditable]');
 		const back = async () => {
 			if (document.visibilityState !== 'visible') return;
-			if ((updated.current || (await updated.check())) && !typing()) location.reload();
+			if ((updated.current || (await updated.check())) && harmlessReload(page.url.pathname)) location.reload();
 		};
 		document.addEventListener('visibilitychange', back);
 		return () => document.removeEventListener('visibilitychange', back);
@@ -58,9 +67,11 @@
 
 <QueryClientProvider client={queryClient}>
 	<nav class="skip" aria-label="Skip to content"><a href="#main">Skip to content</a></nav>
-	{#if session.state.status === 'signed_in'}<Header />{/if}
-	<main id="main" class:page={session.state.status === 'signed_in'} tabindex="-1">
-		{#if session.state.status === 'loading'}
+	{#if session.state.status === 'signed_in' && !locked}<Header />{/if}
+	<main id="main" class:page={session.state.status === 'signed_in' && !locked} tabindex="-1">
+		{#if locked}
+			<Outdated />
+		{:else if session.state.status === 'loading'}
 			{#if session.state.retrying}
 				<AuthShell>
 					<section class="notice" aria-labelledby="unreachable-title">
@@ -75,7 +86,8 @@
 		{:else if session.state.status === 'signed_out' && !door}
 			<SignIn />
 		{:else}
-			{@render children()}
+			<!-- another account: every view starts over, nothing kept from the last one -->
+			{#key session.user?.id}{@render children()}{/key}
 		{/if}
 	</main>
 	<Toasts />
