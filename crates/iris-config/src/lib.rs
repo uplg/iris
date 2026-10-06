@@ -58,6 +58,10 @@ pub struct LiveTvConfig {
     /// Country catalogue (code / name / flag) shown in the country picker.
     #[serde(default = "default_livetv_countries_url")]
     pub countries_url: String,
+    /// Every country's playlist in one file, `group-title` = country name:
+    /// sizes the picker (channels per country) without loading each country.
+    #[serde(default = "default_livetv_country_index_url")]
+    pub country_index_url: String,
     /// iptv-org's full stream database. The per-country playlists only embed
     /// ONE feed per channel; this database lists them all, and every extra
     /// feed becomes a fallback source the proxy can rotate to.
@@ -139,6 +143,9 @@ fn default_livetv_playlist_template() -> String {
 }
 fn default_livetv_countries_url() -> String {
     "https://iptv-org.github.io/api/countries.json".to_string()
+}
+fn default_livetv_country_index_url() -> String {
+    "https://iptv-org.github.io/iptv/index.country.m3u".to_string()
 }
 fn default_livetv_streams_url() -> String {
     "https://iptv-org.github.io/api/streams.json".to_string()
@@ -235,6 +242,7 @@ impl Default for LiveTvConfig {
             default_country: default_livetv_country(),
             playlist_url_template: default_livetv_playlist_template(),
             countries_url: default_livetv_countries_url(),
+            country_index_url: default_livetv_country_index_url(),
             streams_url: default_livetv_streams_url(),
             channels_url: default_livetv_channels_url(),
             extra_playlists: default_livetv_extra_playlists(),

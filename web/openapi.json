@@ -1147,7 +1147,7 @@
         "operationId": "live_tv_countries",
         "responses": {
           "200": {
-            "description": "Countries available in the live TV catalogue",
+            "description": "Countries with channels to watch, in name order",
             "content": {
               "application/json": {
                 "schema": {
@@ -1307,7 +1307,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Channels for the country — TNT-pinned first (fr), then grouped by category",
+            "description": "Channels for the country — TNT-pinned first (fr), then grouped by category; empty for a country without any",
             "content": {
               "application/json": {
                 "schema": {
@@ -6319,6 +6319,15 @@
           "flag"
         ],
         "properties": {
+          "channel_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Channels the country carries; absent when not known up front. A\ncountry with none is left out of the list.",
+            "minimum": 0
+          },
           "code": {
             "type": "string",
             "description": "ISO 3166-1 alpha-2, lowercase."
