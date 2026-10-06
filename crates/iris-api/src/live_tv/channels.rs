@@ -12,6 +12,10 @@ use super::m3u::M3uEntry;
 pub struct Channel {
     /// Stable slug used in URLs (`tf1`, `france-2`, …).
     pub id: String,
+    /// Ids the channel's entries folded to under [`normalize_legacy`], where
+    /// they differ from `id`: what bookmarks, proxy URLs and config written
+    /// before the fold kept accented capitals still name it by.
+    pub legacy_ids: Vec<String>,
     /// Display name with quality/reliability suffixes stripped.
     pub name: String,
     /// Raw `tvg-id` of the first entry (kept for EPG matching).
@@ -26,6 +30,14 @@ pub struct Channel {
     pub tnt_number: Option<u16>,
     /// Upstream candidates, best quality first. Never exposed to clients.
     pub sources: Vec<StreamSource>,
+}
+
+impl Channel {
+    fn remember_legacy_id(&mut self, legacy: String) {
+        if !legacy.is_empty() && legacy != self.id && !self.legacy_ids.contains(&legacy) {
+            self.legacy_ids.push(legacy);
+        }
+    }
 }
 
 /// One upstream stream URL plus the request headers it demands.
@@ -324,10 +336,8 @@ pub fn build_channels(
                 continue;
             }
             let tvg_id = entry.attrs.get("tvg-id").filter(|s| !s.is_empty());
-            let identity = tvg_id
-                .map(|id| normalize(tvg_id_base(id)))
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| normalize(&name));
+            let identity = channel_id(tvg_id.map(String::as_str), &name, normalize);
+            let legacy_id = channel_id(tvg_id.map(String::as_str), &name, normalize_legacy);
 
             let source = StreamSource {
                 tier: classify_source(&entry.url),
@@ -361,6 +371,9 @@ pub fn build_channels(
                     by_identity.entry(identity).or_insert(idx);
                 }
                 let ch = &mut channels[idx];
+                if !merge_only {
+                    ch.remember_legacy_id(legacy_id);
+                }
                 if ch.sources.iter().all(|s| s.url != source.url) {
                     ch.sources.push(source);
                 }
@@ -383,8 +396,9 @@ pub fn build_channels(
             }
             by_name.entry(normalize(&name)).or_insert(channels.len());
             by_identity.insert(identity.clone(), channels.len());
-            channels.push(Channel {
+            let mut channel = Channel {
                 id: identity,
+                legacy_ids: Vec::new(),
                 name,
                 tvg_id: tvg_id.cloned(),
                 logo_url: entry
@@ -397,7 +411,9 @@ pub fn build_channels(
                 not_24_7,
                 tnt_number,
                 sources: vec![source],
-            });
+            };
+            channel.remember_legacy_id(legacy_id);
+            channels.push(channel);
         }
     }
     sort_listing(&mut channels);
@@ -591,18 +607,49 @@ pub(crate) fn tvg_id_base(tvg_id: &str) -> &str {
 /// any source is openable as `(country, id)` against the country snapshot.
 pub(crate) fn entry_display_and_id(entry: &M3uEntry) -> (String, String) {
     let display = clean_name(&entry.name).0;
-    let id = entry
+    let tvg_id = entry
         .attrs
         .get("tvg-id")
         .filter(|s| !s.is_empty())
-        .map(|id| normalize(tvg_id_base(id)))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| normalize(&display));
+        .map(String::as_str);
+    let id = channel_id(tvg_id, &display, normalize);
     (display, id)
 }
 
-/// Lowercase alphanumeric fold: `"L'Équipe TV"` → `"lequipetv"`.
+/// A channel's id: its folded tvg-id base, else its folded cleaned name.
+fn channel_id(tvg_id: Option<&str>, name: &str, fold: fn(&str) -> String) -> String {
+    tvg_id
+        .map(|id| fold(tvg_id_base(id)))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| fold(name))
+}
+
+/// Lowercase ASCII-alphanumeric fold, accents taken off whatever their case:
+/// `"L'ÉQUIPE TV"` → `"lequipetv"`.
 pub(crate) fn normalize(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    let mut out = String::with_capacity(s.len());
+    for c in s.to_lowercase().nfkd() {
+        match c {
+            'æ' => out.push_str("ae"),
+            'œ' => out.push_str("oe"),
+            'ß' => out.push_str("ss"),
+            'ø' => out.push('o'),
+            'đ' | 'ð' => out.push('d'),
+            'ł' => out.push('l'),
+            'ı' => out.push('i'),
+            c if c.is_ascii_alphanumeric() => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The fold channel ids were minted with until 2026-10: lowercase accented
+/// letters folded from a short list, every other non-ASCII letter dropped —
+/// uppercase accented ones included (`"L'ÉQUIPE"` → `"lquipe"`). Kept only
+/// to recognise the ids it produced ([`Channel::legacy_ids`]).
+fn normalize_legacy(s: &str) -> String {
     s.chars()
         .filter_map(|c| {
             let c = match c {
@@ -753,6 +800,33 @@ mod tests {
                 "https://official.tf1.fr/extra.m3u8",
             ]
         );
+    }
+
+    #[test]
+    fn accented_capitals_fold_like_their_lowercase() {
+        assert_eq!(normalize("L'ÉQUIPE"), normalize("L'Equipe"));
+        assert_eq!(normalize("L'ÉQUIPE"), "lequipe");
+        assert_eq!(normalize("ÇA À ÊTRE"), "caaetre");
+        assert_eq!(
+            normalize("Ñuble TV Ø Œuvre Straße"),
+            "nubletvooeuvrestrasse"
+        );
+        assert_eq!(normalize("Canal＋ ²"), "canal2", "compatibility forms");
+        assert_eq!(normalize_legacy("L'ÉQUIPE"), "lquipe", "the old fold");
+
+        let lists = iptv(&[vec![
+            entry("", "L'ÉQUIPE", "http://a/equipe-caps.m3u8", ""),
+            entry("", "L'Equipe", "http://a/equipe.m3u8", ""),
+            entry("", "TF1", "http://a/tf1.m3u8", ""),
+        ]]);
+        let channels = build_channels(&lists, Some(&HashMap::new()));
+        assert_eq!(channels.len(), 2, "one channel, not two");
+        let equipe = channels.iter().find(|c| c.id == "lequipe").unwrap();
+        assert_eq!(equipe.tnt_number, Some(21));
+        assert_eq!(equipe.sources.len(), 2);
+        assert_eq!(equipe.legacy_ids, ["lquipe"]);
+        let tf1 = channels.iter().find(|c| c.id == "tf1").unwrap();
+        assert!(tf1.legacy_ids.is_empty(), "same id under both folds");
     }
 
     #[test]

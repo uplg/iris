@@ -334,13 +334,10 @@ fn origin_of(url: &Url) -> String {
 impl Dlive {
     pub fn new(cfg: DliveConfig, http: reqwest::Client) -> Self {
         let guard = Guard {
-            breaker: Breaker::new(
-                cfg.breaker_failures,
-                Duration::from_mins(cfg.breaker_open_mins.max(1)),
-            ),
+            breaker: Breaker::new(cfg.breaker_failures, cfg.breaker_open()),
             pages: PageBudget {
                 budget: usize::try_from(cfg.page_budget).unwrap_or(usize::MAX),
-                window: Duration::from_mins(cfg.page_budget_window_mins.max(1)),
+                window: cfg.page_budget_window(),
                 loads: VecDeque::new(),
             },
         };
@@ -368,11 +365,11 @@ impl Dlive {
     }
 
     pub fn first_byte_timeout(&self) -> Duration {
-        Duration::from_secs(self.cfg.first_byte_timeout_secs.max(1))
+        self.cfg.first_byte_timeout()
     }
 
     pub fn cold_start_timeout(&self) -> Duration {
-        Duration::from_secs(self.cfg.cold_start_timeout_secs.max(1))
+        self.cfg.cold_start_timeout()
     }
 
     pub fn countries(&self) -> impl Iterator<Item = &String> {
@@ -465,7 +462,7 @@ impl Dlive {
     async fn index_within(self: &Arc<Self>, wait: Duration) -> Option<Arc<Index>> {
         let me = self.clone();
         let task = tokio::spawn(async move {
-            let ttl = Duration::from_hours(me.cfg.index_refresh_hours.max(1));
+            let ttl = me.cfg.index_ttl();
             me.index.get(ttl, INDEX_RETRY, || me.load_index()).await
         });
         match tokio::time::timeout(wait, task).await {

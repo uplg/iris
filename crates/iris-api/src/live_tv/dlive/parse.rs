@@ -448,9 +448,9 @@ pub fn clean_name(raw: &str, country: &str) -> String {
 }
 
 /// dlive names whose fold differs from the iptv-org identity they carry
-/// (folded dlive name → a name folding onto that identity). `RTE One`, not
-/// `RTÉ One`: the fold drops an uppercase accented letter.
-const NAME_ALIASES: &[(&str, &str)] = &[("rte1", "RTE One")];
+/// (folded dlive name → a name folding onto that identity): dlive spells
+/// `RTÉ One` as `RTE 1`.
+const NAME_ALIASES: &[(&str, &str)] = &[("rte1", "RTÉ One")];
 
 /// Category for a dlive-only channel (no iptv-org counterpart to inherit one
 /// from): dlive mostly adds pay sports channels.

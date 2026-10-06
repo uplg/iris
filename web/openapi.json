@@ -1267,6 +1267,18 @@
             }
           },
           {
+            "name": "src",
+            "in": "query",
+            "description": "Source of the channel the URL was minted for (`{index}-{hash}`),\ncovered by the signature. Absent on URLs minted before it existed.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "u",
             "in": "query",
             "description": "base64url-encoded upstream URL.",

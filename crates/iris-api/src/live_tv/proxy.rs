@@ -12,7 +12,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use url::Url;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -20,6 +20,9 @@ type HmacSha256 = Hmac<Sha256>;
 /// Domain separation so a leaked signature can't be replayed against any
 /// other HMAC use of the JWT secret (and vice versa).
 const KEY_PREFIX: &[u8] = b"iris-livetv-proxy-v1";
+/// Signatures that also cover the minting source get their own key, so a v1
+/// signature never verifies as a v2 one or the other way round.
+const SOURCE_KEY_PREFIX: &[u8] = b"iris-livetv-proxy-v2";
 
 /// Longest accepted base64url-encoded upstream URL (defense in depth).
 pub const MAX_ENCODED_URL: usize = 4096;
@@ -27,35 +30,103 @@ pub const MAX_ENCODED_URL: usize = 4096;
 #[derive(Clone)]
 pub struct Signer {
     key: Vec<u8>,
+    source_key: Vec<u8>,
 }
 
 impl Signer {
     pub fn new(jwt_secret: &str) -> Self {
-        let mut key = Vec::with_capacity(KEY_PREFIX.len() + jwt_secret.len());
-        key.extend_from_slice(KEY_PREFIX);
-        key.extend_from_slice(jwt_secret.as_bytes());
-        Self { key }
+        let keyed = |prefix: &[u8]| [prefix, jwt_secret.as_bytes()].concat();
+        Self {
+            key: keyed(KEY_PREFIX),
+            source_key: keyed(SOURCE_KEY_PREFIX),
+        }
     }
 
-    fn mac(&self, channel_key: &str, url: &str) -> HmacSha256 {
-        let mut mac = HmacSha256::new_from_slice(&self.key).expect("hmac accepts any key size");
+    fn mac(&self, channel_key: &str, source: Option<&str>, url: &str) -> HmacSha256 {
+        let key = if source.is_some() {
+            &self.source_key
+        } else {
+            &self.key
+        };
+        let mut mac = HmacSha256::new_from_slice(key).expect("hmac accepts any key size");
         mac.update(channel_key.as_bytes());
         mac.update(b"|");
+        if let Some(source) = source {
+            mac.update(source.as_bytes());
+            mac.update(b"|");
+        }
         mac.update(url.as_bytes());
         mac
     }
 
-    pub fn sign(&self, channel_key: &str, url: &str) -> String {
-        hex::encode(self.mac(channel_key, url).finalize().into_bytes())
+    pub fn sign(&self, channel_key: &str, source: Option<&str>, url: &str) -> String {
+        hex::encode(self.mac(channel_key, source, url).finalize().into_bytes())
     }
 
     /// Constant-time verification.
-    pub fn verify(&self, channel_key: &str, url: &str, sig_hex: &str) -> bool {
+    pub fn verify(
+        &self,
+        channel_key: &str,
+        source: Option<&str>,
+        url: &str,
+        sig_hex: &str,
+    ) -> bool {
         let Ok(sig) = hex::decode(sig_hex) else {
             return false;
         };
-        self.mac(channel_key, url).verify_slice(&sig).is_ok()
+        self.mac(channel_key, source, url)
+            .verify_slice(&sig)
+            .is_ok()
     }
+}
+
+/// The channel source a proxy URL was minted for: its index then, plus a hash
+/// of its URL, so a list refresh that reorders or drops sources can't charge
+/// the URL's fetches to another one. Wire form `{index}-{16 hex}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceTag {
+    pub index: usize,
+    pub key: u64,
+}
+
+impl SourceTag {
+    pub fn of(index: usize, source_url: &str) -> Self {
+        Self {
+            index,
+            key: source_key(source_url),
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        let (index, key) = s.split_once('-')?;
+        let canonical = !index.is_empty()
+            && index.len() <= 4
+            && index.bytes().all(|b| b.is_ascii_digit())
+            && key.len() == 16
+            && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        if !canonical {
+            return None;
+        }
+        Some(Self {
+            index: index.parse().ok()?,
+            key: u64::from_str_radix(key, 16).ok()?,
+        })
+    }
+}
+
+impl std::fmt::Display for SourceTag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{:016x}", self.index, self.key)
+    }
+}
+
+/// Stable identity of a source URL — for Vavoo and dlive the sentinel, so it
+/// survives their token rotation.
+pub fn source_key(source_url: &str) -> u64 {
+    let digest = Sha256::digest(source_url.as_bytes());
+    let mut first = [0u8; 8];
+    first.copy_from_slice(&digest[..8]);
+    u64::from_be_bytes(first)
 }
 
 /// Decode the `u` query param back to the upstream URL. Enforces the size
@@ -71,11 +142,21 @@ pub fn decode_upstream(encoded: &str) -> Option<Url> {
 }
 
 /// `channel_key` is `country:channel_id` — it namespaces signatures per
-/// channel so the proxy can apply that channel's upstream headers.
-pub fn proxied_url(channel_key: &str, upstream: &Url, signer: &Signer) -> String {
+/// channel; `source` names the source whose headers the fetch needs and whose
+/// health its outcome feeds.
+pub fn proxied_url(
+    channel_key: &str,
+    source: Option<SourceTag>,
+    upstream: &Url,
+    signer: &Signer,
+) -> String {
     let u = URL_SAFE_NO_PAD.encode(upstream.as_str());
-    let s = signer.sign(channel_key, upstream.as_str());
-    format!("/api/livetv/proxy?c={channel_key}&u={u}&s={s}")
+    let Some(src) = source.map(|t| t.to_string()) else {
+        let s = signer.sign(channel_key, None, upstream.as_str());
+        return format!("/api/livetv/proxy?c={channel_key}&u={u}&s={s}");
+    };
+    let s = signer.sign(channel_key, Some(&src), upstream.as_str());
+    format!("/api/livetv/proxy?c={channel_key}&src={src}&u={u}&s={s}")
 }
 
 /// Signing namespace for proxied channel logos (distinct from any channel
@@ -87,7 +168,7 @@ pub const LOGO_KEY: &str = "logo";
 /// the luminance-adaptive plate.
 pub fn logo_url(upstream: &Url, signer: &Signer) -> String {
     let u = URL_SAFE_NO_PAD.encode(upstream.as_str());
-    let s = signer.sign(LOGO_KEY, upstream.as_str());
+    let s = signer.sign(LOGO_KEY, None, upstream.as_str());
     format!("/api/livetv/logo?u={u}&s={s}")
 }
 
@@ -95,7 +176,13 @@ pub fn logo_url(upstream: &Url, signer: &Signer) -> String {
 /// decides, not us) to the signed proxy endpoint. `base` must be the
 /// *final* URL the playlist was fetched from (post-redirect), or relative
 /// segment URIs resolve against the wrong host.
-pub fn rewrite_playlist(body: &str, base: &Url, channel_key: &str, signer: &Signer) -> String {
+pub fn rewrite_playlist(
+    body: &str,
+    base: &Url,
+    channel_key: &str,
+    source: Option<SourceTag>,
+    signer: &Signer,
+) -> String {
     let mut out = String::with_capacity(body.len() * 2);
     for line in body.lines() {
         let trimmed = line.trim();
@@ -119,11 +206,11 @@ pub fn rewrite_playlist(body: &str, base: &Url, channel_key: &str, signer: &Sign
             // EXT-X-MEDIA, EXT-X-I-FRAME-STREAM-INF, …) need that URI
             // proxied too — an unrewritten AES key URI breaks playback
             // silently (cross-origin key fetch fails).
-            out.push_str(&rewrite_uri_attr(&line, base, channel_key, signer));
+            out.push_str(&rewrite_uri_attr(&line, base, channel_key, source, signer));
         } else {
             match base.join(trimmed) {
                 Ok(abs) if matches!(abs.scheme(), "http" | "https") => {
-                    out.push_str(&proxied_url(channel_key, &abs, signer));
+                    out.push_str(&proxied_url(channel_key, source, &abs, signer));
                 }
                 // data: URIs and unparseable lines pass through untouched.
                 _ => out.push_str(trimmed),
@@ -162,7 +249,13 @@ fn strip_codecs_attr(line: &str) -> String {
 }
 
 /// Rewrite the value of a `URI="…"` attribute inside a tag line, if any.
-fn rewrite_uri_attr(line: &str, base: &Url, channel_key: &str, signer: &Signer) -> String {
+fn rewrite_uri_attr(
+    line: &str,
+    base: &Url,
+    channel_key: &str,
+    source: Option<SourceTag>,
+    signer: &Signer,
+) -> String {
     let Some(start) = line.find("URI=\"") else {
         return line.to_string();
     };
@@ -179,7 +272,7 @@ fn rewrite_uri_attr(line: &str, base: &Url, channel_key: &str, signer: &Signer) 
     }
     let mut out = String::with_capacity(line.len() + 128);
     out.push_str(&line[..val_start]);
-    out.push_str(&proxied_url(channel_key, &abs, signer));
+    out.push_str(&proxied_url(channel_key, source, &abs, signer));
     out.push_str(&line[val_start + val_len..]);
     out
 }
@@ -311,22 +404,61 @@ mod tests {
     #[test]
     fn sign_verify_roundtrip_and_tamper_rejection() {
         let s = signer();
-        let sig = s.sign("fr:tf1", "http://up.example/seg1.ts");
-        assert!(s.verify("fr:tf1", "http://up.example/seg1.ts", &sig));
+        let sig = s.sign("fr:tf1", None, "http://up.example/seg1.ts");
+        assert!(s.verify("fr:tf1", None, "http://up.example/seg1.ts", &sig));
         // tampered URL, channel, signature
-        assert!(!s.verify("fr:tf1", "http://up.example/seg2.ts", &sig));
-        assert!(!s.verify("fr:m6", "http://up.example/seg1.ts", &sig));
-        assert!(!s.verify("fr:tf1", "http://up.example/seg1.ts", "deadbeef"));
-        assert!(!s.verify("fr:tf1", "http://up.example/seg1.ts", "not-hex"));
+        assert!(!s.verify("fr:tf1", None, "http://up.example/seg2.ts", &sig));
+        assert!(!s.verify("fr:m6", None, "http://up.example/seg1.ts", &sig));
+        assert!(!s.verify("fr:tf1", None, "http://up.example/seg1.ts", "deadbeef"));
+        assert!(!s.verify("fr:tf1", None, "http://up.example/seg1.ts", "not-hex"));
         // different secret
-        assert!(!Signer::new("other").verify("fr:tf1", "http://up.example/seg1.ts", &sig));
+        assert!(!Signer::new("other").verify("fr:tf1", None, "http://up.example/seg1.ts", &sig));
+    }
+
+    #[test]
+    fn the_minting_source_is_signed_and_cannot_be_swapped() {
+        let s = signer();
+        let url = "http://up.example/seg1.ts";
+        let tag = SourceTag::of(2, "vavoo://abc");
+        let src = tag.to_string();
+        assert_eq!(SourceTag::parse(&src), Some(tag));
+        let sig = s.sign("fr:m6", Some(&src), url);
+        assert!(s.verify("fr:m6", Some(&src), url, &sig));
+        let other = SourceTag::of(1, "vavoo://def").to_string();
+        assert!(
+            !s.verify("fr:m6", Some(&other), url, &sig),
+            "another source"
+        );
+        assert!(!s.verify("fr:m6", None, url, &sig), "the source dropped");
+        let legacy = s.sign("fr:m6", None, url);
+        assert!(
+            !s.verify("fr:m6", Some(&src), url, &legacy),
+            "a v1 signature"
+        );
+        for bad in [
+            "",
+            "2",
+            "-0123456789abcdef",
+            "2-0123",
+            "2-0123456789ABCDEF",
+            "x-0123456789abcdef",
+            "12345-0123456789abcdef",
+        ] {
+            assert_eq!(SourceTag::parse(bad), None, "{bad:?}");
+        }
+
+        let base = Url::parse("https://cdn.example/live/m6/index.m3u8").unwrap();
+        let out = rewrite_playlist("#EXTINF:4,\nseg1.ts\n", &base, "fr:m6", Some(tag), &s);
+        let seg = Url::parse("https://cdn.example/live/m6/seg1.ts").unwrap();
+        assert!(out.contains(&format!("&src={src}&")));
+        assert!(out.contains(&proxied_url("fr:m6", Some(tag), &seg, &s)));
     }
 
     #[test]
     fn proxied_url_roundtrips_through_decode() {
         let s = signer();
         let up = Url::parse("http://up.example/live/playlist.m3u8?token=abc&x=1").unwrap();
-        let proxied = proxied_url("fr:tf1", &up, &s);
+        let proxied = proxied_url("fr:tf1", None, &up, &s);
         let u_param = proxied
             .split("u=")
             .nth(1)
@@ -358,18 +490,18 @@ mod tests {
             hd/index.m3u8\n\
             #EXT-X-STREAM-INF:BANDWIDTH=1000000\n\
             https://other-cdn.example/sd/index.m3u8\n";
-        let out = rewrite_playlist(body, &base, "fr:tf1", &s);
+        let out = rewrite_playlist(body, &base, "fr:tf1", None, &s);
         // relative variant resolved against base dir
         let variant_rel = Url::parse("https://cdn.example/live/tf1/hd/index.m3u8").unwrap();
-        assert!(out.contains(&proxied_url("fr:tf1", &variant_rel, &s)));
+        assert!(out.contains(&proxied_url("fr:tf1", None, &variant_rel, &s)));
         // absolute variant on another host still proxied
         let variant_abs = Url::parse("https://other-cdn.example/sd/index.m3u8").unwrap();
-        assert!(out.contains(&proxied_url("fr:tf1", &variant_abs, &s)));
+        assert!(out.contains(&proxied_url("fr:tf1", None, &variant_abs, &s)));
         // EXT-X-MEDIA URI attribute rewritten
         let expected_audio = Url::parse("https://cdn.example/live/tf1/audio/fr.m3u8").unwrap();
         assert!(out.contains(&format!(
             "URI=\"{}\"",
-            proxied_url("fr:tf1", &expected_audio, &s)
+            proxied_url("fr:tf1", None, &expected_audio, &s)
         )));
         // stream-inf line itself untouched
         assert!(out.contains("#EXT-X-STREAM-INF:BANDWIDTH=5000000,AUDIO=\"aud\"\n"));
@@ -390,14 +522,14 @@ mod tests {
             #EXT-X-DISCONTINUITY\n\
             #EXTINF:6.0,\n\
             /abs/seg002.ts\n";
-        let out = rewrite_playlist(body, &base, "fr:m6", &s);
+        let out = rewrite_playlist(body, &base, "fr:m6", None, &s);
         let key = Url::parse("http://cdn.example/hls/ch/key.bin").unwrap();
         let map = Url::parse("http://cdn.example/hls/ch/init.mp4").unwrap();
         let seg_rel = Url::parse("http://cdn.example/hls/ch/seg001.ts?tok=1").unwrap();
         let seg_abs = Url::parse("http://cdn.example/abs/seg002.ts").unwrap();
         for u in [&key, &map, &seg_rel, &seg_abs] {
             assert!(
-                out.contains(&proxied_url("fr:m6", u, &s)),
+                out.contains(&proxied_url("fr:m6", None, u, &s)),
                 "missing rewrite for {u}"
             );
         }
@@ -418,7 +550,7 @@ mod tests {
         let body = "#EXTM3U\n\
             #EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=4470000,BANDWIDTH=5580000,RESOLUTION=1920x1080,FRAME-RATE=25.000,CODECS=\"avc1.640028\",CLOSED-CAPTIONS=NONE\n\
             tracks-v1a1/mono.ts.m3u8\n";
-        let out = rewrite_playlist(body, &base, "fr:m6", &s);
+        let out = rewrite_playlist(body, &base, "fr:m6", None, &s);
         assert!(!out.contains("CODECS"));
         assert!(out.contains("FRAME-RATE=25.000,CLOSED-CAPTIONS=NONE"));
         // trailing-position CODECS loses its leading comma instead
@@ -448,7 +580,7 @@ mod tests {
         let s = signer();
         let base = Url::parse("https://cdn.example/x.m3u8").unwrap();
         let body = "#EXT-X-KEY:METHOD=AES-128,URI=\"data:text/plain;base64,AAAA\"\n";
-        let out = rewrite_playlist(body, &base, "fr:x", &s);
+        let out = rewrite_playlist(body, &base, "fr:x", None, &s);
         assert!(out.contains("URI=\"data:text/plain;base64,AAAA\""));
     }
 
