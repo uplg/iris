@@ -71,6 +71,7 @@ struct Inner {
     /// Fired after a torrent is evicted from disk so derived caches keyed
     /// by infohash (e.g. the remuxer's `.fmp4` files) can clean up too.
     on_evict: Box<dyn Fn(&str) + Send + Sync>,
+    run_lock: tokio::sync::Mutex<()>,
 }
 
 impl Gc {
@@ -90,6 +91,7 @@ impl Gc {
                 download_dir,
                 derived,
                 on_evict: Box::new(on_evict),
+                run_lock: tokio::sync::Mutex::new(()),
             }),
         }
     }
@@ -117,9 +119,18 @@ impl Gc {
 
     pub async fn run_once(&self) -> anyhow::Result<GcReport> {
         let cfg = &self.inner.cfg;
-        let torrent_used = dir_size(&self.inner.download_dir).await.unwrap_or(0);
+        // One pass at a time: an admin run overlapping the loop would measure
+        // the same usage and evict toward the same target twice.
+        let _running = self.inner.run_lock.lock().await;
+        // An unreadable tree must fail the pass, not read as "0 bytes used"
+        // (which silently disables the GC).
+        let torrent_used = dir_size(&self.inner.download_dir)
+            .await
+            .map_err(|e| anyhow::anyhow!("measuring the download dir: {e}"))?;
         let derived_used = match &self.inner.derived {
-            Some(d) => dir_size(&d.dir).await.unwrap_or(0),
+            Some(d) => dir_size(&d.dir)
+                .await
+                .map_err(|e| anyhow::anyhow!("measuring the derived cache: {e}"))?,
             None => 0,
         };
         let used = torrent_used.saturating_add(derived_used);
@@ -213,6 +224,14 @@ impl Gc {
             if current <= target {
                 break;
             }
+            // Each eviction can wait seconds on a stopped announce: a torrent
+            // whose playback started since the listing is no longer cold.
+            let fresh = iris_db::torrents::find_by_infohash(&self.inner.pool, &row.infohash)
+                .await?
+                .and_then(|r| r.last_played_at);
+            if fresh.is_some_and(|played| played >= cutoff) {
+                continue;
+            }
             tracing::info!(
                 infohash = %row.infohash,
                 name = %row.name,
@@ -229,17 +248,26 @@ impl Gc {
                 )
                 .await;
             }
-            if let Err(e) = self
+            match self
                 .inner
                 .engine
                 .delete_by_infohash(&row.infohash, true)
                 .await
             {
-                tracing::warn!(error = %e, "gc: engine delete failed, skipping");
-                continue;
+                // Not in the engine: nothing left to delete there, and the
+                // row must not stay "active" for every later pass to retry.
+                Ok(()) | Err(crate::EngineError::NotFound) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "gc: engine delete failed, skipping");
+                    continue;
+                }
             }
             (self.inner.on_evict)(&row.infohash);
-            iris_db::torrents::soft_delete(&self.inner.pool, TorrentId::from(row.id)).await?;
+            if let Err(e) =
+                iris_db::torrents::soft_delete(&self.inner.pool, TorrentId::from(row.id)).await
+            {
+                tracing::warn!(error = %e, infohash = %row.infohash, "gc: soft delete failed");
+            }
             let freed = u64::try_from(row.total_size_bytes).unwrap_or(0);
             current = current.saturating_sub(freed);
             report.evicted.push(EvictedEntry {
