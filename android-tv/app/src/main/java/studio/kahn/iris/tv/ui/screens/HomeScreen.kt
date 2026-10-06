@@ -140,7 +140,7 @@ fun HomeContent(
     val layout = IrisLayout.current
     val header = LocalShellHeader.current
     val heroFocus = remember { FocusRequester() }
-    val focus = rememberCardFocus()
+    val focus = rememberCardFocus(fallback = header)
     val list = rememberLazyListState()
     var focusPlaced by remember { mutableStateOf(false) }
 
@@ -247,16 +247,9 @@ fun HomeContent(
     CardMenuHost(
         focus = focus,
         busy = state.busy,
-        present = { key -> state.hasCard(key) },
-        fallback = header,
         onCardAction = onCardAction,
     )
 }
-
-private fun HomeUiState.hasCard(key: String): Boolean =
-    sequenceOf(continueWatching.valueOrNull, watchlist.valueOrNull, library.valueOrNull)
-        .plus(forYou.asSequence().map { it.cards })
-        .any { list -> list?.any { it.key == key } == true }
 
 // The board's hero still: 1100 x 620 of 1920 x 1080, in the top right corner.
 private const val HERO_ART_WIDTH = 1100f / 1920f

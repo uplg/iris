@@ -70,7 +70,8 @@ import studio.kahn.iris.tv.ui.components.StaleNotice
 import studio.kahn.iris.tv.ui.components.TextInput
 import studio.kahn.iris.tv.ui.screens.library.ChosenPanelOptions
 import studio.kahn.iris.tv.ui.screens.library.DownloadsUi
-import studio.kahn.iris.tv.ui.screens.library.FocusKeys
+import studio.kahn.iris.tv.ui.components.FocusReturn
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.screens.library.LibraryUiState
 import studio.kahn.iris.tv.ui.screens.library.LibraryView
 import studio.kahn.iris.tv.ui.screens.library.LibraryViewModel
@@ -78,7 +79,6 @@ import studio.kahn.iris.tv.ui.screens.library.NoticeLine
 import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
 import studio.kahn.iris.tv.ui.screens.library.ReleaseItem
 import studio.kahn.iris.tv.ui.screens.library.ReleaseRow
-import studio.kahn.iris.tv.ui.screens.library.neighbourOf
 import studio.kahn.iris.tv.ui.screens.library.ShowFilter
 import studio.kahn.iris.tv.ui.screens.library.Sort
 import studio.kahn.iris.tv.ui.screens.library.TitleCard
@@ -171,14 +171,7 @@ fun LibraryContent(
     val grid = rememberLazyGridState()
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val keys = remember { FocusKeys() }
-    // Where focus goes back once a dialog or a panel closes: the first of these keys on screen.
-    var refocus by remember { mutableStateOf<List<String>?>(null) }
-    LaunchedEffect(refocus) {
-        val wanted = refocus ?: return@LaunchedEffect
-        refocus = null
-        if (!keys.focus(*wanted.toTypedArray())) runCatching { top.requestFocus() }
-    }
+    val keys = rememberFocusReturn(fallback = top)
 
     // The Titles view places its own focus (the title opened last); Downloads starts at the top.
     LaunchedEffect(Unit) {
@@ -250,7 +243,7 @@ fun LibraryContent(
                 onFilters = actions.onFilters,
                 onDismiss = {
                     panel = Panel.None
-                    refocus = listOf(FIND_KEY)
+                    keys.returnTo(FIND_KEY)
                 },
             )
             Panel.FindRelease -> FindReleasePanel(
@@ -258,7 +251,7 @@ fun LibraryContent(
                 onQuery = actions.onReleaseQuery,
                 onDismiss = {
                     panel = Panel.None
-                    refocus = listOf(FIND_KEY)
+                    keys.returnTo(FIND_KEY)
                 },
             )
         }
@@ -272,11 +265,11 @@ fun LibraryContent(
                     hiding = null
                     actions.onHide(card)
                     val ids = state.titles.valueOrNull?.cards?.map { it.id }.orEmpty()
-                    refocus = listOfNotNull(neighbourOf(ids, card.id), card.id)
+                    keys.returnTo(card.id, ids, leaving = true)
                 },
                 onCancel = {
                     hiding = null
-                    refocus = listOf(card.id)
+                    keys.returnTo(card.id)
                 },
             )
         }
@@ -290,11 +283,11 @@ fun LibraryContent(
                     deleting = null
                     actions.onRelease.onDelete(row)
                     val ids = state.downloads.valueOrNull?.groups?.flatMap { g -> g.rows.map { it.infohash } }.orEmpty()
-                    refocus = listOfNotNull(neighbourOf(ids, row.infohash), row.infohash)
+                    keys.returnTo(row.infohash, ids, leaving = true)
                 },
                 onCancel = {
                     deleting = null
-                    refocus = listOf(row.infohash)
+                    keys.returnTo(row.infohash)
                 },
             )
         }
@@ -335,7 +328,7 @@ private fun TitlesPane(
     lastOpened: String?,
     focusedIndex: MutableIntState,
     top: FocusRequester,
-    keys: FocusKeys,
+    keys: FocusReturn,
     actions: LibraryActions,
     onFind: () -> Unit,
     onSort: () -> Unit,
@@ -376,7 +369,7 @@ private fun TitlesPane(
         val index = target + HEADER_ITEMS
         if (grid.layoutInfo.visibleItemsInfo.none { it.index == index }) grid.scrollToItem(index)
         snapshotFlow { grid.layoutInfo.visibleItemsInfo.any { it.index == index } }.first { it }
-        keys.focus(ui.cards[target].id)
+        keys.focus(listOf(ui.cards[target].id))
     }
     PosterGrid(
         items = ui.cards,
@@ -411,7 +404,7 @@ private fun TitlesPane(
             status = card.status.text,
             statusTone = card.status.tone.cardTone(),
             modifier = Modifier
-                .focusRequester(keys.of(card.id))
+                .focusRequester(keys.requester(card.id))
                 .onFocusChanged { if (it.hasFocus) focusedIndex.intValue = index },
         )
     }
@@ -426,7 +419,7 @@ private fun Filters(
     state: LibraryUiState,
     ui: TitlesUi,
     actions: LibraryActions,
-    keys: FocusKeys,
+    keys: FocusReturn,
     onFind: () -> Unit,
     onSort: () -> Unit,
 ) {
@@ -476,7 +469,7 @@ private fun Filters(
                 text = if (f.query.isBlank()) "Find a title" else "Finding “${f.query.trim()}”",
                 selected = f.query.isNotBlank(),
                 onClick = onFind,
-                modifier = Modifier.focusRequester(keys.of(FIND_KEY)),
+                modifier = Modifier.focusRequester(keys.requester(FIND_KEY)),
             )
             Pill(text = f.sort.words, selected = false, onClick = onSort)
         }
@@ -495,7 +488,7 @@ private fun Filters(
 private fun DownloadsPane(
     state: LibraryUiState,
     list: LazyListState,
-    keys: FocusKeys,
+    keys: FocusReturn,
     heading: @Composable () -> Unit,
     footer: Dp,
     actions: LibraryActions,
@@ -538,7 +531,7 @@ private fun DownloadsPane(
                                 text = if (state.releaseQuery.isBlank()) "Find a release" else "Finding “${state.releaseQuery.trim()}”",
                                 selected = state.releaseQuery.isNotBlank(),
                                 onClick = onFind,
-                                modifier = Modifier.focusRequester(keys.of(FIND_KEY)),
+                                modifier = Modifier.focusRequester(keys.requester(FIND_KEY)),
                             )
                             Text(ui.countWords, style = IrisType.meta, color = IrisColor.inkMuted)
                             if (state.releaseQuery.isNotBlank()) Pill("Clear the search", selected = false, onClick = { actions.onReleaseQuery("") })
@@ -560,7 +553,7 @@ private fun DownloadsPane(
                             row,
                             actions.onRelease,
                             state.busy,
-                            Modifier.focusRequester(keys.of(row.infohash)),
+                            Modifier.focusRequester(keys.requester(row.infohash)),
                             actionsBeside = layout.width >= 840.dp,
                         )
                     }

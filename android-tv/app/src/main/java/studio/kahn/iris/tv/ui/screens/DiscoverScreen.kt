@@ -29,6 +29,7 @@ import androidx.tv.material3.Text
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.ui.components.KeyHint
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
 import studio.kahn.iris.tv.ui.components.ScreenFooter
@@ -88,9 +89,9 @@ fun DiscoverContent(
 ) {
     val layout = IrisLayout.current
     val kindFocus = remember { FocusRequester() }
-    val focus = rememberCardFocus()
-    val tiles = remember { HashMap<String, FocusRequester>() }
-    val tileFocus = { id: String -> tiles.getOrPut(id) { FocusRequester() } }
+    val focus = rememberCardFocus(fallback = kindFocus)
+    val tiles = rememberFocusReturn()
+    val tileFocus = { id: String -> tiles.requester(id) }
     var lastMood by remember { mutableStateOf<String?>(null) }
     var focusPlaced by remember { mutableStateOf(false) }
 
@@ -113,7 +114,7 @@ fun DiscoverContent(
         if (id != null) {
             lastMood = id
         } else {
-            lastMood?.let { previous -> runCatching { tileFocus(previous).requestFocus() } }
+            lastMood?.let { previous -> tiles.returnTo(previous) }
             lastMood = null
         }
     }
@@ -183,12 +184,6 @@ fun DiscoverContent(
     CardMenuHost(
         focus = focus,
         busy = state.busy,
-        present = { key -> state.hasCard(key) },
-        fallback = kindFocus,
         onCardAction = onCardAction,
     )
 }
-
-private fun DiscoverUiState.hasCard(key: String): Boolean =
-    mood?.cards?.valueOrNull?.any { it.key == key } == true ||
-        forYou.valueOrNull?.any { shelf -> shelf.cards.any { it.key == key } } == true

@@ -84,7 +84,7 @@ import studio.kahn.iris.tv.ui.screens.library.CollectionViewModel
 import studio.kahn.iris.tv.ui.screens.library.EpisodeAction
 import studio.kahn.iris.tv.ui.screens.library.EpisodeRowUi
 import studio.kahn.iris.tv.ui.screens.library.FileUi
-import studio.kahn.iris.tv.ui.screens.library.FocusKeys
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.screens.library.GoneUi
 import studio.kahn.iris.tv.ui.screens.library.LanguagesUi
 import studio.kahn.iris.tv.ui.screens.library.NoticeLine
@@ -96,7 +96,6 @@ import studio.kahn.iris.tv.ui.screens.library.Tone
 import studio.kahn.iris.tv.ui.screens.library.ToneLine
 import studio.kahn.iris.tv.ui.screens.library.audioWords
 import studio.kahn.iris.tv.ui.screens.library.busyKey
-import studio.kahn.iris.tv.ui.screens.library.neighbourOf
 import studio.kahn.iris.tv.ui.screens.library.subtitleWords
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
@@ -242,13 +241,7 @@ private fun TitlePage(
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val playFocus = remember { FocusRequester() }
-    val keys = remember { FocusKeys() }
-    var refocus by remember { mutableStateOf<List<String>?>(null) }
-    LaunchedEffect(refocus) {
-        val wanted = refocus ?: return@LaunchedEffect
-        refocus = null
-        if (!keys.focus(*wanted.toTypedArray())) runCatching { playFocus.requestFocus() }
-    }
+    val keys = rememberFocusReturn(fallback = playFocus)
     var atPlay by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf<Sheet?>(null) }
     var deleting by remember { mutableStateOf<ReleaseRow?>(null) }
@@ -262,7 +255,7 @@ private fun TitlePage(
             val item = episodesStart + index
             if (list.layoutInfo.visibleItemsInfo.none { it.index == item }) list.scrollToItem(item)
             snapshotFlow { list.layoutInfo.visibleItemsInfo.any { it.index == item } }.first { it }
-            keys.focus("ep:$focusKey")
+            keys.focus(listOf("ep:$focusKey"))
         } else {
             snapshotFlow { list.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
             runCatching { playFocus.requestFocus() }
@@ -303,7 +296,7 @@ private fun TitlePage(
                     actions = actions,
                     stale = stale,
                     onLanguages = { sheet = Sheet.Languages },
-                    languagesFocus = keys.of(LANGUAGES_KEY),
+                    languagesFocus = keys.requester(LANGUAGES_KEY),
                     playFocus = playFocus,
                     onPlayFocused = { atPlay = it },
                 )
@@ -320,7 +313,7 @@ private fun TitlePage(
                             if (main != null) actions.onEpisode(row, main) else sheet = Sheet.Episode(row)
                         },
                         onLongClick = { sheet = Sheet.Episode(row) },
-                        modifier = Modifier.focusRequester(keys.of("ep:${row.key}")),
+                        modifier = Modifier.focusRequester(keys.requester("ep:${row.key}")),
                     )
                 }
                 p.emptyEpisodes?.let { words -> item(key = "no-episodes") { Hint(words) } }
@@ -333,7 +326,7 @@ private fun TitlePage(
                     row,
                     actions.onRelease.copy(onDelete = { deleting = it }),
                     state.busy,
-                    Modifier.focusRequester(keys.of("disk:${row.infohash}")),
+                    Modifier.focusRequester(keys.requester("disk:${row.infohash}")),
                     showTitle = false,
                 )
             }
@@ -369,7 +362,7 @@ private fun TitlePage(
             onAction = { row, action -> actions.onEpisode(row, action) },
             onDismiss = {
                 sheet = null
-                refocus = listOf("ep:${s.row.key}")
+                keys.returnTo("ep:${s.row.key}")
             },
         )
         Sheet.Languages -> state.languages?.valueOrNull?.let { langs ->
@@ -380,12 +373,12 @@ private fun TitlePage(
                 onSave = { a, s2 ->
                     actions.onSaveLanguages(a, s2) {
                         sheet = null
-                        refocus = listOf(LANGUAGES_KEY)
+                        keys.returnTo(LANGUAGES_KEY)
                     }
                 },
                 onDismiss = {
                     sheet = null
-                    refocus = listOf(LANGUAGES_KEY)
+                    keys.returnTo(LANGUAGES_KEY)
                 },
             )
         }
@@ -399,11 +392,11 @@ private fun TitlePage(
             onConfirm = {
                 deleting = null
                 actions.onRelease.onDelete(row)
-                refocus = listOfNotNull(neighbourOf(p.onDisk.map { it.infohash }, row.infohash)?.let { "disk:$it" })
+                keys.returnTo("disk:${row.infohash}", p.onDisk.map { "disk:${it.infohash}" }, leaving = true)
             },
             onCancel = {
                 deleting = null
-                refocus = listOf("disk:${row.infohash}")
+                keys.returnTo("disk:${row.infohash}")
             },
         )
     }

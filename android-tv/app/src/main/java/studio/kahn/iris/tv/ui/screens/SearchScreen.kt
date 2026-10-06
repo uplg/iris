@@ -118,7 +118,9 @@ import studio.kahn.iris.tv.ui.screens.search.parsedWords
 import studio.kahn.iris.tv.ui.screens.search.recentWhen
 import studio.kahn.iris.tv.ui.screens.search.releaseKey
 import studio.kahn.iris.tv.ui.screens.search.releaseRows
-import studio.kahn.iris.tv.ui.screens.search.rememberedFocus
+import studio.kahn.iris.tv.ui.components.FocusReturn
+import studio.kahn.iris.tv.ui.components.focusReturn
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.screens.search.titleMeta
 import studio.kahn.iris.tv.ui.screens.search.titleStatus
 import studio.kahn.iris.tv.ui.state.Loadable
@@ -257,20 +259,17 @@ fun SearchContent(
 ) {
     val layout = IrisLayout.current
     val field = remember { FocusRequester() }
-    val restore = remember { FocusRequester() }
-    var restoreKey by rememberSaveable { mutableStateOf(initialFocus) }
+    val remembered = rememberFocusReturn(initial = initialFocus)
     var fieldFocused by remember { mutableStateOf(false) }
     val results = state.showsResults
 
     // Coming back from a release lands on the result left; else the field.
     LaunchedEffect(results) {
         withFrameNanos { }
-        val restored = restoreKey != null && runCatching { restore.requestFocus() }.isSuccess
-        if (!restored) runCatching { field.requestFocus() }
+        if (!remembered.focusLast()) runCatching { field.requestFocus() }
     }
     // Back comes to the field first; from the field the shell takes it (to the header).
     BackHandler(enabled = !fieldFocused) { runCatching { field.requestFocus() } }
-    val onFocused: (String) -> Unit = { restoreKey = it }
 
     Box(
         Modifier
@@ -303,9 +302,9 @@ fun SearchContent(
             ) {
                 val fieldFocus = FieldFocus(field) { fieldFocused = it }
                 if (results) {
-                    ResultsLayout(state, grab, actions, fieldFocus, restoreKey, restore, onFocused, Modifier.weight(1f))
+                    ResultsLayout(state, grab, actions, fieldFocus, remembered, Modifier.weight(1f))
                 } else {
-                    ComposeLayout(state, onScreenKeyboard, actions, fieldFocus, restoreKey, restore, onFocused, now, Modifier.weight(1f))
+                    ComposeLayout(state, onScreenKeyboard, actions, fieldFocus, remembered, now, Modifier.weight(1f))
                 }
             }
         }
@@ -378,9 +377,7 @@ private fun ComposeLayout(
     onScreenKeyboard: Boolean,
     actions: SearchActions,
     fieldFocus: FieldFocus,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
     now: ZonedDateTime,
     modifier: Modifier,
 ) {
@@ -419,7 +416,7 @@ private fun ComposeLayout(
             if (state.typed.isBlank()) {
                 RecentSearches(state, actions, now)
             } else {
-                TitlesPanel(state, actions, restoreKey, restore, onFocused)
+                TitlesPanel(state, actions, remembered)
             }
         }
     }
@@ -512,9 +509,7 @@ private fun KindPills(state: SearchUiState, actions: SearchActions) {
 private fun TitlesPanel(
     state: SearchUiState,
     actions: SearchActions,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
 ) {
     Row(
         Modifier.horizontalScroll(rememberScrollState()),
@@ -551,7 +546,7 @@ private fun TitlesPanel(
             )
             else -> {
                 titles.errorOrNull?.let { StaleNotice(it) }
-                TitleRow(state.titleCards, state.counts, actions, restoreKey, restore, onFocused)
+                TitleRow(state.titleCards, state.counts, actions, remembered)
             }
         }
         val unmatched = if (ownResults) state.shown.count { it.titleMatch == null } else 0
@@ -591,9 +586,7 @@ private fun TitleRow(
     titles: List<TitleCard>,
     counts: Map<Long, Int>,
     actions: SearchActions,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
 ) {
     CardRow(
         items = titles,
@@ -610,7 +603,7 @@ private fun TitleRow(
             meta = if (status == null) titleMeta(t).ifEmpty { null } else null,
             status = status,
             statusTone = if (t.collectionId != null) StatusTone.Ok else StatusTone.Muted,
-            modifier = Modifier.rememberedFocus(titleKey(t), restoreKey, restore, onFocused),
+            modifier = Modifier.focusReturn(remembered, titleKey(t)),
         )
     }
 }
@@ -623,9 +616,7 @@ private fun ResultsLayout(
     grab: GrabUi,
     actions: SearchActions,
     fieldFocus: FieldFocus,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
     modifier: Modifier,
 ) {
     // A landscape phone has no height for two rows of filters: they share one, scrolled.
@@ -671,7 +662,7 @@ private fun ResultsLayout(
         val line = listOfNotNull(parsedWords(state.results?.valueOrNull?.parsed), state.summaryLine).joinToString(" ")
         SummaryLine(line, failedTrackers(state.results?.valueOrNull?.providers.orEmpty()), actions.onRetry, Modifier.padding(horizontal = 4.dp))
         GrabRefusal(grab, actions.onDismissGrab)
-        ResultsBody(state, grab, actions, restoreKey, restore, onFocused)
+        ResultsBody(state, grab, actions, remembered)
     }
 }
 
@@ -714,9 +705,7 @@ private fun ResultsBody(
     state: SearchUiState,
     grab: GrabUi,
     actions: SearchActions,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
 ) {
     val bottom = IrisSpace.s3
     when (val results = state.results) {
@@ -770,7 +759,7 @@ private fun ResultsBody(
                             onClick = { actions.onRelease(r) },
                             onLongClick = { actions.onGrab(r) },
                             busy = busyKey == key,
-                            modifier = Modifier.rememberedFocus(key, restoreKey, restore, onFocused),
+                            modifier = Modifier.focusReturn(remembered, key),
                         )
                     }
                     if (state.loadingMore || state.moreError != null) {
@@ -790,7 +779,7 @@ private fun ResultsBody(
                 LoadMoreAtEnd(list, enabled = hasNext && !state.loadingMore && state.moreError == null, onLoadMore = actions.onLoadMore)
                 ReleaseList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
                     items(state.matches, key = { "match-${it.collectionId}" }) { m: LibraryMatch -> LibraryMatchRow(m, actions.onMatch) }
-                    releaseRows(shown, grab, restoreKey, restore, onFocused, actions.onRelease, actions.onGrab)
+                    releaseRows(shown, grab, remembered, actions.onRelease, actions.onGrab)
                     item(key = "more") { MoreFooter(state.loadingMore, state.moreError, hasNext, actions.onRetryMore) }
                 }
             }

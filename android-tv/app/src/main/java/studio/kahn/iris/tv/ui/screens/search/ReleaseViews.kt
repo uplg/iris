@@ -52,7 +52,9 @@ import studio.kahn.iris.tv.ui.components.Chip
 import studio.kahn.iris.tv.ui.components.ChipSize
 import studio.kahn.iris.tv.ui.components.ChipTone
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
+import studio.kahn.iris.tv.ui.components.FocusReturn
 import studio.kahn.iris.tv.ui.components.FramedBlock
+import studio.kahn.iris.tv.ui.components.focusReturn
 import studio.kahn.iris.tv.ui.components.PosterCard
 import studio.kahn.iris.tv.ui.components.RowCard
 import studio.kahn.iris.tv.ui.components.Spinner
@@ -322,17 +324,11 @@ fun ReleaseList(
     )
 }
 
-/** Remembers which item was focused last so coming back (from a release) lands on it again. */
-fun Modifier.rememberedFocus(key: String, restoreKey: String?, restore: FocusRequester, onFocused: (String) -> Unit): Modifier =
-    (if (key == restoreKey) focusRequester(restore) else this).onFocusChanged { if (it.isFocused) onFocused(key) }
-
 /** The rows of [releases] with their stable keys. */
 fun LazyListScope.releaseRows(
     releases: List<SearchResult>,
     grab: GrabUi,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
     onOpen: (SearchResult) -> Unit,
     onGrab: (SearchResult) -> Unit,
     withTitle: Boolean = true,
@@ -345,7 +341,7 @@ fun LazyListScope.releaseRows(
             onLongClick = { onGrab(r) },
             withTitle = withTitle,
             busy = grab is GrabUi.Busy && grab.key == key,
-            modifier = Modifier.rememberedFocus(key, restoreKey, restore, onFocused),
+            modifier = Modifier.focusReturn(remembered, key),
         )
     }
 }

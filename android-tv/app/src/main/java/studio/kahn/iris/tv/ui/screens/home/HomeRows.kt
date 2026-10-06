@@ -29,6 +29,8 @@ import studio.kahn.iris.tv.ui.components.ActionSheet
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.CardRow
+import studio.kahn.iris.tv.ui.components.FocusReturn
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.components.PosterCard
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.Spinner
@@ -46,44 +48,35 @@ import studio.kahn.iris.tv.ui.theme.IrisType
 /** A card whose "Hold OK" menu is open, with its row's keys as they were (to find a neighbour once it is gone). */
 data class OpenMenu(val card: CardModel, val eyebrow: String, val rowKeys: List<String>)
 
+
 /**
- * The cards of a screen and their "Hold OK" menu: one focus requester per card key (so the
- * focus can come back to a card, or its neighbour once the card left its row), and the open
- * menu, drawn by [CardMenuHost].
+ * The cards of a screen and their "Hold OK" menu, drawn by [CardMenuHost]: once the menu
+ * closes, focus returns to its card, or the nearest one left in its row ([FocusReturn]).
  */
 @Stable
-class CardFocus {
-    private val requesters = HashMap<String, FocusRequester>()
+class CardFocus(private val cards: FocusReturn) {
     var menu by mutableStateOf<OpenMenu?>(null)
         private set
-    private var refocus: OpenMenu? = null
 
-    fun requester(key: String): FocusRequester = requesters.getOrPut(key) { FocusRequester() }
+    fun requester(key: String): FocusRequester = cards.requester(key)
 
     fun open(card: CardModel, eyebrow: String, row: List<CardModel>) {
         menu = OpenMenu(card, eyebrow, row.map { it.key })
     }
 
     fun dismiss() {
-        refocus = menu
+        val m = menu ?: return
         menu = null
-    }
-
-    /** After the menu closed: back to its card, or the nearest one left in its row, else [fallback]. */
-    fun restore(present: (String) -> Boolean, fallback: FocusRequester?) {
-        val m = refocus ?: return
-        refocus = null
-        val keys = m.rowKeys
-        val at = keys.indexOf(m.card.key)
-        val order = listOf(m.card.key) + keys.drop(at + 1) + keys.take(at.coerceAtLeast(0)).reversed()
-        val target = order.firstOrNull(present)
-        val done = target != null && runCatching { requester(target).requestFocus() }.isSuccess
-        if (!done && fallback != null) runCatching { fallback.requestFocus() }
+        cards.returnTo(m.card.key, m.rowKeys)
     }
 }
 
+/** The screen's [CardFocus]; [fallback] takes the focus when a menu's row emptied. */
 @Composable
-fun rememberCardFocus(): CardFocus = remember { CardFocus() }
+fun rememberCardFocus(fallback: FocusRequester?): CardFocus {
+    val cards = rememberFocusReturn(fallback = fallback)
+    return remember(cards) { CardFocus(cards) }
+}
 
 /** The menu actions that wait for the server before the menu closes. */
 val SERVER_ACTIONS = setOf(
@@ -104,19 +97,15 @@ fun busyKeyOf(key: String, action: CardAction): String = when (action) {
 
 /**
  * The open menu of [focus], if any, as an [ActionSheet] wired to [onCardAction]; [busy] is the
- * screen's action in flight ([busyKeyOf]). [present] says whether a card key is still on
- * screen, [fallback] takes the focus when its row emptied.
+ * screen's action in flight ([busyKeyOf]).
  */
 @Composable
 fun CardMenuHost(
     focus: CardFocus,
     busy: String?,
-    present: (String) -> Boolean,
-    fallback: FocusRequester?,
     onCardAction: (String, CardAction) -> Unit,
 ) {
     val menu = focus.menu
-    LaunchedEffect(menu) { if (menu == null) focus.restore(present, fallback) }
     if (menu != null) {
         ActionSheet(
             title = menu.card.title,

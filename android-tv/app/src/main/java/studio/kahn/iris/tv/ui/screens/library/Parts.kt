@@ -69,22 +69,6 @@ fun Tone.cardTone(): StatusTone = when (this) {
 }
 
 /**
- * A focus requester per item key, so focus can go back to an item (or its neighbour) once a
- * panel or a dialog closes. Asking for a key whose item is not on screen does nothing.
- */
-@Stable
-class FocusKeys {
-    private val map = HashMap<Any, FocusRequester>()
-
-    fun of(key: Any): FocusRequester = map.getOrPut(key) { FocusRequester() }
-
-    /** Focuses the first of [keys] whose item is composed; false when none is. */
-    fun focus(vararg keys: Any?): Boolean = keys.filterNotNull().any { k ->
-        map[k]?.let { r -> runCatching { r.requestFocus(); true }.getOrDefault(false) } == true
-    }
-}
-
-/**
  * [studio.kahn.iris.tv.ui.components.PanelOptions] whose chosen option carries [selectedFocus],
  * so a panel opens on what is chosen (the shared one has no way to reach an option).
  */
@@ -106,12 +90,6 @@ fun <T> ChosenPanelOptions(
             )
         }
     }
-}
-
-/** The item after [key] in [keys], else the one before: where focus goes once [key] leaves. */
-fun <T> neighbourOf(keys: List<T>, key: T): T? {
-    val i = keys.indexOf(key)
-    return if (i < 0) null else keys.getOrNull(i + 1) ?: keys.getOrNull(i - 1)
 }
 
 /** What an action ended with, said once on the screen it happened on. */
