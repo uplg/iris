@@ -31,6 +31,7 @@ struct Inner {
     pub presence: Presence,
     pub live_tv: Option<LiveTvService>,
     pub passkeys: Option<crate::passkeys::Passkeys>,
+    pub session_cuts: crate::session_cut::SessionCuts,
 }
 
 impl AppState {
@@ -109,6 +110,7 @@ impl AppState {
                 presence: Presence::new(),
                 live_tv,
                 passkeys,
+                session_cuts: crate::session_cut::SessionCuts::default(),
             }),
         }
     }
@@ -204,6 +206,9 @@ impl AppState {
     }
     pub fn presence(&self) -> &Presence {
         &self.inner.presence
+    }
+    pub fn session_cuts(&self) -> &crate::session_cut::SessionCuts {
+        &self.inner.session_cuts
     }
     pub fn live_tv(&self) -> Option<&LiveTvService> {
         self.inner.live_tv.as_ref()

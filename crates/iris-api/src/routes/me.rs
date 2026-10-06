@@ -79,6 +79,7 @@ pub(crate) async fn change_password(
     let passkeys = iris_db::users::set_password(state.db(), user.id, &new_hash)
         .await?
         .ok_or(ApiError::Unauthorized)?;
+    state.session_cuts().forget(user.id);
     let id = Uuid::from(user.id).to_string();
     super::audit(
         &state,

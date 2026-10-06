@@ -220,6 +220,10 @@ pub(crate) async fn refresh(
         tracing::warn!(error = %e, "refresh rejected: token verify failed");
         ApiError::Unauthorized
     })?;
+    state
+        .session_cuts()
+        .check(state.db(), UserId::from(claims.sub), claims.issued_at_ms())
+        .await?;
 
     // Resolve the device tagging to carry forward, tolerating a rotation race.
     // Normal path: the jti is active → rotate it (`mark_rotated`, not `revoke`,
@@ -350,16 +354,17 @@ pub async fn issue_device_session(
     // The override TTL must reach the JWT encoder itself: `verify_refresh`
     // checks the token's `exp` before any DB lookup, so the JWT, the DB
     // `expires_at` and the cookie Max-Age have to agree on the horizon.
-    let (refresh, jti, exp) = state
+    let issued = state
         .jwt()
         .issue_refresh(user_id, refresh_ttl_override_secs.map(Duration::seconds))
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("issue refresh: {e}")))?;
+    let (refresh, jti) = (issued.token, issued.jti);
 
     iris_db::refresh_tokens::insert_with_device(
         state.db(),
         jti,
         user_id,
-        exp,
+        issued.expires_at,
         device_label,
         device_kind,
     )
@@ -405,4 +410,239 @@ fn build_cookie(
         // so it is immune to skew.
         .max_age(time::Duration::seconds(ttl.num_seconds()))
         .build()
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use iris_core::ids::UserId;
+    use iris_providers::ProviderRegistry;
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+
+    use crate::state::AppState;
+
+    pub(crate) struct Reply {
+        pub status: StatusCode,
+        pub json: Value,
+        /// `name=value` of every cookie the response sets.
+        pub cookies: Vec<String>,
+    }
+
+    impl Reply {
+        pub fn cookie(&self, name: &str) -> Option<String> {
+            self.cookies
+                .iter()
+                .find(|c| c.starts_with(&format!("{name}=")))
+                .cloned()
+        }
+    }
+
+    pub(crate) async fn call(
+        app: &axum::Router,
+        method: &str,
+        path: &str,
+        bearer: Option<&str>,
+        cookie: Option<&str>,
+        body: Option<Value>,
+    ) -> Reply {
+        let mut req = Request::builder().method(method).uri(path);
+        if let Some(t) = bearer {
+            req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        if let Some(c) = cookie {
+            req = req.header(header::COOKIE, c);
+        }
+        let req = match body {
+            Some(b) => req
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(b.to_string())),
+            None => req.body(Body::empty()),
+        }
+        .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let cookies = res
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .filter_map(|v| v.split(';').next())
+            .filter(|kv| !kv.ends_with('='))
+            .map(str::to_owned)
+            .collect();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        Reply {
+            status,
+            json: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            cookies,
+        }
+    }
+
+    pub(crate) const PASSWORD: &str = "correct horse battery";
+
+    /// A router over a fresh DB holding one member who signs in with
+    /// [`PASSWORD`].
+    pub(crate) async fn app_with_member() -> (AppState, axum::Router, UserId, String) {
+        let pool = iris_db::test_support::migrated_pool().await;
+        let email = "ana@example.org".to_owned();
+        let user = iris_db::users::create(
+            &pool,
+            iris_db::users::NewUser {
+                email: email.clone(),
+                password_hash: crate::passwords::hash(PASSWORD).await.unwrap(),
+                is_admin: false,
+            },
+        )
+        .await
+        .unwrap();
+        let state = AppState::for_tests(pool, ProviderRegistry::from_entries(&[]).unwrap()).await;
+        let app = crate::app::build_router(state.clone());
+        (state, app, user.id, email)
+    }
+
+    pub(crate) async fn login(app: &axum::Router, email: &str, password: &str) -> Reply {
+        call(
+            app,
+            "POST",
+            "/api/auth/login",
+            None,
+            None,
+            Some(json!({ "email": email, "password": password })),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_password_change_ends_every_session_the_callers_included() {
+        let (state, app, user, email) = app_with_member().await;
+        let signed_in = login(&app, &email, PASSWORD).await;
+        assert_eq!(signed_in.status, StatusCode::OK);
+        let refresh = signed_in.cookie("iris_refresh").unwrap();
+        let old = state.jwt().issue_access(user, false).unwrap();
+        assert_eq!(
+            call(&app, "GET", "/api/me", Some(&old), None, None)
+                .await
+                .status,
+            StatusCode::OK
+        );
+        let code = iris_db::device_codes::create(
+            state.db(),
+            "ABCD-2345",
+            chrono::Utc::now() + chrono::Duration::minutes(10),
+            "android-tv",
+        )
+        .await
+        .unwrap();
+        assert!(
+            iris_db::device_codes::claim(state.db(), "ABCD-2345", user, None)
+                .await
+                .unwrap()
+        );
+
+        let changed = call(
+            &app,
+            "POST",
+            "/api/me/password",
+            Some(&old),
+            None,
+            Some(json!({ "old_password": PASSWORD, "new_password": "a brand new secret" })),
+        )
+        .await;
+        assert_eq!(changed.status, StatusCode::NO_CONTENT);
+
+        for (method, path, body) in [
+            ("GET", "/api/me", None),
+            ("POST", "/api/me/passkeys/register/start", Some(json!({}))),
+            (
+                "POST",
+                "/api/me/devices",
+                Some(json!({ "code": "WXYZ-2345" })),
+            ),
+        ] {
+            assert_eq!(
+                call(&app, method, path, Some(&old), None, body)
+                    .await
+                    .status,
+                StatusCode::UNAUTHORIZED,
+                "{method} {path} with a token from before the change"
+            );
+        }
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/api/auth/refresh",
+                None,
+                Some(&refresh),
+                None
+            )
+            .await
+            .status,
+            StatusCode::UNAUTHORIZED
+        );
+        let polled = call(
+            &app,
+            "GET",
+            &format!("/api/auth/device/poll/{}", code.device_id),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(polled.json["status"], "expired", "{:?}", polled.json);
+        assert!(polled.cookie("iris_refresh").is_none());
+
+        assert_eq!(
+            login(&app, &email, PASSWORD).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        let again = login(&app, &email, "a brand new secret").await;
+        assert_eq!(again.status, StatusCode::OK);
+        let fresh = state.jwt().issue_access(user, false).unwrap();
+        assert_eq!(
+            call(&app, "GET", "/api/me", Some(&fresh), None, None)
+                .await
+                .status,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deleted_account_loses_its_access_token_at_once() {
+        let (state, app, user, _) = app_with_member().await;
+        let admin = iris_db::test_support::make_user(state.db()).await;
+        sqlx::query("UPDATE users SET is_admin = 1 WHERE id = ?1")
+            .bind(uuid::Uuid::from(admin))
+            .execute(state.db())
+            .await
+            .unwrap();
+        let admin_token = state.jwt().issue_access(admin, true).unwrap();
+        let token = state.jwt().issue_access(user, false).unwrap();
+        assert_eq!(
+            call(&app, "GET", "/api/me", Some(&token), None, None)
+                .await
+                .status,
+            StatusCode::OK
+        );
+        let deleted = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/users/{}", uuid::Uuid::from(user)),
+            Some(&admin_token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(deleted.status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            call(&app, "GET", "/api/me", Some(&token), None, None)
+                .await
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
 }

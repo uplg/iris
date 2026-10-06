@@ -20,6 +20,7 @@ pub mod rate_limit;
 pub mod reco;
 pub mod routes;
 pub mod seed_stats;
+pub mod session_cut;
 pub mod simkl;
 pub mod state;
 pub mod supervise;

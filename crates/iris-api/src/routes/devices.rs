@@ -141,6 +141,14 @@ pub(crate) async fn poll(
     let user = iris_db::users::find_by_id(state.db(), UserId::from(user_id))
         .await?
         .ok_or(ApiError::NotFound)?;
+    // Linked by a session the password change since ended: the pairing went
+    // with it.
+    let cut = iris_db::users::sessions_valid_after(state.db(), user.id)
+        .await?
+        .flatten();
+    if cut.is_some_and(|cut| row.claimed_at.is_none_or(|at| at < cut)) {
+        return Ok((jar, Json(PollResponse::Expired)));
+    }
 
     // Hand the device back a real session via the same cookie path the web
     // login uses, with a longer refresh TTL and labelled with the device
