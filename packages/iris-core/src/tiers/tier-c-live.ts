@@ -501,54 +501,58 @@ export const mountTierCLive: EngineMount = async (opts) => {
 						}
 					};
 
-					const sampleSink = new AudioSampleSink(audioTrack);
-					for await (const sample of sampleSink.samples(anchor, Number.POSITIVE_INFINITY)) {
-						if (disposed || encoderError) {
-							sample.close();
-							break;
-						}
-						try {
-							const rel = Math.max(0, sample.timestamp - anchor);
-							while (
-								!disposed &&
-								(rel - playheadRel() > (video.readyState > 0 ? FEED_AHEAD_S : PRESTART_AHEAD_S) || rel - videoFedRel > TRACK_LEAD_CAP)
-							) {
-								await sleep(PACE_MS);
+					// closed on every way out: a dispose ends the sample read with a throw
+					try {
+						const sampleSink = new AudioSampleSink(audioTrack);
+						for await (const sample of sampleSink.samples(anchor, Number.POSITIVE_INFINITY)) {
+							if (disposed || encoderError) {
+								sample.close();
+								break;
 							}
-							if (disposed) break;
-							if (expectedRel === null) {
-								contentBase = rel;
-								expectedRel = rel;
-							}
-							const gap = rel - expectedRel;
-							if (gap > 0.015) {
-								console.warn(
-									`[iris-core] live-c: audio content gap ${(gap * 1000).toFixed(0)}ms at ${rel.toFixed(2)}s — filling with silence`
-								);
-								encodeSilence(gap);
-							}
-							expectedRel = rel + sample.duration;
-							const data = sample.toAudioData();
 							try {
-								aEncoder.encode(data);
+								const rel = Math.max(0, sample.timestamp - anchor);
+								while (
+									!disposed &&
+									(rel - playheadRel() > (video.readyState > 0 ? FEED_AHEAD_S : PRESTART_AHEAD_S) || rel - videoFedRel > TRACK_LEAD_CAP)
+								) {
+									await sleep(PACE_MS);
+								}
+								if (disposed) break;
+								if (expectedRel === null) {
+									contentBase = rel;
+									expectedRel = rel;
+								}
+								const gap = rel - expectedRel;
+								if (gap > 0.015) {
+									console.warn(
+										`[iris-core] live-c: audio content gap ${(gap * 1000).toFixed(0)}ms at ${rel.toFixed(2)}s — filling with silence`
+									);
+									encodeSilence(gap);
+								}
+								expectedRel = rel + sample.duration;
+								const data = sample.toAudioData();
+								try {
+									aEncoder.encode(data);
+								} finally {
+									data.close();
+								}
 							} finally {
-								data.close();
+								sample.close();
 							}
-						} finally {
-							sample.close();
 						}
-					}
-					if (encoderError) throw encoderError;
-					try {
-						await aEncoder.flush();
-						await pumpEncoded();
-					} catch {
-						/* teardown */
-					}
-					try {
-						aEncoder.close();
-					} catch {
-						/* idempotent */
+						if (encoderError) throw encoderError;
+						try {
+							await aEncoder.flush();
+							await pumpEncoded();
+						} catch {
+							/* teardown */
+						}
+					} finally {
+						try {
+							aEncoder.close();
+						} catch {
+							/* idempotent */
+						}
 					}
 				}
 				try {
@@ -760,7 +764,14 @@ export const mountTierCLive: EngineMount = async (opts) => {
 			// ENDLIST — backend session died; the page rotates sources.
 			if (!disposed) opts.onEnded?.();
 		})();
-		void videoP;
+		// a dispose ends the packet read with a throw; a read that gave up (its retries spent) is a
+		// failure the page must hear, or the picture freezes with nothing rotating the source
+		void videoP.catch((e: unknown) => {
+			if (!disposed) {
+				console.warn('[iris-core] live-c: video pipeline ended', e);
+				fail(e instanceof Error ? e : new Error(String(e)));
+			}
+		});
 	} catch (e) {
 		await dispose();
 		const err = e instanceof Error ? e : new Error(String(e));

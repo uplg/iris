@@ -1288,7 +1288,16 @@ export const mountTierB: EngineMount = async (opts) => {
 
 	// Initial MediaSource + SourceBuffer setup
 
-	await openMediaSource(mediaSource, 'Tier B');
+	// a mount that fails tears down what it set up (the visibility listener, the object URL, the
+	// element's MediaSource and the decoder it holds) before it says so
+	const bail = async (e: unknown): Promise<never> => {
+		await dispose();
+		const err = e instanceof Error ? e : new Error(String(e));
+		fail(err);
+		throw err;
+	};
+
+	await openMediaSource(mediaSource, 'Tier B').catch(bail);
 
 	// Mediabunny writes `hvc1` sample entries (parameter sets live in the sample
 	// entry, not in-band), which ffprobe confirms on its output. The manifest
@@ -1307,14 +1316,13 @@ export const mountTierB: EngineMount = async (opts) => {
 	const audioCodec = audioNeedsTranscode ? (encoderChoice?.mp4Codec ?? 'mp4a.40.2') : chosenAudio?.codec_string;
 	const codecs = [videoCodec, audioCodec].filter((c): c is string => !!c).join(',');
 	const mime = codecs ? `video/mp4; codecs="${codecs}"` : 'video/mp4';
-	if (!MediaSource.isTypeSupported(mime)) {
-		await dispose();
-		const err = new Error(`MIME not supported by MSE: ${mime}`);
-		fail(err);
-		throw err;
-	}
+	if (!MediaSource.isTypeSupported(mime)) return bail(new Error(`MIME not supported by MSE: ${mime}`));
 
-	sourceBuffer = mediaSource.addSourceBuffer(mime);
+	try {
+		sourceBuffer = mediaSource.addSourceBuffer(mime);
+	} catch (e) {
+		return bail(e);
+	}
 	sourceBuffer.mode = 'segments';
 	appendQueue.attach(sourceBuffer);
 
@@ -1390,10 +1398,7 @@ export const mountTierB: EngineMount = async (opts) => {
 		}
 		await runManualPipeline(opts.startPosition);
 	} catch (e) {
-		await dispose();
-		const err = e instanceof Error ? e : new Error(String(e));
-		fail(err);
-		throw err;
+		return bail(e);
 	}
 
 	return handle;

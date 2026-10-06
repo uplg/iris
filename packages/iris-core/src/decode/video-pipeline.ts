@@ -100,6 +100,9 @@ export function startVideoPipeline(opts: VideoPipelineOptions): VideoPipelineHan
 					await new Promise<void>((r) => setTimeout(r, PACING_POLL_MS));
 				}
 				if (stopped) break;
+				// a decode error closes the codec and was said by its `error` callback: the next
+				// `decode()` would throw and say it twice
+				if (decoder.state === 'closed') return;
 				decoder.decode(packet.toEncodedVideoChunk());
 			}
 			if (!stopped) {
