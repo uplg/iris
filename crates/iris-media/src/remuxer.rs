@@ -409,6 +409,11 @@ impl RemuxManager {
         Some(progress_fraction(encoded, total))
     }
 
+    /// Whether `key`'s cache is built to the end (see [`cache_is_complete`]).
+    pub async fn is_complete(&self, key: &str) -> bool {
+        cache_is_complete(&self.master_path(key)).await
+    }
+
     pub async fn is_in_flight(&self, key: &str) -> bool {
         self.inner.jobs.lock().await.contains_key(key)
     }
@@ -438,7 +443,7 @@ impl RemuxManager {
         let master = self.master_path(key);
 
         // Lock-free fast path: cache hit.
-        if master_is_ready(&master).await {
+        if cache_is_complete(&master).await {
             return Ok(master);
         }
 
@@ -451,9 +456,12 @@ impl RemuxManager {
             if let Some(existing) = jobs.get(key).cloned() {
                 existing
             } else {
-                if master_is_ready(&master).await {
+                if cache_is_complete(&master).await {
                     return Ok(master);
                 }
+                // A transcode cut short by a restart: rebuilt from scratch,
+                // or its stale playlist would pass the readiness watch.
+                let _ = tokio::fs::remove_dir_all(self.cache_dir(key)).await;
                 let total_ms = plan
                     .source_duration_secs
                     .filter(|d| d.is_finite() && *d > 0.0)
@@ -770,6 +778,22 @@ impl RemuxPlan {
             v.push(format!("{}_init.mp4", a.name));
         }
         v
+    }
+}
+
+/// A cache built to the end: its master is on disk and its video playlist is
+/// closed. The transcode path streams an EVENT playlist that only gets
+/// `#EXT-X-ENDLIST` once ffmpeg finishes; one cut short (restart, crash)
+/// would otherwise pass for a hit forever and stall at the cut. A cache with
+/// no video playlist to judge by (shaka's are VOD) goes by its master.
+async fn cache_is_complete(master: &Path) -> bool {
+    if !master_is_ready(master).await {
+        return false;
+    }
+    let video = master.with_file_name(format!("{VIDEO_VARIANT}.m3u8"));
+    match tokio::fs::read_to_string(&video).await {
+        Ok(p) => !p.contains("#EXT-X-PLAYLIST-TYPE:EVENT") || p.contains("#EXT-X-ENDLIST"),
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
     }
 }
 
@@ -1497,6 +1521,40 @@ mod tests {
             .open(&sentinel)
             .unwrap();
         f.set_modified(SystemTime::now() - age).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_transcode_cut_short_is_no_cache_hit() {
+        let dir = std::env::temp_dir().join(format!("iris-remux-cut-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let master = dir.join(MASTER_PLAYLIST);
+        assert!(!cache_is_complete(&master).await, "nothing on disk");
+        std::fs::write(&master, "#EXTM3U\n").unwrap();
+        assert!(
+            cache_is_complete(&master).await,
+            "a master alone (shaka layout)"
+        );
+        let video = dir.join(format!("{VIDEO_VARIANT}.m3u8"));
+        std::fs::write(
+            &video,
+            "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXTINF:6,\nv_0.m4s\n",
+        )
+        .unwrap();
+        assert!(!cache_is_complete(&master).await, "an open EVENT playlist");
+        std::fs::write(
+            &video,
+            "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXTINF:6,\nv_0.m4s\n#EXT-X-ENDLIST\n",
+        )
+        .unwrap();
+        assert!(cache_is_complete(&master).await, "a finished transcode");
+        std::fs::write(
+            &video,
+            "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-ENDLIST\n",
+        )
+        .unwrap();
+        assert!(cache_is_complete(&master).await, "a shaka VOD playlist");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

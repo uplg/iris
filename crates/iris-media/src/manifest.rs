@@ -246,9 +246,20 @@ fn subtitle_track(s: &SubtitleStream, infohash: &str, file_idx: u32) -> Subtitle
         default: s.default,
         forced: s.forced,
         text_based: s.text_based,
-        extractable: true,
+        extractable: is_extractable(&s.codec, s.text_based),
         url,
     }
+}
+
+/// Whether `track.<ext>` can be cut out of the file: a text track (to `WebVTT`
+/// or ASS), or PGS copied verbatim. ffmpeg's `sup` muxer takes PGS only, so
+/// DVD/DVB bitmaps and the like are listed but not extractable.
+fn is_extractable(codec: &str, text_based: bool) -> bool {
+    text_based
+        || matches!(
+            codec.to_ascii_lowercase().as_str(),
+            "pgs" | "hdmv_pgs_subtitle"
+        )
 }
 
 fn subtitle_url_ext(codec: &str) -> &'static str {
@@ -478,6 +489,14 @@ async fn moov_before_mdat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_text_and_pgs_subtitles_are_extractable() {
+        assert!(is_extractable("subrip", true));
+        assert!(is_extractable("hdmv_pgs_subtitle", false));
+        assert!(!is_extractable("dvd_subtitle", false));
+        assert!(!is_extractable("dvb_teletext", false));
+    }
 
     fn mp4_box(kind: [u8; 4], body_len: usize) -> Vec<u8> {
         let size = u32::try_from(8 + body_len).unwrap();

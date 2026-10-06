@@ -1850,12 +1850,7 @@ pub(crate) async fn play_status(
         }
         // Not in flight: either the encode finished (master on disk → playable
         // + fully seekable) or it hasn't been kicked off yet.
-        let master = state.remuxer().master_path(&key);
-        let master_ready = matches!(
-            tokio::fs::metadata(&master).await,
-            Ok(m) if m.is_file() && m.len() > 0
-        );
-        if master_ready {
+        if state.remuxer().is_complete(&key).await {
             return Ok(Json(PlayStatus {
                 ready: true,
                 reason: None,
@@ -1887,11 +1882,7 @@ pub(crate) async fn play_status(
     // it's strictly lazy, firing only when someone requests
     // `/play/master.m3u8`. Report ready as soon as the master exists, else
     // fall through to ready — there's nothing to wait on.
-    let master = state.remuxer().master_path(&key);
-    if let Ok(meta) = tokio::fs::metadata(&master).await
-        && meta.is_file()
-        && meta.len() > 0
-    {
+    if state.remuxer().is_complete(&key).await {
         return Ok(Json(PlayStatus {
             ready: true,
             reason: None,

@@ -252,6 +252,7 @@ pub async fn probe_file(path: &Path) -> Result<MediaProbe, ProbeError> {
             "-show_streams",
         ])
         .arg(path)
+        .kill_on_drop(true)
         .output()
         .await?;
 
