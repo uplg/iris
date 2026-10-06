@@ -386,42 +386,6 @@ fun isRemuxableError(e: PlaybackException): Boolean = when (e.errorCode) {
 }
 
 /**
- * Build a `MediaItem` for the Iris `/stream` endpoint — the raw,
- * range-supported source bytes (MKV / MP4 / etc.) served as-is by
- * `iris-api`'s `stream_file` route.
- *
- * We deliberately bypass the server-side HLS-CMAF remux pipeline that
- * the web client uses as its Tier F fallback. Media3 / ExoPlayer
- * already does everything that pipeline does, but in-process:
- *   - MatroskaExtractor demuxes the container.
- *   - HEVC / H.264 video is hardware-decoded (or software-decoded via
- *     C2 on the SoC).
- *   - AC-3 / E-AC-3 / DTS audio is passed through to the HDMI sink
- *     when the receiver advertises support; otherwise Media3 falls
- *     back to its software AC-3 decoder.
- *   - Multi-audio + embedded subtitle tracks (SRT, ASS, PGS) are
- *     surfaced via the standard `Tracks` API and the native
- *     PlayerView settings menu.
- *
- * Savings vs the HLS pipeline: zero ffmpeg+shaka CPU on the server,
- * no remux wait at start, sub-stream handling is consistent with
- * the source file (PGS bitmap subs from Blu-rays render correctly
- * instead of being silently dropped at the VTT filter).
- *
- * Mime hint: `APPLICATION_MATROSKA` is the common case for our
- * library (every torrent we've ingested is `.mkv`). Caller can pass
- * a different mime via `mimeType` if probing surfaces something else.
- * Letting Media3 sniff also works (omit the hint) but pre-declaring
- * skips the first range probe.
- *
- * Resume position is intentionally NOT applied here via
- * `ClippingConfiguration` — that would re-window the timeline so
- * `player.duration` reports `(end - resume)` instead of the full file
- * duration (a 23-min episode came back as a 6-min one after resuming).
- * The caller seeks via `Player.setMediaItem(item, startPositionMs)`
- * which positions the playhead without touching the timeline.
- */
-/**
  * Side-loaded WebVTT subtitle track for the server HLS path. The remux /
  * transcode master playlist carries NO subtitle renditions (subs stay
  * external, served by `/sub/{stream_idx}/track.vtt`), and Media3 only reads
@@ -443,6 +407,42 @@ fun webVttSubtitle(
         .setSelectionFlags(if (forced) C.SELECTION_FLAG_FORCED else 0)
         .build()
 
+/**
+ * Build a `MediaItem` for the Iris `/stream` endpoint — the raw,
+ * range-supported source bytes (MKV / MP4 / etc.) served as-is by
+ * `iris-api`'s `stream_file` route.
+ *
+ * We deliberately bypass the server-side HLS-CMAF remux pipeline that
+ * the web client uses as its Tier F fallback. Media3 / ExoPlayer
+ * already does everything that pipeline does, but in-process:
+ *   - MatroskaExtractor demuxes the container.
+ *   - HEVC / H.264 video is hardware-decoded (or software-decoded via
+ *     C2 on the SoC).
+ *   - AC-3 / E-AC-3 / DTS audio is passed through to the HDMI sink
+ *     when the receiver advertises support; otherwise Media3 falls
+ *     back to its software AC-3 decoder.
+ *   - Multi-audio + embedded subtitle tracks (SRT, ASS, PGS) are
+ *     surfaced via the standard `Tracks` API, picked in the
+ *     player's own Compose panel (`trackMenu`).
+ *
+ * Savings vs the HLS pipeline: zero ffmpeg+shaka CPU on the server,
+ * no remux wait at start, sub-stream handling is consistent with
+ * the source file (PGS bitmap subs from Blu-rays render correctly
+ * instead of being silently dropped at the VTT filter).
+ *
+ * Mime hint: `APPLICATION_MATROSKA` is the common case for our
+ * library (every torrent we've ingested is `.mkv`). Caller can pass
+ * a different mime via `mimeType` if probing surfaces something else.
+ * Letting Media3 sniff also works (omit the hint) but pre-declaring
+ * skips the first range probe.
+ *
+ * Resume position is intentionally NOT applied here via
+ * `ClippingConfiguration` — that would re-window the timeline so
+ * `player.duration` reports `(end - resume)` instead of the full file
+ * duration (a 23-min episode came back as a 6-min one after resuming).
+ * The caller seeks via `Player.setMediaItem(item, startPositionMs)`
+ * which positions the playhead without touching the timeline.
+ */
 @UnstableApi
 fun buildMediaItem(
     playUrl: String,

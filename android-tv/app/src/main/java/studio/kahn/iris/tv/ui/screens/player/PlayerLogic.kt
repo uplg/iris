@@ -6,6 +6,7 @@ import studio.kahn.iris.tv.data.EpisodePoint
 import studio.kahn.iris.tv.data.EpisodeStatus
 import studio.kahn.iris.tv.ui.format.clock
 import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.prettySceneName
 
 /** Watched once past 90 % (the credits), for movies and episodes alike; the web's rule too. */
 const val WATCHED_FRACTION = 0.90
@@ -65,13 +66,11 @@ fun clockText(ms: Long): String = clock(ms.coerceAtLeast(0) / 1_000.0)
 fun remainingText(positionMs: Long, durationMs: Long): String =
     "−" + clockText(abs(durationMs - positionMs))
 
-/** A release or file name made readable: no extension, dots and underscores as spaces. */
+/** A release or file name as a title ([prettySceneName]: "Mercato (2025)"), its folders left out. */
 fun prettyName(raw: String?): String? = raw
     ?.substringAfterLast('/')
-    ?.let { name -> if ('.' in name) name.substringBeforeLast('.') else name }
-    ?.replace('.', ' ')
-    ?.replace('_', ' ')
-    ?.trim()
+    ?.takeIf { it.isNotBlank() }
+    ?.let(::prettySceneName)
     ?.takeIf { it.isNotBlank() }
 
 /** "S2:E4 · Woe's Hollow" (the name when the server knows it). */
@@ -112,5 +111,5 @@ fun retrySearchQuery(title: String?, season: Long?, episode: Long?, releaseName:
         return String.format(Locale.ROOT, "%s S%02dE%02d", title, season, episode)
     }
     if (!title.isNullOrBlank()) return title
-    return prettyName(releaseName).orEmpty()
+    return prettyName(releaseName)?.replace("(", "")?.replace(")", "").orEmpty()
 }

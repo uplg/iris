@@ -76,7 +76,8 @@ fun GettingReadyContent(
     val layout = IrisLayout.current
     val first = remember { FocusRequester() }
     val problem = ui.readiness.problem
-    LaunchedEffect(ui.gone, problem?.title) { runCatching { first.requestFocus() } }
+    // The buttons change with the problem and with a failed regrab: the focus follows.
+    LaunchedEffect(ui.gone, problem?.title, ui.regrabFailed) { runCatching { first.requestFocus() } }
     Box(
         modifier
             .fillMaxSize()
