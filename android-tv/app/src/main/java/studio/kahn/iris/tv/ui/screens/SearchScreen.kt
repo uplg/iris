@@ -40,7 +40,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -242,7 +241,6 @@ fun SearchScreen(
     // a series sharing a slug) used to share one cache entry, so the
     // wrong poster carried over to half the rows. Mirrors the web's
     // `["tmdb-by-title", cleaned, result.kind ?? "any"]` query key.
-    val tmdbCache = remember { mutableStateMapOf<Pair<String, String?>, TmdbSuggestion?>() }
 
     // The device's last few submitted searches — one-click chips on the
     // empty state, so a remote user re-runs yesterday's search without
@@ -409,33 +407,6 @@ fun SearchScreen(
             p.totalPages?.let { if (it > pages) pages = it }
         }
         count to pages
-    }
-
-    // Resolve TMDB posters from cleaned SCENE titles. Runs whenever the
-    // result set changes, fires one TMDB multi-search per *unique* cleaned
-    // title not already in the cache. Misses fall back to the indexer's
-    // poster_url / placeholder gradient inside ResultCard.
-    LaunchedEffect(data) {
-        val results = data?.results.orEmpty()
-        val libs = data?.libraryMatches.orEmpty()
-        if (results.isEmpty() && libs.isEmpty()) return@LaunchedEffect
-        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
-        val api = container.apiFor(url)
-        // One resolve call per distinct (release title, kind). The
-        // backend parses + scores by kind + year and caches 30d, so this
-        // is both correct (no more "Pride" → "Pride and Prejudice"
-        // popularity collisions) and cheap (shared server-side cache).
-        // Library matches resolve through the same cache keyed on their
-        // clean display title — same poster pipeline as everything else.
-        val unresolved = (results.map { it.title to it.kind?.value } +
-            libs.map { it.displayTitle to it.kind })
-            .filter { (title, _) -> title.isNotBlank() }
-            .filter { it !in tmdbCache }
-            .distinct()
-        for ((title, kind) in unresolved) {
-            tmdbCache[title to kind] =
-                runCatching { api.tmdbResolve(title, kind) }.getOrNull()
-        }
     }
 
     val focusManager: FocusManager = LocalFocusManager.current
@@ -723,7 +694,7 @@ fun SearchScreen(
                             ) { m ->
                                 LibraryMatchCard(
                                     match = m,
-                                    resolvedPoster = tmdbCache[m.displayTitle to m.kind]?.posterPath,
+                                    resolvedPoster = m.posterPath,
                                     onClick = { openLibraryMatch(m, onPickFile, onPickCollection) },
                                 )
                             }
@@ -733,8 +704,7 @@ fun SearchScreen(
                             ) { r ->
                                 ResultCard(
                                     result = r,
-                                    resolvedPoster = tmdbCache[r.title to r.kind?.value]?.posterPath,
-                                    onClick = {
+                                                                        onClick = {
                                         onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind?.value)
                                     },
                                 )
@@ -750,7 +720,7 @@ fun SearchScreen(
                             ) { m ->
                                 LibraryMatchRow(
                                     match = m,
-                                    resolvedPoster = tmdbCache[m.displayTitle to m.kind]?.posterPath,
+                                    resolvedPoster = m.posterPath,
                                     onClick = { openLibraryMatch(m, onPickFile, onPickCollection) },
                                 )
                             }
@@ -760,8 +730,7 @@ fun SearchScreen(
                             ) { r ->
                                 ResultRow(
                                     result = r,
-                                    resolvedPoster = tmdbCache[r.title to r.kind?.value]?.posterPath,
-                                    onClick = {
+                                                                        onClick = {
                                         onPickResult(r.providerId, r.externalId, r.tmdbId, r.kind?.value)
                                     },
                                 )
@@ -1198,16 +1167,10 @@ private fun LibraryMatchRow(
 @Composable
 private fun ResultCard(
     result: SearchResult,
-    /** TMDB poster path resolved upstream from the SCENE-cleaned release
-     *  title — bypasses the indexer's per-result `tmdb_id` (frequently
-     *  wrong, e.g. Silicon Valley → Burning Bed). When null we fall
-     *  through to `result.posterUrl` (rarely populated) and finally to
-     *  the placeholder gradient. */
-    resolvedPoster: String?,
     onClick: () -> Unit,
 ) {
     val parsed = remember(result) { parseTags(result) }
-    val poster: String? = tmdbPosterUrl(resolvedPoster, "w342") ?: result.posterUrl
+    val poster: String? = result.posterUrl
     var focused by remember { mutableStateOf(false) }
     val cardShape = RoundedCornerShape(Radius.poster)
     Card(
@@ -1374,11 +1337,10 @@ private fun ResultCard(
 @Composable
 private fun ResultRow(
     result: SearchResult,
-    resolvedPoster: String?,
     onClick: () -> Unit,
 ) {
     val parsed = remember(result) { parseTags(result) }
-    val poster: String? = tmdbPosterUrl(resolvedPoster, "w185") ?: result.posterUrl
+    val poster: String? = result.posterUrl
     var focused by remember { mutableStateOf(false) }
     val rowShape = RoundedCornerShape(Radius.button)
     Card(
