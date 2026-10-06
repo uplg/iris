@@ -37,6 +37,7 @@ export const KEYS = {
 	featured: ['discover-featured'],
 	forYou: ['for-you'],
 	forYouPage: ['for-you-page'],
+	moodBoardAll: ['mood-board'],
 	moodBoard: (kind: MediaKind) => ['mood-board', kind] as const,
 	moodResults: ['mood-results'],
 	preferences: ['preferences'],

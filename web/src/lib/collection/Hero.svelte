@@ -72,6 +72,7 @@
 			},
 			async () => {
 				void queryClient.invalidateQueries({ queryKey: KEYS.watchlist });
+				void queryClient.invalidateQueries({ queryKey: KEYS.follows });
 				await refetchCollection(c.id);
 				ui.say(was ? `${c.display_title} is no longer on your watchlist.` : `${c.display_title} is on your watchlist.`);
 			},

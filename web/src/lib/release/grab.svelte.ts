@@ -7,6 +7,8 @@ import { ApiError, torrents, type TorrentPreview } from '@iris/api/client';
 import { Gesture } from '#lib/gesture.svelte.ts';
 import { autoFile } from './files.ts';
 import { watchHref } from '#lib/paths.ts';
+import { queryClient } from '#lib/query.ts';
+import { KEYS, refreshLibrary } from '#lib/queries.ts';
 
 /** Above this a grab asks twice: complete-series packs fill the shared disk, and everyone's
  * library is cleaned up sooner. */
@@ -61,6 +63,10 @@ export class Grab {
 					return null;
 				}
 				const res = await torrents.ingest(t.provider, t.id, t.tmdbId ?? null, given.duplicate ?? false);
+				// in the library now: what lists it, and the results that said « not in library »,
+				// are read again when next shown
+				void refreshLibrary();
+				void queryClient.invalidateQueries({ queryKey: KEYS.search, refetchType: 'none' });
 				return watchHref(res.snapshot.infohash, idx);
 			},
 			(href) => {

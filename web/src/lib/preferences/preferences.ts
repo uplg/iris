@@ -20,5 +20,6 @@ export function toggled<T>(list: readonly T[], v: T): T[] {
 /** The server kept these preferences: they replace the cached ones, the suggestions follow. */
 export function preferencesSaved(saved: Preferences): void {
 	queryClient.setQueryData(KEYS.preferences, saved);
-	for (const queryKey of [KEYS.forYou, KEYS.forYouPage, KEYS.moodResults]) void queryClient.invalidateQueries({ queryKey });
+	for (const queryKey of [KEYS.forYou, KEYS.forYouPage, KEYS.moodBoardAll, KEYS.moodResults])
+		void queryClient.invalidateQueries({ queryKey });
 }
