@@ -81,9 +81,16 @@ fun <T> polling(
     intervalMs: Long,
     from: () -> Loadable<T>,
     fetch: suspend () -> T,
+): Flow<Loadable<T>> = polling({ _: T? -> intervalMs }, from, fetch)
+
+/** [polling] at a pace that follows what was read last (slower once nothing moves). */
+fun <T> polling(
+    intervalMs: (T?) -> Long,
+    from: () -> Loadable<T>,
+    fetch: suspend () -> T,
 ): Flow<Loadable<T>> = flow {
     var state = from()
-    pollWhile({ intervalMs }) {
+    pollWhile({ intervalMs(state.valueOrNull) }) {
         state = load(state, fetch)
         emit(state)
     }
@@ -128,7 +135,11 @@ const val STOP_TIMEOUT_MS = 5_000L
  * screen is started (it stops [STOP_TIMEOUT_MS] after Home, the screensaver
  * or another screen on top) and resumes from the value it last showed.
  */
-fun <T> CoroutineScope.pollWhileStarted(intervalMs: Long, fetch: suspend () -> T): StateFlow<Loadable<T>> {
+fun <T> CoroutineScope.pollWhileStarted(intervalMs: Long, fetch: suspend () -> T): StateFlow<Loadable<T>> =
+    pollWhileStarted({ _: T? -> intervalMs }, fetch)
+
+/** [pollWhileStarted] at a pace that follows what was read last. */
+fun <T> CoroutineScope.pollWhileStarted(intervalMs: (T?) -> Long, fetch: suspend () -> T): StateFlow<Loadable<T>> {
     lateinit var state: StateFlow<Loadable<T>>
     state = polling(intervalMs, from = { state.value }, fetch = fetch)
         .stateIn(this, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), Loadable.Loading)

@@ -203,7 +203,7 @@ class IrisAuthenticator(private val sessionStore: SessionStore) : Authenticator 
             }
             val client = refreshClient ?: return null
             val baseUrl = runBlocking { sessionStore.serverUrl.first() } ?: return null
-            val refreshUrl = (if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/") + "api/auth/refresh"
+            val refreshUrl = serverBase(baseUrl) + "api/auth/refresh"
             val refreshReq = Request.Builder()
                 .url(refreshUrl)
                 .post(ByteArray(0).toRequestBody())

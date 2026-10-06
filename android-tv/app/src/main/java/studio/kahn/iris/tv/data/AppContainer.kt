@@ -107,6 +107,9 @@ class DefaultAppContainer(context: Context) : AppContainer {
                 .create(IrisApi::class.java)
         }
 
-    private fun normalize(url: String): String =
-        if (url.endsWith("/")) url else "$url/"
+    private fun normalize(url: String): String = serverBase(url)
 }
+
+/** The server's URL as a base for paths: with its trailing slash. */
+fun serverBase(url: String): String = if (url.endsWith("/")) url else "$url/"
+
