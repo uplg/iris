@@ -131,11 +131,11 @@ pub async fn list_best_for_series(
                WHERE normalized_name = ",
     );
     qb.push_bind(normalized_name);
-    qb.push(
-        " AND episode > 0 AND seeders IS NOT 0) \
-         WHERE _rn = 1 \
-         ORDER BY season, episode, language",
-    );
+    qb.push(concat!(
+        " AND episode > 0 AND seeders IS NOT 0 AND ",
+        offer_tracker_on_sql!(""),
+        ") WHERE _rn = 1 ORDER BY season, episode, language"
+    ));
     qb.build_query_as::<AvailableEpisodeRow>()
         .fetch_all(pool)
         .await
@@ -200,11 +200,11 @@ pub async fn list_season_packs_for_series(
                WHERE normalized_name = ",
     );
     qb.push_bind(normalized_name);
-    qb.push(
-        " AND episode = 0 AND seeders IS NOT 0) \
-         WHERE _rn = 1 \
-         ORDER BY season, language",
-    );
+    qb.push(concat!(
+        " AND episode = 0 AND seeders IS NOT 0 AND ",
+        offer_tracker_on_sql!(""),
+        ") WHERE _rn = 1 ORDER BY season, language"
+    ));
     let packs = qb
         .build_query_as::<AvailableEpisodeRow>()
         .fetch_all(pool)
@@ -256,7 +256,11 @@ pub async fn find_pack_for_season(
     qb.push_bind(normalized_name);
     qb.push(" AND episode = 0 AND season = ");
     qb.push_bind(season);
-    qb.push(" AND seeders IS NOT 0 AND (");
+    qb.push(concat!(
+        " AND seeders IS NOT 0 AND ",
+        offer_tracker_on_sql!(""),
+        " AND ("
+    ));
     qb.push_bind(language_pref);
     qb.push(" IS NULL OR language = ");
     qb.push_bind(language_pref);
@@ -286,7 +290,8 @@ pub async fn list_offers_for_episode(
         available_episode_columns!(),
         " FROM available_episodes \
          WHERE normalized_name = ?1 AND season = ?2 AND episode = ?3 \
-           AND episode > 0 AND seeders IS NOT 0"
+           AND episode > 0 AND seeders IS NOT 0 AND ",
+        offer_tracker_on_sql!("")
     ))
     .bind(normalized_name)
     .bind(season)
@@ -307,7 +312,8 @@ pub async fn list_pack_offers_for_season(
         "SELECT ",
         available_episode_columns!(),
         " FROM available_episodes \
-         WHERE normalized_name = ?1 AND season = ?2 AND episode = 0 AND seeders IS NOT 0"
+         WHERE normalized_name = ?1 AND season = ?2 AND episode = 0 AND seeders IS NOT 0 AND ",
+        offer_tracker_on_sql!("")
     ))
     .bind(normalized_name)
     .bind(season)
@@ -343,17 +349,18 @@ pub async fn count_new_for_series(
     let Some(cutoff) = since else {
         return Ok(0);
     };
-    let row: (i64,) = sqlx::query_as(
+    let row: (i64,) = sqlx::query_as(concat!(
         "SELECT COUNT(DISTINCT ae.season || '-' || ae.episode) FROM available_episodes ae \
          WHERE ae.normalized_name = ?1 AND ae.found_at > ?2 \
-           AND ae.episode > 0 AND ae.seeders IS NOT 0 \
-           AND NOT EXISTS ( \
+           AND ae.episode > 0 AND ae.seeders IS NOT 0 AND ",
+        offer_tracker_on_sql!("ae."),
+        " AND NOT EXISTS ( \
                SELECT 1 FROM episode_files ef \
                JOIN collections c ON c.id = ef.collection_id \
                JOIN torrents t ON t.infohash = ef.infohash AND t.deleted_at IS NULL \
                WHERE c.parsed_title_normalized = ?1 AND c.kind = 'tv' \
                  AND ef.season = ae.season AND ef.episode = ae.episode)",
-    )
+    ))
     .bind(normalized_name)
     .bind(cutoff)
     .fetch_one(pool)
@@ -615,5 +622,61 @@ mod count_new_tests {
             .await
             .unwrap();
         assert_eq!(n, 1, "only S02E02 is new and grabbable");
+    }
+
+    #[tokio::test]
+    async fn a_tracker_switched_off_hides_its_offers_until_it_is_on_again() {
+        let pool = migrated_pool().await;
+        let admin = make_user(&pool).await;
+        let mut other = offer(1, 2, "tl-1", Some(3));
+        other.indexer_provider = "tl".into();
+        for o in [
+            offer(1, 1, "e1", Some(9)),
+            offer(1, 0, "pack", Some(9)),
+            other,
+        ] {
+            upsert(&pool, o).await.unwrap();
+        }
+        let visible = |pool: SqlitePool| async move {
+            let best = list_best_for_series(&pool, "severance").await.unwrap();
+            let packs = list_season_packs_for_series(&pool, "severance", &HashMap::new())
+                .await
+                .unwrap();
+            let offers = list_offers_for_episode(&pool, "severance", 1, 1)
+                .await
+                .unwrap();
+            let pack_offers = list_pack_offers_for_season(&pool, "severance", 1)
+                .await
+                .unwrap();
+            let pack = find_pack_for_season(&pool, "severance", 1, None)
+                .await
+                .unwrap();
+            (
+                best.len(),
+                packs.len(),
+                offers.len(),
+                pack_offers.len(),
+                pack.is_some(),
+            )
+        };
+        assert_eq!(visible(pool.clone()).await, (2, 1, 1, 1, true));
+
+        crate::provider_overrides::set(&pool, "c411", false, admin)
+            .await
+            .unwrap();
+        assert_eq!(visible(pool.clone()).await, (1, 0, 0, 0, false));
+        let since = Utc::now() - chrono::TimeDelta::hours(1);
+        assert_eq!(
+            count_new_for_series(&pool, "severance", Some(since))
+                .await
+                .unwrap(),
+            1,
+            "only tl's offer counts"
+        );
+
+        crate::provider_overrides::set(&pool, "c411", true, admin)
+            .await
+            .unwrap();
+        assert_eq!(visible(pool.clone()).await, (2, 1, 1, 1, true));
     }
 }

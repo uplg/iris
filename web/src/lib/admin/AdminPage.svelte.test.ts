@@ -3,7 +3,7 @@ import { render } from 'vitest-browser-svelte';
 import { page } from 'vitest/browser';
 import { session } from '#lib/session.svelte.ts';
 import { ui } from '#lib/ui.svelte.ts';
-import { stubApi } from '#lib/test/api.ts';
+import { deferred, stubApi } from '#lib/test/api.ts';
 import '../../styles/app.css';
 import { controlAt } from '#lib/test/hit.ts';
 import { alex, leonard, noContent } from '../account/testing.ts';
@@ -20,6 +20,18 @@ const later = new Date(Date.now() + 3 * 86_400_000).toISOString();
 const invitations = [
 	{ id: 'i1', created_at: day(3), created_by: 'u1', expires_at: later },
 	{ id: 'i2', created_at: day(1), created_by: 'u1', expires_at: later, consumed_at: day(2), consumed_by: 'u2' }
+];
+
+const trackers = (tr4ker = true) => [
+	{ id: 'c411', kind: 'c411', enabled: true, configured: true, last_search: { at: day(6, 21), latency_ms: 420 } },
+	{ id: 'tos', kind: 'unit3d', enabled: false, configured: false },
+	{
+		id: 'tr4ker',
+		kind: 'tr4ker',
+		enabled: tr4ker,
+		configured: true,
+		last_search: { at: day(6, 21), latency_ms: 8000, error: 'provider error: timed out after 8s' }
+	}
 ];
 
 function site(more: Record<string, unknown> = {}) {
@@ -56,6 +68,7 @@ function site(more: Record<string, unknown> = {}) {
 			total_downloaded_bytes: 1000
 		},
 		'GET /admin/remux': [],
+		'GET /admin/providers': trackers(),
 		'GET /admin/audit-log?limit=50': [
 			{ id: 1, action: 'user.password_reset', actor_id: 'u1', actor_display_name: 'Léonard', resource_type: 'user', created_at: day(5) }
 		],
@@ -74,7 +87,7 @@ describe('admin page', () => {
 		site();
 		await render(AdminPage);
 		await expect.element(page.getByRole('heading', { level: 1, name: 'Admin' })).toBeVisible();
-		for (const name of ['Users', 'Invitations', 'Now watching', 'Watch history', 'Storage', 'Maintenance', 'Audit log']) {
+		for (const name of ['Users', 'Invitations', 'Now watching', 'Watch history', 'Storage', 'Trackers', 'Maintenance', 'Audit log']) {
 			await expect.element(region(name)).toBeVisible();
 		}
 		await expect.element(region('Now watching').getByText('Paused')).toBeVisible();
@@ -154,6 +167,37 @@ describe('admin page', () => {
 		await expect.poll(() => document.querySelectorAll('.list-row').length).toBeGreaterThan(0);
 		expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(320);
 		await page.viewport(414, 896);
+	});
+
+	it('trackers: each one on or off in words, how its last search went', async () => {
+		site();
+		await render(AdminPage);
+		const list = region('Trackers');
+		await expect.element(list.getByText(/^On · Last search .*: answered in 420 ms$/)).toBeVisible();
+		await expect.element(list.getByText(/^On · Last search .*: failed after 8\.0 s: provider error: timed out after 8s$/)).toBeVisible();
+		await expect.element(list.getByText('Off in providers.toml · unit3d')).toBeVisible();
+		const tos = list.getByRole('switch', { name: 'tos' });
+		await expect.element(tos).toHaveAttribute('aria-disabled', 'true');
+		await expect.element(tos).toHaveAccessibleDescription('Disabled in providers.toml: only the config can turn it on.');
+	});
+
+	it('turns a tracker off: the row changes once the server says so', async () => {
+		const answer = deferred();
+		const api = site({ 'PUT /admin/providers/tr4ker': () => answer.promise });
+		await render(AdminPage);
+		const tr4ker = region('Trackers').getByRole('switch', { name: 'tr4ker' });
+		await expect.element(tr4ker).toBeChecked();
+		await tr4ker.click();
+		await expect.poll(() => api.sent('PUT', '/admin/providers/tr4ker')[0]?.body).toEqual({ enabled: false });
+		await expect.element(tr4ker).toHaveAttribute('aria-busy', 'true');
+		await expect.element(tr4ker).toBeChecked();
+
+		api.routes['GET /admin/providers'] = trackers(false);
+		answer.resolve(trackers(false)[2]);
+		await expect.element(tr4ker).not.toBeChecked();
+		await expect.element(region('Trackers').getByText('Off · searches skip it')).toBeVisible();
+		(region('Trackers').getByRole('switch', { name: 'tos' }).element() as HTMLElement).click();
+		expect(api.sent('PUT', '/admin/providers/tos')).toHaveLength(0);
 	});
 
 	it('frees disk space after asking, and says what went', async () => {

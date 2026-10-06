@@ -219,6 +219,8 @@ export type GcReport = components['schemas']['GcReport'];
 export type UserView = components['schemas']['UserView'];
 
 export type RemuxJobView = components['schemas']['RemuxJobView'];
+/** A providers.toml entry as an admin sees it: on or off now, built or not, its last search. */
+export type ProviderStatus = components['schemas']['ProviderStatus'];
 
 /** A live "who's watching what" entry from `/admin/active-sessions`. */
 export type ActiveSession = components['schemas']['ActiveSessionView'];
@@ -244,6 +246,9 @@ export const admin = {
 	deleteUser: (userId: string) => api.delete<void>(`/admin/users/${seg(userId)}`),
 	listRemux: () => api.get<RemuxJobView[]>('/admin/remux'),
 	wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${seg(key)}`),
+	providers: () => api.get<ProviderStatus[]>('/admin/providers'),
+	/** Turn a tracker on or off without a restart; answers its new state. */
+	setProviderEnabled: (id: string, enabled: boolean) => api.put<ProviderStatus>(`/admin/providers/${seg(id)}`, { enabled }),
 	activeSessions: () => api.get<ActiveSession[]>('/admin/active-sessions'),
 	watchHistory: (limit?: number) => api.get<WatchHistoryEntry[]>(`/admin/watch-history${limit ? `?limit=${limit}` : ''}`),
 	/** Full watch history for one user — admin drill-down equivalent of

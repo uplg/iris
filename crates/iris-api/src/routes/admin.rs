@@ -46,6 +46,7 @@ pub fn router() -> Router<AppState> {
         .route("/watch-history", get(watch_history))
         .route("/users/{id}/history", get(user_history))
         .route("/audit-log", get(audit_log))
+        .merge(super::providers::admin_router())
 }
 
 /// One live "who's watching what" row for `GET /admin/active-sessions`.

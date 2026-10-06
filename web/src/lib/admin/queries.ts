@@ -15,3 +15,5 @@ export const watchHistoryQuery = () => ({
 export const storageQuery = () => ({ queryKey: ['admin', 'storage'], queryFn: admin.storage, refetchInterval: 10_000 });
 export const remuxQuery = () => ({ queryKey: ['admin', 'remux'], queryFn: admin.listRemux, refetchInterval: 10_000 });
 export const auditQuery = () => ({ queryKey: ['admin', 'audit-log'], queryFn: () => admin.auditLog(50), refetchInterval: 30_000 });
+/** The trackers, on or off, and how each one's last search went: read every 30 s. */
+export const providersQuery = () => ({ queryKey: ['admin', 'providers'], queryFn: admin.providers, refetchInterval: 30_000 });

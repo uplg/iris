@@ -1,6 +1,6 @@
 <script lang="ts">
 	// The engine room (admins): the household's accounts, the invitations, who watches now and
-	// what was watched, the disk, its upkeep and the log of sensitive actions. Every live
+	// what was watched, the disk and the trackers, the upkeep and the log of sensitive actions. Every live
 	// figure is read again by its query (refetchInterval), never by a timer of ours.
 	import PageHead from '#lib/components/PageHead.svelte';
 	import Icon from '#lib/components/Icon.svelte';
@@ -9,12 +9,13 @@
 	import Maintenance from './Maintenance.svelte';
 	import NowWatching from './NowWatching.svelte';
 	import Storage from './Storage.svelte';
+	import Trackers from './Trackers.svelte';
 	import Users from './Users.svelte';
 	import WatchActivity from './WatchActivity.svelte';
 </script>
 
 <PageHead title="Admin">
-	{#snippet sub()}People, invitations, playback and the disk.{/snippet}
+	{#snippet sub()}People, invitations, playback, the disk and the trackers.{/snippet}
 	{#snippet end()}
 		<a class="btn" href="/library?view=torrents"><Icon name="list" />Raw releases view</a>
 	{/snippet}
@@ -31,7 +32,10 @@
 		<Invitations />
 	</div>
 	<div class="pair">
-		<Storage />
+		<div class="stack">
+			<Storage />
+			<Trackers />
+		</div>
 		<Maintenance />
 	</div>
 	<AuditLog />
@@ -42,7 +46,8 @@
 		display: grid;
 		gap: var(--s-6);
 	}
-	.pair {
+	.pair,
+	.stack {
 		display: grid;
 		gap: var(--s-6);
 	}
@@ -53,7 +58,8 @@
 		}
 	}
 	.sections :global(.group + .group),
-	.pair :global(.group) {
+	.pair :global(.group),
+	.stack :global(.group) {
 		margin-top: 0;
 	}
 	.sections :global(.group p) {

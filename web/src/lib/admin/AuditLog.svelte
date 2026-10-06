@@ -16,7 +16,9 @@
 		'user.display_name_update': 'changed a display name',
 		'user.delete': 'deleted an account',
 		'gc.evict': 'freed disk space',
-		'remux.wipe': 'deleted a prepared copy'
+		'remux.wipe': 'deleted a prepared copy',
+		'provider.enable': 'turned a tracker on',
+		'provider.disable': 'turned a tracker off'
 	};
 	const log = createQuery(auditQuery, () => queryClient);
 	const value = loadable(log);
@@ -24,7 +26,7 @@
 </script>
 
 <Group id="audit-title" title="Audit log" fact={log.data?.length ? plural(log.data.length, 'entry', 'entries') : undefined}>
-	<p class="hint">Deletions, password changes and clean-ups, and who made them.</p>
+	<p class="hint">Deletions, password changes, clean-ups and trackers turned on or off, and who made them.</p>
 	<Loaded {value} empty={log.data?.length === 0} emptyText="Nothing recorded yet.">
 		<ul class="plain-list log">
 			{#each log.data ?? [] as e (e.id)}

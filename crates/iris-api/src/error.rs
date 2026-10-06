@@ -50,6 +50,10 @@ pub enum ApiError {
     /// asking the tracker, and the message names what's holding the slot.
     #[error("{0}")]
     ProviderSlotLimit(String),
+    /// An admin turned the release's tracker off (Admin → Trackers): it is
+    /// not asked for anything until it is turned on again.
+    #[error("This tracker is turned off in Admin.")]
+    ProviderOff,
     /// A remote origin we depend on (live TV playlist / stream / guide)
     /// failed. 502 so clients can distinguish "their side" from "our side".
     #[error("upstream unavailable: {0}")]
@@ -94,6 +98,7 @@ impl IntoResponse for ApiError {
                 "provider_slot_limit",
                 self.to_string(),
             ),
+            ApiError::ProviderOff => (StatusCode::CONFLICT, "provider_off", self.to_string()),
             ApiError::Upstream(_) => (StatusCode::BAD_GATEWAY, "upstream", self.to_string()),
             ApiError::Db(_) | ApiError::Internal(_) => {
                 tracing::error!(error = ?self, "internal error");
