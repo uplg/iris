@@ -195,9 +195,6 @@ fun IrisRoot(
                 DiscoverScreen(
                     container = container,
                     onSelectTab = { },
-                    onOpenCollection = { collectionId ->
-                        navController.navigate(Routes.Collection(collectionId))
-                    },
                     onOpenSearch = { query ->
                         navController.navigate(Routes.Search(query))
                     },
