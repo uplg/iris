@@ -1491,19 +1491,49 @@ pub(crate) async fn seek_hint(
         playhead_s = body.playhead_s,
         "seek hint",
     );
+    // A file on disk has nothing to fetch: the read would only compete with
+    // the real playback read.
+    let row = torrent_or_404(&state, &infohash).await?;
+    if torrent_finished(&state, &row) {
+        return Ok(StatusCode::NO_CONTENT);
+    }
     // Spawn the prefetch in the background so the client gets its 204 back
     // immediately; librqbit picks up the priority bias as soon as the read
     // starts. We aim for ~30 seconds of playback ahead — derived from the
     // probed bitrate when we have one, falling back to a flat 64 MiB cap.
+    // One prefetch per file: a new seek aborts the previous one, whose
+    // position the player has already left.
+    let key = format!("{infohash}_{idx}");
+    let mut prefetches = SEEK_PREFETCHES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let entry = prefetches.entry(key.clone()).or_default();
+    if let Some(task) = entry.task.take() {
+        task.abort();
+    }
+    let window = entry.window;
     let engine = state.engine().clone();
     let probes = state.probes().clone();
-    let infohash_clone = infohash.clone();
     let byte_offset = body.byte_offset;
-    tokio::spawn(async move {
-        let bytes_ahead = playhead_window_bytes(&engine, &probes, &infohash_clone, idx).await;
+    let task_key = key;
+    let task = tokio::spawn(async move {
+        let bytes_ahead = if let Some(w) = window {
+            w
+        } else {
+            let w = playhead_window_bytes(&engine, &probes, &infohash, idx).await;
+            if let Some(w) = w
+                && let Some(entry) = SEEK_PREFETCHES
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get_mut(&task_key)
+            {
+                entry.window = Some(w);
+            }
+            w.unwrap_or(PREFETCH_FALLBACK)
+        };
         if let Err(e) = engine
             .prefetch_range(
-                &infohash_clone,
+                &infohash,
                 idx,
                 byte_offset,
                 bytes_ahead,
@@ -1514,52 +1544,58 @@ pub(crate) async fn seek_hint(
             tracing::debug!(error = %e, "seek hint prefetch errored");
         }
     });
+    entry.task = Some(task.abort_handle());
+    drop(prefetches);
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Per `{infohash}_{idx}`: the prefetch in flight, and the playhead window
+/// once measured (one ffprobe per file, not one per seek).
+#[derive(Default)]
+struct SeekPrefetch {
+    task: Option<tokio::task::AbortHandle>,
+    window: Option<u64>,
+}
+
+static SEEK_PREFETCHES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, SeekPrefetch>>,
+> = std::sync::LazyLock::new(Default::default);
+
+const PREFETCH_FALLBACK: u64 = 64 * 1024 * 1024;
+
 /// Window of bytes to mark high-priority ahead of the playhead. Targets
 /// ~30 seconds of playback by deriving bytes-per-second from the cached
-/// probe (total size ÷ duration); falls back to a flat 64 MiB ceiling
-/// when the probe is unavailable. Capped at 256 MiB so a long seek on a
-/// 4 K HEVC remux doesn't lock librqbit into an impossibly wide window.
+/// probe (total size ÷ duration); `None` when the probe can't tell yet (the
+/// caller then uses [`PREFETCH_FALLBACK`]). Capped at 256 MiB so a long
+/// seek on a 4 K HEVC remux doesn't lock librqbit into an impossibly wide
+/// window.
 async fn playhead_window_bytes(
     engine: &std::sync::Arc<iris_torrent::Engine>,
     probes: &iris_media::ProbeCache,
     infohash: &str,
     idx: usize,
-) -> u64 {
-    const FALLBACK: u64 = 64 * 1024 * 1024;
+) -> Option<u64> {
     const CAP: u64 = 256 * 1024 * 1024;
     const SECONDS_AHEAD: f64 = 30.0;
 
-    let Some(snapshot) = engine.get_by_infohash(infohash) else {
-        return FALLBACK;
-    };
+    let snapshot = engine.get_by_infohash(infohash)?;
     let file_size = snapshot
         .files
         .iter()
         .find(|f| f.index == idx)
-        .map_or(0, |f| f.size_bytes);
-    if file_size == 0 {
-        return FALLBACK;
-    }
-    let Ok(path) = engine.file_path(infohash, idx) else {
-        return FALLBACK;
-    };
-    let Ok(probe) = probes
+        .map(|f| f.size_bytes)
+        .filter(|s| *s > 0)?;
+    let path = engine.file_path(infohash, idx).ok()?;
+    let probe = probes
         .get_or_probe(infohash, idx, &path, snapshot.finished)
         .await
-    else {
-        return FALLBACK;
-    };
-    let Some(duration) = probe.duration_seconds.filter(|d| *d > 0.0) else {
-        return FALLBACK;
-    };
+        .ok()?;
+    let duration = probe.duration_seconds.filter(|d| *d > 0.0)?;
     #[allow(clippy::cast_precision_loss)]
     let bps = file_size as f64 / duration;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let bytes = (bps * SECONDS_AHEAD).round() as u64;
-    bytes.clamp(8 * 1024 * 1024, CAP)
+    Some(bytes.clamp(8 * 1024 * 1024, CAP))
 }
 
 /// Playback-error report sent by clients when a decode tier fails.
