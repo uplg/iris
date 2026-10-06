@@ -14,13 +14,16 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.SubtitlePick
 import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.ui.components.LockLandscape
+import studio.kahn.iris.tv.ui.components.OnOutputLost
 import studio.kahn.iris.tv.ui.components.PlayerStage
 import studio.kahn.iris.tv.ui.screens.player.ChromeMode
 import studio.kahn.iris.tv.ui.screens.player.ChromeState
 import studio.kahn.iris.tv.ui.screens.player.GettingReadyContent
 import studio.kahn.iris.tv.ui.screens.player.GettingReadyUi
 import studio.kahn.iris.tv.ui.screens.player.PlayerChrome
+import studio.kahn.iris.tv.ui.screens.player.PlayRoute
 import studio.kahn.iris.tv.ui.screens.player.ProbePhase
+import studio.kahn.iris.tv.ui.screens.player.RouteTracks
 import studio.kahn.iris.tv.ui.screens.player.ReadyInput
 import studio.kahn.iris.tv.ui.screens.player.ReadyProblem
 import studio.kahn.iris.tv.ui.screens.player.VodEngine
@@ -33,6 +36,7 @@ import studio.kahn.iris.tv.ui.screens.player.playWords
 import studio.kahn.iris.tv.ui.screens.player.readiness
 import studio.kahn.iris.tv.ui.state.irisViewModel
 import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
 import studio.kahn.iris.tv.ui.format.languageName
 
 /**
@@ -60,6 +64,8 @@ fun WatchScreen(
     val header by vm.header.collectAsStateWithLifecycle()
     val playback = remember(vm) { VodPlayback() }
     val chrome = remember(vm) { ChromeState() }
+    // From the start, getting ready included: a TV switched off then must not start playing.
+    OnOutputLost { playback.outputLost = true }
 
     Box(Modifier.fillMaxSize().background(IrisColor.stage)) {
         val ready = setup
@@ -111,7 +117,7 @@ private fun GettingReadyLayer(
     val playerError = playback.error
     val ui = GettingReadyUi(
         title = header.title,
-        subtitle = listOfNotNull(header.episode, setup?.let(::startLanguages)).joinToString(" · ").ifEmpty { null },
+        subtitle = listOfNotNull(header.episode, setup?.let { startLanguages(it, playback.route) }).joinToString(" · ").ifEmpty { null },
         posterUrl = header.posterUrl,
         readiness = if (playerError != null && base.problem == null) {
             base.copy(problem = ReadyProblem("The player stopped", playerError, deadSwarm = false))
@@ -134,18 +140,19 @@ private fun GettingReadyLayer(
 }
 
 /** The languages it starts in, as the engine will pick them: "English audio, French subtitles". */
-private fun startLanguages(setup: WatchSetup): String? {
+private fun startLanguages(setup: WatchSetup, route: PlayRoute): String? {
     val probe = setup.probe
-    val audioLang = setup.savedAudioIdx?.let { idx -> probe.audio.firstOrNull { it.index == idx }?.language }
+    val tracks = RouteTracks.of(probe, route)
+    val audioLang = tracks.audioLanguage(setup.savedAudioIdx)
         ?: setup.prefAudioLang
         ?: probe.audio.firstOrNull { it.default }?.language
         ?: probe.audio.firstOrNull()?.language
     val subLang = when (val saved = setup.savedSubIdx) {
         -1 -> null
         null -> setup.prefSubLang
-            ?.takeIf { it != "off" }
-            ?.let { pref -> SubtitlePick.preferredOrdinal(probe.subtitle, pref)?.let { probe.subtitle[it].language } }
-        else -> probe.subtitle.firstOrNull { it.index == saved }?.language
+            ?.takeIf { it != NO_SUBTITLES }
+            ?.let { pref -> SubtitlePick.preferredOrdinal(tracks.subtitles, pref)?.let { tracks.subtitles[it].language } }
+        else -> tracks.subtitleLanguage(saved)
     }
     val audio = languageName(audioLang)?.let { "$it audio" } ?: return null
     val subs = languageName(subLang)?.let { "$it subtitles" } ?: "no subtitles"
