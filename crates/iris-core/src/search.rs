@@ -61,6 +61,15 @@ impl MediaKind {
         }
     }
 
+    /// A stored `kind` column read as a kind, for the call sites that need
+    /// one. The columns are CHECK-constrained to `movie`/`tv`, so the
+    /// fallback only covers a hand-edited row: it reads as a series, the
+    /// shape that still renders (seasons, episode list) whatever the title.
+    #[must_use]
+    pub fn from_stored(s: &str) -> Self {
+        Self::from_wire(s).unwrap_or(Self::Tv)
+    }
+
     /// The wire / DB token, the inverse of [`Self::from_wire`].
     #[must_use]
     pub const fn as_wire(self) -> &'static str {
@@ -406,6 +415,13 @@ pub struct SubInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_kind_falls_back_to_tv() {
+        assert_eq!(MediaKind::from_stored("movie"), MediaKind::Movie);
+        assert_eq!(MediaKind::from_stored("tv"), MediaKind::Tv);
+        assert_eq!(MediaKind::from_stored("anime"), MediaKind::Tv);
+    }
 
     fn result(category: Option<&str>, kind: Option<MediaKind>) -> SearchResult {
         SearchResult {
