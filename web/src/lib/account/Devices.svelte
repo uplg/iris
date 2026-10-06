@@ -26,7 +26,7 @@
 	const KINDS: Record<string, string> = { 'android-tv': 'Android TV', web: 'Web' };
 
 	/** Waiting for the TV whose code was accepted: since when, and how many devices there were. */
-	let waiting = $state<{ since: number; had: number } | null>(null);
+	let waiting = $state<{ since: number; had: Set<string> } | null>(null);
 	const list = createQuery(
 		() => ({
 			queryKey: ['devices'],
@@ -55,7 +55,8 @@
 	$effect(() => {
 		if (!waiting || !list.data) return;
 		void list.dataUpdatedAt;
-		if (list.data.length > waiting.had) {
+		// a device not listed before: a re-paired TV replaces its row, a revoke may land meanwhile
+		if (list.data.some((d) => !waiting?.had.has(d.jti))) {
 			waiting = null;
 			ui.toast('Your TV is paired and signed in.');
 		} else if (Date.now() - waiting.since > CODE_LIFE_MS) {
@@ -77,7 +78,7 @@
 		return g.run(
 			() => devices.link(c, label.trim() || undefined),
 			async () => {
-				waiting = { since: Date.now(), had: list.data?.length ?? 0 };
+				waiting = { since: Date.now(), had: new Set((list.data ?? []).map((d) => d.jti)) };
 				code = label = '';
 				ui.say('Code accepted. Waiting for the TV to sign in.');
 				await list.refetch();

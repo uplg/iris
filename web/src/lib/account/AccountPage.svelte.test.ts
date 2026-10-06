@@ -187,6 +187,17 @@ describe('account page', () => {
 		await expect.element(page.getByRole('button', { name: 'Stop waiting' })).not.toBeInTheDocument();
 	});
 
+	it('a re-paired TV is seen arriving although the count of devices stays the same', async () => {
+		let reads = 0;
+		// the TV's old row is replaced by its new one
+		const again = { ...tv, jti: 'j2' };
+		site({ 'GET /me/devices': () => (reads++ >= 2 ? [again] : [tv]), 'POST /me/devices': noContent() });
+		await render(AccountPage);
+		await page.getByLabelText('Pairing code').fill('wx7k-abcd');
+		await page.getByRole('button', { name: 'Pair the TV' }).click();
+		await expect.poll(() => ui.toasts.map((t) => t.text), { timeout: 6000 }).toContain('Your TV is paired and signed in.');
+	});
+
 	it('a refused code is said under the code field', async () => {
 		site({ 'POST /me/devices': json({ error: 'bad_request', message: 'bad request: invalid or expired code' }, 400) });
 		await render(AccountPage);
