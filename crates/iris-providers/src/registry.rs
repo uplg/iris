@@ -126,6 +126,33 @@ pub struct ProviderRegistry {
     /// Provider-id → semaphore bounding concurrent `search` calls
     /// ([`MAX_INFLIGHT_PER_PROVIDER`]).
     search_permits: Arc<HashMap<String, Arc<tokio::sync::Semaphore>>>,
+    /// The TMDB id each tracker shipped with a release it listed, kept
+    /// from the searches and feeds that passed through so a grab can
+    /// record it (trust signal T1) — the grab request only carries
+    /// `(provider_id, external_id)`.
+    tracker_tmdb: Arc<std::sync::Mutex<TrackerTmdbIds>>,
+}
+
+/// Bounded FIFO of `(provider_id, external_id) → tmdb_id`.
+#[derive(Default)]
+struct TrackerTmdbIds {
+    ids: HashMap<(String, String), u64>,
+    order: std::collections::VecDeque<(String, String)>,
+}
+
+const TRACKER_TMDB_CAP: usize = 8192;
+
+impl TrackerTmdbIds {
+    fn insert(&mut self, key: (String, String), id: u64) {
+        if self.ids.insert(key.clone(), id).is_none() {
+            self.order.push_back(key);
+            while self.order.len() > TRACKER_TMDB_CAP {
+                if let Some(old) = self.order.pop_front() {
+                    self.ids.remove(&old);
+                }
+            }
+        }
+    }
 }
 
 impl ProviderRegistry {
@@ -159,7 +186,34 @@ impl ProviderRegistry {
             providers: Arc::new(map),
             policies: Arc::new(policies),
             search_permits: Arc::new(permits),
+            tracker_tmdb: Arc::default(),
         })
+    }
+
+    /// Remember the TMDB ids the trackers shipped with `results`. Called
+    /// on every aggregated search; feed readers (`latest`, featured) call
+    /// it themselves.
+    pub fn remember_tracker_ids(&self, results: &[crate::SearchResult]) {
+        let mut map = self
+            .tracker_tmdb
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for r in results {
+            if let Some(id) = r.tmdb_id.filter(|id| *id > 0) {
+                map.insert((r.provider_id.clone(), r.external_id.clone()), id);
+            }
+        }
+    }
+
+    /// The TMDB id the tracker shipped with this release, when a search or
+    /// feed since boot listed it.
+    pub fn tracker_tmdb_id(&self, provider_id: &str, external_id: &str) -> Option<u64> {
+        self.tracker_tmdb
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .ids
+            .get(&(provider_id.to_owned(), external_id.to_owned()))
+            .copied()
     }
 
     /// The policy a provider declared, or the defaults for an unknown id.
@@ -312,6 +366,7 @@ impl ProviderRegistry {
                         total_pages: p.total_pages,
                         error: None,
                     });
+                    self.remember_tracker_ids(&p.results);
                     agg.results.extend(p.results);
                 }
                 Err(e) => {
