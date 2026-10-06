@@ -175,6 +175,27 @@ pub(crate) fn parse_size(text: &str) -> Option<u64> {
     Some((num * mult).round() as u64)
 }
 
+/// A `reqwest::Error` without its request URL. reqwest's `Display` appends
+/// ` for url (…)`, and tracker URLs carry the secret (Torznab `apikey`,
+/// `UNIT3D` `api_token`, `TorrentLeech` `rss_key`, TMDB `api_key`); the text
+/// reaches the logs and every `/api/search` client.
+pub fn redact(e: reqwest::Error) -> reqwest::Error {
+    e.without_url()
+}
+
+/// A provider error for a failed HTTP step, URL stripped (see [`redact`]).
+pub(crate) fn http_error(context: &str, e: reqwest::Error) -> Error {
+    Error::Provider(format!("{context}: {}", redact(e)))
+}
+
+/// `scheme://host` of a URL, for logs: the path and query may hold a key.
+pub(crate) fn url_origin(url: &str) -> String {
+    url::Url::parse(url).map_or_else(
+        |_| "<invalid url>".to_owned(),
+        |u| u.origin().ascii_serialization(),
+    )
+}
+
 /// Run a CPU-bound page parse on the blocking pool. A tracker page is a few
 /// hundred KB of HTML, and `scraper` builds the whole DOM: on an async worker
 /// that would stall every request scheduled alongside it.
@@ -254,7 +275,23 @@ fn base32_infohash(s: &str) -> Option<String> {
 mod tests {
     use iris_core::search::SearchQuery;
 
-    use super::{extract_year, join_category, normalize_infohash, scene_query};
+    use super::{extract_year, http_error, join_category, normalize_infohash, scene_query};
+
+    #[tokio::test]
+    async fn http_errors_never_carry_the_request_url() {
+        let err = reqwest::Client::new()
+            .get("http://127.0.0.1:1/api?apikey=SECRET")
+            .send()
+            .await
+            .expect_err("nothing listens on port 1");
+        assert!(
+            err.to_string().contains("SECRET"),
+            "reqwest appends the url"
+        );
+        let msg = http_error("torznab request", err).to_string();
+        assert!(!msg.contains("SECRET"), "{msg}");
+        assert!(msg.contains("torznab request"), "{msg}");
+    }
 
     #[test]
     fn infohash_accepts_hex_and_base32_and_rejects_the_rest() {

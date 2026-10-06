@@ -211,7 +211,7 @@ impl TmdbClient {
 
     /// GET `https://api.themoviedb.org/3/{path}` with the API key added to
     /// `query`. `what` names the call in logs; the URL never is (it carries
-    /// the key).
+    /// the key), so errors are logged through `iris_providers::redact`.
     async fn get_json<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -227,7 +227,7 @@ impl TmdbClient {
             .send()
             .await
             .map_err(|e| {
-                tracing::warn!(error = %e, what, "tmdb request failed");
+                tracing::warn!(error = %iris_providers::redact(e), what, "tmdb request failed");
                 Miss::Failed
             })?;
         if res.status() == reqwest::StatusCode::NOT_FOUND {
@@ -238,7 +238,7 @@ impl TmdbClient {
             return Err(Miss::Failed);
         }
         res.json().await.map_err(|e| {
-            tracing::warn!(error = %e, what, "tmdb response unparsable");
+            tracing::warn!(error = %iris_providers::redact(e), what, "tmdb response unparsable");
             Miss::Failed
         })
     }

@@ -133,7 +133,7 @@ impl C411 {
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("c411 details request: {e}")))?;
+            .map_err(|e| crate::util::http_error("c411 details request", e))?;
         if res.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -148,7 +148,7 @@ impl C411 {
         let body = res
             .text()
             .await
-            .map_err(|e| Error::Provider(format!("c411 details body: {e}")))?;
+            .map_err(|e| crate::util::http_error("c411 details body", e))?;
         let raw: TorrentDetailRaw = serde_json::from_str(&body).map_err(|e| {
             tracing::warn!(
                 provider = %self.id,
@@ -183,12 +183,12 @@ impl C411 {
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("c411 homepage request: {e}")))?
+            .map_err(|e| crate::util::http_error("c411 homepage request", e))?
             .error_for_status()
-            .map_err(|e| Error::Provider(format!("c411 homepage status: {e}")))?
+            .map_err(|e| crate::util::http_error("c411 homepage status", e))?
             .text()
             .await
-            .map_err(|e| Error::Provider(format!("c411 homepage body: {e}")))?;
+            .map_err(|e| crate::util::http_error("c411 homepage body", e))?;
 
         let resp: HomepageResponse = serde_json::from_str(&body).map_err(|e| {
             tracing::warn!(

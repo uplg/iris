@@ -170,13 +170,13 @@ impl HdTorrents {
             .form(&[("uid", self.username.as_str()), ("pwd", &self.password)])
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("hdtorrents login: {e}")))?;
+            .map_err(|e| crate::util::http_error("hdtorrents login", e))?;
 
         let status = res.status();
         let body = res
             .text()
             .await
-            .map_err(|e| Error::Provider(format!("hdtorrents login body: {e}")))?;
+            .map_err(|e| crate::util::http_error("hdtorrents login body", e))?;
 
         if body.to_ascii_lowercase().contains(LOGIN_OK_MARKER) {
             tracing::debug!(provider = %self.id, "hdtorrents login succeeded");
@@ -214,7 +214,7 @@ impl HdTorrents {
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(|e| Error::Provider(format!("hdtorrents request: {e}")))?;
+                .map_err(|e| crate::util::http_error("hdtorrents request", e))?;
             if !res.status().is_success() {
                 let status = res.status();
                 return Err(Error::Provider(format!(
@@ -224,7 +224,7 @@ impl HdTorrents {
             let body = res
                 .text()
                 .await
-                .map_err(|e| Error::Provider(format!("hdtorrents body: {e}")))?;
+                .map_err(|e| crate::util::http_error("hdtorrents body", e))?;
             if body.contains(NOT_AUTHORIZED_MARKER) && attempt == 0 {
                 attempt += 1;
                 self.invalidate_session().await;
@@ -250,7 +250,7 @@ impl HdTorrents {
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(|e| Error::Provider(format!("hdtorrents download: {e}")))?;
+                .map_err(|e| crate::util::http_error("hdtorrents download", e))?;
             if !res.status().is_success() {
                 let status = res.status();
                 return Err(Error::Provider(format!(
@@ -260,7 +260,7 @@ impl HdTorrents {
             let bytes = res
                 .bytes()
                 .await
-                .map_err(|e| Error::Provider(format!("hdtorrents download body: {e}")))?;
+                .map_err(|e| crate::util::http_error("hdtorrents download body", e))?;
             let looks_expired = bytes.first().copied() != Some(BENCODE_DICT_MARKER)
                 && String::from_utf8_lossy(&bytes).contains(NOT_AUTHORIZED_MARKER);
             if looks_expired && attempt == 0 {

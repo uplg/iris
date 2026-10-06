@@ -177,7 +177,7 @@ impl Unit3dProvider {
             .query(&[("api_token", &self.api_token)])
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("unit3d details request: {e}")))?;
+            .map_err(|e| crate::util::http_error("unit3d details request", e))?;
         if res.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -192,7 +192,7 @@ impl Unit3dProvider {
         let body = res
             .text()
             .await
-            .map_err(|e| Error::Provider(format!("unit3d details body: {e}")))?;
+            .map_err(|e| crate::util::http_error("unit3d details body", e))?;
         let envelope: TorrentEnvelope = serde_json::from_str(&body).map_err(|e| {
             tracing::warn!(
                 provider = %self.id,
@@ -232,7 +232,7 @@ impl Unit3dProvider {
             .get(url)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("unit3d download: {e}")))?;
+            .map_err(|e| crate::util::http_error("unit3d download", e))?;
         if !res.status().is_success() {
             let status = res.status();
             let body = res.text().await.unwrap_or_default();
@@ -258,13 +258,13 @@ impl Unit3dProvider {
         let bytes = res
             .bytes()
             .await
-            .map_err(|e| Error::Provider(format!("unit3d download body: {e}")))?;
+            .map_err(|e| crate::util::http_error("unit3d download body", e))?;
         if bytes.first().copied() != Some(BENCODE_DICT_MARKER) {
             let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned();
             tracing::warn!(
                 provider = %self.id,
                 external_id,
-                url = %url,
+                url = %crate::util::url_origin(url),
                 first_byte = ?bytes.first(),
                 body_preview = %preview,
                 "unit3d download returned non-bencoded body",
@@ -350,12 +350,12 @@ impl SearchProvider for Unit3dProvider {
             .query(&qs)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("unit3d request: {e}")))?
+            .map_err(|e| crate::util::http_error("unit3d request", e))?
             .error_for_status()
-            .map_err(|e| Error::Provider(format!("unit3d status: {e}")))?
+            .map_err(|e| crate::util::http_error("unit3d status", e))?
             .text()
             .await
-            .map_err(|e| Error::Provider(format!("unit3d body: {e}")))?;
+            .map_err(|e| crate::util::http_error("unit3d body", e))?;
 
         let parsed: SearchResponse = serde_json::from_str(&resp).map_err(|e| {
             tracing::warn!(

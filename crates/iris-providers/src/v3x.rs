@@ -150,7 +150,7 @@ impl Session {
             }))
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("v3x login: {e}")))?;
+            .map_err(|e| crate::util::http_error("v3x login", e))?;
         let status = res.status();
         let body: serde_json::Value = res.json().await.unwrap_or_default();
         if !status.is_success() {
@@ -185,7 +185,7 @@ impl Session {
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(|e| Error::Provider(format!("v3x details: {e}")))?;
+                .map_err(|e| crate::util::http_error("v3x details", e))?;
             if res.status() == StatusCode::UNAUTHORIZED && !retried {
                 retried = true;
                 *self.logged_in.lock().await = false;
@@ -200,7 +200,7 @@ impl Session {
             break res
                 .json()
                 .await
-                .map_err(|e| Error::Provider(format!("v3x details body: {e}")))?;
+                .map_err(|e| crate::util::http_error("v3x details body", e))?;
         };
         let d = raw.into_details(provider_id, id);
         self.cache.put(id.to_string(), d.clone()).await;
