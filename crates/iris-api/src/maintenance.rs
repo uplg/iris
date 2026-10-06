@@ -1,6 +1,6 @@
 //! Hourly housekeeping of tables that only ever grow: sessions nobody can
-//! use any more, expired pairing codes, old capability telemetry and stale
-//! TMDB resolutions.
+//! use any more, expired pairing codes, old capability telemetry, stale
+//! TMDB resolutions and offers no indexer scan returns any more.
 
 use std::time::Duration;
 
@@ -14,6 +14,8 @@ const CAPS_LOG_RETENTION: chrono::Duration = chrono::Duration::days(30);
 /// Must stay at or past `tmdb_resolve`'s cache max age (30 days): older rows
 /// are never read again.
 const TMDB_RESOLVE_RETENTION: chrono::Duration = chrono::Duration::days(31);
+/// An offer every scan has missed for this long left its tracker.
+const OFFER_RETENTION: chrono::Duration = chrono::Duration::days(30);
 
 pub fn spawn(pool: SqlitePool) {
     tokio::spawn(async move {
@@ -32,15 +34,17 @@ async fn run_once(pool: &SqlitePool) {
     let codes = iris_db::device_codes::cleanup_expired(pool).await;
     let caps = iris_db::playback_caps::prune(pool, now - CAPS_LOG_RETENTION).await;
     let tmdb = iris_db::tmdb_cache::prune(pool, now - TMDB_RESOLVE_RETENTION).await;
-    match (sessions, codes, caps, tmdb) {
-        (Ok(sessions), Ok(codes), Ok(caps), Ok(tmdb)) => {
-            tracing::debug!(sessions, codes, caps, tmdb, "maintenance: pruned");
+    let offers = iris_db::available_episodes::prune_unseen(pool, now - OFFER_RETENTION).await;
+    match (sessions, codes, caps, tmdb, offers) {
+        (Ok(sessions), Ok(codes), Ok(caps), Ok(tmdb), Ok(offers)) => {
+            tracing::debug!(sessions, codes, caps, tmdb, offers, "maintenance: pruned");
         }
-        (sessions, codes, caps, tmdb) => tracing::warn!(
+        (sessions, codes, caps, tmdb, offers) => tracing::warn!(
             sessions = ?sessions.err(),
             codes = ?codes.err(),
             caps = ?caps.err(),
             tmdb = ?tmdb.err(),
+            offers = ?offers.err(),
             "maintenance: prune failed"
         ),
     }
