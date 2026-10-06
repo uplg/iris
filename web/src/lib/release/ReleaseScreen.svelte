@@ -35,13 +35,13 @@
 	const back = backToResults();
 
 	const preview = createQuery(
-		() => ({ queryKey: ['torrent-preview', provider, id], queryFn: () => torrents.preview(provider, id), staleTime: 5 * 60_000 }),
+		() => ({ queryKey: KEYS.torrentPreview(provider, id), queryFn: () => torrents.preview(provider, id), staleTime: 5 * 60_000 }),
 		() => queryClient
 	);
 	// best-effort: some trackers have no details, and the release can still be grabbed
 	const details = createQuery(
 		() => ({
-			queryKey: ['search-details', provider, id],
+			queryKey: KEYS.searchDetails(provider, id),
 			queryFn: () => searchDetails.get(provider, id).catch(() => null),
 			staleTime: 5 * 60_000
 		}),

@@ -5,6 +5,7 @@
 	// refetchInterval, no timer of our own) until the new device appears, or until the code's
 	// life is over (10 min on the server), when the wait ends and says so.
 	import { createQuery } from '@tanstack/svelte-query';
+	import { KEYS } from '#lib/queries.ts';
 	import { ago, onDay, plural } from '@iris/api/format';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
@@ -28,7 +29,7 @@
 	let waiting = $state<{ since: number; had: Set<string> } | null>(null);
 	const list = createQuery(
 		() => ({
-			queryKey: ['devices'],
+			queryKey: KEYS.devices,
 			queryFn: devices.list,
 			refetchInterval: waiting ? 2_000 : (false as const)
 		}),

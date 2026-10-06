@@ -115,7 +115,7 @@
 		staleTime: Infinity
 	}));
 	const manifestQ = createQuery(() => ({
-		queryKey: ['manifest', infohash, fileIdx],
+		queryKey: KEYS.manifest(infohash, fileIdx),
 		queryFn: () => fetchManifest(infohash, fileIdx),
 		retry: (count: number, e: Error) => e instanceof ManifestNotReadyError && count < 30,
 		retryDelay: 2000,
@@ -126,7 +126,7 @@
 
 	// a fresh read on every visit: a cached position would replay as if nothing was watched since
 	const progressQ = createQuery(() => ({
-		queryKey: ['progress', infohash, fileIdx],
+		queryKey: KEYS.fileProgress(infohash, fileIdx),
 		queryFn: () => progressApi.get(infohash, fileIdx),
 		staleTime: 0,
 		gcTime: 0
@@ -209,7 +209,7 @@
 
 	// while the server is away, ask every 2 s; once it answers, remount on the same tier
 	const recoveryQ = createQuery(() => ({
-		queryKey: ['backend-recovery', infohash, fileIdx, nonce],
+		queryKey: KEYS.backendRecovery(infohash, fileIdx, nonce),
 		queryFn: backendReachable,
 		enabled: outage,
 		refetchInterval: (q) => (q.state.data === true ? false : 2000),

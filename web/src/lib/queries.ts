@@ -54,7 +54,27 @@ export const KEYS = {
 	tmdb: (id: number | null, kind: MediaKind | null) => ['tmdb', id, kind] as const,
 	liveCountries: ['livetv', 'countries'],
 	liveChannels: (country: string) => ['livetv', 'channels', country] as const,
-	liveEpg: (country: string) => ['livetv', 'epg-now', country] as const
+	liveEpg: (country: string) => ['livetv', 'epg-now', country] as const,
+	liveSearch: (q: string) => ['livetv', 'search', q] as const,
+	liveProbe: (country: string, channelId: string, attempt: number) => ['livetv', 'probe', country, channelId, attempt] as const,
+	searchResults: (q: string, kind: string | null, sort: string | null, title: number | null) => ['search', q, kind, sort, title] as const,
+	searchTitles: (q: string) => ['search-titles', q] as const,
+	searchDetails: (provider: string, id: string) => ['search-details', provider, id] as const,
+	tmdbSuggest: (q: string) => ['tmdb-suggest', q] as const,
+	torrentPreview: (provider: string, id: string) => ['torrent-preview', provider, id] as const,
+	manifest: (infohash: string, fileIdx: number) => ['manifest', infohash, fileIdx] as const,
+	fileProgress: (infohash: string, fileIdx: number) => ['progress', infohash, fileIdx] as const,
+	backendRecovery: (infohash: string, fileIdx: number, nonce: number) => ['backend-recovery', infohash, fileIdx, nonce] as const,
+	passkeys: ['passkeys'],
+	devices: ['devices'],
+	adminUsers: ['admin', 'users'],
+	adminInvitations: ['admin', 'invitations'],
+	adminSessions: ['admin', 'active-sessions'],
+	adminPlays: (user: string | null, kind: string | null) => ['admin', 'watch-history', user, kind] as const,
+	adminStorage: ['admin', 'storage'],
+	adminRemux: ['admin', 'remux'],
+	adminAudit: (action: string | null, actor: string | null) => ['admin', 'audit-log', action, actor] as const,
+	adminProviders: ['admin', 'providers']
 } as const;
 
 /** Live progress: quick while something moves, slow otherwise. */

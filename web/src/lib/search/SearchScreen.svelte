@@ -72,7 +72,7 @@
 		() => {
 			const asked = { ...s, lang: null };
 			return {
-				queryKey: [...KEYS.search, asked.q, asked.kind, asked.sort, asked.title],
+				queryKey: KEYS.searchResults(asked.q, asked.kind, asked.sort, asked.title),
 				// a newer search aborts this one (its signal): the tracker fan-out stops server-side
 				queryFn: ({ pageParam, signal }: { pageParam: number; signal: AbortSignal }) =>
 					search.query(asked.q, searchOpts(asked, pageParam, PAGE_SIZE), signal),
@@ -93,7 +93,7 @@
 		() => {
 			const q = s.q;
 			return {
-				queryKey: ['search-titles', q],
+				queryKey: KEYS.searchTitles(q),
 				queryFn: ({ signal }: { signal: AbortSignal }) => search.titles(q, signal),
 				enabled: q.length >= 2 && (effective === 'titles' || s.title !== null),
 				staleTime: 5 * 60_000

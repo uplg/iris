@@ -3,6 +3,7 @@
 	// with a listbox: arrows go through them, Enter picks the highlighted one, Escape closes), and
 	// the Search button. Trackers are asked on submit only; TMDB a moment after the last key.
 	import { createQuery } from '@tanstack/svelte-query';
+	import { KEYS } from '#lib/queries.ts';
 	import { metadata, tmdbImage, type TmdbSuggestion } from '@iris/api/client';
 	import { queryClient } from '#lib/query.ts';
 	import Icon from '#lib/components/Icon.svelte';
@@ -28,7 +29,7 @@
 
 	const suggest = createQuery(
 		() => ({
-			queryKey: ['tmdb-suggest', typed.value],
+			queryKey: KEYS.tmdbSuggest(typed.value),
 			queryFn: () => metadata.tmdbSearch(typed.value),
 			enabled: open && typed.value.length >= 2,
 			staleTime: 60_000

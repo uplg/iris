@@ -31,7 +31,7 @@
 	const masterUrl = $derived(livetv.masterUrl(country, channelId));
 
 	const probeQ = createQuery(() => ({
-		queryKey: ['livetv', 'probe', country, channelId, attempt],
+		queryKey: KEYS.liveProbe(country, channelId, attempt),
 		// through the client: an expired access cookie refreshes instead of failing the channel
 		queryFn: async () => {
 			const headers = await livetv.masterHeaders(country, channelId);

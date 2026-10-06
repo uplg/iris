@@ -12,7 +12,7 @@
 	import PageHead from '#lib/components/PageHead.svelte';
 	import PillChoice from '#lib/components/PillChoice.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import { read } from '#lib/queries.ts';
+	import { KEYS, read } from '#lib/queries.ts';
 	import { loadable } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import ChannelRow from './ChannelRow.svelte';
@@ -72,7 +72,7 @@
 	const q = $derived(query.trim());
 	const searching = $derived(q.length >= 2);
 	const searchQ = createQuery(() => ({
-		queryKey: ['livetv', 'search', q],
+		queryKey: KEYS.liveSearch(q),
 		queryFn: () => livetv.search(q),
 		enabled: q.length >= 2,
 		staleTime: 60_000,
