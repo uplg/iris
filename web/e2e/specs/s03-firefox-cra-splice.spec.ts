@@ -40,3 +40,19 @@ test('HEVC open GOP + E-AC-3 5.1: the audio goes through libav.js in its worker'
 	expect(logs.has(/libav decode init: codec=eac3/), 'E-AC-3 did not go through libav.js').toBe(true);
 	expect(logs.matching(/libav\.js worker unavailable/)).toEqual([]);
 });
+
+test('the libav.js variant probe tells a missing build from a served one', { tag: ['@firefox', '@chrome'] }, async ({ page, state }) => {
+	const res = await page.request.head('/libavjs/libav-6.10.9.0-iris.wasm.mjs');
+	const type = res.headers()['content-type'] ?? '';
+	if (state.libavIris) {
+		expect(res.status()).toBe(200);
+		expect(type).toMatch(/javascript/);
+	} else {
+		// not the SPA's index.html with a 200, which the probe used to read as "present"
+		expect(res.status(), `answered ${type}`).toBe(404);
+	}
+	for (const path of ['/libass/nope.wasm', '/hevcjs/nope.js', '/libpgs/nope.js', '/_app/immutable/nope.js']) {
+		expect((await page.request.get(path)).status(), path).toBe(404);
+	}
+	expect((await page.request.get('/watch/nope/0')).headers()['content-type']).toMatch(/text\/html/);
+});
