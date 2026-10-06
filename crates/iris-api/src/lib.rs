@@ -345,6 +345,11 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
 
     let cfg = iris_config::AppConfig::load(&config_path)
         .with_context(|| format!("loading config {}", config_path.display()))?;
+    match cfg.jwt_secret_problem() {
+        Ok(None) => {}
+        Ok(Some(warning)) => tracing::error!("{warning}"),
+        Err(refusal) => anyhow::bail!(refusal),
+    }
 
     let providers_cfg = cfg
         .load_providers(providers_override.as_deref())
