@@ -1,6 +1,6 @@
-// The plate drawn behind a channel logo, picked from the logo's own pixels: black ink vanishes
-// on a dark plate, white ink on a light one, so a dark logo gets a light well, a light logo a
-// dark one, a colorful one a neutral grey. Read from the tile's own <img> once it has loaded
+// The plate drawn behind a channel logo, picked from the logo's own pixels: whichever of the
+// light and the dark plate contrasts more with the logo's mean luminance. No grey in between:
+// a red, orange or grey logo all but vanished on it. Read from the tile's own <img> once it has loaded
 // (lazy: a logo off screen is neither fetched nor decoded). Logos come through the backend
 // proxy (same origin: the canvas is never tainted). Cosmetic: any oddity falls back to neutral.
 
@@ -33,17 +33,32 @@ function analyze(img: HTMLImageElement): LogoTone {
 		if (!ctx) return 'neutral';
 		ctx.drawImage(img, 0, 0, SAMPLE, SAMPLE);
 		const { data } = ctx.getImageData(0, 0, SAMPLE, SAMPLE);
-		let luma = 0;
+		let lum = 0;
 		let count = 0;
 		for (let i = 0; i < data.length; i += 4) {
 			if (data[i + 3] < ALPHA_CUTOFF) continue;
-			luma += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+			lum += 0.2126 * linear(data[i]) + 0.7152 * linear(data[i + 1]) + 0.0722 * linear(data[i + 2]);
 			count += 1;
 		}
 		if (count === 0) return 'neutral';
-		const mean = luma / count / 255;
-		return mean < 0.38 ? 'light' : mean > 0.62 ? 'dark' : 'neutral';
+		return toneFor(lum / count);
 	} catch {
 		return 'neutral';
 	}
+}
+
+const linear = (c: number) => {
+	const v = c / 255;
+	return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+};
+
+/** Relative luminance of the plates (cloud, night). */
+const LIGHT_PLATE = 0.92;
+const DARK_PLATE = 0.012;
+
+/** The plate with the higher WCAG contrast against a logo of mean relative luminance `l`. */
+export function toneFor(l: number): LogoTone {
+	const onLight = (LIGHT_PLATE + 0.05) / (l + 0.05);
+	const onDark = (l + 0.05) / (DARK_PLATE + 0.05);
+	return onLight >= onDark ? 'light' : 'dark';
 }

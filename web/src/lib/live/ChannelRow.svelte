@@ -108,10 +108,14 @@
 	}
 	.well {
 		display: grid;
+		/* definite tracks: an auto one sizes to the image, and its max-height then resolves to
+		   nothing, so a large square logo spilled out of the plate */
+		grid-template: minmax(0, 1fr) / minmax(0, 1fr);
 		place-items: center;
 		width: 4.5rem;
 		height: 3rem;
 		padding: var(--s-1);
+		overflow: hidden;
 		border-radius: var(--radius-m);
 	}
 	.well.light {
@@ -124,8 +128,8 @@
 		background: color-mix(in srgb, var(--raw-muted-dark) 55%, transparent);
 	}
 	.well img {
-		max-height: 100%;
-		max-width: 100%;
+		width: 100%;
+		height: 100%;
 		object-fit: contain;
 	}
 	.letter {

@@ -43,7 +43,9 @@ class LiveLogicTest {
     @Test
     fun logosOnAPlateThatSuitsThem() {
         assertEquals(LogoTone.Light, toneOf(0.1))
-        assertEquals(LogoTone.Neutral, toneOf(0.5))
+        assertEquals(LogoTone.Dark, toneOf(0.5))
+        assertEquals("a red logo: the light plate, never grey", LogoTone.Light, toneOf(0.16))
+        assertEquals("a grey logo: the dark plate", LogoTone.Dark, toneOf(0.25))
         assertEquals(LogoTone.Dark, toneOf(0.9))
         assertEquals(LogoTone.Neutral, toneOf(null))
         assertEquals("https://iris/api/livetv/logo?x", absolutize("https://iris/", "/api/livetv/logo?x"))

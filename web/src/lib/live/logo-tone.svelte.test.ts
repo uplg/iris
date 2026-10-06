@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import type { LiveChannel } from '@iris/api/client';
 import ChannelRow from './ChannelRow.svelte';
-import { knownTone, readTone } from './logo-tone.ts';
+import { knownTone, readTone, toneFor } from './logo-tone.ts';
 
 /** A plain square logo of one colour, as a data URL. */
 function logo(colour: string): string {
@@ -41,5 +41,33 @@ describe('a logo’s plate', () => {
 		await expect.poll(() => container.querySelector('.well')?.classList.contains('dark')).toBe(true);
 		expect(spy).not.toHaveBeenCalled();
 		spy.mockRestore();
+	});
+});
+
+describe('the plate with the most contrast', () => {
+	it('never a grey one: a red or orange logo on the light plate, a grey one on the dark', async () => {
+		expect(readTone(logo('#e2001a'), await loaded(logo('#e2001a')))).toBe('light');
+		expect(readTone(logo('#f39200'), await loaded(logo('#f39200')))).toBe('dark');
+		expect(readTone(logo('#8a8a8a'), await loaded(logo('#8a8a8a')))).toBe('dark');
+		expect(toneFor(0.01)).toBe('light');
+		expect(toneFor(0.9)).toBe('dark');
+	});
+
+	it('a large square logo stays inside its plate', async () => {
+		const c = document.createElement('canvas');
+		c.width = c.height = 400;
+		const ctx = c.getContext('2d')!;
+		ctx.fillStyle = '#e2001a';
+		ctx.fillRect(0, 0, 400, 400);
+		const channel = { id: 'c2', name: 'FM104', logo_url: c.toDataURL('image/png') } as LiveChannel;
+		const { container } = await render(ChannelRow, { channel, country: 'ie', at: Date.now() });
+		const img = container.querySelector('img')!;
+		await expect.poll(() => img.complete && img.naturalWidth > 0).toBe(true);
+		const well = img.parentElement!.getBoundingClientRect();
+		const box = img.getBoundingClientRect();
+		expect(box.width).toBeLessThanOrEqual(well.width);
+		expect(box.height).toBeLessThanOrEqual(well.height);
+		expect(box.top).toBeGreaterThanOrEqual(well.top);
+		expect(box.bottom).toBeLessThanOrEqual(well.bottom);
 	});
 });

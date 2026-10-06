@@ -106,7 +106,8 @@ fun absolutize(base: String, path: String?): String? {
     return base.trimEnd('/') + path
 }
 
-/** The plate behind a channel logo, from the logo's own luminance (web `logo-tone.ts`). */
+/** The plate behind a channel logo: whichever of light and dark contrasts more with the logo's
+ *  mean luminance (web `logo-tone.ts`). Neutral only when nothing could be read. */
 enum class LogoTone(val plate: Color) {
     /** A dark logo: a light plate. */
     Light(IrisColor.artInk),
@@ -118,7 +119,7 @@ enum class LogoTone(val plate: Color) {
 /** One luminance pass per logo: the grid recomposes on every guide refresh. */
 val logoToneCache = ConcurrentHashMap<String, LogoTone>()
 
-/** Mean luminance of the opaque pixels, sampled on a 32×32 grid; the web's thresholds. */
+/** Mean relative luminance of the opaque pixels, sampled on a 32×32 grid. */
 fun logoTone(bitmap: Bitmap): LogoTone {
     val stepX = maxOf(1, bitmap.width / 32)
     val stepY = maxOf(1, bitmap.height / 32)
@@ -130,20 +131,30 @@ fun logoTone(bitmap: Bitmap): LogoTone {
         while (x < bitmap.width) {
             val px = bitmap[x, y]
             if (px ushr 24 and 0xFF > 25) {
-                luma += 0.2126 * (px ushr 16 and 0xFF) + 0.7152 * (px ushr 8 and 0xFF) + 0.0722 * (px and 0xFF)
+                luma += 0.2126 * linear(px ushr 16 and 0xFF) + 0.7152 * linear(px ushr 8 and 0xFF) +
+                    0.0722 * linear(px and 0xFF)
                 count++
             }
             x += stepX
         }
         y += stepY
     }
-    return toneOf(if (count == 0) null else luma / count / 255.0)
+    return toneOf(if (count == 0) null else luma / count)
 }
 
-/** The plate for a mean luminance (0..1), null = nothing opaque. */
+private fun linear(c: Int): Double {
+    val v = c / 255.0
+    return if (v <= 0.04045) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4)
+}
+
+/** Relative luminance of the light and dark plates. */
+private const val LIGHT_PLATE = 0.92
+private const val DARK_PLATE = 0.012
+
+/** The plate for a mean relative luminance (0..1) — the higher WCAG contrast; null = nothing
+ *  opaque. No grey in between: a red, orange or grey logo all but vanished on it. */
 fun toneOf(mean: Double?): LogoTone = when {
     mean == null -> LogoTone.Neutral
-    mean < 0.38 -> LogoTone.Light
-    mean > 0.62 -> LogoTone.Dark
-    else -> LogoTone.Neutral
+    (LIGHT_PLATE + 0.05) / (mean + 0.05) >= (mean + 0.05) / (DARK_PLATE + 0.05) -> LogoTone.Light
+    else -> LogoTone.Dark
 }
