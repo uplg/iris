@@ -9,7 +9,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -25,6 +27,7 @@ import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.libraryCollections
 import studio.kahn.iris.tv.data.libraryTorrents
 import studio.kahn.iris.tv.ui.state.BusyActions
+import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.screens.library.moving
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
@@ -168,7 +171,8 @@ class HomeViewModel(
 ) : ViewModel() {
     private val data = MutableStateFlow(HomeData())
     val state: StateFlow<HomeUiState> = data.map(::homeUi)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, homeUi(data.value))
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), homeUi(data.value))
 
     private val eventChannel = Channel<HomeEvent>(Channel.BUFFERED)
     val events: Flow<HomeEvent> = eventChannel.receiveAsFlow()

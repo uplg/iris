@@ -226,12 +226,15 @@ fun PlayerChrome(
             PlayerControls(
                 title = PlayerTitle(header.title, header.episode, factsWithRoute(facts, playback.route)),
                 clock = clock,
-                scrub = ScrubPosition(
-                    positionMs = progress.currentPositionMs,
-                    bufferedMs = progress.bufferedPositionMs,
-                    durationMs = durationOf(),
-                    previewMs = chrome.previewMs,
-                ),
+                // Read by the scrub bar alone: the 1 s tick recomposes nothing else.
+                scrub = {
+                    ScrubPosition(
+                        positionMs = progress.currentPositionMs,
+                        bufferedMs = progress.bufferedPositionMs,
+                        durationMs = durationOf(),
+                        previewMs = chrome.previewMs,
+                    )
+                },
                 buttons = PlayerButtons(
                     playing = !playPause.showPlay,
                     showTracks = !menu.isEmpty,

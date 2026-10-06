@@ -69,7 +69,7 @@ class PlayerScreenshots {
             PlayerControls(
                 title = PlayerTitle("Severance", "S2:E4 · Woe's Hollow", "Playing from disk · 1080p HEVC"),
                 clock = "21:47",
-                scrub = ScrubPosition(positionMs = 1_930_000, bufferedMs = 2_700_000, durationMs = 3_300_000),
+                scrub = { ScrubPosition(positionMs = 1_930_000, bufferedMs = 2_700_000, durationMs = 3_300_000) },
                 buttons = PlayerButtons(
                     playing = true,
                     showTracks = true,

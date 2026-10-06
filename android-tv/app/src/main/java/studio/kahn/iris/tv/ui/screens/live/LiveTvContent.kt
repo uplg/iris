@@ -561,6 +561,12 @@ private fun LogoWell(channel: LiveChannel, dim: Boolean) {
     var index by remember(candidates) { mutableIntStateOf(0) }
     val logo = candidates.getOrNull(index)
     var tone by remember(logo) { mutableStateOf(logo?.let { logoToneCache[it] } ?: LogoTone.Neutral) }
+    val platform = LocalPlatformContext.current
+    // Software bitmaps only while the luminance pass still has to read the pixels:
+    // a tone already known keeps the logo in a hardware bitmap (2 GB boxes).
+    val request = remember(logo, platform) {
+        logo?.let { ImageRequest.Builder(platform).data(it).allowHardware(logoToneCache.containsKey(it)).build() }
+    }
     Box(
         Modifier
             .size(width = 72.dp, height = 44.dp)
@@ -571,10 +577,7 @@ private fun LogoWell(channel: LiveChannel, dim: Boolean) {
     ) {
         if (logo != null) {
             AsyncImage(
-                // Software bitmaps only while the luminance pass still has to read the pixels:
-                // a tone already known keeps the logo in a hardware bitmap (2 GB boxes).
-                model = ImageRequest.Builder(LocalPlatformContext.current).data(logo)
-                    .allowHardware(logoToneCache.containsKey(logo)).build(),
+                model = request,
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
                 colorFilter = if (dim) grey else null,

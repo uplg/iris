@@ -113,6 +113,12 @@ object IrisCaps {
             }
         }
 
+    /** Scans the decoders on a worker thread, so the first player or request does not wait on it. */
+    fun warmUp() {
+        decoders
+        hardwareAv1Main10
+    }
+
     fun headerValue(): String {
         val parts =
             listOf(

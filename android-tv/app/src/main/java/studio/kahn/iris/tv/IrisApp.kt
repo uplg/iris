@@ -9,10 +9,12 @@ import coil3.disk.DiskCache
 import coil3.disk.directory
 import coil3.memory.MemoryCache
 import coil3.svg.SvgDecoder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.DefaultAppContainer
+import studio.kahn.iris.tv.data.IrisCaps
 
 /**
  * Manual DI entrypoint. Hilt would be tempting but it's another KSP layer
@@ -32,6 +34,7 @@ class IrisApp : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         container = DefaultAppContainer(this)
         container.applicationScope.launch { AppUpdater.clearDownloads(this@IrisApp) }
+        container.applicationScope.launch(Dispatchers.Default) { IrisCaps.warmUp() }
     }
 
     // Sized for a 1-2 GB box: a fifth of the app heap for decoded posters

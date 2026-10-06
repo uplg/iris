@@ -8,7 +8,9 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -17,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.state.BusyActions
+import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.CatalogCard
 import studio.kahn.iris.tv.data.DismissRequest
@@ -104,7 +107,8 @@ class DiscoverViewModel(
         ),
     )
     val state: StateFlow<DiscoverUiState> = data.map(::discoverUi)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, discoverUi(data.value))
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), discoverUi(data.value))
     private val actions = BusyActions(viewModelScope, oneAtATime = true)
 
     init {

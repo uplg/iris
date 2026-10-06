@@ -147,11 +147,12 @@ fun PlayerTopBar(info: PlayerTitle, clock: String?, modifier: Modifier = Modifie
  */
 @Composable
 fun ScrubBar(
-    position: ScrubPosition,
+    read: () -> ScrubPosition,
     modifier: Modifier = Modifier,
     onPreview: ((Long?) -> Unit)? = null,
     onSeek: ((Long) -> Unit)? = null,
 ) {
+    val position = read()
     val duration = position.durationMs.coerceAtLeast(0)
     val shown = position.shownMs.coerceIn(0, if (duration > 0) duration else Long.MAX_VALUE)
     Row(
@@ -238,7 +239,7 @@ fun ScrubBar(
  */
 @Composable
 fun PlayerBottomBar(
-    scrub: ScrubPosition,
+    scrub: () -> ScrubPosition,
     buttons: PlayerButtons,
     focus: PlayerButtonFocus,
     onPlayPause: () -> Unit,
@@ -342,7 +343,7 @@ fun PlayerBottomBar(
 fun PlayerControls(
     title: PlayerTitle,
     clock: String?,
-    scrub: ScrubPosition,
+    scrub: () -> ScrubPosition,
     buttons: PlayerButtons,
     focus: PlayerButtonFocus,
     onPlayPause: () -> Unit,
