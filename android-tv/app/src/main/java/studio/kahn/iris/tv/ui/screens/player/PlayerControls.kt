@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.player
 
+import studio.kahn.iris.tv.ui.theme.IrisStageBar
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
@@ -108,14 +109,14 @@ fun PlayerTopBar(info: PlayerTitle, clock: String?, modifier: Modifier = Modifie
         modifier
             .fillMaxWidth()
             .background(IrisColor.stageScrim)
-            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = 14.dp),
+            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = IrisStageBar.gap),
         horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5)) {
             Text(
                 info.title,
-                style = IrisType.stageTitle,
+                style = IrisType.titleFor(info.title, IrisType.stageTitle),
                 color = IrisColor.stageInk,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -157,7 +158,7 @@ fun ScrubBar(
     val shown = position.shownMs.coerceIn(0, if (duration > 0) duration else Long.MAX_VALUE)
     Row(
         modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(IrisStageBar.gap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -256,8 +257,8 @@ fun PlayerBottomBar(
         modifier
             .fillMaxWidth()
             .background(IrisColor.stageScrim)
-            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = 16.dp, bottom = 23.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = IrisStageBar.top, bottom = IrisStageBar.bottom),
+        verticalArrangement = Arrangement.spacedBy(IrisStageBar.gap),
     ) {
         ScrubBar(scrub, onPreview = onPreview, onSeek = onSeek)
         Row(

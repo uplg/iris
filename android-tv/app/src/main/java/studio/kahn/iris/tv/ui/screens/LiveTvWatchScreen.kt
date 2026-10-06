@@ -3,6 +3,7 @@
 
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.theme.IrisStageBar
 import studio.kahn.iris.tv.ui.components.StageErrorCard
 import studio.kahn.iris.tv.ui.format.clockTime
 import android.content.Context
@@ -594,16 +595,17 @@ internal fun LiveTopBar(
         modifier
             .fillMaxWidth()
             .background(IrisColor.stageScrim)
-            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = 14.dp),
+            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = IrisStageBar.gap),
         horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
     ) {
         val number = channel?.tntNumber
         if (number != null) {
             Text(number.toString(), style = IrisType.stageFigure, color = IrisColor.stageMuted, modifier = Modifier.alignByBaseline())
         }
+        val name = channel?.name ?: fallbackName
         Text(
-            channel?.name ?: fallbackName,
-            style = IrisType.stageTitle,
+            name,
+            style = IrisType.titleFor(name, IrisType.stageTitle),
             color = IrisColor.stageInk,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -646,13 +648,13 @@ internal fun LiveBottomBar(
         modifier
             .fillMaxWidth()
             .background(IrisColor.stageScrim)
-            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = 16.dp, bottom = 23.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = IrisStageBar.top, bottom = IrisStageBar.bottom),
+        verticalArrangement = Arrangement.spacedBy(IrisStageBar.gap),
     ) {
         val now = nowNext?.now
         val progress = now?.let { programmeProgress(it.start, it.stop, nowMs) }
         if (now != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(IrisStageBar.gap), verticalAlignment = Alignment.CenterVertically) {
                 Text(clock(now.start), style = IrisType.figure, color = IrisColor.stageInk)
                 Meter(progress ?: 0f, Modifier.weight(1f), track = IrisColor.stageLine, height = 5.dp)
                 Text(clock(now.stop), style = IrisType.figure, color = IrisColor.stageMuted)

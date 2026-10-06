@@ -131,6 +131,16 @@ object IrisSize {
     val stepIcon = 22.dp
 }
 
+/** The bars over the picture (the player's, a channel's: TVPlayer). */
+object IrisStageBar {
+    /** 28 px: between a bar's lines, and under the top bar's. */
+    val gap = 14.dp
+    /** 32 px: above the bottom bar's first line. */
+    val top = 16.dp
+    /** 46 px: under the bottom bar's key hints. */
+    val bottom = 23.dp
+}
+
 /**
  * The screen the app draws on, and what follows from it: the 5 % safe
  * margins (96x54 px on the boards = 48x27 dp on a TV, less on a phone) and

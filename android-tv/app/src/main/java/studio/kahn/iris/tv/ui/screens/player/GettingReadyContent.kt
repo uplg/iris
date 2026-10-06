@@ -108,7 +108,7 @@ fun GettingReadyContent(
                     Text("Getting ready", style = IrisType.meta, color = IrisColor.stageMuted)
                     Text(
                         ui.title,
-                        style = IrisType.headline,
+                        style = IrisType.titleFor(ui.title, IrisType.headline),
                         color = IrisColor.stageInk,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,

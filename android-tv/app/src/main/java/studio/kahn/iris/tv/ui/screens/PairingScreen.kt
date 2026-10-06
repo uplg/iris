@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.theme.IrisSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,7 +31,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.data.AppContainer
@@ -108,11 +108,11 @@ fun PairingContent(
         Column(
             Modifier
                 .align(Alignment.Center)
-                .widthIn(max = 460.dp)
+                .widthIn(max = IrisSize.dialog)
                 .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
         ) {
-            IrisWordmark(fontSize = 26.sp)
+            IrisWordmark(fontSize = IrisType.brandLarge.fontSize)
             val code = state.code?.valueOrNull
             if (code == null) {
                 PairingForm(state, onServerUrlChange, onGenerate, onUsePassword)

@@ -146,7 +146,7 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
                     ) {
                         item(key = "title") {
                             Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
-                                Text(p.title, style = IrisType.title, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(p.title, style = IrisType.titleFor(p.title, IrisType.title), color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 page.errorOrNull?.let { StaleNotice(it) }
                             }
                         }

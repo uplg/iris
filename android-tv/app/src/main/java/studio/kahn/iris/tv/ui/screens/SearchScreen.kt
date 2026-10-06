@@ -40,7 +40,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -57,9 +56,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
@@ -485,7 +482,7 @@ private fun RecentRow(item: RecentSearchView, forgetting: String?, actions: Sear
         }
         Text(
             item.query,
-            style = IrisType.control.copy(fontSize = 14.sp, lineHeight = 17.sp),
+            style = IrisType.controlLarge,
             color = IrisColor.ink,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -708,7 +705,7 @@ private fun CompactField(query: String, onEdit: () -> Unit, modifier: Modifier) 
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Rounded.Search, contentDescription = null, tint = IrisColor.inkMuted, modifier = Modifier.size(13.dp))
-            Text(query, style = IrisType.control.copy(fontSize = 13.sp), color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(query, style = IrisType.action, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

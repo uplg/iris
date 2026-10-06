@@ -179,7 +179,7 @@ fun TitleReleasesContent(state: TitleReleasesUiState, grab: GrabUi, actions: Tit
                 compact = narrow,
                 modifier = Modifier.width(if (narrow) IrisSize.posterAside else IrisSize.asideColumn),
             ) {
-                Text(head.title, style = if (narrow) IrisType.panel else IrisType.title, color = IrisColor.ink, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(head.title, style = if (narrow) IrisType.panel else IrisType.titleFor(head.title, IrisType.title), color = IrisColor.ink, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 head.meta?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
                 if (head.inLibrary) StatusLine("In your library", tone = StatusTone.Ok)
             }

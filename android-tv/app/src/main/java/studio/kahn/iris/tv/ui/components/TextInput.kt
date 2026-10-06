@@ -27,7 +27,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.ui.theme.IrisColor
@@ -50,7 +49,7 @@ fun TextInput(
     label: String,
     modifier: Modifier = Modifier,
     leadingIcon: ImageVector? = null,
-    textStyle: TextStyle = IrisType.control.copy(fontSize = 16.sp, lineHeight = 20.sp),
+    textStyle: TextStyle = IrisType.input,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     enabled: Boolean = true,
@@ -86,7 +85,7 @@ fun TextInput(
                 }
                 Box(Modifier.weight(1f)) {
                     if (value.isEmpty()) {
-                        Text(label, style = textStyle.copy(fontSize = 14.sp), color = IrisColor.inkMuted, maxLines = 1)
+                        Text(label, style = textStyle.copy(fontSize = IrisType.inputHint.fontSize), color = IrisColor.inkMuted, maxLines = 1)
                     }
                     inner()
                 }

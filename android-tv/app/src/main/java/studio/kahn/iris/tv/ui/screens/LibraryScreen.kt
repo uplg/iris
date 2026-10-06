@@ -387,7 +387,7 @@ private fun TitlesPane(
     val target = ui.cards.indexOfFirst { it.id == lastOpened }.takeIf { it >= 0 } ?: 0
     var placed by remember { mutableStateOf(false) }
     // A phone shows a row at most: entering there starts at the top, not on a poster.
-    val startOnCard = lastOpened != null || layout.height >= 500.dp
+    val startOnCard = lastOpened != null || !layout.short
     LaunchedEffect(ui.cards.isNotEmpty()) {
         if (placed || ui.cards.isEmpty()) return@LaunchedEffect
         placed = true

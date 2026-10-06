@@ -365,7 +365,7 @@ private fun Hero(
         Eyebrow(hero.eyebrow)
         Text(
             hero.title,
-            style = if (compact) IrisType.title else IrisType.hero,
+            style = IrisType.titleFor(hero.title, if (compact) IrisType.title else IrisType.hero),
             color = IrisColor.ink,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,

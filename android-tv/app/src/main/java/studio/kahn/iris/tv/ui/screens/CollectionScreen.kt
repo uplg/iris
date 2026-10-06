@@ -448,7 +448,7 @@ private fun Head(
         .onFocusChanged { onPlayFocused(it.hasFocus) }
     val languagesModifier = Modifier.focusRequester(languagesFocus)
     Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
-        Text(p.title, style = IrisType.title, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(p.title, style = IrisType.titleFor(p.title, IrisType.title), color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(p.facts, style = IrisType.metaLarge, color = IrisColor.inkMuted)
         if (p.chips.isNotEmpty() || p.fresh > 0) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {

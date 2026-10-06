@@ -239,7 +239,7 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
 @Composable
 private fun Heading(sheet: ReleaseSheet) {
     Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
-        Text(sheet.heading, style = IrisType.title, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(sheet.heading, style = IrisType.titleFor(sheet.heading, IrisType.title), color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (sheet.name.isNotEmpty()) Text(sheet.name, style = IrisType.mono, color = IrisColor.inkMuted)
         if (sheet.chips.isNotEmpty()) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
