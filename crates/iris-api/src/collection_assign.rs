@@ -15,9 +15,8 @@
 //! folder.
 //!
 //! `collections.tmdb_id` (used by the UI to fetch poster / synopsis) is the
-//! single source of truth, resolved from the collection's SCENE identity by
-//! [`resolve_collection_tmdb`]. The runtime probe (`verify_tmdb_match`) only
-//! flips the per-torrent `tmdb_verified` flag — it never writes the id.
+//! single source of truth, written only for a trusted match by
+//! [`resolve_collection_tmdb`] (see `tmdb_trust`).
 //!
 //! For TV torrents we also populate `episode_files` from any file
 //! whose name parses to a `(season, episode)` — this is what lets
@@ -50,10 +49,8 @@ pub struct EnrichDeps<'a> {
 /// logged, not returned, since collection assignment is metadata
 /// not playback.
 ///
-/// Resolves the collection's `tmdb_id` from its SCENE identity via
-/// [`resolve_collection_tmdb`] — THE single resolution path (movies + TV).
-/// The runtime probe (`verify_tmdb_match`) later only confirms it; the
-/// torrent's own id is never consulted.
+/// Evaluates the collection's TMDB match via [`resolve_collection_tmdb`] —
+/// THE single resolution path (movies + TV).
 pub async fn assign_after_ingest(
     pool: &SqlitePool,
     deps: EnrichDeps<'_>,
@@ -123,7 +120,7 @@ pub async fn assign_after_ingest(
     // THE single tmdb resolution path: from the collection's SCENE identity
     // (`display_title`), for movies AND TV alike. No torrent-level resolution
     // duplicates this. (TV additionally pre-warms episodes/anime below.)
-    resolve_collection_tmdb(pool, deps, &collection, kind).await;
+    resolve_collection_tmdb(pool, deps, &collection).await;
 
     // For TV: turn any SCENE-parseable filename into an episode_files
     // row so the Series page picks it up. Keyed on collection_id
@@ -156,9 +153,8 @@ pub async fn assign_after_ingest(
         // collection page that would otherwise show "No poster" +
         // empty Watchlist until the runtime probe + 4 h scheduler
         // tick caught up. Both signals are cheap to pre-warm:
-        //   * collection identity → TMDB resolve gives us a `tmdb_id`
-        //     good enough for the poster lookup (NOT `tmdb_verified` —
-        //     that still requires the runtime probe).
+        //   * collection identity → the trust gate gives us a `tmdb_id`
+        //     when a trusted signal backs one (poster lookup).
         //   * A one-shot scan against the indexers populates
         //     `available_episodes` so the "next episodes" picker
         //     has data on first render.
@@ -185,54 +181,20 @@ pub async fn assign_after_ingest(
     }
 }
 
-/// THE single TMDB-id resolution path for a collection: resolve from its SCENE
-/// identity (`display_title`) and stamp it (first-writer-wins, so `tmdb_backfill`
-/// or a prior grab is never clobbered). Runs for movies AND TV. The result is
-/// unverified (poster-grade) until the runtime probe confirms it in
-/// `verify_tmdb_match`. The torrent's own name is deliberately never used —
-/// c411 season packs are named "Saison N" (no title) and resolve to garbage.
+/// THE single TMDB-id path for a collection: evaluate it through the trust
+/// gate (`tmdb_trust`: the members' tracker ids cross-checked with the strict
+/// SCENE match of `display_title`) and store a trusted match under the
+/// conflict rule. Runs for movies AND TV. The torrent's own name is
+/// deliberately never parsed — c411 season packs are named "Saison N" (no
+/// title) and resolve to garbage. A legacy row (id without trust) is left to
+/// `tmdb-trust --apply`.
 async fn resolve_collection_tmdb(
     pool: &SqlitePool,
     deps: EnrichDeps<'_>,
     collection: &iris_db::collections::CollectionRow,
-    kind: Kind,
 ) {
-    if collection.tmdb_id.is_some() {
-        return;
-    }
     let Some(client) = deps.tmdb else { return };
-    let hint = if kind == Kind::Tv {
-        crate::tmdb::TmdbKind::Tv
-    } else {
-        crate::tmdb::TmdbKind::Movie
-    };
-    let Some(resolved) = crate::tmdb_resolve::resolve_release_name(
-        pool,
-        client,
-        &collection.display_title,
-        Some(hint),
-    )
-    .await
-    else {
-        return;
-    };
-    let Ok(id) = i64::try_from(resolved.tmdb_id) else {
-        tracing::warn!(
-            tmdb_id = resolved.tmdb_id,
-            collection_id = %collection.id,
-            "resolve_collection_tmdb: id overflowed i64 (shouldn't happen)",
-        );
-        return;
-    };
-    if let Err(e) = iris_db::collections::set_tmdb_id_if_missing(pool, collection.id, id).await {
-        tracing::warn!(error = %e, collection_id = %collection.id, "resolve_collection_tmdb: write failed");
-    } else {
-        tracing::info!(
-            collection_id = %collection.id,
-            tmdb_id = id,
-            "resolved collection TMDB id from identity (unverified — poster only)",
-        );
-    }
+    crate::tmdb_trust::refresh_collection(pool, client, collection).await;
 }
 
 /// Best-effort: enrich a TV collection's anime id and kick the collections
@@ -574,7 +536,7 @@ async fn heal_tv_collection_identity(pool: &SqlitePool, deps: EnrichDeps<'_>, in
     if let Err(e) = iris_db::collections::clear_tmdb_id(pool, collection_id).await {
         tracing::warn!(error = %e, collection_id = %collection_id, "heal: clear_tmdb_id failed");
     } else if let Ok(Some(fresh)) = iris_db::collections::get(pool, collection_id).await {
-        resolve_collection_tmdb(pool, deps, &fresh, Kind::Tv).await;
+        resolve_collection_tmdb(pool, deps, &fresh).await;
     }
     tracing::info!(
         collection_id = %collection_id,
@@ -888,8 +850,7 @@ async fn rebuild_availability(
 /// which both breaks the AniList search (it keys on the raw title) and leaks the
 /// fansub group into the UI. This re-derives the clean `display_title` from the
 /// torrent name (rename in place, collision-guarded) and re-resolves AniList off
-/// it. TMDB self-heals separately via `tmdb_backfill`, which already re-parses the
-/// `display_title` with the fixed parser. Idempotent: a no-op once the title is
+/// it. Idempotent: a no-op once the title is
 /// canonical and AniList is set.
 async fn heal_anime_batch_metadata(
     pool: &SqlitePool,
@@ -1034,7 +995,7 @@ async fn heal_bracketed_display_titles(pool: &SqlitePool, deps: EnrichDeps<'_>) 
         );
         // Re-resolve TMDB off the clean identity (no-op when set).
         if let Ok(Some(fresh)) = collections::get(pool, c.id).await {
-            resolve_collection_tmdb(pool, deps, &fresh, kind).await;
+            resolve_collection_tmdb(pool, deps, &fresh).await;
         }
     }
 }
@@ -1164,8 +1125,6 @@ pub async fn run_backfill(pool: &SqlitePool, deps: EnrichDeps<'_>, engine: &iris
     let mut done = 0;
     for row in rows {
         if row.collection_id.is_some() {
-            // (collection.tmdb_id is filled by `tmdb_backfill` from the
-            // collection's identity — the single resolution path.)
             // Self-heal stale episode numbers from a since-improved
             // parser. Needs the engine file list; torrents not yet
             // loaded are retried on a later tick (same as the

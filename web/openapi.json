@@ -2518,7 +2518,7 @@
         "tags": [
           "metadata"
         ],
-        "summary": "Resolve a release name to its single best TMDB match, scored by\n**kind + year** (not raw popularity) and served from the persistent\n30-day resolve cache shared with the ingest/backfill pipeline.",
+        "summary": "Resolve a release name to its TMDB match when the strict SCENE rule of\nthe trust gate accepts one (exact normalised title, kind, year — see\n`tmdb_trust`), served from the persistent 30-day resolve cache. `null`\nrather than a guess.",
         "description": "This is the poster-resolution path for search-result cards. It\nreplaces the old client-side `extractSceneTitle` + `/tmdb/search` +\n\"take popularity #1\" logic that was duplicated (and subtly fragile —\nshort titles like \"Pride\" collided with more-popular namesakes) in\nboth the web and TV clients. `/tmdb/search` stays a raw popularity\nproxy for the live typeahead dropdown, which legitimately wants the\nunfiltered suggestion list.",
         "operationId": "resolve_tmdb",
         "parameters": [
@@ -2543,7 +2543,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Best TMDB match for the release name (null when none / unconfigured)",
+            "description": "Trusted TMDB match for the release name (null when none / unconfigured)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7549,7 +7549,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Optional TMDB id, captured at search time. We persist it on ingest so\nthe library/continue-watching endpoints can ship posters without a\nfuzzy title-year lookup. Frontends are expected to pass this through\nfrom the search hit when available."
+            "description": "Ignored, kept for shipped clients. Clients send their own guess\nhere, so the server records the tracker's id from the search it\nserved instead (`ProviderRegistry::tracker_tmdb_id`)."
           }
         }
       },
@@ -8231,7 +8231,7 @@
       },
       "TmdbDiagnose": {
         "type": "object",
-        "description": "Per-torrent TMDB resolution dump — `GET /admin/tmdb/diagnose/{infohash}`.\n\nSurfaces every input the resolver sees so we can tell *why* a given\ntorrent is stuck on a wrong `tmdb_id`: the raw torrent name, what the\nSCENE parser extracted, the multi-search candidates TMDB returned,\nand what `pick_best` would settle on with the current rules. Useful\nwhen a library card shows the wrong poster and we need to know\nwhether the bug is upstream of `pick_best` (parser misextracted the\ntitle, TMDB has the wrong show on file) or downstream (our scoring\npicks a worse candidate).",
+        "description": "Per-torrent TMDB resolution dump — `GET /admin/tmdb/diagnose/{infohash}`.\n\nSurfaces every input the resolver sees so we can tell *why* a given\ntorrent is stuck on a wrong `tmdb_id`: the raw torrent name, what the\nSCENE parser extracted, the multi-search candidates TMDB returned,\nand the strict SCENE match the trust gate accepts (`picked`, `null`\nwhen none). Tells a parser misextraction apart from a title TMDB files\nunder another name.",
         "required": [
           "infohash",
           "torrent_name",
@@ -8393,6 +8393,13 @@
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/TmdbKind"
+          },
+          "original_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB's `original_title` / `original_name`, when it differs from\n`title`. The strict SCENE match accepts either. Additive."
           },
           "overview": {
             "type": [
@@ -8831,7 +8838,7 @@
               },
               "tmdb_verified": {
                 "type": "boolean",
-                "description": "True only when we've matched the TMDB runtime against the file's\nprobed duration within ±15 %. Frontends use the `(tmdb_id,\ntmdb_verified=true)` pair to decide whether to fetch posters /\ntitles from TMDB; otherwise they stick with the filename."
+                "description": "True when the collection's TMDB match is trusted (see `tmdb_trust`);\nfor a legacy collection not yet re-evaluated, the old runtime check.\nFrontends use the `(tmdb_id, tmdb_verified=true)` pair to decide\nwhether to fetch posters / titles from TMDB; otherwise they stick\nwith the filename."
               },
               "uploaded_bytes_total": {
                 "type": "integer",

@@ -426,7 +426,7 @@ async fn join_one(deps: &Deps, target: &Target) -> bool {
             )
         });
         for (release, lang) in candidates.into_iter().take(VERIFY_ATTEMPTS) {
-            let verified = crate::tmdb_resolve::resolve_release_name(
+            let verified = crate::tmdb_resolve::suggest_release_name(
                 &deps.pool,
                 &deps.tmdb,
                 &release.title,

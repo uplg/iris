@@ -106,9 +106,10 @@ pub(crate) struct TmdbResolveParams {
     kind: Option<String>,
 }
 
-/// Resolve a release name to its single best TMDB match, scored by
-/// **kind + year** (not raw popularity) and served from the persistent
-/// 30-day resolve cache shared with the ingest/backfill pipeline.
+/// Resolve a release name to its TMDB match when the strict SCENE rule of
+/// the trust gate accepts one (exact normalised title, kind, year — see
+/// `tmdb_trust`), served from the persistent 30-day resolve cache. `null`
+/// rather than a guess.
 ///
 /// This is the poster-resolution path for search-result cards. It
 /// replaces the old client-side `extractSceneTitle` + `/tmdb/search` +
@@ -122,7 +123,7 @@ pub(crate) struct TmdbResolveParams {
     path = "/api/metadata/tmdb/resolve",
     operation_id = "resolve_tmdb",
     params(TmdbResolveParams),
-    responses((status = 200, description = "Best TMDB match for the release name (null when none / unconfigured)", body = TmdbSuggestion)),
+    responses((status = 200, description = "Trusted TMDB match for the release name (null when none / unconfigured)", body = TmdbSuggestion)),
     tag = "metadata",
 )]
 pub(crate) async fn tmdb_resolve(
@@ -137,8 +138,13 @@ pub(crate) async fn tmdb_resolve(
         .kind
         .as_deref()
         .and_then(crate::tmdb::TmdbKind::from_wire);
-    let resolved =
-        crate::tmdb_resolve::resolve_release_name(state.db(), client, &params.title, kind_hint)
-            .await;
+    let resolved = crate::tmdb_trust::trusted_release_match(
+        state.db(),
+        client,
+        &params.title,
+        kind_hint,
+        None,
+    )
+    .await;
     Ok(Json(resolved))
 }

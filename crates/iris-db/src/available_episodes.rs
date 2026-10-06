@@ -590,6 +590,7 @@ mod count_new_tests {
                 total_size_bytes: 1,
                 source_provider: None,
                 source_external_id: None,
+                tracker_tmdb_id: None,
                 added_by: user,
             },
         )

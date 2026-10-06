@@ -27,7 +27,7 @@ use uuid::Uuid;
 macro_rules! collection_columns {
     () => {
         "id, tmdb_id, parsed_title_normalized, display_title, kind, created_at, \
-         last_indexer_scan_at, last_visited_at, is_anime, anilist_id"
+         last_indexer_scan_at, last_visited_at, is_anime, anilist_id, tmdb_trust"
     };
 }
 
@@ -62,6 +62,11 @@ pub struct CollectionRow {
     /// enrichment only (poster / recommendations), never identity.
     #[serde(default)]
     pub anilist_id: Option<i64>,
+    /// Which signal backs `tmdb_id` (`admin` / `tracker_scene` / `scene` /
+    /// `tracker`, see migration 0044). `None` with an id = legacy row, not
+    /// yet re-evaluated by `tmdb-trust --apply`.
+    #[serde(default)]
+    pub tmdb_trust: Option<String>,
 }
 
 /// A collection's kind; the `kind` column holds its wire form.
@@ -231,13 +236,13 @@ pub async fn set_tmdb_id_if_missing(
     Ok(())
 }
 
-/// Detach the `tmdb_id` from a collection. Used by the identity
-/// self-heal when the SCENE key changes: the id was resolved from the
-/// OLD title and is presumed poison, so first-writer-wins semantics
-/// restart from a clean slate and the next resolve stamps the id that
-/// matches the corrected identity.
+/// Detach the `tmdb_id` (and its trust) from a collection. Used by the
+/// identity self-heal when the SCENE key changes — the id was resolved from
+/// the OLD title and is presumed poison, so the next evaluation starts from
+/// a clean slate — and by `tmdb-trust --apply` for a match no trusted
+/// signal backs.
 pub async fn clear_tmdb_id(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE collections SET tmdb_id = NULL WHERE id = ?1")
+    sqlx::query("UPDATE collections SET tmdb_id = NULL, tmdb_trust = NULL WHERE id = ?1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -327,6 +332,51 @@ pub async fn set_tmdb_id(pool: &SqlitePool, id: Uuid, tmdb_id: i64) -> Result<()
             .await?;
     }
     tx.commit().await
+}
+
+/// Store a trusted TMDB match: the id and the signal backing it
+/// (`tmdb_trust`). The caller has already applied the conflict rule
+/// (`tmdb_trust::should_replace`). A changed id un-verifies the member
+/// torrents' legacy runtime flag in the same transaction.
+pub async fn set_trusted_tmdb(
+    pool: &SqlitePool,
+    id: Uuid,
+    tmdb_id: i64,
+    trust: &str,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let (old,): (Option<i64>,) = sqlx::query_as("SELECT tmdb_id FROM collections WHERE id = ?1")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE collections SET tmdb_id = ?1, tmdb_trust = ?2 WHERE id = ?3")
+        .bind(tmdb_id)
+        .bind(trust)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    if old != Some(tmdb_id) {
+        sqlx::query("UPDATE torrents SET tmdb_verified = FALSE WHERE collection_id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
+}
+
+/// Distinct tracker-shipped TMDB ids across the collection's torrents,
+/// soft-deleted ones included (a reclaimed release still vouched for the
+/// title). Only ids recorded as tracker-provided count.
+pub async fn tracker_tmdb_ids(pool: &SqlitePool, id: Uuid) -> Result<Vec<i64>, sqlx::Error> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT DISTINCT tmdb_id FROM torrents \
+         WHERE collection_id = ?1 AND tmdb_id_source = 'tracker' AND tmdb_id IS NOT NULL \
+         ORDER BY tmdb_id",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(t,)| t).collect())
 }
 
 /// Hard-delete a collection row. Member torrents are `ON DELETE SET NULL`
@@ -767,6 +817,7 @@ mod tests {
                 total_size_bytes: 1_000,
                 source_provider: None,
                 source_external_id: None,
+                tracker_tmdb_id: None,
                 added_by: watcher,
             },
         )
@@ -881,6 +932,7 @@ mod tests {
                 total_size_bytes: 1,
                 source_provider: None,
                 source_external_id: None,
+                tracker_tmdb_id: None,
                 added_by: user,
             },
         )

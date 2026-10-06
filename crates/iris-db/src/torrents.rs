@@ -9,14 +9,20 @@ use uuid::Uuid;
 /// so it stays a literal inside `concat!` (sqlx 0.9 only takes `&'static str`).
 macro_rules! select_torrent_rows {
     () => {
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, \
-         t.source_external_id, t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, \
-         u.display_name AS added_by_name, t.added_at, t.finished_at, t.last_played_at, \
-         t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
-         t.downloaded_bytes_total, c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id"
+        concat!(
+            "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, \
+             t.source_external_id, \
+             CASE WHEN t.tmdb_id_source = 'tracker' THEN t.tmdb_id END AS tmdb_id, ",
+            tmdb_verified_sql!("t", "c"),
+            " AS tmdb_verified, t.collection_id, t.added_by, \
+             u.display_name AS added_by_name, t.added_at, t.finished_at, t.last_played_at, \
+             t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+             t.downloaded_bytes_total, c.kind AS kind, c.tmdb_id AS collection_tmdb_id, \
+             c.tmdb_trust AS collection_tmdb_trust \
+             FROM torrents t \
+             JOIN users u ON u.id = t.added_by \
+             LEFT JOIN collections c ON c.id = t.collection_id"
+        )
     };
 }
 
@@ -28,16 +34,17 @@ pub struct TorrentRow {
     pub total_size_bytes: i64,
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
-    /// DEPRECATED — no longer written (always NULL for torrents ingested after
-    /// the collection-tmdb unification). The collection's id is the single source
-    /// of truth ([`Self::effective_tmdb_id`] / `collection_tmdb_id`). Kept only so
-    /// the admin diagnostic can still surface legacy rows' stale value; drop the
-    /// column in a follow-up migration once the new grab flow is confirmed.
+    /// The TMDB id the TRACKER shipped for this release (trust signal T1),
+    /// captured at grab time. Never displayed as is: it only feeds the
+    /// collection's trust evaluation (`tmdb_trust`). Legacy values of the
+    /// column (mixed provenance, before migration 0044) read as `None` —
+    /// only rows marked `tmdb_id_source = 'tracker'` surface here.
     pub tmdb_id: Option<i64>,
-    /// Set true by [`set_tmdb_verified`] once we've matched the collection's `tmdb_id`'s
-    /// declared runtime against the file's probed duration. Until then
-    /// frontends ignore `tmdb_id` for display purposes — wrong posters
-    /// are worse UX than no posters.
+    /// Whether clients may show the collection's TMDB artwork for this
+    /// torrent. Derived: `true` when the collection carries a trusted id
+    /// (`tmdb_trust` set); for a legacy collection (not yet through
+    /// `tmdb-trust --apply`), the old per-torrent runtime check
+    /// ([`set_tmdb_verified`]).
     pub tmdb_verified: bool,
     /// Set by the collection-assignment job (Phase 4.5) to group multi-
     /// torrent series under one library entity. NULL until the job runs.
@@ -86,6 +93,8 @@ pub struct TorrentRow {
     /// Surfaced to clients via [`TorrentRow::effective_tmdb_id`] so
     /// every poster path converges on the same stable id.
     pub collection_tmdb_id: Option<i64>,
+    /// Parent collection's `tmdb_trust` (`None` = legacy or no trusted id).
+    pub collection_tmdb_trust: Option<String>,
 }
 
 impl TorrentRow {
@@ -107,6 +116,8 @@ pub struct NewTorrent {
     pub total_size_bytes: u64,
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
+    /// The TMDB id the tracker attached to the release, when it ships one.
+    pub tracker_tmdb_id: Option<i64>,
     pub added_by: UserId,
 }
 
@@ -114,9 +125,9 @@ pub struct NewTorrent {
 /// row is returned as is. A soft-deleted one is brought back as the new
 /// grab: the re-grabber becomes `added_by` and the release's provenance is
 /// the new one. One statement, so two concurrent grabs of the same
-/// infohash both succeed. The torrent's own `tmdb_id` is no longer written —
-/// the parent collection's id is the single source of truth (resolved from the
-/// collection's SCENE identity); see `collection_assign::resolve_collection_tmdb`.
+/// infohash both succeed. The torrent's own `tmdb_id` records the tracker's id
+/// (`tmdb_id_source = 'tracker'`) — evidence for the collection's trust
+/// evaluation, never displayed directly.
 pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sqlx::Error> {
     let id = Uuid::new_v4();
     let now = Utc::now();
@@ -126,12 +137,14 @@ pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sq
     // as "complete on disk". `set_finished` re-stamps it later.
     sqlx::query(
         "INSERT INTO torrents (id, infohash, name, total_size_bytes, source_provider, \
-         source_external_id, added_by, added_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+         source_external_id, added_by, added_at, tmdb_id, tmdb_id_source) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CASE WHEN ?9 IS NOT NULL THEN 'tracker' END) \
          ON CONFLICT(infohash) DO UPDATE SET \
             source_provider = COALESCE(excluded.source_provider, torrents.source_provider), \
             source_external_id = \
                 COALESCE(excluded.source_external_id, torrents.source_external_id), \
+            tmdb_id = COALESCE(excluded.tmdb_id, torrents.tmdb_id), \
+            tmdb_id_source = COALESCE(excluded.tmdb_id_source, torrents.tmdb_id_source), \
             added_by = excluded.added_by, \
             finished_at = NULL, \
             deleted_at = NULL \
@@ -145,6 +158,7 @@ pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sq
     .bind(&new.source_external_id)
     .bind(added_by)
     .bind(now)
+    .bind(new.tracker_tmdb_id)
     .execute(pool)
     .await?;
     find_by_infohash(pool, &new.infohash)
@@ -514,6 +528,7 @@ mod tests {
                     total_size_bytes: 1024,
                     source_provider: None,
                     source_external_id: None,
+                    tracker_tmdb_id: None,
                     added_by: user,
                 },
             )
@@ -529,6 +544,84 @@ mod tests {
         }
         assert_eq!(lifetime_bytes(&pool).await.unwrap(), (350, 300));
         assert_eq!(count_active(&pool).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn tmdb_verified_is_derived_from_trust_and_tracker_ids_are_marked() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let film = crate::collections::find_or_create(
+            &pool,
+            "dune 2021",
+            "Dune (2021)",
+            crate::collections::Kind::Movie,
+            false,
+        )
+        .await
+        .unwrap();
+        let t = upsert(
+            &pool,
+            NewTorrent {
+                infohash: "cc".repeat(20),
+                name: "Dune.2021.1080p".into(),
+                total_size_bytes: 1,
+                source_provider: Some("p".into()),
+                source_external_id: Some("1".into()),
+                tracker_tmdb_id: Some(438_631),
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(t.tmdb_id, Some(438_631));
+        set_collection(&pool, &t.infohash, Some(film.id))
+            .await
+            .unwrap();
+        let verified = || async {
+            find_by_infohash(&pool, &"cc".repeat(20))
+                .await
+                .unwrap()
+                .unwrap()
+                .tmdb_verified
+        };
+        assert!(!verified().await, "no id");
+        sqlx::query("UPDATE collections SET tmdb_id = 438631 WHERE id = ?1")
+            .bind(film.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(!verified().await, "legacy id, runtime check not passed");
+        set_tmdb_verified(&pool, &t.infohash, true).await.unwrap();
+        assert!(verified().await, "legacy id, runtime check passed");
+        crate::collections::set_trusted_tmdb(&pool, film.id, 438_631, "scene")
+            .await
+            .unwrap();
+        set_tmdb_verified(&pool, &t.infohash, false).await.unwrap();
+        assert!(
+            verified().await,
+            "trusted id: the runtime flag no longer matters"
+        );
+        crate::collections::clear_tmdb_id(&pool, film.id)
+            .await
+            .unwrap();
+        assert!(!verified().await);
+
+        sqlx::query("UPDATE torrents SET tmdb_id = 99, tmdb_id_source = NULL WHERE infohash = ?1")
+            .bind(&t.infohash)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let legacy = find_by_infohash(&pool, &t.infohash).await.unwrap().unwrap();
+        assert_eq!(
+            legacy.tmdb_id, None,
+            "an unmarked legacy id is not a tracker id"
+        );
+        assert_eq!(
+            crate::collections::tracker_tmdb_ids(&pool, film.id)
+                .await
+                .unwrap(),
+            Vec::<i64>::new()
+        );
     }
 
     /// Re-grabbing an evicted torrent must reset `finished_at`: the payload
@@ -547,6 +640,7 @@ mod tests {
             total_size_bytes: 1024,
             source_provider: None,
             source_external_id: None,
+            tracker_tmdb_id: None,
             added_by: user,
         };
         let row = upsert(&pool, new.clone()).await.unwrap();
@@ -583,6 +677,7 @@ mod tests {
             total_size_bytes: 2048,
             source_provider: None,
             source_external_id: None,
+            tracker_tmdb_id: None,
             added_by: user,
         };
         let row = upsert(&pool, new.clone()).await.unwrap();
@@ -604,6 +699,7 @@ mod tests {
             total_size_bytes: 1,
             source_provider: Some(provider.into()),
             source_external_id: Some(format!("{provider}-1")),
+            tracker_tmdb_id: None,
             added_by: by,
         };
         let row = upsert(&pool, grab(first, "c411")).await.unwrap();
@@ -632,6 +728,7 @@ mod tests {
                 total_size_bytes: 100,
                 source_provider: None,
                 source_external_id: None,
+                tracker_tmdb_id: None,
                 added_by: user,
             },
         )
@@ -672,6 +769,7 @@ mod tests {
             total_size_bytes: 1,
             source_provider: None,
             source_external_id: None,
+            tracker_tmdb_id: None,
             added_by: user,
         };
         let (a, b) = tokio::join!(upsert(&pool, new.clone()), upsert(&pool, new));
@@ -695,6 +793,7 @@ mod tests {
                 total_size_bytes: 1024,
                 source_provider: None,
                 source_external_id: None,
+                tracker_tmdb_id: None,
                 added_by: user,
             },
         )

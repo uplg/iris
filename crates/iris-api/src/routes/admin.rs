@@ -780,11 +780,9 @@ pub(crate) struct WipeRemuxResponse {
 /// Surfaces every input the resolver sees so we can tell *why* a given
 /// torrent is stuck on a wrong `tmdb_id`: the raw torrent name, what the
 /// SCENE parser extracted, the multi-search candidates TMDB returned,
-/// and what `pick_best` would settle on with the current rules. Useful
-/// when a library card shows the wrong poster and we need to know
-/// whether the bug is upstream of `pick_best` (parser misextracted the
-/// title, TMDB has the wrong show on file) or downstream (our scoring
-/// picks a worse candidate).
+/// and the strict SCENE match the trust gate accepts (`picked`, `null`
+/// when none). Tells a parser misextraction apart from a title TMDB files
+/// under another name.
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct TmdbDiagnose {
     infohash: String,
@@ -872,16 +870,17 @@ pub(crate) async fn diagnose_tmdb(
     {
         let raw = tmdb.multi_search(&cleaned).await.unwrap_or_default();
         suggestions.extend(raw.into_iter().map(TmdbDiagnoseSuggestion::from));
-        // Re-run resolution end-to-end so the dump reflects what the
-        // backfill / ingestion path would actually pick today.
-        picked = crate::tmdb_resolve::resolve_cleaned(
+        // The strict SCENE match (trust signal T2) the ingest path applies.
+        picked = crate::tmdb_trust::strict_scene(
             state.db(),
             tmdb,
-            &cleaned,
-            Some(crate::tmdb_resolve::parsed_kind(p)),
+            &p.title,
+            crate::tmdb_resolve::parsed_kind(p),
             p.year.map(u32::from),
         )
         .await
+        .ok()
+        .flatten()
         .map(TmdbDiagnoseSuggestion::from);
     }
 

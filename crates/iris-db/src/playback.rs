@@ -322,10 +322,12 @@ pub async fn continue_watching(
     limit: i64,
 ) -> Result<Vec<ContinueWatchingRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
-    sqlx::query_as::<_, ContinueWatchingRow>(
+    sqlx::query_as::<_, ContinueWatchingRow>(concat!(
         "SELECT p.infohash, t.name as torrent_name, \
             c.tmdb_id as tmdb_id, \
-            t.tmdb_verified, p.file_idx, \
+            ",
+        tmdb_verified_sql!("t", "c"),
+        " AS tmdb_verified, p.file_idx, \
             p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
             p.audio_track_idx, p.subtitle_track_idx, c.kind as kind, \
             t.collection_id as collection_id, 0 AS next_up, \
@@ -340,8 +342,8 @@ pub async fn continue_watching(
              WHERE d.user_id = ?1 AND d.collection_id = t.collection_id \
                AND d.dismissed_at >= p.last_watched_at) \
          ORDER BY p.last_watched_at DESC \
-         LIMIT ?2",
-    )
+         LIMIT ?2"
+    ))
     .bind(user)
     .bind(limit)
     .fetch_all(pool)
@@ -410,8 +412,9 @@ pub async fn continue_watching_next_up(
 ) -> Result<Vec<NextUpRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
     sqlx::query_as::<_, NextUpRow>(
+        concat!(
         "SELECT nf.infohash AS infohash, nt.name AS torrent_name, \
-            c.tmdb_id AS tmdb_id, nt.tmdb_verified AS tmdb_verified, \
+            c.tmdb_id AS tmdb_id, ", tmdb_verified_sql!("nt", "c"), " AS tmdb_verified, \
             nf.file_idx AS file_idx, 0.0 AS position_seconds, \
             NULL AS duration_seconds, latest.last_watched_at AS last_watched_at, \
             0 AS completed, NULL AS audio_track_idx, NULL AS subtitle_track_idx, \
@@ -453,7 +456,8 @@ pub async fn continue_watching_next_up(
                 WHERE d.user_id = ?1 AND d.collection_id = latest.cid \
                   AND d.dismissed_at >= latest.last_watched_at) \
          ORDER BY latest.last_watched_at DESC \
-         LIMIT ?2",
+         LIMIT ?2"
+    ),
     )
     .bind(user)
     .bind(limit)
@@ -475,6 +479,9 @@ pub struct FrontierRow {
     pub collection_id: Uuid,
     pub display_title: String,
     pub tmdb_id: Option<i64>,
+    /// Same derivation as the other watch rows' flag; a legacy collection
+    /// counts as verified when any member torrent passed the runtime check.
+    pub tmdb_verified: bool,
     pub prev_season: i64,
     pub prev_episode: i64,
     pub last_watched_at: DateTime<Utc>,
@@ -488,7 +495,11 @@ pub async fn continue_watching_frontiers(
     let user: Uuid = user_id.into();
     sqlx::query_as::<_, FrontierRow>(
         "SELECT latest.cid AS collection_id, c.display_title AS display_title, \
-            c.tmdb_id AS tmdb_id, latest.s AS prev_season, latest.e AS prev_episode, \
+            c.tmdb_id AS tmdb_id, \
+            (c.tmdb_id IS NOT NULL AND (c.tmdb_trust IS NOT NULL OR EXISTS ( \
+                SELECT 1 FROM torrents vt \
+                WHERE vt.collection_id = c.id AND vt.tmdb_verified))) AS tmdb_verified, \
+            latest.s AS prev_season, latest.e AS prev_episode, \
             latest.last_watched_at AS last_watched_at \
          FROM ( \
             SELECT ef.collection_id AS cid, ef.season AS s, ef.episode AS e, \
@@ -573,14 +584,16 @@ pub async fn session_card(
     pool: &SqlitePool,
     infohash: &str,
 ) -> Result<Option<SessionCardRow>, sqlx::Error> {
-    sqlx::query_as::<_, SessionCardRow>(
+    sqlx::query_as::<_, SessionCardRow>(concat!(
         "SELECT t.name as torrent_name, \
             c.tmdb_id as tmdb_id, \
-            t.tmdb_verified, c.kind as kind \
+            ",
+        tmdb_verified_sql!("t", "c"),
+        " AS tmdb_verified, c.kind as kind \
          FROM torrents t \
          LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.infohash = ?1 AND t.deleted_at IS NULL",
-    )
+         WHERE t.infohash = ?1 AND t.deleted_at IS NULL"
+    ))
     .bind(infohash)
     .fetch_optional(pool)
     .await
@@ -592,10 +605,12 @@ pub async fn recent_activity(
     pool: &SqlitePool,
     limit: i64,
 ) -> Result<Vec<RecentActivityRow>, sqlx::Error> {
-    sqlx::query_as::<_, RecentActivityRow>(
+    sqlx::query_as::<_, RecentActivityRow>(concat!(
         "SELECT p.user_id, u.display_name, p.infohash, t.name as torrent_name, \
             c.tmdb_id as tmdb_id, \
-            t.tmdb_verified, p.file_idx, \
+            ",
+        tmdb_verified_sql!("t", "c"),
+        " AS tmdb_verified, p.file_idx, \
             p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
             c.kind as kind \
          FROM playback_progress p \
@@ -603,8 +618,8 @@ pub async fn recent_activity(
          JOIN torrents t ON t.infohash = p.infohash AND t.deleted_at IS NULL \
          LEFT JOIN collections c ON c.id = t.collection_id \
          ORDER BY p.last_watched_at DESC \
-         LIMIT ?1",
-    )
+         LIMIT ?1"
+    ))
     .bind(limit)
     .fetch_all(pool)
     .await
@@ -665,10 +680,12 @@ pub async fn user_history(
     offset: i64,
 ) -> Result<Vec<HistoryRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
-    sqlx::query_as::<_, HistoryRow>(
+    sqlx::query_as::<_, HistoryRow>(concat!(
         "SELECT p.infohash, t.name as torrent_name, \
             c.tmdb_id as tmdb_id, \
-            t.tmdb_verified, p.file_idx, \
+            ",
+        tmdb_verified_sql!("t", "c"),
+        " AS tmdb_verified, p.file_idx, \
             p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
             c.kind as kind, (t.deleted_at IS NOT NULL) as deleted, \
             t.collection_id as collection_id, c.display_title as collection_title, \
@@ -683,8 +700,8 @@ pub async fn user_history(
             ON ef.infohash = p.infohash AND ef.file_idx = p.file_idx \
          WHERE p.user_id = ?1 \
          ORDER BY p.last_watched_at DESC \
-         LIMIT ?2 OFFSET ?3",
-    )
+         LIMIT ?2 OFFSET ?3"
+    ))
     .bind(user)
     .bind(limit)
     .bind(offset)
@@ -863,6 +880,7 @@ mod tests {
                 total_size_bytes: 1_000,
                 source_provider: None,
                 source_external_id: None,
+                tracker_tmdb_id: None,
                 added_by: owner,
             },
         )
@@ -1103,6 +1121,7 @@ mod tests {
                 total_size_bytes: 1_000,
                 source_provider: Some("c411".to_string()),
                 source_external_id: Some("12345".to_string()),
+                tracker_tmdb_id: None,
                 added_by: user,
             },
         )
@@ -1177,6 +1196,7 @@ mod tests {
                 total_size_bytes: 1_000,
                 source_provider: Some("c411".to_string()),
                 source_external_id: Some("777".to_string()),
+                tracker_tmdb_id: None,
                 added_by: user,
             },
         )
@@ -1250,6 +1270,7 @@ mod tests {
                 total_size_bytes: 1_000,
                 source_provider: Some("c411".to_string()),
                 source_external_id: Some("777".to_string()),
+                tracker_tmdb_id: None,
                 added_by: user,
             },
         )
@@ -1282,6 +1303,7 @@ mod tests {
                 total_size_bytes: 1_000,
                 source_provider: Some("c411".to_string()),
                 source_external_id: Some("42".to_string()),
+                tracker_tmdb_id: None,
                 added_by: user,
             },
         )
@@ -1400,6 +1422,7 @@ mod tests {
                 total_size_bytes: 1,
                 source_provider: None,
                 source_external_id: None,
+                tracker_tmdb_id: None,
                 added_by: user,
             },
         )

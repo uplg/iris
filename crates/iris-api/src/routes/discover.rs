@@ -54,5 +54,9 @@ pub(crate) async fn featured(
             Err(e) => tracing::warn!(provider = %id, error = %e, "featured_series failed"),
         }
     }
+    state.providers().remember_tracker_ids(&movies);
+    state.providers().remember_tracker_ids(&series);
+    super::search::match_titles(&state, &mut movies).await;
+    super::search::match_titles(&state, &mut series).await;
     Ok(Json(FeaturedResponse { movies, series }))
 }

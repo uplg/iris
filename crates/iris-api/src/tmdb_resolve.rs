@@ -1,4 +1,10 @@
-//! SCENE-name → TMDB resolution with persistent cache.
+//! SCENE-name → TMDB *suggestion* with persistent cache.
+//!
+//! Best effort: kind, then exact year, then closest year, then the most
+//! popular hit, with year-less and `/search/multi` retries. That is a
+//! guess, so it never decides what artwork a library or search surface
+//! shows — [`crate::tmdb_trust`] does, with strict rules. What still uses
+//! these suggestions: the discovery catalogue (freshness + pulse joins).
 //!
 //! Indexer-supplied `tmdb_id`s are unreliable —
 //! Silicon Valley releases come back tagged with The Burning Bed's id,
@@ -36,7 +42,7 @@ const MAX_AGE_DAYS: i64 = 30;
 /// evidence — e.g. the search-result `kind` filter, or an existing
 /// follow's classification). Returns `None` only when neither the
 /// cache nor TMDB had anything for this title.
-pub async fn resolve_release_name(
+pub async fn suggest_release_name(
     pool: &SqlitePool,
     tmdb: &TmdbClient,
     release_name: &str,
@@ -171,6 +177,7 @@ fn from_entry(entry: &ResolveEntry, kind_hint: Option<TmdbKind>) -> Option<TmdbS
         tmdb_id,
         kind: kind_hint.unwrap_or(TmdbKind::Movie),
         title: entry.title.clone().unwrap_or_default(),
+        original_title: None,
         year: entry.year.and_then(|y| u32::try_from(y).ok()),
         poster_path: entry.poster_path.clone(),
         overview: entry.overview.clone(),
