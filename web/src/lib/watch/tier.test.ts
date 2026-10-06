@@ -11,7 +11,6 @@ import {
 	isNearEnd,
 	isWatched,
 	nextDemotionTarget,
-	notOnDisk,
 	playSource,
 	playStatusInterval,
 	resumeFrom,
@@ -91,11 +90,6 @@ describe('the stream', () => {
 		expect(playStatusInterval({ ready: false, reason: 'remuxing' })).toBe(1000);
 		expect(playStatusInterval({ ready: true })).toBe(false);
 		expect(playStatusInterval({ ready: false, error: 'ffmpeg died' })).toBe(false);
-	});
-	it('retries the probe and manifest on « not yet on disk » only', () => {
-		expect(notOnDisk(new Error('file not yet on disk'))).toBe(true);
-		expect(notOnDisk(new Error('no seeders'))).toBe(false);
-		expect(notOnDisk(undefined)).toBe(false);
 	});
 });
 

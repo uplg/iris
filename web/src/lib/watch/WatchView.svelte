@@ -34,6 +34,7 @@
 	import { pageTitle } from '#lib/title.ts';
 	import { KEYS, read, refreshLibrary } from '#lib/queries.ts';
 	import { stateWord } from '#lib/torrent.ts';
+	import { isNotOnDisk } from '@iris/api/refusals';
 	import { ui } from '#lib/ui.svelte.ts';
 	import IrisPlayer from '#lib/player/IrisPlayer.svelte';
 	import StageTopBar from '#lib/player/StageTopBar.svelte';
@@ -54,7 +55,6 @@
 		forcedTier,
 		isNearEnd,
 		nextDemotionTarget,
-		notOnDisk,
 		playSource,
 		playStatusInterval,
 		resumeFrom,
@@ -108,9 +108,9 @@
 	const probeQ = createQuery(() => ({
 		queryKey: KEYS.probe(infohash, fileIdx),
 		queryFn: () => torrents.probe(infohash, fileIdx),
-		retry: (count: number, e: Error) => notOnDisk(e) && count < 30,
+		retry: (count: number, e: Error) => isNotOnDisk(e) && count < 30,
 		retryDelay: 2000,
-		refetchInterval: (q) => (q.state.data ? false : notOnDisk(q.state.error) ? 2000 : false),
+		refetchInterval: (q) => (q.state.data ? false : isNotOnDisk(q.state.error) ? 2000 : false),
 		// a file's streams never change under it (a regrab invalidates them)
 		staleTime: Infinity
 	}));

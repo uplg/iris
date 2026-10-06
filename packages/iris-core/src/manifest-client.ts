@@ -8,6 +8,7 @@
  */
 
 import type { components } from '@iris/api/api-types';
+import { isNotOnDisk } from '@iris/api/refusals';
 import { isHevc } from './codec';
 import { capsHeader, cheapProbeVideoCodec, hevcMseNeedsIdrStart, isMobileLike, mseSupportsType, probeCapabilities } from './caps';
 import { libavCanDecode } from './decode/libav-codecs';
@@ -70,9 +71,9 @@ export async function fetchManifest(infohash: string, fileIdx: number): Promise<
 export async function readManifestResponse(res: Response): Promise<Manifest> {
 	if (res.ok) return (await res.json()) as Manifest;
 	// the body read once: a second `json()` throws and the server's message would be lost
-	const body = (await res.json().catch(() => null)) as { message?: string } | null;
+	const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
 	const message = body?.message;
-	if (res.status === 400 && message && /download in progress|file not yet on disk|not yet probable/i.test(message)) {
+	if (res.status === 400 && message && isNotOnDisk({ code: body?.error, message })) {
 		throw new ManifestNotReadyError(message);
 	}
 	throw new Error(message ?? `manifest fetch failed (${res.status})`);

@@ -113,6 +113,3 @@ export const isNearEnd = (t: number, dur: number | null): boolean => dur !== nul
 
 /** A position worth saving: past the opening seconds, and 7 s away from the last save, either way (a seek back counts). */
 export const heartbeatDue = (t: number, lastSaved: number): boolean => isResumable(t) && Math.abs(t - lastSaved) > 7;
-
-/** The probe and manifest polls: the « not on disk yet » answer means try again. */
-export const notOnDisk = (e: unknown): boolean => e instanceof Error && e.message.includes('not yet on disk');
