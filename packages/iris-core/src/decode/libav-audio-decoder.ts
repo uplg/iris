@@ -17,6 +17,7 @@
  */
 
 import { AudioSample, CustomAudioDecoder, registerDecoder, type AudioCodec, type EncodedPacket } from 'mediabunny';
+import { onceUntilFailure } from '../memo';
 import { libavCanDecode } from './libav-codecs';
 
 // AV_SAMPLE_FMT_* values from libav. The number is the libav enum
@@ -66,8 +67,6 @@ type DecodedFrame = {
 	data: ArrayBufferView | ArrayBufferView[];
 };
 
-let libavSingleton: Promise<LibavLike> | null = null;
-
 /** Detect whether the Iris custom libav variant (with AC-3 / E-AC-3
  *  codecs) is deployed alongside the default variant. The build only
  *  ships it inside the Docker image (see `libav-builder` stage); dev
@@ -90,35 +89,31 @@ export function isScriptResponse(res: Response): boolean {
 	return res.ok && /javascript/i.test(res.headers.get('content-type') ?? '');
 }
 
-function getLibav(): Promise<LibavLike> {
-	if (libavSingleton) return libavSingleton;
-	libavSingleton = (async () => {
-		const variant = (await detectIrisVariant()) ? 'iris' : 'default';
-		if (variant === 'default') {
-			console.warn(
-				'[iris-core] Iris libav variant not found — falling back to `default` ' +
-					'(no AC-3 / E-AC-3 client-side decode). Run the libav-builder Docker ' +
-					'stage or `docker compose build` to produce the iris variant.'
-			);
-		}
-		const mod = await import('libav.js');
-		const factory =
-			(mod as unknown as { LibAV?: (opts: object) => Promise<LibavLike> }).LibAV ??
-			(mod as unknown as { default?: { LibAV?: (opts: object) => Promise<LibavLike> } }).default?.LibAV;
-		if (!factory) throw new Error('libav.js: LibAV factory not found');
-		// libav.js runs in its own worker: AC-3 / E-AC-3 / DTS decode off the UI thread, where
-		// it competed with the chrome, the animation frames and the MSE appends (phones on Tier
-		// B included). A browser that can't start that module worker keeps the main thread.
-		const config = { base: '/libavjs', nothreads: true, variant };
-		try {
-			return await factory(config);
-		} catch (e) {
-			console.warn('[iris-core] libav.js worker unavailable, decoding on the main thread:', e);
-			return factory({ ...config, noworker: true });
-		}
-	})();
-	return libavSingleton;
-}
+const getLibav = onceUntilFailure(async (): Promise<LibavLike> => {
+	const variant = (await detectIrisVariant()) ? 'iris' : 'default';
+	if (variant === 'default') {
+		console.warn(
+			'[iris-core] Iris libav variant not found — falling back to `default` ' +
+				'(no AC-3 / E-AC-3 client-side decode). Run the libav-builder Docker ' +
+				'stage or `docker compose build` to produce the iris variant.'
+		);
+	}
+	const mod = await import('libav.js');
+	const factory =
+		(mod as unknown as { LibAV?: (opts: object) => Promise<LibavLike> }).LibAV ??
+		(mod as unknown as { default?: { LibAV?: (opts: object) => Promise<LibavLike> } }).default?.LibAV;
+	if (!factory) throw new Error('libav.js: LibAV factory not found');
+	// libav.js runs in its own worker: AC-3 / E-AC-3 / DTS decode off the UI thread, where
+	// it competed with the chrome, the animation frames and the MSE appends (phones on Tier
+	// B included). A browser that can't start that module worker keeps the main thread.
+	const config = { base: '/libavjs', nothreads: true, variant };
+	try {
+		return await factory(config);
+	} catch (e) {
+		console.warn('[iris-core] libav.js worker unavailable, decoding on the main thread:', e);
+		return factory({ ...config, noworker: true });
+	}
+});
 
 class LibavAudioDecoder extends CustomAudioDecoder {
 	static supports(codec: AudioCodec, _config: AudioDecoderConfig): boolean {

@@ -60,22 +60,22 @@ export async function fetchManifest(infohash: string, fileIdx: number): Promise<
 		credentials: 'include',
 		headers: { 'Iris-Caps': capsHeader(caps) }
 	});
-	if (res.status === 400) {
-		// Phase 0: the server returns 400 + "file not yet on disk" / "download
-		// in progress" until the torrent finishes. Phase 1 will switch this to
-		// a streaming manifest, but for now we surface a distinct error so the
-		// caller can keep polling without bouncing the user to an error page.
-		const body = (await res.json().catch(() => null)) as { message?: string } | null;
-		const message = body?.message ?? 'manifest not ready';
-		if (/download in progress|file not yet on disk|not yet probable/i.test(message)) {
-			throw new ManifestNotReadyError(message);
-		}
+	return readManifestResponse(res);
+}
+
+/** The manifest, or why there is none. The server answers 400 « file not yet on disk » /
+ * « download in progress » until the head is there: that is {@link ManifestNotReadyError}, so
+ * the caller keeps polling instead of showing an error; any other failure keeps the server's
+ * message. */
+export async function readManifestResponse(res: Response): Promise<Manifest> {
+	if (res.ok) return (await res.json()) as Manifest;
+	// the body read once: a second `json()` throws and the server's message would be lost
+	const body = (await res.json().catch(() => null)) as { message?: string } | null;
+	const message = body?.message;
+	if (res.status === 400 && message && /download in progress|file not yet on disk|not yet probable/i.test(message)) {
+		throw new ManifestNotReadyError(message);
 	}
-	if (!res.ok) {
-		const body = (await res.json().catch(() => null)) as { message?: string } | null;
-		throw new Error(body?.message ?? `manifest fetch failed (${res.status})`);
-	}
-	return (await res.json()) as Manifest;
+	throw new Error(message ?? `manifest fetch failed (${res.status})`);
 }
 
 /**

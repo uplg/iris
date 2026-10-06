@@ -14,6 +14,8 @@
  * surfaces (Tier C's canvas) work too.
  */
 
+import { onceUntilFailure } from '../memo';
+
 const LIBASS_BASE = '/libass';
 const SCRIPT_URL = `${LIBASS_BASE}/subtitles-octopus.js`;
 const WORKER_URL = `${LIBASS_BASE}/subtitles-octopus-worker.js`;
@@ -53,24 +55,27 @@ type SubtitlesOctopusInstance = {
 
 type SubtitlesOctopusConstructor = new (options: SubtitlesOctopusOptions) => SubtitlesOctopusInstance;
 
-let scriptLoadPromise: Promise<SubtitlesOctopusConstructor> | null = null;
+const loadScript = onceUntilFailure(
+	() =>
+		new Promise<SubtitlesOctopusConstructor>((resolve, reject) => {
+			const tag = document.createElement('script');
+			tag.src = SCRIPT_URL;
+			tag.async = true;
+			tag.onload = () => {
+				const ctor = window.SubtitlesOctopus;
+				if (ctor) resolve(ctor);
+				else reject(new Error('libass-wasm loaded but SubtitlesOctopus is undefined'));
+			};
+			tag.onerror = () => {
+				tag.remove();
+				reject(new Error(`failed to load ${SCRIPT_URL}`));
+			};
+			document.head.appendChild(tag);
+		})
+);
 
 async function loadSubtitlesOctopus(): Promise<SubtitlesOctopusConstructor> {
-	if (window.SubtitlesOctopus) return window.SubtitlesOctopus;
-	if (scriptLoadPromise) return scriptLoadPromise;
-	scriptLoadPromise = new Promise<SubtitlesOctopusConstructor>((resolve, reject) => {
-		const tag = document.createElement('script');
-		tag.src = SCRIPT_URL;
-		tag.async = true;
-		tag.onload = () => {
-			const ctor = window.SubtitlesOctopus;
-			if (ctor) resolve(ctor);
-			else reject(new Error('libass-wasm loaded but SubtitlesOctopus is undefined'));
-		};
-		tag.onerror = () => reject(new Error(`failed to load ${SCRIPT_URL}`));
-		document.head.appendChild(tag);
-	});
-	return scriptLoadPromise;
+	return window.SubtitlesOctopus ?? loadScript();
 }
 
 export type AssOverlayOptions = {
