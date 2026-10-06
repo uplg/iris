@@ -390,7 +390,7 @@ impl SearchProvider for TorznabProvider {
         let url = self.api_url()?;
         let limit = q.limit.unwrap_or(25).clamp(1, 100);
         let page = q.page.unwrap_or(1).max(1);
-        let offset = (page - 1) * limit;
+        let offset = (page - 1).saturating_mul(limit);
 
         let has_se_hint = q.season.is_some();
         let (t_op, bucket, structured_se) = plan_search(q.kind, has_se_hint, self.tvsearch_q);
@@ -442,7 +442,7 @@ impl SearchProvider for TorznabProvider {
         let url = self.api_url()?;
         let limit = 100u32;
         let page = page.max(1);
-        let offset = (page - 1) * limit;
+        let offset = (page - 1).saturating_mul(limit);
 
         // Torznab's search ops return the indexer's newest items when called
         // with no `q=`. Pick the op + category bucket for the kind; omit `q`
@@ -512,10 +512,11 @@ impl SearchProvider for TorznabProvider {
             .map_err(|e| crate::util::http_error("torznab download", e))?;
         if !res.status().is_success() && res.status() != StatusCode::FOUND {
             let status = res.status();
-            let body = res.text().await.unwrap_or_default();
+            let body = res.bytes().await.unwrap_or_default();
             return Err(Error::Provider(format!(
-                "torznab `{}` download failed: HTTP {status} — {body}",
+                "torznab `{}` download failed: HTTP {status} — {}",
                 self.id,
+                crate::util::body_preview(&body),
             )));
         }
         let bytes = res
@@ -539,7 +540,7 @@ impl SearchProvider for TorznabProvider {
             // indexers (HTML detail page in `<link>`, missing/expired
             // apikey returning a login HTML, etc.) are diagnosable from
             // logs without re-running the whole flow.
-            let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned();
+            let preview = crate::util::body_preview(&bytes);
             tracing::warn!(
                 provider = %self.id,
                 external_id,
@@ -1058,6 +1059,23 @@ pub(crate) fn text_value(t: &BytesText) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `page` comes straight from `/api/search?page=`.
+    #[tokio::test]
+    async fn a_huge_page_is_a_plain_failure_not_an_overflow() {
+        let entry: ProviderEntry = toml::from_str(
+            "id = \"idx\"\nkind = \"torznab\"\nbase_url = \"http://127.0.0.1:1\"\napi_key = \"k\"\n",
+        )
+        .unwrap();
+        let p = TorznabProvider::from_config(&entry).unwrap();
+        let q = SearchQuery {
+            q: "x".into(),
+            page: Some(u32::MAX),
+            limit: Some(100),
+            ..SearchQuery::default()
+        };
+        assert!(p.search(&q).await.is_err());
+    }
 
     const SAMPLE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">

@@ -12,6 +12,18 @@ pub(crate) const DEFAULT_USER_AGENT: &str =
 /// First byte of a valid `.torrent` file (bencoded dictionary).
 pub(crate) const BENCODE_DICT_MARKER: u8 = b'd';
 
+/// A download body as a torrent: bencoded `.torrent` bytes, or a magnet link
+/// sent as the body. `None` for anything else.
+pub(crate) fn torrent_source_from_body(bytes: &[u8]) -> Option<iris_core::search::TorrentSource> {
+    use iris_core::search::TorrentSource;
+    if bytes.first().copied() == Some(BENCODE_DICT_MARKER) {
+        return Some(TorrentSource::TorrentFile(bytes.to_vec()));
+    }
+    let text = std::str::from_utf8(bytes).ok()?.trim();
+    text.starts_with("magnet:")
+        .then(|| TorrentSource::Magnet(text.to_owned()))
+}
+
 /// Extract a string field from a provider entry, or fall back to the env var
 /// named by `<key>_env` if present. Useful for secrets that should not live
 /// in `providers.toml`.
@@ -188,8 +200,14 @@ pub(crate) fn http_error(context: &str, e: reqwest::Error) -> Error {
     Error::Provider(format!("{context}: {}", redact(e)))
 }
 
+/// The first 200 bytes of a response body, for an error or a log line: a
+/// tracker's error page can be megabytes.
+pub(crate) fn body_preview(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned()
+}
+
 /// `scheme://host` of a URL, for logs: the path and query may hold a key.
-pub(crate) fn url_origin(url: &str) -> String {
+pub fn url_origin(url: &str) -> String {
     url::Url::parse(url).map_or_else(
         |_| "<invalid url>".to_owned(),
         |u| u.origin().ascii_serialization(),
@@ -273,6 +291,21 @@ fn base32_infohash(s: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_download_body_is_a_torrent_a_magnet_or_nothing() {
+        use iris_core::search::TorrentSource;
+        assert!(matches!(
+            super::torrent_source_from_body(b"d8:announce"),
+            Some(TorrentSource::TorrentFile(_))
+        ));
+        assert!(matches!(
+            super::torrent_source_from_body(b"magnet:?xt=urn:btih:ab\n"),
+            Some(TorrentSource::Magnet(m)) if m == "magnet:?xt=urn:btih:ab"
+        ));
+        assert!(super::torrent_source_from_body(b"<html>link expired</html>").is_none());
+        assert!(super::torrent_source_from_body(b"").is_none());
+    }
+
     use iris_core::search::SearchQuery;
 
     use super::{extract_year, http_error, join_category, normalize_infohash, scene_query};

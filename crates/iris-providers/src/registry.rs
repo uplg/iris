@@ -284,6 +284,13 @@ impl ProviderRegistry {
         } else {
             off.insert(provider_id.to_owned());
         }
+        drop(off);
+        // A switch is a fresh start: turning a tripped tracker back on asks it
+        // again at once instead of skipping it for the rest of its cooldown.
+        self.breakers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(provider_id);
         true
     }
 
@@ -310,6 +317,11 @@ impl ProviderRegistry {
             .collect();
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
+    }
+
+    #[cfg(test)]
+    fn breaker_open(&self, id: &str) -> bool {
+        matches!(self.admit(id), Admit::Skip(_))
     }
 
     fn admit(&self, id: &str) -> Admit {
@@ -528,12 +540,14 @@ impl ProviderRegistry {
                 let remaining = SEARCH_DEADLINE.saturating_sub(started.elapsed());
                 let (res, timed_out) = match tokio::time::timeout(remaining, p.search(&q)).await {
                     Ok(res) => (res, Some(false)),
+                    // A search that spent most of its budget queued says
+                    // nothing of the tracker's health: no breaker strike.
                     Err(_) => (
                         Err(Error::Provider(format!(
                             "timed out after {}s",
                             SEARCH_DEADLINE.as_secs()
                         ))),
-                        Some(true),
+                        counts_as_timeout(remaining).then_some(true),
                     ),
                 };
                 (id, started.elapsed(), res, timed_out)
@@ -625,6 +639,12 @@ fn policy_of(entry: &ProviderEntry) -> ProviderPolicy {
             .and_then(toml::Value::as_integer)
             .and_then(|n| u32::try_from(n).ok()),
     }
+}
+
+/// Whether a search that timed out with `budget` left after its queue wait
+/// is a strike against the provider.
+fn counts_as_timeout(budget: std::time::Duration) -> bool {
+    budget >= SEARCH_DEADLINE / 2
 }
 
 /// Factory: dispatches on `entry.kind` to construct a concrete provider.
@@ -830,6 +850,30 @@ mod policy_tests {
         assert_eq!(error(registry.search_all(&q).await), None);
         assert_eq!(error(registry.search_all(&q).await), None, "closed again");
         assert_eq!(asked.load(Ordering::SeqCst), 6);
+    }
+
+    #[test]
+    fn switching_a_tripped_provider_back_on_closes_its_breaker() {
+        let entries = [entry(
+            "id = \"slow\"\nkind = \"nyaa\"\nbase_url = \"http://127.0.0.1:1\"\n",
+        )];
+        let registry = super::ProviderRegistry::from_entries(&entries).expect("registry");
+        for _ in 0..super::BREAKER_TIMEOUTS {
+            registry.settle("slow", true);
+        }
+        assert!(registry.breaker_open("slow"));
+        assert!(registry.set_enabled("slow", false));
+        assert!(registry.set_enabled("slow", true));
+        assert!(!registry.breaker_open("slow"));
+    }
+
+    #[test]
+    fn a_search_starved_in_the_queue_is_no_strike() {
+        assert!(super::counts_as_timeout(super::SEARCH_DEADLINE));
+        assert!(super::counts_as_timeout(super::SEARCH_DEADLINE / 2));
+        assert!(!super::counts_as_timeout(std::time::Duration::from_millis(
+            100
+        )));
     }
 
     #[test]

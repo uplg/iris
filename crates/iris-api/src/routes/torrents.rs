@@ -578,18 +578,10 @@ async fn resolve_release(
     if let Some(url) =
         iris_db::catalog::download_url_for(state.db(), provider_id, external_id).await?
     {
-        match provider.fetch_bytes(&url).await {
-            Ok(bytes) => {
-                // Almost always a .torrent; tolerate a magnet body just in case.
-                if bytes.starts_with(b"magnet:")
-                    && let Ok(s) = std::str::from_utf8(&bytes)
-                {
-                    return Ok(TorrentSource::Magnet(s.trim().to_string()));
-                }
-                return Ok(TorrentSource::TorrentFile(bytes.to_vec()));
-            }
+        match provider.fetch_source(&url).await {
+            Ok(source) => return Ok(source),
             Err(e) => tracing::warn!(
-                url,
+                url = %iris_providers::url_origin(&url),
                 provider = provider_id,
                 error = %e,
                 "catalog download_url fetch failed; falling back to resolve()",
