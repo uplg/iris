@@ -107,6 +107,24 @@ make Bench.Hotel.2008.360p.WEB.H264.AAC.PGS-IRIS.mkv $(video 640x360 60) $(stere
 	-map 0:v -map 1:a -map 2:s "${x264[@]}" -metadata:s:a:0 language=eng -c:a aac -b:a 128k -ar 48000 -c:s copy \
 	-metadata:s:s:0 language=eng
 
+# Scenario 15: a SubRip track (served as WebVTT, drawn by the browser from a <track>), one
+# single-line cue every six seconds (long enough to toggle and hover over one), in Matroska
+# (Tier B) and as mov_text in MP4 (Tier A).
+srt="$out/bench.srt"
+if [[ ! -f "$srt" || "$force" == "--force" ]]; then
+	for s in $(seq 0 6 54); do
+		printf '%d\n00:00:%02d,000 --> 00:00:%02d,900\nLine at %d seconds\n\n' "$((s / 6 + 1))" "$s" "$((s + 5))" "$s"
+	done >"$srt"
+fi
+# shellcheck disable=SC2046
+make Bench.November.2014.360p.WEB.H264.AAC.SRT-IRIS.mkv $(video 640x360 60) $(stereo48 60) -i "$srt" \
+	-map 0:v -map 1:a -map 2:s "${x264[@]}" -metadata:s:a:0 language=eng -c:a aac -b:a 128k -ar 48000 -c:s srt \
+	-metadata:s:s:0 language=eng
+# shellcheck disable=SC2046
+make Bench.Oscar.2015.360p.WEB.H264.AAC.SRT-IRIS.mp4 $(video 640x360 60) $(stereo48 60) -i "$srt" \
+	-map 0:v -map 1:a -map 2:s "${x264[@]}" -metadata:s:a:0 language=eng -c:a aac -b:a 128k -ar 48000 -c:s mov_text \
+	-metadata:s:s:0 language=eng -movflags +faststart
+
 # Scenario 10 (phone, Tier B): H.264 + E-AC-3 stereo in Matroska.
 # shellcheck disable=SC2046
 make Bench.India.2009.360p.WEB.H264.EAC3-IRIS.mkv $(video 640x360 60) $(stereo48 60) \

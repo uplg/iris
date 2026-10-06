@@ -313,10 +313,22 @@ export function videoBackedHandle(
 		audioTracks: extras.audioTracks ?? (() => []),
 		setAudioTrack: extras.setAudioTrack ?? (() => undefined),
 		setNativeSubtitle: (streamIdx) => {
-			if (!extras.nativeTrackMap) return;
+			const map = extras.nativeTrackMap;
+			if (!map) return;
 			// `HTMLTrackElement.track` exists from the element's creation (never null per spec)
-			for (const [idx, trackEl] of extras.nativeTrackMap) {
-				trackEl.track.mode = idx === streamIdx ? 'showing' : 'disabled';
+			for (const [idx, trackEl] of map) {
+				if (idx !== streamIdx) {
+					trackEl.track.mode = 'disabled';
+					continue;
+				}
+				if (trackEl.track.mode === 'showing') continue;
+				// Gecko restarts an unfinished load on every mode change and keeps the cues the
+				// first one parsed, so each would show twice (the server streams the WebVTT as
+				// ffmpeg extracts it): a track not fully loaded comes back as a fresh element
+				const unfinished = trackEl.readyState === HTMLTrackElement.LOADING || trackEl.readyState === HTMLTrackElement.ERROR;
+				const el = unfinished ? renewTrack(trackEl) : trackEl;
+				map.set(idx, el);
+				el.track.mode = 'showing';
 			}
 		},
 		setNativeSubtitleSrc: (streamIdx, url) => {
@@ -329,6 +341,13 @@ export function videoBackedHandle(
 		videoElement: () => video,
 		canvasElement: () => null
 	};
+}
+
+/** The same `<track>` (its attributes) with a new, empty text track, in place of `el`. */
+function renewTrack(el: HTMLTrackElement): HTMLTrackElement {
+	const next = el.cloneNode(false) as HTMLTrackElement;
+	el.replaceWith(next);
+	return next;
 }
 
 /** Reusable helper: build a `<track>` element for a native subtitle
