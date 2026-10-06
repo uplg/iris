@@ -20,18 +20,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavType
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
+import androidx.navigation.toRoute
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.nav.Routes
 import studio.kahn.iris.tv.ui.screens.CollectionScreen
 import studio.kahn.iris.tv.ui.screens.DetailScreen
 import studio.kahn.iris.tv.ui.screens.DiscoverScreen
@@ -49,60 +50,6 @@ import studio.kahn.iris.tv.ui.screens.SetupScreen
 import studio.kahn.iris.tv.ui.screens.TorrentsScreen
 import studio.kahn.iris.tv.ui.screens.WatchScreen
 
-object Routes {
-    const val PAIRING = "pairing"
-    const val SETUP = "setup"
-    const val HOME = "home"
-    const val LIBRARY = "library"
-    const val DETAIL = "detail/{infohash}"
-    const val SETTINGS = "settings"
-    const val TORRENTS = "torrents"
-    const val SEARCH = "search?q={q}&autoPlay={autoPlay}"
-    const val SEARCH_DETAIL = "search-detail/{provider}/{externalId}?tmdbId={tmdbId}&kind={kind}"
-    const val SERIES = "series/{followId}"
-    const val COLLECTION = "collection/{collectionId}"
-    const val WATCH = "watch/{infohash}/{fileIdx}"
-    const val DISCOVER = "discover"
-    const val HISTORY = "history"
-    const val LIVE_TV = "livetv"
-    const val LIVE_TV_WATCH = "livetv/{country}/{channelId}"
-    fun detail(infohash: String) = "detail/$infohash"
-    fun collection(id: String): String {
-        val cid = java.net.URLEncoder.encode(id, "UTF-8")
-        return "collection/$cid"
-    }
-    fun search(q: String? = null, autoPlay: Boolean = false): String {
-        val qPart = q?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
-        return "search?q=$qPart&autoPlay=$autoPlay"
-    }
-    fun searchDetail(
-        provider: String,
-        externalId: String,
-        tmdbId: Long?,
-        kind: String? = null,
-    ): String {
-        val p = java.net.URLEncoder.encode(provider, "UTF-8")
-        val e = java.net.URLEncoder.encode(externalId, "UTF-8")
-        // Pass `0` to mean "no tmdb id" — NavType.LongType doesn't accept null
-        // and treating 0 as "absent" is fine since TMDB ids start at 1.
-        val t = tmdbId ?: 0L
-        // Empty `kind` = unknown / movie-by-default. Detail screen
-        // uses it to gate the Follow button.
-        val k = kind?.let { java.net.URLEncoder.encode(it, "UTF-8") }.orEmpty()
-        return "search-detail/$p/$e?tmdbId=$t&kind=$k"
-    }
-    fun watch(infohash: String, fileIdx: Int) = "watch/$infohash/$fileIdx"
-    fun liveTvWatch(country: String, channelId: String): String {
-        val c = java.net.URLEncoder.encode(country, "UTF-8")
-        val ch = java.net.URLEncoder.encode(channelId, "UTF-8")
-        return "livetv/$c/$ch"
-    }
-    fun series(followId: String): String {
-        val id = java.net.URLEncoder.encode(followId, "UTF-8")
-        return "series/$id"
-    }
-}
-
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun IrisRoot(
@@ -115,10 +62,10 @@ fun IrisRoot(
 ) {
     val navController = rememberNavController()
     val start = when {
-        !isAuthenticated -> Routes.PAIRING
-        pendingWatch != null -> Routes.watch(pendingWatch.first, pendingWatch.second)
-        pendingVoiceQuery != null -> Routes.search(pendingVoiceQuery, autoPlay = true)
-        else -> Routes.HOME
+        !isAuthenticated -> Routes.Pairing
+        pendingWatch != null -> Routes.Watch(pendingWatch.first, pendingWatch.second)
+        pendingVoiceQuery != null -> Routes.Search(pendingVoiceQuery, autoPlay = true)
+        else -> Routes.Home
     }
 
     // Session dropped underneath us — the refresh token died (expired / revoked)
@@ -129,9 +76,9 @@ fun IrisRoot(
     // reconnects" report). Route back to pairing so the user can re-link.
     LaunchedEffect(isAuthenticated) {
         if (!isAuthenticated) {
-            val current = navController.currentDestination?.route
-            if (current != null && current != Routes.PAIRING) {
-                navController.navigate(Routes.PAIRING) {
+            val current = navController.currentDestination
+            if (current != null && !current.hasRoute<Routes.Pairing>()) {
+                navController.navigate(Routes.Pairing) {
                     popUpTo(0) { inclusive = true }
                 }
             }
@@ -156,312 +103,246 @@ fun IrisRoot(
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.ime)),
     ) {
         NavHost(navController = navController, startDestination = start) {
-            composable(Routes.PAIRING) {
+            composable<Routes.Pairing> {
                 PairingScreen(
                     container = container,
                     onPaired = {
-                        navController.navigate(Routes.HOME) {
-                            popUpTo(Routes.PAIRING) { inclusive = true }
+                        navController.navigate(Routes.Home) {
+                            popUpTo<Routes.Pairing> { inclusive = true }
                         }
                     },
                     onUsePassword = {
-                        navController.navigate(Routes.SETUP)
+                        navController.navigate(Routes.Setup)
                     },
                 )
             }
-            composable(Routes.SETUP) {
+            composable<Routes.Setup> {
                 SetupScreen(
                     container = container,
                     onAuthenticated = {
-                        navController.navigate(Routes.HOME) {
-                            popUpTo(Routes.PAIRING) { inclusive = true }
+                        navController.navigate(Routes.Home) {
+                            popUpTo<Routes.Pairing> { inclusive = true }
                         }
                     },
                 )
             }
-            composable(Routes.HOME) {
+            composable<Routes.Home> {
                 HomeScreen(
                     container = container,
                     onPickTorrent = { infohash ->
-                        navController.navigate(Routes.detail(infohash))
+                        navController.navigate(Routes.Detail(infohash))
                     },
                     onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.watch(infohash, fileIdx))
+                        navController.navigate(Routes.Watch(infohash, fileIdx))
                     },
                     onOpenSettings = {
-                        navController.navigate(Routes.SETTINGS)
+                        navController.navigate(Routes.Settings)
                     },
                     onOpenSearch = { query ->
-                        navController.navigate(Routes.search(query))
+                        navController.navigate(Routes.Search(query))
                     },
                     onOpenLibrary = {
-                        navController.navigate(Routes.LIBRARY)
+                        navController.navigate(Routes.Library)
                     },
                     onPickResult = { providerId, externalId, tmdbId, kind ->
                         navController.navigate(
-                            Routes.searchDetail(providerId, externalId, tmdbId, kind),
+                            Routes.SearchDetail(providerId, externalId, tmdbId, kind),
                         )
                     },
                     onOpenSeries = { followId ->
-                        navController.navigate(Routes.series(followId))
+                        navController.navigate(Routes.Series(followId))
                     },
                     onOpenCollection = { collectionId ->
-                        navController.navigate(Routes.collection(collectionId))
+                        navController.navigate(Routes.Collection(collectionId))
                     },
                     onOpenDiscover = {
-                        navController.navigate(Routes.DISCOVER)
+                        navController.navigate(Routes.Discover)
                     },
                     onOpenLiveTv = {
-                        navController.navigate(Routes.LIVE_TV)
+                        navController.navigate(Routes.LiveTv)
                     },
                 )
             }
-            composable(Routes.LIVE_TV) {
+            composable<Routes.LiveTv> {
                 LiveTvScreen(
                     container = container,
                     onOpenChannel = { country, channelId ->
-                        navController.navigate(Routes.liveTvWatch(country, channelId))
+                        navController.navigate(Routes.LiveTvWatch(country, channelId))
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(
-                Routes.LIVE_TV_WATCH,
-                arguments = listOf(
-                    navArgument("country") { type = NavType.StringType },
-                    navArgument("channelId") { type = NavType.StringType },
-                ),
-            ) { backStackEntry ->
+            composable<Routes.LiveTvWatch> { backStackEntry ->
+                val route = backStackEntry.toRoute<Routes.LiveTvWatch>()
                 LiveTvWatchScreen(
                     container = container,
-                    country = java.net.URLDecoder.decode(
-                        backStackEntry.arguments!!.getString("country")!!, "UTF-8",
-                    ),
-                    initialChannelId = java.net.URLDecoder.decode(
-                        backStackEntry.arguments!!.getString("channelId")!!, "UTF-8",
-                    ),
+                    country = route.country,
+                    initialChannelId = route.channelId,
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(Routes.DISCOVER) {
+            composable<Routes.Discover> {
                 DiscoverScreen(
                     container = container,
                     onOpenCollection = { collectionId ->
-                        navController.navigate(Routes.collection(collectionId))
+                        navController.navigate(Routes.Collection(collectionId))
                     },
                     onPickResult = { providerId, externalId, tmdbId, kind ->
                         navController.navigate(
-                            Routes.searchDetail(providerId, externalId, tmdbId, kind),
+                            Routes.SearchDetail(providerId, externalId, tmdbId, kind),
                         )
                     },
                     onOpenSearch = { query ->
-                        navController.navigate(Routes.search(query))
+                        navController.navigate(Routes.Search(query))
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(Routes.LIBRARY) {
+            composable<Routes.Library> {
                 LibraryScreen(
                     container = container,
                     onOpenCollection = { collectionId ->
-                        navController.navigate(Routes.collection(collectionId))
+                        navController.navigate(Routes.Collection(collectionId))
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(
-                Routes.COLLECTION,
-                arguments = listOf(navArgument("collectionId") { type = NavType.StringType }),
-            ) { backStackEntry ->
-                val cid = java.net.URLDecoder.decode(
-                    backStackEntry.arguments!!.getString("collectionId")!!, "UTF-8",
-                )
+            composable<Routes.Collection> { backStackEntry ->
+                val route = backStackEntry.toRoute<Routes.Collection>()
                 CollectionScreen(
                     container = container,
-                    collectionId = cid,
+                    collectionId = route.collectionId,
                     onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.watch(infohash, fileIdx))
+                        navController.navigate(Routes.Watch(infohash, fileIdx))
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(
-                Routes.DETAIL,
-                arguments = listOf(navArgument("infohash") { type = NavType.StringType }),
-            ) { backStackEntry ->
+            composable<Routes.Detail> { backStackEntry ->
+                val route = backStackEntry.toRoute<Routes.Detail>()
                 DetailScreen(
                     container = container,
-                    infohash = backStackEntry.arguments!!.getString("infohash")!!,
+                    infohash = route.infohash,
                     onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.watch(infohash, fileIdx))
+                        navController.navigate(Routes.Watch(infohash, fileIdx))
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(Routes.TORRENTS) {
+            composable<Routes.Torrents> {
                 TorrentsScreen(
                     container = container,
                     onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.watch(infohash, fileIdx))
+                        navController.navigate(Routes.Watch(infohash, fileIdx))
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(Routes.SETTINGS) {
+            composable<Routes.Settings> {
                 SettingsScreen(
                     container = container,
                     onOpenHistory = {
-                        navController.navigate(Routes.HISTORY)
+                        navController.navigate(Routes.History)
                     },
                     onOpenTorrents = {
-                        navController.navigate(Routes.TORRENTS)
+                        navController.navigate(Routes.Torrents)
                     },
                     onSignOut = {
-                        navController.navigate(Routes.PAIRING) {
-                            popUpTo(Routes.HOME) { inclusive = true }
+                        navController.navigate(Routes.Pairing) {
+                            popUpTo<Routes.Home> { inclusive = true }
                         }
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(Routes.HISTORY) {
+            composable<Routes.History> {
                 HistoryScreen(
                     container = container,
                     onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.watch(infohash, fileIdx))
+                        navController.navigate(Routes.Watch(infohash, fileIdx))
                     },
                     onOpenCollection = { collectionId ->
-                        navController.navigate(Routes.collection(collectionId))
+                        navController.navigate(Routes.Collection(collectionId))
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(
-                Routes.SEARCH,
-                arguments = listOf(
-                    navArgument("q") {
-                        type = NavType.StringType
-                        defaultValue = ""
-                        nullable = false
-                    },
-                    navArgument("autoPlay") {
-                        type = NavType.BoolType
-                        defaultValue = false
-                    },
-                ),
-            ) { backStackEntry ->
-                val q = backStackEntry.arguments?.getString("q")?.takeIf { it.isNotBlank() }
-                    ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
-                val autoPlay = backStackEntry.arguments?.getBoolean("autoPlay") ?: false
+            composable<Routes.Search> { backStackEntry ->
+                val route = backStackEntry.toRoute<Routes.Search>()
                 SearchScreen(
                     container = container,
-                    initialQuery = q,
-                    autoPickTop = autoPlay,
+                    initialQuery = route.q?.takeIf { it.isNotBlank() },
+                    autoPickTop = route.autoPlay,
                     onPickResult = { providerId, externalId, tmdbId, kind ->
                         navController.navigate(
-                            Routes.searchDetail(providerId, externalId, tmdbId, kind),
+                            Routes.SearchDetail(providerId, externalId, tmdbId, kind),
                         )
                     },
                     onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.watch(infohash, fileIdx))
+                        navController.navigate(Routes.Watch(infohash, fileIdx))
                     },
                     onPickTorrent = { infohash ->
-                        navController.navigate(Routes.detail(infohash))
+                        navController.navigate(Routes.Detail(infohash))
                     },
                     onPickCollection = { collectionId ->
-                        navController.navigate(Routes.collection(collectionId))
+                        navController.navigate(Routes.Collection(collectionId))
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(
-                Routes.SEARCH_DETAIL,
-                arguments = listOf(
-                    navArgument("provider") { type = NavType.StringType },
-                    navArgument("externalId") { type = NavType.StringType },
-                    navArgument("tmdbId") {
-                        type = NavType.LongType
-                        defaultValue = 0L
-                    },
-                    navArgument("kind") {
-                        type = NavType.StringType
-                        defaultValue = ""
-                        nullable = false
-                    },
-                ),
-            ) { backStackEntry ->
-                val provider = java.net.URLDecoder.decode(
-                    backStackEntry.arguments!!.getString("provider")!!, "UTF-8",
-                )
-                val externalId = java.net.URLDecoder.decode(
-                    backStackEntry.arguments!!.getString("externalId")!!, "UTF-8",
-                )
-                val tmdbId = backStackEntry.arguments!!.getLong("tmdbId").takeIf { it > 0L }
-                val kind = backStackEntry.arguments
-                    ?.getString("kind")
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+            composable<Routes.SearchDetail> { backStackEntry ->
+                val route = backStackEntry.toRoute<Routes.SearchDetail>()
                 SearchDetailScreen(
                     container = container,
-                    providerId = provider,
-                    externalId = externalId,
-                    tmdbId = tmdbId,
-                    kind = kind,
+                    providerId = route.provider,
+                    externalId = route.externalId,
+                    tmdbId = route.tmdbId,
+                    kind = route.kind,
                     onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.watch(infohash, fileIdx)) {
+                        navController.navigate(Routes.Watch(infohash, fileIdx)) {
                             // Don't leave the detail screen on the back
                             // stack — user lands at /watch and Back from
                             // there should go to search.
-                            popUpTo(Routes.SEARCH_DETAIL) { inclusive = true }
+                            popUpTo<Routes.SearchDetail> { inclusive = true }
                         }
                     },
                     onOpenSeries = { followId ->
-                        navController.navigate(Routes.series(followId)) {
-                            popUpTo(Routes.SEARCH_DETAIL) { inclusive = true }
+                        navController.navigate(Routes.Series(followId)) {
+                            popUpTo<Routes.SearchDetail> { inclusive = true }
                         }
                     },
                     onPickTorrent = { infohash ->
-                        navController.navigate(Routes.detail(infohash)) {
-                            popUpTo(Routes.SEARCH_DETAIL) { inclusive = true }
+                        navController.navigate(Routes.Detail(infohash)) {
+                            popUpTo<Routes.SearchDetail> { inclusive = true }
                         }
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(
-                Routes.SERIES,
-                arguments = listOf(navArgument("followId") { type = NavType.StringType }),
-            ) { backStackEntry ->
-                val followId = java.net.URLDecoder.decode(
-                    backStackEntry.arguments!!.getString("followId")!!, "UTF-8",
-                )
+            composable<Routes.Series> { backStackEntry ->
+                val route = backStackEntry.toRoute<Routes.Series>()
                 SeriesScreen(
                     container = container,
-                    followId = followId,
+                    followId = route.followId,
                     onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.watch(infohash, fileIdx))
+                        navController.navigate(Routes.Watch(infohash, fileIdx))
                     },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(
-                Routes.WATCH,
-                arguments = listOf(
-                    navArgument("infohash") { type = NavType.StringType },
-                    navArgument("fileIdx") { type = NavType.IntType },
-                ),
-            ) { backStackEntry ->
+            composable<Routes.Watch> { backStackEntry ->
+                val route = backStackEntry.toRoute<Routes.Watch>()
                 WatchScreen(
                     container = container,
-                    infohash = backStackEntry.arguments!!.getString("infohash")!!,
-                    fileIdx = backStackEntry.arguments!!.getInt("fileIdx"),
+                    infohash = route.infohash,
+                    fileIdx = route.fileIdx,
                     onBack = { navController.popBackStack() },
                     onNavigateToFile = { nextInfohash, nextFileIdx ->
                         // Replace the current Watch entry instead of
                         // stacking — Back from the next episode should
                         // skip the one we just finished watching.
-                        navController.navigate(Routes.watch(nextInfohash, nextFileIdx)) {
-                            popUpTo(Routes.WATCH) { inclusive = true }
+                        navController.navigate(Routes.Watch(nextInfohash, nextFileIdx)) {
+                            popUpTo<Routes.Watch> { inclusive = true }
                         }
                     },
                 )
@@ -477,10 +358,10 @@ fun IrisRoot(
         // fixed external URL (`synthe.se`), unaffected by the server
         // gate, so the update flow keeps working.
         val currentRoute by navController.currentBackStackEntryAsState()
-        if (clientOutdated && currentRoute?.destination?.route != Routes.SETTINGS) {
+        if (clientOutdated && currentRoute?.destination?.hasRoute<Routes.Settings>() != true) {
             ClientOutdatedOverlay(
                 onOpenSettings = {
-                    navController.navigate(Routes.SETTINGS) {
+                    navController.navigate(Routes.Settings) {
                         // Single Settings entry on the back stack — avoids
                         // a tower of identical screens if the user keeps
                         // hitting the button.
