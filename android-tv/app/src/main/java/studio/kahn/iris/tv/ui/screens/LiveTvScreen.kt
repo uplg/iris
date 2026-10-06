@@ -1,14 +1,12 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.format.clockTime
 import android.content.Context
-import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.OffsetDateTime
-import java.util.Date
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.screens.live.LiveTvContent
 import studio.kahn.iris.tv.ui.screens.live.LiveTvUi
@@ -36,8 +34,7 @@ fun LiveTvScreen(
     val query by vm.query.collectAsStateWithLifecycle()
     val results by vm.results.collectAsStateWithLifecycle()
     val usual by vm.usual.collectAsStateWithLifecycle()
-    val format = remember(context) { DateFormat.getTimeFormat(context) }
-    val clock = remember(format) { { t: OffsetDateTime -> format.format(Date.from(t.toInstant())) } }
+    val clock: (OffsetDateTime) -> String = ::clockTime
     LiveTvContent(
         ui = LiveTvUi(countries, country, channels, guide, query, results, usual),
         clock = clock,

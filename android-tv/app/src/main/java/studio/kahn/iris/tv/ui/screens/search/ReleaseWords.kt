@@ -1,7 +1,8 @@
 package studio.kahn.iris.tv.ui.screens.search
 
+import studio.kahn.iris.tv.ui.format.languageLabel
+import studio.kahn.iris.tv.ui.format.seedersWords
 import java.time.Instant
-import java.util.Locale
 import kotlin.math.roundToInt
 import studio.kahn.iris.tv.data.AudioInfo
 import studio.kahn.iris.tv.data.LibraryMatch
@@ -49,20 +50,16 @@ private val UHD = Regex("""\b(4k|uhd)\b""", RegexOption.IGNORE_CASE)
 fun resolution(name: String): String? =
     RESOLUTION.find(name)?.let { "${it.groupValues[1]}p" } ?: if (UHD.containsMatchIn(name)) "2160p" else null
 
-fun seedersWords(n: Int?): String? = n?.let { if (it == 1) "1 seeder" else "${String.format(Locale.ENGLISH, "%,d", it)} seeders" }
-
 /** A confirmed empty swarm: its pieces would never all arrive. Unknown is not dead. */
 fun isDead(seeders: Int?): Boolean = seeders == 0
 
 const val DEAD = "No seeders right now"
 
-private val SHORT_LANGUAGE = mapOf("fr" to "French", "en" to "English", "multi" to "MULTI", "vost" to "VOSTFR", "vo" to "VO")
-
 /** The grid's short "what" (TVSearchGrid): "Season 2 · MULTI", "S2:E7 · French", "Movie 2006 · VO". */
 fun gridWhat(r: SearchResult): String? {
     val part = episodeCode(r.parsedSeason, r.parsedEpisode)
         ?: if ((r.titleMatch?.kind ?: r.kind) == MediaKind.movie) listOfNotNull("Movie", (r.titleMatch?.year ?: r.year)?.toString()).joinToString(" ") else null
-    return listOfNotNull(part, SHORT_LANGUAGE[r.languageTag]).joinToString(" · ").ifEmpty { null }
+    return listOfNotNull(part, languageLabel(r.languageTag, long = false)).joinToString(" · ").ifEmpty { null }
 }
 
 /** "142 seeders · 12.4 GB · torr9 · 3d ago" */

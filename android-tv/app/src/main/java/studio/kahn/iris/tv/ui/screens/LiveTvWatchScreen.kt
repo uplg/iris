@@ -3,9 +3,9 @@
 
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.format.clockTime
 import android.content.Context
 import android.content.pm.PackageManager
-import android.text.format.DateFormat
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -56,7 +56,6 @@ import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.session.MediaSession
 import androidx.tv.material3.Text
 import java.time.OffsetDateTime
-import java.util.Date
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -443,8 +442,7 @@ fun LiveTvWatchScreen(
     BackHandler(enabled = actionsShown && errorMessage == null) { actionsShown = false }
 
     val touchscreen = remember(context) { context.packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN) }
-    val format = remember(context) { DateFormat.getTimeFormat(context) }
-    val clock = remember(format) { { t: OffsetDateTime -> format.format(Date.from(t.toInstant())) } }
+    val clock: (OffsetDateTime) -> String = ::clockTime
 
     Box(
         Modifier

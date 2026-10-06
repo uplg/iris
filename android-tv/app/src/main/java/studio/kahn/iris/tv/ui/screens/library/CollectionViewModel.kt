@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.format.fromProvider
 import studio.kahn.iris.tv.data.playFileOf
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
@@ -431,7 +432,7 @@ fun collectionPage(
                 name = r.name,
                 watchLine = goneWatchLine(r.watched, r.positionSeconds, r.durationSeconds, r.lastWatchedAt, now),
                 watched = r.watched == true,
-                facts = listOfNotNull(formatSize(r.totalSizeBytes), "via ${r.sourceProvider}", r.deletedAt?.let { "removed ${recentTime(it, now)}" })
+                facts = listOfNotNull(formatSize(r.totalSizeBytes), fromProvider(r.sourceProvider), r.deletedAt?.let { "removed ${recentTime(it, now)}" })
                     .joinToString(" · "),
                 provider = r.sourceProvider,
                 externalId = r.sourceExternalId,

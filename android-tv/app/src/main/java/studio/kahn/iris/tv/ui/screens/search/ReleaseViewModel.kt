@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens.search
 
+import studio.kahn.iris.tv.ui.format.leechersWords
+import studio.kahn.iris.tv.ui.format.seedersWords
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.ViewModel
@@ -124,7 +126,7 @@ fun releaseSheet(s: ReleaseUiState): ReleaseSheet {
     val leechers = d?.leechers ?: hit?.leechers
     val swarm = listOfNotNull(
         seedersWords(seeders),
-        leechers?.let { "$it leechers" },
+        leechersWords(leechers),
         d?.timesCompleted?.let { "${String.format(java.util.Locale.ENGLISH, "%,d", it)} downloads" },
     ).joinToString(" · ")
     val uploadedAt = d?.uploadedAt ?: hit?.uploadedAt

@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.search
 
+import studio.kahn.iris.tv.ui.format.seedersWords
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box

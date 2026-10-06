@@ -1,9 +1,10 @@
 package studio.kahn.iris.tv.ui.screens.search
 
+import studio.kahn.iris.tv.ui.format.clockTime
 import java.time.OffsetDateTime
 import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Locale
 import studio.kahn.iris.tv.data.ParsedQueryInfo
@@ -113,7 +114,8 @@ fun parsedWords(parsed: ParsedQueryInfo?): String? {
     return "Showing results for " + listOfNotNull(parsed.title, part, parsed.year?.toString()).joinToString(" · ") + "."
 }
 
-private val CLOCK = DateTimeFormatter.ofPattern("HH:mm", Locale.ENGLISH)
+
+// "28 Sep": the JDK's UK months say "Sept".
 private val DAY_MONTH = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
 
 /** When a recent search was made: "Today, 20:41", "Yesterday", "Saturday", "28 Sep". */
@@ -121,7 +123,7 @@ fun recentWhen(at: OffsetDateTime, now: ZonedDateTime): String {
     val local = at.atZoneSameInstant(now.zone)
     val days = ChronoUnit.DAYS.between(local.toLocalDate(), now.toLocalDate())
     return when {
-        days <= 0L -> "Today, ${local.format(CLOCK)}"
+        days <= 0L -> "Today, ${clockTime(at, now.zone)}"
         days == 1L -> "Yesterday"
         days < 7L -> local.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.ENGLISH)
         else -> local.format(DAY_MONTH)

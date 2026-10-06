@@ -1,5 +1,9 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.format.languageWord
+import studio.kahn.iris.tv.ui.format.etaWords
+import studio.kahn.iris.tv.ui.format.fromProvider
+import studio.kahn.iris.tv.ui.format.seedersWords
 import studio.kahn.iris.tv.data.playFileOf
 import androidx.compose.runtime.Immutable
 import kotlin.math.max
@@ -210,23 +214,14 @@ fun episodeTitle(ep: Episode): String {
     return if (name != null) "${episodeName(ep)} · $name" else episodeName(ep)
 }
 
-private val WORD = mapOf(
-    "french" to "French",
-    "english" to "English",
-    "multi" to "several languages",
-    "vostfr" to "original with French subtitles",
-)
 // A release's language tag in the library's words, mapped to the search's tag for its label.
 private val SEARCH_TAG = mapOf("french" to "fr", "english" to "en", "multi" to "multi", "vostfr" to "vost", "vo" to "vo")
 private val ISO = mapOf("french" to "fr", "english" to "en")
 
-/** A release language inside a sentence: `Play in French`. */
-fun languageWord(lang: String?): String? = lang?.let { WORD[it] }
-
 /** `English audio (original)`, `French audio (VF)`. [original] is TMDB's ISO 639-1. */
 fun audioChip(lang: String, original: String? = null): String? {
     val label = languageLabel(SEARCH_TAG[lang]) ?: return null
-    if (original != null && ISO[lang] == original) return "${WORD[lang]} audio (original)"
+    if (original != null && ISO[lang] == original) return "${languageWord(lang)} audio (original)"
     return label
 }
 
@@ -342,7 +337,7 @@ fun eta(t: TorrentView): String {
     if (t.state == TorrentState.error) return t.error?.let { "stopped: $it" } ?: "stopped by an error"
     val left = max(0L, t.totalSizeBytes - t.progressBytes)
     if (t.downloadSpeedBps <= 0) return if (t.peers > 0) "starting" else "waiting for peers"
-    return "done in about ${duration(left.toDouble() / t.downloadSpeedBps)}"
+    return "done in ${etaWords(left.toDouble() / t.downloadSpeedBps)}"
 }
 
 fun downloading(t: TorrentView?): Boolean = t != null && !t.finished
@@ -407,7 +402,7 @@ fun offersByLanguage(ep: Episode): List<Variant.Available> =
 fun offerFacts(o: Variant.Available): String = listOfNotNull(
     languageWord(o.language) ?: "Unknown language",
     o.quality,
-    o.seeders?.let { "$it seeders" },
+    seedersWords(o.seeders),
     o.sizeBytes?.let(::formatSize),
 ).joinToString(" · ")
 
@@ -472,9 +467,9 @@ fun goneFacts(g: Variant.Gone): String = listOfNotNull(
 fun packFacts(p: SeasonPackEntry): String = listOfNotNull(
     p.language?.let { audioChip(it) },
     p.quality,
-    p.seeders?.let { "$it seeders" },
+    seedersWords(p.seeders),
     p.sizeBytes?.let(::formatSize),
-    "via ${p.indexerProvider}",
+    fromProvider(p.indexerProvider),
 ).joinToString(" · ")
 
 /** The gone releases the episode list cannot show in place (a movie, a pack never split). */

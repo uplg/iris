@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.format
 
+import java.time.ZoneId
 import java.time.Duration
 import java.time.Instant
 import java.time.OffsetDateTime
@@ -35,6 +36,9 @@ fun duration(seconds: Double): String {
     return if (m == 0L) "$h h" else "$h h $m min"
 }
 
+/** How long until a download is done: `about 6 min`. */
+fun etaWords(seconds: Double): String = "about ${duration(seconds)}"
+
 /** What is left to watch: `23 min left`. */
 fun timeLeft(seconds: Double): String = "${duration(seconds)} left"
 
@@ -62,6 +66,11 @@ fun formatRelative(at: OffsetDateTime, now: Instant = Instant.now()): String {
 
 private val TIME = DateTimeFormatter.ofPattern("HH:mm", Locale.UK)
 private val DAY_MONTH = DateTimeFormatter.ofPattern("d MMM", Locale.UK)
+
+/** A time of day, `21:05`: 24 h whatever the device says, as every time the app says (web `clockTime`). */
+fun clockTime(at: OffsetDateTime, zone: ZoneId = ZoneId.systemDefault()): String = at.atZoneSameInstant(zone).format(TIME)
+
+fun clockTime(at: Instant, zone: ZoneId = ZoneId.systemDefault()): String = at.atZone(zone).format(TIME)
 private val DAY_MONTH_YEAR = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.UK)
 
 /**

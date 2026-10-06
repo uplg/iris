@@ -93,6 +93,23 @@ val LANGUAGE_TAGS = listOf(
 fun languageLabel(tag: String?, long: Boolean = true): String? =
     LANGUAGE_TAGS.firstOrNull { it.tag == tag }?.let { if (long) it.long else it.short }
 
+// A library release's language (`french`, `english`, `multi`, `vostfr`), web `collection/merge.ts`.
+private val RELEASE_LANGUAGE = mapOf(
+    "french" to "French",
+    "english" to "English",
+    "multi" to "several languages",
+    "vostfr" to "original with French subtitles",
+)
+
+/** A release language inside a sentence: `Play in French`, `in several languages`. */
+fun languageWord(lang: String?): String? = lang?.lowercase()?.let(RELEASE_LANGUAGE::get)
+
+/** The same on its own (a chip, a list line): `Several languages`; a tag Iris does not know, as written. */
+fun languageChipWords(lang: String?): String? = when (lang?.lowercase()) {
+    null, "", "unknown" -> null
+    else -> languageWord(lang)?.replaceFirstChar { it.uppercase() } ?: lang.uppercase()
+}
+
 // ISO 639-2 codes (bibliographic and terminology) the tracks and the trackers carry.
 private val ISO_639_2_TO_1 = mapOf(
     "fre" to "fr", "fra" to "fr", "eng" to "en", "ger" to "de", "deu" to "de",

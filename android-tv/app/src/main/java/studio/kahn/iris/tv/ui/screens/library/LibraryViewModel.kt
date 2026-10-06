@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.format.ratioWords
 import studio.kahn.iris.tv.data.asReleaseFile
 import studio.kahn.iris.tv.data.playableFiles
 import androidx.compose.runtime.Immutable
@@ -376,7 +377,7 @@ fun downloadsUi(
         "${formatSpeed(up)} up",
         "${t.items.size} active",
         "${formatSize(t.uploaded)} sent in all",
-        ratio?.let { "ratio %.2f".format(java.util.Locale.ROOT, it) },
+        ratio?.let(::ratioWords),
     ).joinToString(" · ")
     val count = if (shown.size == t.items.size) plural(t.items.size, "release") else "Showing ${shown.size} of ${t.items.size} releases"
     return DownloadsUi(groups, t.items.size, count, totals)

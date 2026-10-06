@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.player
 
+import studio.kahn.iris.tv.ui.format.languageChipWords
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,7 +38,6 @@ import studio.kahn.iris.tv.ui.components.FocusSurface
 import studio.kahn.iris.tv.ui.components.KeyHint
 import studio.kahn.iris.tv.ui.components.KeyHints
 import studio.kahn.iris.tv.ui.components.Keys
-import studio.kahn.iris.tv.ui.components.LanguageWords
 import studio.kahn.iris.tv.ui.components.Meter
 import studio.kahn.iris.tv.ui.components.PanelLabel
 import studio.kahn.iris.tv.ui.components.PanelOption
@@ -154,7 +154,7 @@ fun EpisodesPanel(
 @Composable
 private fun EpisodeRow(row: SideRow, busy: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val facts = buildList {
-        if (row.secondary.isNotEmpty()) add(if (row.mono) row.secondary else LanguageWords.of(row.secondary) ?: row.secondary)
+        if (row.secondary.isNotEmpty()) add(if (row.mono) row.secondary else languageChipWords(row.secondary) ?: row.secondary)
         if (row.watched) add("Watched")
         if (row.started) add("${percent(row.watchedPct ?: 0.0)} watched")
         if (row.active) add("Now playing")

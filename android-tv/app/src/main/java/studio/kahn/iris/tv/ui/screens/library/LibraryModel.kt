@@ -1,5 +1,8 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.ui.format.fromProvider
+import studio.kahn.iris.tv.ui.format.etaWords
+import studio.kahn.iris.tv.ui.format.ratioWords
 import java.time.Duration
 import androidx.compose.runtime.Immutable
 import kotlin.math.max
@@ -233,7 +236,7 @@ fun releaseStatus(t: TorrentView): Status {
     if (t.state == TorrentState.initializing) return Status(StatusTone.Busy, "Checking files · $pct")
     if (groupOf(t) == ReleaseGroup.Attention) return Status(StatusTone.Warn, "Stalled · no peers · $pct")
     val parts = mutableListOf("Downloading · $pct", formatSpeed(t.downloadSpeedBps), plural(t.peers, "peer"))
-    etaSeconds(t)?.let { parts += "about ${duration(it)}" }
+    etaSeconds(t)?.let { parts += etaWords(it) }
     return Status(StatusTone.Busy, parts.joinToString(" · "))
 }
 
@@ -277,9 +280,9 @@ fun releaseFacts(t: TorrentView, now: java.time.Instant = java.time.Instant.now(
     return listOfNotNull(
         "Added by ${t.addedByName}",
         recentTime(t.addedAt, now),
-        t.sourceProvider?.let { "from $it" },
+        t.sourceProvider?.let(::fromProvider),
         "${formatSize(t.uploadedBytesTotal)} sent",
-        ratio?.let { "ratio %.2f".format(java.util.Locale.ROOT, it) },
+        ratio?.let(::ratioWords),
     ).joinToString(" · ")
 }
 
