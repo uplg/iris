@@ -8,6 +8,7 @@
 	import Loaded from '#lib/components/Loaded.svelte';
 	import PageHead from '#lib/components/PageHead.svelte';
 	import HistoryList from '#lib/history/HistoryList.svelte';
+	import { groupHistory } from '#lib/history/groups.ts';
 	import { usersQuery } from './queries.ts';
 
 	let { userId }: { userId: string } = $props();
@@ -30,7 +31,7 @@
 	{#snippet sub()}{who ? `Everything ${who.display_name} watched, finished or not.` : 'Everything this person watched.'}{/snippet}
 </PageHead>
 <Loaded {value} empty={history.data?.length === 0} emptyText="Nothing watched yet." missing="This account no longer exists.">
-	<HistoryList items={history.data ?? []} collections={false} />
+	<HistoryList groups={groupHistory(history.data ?? [])} collections={false} />
 </Loaded>
 
 <style>
