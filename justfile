@@ -1,8 +1,8 @@
 # Iris — task runner (just). Run `just` to list recipes.
 #
 # `just deploy` rebuilds + restarts, stamping the web bundle with the current
-# git commit so already-open browser tabs detect the redeploy and offer a
-# reload (web/src/components/UpdateBanner.tsx). `.git` is excluded from the
+# git commit so already-open browser tabs detect the redeploy and reload at
+# the next navigation (SvelteKit's `version`, web/vite.config.ts). `.git` is excluded from the
 # Docker build context, so Vite CANNOT read the sha inside the build — it must
 # be injected from the host. That's the whole point of the stamping; plain
 # `docker compose up -d --build` still works (falls back to a build timestamp).
@@ -52,7 +52,7 @@ test:
 web-dev:
     cd web && bun run dev
 
-# Production web build (tsc -b && vite build).
+# Production web build (SvelteKit, adapter-static → web/build).
 web-build:
     cd web && bun run build
 

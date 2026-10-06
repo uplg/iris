@@ -11,119 +11,119 @@
  * (C/D) keeps its own clock + decoder pipeline state.
  */
 
-import type { Manifest, SubtitleTrack } from "./manifest-client";
+import type { Manifest, SubtitleTrack } from './manifest-client';
 
 /** Native `<track>`-renderable subtitle with the URL rewritten to `.vtt`. */
 export type NativeSubtitleTrack = SubtitleTrack & { vttUrl: string };
 
 export type EngineAudioTrack = {
-  /** Stable identifier — engine-specific (HLS rendition group id,
-   *  manifest stream_idx, …). */
-  id: string;
-  label: string;
-  lang?: string;
-  active: boolean;
+	/** Stable identifier — engine-specific (HLS rendition group id,
+	 *  manifest stream_idx, …). */
+	id: string;
+	label: string;
+	lang?: string;
+	active: boolean;
 };
 
 export type EngineMountOptions = {
-  /** The `<div>` (or any block-level element) the engine renders into. */
-  container: HTMLDivElement;
-  manifest: Manifest;
-  /** `/api/torrents/.../stream` (A/B/C/D) or `/play/master.m3u8` (F). */
-  streamUrl: string;
-  /** Resume position in seconds; engine seeks here on first decodable frame. */
-  startPosition: number;
-  /** Native `<track>`-renderable subtitle tracks. The URL is already
-   *  rewritten to the `.vtt` endpoint. ASS / PGS subs never appear here. */
-  nativeSubs: NativeSubtitleTrack[];
-  /** Index into `manifest.audio` (NOT `stream_idx`) for the audio track
-   *  the engine should activate on mount. `undefined` = engine picks
-   *  its own default (typically the file's primary). Tier B/C react
-   *  to this; Tier F switches audio via its handle's `setAudioTrack`
-   *  (no remount needed); Tier A is single-audio. Changing this value
-   *  triggers a remount in `IrisPlayer`. */
-  audioTrackIndex?: number;
-  /** Live-TV mode (Tier F only): endless stream played at the live
-   *  edge. The engine switches hls.js to its live config, autoplays
-   *  once the manifest parses, retries master reloads on network
-   *  errors (a dead source 502s until the backend elects the next
-   *  feed), and starts the E-AC-3 WebAudio sidecar when the feed's
-   *  audio can't be decoded by MSE. */
-  live?: boolean;
+	/** The `<div>` (or any block-level element) the engine renders into. */
+	container: HTMLDivElement;
+	manifest: Manifest;
+	/** `/api/torrents/.../stream` (A/B/C/D) or `/play/master.m3u8` (F). */
+	streamUrl: string;
+	/** Resume position in seconds; engine seeks here on first decodable frame. */
+	startPosition: number;
+	/** Native `<track>`-renderable subtitle tracks. The URL is already
+	 *  rewritten to the `.vtt` endpoint. ASS / PGS subs never appear here. */
+	nativeSubs: NativeSubtitleTrack[];
+	/** Index into `manifest.audio` (NOT `stream_idx`) for the audio track
+	 *  the engine should activate on mount. `undefined` = engine picks
+	 *  its own default (typically the file's primary). Tier B/C react
+	 *  to this; Tier F switches audio via its handle's `setAudioTrack`
+	 *  (no remount needed); Tier A is single-audio. Changing this value
+	 *  triggers a remount in `IrisPlayer`. */
+	audioTrackIndex?: number;
+	/** Live-TV mode (Tier F only): endless stream played at the live
+	 *  edge. The engine switches hls.js to its live config, autoplays
+	 *  once the manifest parses, retries master reloads on network
+	 *  errors (a dead source 502s until the backend elects the next
+	 *  feed), and starts the E-AC-3 WebAudio sidecar when the feed's
+	 *  audio can't be decoded by MSE. */
+	live?: boolean;
 
-  onReady?: () => void;
-  /** Fired when the engine starts or stops making the user wait: buffering,
-   *  seeking, or — Tier E — transcoding a fragment before it can show
-   *  anything. Event-driven on purpose; nothing here polls. */
-  onBusyChange?: (busy: boolean) => void;
-  /** Fires on `timeupdate` (native) or on the master-clock tick (C/D). */
-  onTimeUpdate?: (mediaTimeSeconds: number) => void;
-  onDurationChange?: (durationSeconds: number) => void;
-  onPlayingChange?: (playing: boolean) => void;
-  onSeeking?: (mediaTimeSeconds: number) => void;
-  onPause?: (mediaTimeSeconds: number) => void;
-  onEnded?: () => void;
-  onAudioTracksChange?: (tracks: EngineAudioTrack[]) => void;
-  /** Terminal failure: caller treats this as a demotion signal. */
-  onError: (err: Error) => void;
+	onReady?: () => void;
+	/** Fired when the engine starts or stops making the user wait: buffering,
+	 *  seeking, or — Tier E — transcoding a fragment before it can show
+	 *  anything. Event-driven on purpose; nothing here polls. */
+	onBusyChange?: (busy: boolean) => void;
+	/** Fires on `timeupdate` (native) or on the master-clock tick (C/D). */
+	onTimeUpdate?: (mediaTimeSeconds: number) => void;
+	onDurationChange?: (durationSeconds: number) => void;
+	onPlayingChange?: (playing: boolean) => void;
+	onSeeking?: (mediaTimeSeconds: number) => void;
+	onPause?: (mediaTimeSeconds: number) => void;
+	onEnded?: () => void;
+	onAudioTracksChange?: (tracks: EngineAudioTrack[]) => void;
+	/** Terminal failure: caller treats this as a demotion signal. */
+	onError: (err: Error) => void;
 };
 
 export type EngineHandle = {
-  // Lifecycle ---------------------------------------------------------
-  dispose: () => Promise<void>;
+	// Lifecycle ---------------------------------------------------------
+	dispose: () => Promise<void>;
 
-  // Read state --------------------------------------------------------
-  currentTime: () => number;
-  duration: () => number | null;
-  paused: () => boolean;
-  volume: () => number;
-  muted: () => boolean;
-  /** Buffered byte/time ranges as `[start, end]` pairs in seconds. */
-  buffered: () => Array<[number, number]>;
+	// Read state --------------------------------------------------------
+	currentTime: () => number;
+	duration: () => number | null;
+	paused: () => boolean;
+	volume: () => number;
+	muted: () => boolean;
+	/** Buffered byte/time ranges as `[start, end]` pairs in seconds. */
+	buffered: () => Array<[number, number]>;
 
-  // Controls ---------------------------------------------------------
-  play: () => Promise<void>;
-  pause: () => void;
-  /** Seek to `seconds`. Engines that can't seek (e.g., Tier C without
-   *  re-mount logic) should still attempt it and surface a warning. */
-  seek: (seconds: number) => void;
-  setVolume: (vol01: number) => void;
-  setMuted: (muted: boolean) => void;
+	// Controls ---------------------------------------------------------
+	play: () => Promise<void>;
+	pause: () => void;
+	/** Seek to `seconds`. Engines that can't seek (e.g., Tier C without
+	 *  re-mount logic) should still attempt it and surface a warning. */
+	seek: (seconds: number) => void;
+	setVolume: (vol01: number) => void;
+	setMuted: (muted: boolean) => void;
 
-  // Audio tracks -----------------------------------------------------
-  audioTracks: () => EngineAudioTrack[];
-  setAudioTrack: (id: string) => void;
+	// Audio tracks -----------------------------------------------------
+	audioTracks: () => EngineAudioTrack[];
+	setAudioTrack: (id: string) => void;
 
-  // Native subtitles -------------------------------------------------
-  /** Set the active native (`<track>`-renderable) subtitle by the
-   *  `stream_idx` it had in the manifest. `null` disables all native
-   *  subs. Engines without a `<video>` element are a no-op — ASS/PGS
-   *  overlay paths run from `IrisPlayer` instead. */
-  setNativeSubtitle: (streamIdx: number | null) => void;
-  /** Repoint the `<track>` element for `streamIdx` at `url`. A track
-   *  element fetches its src exactly once — the `.vtt` extraction of a
-   *  partially-downloaded source is truncated at the first sparse hole,
-   *  so the player bumps the URL (`?v=<subtitleVersion>`) as the
-   *  torrent progresses and the src change makes the browser re-run
-   *  the track fetch in place. Engines without `<track>` elements
-   *  (C/D) omit it. */
-  setNativeSubtitleSrc?: (streamIdx: number, url: string) => void;
+	// Native subtitles -------------------------------------------------
+	/** Set the active native (`<track>`-renderable) subtitle by the
+	 *  `stream_idx` it had in the manifest. `null` disables all native
+	 *  subs. Engines without a `<video>` element are a no-op — ASS/PGS
+	 *  overlay paths run from `IrisPlayer` instead. */
+	setNativeSubtitle: (streamIdx: number | null) => void;
+	/** Repoint the `<track>` element for `streamIdx` at `url`. A track
+	 *  element fetches its src exactly once — the `.vtt` extraction of a
+	 *  partially-downloaded source is truncated at the first sparse hole,
+	 *  so the player bumps the URL (`?v=<subtitleVersion>`) as the
+	 *  torrent progresses and the src change makes the browser re-run
+	 *  the track fetch in place. Engines without `<track>` elements
+	 *  (C/D) omit it. */
+	setNativeSubtitleSrc?: (streamIdx: number, url: string) => void;
 
-  /** Ordered `[label, value]` pairs for the player's debug panel. Every
-   *  engine describes itself: the panel renders whatever it is handed and
-   *  knows nothing about tiers. Polled from the chrome's existing rAF loop,
-   *  and only while the panel is open. */
-  stats?: () => Array<[string, string]>;
+	/** Ordered `[label, value]` pairs for the player's debug panel. Every
+	 *  engine describes itself: the panel renders whatever it is handed and
+	 *  knows nothing about tiers. Polled from the chrome's existing rAF loop,
+	 *  and only while the panel is open. */
+	stats?: () => Array<[string, string]>;
 
-  // Optional escape hatches ------------------------------------------
-  /** The underlying `<video>` element when the engine has one. Used by
-   *  `IrisChrome` for native fullscreen + Document PiP wiring. Returns
-   *  null for canvas-only engines (C/D). */
-  videoElement: () => HTMLVideoElement | null;
-  /** The underlying `<canvas>` element when the engine renders to a
-   *  canvas (C/D). Used by `IrisChrome` to wire Document PiP via a
-   *  captured MediaStream. Null otherwise. */
-  canvasElement: () => HTMLCanvasElement | null;
+	// Optional escape hatches ------------------------------------------
+	/** The underlying `<video>` element when the engine has one. Used by
+	 *  `IrisChrome` for native fullscreen + Document PiP wiring. Returns
+	 *  null for canvas-only engines (C/D). */
+	videoElement: () => HTMLVideoElement | null;
+	/** The underlying `<canvas>` element when the engine renders to a
+	 *  canvas (C/D). Used by `IrisChrome` to wire Document PiP via a
+	 *  captured MediaStream. Null otherwise. */
+	canvasElement: () => HTMLCanvasElement | null;
 };
 
 export type EngineMount = (opts: EngineMountOptions) => Promise<EngineHandle>;
@@ -131,83 +131,79 @@ export type EngineMount = (opts: EngineMountOptions) => Promise<EngineHandle>;
 /** Convenience: build the standard set of `<video>` event listeners
  *  that forward to the unified callbacks. Engines that wrap a `<video>`
  *  (A/B/F) all use this. */
-export function bindVideoCallbacks(
-  video: HTMLVideoElement,
-  opts: EngineMountOptions,
-  initialSeek: { done: boolean },
-): () => void {
-  const onTime = () => {
-    opts.onTimeUpdate?.(video.currentTime);
-    // A moving playhead is the one proof nobody is waiting. It closes any
-    // spinner a missed event pair left open — Safari's `stalled` with no
-    // `playing` after it being the known one.
-    if (!video.paused && !video.seeking && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
-      opts.onBusyChange?.(false);
-    }
-  };
-  const onDuration = () => {
-    if (Number.isFinite(video.duration) && video.duration > 0) {
-      opts.onDurationChange?.(video.duration);
-    }
-  };
-  const onSeek = () => opts.onSeeking?.(video.currentTime);
-  const onPause = () => {
-    opts.onPause?.(video.currentTime);
-    opts.onPlayingChange?.(false);
-  };
-  const onPlaying = () => opts.onPlayingChange?.(true);
-  const onEnded = () => opts.onEnded?.();
-  const onBusy = () => opts.onBusyChange?.(true);
-  const onIdle = () => opts.onBusyChange?.(false);
-  // `stalled` is a network signal, not a playback one: WebKit fires it whenever
-  // the fetch goes quiet for a few seconds — buffer full, picture moving — and
-  // nothing follows it, since playback never stopped. Only a starved element is
-  // actually waiting.
-  const onStalled = () => {
-    if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) onBusy();
-  };
-  const onCanPlay = () => {
-    if (initialSeek.done) return;
-    initialSeek.done = true;
-    if (opts.startPosition > 0) {
-      try {
-        video.currentTime = opts.startPosition;
-      } catch {
-        /* swallow */
-      }
-    }
-  };
-  video.addEventListener("timeupdate", onTime);
-  video.addEventListener("durationchange", onDuration);
-  video.addEventListener("seeking", onSeek);
-  video.addEventListener("pause", onPause);
-  video.addEventListener("playing", onPlaying);
-  video.addEventListener("ended", onEnded);
-  video.addEventListener("canplay", onCanPlay);
-  // Busy while the element is starved or repositioning, idle once it can
-  // actually show something. `seeking`/`seeked` matter for Tier E, where a
-  // reposition means a fresh transcode rather than an instant jump.
-  video.addEventListener("waiting", onBusy);
-  video.addEventListener("stalled", onStalled);
-  video.addEventListener("seeking", onBusy);
-  video.addEventListener("canplay", onIdle);
-  video.addEventListener("playing", onIdle);
-  video.addEventListener("seeked", onIdle);
-  return () => {
-    video.removeEventListener("timeupdate", onTime);
-    video.removeEventListener("durationchange", onDuration);
-    video.removeEventListener("seeking", onSeek);
-    video.removeEventListener("pause", onPause);
-    video.removeEventListener("playing", onPlaying);
-    video.removeEventListener("ended", onEnded);
-    video.removeEventListener("canplay", onCanPlay);
-    video.removeEventListener("waiting", onBusy);
-    video.removeEventListener("stalled", onStalled);
-    video.removeEventListener("seeking", onBusy);
-    video.removeEventListener("canplay", onIdle);
-    video.removeEventListener("playing", onIdle);
-    video.removeEventListener("seeked", onIdle);
-  };
+export function bindVideoCallbacks(video: HTMLVideoElement, opts: EngineMountOptions, initialSeek: { done: boolean }): () => void {
+	const onTime = () => {
+		opts.onTimeUpdate?.(video.currentTime);
+		// A moving playhead is the one proof nobody is waiting. It closes any
+		// spinner a missed event pair left open — Safari's `stalled` with no
+		// `playing` after it being the known one.
+		if (!video.paused && !video.seeking && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+			opts.onBusyChange?.(false);
+		}
+	};
+	const onDuration = () => {
+		if (Number.isFinite(video.duration) && video.duration > 0) {
+			opts.onDurationChange?.(video.duration);
+		}
+	};
+	const onSeek = () => opts.onSeeking?.(video.currentTime);
+	const onPause = () => {
+		opts.onPause?.(video.currentTime);
+		opts.onPlayingChange?.(false);
+	};
+	const onPlaying = () => opts.onPlayingChange?.(true);
+	const onEnded = () => opts.onEnded?.();
+	const onBusy = () => opts.onBusyChange?.(true);
+	const onIdle = () => opts.onBusyChange?.(false);
+	// `stalled` is a network signal, not a playback one: WebKit fires it whenever
+	// the fetch goes quiet for a few seconds — buffer full, picture moving — and
+	// nothing follows it, since playback never stopped. Only a starved element is
+	// actually waiting.
+	const onStalled = () => {
+		if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) onBusy();
+	};
+	const onCanPlay = () => {
+		if (initialSeek.done) return;
+		initialSeek.done = true;
+		if (opts.startPosition > 0) {
+			try {
+				video.currentTime = opts.startPosition;
+			} catch {
+				/* swallow */
+			}
+		}
+	};
+	video.addEventListener('timeupdate', onTime);
+	video.addEventListener('durationchange', onDuration);
+	video.addEventListener('seeking', onSeek);
+	video.addEventListener('pause', onPause);
+	video.addEventListener('playing', onPlaying);
+	video.addEventListener('ended', onEnded);
+	video.addEventListener('canplay', onCanPlay);
+	// Busy while the element is starved or repositioning, idle once it can
+	// actually show something. `seeking`/`seeked` matter for Tier E, where a
+	// reposition means a fresh transcode rather than an instant jump.
+	video.addEventListener('waiting', onBusy);
+	video.addEventListener('stalled', onStalled);
+	video.addEventListener('seeking', onBusy);
+	video.addEventListener('canplay', onIdle);
+	video.addEventListener('playing', onIdle);
+	video.addEventListener('seeked', onIdle);
+	return () => {
+		video.removeEventListener('timeupdate', onTime);
+		video.removeEventListener('durationchange', onDuration);
+		video.removeEventListener('seeking', onSeek);
+		video.removeEventListener('pause', onPause);
+		video.removeEventListener('playing', onPlaying);
+		video.removeEventListener('ended', onEnded);
+		video.removeEventListener('canplay', onCanPlay);
+		video.removeEventListener('waiting', onBusy);
+		video.removeEventListener('stalled', onStalled);
+		video.removeEventListener('seeking', onBusy);
+		video.removeEventListener('canplay', onIdle);
+		video.removeEventListener('playing', onIdle);
+		video.removeEventListener('seeked', onIdle);
+	};
 }
 
 /** Build a standard `<video>` handle backed by an `HTMLVideoElement`.
@@ -216,132 +212,123 @@ export function bindVideoCallbacks(
  *  `HTMLTrackElement` so the chrome can flip native subs on/off by
  *  the same identity it uses in the picker menu. */
 export function videoBackedHandle(
-  video: HTMLVideoElement,
-  extras: {
-    dispose: () => Promise<void>;
-    audioTracks?: () => EngineAudioTrack[];
-    setAudioTrack?: (id: string) => void;
-    /** Map stream_idx → the `<track>` element this engine injected
-     *  for it. Tier A/B/F engines build this when creating their
-     *  per-sub `<track>` elements. */
-    nativeTrackMap?: Map<number, HTMLTrackElement>;
-    /** Fallback duration the handle reports when `video.duration` is
-     *  `Infinity` (MSE before `endOfStream`) or NaN. The chrome
-     *  needs a finite number to draw the scrub bar. */
-    fallbackDuration?: number | null;
-  },
+	video: HTMLVideoElement,
+	extras: {
+		dispose: () => Promise<void>;
+		audioTracks?: () => EngineAudioTrack[];
+		setAudioTrack?: (id: string) => void;
+		/** Map stream_idx → the `<track>` element this engine injected
+		 *  for it. Tier A/B/F engines build this when creating their
+		 *  per-sub `<track>` elements. */
+		nativeTrackMap?: Map<number, HTMLTrackElement>;
+		/** Fallback duration the handle reports when `video.duration` is
+		 *  `Infinity` (MSE before `endOfStream`) or NaN. The chrome
+		 *  needs a finite number to draw the scrub bar. */
+		fallbackDuration?: number | null;
+	}
 ): EngineHandle {
-  const ranges = (tr: TimeRanges): string =>
-    tr.length === 0
-      ? "none"
-      : Array.from(
-          { length: tr.length },
-          (_, i) => `${tr.start(i).toFixed(1)}-${tr.end(i).toFixed(1)}`,
-        ).join(" ");
-  return {
-    stats: () => {
-      const q = video.getVideoPlaybackQuality?.();
-      const err = video.error;
-      const out: Array<[string, string]> = [
-        [
-          "time",
-          `${video.currentTime.toFixed(2)} / ${Number.isFinite(video.duration) ? video.duration.toFixed(1) : "?"}`,
-        ],
-        [
-          "state",
-          `ready ${video.readyState} · net ${video.networkState}${video.seeking ? " · seeking" : ""}${video.paused ? " · paused" : ""}`,
-        ],
-        ["picture", video.videoWidth ? `${video.videoWidth}x${video.videoHeight}` : "no frame yet"],
-        ["buffered", ranges(video.buffered)],
-      ];
-      if (q)
-        out.push(["frames", `${q.totalVideoFrames} decoded · ${q.droppedVideoFrames} dropped`]);
-      if (err) out.push(["error", `${err.code} ${err.message}`]);
-      return out;
-    },
-    dispose: extras.dispose,
-    currentTime: () => video.currentTime,
-    duration: () => {
-      if (Number.isFinite(video.duration) && video.duration > 0) return video.duration;
-      return extras.fallbackDuration ?? null;
-    },
-    paused: () => video.paused,
-    volume: () => video.volume,
-    muted: () => video.muted,
-    buffered: () => {
-      // Defensive: Firefox can throw `DOMException: Index or size
-      // is negative…` from `<video>.buffered.start/end(i)` when the
-      // media element is in a transient state (mid-detach, after a
-      // decode error, …). The TimeRanges length is read fresh on
-      // each iteration so most races resolve themselves, but a
-      // throw here would propagate into the chrome's rAF tick →
-      // `setBuffered` during render → React errors recursively
-      // through the tree (visible as a long stack of minified
-      // function frames repeating). Catching keeps the chrome
-      // responsive even when the underlying media is wedged.
-      const ranges: Array<[number, number]> = [];
-      try {
-        const tr = video.buffered;
-        for (let i = 0; i < tr.length; i += 1) {
-          ranges.push([tr.start(i), tr.end(i)]);
-        }
-      } catch {
-        /* return whatever we managed to collect so far */
-      }
-      return ranges;
-    },
-    play: () => video.play(),
-    pause: () => video.pause(),
-    seek: (s) => {
-      try {
-        video.currentTime = s;
-      } catch {
-        /* swallow */
-      }
-    },
-    setVolume: (v) => {
-      video.volume = Math.max(0, Math.min(1, v));
-    },
-    setMuted: (m) => {
-      video.muted = m;
-    },
-    audioTracks: extras.audioTracks ?? (() => []),
-    setAudioTrack: extras.setAudioTrack ?? (() => undefined),
-    setNativeSubtitle: (streamIdx) => {
-      if (!extras.nativeTrackMap) return;
-      // Try to apply the mode change. The `TextTrack` backing each
-      // `<track>` element is created lazily by the browser — `el.track`
-      // can be null for a few rAF ticks after `appendChild`. Retry up
-      // to ~1 s before giving up so the picker selection actually takes.
-      const trackMap = extras.nativeTrackMap;
-      let attempts = 0;
-      const apply = (): void => {
-        let pending = false;
-        for (const [idx, trackEl] of trackMap) {
-          const t = trackEl.track;
-          if (!t) {
-            pending = true;
-            continue;
-          }
-          t.mode = idx === streamIdx ? "showing" : "disabled";
-        }
-        if (pending && attempts < 60) {
-          attempts += 1;
-          requestAnimationFrame(apply);
-        }
-      };
-      apply();
-    },
-    setNativeSubtitleSrc: (streamIdx, url) => {
-      const el = extras.nativeTrackMap?.get(streamIdx);
-      // Compare the attribute, not `el.src` (which reflects back as an
-      // absolute URL and would never equal the relative form we set).
-      if (!el || el.getAttribute("src") === url) return;
-      el.src = url;
-    },
-    videoElement: () => video,
-    canvasElement: () => null,
-  };
+	const ranges = (tr: TimeRanges): string =>
+		tr.length === 0 ? 'none' : Array.from({ length: tr.length }, (_, i) => `${tr.start(i).toFixed(1)}-${tr.end(i).toFixed(1)}`).join(' ');
+	return {
+		stats: () => {
+			const q = video.getVideoPlaybackQuality?.();
+			const err = video.error;
+			const out: Array<[string, string]> = [
+				['time', `${video.currentTime.toFixed(2)} / ${Number.isFinite(video.duration) ? video.duration.toFixed(1) : '?'}`],
+				[
+					'state',
+					`ready ${video.readyState} · net ${video.networkState}${video.seeking ? ' · seeking' : ''}${video.paused ? ' · paused' : ''}`
+				],
+				['picture', video.videoWidth ? `${video.videoWidth}x${video.videoHeight}` : 'no frame yet'],
+				['buffered', ranges(video.buffered)]
+			];
+			if (q) out.push(['frames', `${q.totalVideoFrames} decoded · ${q.droppedVideoFrames} dropped`]);
+			if (err) out.push(['error', `${err.code} ${err.message}`]);
+			return out;
+		},
+		dispose: extras.dispose,
+		currentTime: () => video.currentTime,
+		duration: () => {
+			if (Number.isFinite(video.duration) && video.duration > 0) return video.duration;
+			return extras.fallbackDuration ?? null;
+		},
+		paused: () => video.paused,
+		volume: () => video.volume,
+		muted: () => video.muted,
+		buffered: () => {
+			// Defensive: Firefox can throw `DOMException: Index or size
+			// is negative…` from `<video>.buffered.start/end(i)` when the
+			// media element is in a transient state (mid-detach, after a
+			// decode error, …). The TimeRanges length is read fresh on
+			// each iteration so most races resolve themselves, but a
+			// throw here would propagate into the chrome's rAF tick →
+			// `setBuffered` during render → React errors recursively
+			// through the tree (visible as a long stack of minified
+			// function frames repeating). Catching keeps the chrome
+			// responsive even when the underlying media is wedged.
+			const spans: Array<[number, number]> = [];
+			try {
+				const tr = video.buffered;
+				for (let i = 0; i < tr.length; i += 1) {
+					spans.push([tr.start(i), tr.end(i)]);
+				}
+			} catch {
+				/* return whatever we managed to collect so far */
+			}
+			return spans;
+		},
+		play: () => video.play(),
+		pause: () => video.pause(),
+		seek: (s) => {
+			try {
+				video.currentTime = s;
+			} catch {
+				/* swallow */
+			}
+		},
+		setVolume: (v) => {
+			video.volume = Math.max(0, Math.min(1, v));
+		},
+		setMuted: (m) => {
+			video.muted = m;
+		},
+		audioTracks: extras.audioTracks ?? (() => []),
+		setAudioTrack: extras.setAudioTrack ?? (() => undefined),
+		setNativeSubtitle: (streamIdx) => {
+			if (!extras.nativeTrackMap) return;
+			// Try to apply the mode change. The `TextTrack` backing each
+			// `<track>` element is created lazily by the browser — `el.track`
+			// can be null for a few rAF ticks after `appendChild`. Retry up
+			// to ~1 s before giving up so the picker selection actually takes.
+			const trackMap = extras.nativeTrackMap;
+			let attempts = 0;
+			const apply = (): void => {
+				let pending = false;
+				for (const [idx, trackEl] of trackMap) {
+					const t = trackEl.track;
+					if (!t) {
+						pending = true;
+						continue;
+					}
+					t.mode = idx === streamIdx ? 'showing' : 'disabled';
+				}
+				if (pending && attempts < 60) {
+					attempts += 1;
+					requestAnimationFrame(apply);
+				}
+			};
+			apply();
+		},
+		setNativeSubtitleSrc: (streamIdx, url) => {
+			const el = extras.nativeTrackMap?.get(streamIdx);
+			// Compare the attribute, not `el.src` (which reflects back as an
+			// absolute URL and would never equal the relative form we set).
+			if (!el || el.getAttribute('src') === url) return;
+			el.src = url;
+		},
+		videoElement: () => video,
+		canvasElement: () => null
+	};
 }
 
 /** Reusable helper: build a `<track>` element for a native subtitle
@@ -353,16 +340,16 @@ export function videoBackedHandle(
  *  the browser to auto-show a "default" track would fight the
  *  picker's selection on first frame. */
 export function appendNativeTrack(
-  video: HTMLVideoElement,
-  sub: NativeSubtitleTrack,
-  trackMap: Map<number, HTMLTrackElement>,
+	video: HTMLVideoElement,
+	sub: NativeSubtitleTrack,
+	trackMap: Map<number, HTMLTrackElement>
 ): HTMLTrackElement {
-  const el = document.createElement("track");
-  el.src = sub.vttUrl;
-  el.kind = "subtitles";
-  el.label = sub.title ?? sub.lang?.toUpperCase() ?? `Sub ${sub.stream_idx}`;
-  el.srclang = sub.lang ?? "und";
-  video.appendChild(el);
-  trackMap.set(sub.stream_idx, el);
-  return el;
+	const el = document.createElement('track');
+	el.src = sub.vttUrl;
+	el.kind = 'subtitles';
+	el.label = sub.title ?? sub.lang?.toUpperCase() ?? `Sub ${sub.stream_idx}`;
+	el.srclang = sub.lang ?? 'und';
+	video.appendChild(el);
+	trackMap.set(sub.stream_idx, el);
+	return el;
 }

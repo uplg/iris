@@ -20,32 +20,26 @@
  */
 
 import {
-  ALL_FORMATS,
-  AudioSampleSink,
-  AudioSampleSource,
-  Conversion,
-  EncodedAudioPacketSource,
-  EncodedPacketSink,
-  EncodedVideoPacketSource,
-  Input,
-  Mp4OutputFormat,
-  Output,
-  Quality,
-  StreamTarget,
-  type StreamTargetChunk,
-  UrlSource,
-} from "mediabunny";
+	ALL_FORMATS,
+	AudioSampleSink,
+	AudioSampleSource,
+	type Conversion,
+	EncodedAudioPacketSource,
+	EncodedPacketSink,
+	EncodedVideoPacketSource,
+	Input,
+	Mp4OutputFormat,
+	Output,
+	Quality,
+	StreamTarget,
+	type StreamTargetChunk,
+	UrlSource
+} from 'mediabunny';
 
-import { hevcMseNeedsIdrStart, isMobileLike } from "../caps";
-import { HevcCraSplicer, descriptionBytes, splicePacket } from "../decode/hevc-cra-splice";
-import { ensureLibavAudioDecoderRegistered, libavCanDecode } from "../decode/libav-audio-decoder";
-import {
-  appendNativeTrack,
-  bindVideoCallbacks,
-  videoBackedHandle,
-  type EngineHandle,
-  type EngineMount,
-} from "../engine";
+import { hevcMseNeedsIdrStart, isMobileLike } from '../caps';
+import { HevcCraSplicer, descriptionBytes, splicePacket } from '../decode/hevc-cra-splice';
+import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
+import { appendNativeTrack, bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
 
 // Live SourceBuffer window
 //
@@ -117,7 +111,7 @@ const AHEAD_BYTES_BUDGET_FIREFOX = 48 * 1024 * 1024;
 
 /** Match Firefox-proper + Firefox-derived (LibreWolf, Waterfox, …). */
 function isFirefox(): boolean {
-  return typeof navigator !== "undefined" && /Firefox\/\d+/.test(navigator.userAgent);
+	return typeof navigator !== 'undefined' && /Firefox\/\d+/.test(navigator.userAgent);
 }
 
 /** Floors so a very high-bitrate file can't shrink the forward window to
@@ -152,82 +146,71 @@ const TRACK_LEAD_CAP = 4;
  *  once `format` is set — probing without `format` would green-
  *  light Tier B on Firefox and we'd waste a full mount cycle. */
 export type AudioEncoderChoice =
-  | { codec: "aac"; channels: number; mp4Codec: "mp4a.40.2" }
-  | { codec: "opus"; channels: number; mp4Codec: "opus" };
+	| { codec: 'aac'; channels: number; mp4Codec: 'mp4a.40.2' }
+	| { codec: 'opus'; channels: number; mp4Codec: 'opus' };
 
 const encoderProbeCache = new Map<string, AudioEncoderChoice | null>();
 
-export async function pickAudioEncoder(
-  srcChannels: number,
-  sampleRate: number,
-): Promise<AudioEncoderChoice | null> {
-  if (typeof globalThis.AudioEncoder === "undefined") return null;
-  const key = `${srcChannels}/${sampleRate}`;
-  const cached = encoderProbeCache.get(key);
-  if (cached !== undefined) return cached;
+export async function pickAudioEncoder(srcChannels: number, sampleRate: number): Promise<AudioEncoderChoice | null> {
+	if (typeof globalThis.AudioEncoder === 'undefined') return null;
+	const key = `${srcChannels}/${sampleRate}`;
+	const cached = encoderProbeCache.get(key);
+	if (cached !== undefined) return cached;
 
-  // Pass 1 — AAC at descending channel counts (prefer source layout).
-  const aacCandidates = Array.from(
-    new Set([srcChannels, 6, 2].filter((n) => n > 0 && n <= srcChannels)),
-  );
-  for (const n of aacCandidates) {
-    try {
-      const r = await AudioEncoder.isConfigSupported({
-        codec: "mp4a.40.2",
-        sampleRate,
-        numberOfChannels: n,
-        bitrate: 192_000,
-        aac: { format: "aac" },
-      } as AudioEncoderConfig);
-      if (r.supported) {
-        const choice: AudioEncoderChoice = {
-          codec: "aac",
-          channels: n,
-          mp4Codec: "mp4a.40.2",
-        };
-        console.log(
-          `[iris-core] Tier B: AudioEncoder → AAC ${n}ch @ ${sampleRate}Hz (source: ${srcChannels}ch)`,
-        );
-        encoderProbeCache.set(key, choice);
-        return choice;
-      }
-    } catch {
-      /* keep walking */
-    }
-  }
+	// Pass 1 — AAC at descending channel counts (prefer source layout).
+	const aacCandidates = Array.from(new Set([srcChannels, 6, 2].filter((n) => n > 0 && n <= srcChannels)));
+	for (const n of aacCandidates) {
+		try {
+			const r = await AudioEncoder.isConfigSupported({
+				codec: 'mp4a.40.2',
+				sampleRate,
+				numberOfChannels: n,
+				bitrate: 192_000,
+				aac: { format: 'aac' }
+			} as AudioEncoderConfig);
+			if (r.supported) {
+				const choice: AudioEncoderChoice = {
+					codec: 'aac',
+					channels: n,
+					mp4Codec: 'mp4a.40.2'
+				};
+				console.log(`[iris-core] Tier B: AudioEncoder → AAC ${n}ch @ ${sampleRate}Hz (source: ${srcChannels}ch)`);
+				encoderProbeCache.set(key, choice);
+				return choice;
+			}
+		} catch {
+			/* keep walking */
+		}
+	}
 
-  // Pass 2 — Opus 2ch (Firefox fallback). 128 kbps is around the
-  // transparency point for music; speech-heavy content sounds fine
-  // well below that, so this is conservative.
-  try {
-    const r = await AudioEncoder.isConfigSupported({
-      codec: "opus",
-      sampleRate,
-      numberOfChannels: 2,
-      bitrate: 128_000,
-      opus: { format: "opus" },
-    } as AudioEncoderConfig);
-    if (r.supported) {
-      const choice: AudioEncoderChoice = {
-        codec: "opus",
-        channels: 2,
-        mp4Codec: "opus",
-      };
-      console.log(
-        `[iris-core] Tier B: AudioEncoder → Opus 2ch @ ${sampleRate}Hz (source: ${srcChannels}ch, AAC unavailable)`,
-      );
-      encoderProbeCache.set(key, choice);
-      return choice;
-    }
-  } catch {
-    /* fall through */
-  }
+	// Pass 2 — Opus 2ch (Firefox fallback). 128 kbps is around the
+	// transparency point for music; speech-heavy content sounds fine
+	// well below that, so this is conservative.
+	try {
+		const r = await AudioEncoder.isConfigSupported({
+			codec: 'opus',
+			sampleRate,
+			numberOfChannels: 2,
+			bitrate: 128_000,
+			opus: { format: 'opus' }
+		} as AudioEncoderConfig);
+		if (r.supported) {
+			const choice: AudioEncoderChoice = {
+				codec: 'opus',
+				channels: 2,
+				mp4Codec: 'opus'
+			};
+			console.log(`[iris-core] Tier B: AudioEncoder → Opus 2ch @ ${sampleRate}Hz (source: ${srcChannels}ch, AAC unavailable)`);
+			encoderProbeCache.set(key, choice);
+			return choice;
+		}
+	} catch {
+		/* fall through */
+	}
 
-  console.warn(
-    `[iris-core] Tier B: no encodable audio codec @ ${sampleRate}Hz (source: ${srcChannels}ch)`,
-  );
-  encoderProbeCache.set(key, null);
-  return null;
+	console.warn(`[iris-core] Tier B: no encodable audio codec @ ${sampleRate}Hz (source: ${srcChannels}ch)`);
+	encoderProbeCache.set(key, null);
+	return null;
 }
 
 /** Mediabunny's MP4 muxer validates that every packet's PTS is ≥ the
@@ -240,21 +223,21 @@ export async function pickAudioEncoder(
  *  thrown by the validator. We patch the validator on each Output we
  *  build (the muxer is on `output._muxer`). */
 export function relaxMediabunnyGopCheck(output: Output): void {
-  const m = (
-    output as unknown as {
-      _muxer?: { validateTimestamp?: (track: unknown, ts: number, isKey: boolean) => void };
-    }
-  )._muxer;
-  if (!m || typeof m.validateTimestamp !== "function") return;
-  const original = m.validateTimestamp.bind(m);
-  m.validateTimestamp = (track, ts, isKey) => {
-    try {
-      original(track, ts, isKey);
-    } catch (e) {
-      if (e instanceof Error && /previous GOP/i.test(e.message)) return;
-      throw e;
-    }
-  };
+	const m = (
+		output as unknown as {
+			_muxer?: { validateTimestamp?: (track: unknown, ts: number, isKey: boolean) => void };
+		}
+	)._muxer;
+	if (!m || typeof m.validateTimestamp !== 'function') return;
+	const original = m.validateTimestamp.bind(m);
+	m.validateTimestamp = (track, ts, isKey) => {
+		try {
+			original(track, ts, isKey);
+		} catch (e) {
+			if (e instanceof Error && /previous GOP/i.test(e.message)) return;
+			throw e;
+		}
+	};
 }
 
 /** Hard cap on undrained append chunks held in RAM. When the drain stalls
@@ -266,1480 +249,1454 @@ export function relaxMediabunnyGopCheck(output: Output): void {
 const MAX_QUEUED_CHUNKS = 16;
 
 export const mountTierB: EngineMount = async (opts) => {
-  const { container, manifest, streamUrl, nativeSubs, audioTrackIndex } = opts;
-  const fail = (err: Error) => opts.onError(err);
+	const { container, manifest, streamUrl, nativeSubs, audioTrackIndex } = opts;
+	const fail = (err: Error) => opts.onError(err);
 
-  // Derive the live SourceBuffer window up front from the file's average
-  // bitrate, capped by both a time ceiling and a byte budget (see the
-  // constants above). This is what bounds the renderer's memory on a
-  // high-bitrate file — a time-only window would pin hundreds of MB of
-  // 4K and OOM-kill the tab on a phone.
-  const mobile = isMobileLike();
-  const firefox = isFirefox();
-  // Mobile budgets win (tightest); Firefox desktop gets its own
-  // narrower ceiling; everything else keeps the roomy Chrome window.
-  const aheadByteBudget = mobile
-    ? AHEAD_BYTES_BUDGET_MOBILE
-    : firefox
-      ? AHEAD_BYTES_BUDGET_FIREFOX
-      : AHEAD_BYTES_BUDGET;
-  const bytesPerSecond =
-    manifest.size_bytes > 0 && manifest.duration_s && manifest.duration_s > 0
-      ? manifest.size_bytes / manifest.duration_s
-      : 0;
-  const clampWindow = (secondsCeiling: number, minSeconds: number, byteBudget: number): number =>
-    bytesPerSecond > 0
-      ? Math.min(secondsCeiling, Math.max(minSeconds, byteBudget / bytesPerSecond))
-      : secondsCeiling;
-  // Forward window in SECONDS — the single back-pressure lever. Sized from the
-  // file's AVERAGE bitrate (clampWindow divides the byte budget by bytes/s) so
-  // a low-bitrate file gets a deep window and a high-bitrate one a shallow one,
-  // capped by the time ceiling. It ADAPTS DOWN on a real QuotaExceededError
-  // (the only reliable per-region memory signal on VBR) and grows back.
-  //
-  // We deliberately do NOT gate on an estimated resident-BYTE count: now that
-  // `bufferedAheadSeconds()` correctly bridges non-coalescing fMP4 ranges, the
-  // seconds gate bounds the forward buffer accurately, whereas the proportional
-  // byte estimate drifted badly (read ~67 MB for a 28 s buffer), pinned the
-  // producer at the budget, and starved the forward buffer into underruns.
-  let bufferAheadTarget = clampWindow(
-    mobile
-      ? AHEAD_SECONDS_CEILING_MOBILE
-      : firefox
-        ? AHEAD_SECONDS_CEILING_FIREFOX
-        : AHEAD_SECONDS_CEILING,
-    MIN_AHEAD_SECONDS,
-    aheadByteBudget,
-  );
-  const aheadCeiling = bufferAheadTarget;
-  // The seek-back (behind) window. Shrinks to the floor on a real quota — it's
-  // pure nice-to-have, so we dump it FIRST to free room for the forward buffer
-  // playback actually needs. Grows back when quiet. Evicted continuously as
-  // the playhead advances.
-  let playedKeep = mobile ? BEHIND_SECONDS_CEILING_MOBILE : BEHIND_SECONDS_CEILING;
-  const behindCeiling = playedKeep;
+	// Derive the live SourceBuffer window up front from the file's average
+	// bitrate, capped by both a time ceiling and a byte budget (see the
+	// constants above). This is what bounds the renderer's memory on a
+	// high-bitrate file — a time-only window would pin hundreds of MB of
+	// 4K and OOM-kill the tab on a phone.
+	const mobile = isMobileLike();
+	const firefox = isFirefox();
+	// Mobile budgets win (tightest); Firefox desktop gets its own
+	// narrower ceiling; everything else keeps the roomy Chrome window.
+	const aheadByteBudget = mobile ? AHEAD_BYTES_BUDGET_MOBILE : firefox ? AHEAD_BYTES_BUDGET_FIREFOX : AHEAD_BYTES_BUDGET;
+	const bytesPerSecond =
+		manifest.size_bytes > 0 && manifest.duration_s && manifest.duration_s > 0 ? manifest.size_bytes / manifest.duration_s : 0;
+	const clampWindow = (secondsCeiling: number, minSeconds: number, byteBudget: number): number =>
+		bytesPerSecond > 0 ? Math.min(secondsCeiling, Math.max(minSeconds, byteBudget / bytesPerSecond)) : secondsCeiling;
+	// Forward window in SECONDS — the single back-pressure lever. Sized from the
+	// file's AVERAGE bitrate (clampWindow divides the byte budget by bytes/s) so
+	// a low-bitrate file gets a deep window and a high-bitrate one a shallow one,
+	// capped by the time ceiling. It ADAPTS DOWN on a real QuotaExceededError
+	// (the only reliable per-region memory signal on VBR) and grows back.
+	//
+	// We deliberately do NOT gate on an estimated resident-BYTE count: now that
+	// `bufferedAheadSeconds()` correctly bridges non-coalescing fMP4 ranges, the
+	// seconds gate bounds the forward buffer accurately, whereas the proportional
+	// byte estimate drifted badly (read ~67 MB for a 28 s buffer), pinned the
+	// producer at the budget, and starved the forward buffer into underruns.
+	let bufferAheadTarget = clampWindow(
+		mobile ? AHEAD_SECONDS_CEILING_MOBILE : firefox ? AHEAD_SECONDS_CEILING_FIREFOX : AHEAD_SECONDS_CEILING,
+		MIN_AHEAD_SECONDS,
+		aheadByteBudget
+	);
+	const aheadCeiling = bufferAheadTarget;
+	// The seek-back (behind) window. Shrinks to the floor on a real quota — it's
+	// pure nice-to-have, so we dump it FIRST to free room for the forward buffer
+	// playback actually needs. Grows back when quiet. Evicted continuously as
+	// the playhead advances.
+	let playedKeep = mobile ? BEHIND_SECONDS_CEILING_MOBILE : BEHIND_SECONDS_CEILING;
+	const behindCeiling = playedKeep;
 
-  console.log(
-    `[iris-core] Tier B buffer window: ahead≤${bufferAheadTarget.toFixed(0)}s ` +
-      `behind=${playedKeep.toFixed(0)}s (byteBudget=${(aheadByteBudget / 1e6).toFixed(0)}MB sizes window) ` +
-      `(mobile=${mobile}, firefox=${firefox}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`,
-  );
+	console.log(
+		`[iris-core] Tier B buffer window: ahead≤${bufferAheadTarget.toFixed(0)}s ` +
+			`behind=${playedKeep.toFixed(0)}s (byteBudget=${(aheadByteBudget / 1e6).toFixed(0)}MB sizes window) ` +
+			`(mobile=${mobile}, firefox=${firefox}, ~${((bytesPerSecond * 8) / 1e6).toFixed(1)} Mbps)`
+	);
 
-  if (typeof globalThis.MediaSource === "undefined") {
-    const err = new Error("MediaSource Extensions not available");
-    fail(err);
-    throw err;
-  }
+	if (typeof globalThis.MediaSource === 'undefined') {
+		const err = new Error('MediaSource Extensions not available');
+		fail(err);
+		throw err;
+	}
 
-  const defaultAudioIdx = Math.max(
-    0,
-    manifest.audio.findIndex((a) => a.default),
-  );
-  const chosenAudioIdx = audioTrackIndex ?? defaultAudioIdx;
-  const chosenAudio = manifest.audio[chosenAudioIdx];
-  const audioNeedsTranscode = chosenAudio != null && !chosenAudio.browser_native;
-  if (audioNeedsTranscode && !libavCanDecode(chosenAudio.codec)) {
-    const err = new Error(`Tier B: audio codec ${chosenAudio.codec} not transcodable client-side`);
-    fail(err);
-    throw err;
-  }
-  if (audioNeedsTranscode) {
-    ensureLibavAudioDecoderRegistered();
-  }
+	const defaultAudioIdx = Math.max(
+		0,
+		manifest.audio.findIndex((a) => a.default)
+	);
+	const chosenAudioIdx = audioTrackIndex ?? defaultAudioIdx;
+	const chosenAudio = manifest.audio[chosenAudioIdx];
+	const audioNeedsTranscode = chosenAudio !== null && chosenAudio !== undefined && !chosenAudio.browser_native;
+	if (audioNeedsTranscode && !libavCanDecode(chosenAudio.codec)) {
+		const err = new Error(`Tier B: audio codec ${chosenAudio.codec} not transcodable client-side`);
+		fail(err);
+		throw err;
+	}
+	if (audioNeedsTranscode) {
+		ensureLibavAudioDecoderRegistered();
+	}
 
-  // Probe the encoder NOW (before MSE setup) so we know which mp4
-  // audio codec to advertise in the SourceBuffer MIME. Uses the
-  // manifest's channels + sample_rate — saves a round-trip through
-  // Mediabunny's demuxer just to read metadata. Defaults to 48 kHz
-  // when the manifest doesn't carry a rate (rare on AC-3 / E-AC-3,
-  // which are 48 kHz by spec).
-  let encoderChoice: AudioEncoderChoice | null = null;
-  if (audioNeedsTranscode && chosenAudio) {
-    const srcChannels = chosenAudio.channels ?? 2;
-    const srcSampleRate = chosenAudio.sample_rate ?? 48_000;
-    encoderChoice = await pickAudioEncoder(srcChannels, srcSampleRate);
-    if (!encoderChoice) {
-      const err = new Error(
-        `Tier B: this browser doesn't support encoding ${srcChannels}ch @ ${srcSampleRate}Hz audio in MP4 (neither AAC nor Opus accepted by AudioEncoder)`,
-      );
-      fail(err);
-      throw err;
-    }
-  }
+	// Probe the encoder NOW (before MSE setup) so we know which mp4
+	// audio codec to advertise in the SourceBuffer MIME. Uses the
+	// manifest's channels + sample_rate — saves a round-trip through
+	// Mediabunny's demuxer just to read metadata. Defaults to 48 kHz
+	// when the manifest doesn't carry a rate (rare on AC-3 / E-AC-3,
+	// which are 48 kHz by spec).
+	let encoderChoice: AudioEncoderChoice | null = null;
+	if (audioNeedsTranscode && chosenAudio) {
+		const srcChannels = chosenAudio.channels ?? 2;
+		const srcSampleRate = chosenAudio.sample_rate ?? 48_000;
+		encoderChoice = await pickAudioEncoder(srcChannels, srcSampleRate);
+		if (!encoderChoice) {
+			const err = new Error(
+				`Tier B: this browser doesn't support encoding ${srcChannels}ch @ ${srcSampleRate}Hz audio in MP4 (neither AAC nor Opus accepted by AudioEncoder)`
+			);
+			fail(err);
+			throw err;
+		}
+	}
 
-  container.innerHTML = "";
-  const video = document.createElement("video");
-  video.className = "h-full w-full object-contain";
-  video.playsInline = true;
-  const nativeTrackMap = new Map<number, HTMLTrackElement>();
-  for (const sub of nativeSubs) {
-    appendNativeTrack(video, sub, nativeTrackMap);
-  }
-  container.appendChild(video);
+	container.innerHTML = '';
+	const video = document.createElement('video');
+	video.className = 'h-full w-full object-contain';
+	video.playsInline = true;
+	const nativeTrackMap = new Map<number, HTMLTrackElement>();
+	for (const sub of nativeSubs) {
+		appendNativeTrack(video, sub, nativeTrackMap);
+	}
+	container.appendChild(video);
 
-  const initialSeek = { done: false };
-  const unbindVideo = bindVideoCallbacks(video, opts, initialSeek);
+	const initialSeek = { done: false };
+	const unbindVideo = bindVideoCallbacks(video, opts, initialSeek);
 
-  const mediaSource = new MediaSource();
-  const objectUrl = URL.createObjectURL(mediaSource);
-  video.src = objectUrl;
+	const mediaSource = new MediaSource();
+	const objectUrl = URL.createObjectURL(mediaSource);
+	video.src = objectUrl;
 
-  let disposed = false;
-  let sourceBuffer: SourceBuffer | null = null;
-  // Two parallel pipeline shapes, both writing into the same
-  // `appendQueue` / `sourceBuffer`. We keep a reference to whichever
-  // is currently feeding so we can cancel it on dispose / seek.
-  let conversion: Conversion | null = null;
-  let manualOutput: Output | null = null;
-  // Mediabunny `Input` — assigned later (after we've validated MSE
-  // + opened the MediaSource). Declared up here so `dispose` can
-  // close it on any failure path without tripping a TDZ
-  // `ReferenceError` on the early throws (codec unsupported, MIME
-  // not supported, MediaSource error, …).
-  let input: Input | null = null;
-  let conversionGeneration = 0;
-  // Playback time of the last quota event (gates window re-growth) and of
-  // the last quota log line (throttles the console).
-  let lastQuotaT = -Infinity;
-  let lastQuotaLogT = -Infinity;
-  let lastTelemetryT = -Infinity;
-  // Wall-clock (performance.now) of the last conversion (re)start — lets the
-  // media-error diagnostic tell "errored right after mount/seek" from
-  // "errored deep into steady playback".
-  let lastConversionStartWall = 0;
-  // Wall-clock when the tab was last hidden — diagnostic for the media-error
-  // log (a decode error right after a tab return points at Firefox/macOS
-  // having released the VideoToolbox decoder while backgrounded; the reactive
-  // recovery for that lives in IrisPlayer, see the `visibilitychange` handler).
-  let hiddenAtWall = 0;
-  // Diagnostics for the Firefox "appendBuffer wedges in updating=true with no
-  // updateend/error" failure (FF bug 1120084). Records which op is in flight; a
-  // STALL showing `pendingOp=append updating=true` means the append is wedged
-  // (the recovery in `onWaiting` aborts it).
-  let pendingOp: "append" | "remove" | null = null;
-  // Bytes the muxer has actually produced this generation. Reported in the
-  // STALL line: zero here means the muxer emitted nothing, so the fault is
-  // upstream of MSE (a parked feed loop) rather than a rejected append.
-  let sinkChunks = 0;
-  let sinkBytes = 0;
-  /** Firefox only: playhead position to apply once a buffered range covers it.
-   *  See `anchorPlayhead` for why it can't be set up front. */
-  let pendingPlayheadAnchor: number | null = null;
-  /** Most recent reason a feed loop parked, or null when both are running. */
-  let feedPark: string | null = null;
-  // Diagnostics: furthest video timestamp handed to the muxer, and whether
-  // the video feed loop has finished. Distinguishes "demux/feed stopped"
-  // (fedMax frozen / feedEnded) from "decoder stalled with a full buffer".
-  let videoFedMax = 0;
-  let videoFeedEnded = false;
-  // Furthest AUDIO timestamp handed to the muxer. The video feed is gated so
-  // it never races more than TRACK_LEAD_CAP seconds ahead of this (and vice
-  // versa): without it, fast passthrough video out-runs the slow transcoded
-  // audio by minutes, and the muxer HOLDS all that video in memory waiting to
-  // interleave it with audio → jsHeap explodes (300 MB+) while the SourceBuffer
-  // itself stays small. The output-side back-pressure can't see that pile-up.
-  let audioFedMax = 0;
-  // Wakeups for in-flight `waitTrackBalance` calls (resolved when the OTHER
-  // track advances, or on dispose). No timers → deadlock-free.
-  const trackWaiters = new Set<() => void>();
-  const notifyTrackProgress = () => {
-    // Each `w()` deletes itself on resolve; deleting the current element
-    // during Set iteration is safe, and resolves are async (no waiter is
-    // added synchronously during this loop).
-    for (const w of trackWaiters) w();
-  };
-  // Wakeups for feed loops parked in `waitBufferRoom` (the absolute forward
-  // back-pressure). Resolved when playback drains the buffer (`timeupdate`)
-  // or on dispose. No timers → deadlock-free.
-  const bufferRoomWaiters = new Set<() => void>();
-  const notifyBufferRoom = () => {
-    for (const w of bufferRoomWaiters) w();
-  };
-  const appendQueue: Uint8Array[] = [];
+	let disposed = false;
+	let sourceBuffer: SourceBuffer | null = null;
+	// Two parallel pipeline shapes, both writing into the same
+	// `appendQueue` / `sourceBuffer`. We keep a reference to whichever
+	// is currently feeding so we can cancel it on dispose / seek.
+	let conversion: Conversion | null = null;
+	let manualOutput: Output | null = null;
+	// Mediabunny `Input` — assigned later (after we've validated MSE
+	// + opened the MediaSource). Declared up here so `dispose` can
+	// close it on any failure path without tripping a TDZ
+	// `ReferenceError` on the early throws (codec unsupported, MIME
+	// not supported, MediaSource error, …).
+	let input: Input | null = null;
+	let conversionGeneration = 0;
+	// Playback time of the last quota event (gates window re-growth) and of
+	// the last quota log line (throttles the console).
+	let lastQuotaT = -Infinity;
+	let lastQuotaLogT = -Infinity;
+	let lastTelemetryT = -Infinity;
+	// Wall-clock (performance.now) of the last conversion (re)start — lets the
+	// media-error diagnostic tell "errored right after mount/seek" from
+	// "errored deep into steady playback".
+	let lastConversionStartWall = 0;
+	// Wall-clock when the tab was last hidden — diagnostic for the media-error
+	// log (a decode error right after a tab return points at Firefox/macOS
+	// having released the VideoToolbox decoder while backgrounded; the reactive
+	// recovery for that lives in IrisPlayer, see the `visibilitychange` handler).
+	let hiddenAtWall = 0;
+	// Diagnostics for the Firefox "appendBuffer wedges in updating=true with no
+	// updateend/error" failure (FF bug 1120084). Records which op is in flight; a
+	// STALL showing `pendingOp=append updating=true` means the append is wedged
+	// (the recovery in `onWaiting` aborts it).
+	let pendingOp: 'append' | 'remove' | null = null;
+	// Bytes the muxer has actually produced this generation. Reported in the
+	// STALL line: zero here means the muxer emitted nothing, so the fault is
+	// upstream of MSE (a parked feed loop) rather than a rejected append.
+	let sinkChunks = 0;
+	let sinkBytes = 0;
+	/** Firefox only: playhead position to apply once a buffered range covers it.
+	 *  See `anchorPlayhead` for why it can't be set up front. */
+	let pendingPlayheadAnchor: number | null = null;
+	/** Most recent reason a feed loop parked, or null when both are running. */
+	let feedPark: string | null = null;
+	// Diagnostics: furthest video timestamp handed to the muxer, and whether
+	// the video feed loop has finished. Distinguishes "demux/feed stopped"
+	// (fedMax frozen / feedEnded) from "decoder stalled with a full buffer".
+	let videoFedMax = 0;
+	let videoFeedEnded = false;
+	// Furthest AUDIO timestamp handed to the muxer. The video feed is gated so
+	// it never races more than TRACK_LEAD_CAP seconds ahead of this (and vice
+	// versa): without it, fast passthrough video out-runs the slow transcoded
+	// audio by minutes, and the muxer HOLDS all that video in memory waiting to
+	// interleave it with audio → jsHeap explodes (300 MB+) while the SourceBuffer
+	// itself stays small. The output-side back-pressure can't see that pile-up.
+	let audioFedMax = 0;
+	// Wakeups for in-flight `waitTrackBalance` calls (resolved when the OTHER
+	// track advances, or on dispose). No timers → deadlock-free.
+	const trackWaiters = new Set<() => void>();
+	const notifyTrackProgress = () => {
+		// Each `w()` deletes itself on resolve; deleting the current element
+		// during Set iteration is safe, and resolves are async (no waiter is
+		// added synchronously during this loop).
+		for (const w of trackWaiters) w();
+	};
+	// Wakeups for feed loops parked in `waitBufferRoom` (the absolute forward
+	// back-pressure). Resolved when playback drains the buffer (`timeupdate`)
+	// or on dispose. No timers → deadlock-free.
+	const bufferRoomWaiters = new Set<() => void>();
+	const notifyBufferRoom = () => {
+		for (const w of bufferRoomWaiters) w();
+	};
+	const appendQueue: Uint8Array[] = [];
 
-  // One-shot. Firefox can fire `error` on `<video>` repeatedly
-  // when the SourceBuffer is full of undecodable data — without
-  // this guard the demote / banner / analytics path runs on every
-  // tick. Cosmetic but otherwise floods the console + sends a
-  // burst of `playback-error` POSTs.
-  let errorFired = false;
-  const onErr = () => {
-    if (errorFired) return;
-    errorFired = true;
-    const err = video.error;
-    // Diagnostics for the intermittent Firefox-macOS VideoToolbox decode error
-    // (`media error 3` / AppleVTDecoder). The context tells us WHERE it fires:
-    //   - `t≈startPos` + small `fedMax` → at mount/seek start (likely orphan
-    //     open-GOP RASL leading pictures of the first keyframe, fixable with
-    //     `appendWindowStart`);
-    //   - `t` deep into playback → mid-stream (a genuinely VT-hostile frame).
-    // `sinceConvMs` = wall-clock since the last conversion (re)start.
-    console.warn(
-      `[iris-core] Tier B media error: code=${err?.code} t=${video.currentTime.toFixed(1)}s ` +
-        `fedMax=${videoFedMax.toFixed(1)}s gen=${conversionGeneration} ` +
-        `sinceConvMs=${(performance.now() - lastConversionStartWall).toFixed(0)} ` +
-        `hiddenAgoMs=${hiddenAtWall > 0 ? (performance.now() - hiddenAtWall).toFixed(0) : "never"} ` +
-        `readyState=${video.readyState} ranges=[${bufferedRangesStr()}] msg=${err?.message ?? ""}`,
-    );
-    fail(new Error(err ? `media error ${err.code}: ${err.message}` : "video element error"));
-  };
-  video.addEventListener("error", onErr);
+	// One-shot. Firefox can fire `error` on `<video>` repeatedly
+	// when the SourceBuffer is full of undecodable data — without
+	// this guard the demote / banner / analytics path runs on every
+	// tick. Cosmetic but otherwise floods the console + sends a
+	// burst of `playback-error` POSTs.
+	let errorFired = false;
+	const onErr = () => {
+		if (errorFired) return;
+		errorFired = true;
+		const err = video.error;
+		// Diagnostics for the intermittent Firefox-macOS VideoToolbox decode error
+		// (`media error 3` / AppleVTDecoder). The context tells us WHERE it fires:
+		//   - `t≈startPos` + small `fedMax` → at mount/seek start (likely orphan
+		//     open-GOP RASL leading pictures of the first keyframe, fixable with
+		//     `appendWindowStart`);
+		//   - `t` deep into playback → mid-stream (a genuinely VT-hostile frame).
+		// `sinceConvMs` = wall-clock since the last conversion (re)start.
+		console.warn(
+			`[iris-core] Tier B media error: code=${err?.code} t=${video.currentTime.toFixed(1)}s ` +
+				`fedMax=${videoFedMax.toFixed(1)}s gen=${conversionGeneration} ` +
+				`sinceConvMs=${(performance.now() - lastConversionStartWall).toFixed(0)} ` +
+				`hiddenAgoMs=${hiddenAtWall > 0 ? (performance.now() - hiddenAtWall).toFixed(0) : 'never'} ` +
+				`readyState=${video.readyState} ranges=[${bufferedRangesStr()}] msg=${err?.message ?? ''}`
+		);
+		fail(new Error(err ? `media error ${err.code}: ${err.message}` : 'video element error'));
+	};
+	video.addEventListener('error', onErr);
 
-  // buffer helpers
+	// buffer helpers
 
-  /** Seconds of media buffered after the current playhead. CRITICAL: walks
-   *  forward across ADJACENT ranges, bridging the sub-second gaps between
-   *  fMP4 fragments that fail to coalesce into one `buffered` range. Without
-   *  the bridge this returned only the first sub-range (e.g. 8 s) while the
-   *  SourceBuffer actually held 100 s+ in a dozen touching ranges — so the
-   *  back-pressure under-counted wildly, never throttled, and the buffer grew
-   *  until it exhausted memory. The bridge makes the back-pressure see the
-   *  TRUE forward buffer and bound it. */
-  const bufferedAheadSeconds = (): number => {
-    if (!sourceBuffer || sourceBuffer.buffered.length === 0) return 0;
-    const t = video.currentTime;
-    const b = sourceBuffer.buffered;
-    let coveredEnd = Number.NEGATIVE_INFINITY;
-    for (let i = 0; i < b.length; i += 1) {
-      const start = b.start(i);
-      const end = b.end(i);
-      if (coveredEnd === Number.NEGATIVE_INFINITY) {
-        // First range that covers (or sits just after) the playhead.
-        if (start <= t + 0.5 && end >= t) coveredEnd = end;
-      } else if (start - coveredEnd <= 2) {
-        // Adjacent fragment (≤2 s gap — fMP4 fragments often don't coalesce
-        // into one range). Bridge it so the back-pressure counts the TRUE
-        // forward buffer and throttles promptly (a ≤1 s under-bridge let it
-        // overshoot to ~100 s before settling). A genuine hole that wedges
-        // playback is larger than this and the playhead can't cross it anyway.
-        coveredEnd = end;
-      } else {
-        break; // genuine gap — the contiguous forward buffer ends here
-      }
-    }
-    return coveredEnd === Number.NEGATIVE_INFINITY ? 0 : Math.max(0, coveredEnd - t);
-  };
+	/** Seconds of media buffered after the current playhead. CRITICAL: walks
+	 *  forward across ADJACENT ranges, bridging the sub-second gaps between
+	 *  fMP4 fragments that fail to coalesce into one `buffered` range. Without
+	 *  the bridge this returned only the first sub-range (e.g. 8 s) while the
+	 *  SourceBuffer actually held 100 s+ in a dozen touching ranges — so the
+	 *  back-pressure under-counted wildly, never throttled, and the buffer grew
+	 *  until it exhausted memory. The bridge makes the back-pressure see the
+	 *  TRUE forward buffer and bound it. */
+	const bufferedAheadSeconds = (): number => {
+		if (!sourceBuffer || sourceBuffer.buffered.length === 0) return 0;
+		const t = video.currentTime;
+		const b = sourceBuffer.buffered;
+		let coveredEnd = Number.NEGATIVE_INFINITY;
+		for (let i = 0; i < b.length; i += 1) {
+			const start = b.start(i);
+			const end = b.end(i);
+			if (coveredEnd === Number.NEGATIVE_INFINITY) {
+				// First range that covers (or sits just after) the playhead.
+				if (start <= t + 0.5 && end >= t) coveredEnd = end;
+			} else if (start - coveredEnd <= 2) {
+				// Adjacent fragment (≤2 s gap — fMP4 fragments often don't coalesce
+				// into one range). Bridge it so the back-pressure counts the TRUE
+				// forward buffer and throttles promptly (a ≤1 s under-bridge let it
+				// overshoot to ~100 s before settling). A genuine hole that wedges
+				// playback is larger than this and the playhead can't cross it anyway.
+				coveredEnd = end;
+			} else {
+				break; // genuine gap — the contiguous forward buffer ends here
+			}
+		}
+		return coveredEnd === Number.NEGATIVE_INFINITY ? 0 : Math.max(0, coveredEnd - t);
+	};
 
-  const isTimeBuffered = (t: number): boolean => {
-    if (!sourceBuffer) return false;
-    for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
-      if (sourceBuffer.buffered.start(i) - 0.25 <= t && sourceBuffer.buffered.end(i) + 0.25 >= t) {
-        return true;
-      }
-    }
-    return false;
-  };
+	const isTimeBuffered = (t: number): boolean => {
+		if (!sourceBuffer) return false;
+		for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
+			if (sourceBuffer.buffered.start(i) - 0.25 <= t && sourceBuffer.buffered.end(i) + 0.25 >= t) {
+				return true;
+			}
+		}
+		return false;
+	};
 
-  const waitForUpdateEnd = (): Promise<void> =>
-    new Promise<void>((resolve) => {
-      if (!sourceBuffer || !sourceBuffer.updating) {
-        resolve();
-        return;
-      }
-      sourceBuffer.addEventListener("updateend", () => resolve(), { once: true });
-    });
+	const waitForUpdateEnd = (): Promise<void> =>
+		new Promise<void>((resolve) => {
+			if (!sourceBuffer || !sourceBuffer.updating) {
+				resolve();
+				return;
+			}
+			sourceBuffer.addEventListener('updateend', () => resolve(), { once: true });
+		});
 
-  /** Hold a feed loop until its packet `ts` is within `TRACK_LEAD_CAP` of the
-   *  OTHER track's furthest fed timestamp. Keeps fast (passthrough) video from
-   *  racing minutes ahead of slow (transcoded) audio and piling up inside the
-   *  muxer. Wakes when the other track advances (`notifyTrackProgress`) or on
-   *  dispose — never on a timer, so it can't deadlock playback. */
-  const waitTrackBalance = (ts: number, otherFedMax: () => number): Promise<void> =>
-    new Promise<void>((resolve) => {
-      const ready = () => disposed || ts <= otherFedMax() + TRACK_LEAD_CAP;
-      if (ready()) {
-        resolve();
-        return;
-      }
-      feedPark = `balance ts=${ts.toFixed(1)} other=${otherFedMax().toFixed(1)} cap=${TRACK_LEAD_CAP}`;
-      const w = () => {
-        if (!ready()) return;
-        trackWaiters.delete(w);
-        feedPark = null;
-        resolve();
-      };
-      trackWaiters.add(w);
-    });
+	/** Hold a feed loop until its packet `ts` is within `TRACK_LEAD_CAP` of the
+	 *  OTHER track's furthest fed timestamp. Keeps fast (passthrough) video from
+	 *  racing minutes ahead of slow (transcoded) audio and piling up inside the
+	 *  muxer. Wakes when the other track advances (`notifyTrackProgress`) or on
+	 *  dispose — never on a timer, so it can't deadlock playback. */
+	const waitTrackBalance = (ts: number, otherFedMax: () => number): Promise<void> =>
+		new Promise<void>((resolve) => {
+			const ready = () => disposed || ts <= otherFedMax() + TRACK_LEAD_CAP;
+			if (ready()) {
+				resolve();
+				return;
+			}
+			feedPark = `balance ts=${ts.toFixed(1)} other=${otherFedMax().toFixed(1)} cap=${TRACK_LEAD_CAP}`;
+			const w = () => {
+				if (!ready()) return;
+				trackWaiters.delete(w);
+				feedPark = null;
+				resolve();
+			};
+			trackWaiters.add(w);
+		});
 
-  /** Absolute forward back-pressure — THE memory bound. Holds a feed loop
-   *  before it hands the muxer a packet whose timestamp `ts` is more than
-   *  `bufferAheadTarget` seconds ahead of the PLAYHEAD.
-   *
-   *  CRITICAL: it gates on `ts - currentTime` (how far the FEED has run ahead
-   *  of playback), NOT on `bufferedAheadSeconds()` (the appended buffer). Two
-   *  reasons: (1) Mediabunny's `Output` does NOT propagate StreamTarget write
-   *  back-pressure back to `source.add()`, so the source must self-throttle;
-   *  (2) when appends lag/stall (Firefox under memory pressure), the appended
-   *  metric FREEZES — gating on it let the feed race 150 s+ past the playhead,
-   *  piling that media inside the muxer (`fedMax=1770s` while `buffered.end`
-   *  was 1614 → 156 s hoarded → heap climbed, then the over-produced append
-   *  queue wedged Firefox's SourceBuffer and playback stalled). Bounding
-   *  `fed − playhead` caps the muxer backlog regardless of append health.
-   *
-   *  Wakes when playback advances (`notifyBufferRoom` on `timeupdate`) or on
-   *  dispose — never on a timer, so it can't deadlock. */
-  /** Where playback is, or is about to be. While a Firefox anchor is deferred
-   *  the element still reads 0 — gating the feed on that would park it before
-   *  the first packet and deadlock the anchor, which needs buffered data. */
-  const effectivePlayhead = (): number => pendingPlayheadAnchor ?? video.currentTime;
+	/** Absolute forward back-pressure — THE memory bound. Holds a feed loop
+	 *  before it hands the muxer a packet whose timestamp `ts` is more than
+	 *  `bufferAheadTarget` seconds ahead of the PLAYHEAD.
+	 *
+	 *  CRITICAL: it gates on `ts - currentTime` (how far the FEED has run ahead
+	 *  of playback), NOT on `bufferedAheadSeconds()` (the appended buffer). Two
+	 *  reasons: (1) Mediabunny's `Output` does NOT propagate StreamTarget write
+	 *  back-pressure back to `source.add()`, so the source must self-throttle;
+	 *  (2) when appends lag/stall (Firefox under memory pressure), the appended
+	 *  metric FREEZES — gating on it let the feed race 150 s+ past the playhead,
+	 *  piling that media inside the muxer (`fedMax=1770s` while `buffered.end`
+	 *  was 1614 → 156 s hoarded → heap climbed, then the over-produced append
+	 *  queue wedged Firefox's SourceBuffer and playback stalled). Bounding
+	 *  `fed − playhead` caps the muxer backlog regardless of append health.
+	 *
+	 *  Wakes when playback advances (`notifyBufferRoom` on `timeupdate`) or on
+	 *  dispose — never on a timer, so it can't deadlock. */
+	/** Where playback is, or is about to be. While a Firefox anchor is deferred
+	 *  the element still reads 0 — gating the feed on that would park it before
+	 *  the first packet and deadlock the anchor, which needs buffered data. */
+	const effectivePlayhead = (): number => pendingPlayheadAnchor ?? video.currentTime;
 
-  const waitBufferRoom = (ts: number): Promise<void> =>
-    new Promise<void>((resolve) => {
-      const ready = () => disposed || ts - effectivePlayhead() <= bufferAheadTarget;
-      if (ready()) {
-        resolve();
-        return;
-      }
-      feedPark = `room ts=${ts.toFixed(1)} playhead=${effectivePlayhead().toFixed(1)} target=${bufferAheadTarget}`;
-      const w = () => {
-        if (!ready()) return;
-        bufferRoomWaiters.delete(w);
-        feedPark = null;
-        resolve();
-      };
-      bufferRoomWaiters.add(w);
-    });
+	const waitBufferRoom = (ts: number): Promise<void> =>
+		new Promise<void>((resolve) => {
+			const ready = () => disposed || ts - effectivePlayhead() <= bufferAheadTarget;
+			if (ready()) {
+				resolve();
+				return;
+			}
+			feedPark = `room ts=${ts.toFixed(1)} playhead=${effectivePlayhead().toFixed(1)} target=${bufferAheadTarget}`;
+			const w = () => {
+				if (!ready()) return;
+				bufferRoomWaiters.delete(w);
+				feedPark = null;
+				resolve();
+			};
+			bufferRoomWaiters.add(w);
+		});
 
-  /** Move the playhead to `t`.
-   *
-   *  On Firefox this is DEFERRED until a buffered range actually covers `t`.
-   *  Setting `currentTime` while the SourceBuffer is still empty puts the
-   *  element into a pending seek (`seeking=true` from the moment the init
-   *  segment parses), and Firefox then never commits the coded frame groups
-   *  that follow: `sb.buffered` stays empty across megabytes of completed
-   *  appends, with no error and no event — measured on a resume at 82.7 s with
-   *  appendWindow, timestampOffset, mode, duration and seekable all correct. A
-   *  t=0 mount never trips it because `currentTime` already equals the data
-   *  start, so no seek is pending.
-   *
-   *  Chrome keeps the immediate set: it commits the appends regardless, and the
-   *  early anchor is what makes `canplay` fire when the buffered range starts
-   *  past 0. */
-  const anchorPlayhead = (t: number): void => {
-    if (t <= 0) return;
-    if (firefox) {
-      pendingPlayheadAnchor = t;
-      return;
-    }
-    try {
-      if (Math.abs(video.currentTime - t) > 0.05) video.currentTime = t;
-    } catch {
-      /* swallow */
-    }
-  };
+	/** Move the playhead to `t`.
+	 *
+	 *  On Firefox this is DEFERRED until a buffered range actually covers `t`.
+	 *  Setting `currentTime` while the SourceBuffer is still empty puts the
+	 *  element into a pending seek (`seeking=true` from the moment the init
+	 *  segment parses), and Firefox then never commits the coded frame groups
+	 *  that follow: `sb.buffered` stays empty across megabytes of completed
+	 *  appends, with no error and no event — measured on a resume at 82.7 s with
+	 *  appendWindow, timestampOffset, mode, duration and seekable all correct. A
+	 *  t=0 mount never trips it because `currentTime` already equals the data
+	 *  start, so no seek is pending.
+	 *
+	 *  Chrome keeps the immediate set: it commits the appends regardless, and the
+	 *  early anchor is what makes `canplay` fire when the buffered range starts
+	 *  past 0. */
+	const anchorPlayhead = (t: number): void => {
+		if (t <= 0) return;
+		if (firefox) {
+			pendingPlayheadAnchor = t;
+			return;
+		}
+		try {
+			if (Math.abs(video.currentTime - t) > 0.05) video.currentTime = t;
+		} catch {
+			/* swallow */
+		}
+	};
 
-  /** Apply a deferred anchor once the data it needs is buffered. */
-  const applyPendingAnchor = (): void => {
-    const t = pendingPlayheadAnchor;
-    if (t === null || !sourceBuffer) return;
-    for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
-      if (sourceBuffer.buffered.start(i) - 0.25 <= t && sourceBuffer.buffered.end(i) >= t) {
-        pendingPlayheadAnchor = null;
-        try {
-          if (Math.abs(video.currentTime - t) > 0.05) video.currentTime = t;
-        } catch {
-          /* swallow */
-        }
-        return;
-      }
-    }
-  };
+	/** Apply a deferred anchor once the data it needs is buffered. */
+	const applyPendingAnchor = (): void => {
+		const t = pendingPlayheadAnchor;
+		if (t === null || !sourceBuffer) return;
+		for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
+			if (sourceBuffer.buffered.start(i) - 0.25 <= t && sourceBuffer.buffered.end(i) >= t) {
+				pendingPlayheadAnchor = null;
+				try {
+					if (Math.abs(video.currentTime - t) > 0.05) video.currentTime = t;
+				} catch {
+					/* swallow */
+				}
+				return;
+			}
+		}
+	};
 
-  const evictPlayedRange = (keepSeconds: number): boolean => {
-    if (!sourceBuffer || sourceBuffer.updating) return false;
-    // Firefox: do NOT run our own `remove()`. Confirmed via telemetry that a
-    // `SourceBuffer.remove()` wedges Firefox in `updating=true` forever (no
-    // `updateend`/`error` — same swallow as bug 1120084), leaving a stranded
-    // zero-width range and freezing every later append → underrun stall. We
-    // don't NEED to evict on FF anyway: resident sits ~40 MB while Firefox's
-    // native eviction threshold is 150 MiB (`media.mediasource.eviction_
-    // threshold.video`), and FF auto-evicts the side FURTHEST from the playhead
-    // — always the back buffer, since our feed gate caps the forward buffer at
-    // ~24 s. So we leave eviction entirely to Firefox. Chrome keeps our manual
-    // eviction (its remove() is reliable and its quota is what we must respect).
-    if (firefox) return false;
-    const evictBefore = Math.max(0, video.currentTime - keepSeconds);
-    if (evictBefore <= 0) return false;
-    if (sourceBuffer.buffered.length === 0) return false;
-    const firstBufferedStart = sourceBuffer.buffered.start(0);
-    if (firstBufferedStart >= evictBefore) return false;
-    try {
-      sourceBuffer.remove(firstBufferedStart, evictBefore);
-      pendingOp = "remove";
-      return true;
-    } catch {
-      return false;
-    }
-  };
+	const evictPlayedRange = (keepSeconds: number): boolean => {
+		if (!sourceBuffer || sourceBuffer.updating) return false;
+		// Firefox: do NOT run our own `remove()`. Confirmed via telemetry that a
+		// `SourceBuffer.remove()` wedges Firefox in `updating=true` forever (no
+		// `updateend`/`error` — same swallow as bug 1120084), leaving a stranded
+		// zero-width range and freezing every later append → underrun stall. We
+		// don't NEED to evict on FF anyway: resident sits ~40 MB while Firefox's
+		// native eviction threshold is 150 MiB (`media.mediasource.eviction_
+		// threshold.video`), and FF auto-evicts the side FURTHEST from the playhead
+		// — always the back buffer, since our feed gate caps the forward buffer at
+		// ~24 s. So we leave eviction entirely to Firefox. Chrome keeps our manual
+		// eviction (its remove() is reliable and its quota is what we must respect).
+		if (firefox) return false;
+		const evictBefore = Math.max(0, video.currentTime - keepSeconds);
+		if (evictBefore <= 0) return false;
+		if (sourceBuffer.buffered.length === 0) return false;
+		const firstBufferedStart = sourceBuffer.buffered.start(0);
+		if (firstBufferedStart >= evictBefore) return false;
+		try {
+			sourceBuffer.remove(firstBufferedStart, evictBefore);
+			pendingOp = 'remove';
+			return true;
+		} catch {
+			return false;
+		}
+	};
 
-  /** Buffered ranges, for diagnostics — reveals a gap/island (timestamp
-   *  issue) vs one contiguous range (pure memory). */
-  const bufferedRangesStr = (): string => {
-    if (!sourceBuffer || sourceBuffer.buffered.length === 0) return "empty";
-    const b = sourceBuffer.buffered;
-    const parts: string[] = [];
-    for (let i = 0; i < b.length; i += 1) {
-      parts.push(`${b.start(i).toFixed(0)}-${b.end(i).toFixed(0)}`);
-    }
-    return parts.join(" ");
-  };
+	/** Buffered ranges, for diagnostics — reveals a gap/island (timestamp
+	 *  issue) vs one contiguous range (pure memory). */
+	const bufferedRangesStr = (): string => {
+		if (!sourceBuffer || sourceBuffer.buffered.length === 0) return 'empty';
+		const b = sourceBuffer.buffered;
+		const parts: string[] = [];
+		for (let i = 0; i < b.length; i += 1) {
+			parts.push(`${b.start(i).toFixed(0)}-${b.end(i).toFixed(0)}`);
+		}
+		return parts.join(' ');
+	};
 
-  /** Rough bytes resident in the SourceBuffer: total buffered duration ×
-   *  average bitrate. Tracks eviction on BOTH browsers — including Firefox's
-   *  NATIVE eviction, which our code doesn't drive — unlike a hand-kept
-   *  accumulator (which would only ever grow on FF). Approximate on VBR;
-   *  diagnostics only, never a back-pressure input. */
-  const residentBytesEstimate = (): number => {
-    if (!sourceBuffer || bytesPerSecond <= 0) return 0;
-    const b = sourceBuffer.buffered;
-    let span = 0;
-    for (let i = 0; i < b.length; i += 1) span += b.end(i) - b.start(i);
-    return span * bytesPerSecond;
-  };
+	/** Rough bytes resident in the SourceBuffer: total buffered duration ×
+	 *  average bitrate. Tracks eviction on BOTH browsers — including Firefox's
+	 *  NATIVE eviction, which our code doesn't drive — unlike a hand-kept
+	 *  accumulator (which would only ever grow on FF). Approximate on VBR;
+	 *  diagnostics only, never a back-pressure input. */
+	const residentBytesEstimate = (): number => {
+		if (!sourceBuffer || bytesPerSecond <= 0) return 0;
+		const b = sourceBuffer.buffered;
+		let span = 0;
+		for (let i = 0; i < b.length; i += 1) span += b.end(i) - b.start(i);
+		return span * bytesPerSecond;
+	};
 
-  // queue drain
+	// queue drain
 
-  /** If `buf` holds an init segment (`ftyp`/`moov`) immediately followed by a
-   *  media segment (`moof`), return the two halves; otherwise null. */
-  const initSegmentSplit = (buf: Uint8Array): [Uint8Array, Uint8Array] | null => {
-    try {
-      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-      let o = 0;
-      let sawInit = false;
-      while (o + 8 <= buf.byteLength) {
-        let size = dv.getUint32(o);
-        const type = String.fromCharCode(buf[o + 4]!, buf[o + 5]!, buf[o + 6]!, buf[o + 7]!);
-        if (size === 1 && o + 16 <= buf.byteLength) size = Number(dv.getBigUint64(o + 8));
-        if (size < 8 || o + size > buf.byteLength) return null;
-        if (type === "ftyp" || type === "moov") sawInit = true;
-        else if (type === "moof") {
-          return sawInit && o > 0 ? [buf.subarray(0, o), buf.subarray(o)] : null;
-        } else return null;
-        o += size;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  };
+	/** If `buf` holds an init segment (`ftyp`/`moov`) immediately followed by a
+	 *  media segment (`moof`), return the two halves; otherwise null. */
+	const initSegmentSplit = (buf: Uint8Array): [Uint8Array, Uint8Array] | null => {
+		try {
+			const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+			let o = 0;
+			let sawInit = false;
+			while (o + 8 <= buf.byteLength) {
+				let size = dv.getUint32(o);
+				const type = String.fromCharCode(buf[o + 4]!, buf[o + 5]!, buf[o + 6]!, buf[o + 7]!);
+				if (size === 1 && o + 16 <= buf.byteLength) size = Number(dv.getBigUint64(o + 8));
+				if (size < 8 || o + size > buf.byteLength) return null;
+				if (type === 'ftyp' || type === 'moov') sawInit = true;
+				else if (type === 'moof') {
+					return sawInit && o > 0 ? [buf.subarray(0, o), buf.subarray(o)] : null;
+				} else return null;
+				o += size;
+			}
+			return null;
+		} catch {
+			return null;
+		}
+	};
 
-  const drainQueue = () => {
-    if (disposed || !sourceBuffer || sourceBuffer.updating) return;
-    const next = appendQueue.shift();
-    if (!next) return;
-    try {
-      sourceBuffer.appendBuffer(next.slice().buffer);
-      pendingOp = "append";
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "QuotaExceededError") {
-        // We hit the browser's real per-SourceBuffer byte ceiling — this is the
-        // ONE reliable per-region memory signal on VBR. LEARN it: pull the
-        // SECONDS window down to just under what's buffered now so the producer
-        // parks below the ceiling from here on. Also dump the seek-back buffer
-        // (pure nice-to-have) to free the most room for the forward buffer.
-        // Both grow back when the high-bitrate stretch passes.
-        appendQueue.unshift(next);
-        bufferAheadTarget = Math.max(
-          MIN_AHEAD_SECONDS,
-          Math.min(bufferAheadTarget, bufferedAheadSeconds() * 0.8),
-        );
-        playedKeep = MIN_BEHIND_SECONDS;
-        const freed = evictPlayedRange(playedKeep);
-        lastQuotaT = video.currentTime;
-        // Throttle the log: at most one line per ~5 s of playback.
-        if (video.currentTime - lastQuotaLogT > 5) {
-          lastQuotaLogT = video.currentTime;
-          console.warn(
-            `[iris-core] Tier B: SourceBuffer byte ceiling ` +
-              `(ahead=${bufferedAheadSeconds().toFixed(0)}s, ~${(residentBytesEstimate() / 1e6).toFixed(0)}MB, ` +
-              `queued=${appendQueue.length}, evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — ` +
-              `window→${bufferAheadTarget.toFixed(0)}s ranges=[${bufferedRangesStr()}]`,
-          );
-        }
-        return;
-      }
-      fail(e instanceof Error ? e : new Error(String(e)));
-    }
-  };
+	const drainQueue = () => {
+		if (disposed || !sourceBuffer || sourceBuffer.updating) return;
+		const next = appendQueue.shift();
+		if (!next) return;
+		try {
+			sourceBuffer.appendBuffer(next.slice().buffer);
+			pendingOp = 'append';
+		} catch (e) {
+			if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+				// We hit the browser's real per-SourceBuffer byte ceiling — this is the
+				// ONE reliable per-region memory signal on VBR. LEARN it: pull the
+				// SECONDS window down to just under what's buffered now so the producer
+				// parks below the ceiling from here on. Also dump the seek-back buffer
+				// (pure nice-to-have) to free the most room for the forward buffer.
+				// Both grow back when the high-bitrate stretch passes.
+				appendQueue.unshift(next);
+				bufferAheadTarget = Math.max(MIN_AHEAD_SECONDS, Math.min(bufferAheadTarget, bufferedAheadSeconds() * 0.8));
+				playedKeep = MIN_BEHIND_SECONDS;
+				const freed = evictPlayedRange(playedKeep);
+				lastQuotaT = video.currentTime;
+				// Throttle the log: at most one line per ~5 s of playback.
+				if (video.currentTime - lastQuotaLogT > 5) {
+					lastQuotaLogT = video.currentTime;
+					console.warn(
+						`[iris-core] Tier B: SourceBuffer byte ceiling ` +
+							`(ahead=${bufferedAheadSeconds().toFixed(0)}s, ~${(residentBytesEstimate() / 1e6).toFixed(0)}MB, ` +
+							`queued=${appendQueue.length}, evicted=${freed}, t=${video.currentTime.toFixed(1)}s) — ` +
+							`window→${bufferAheadTarget.toFixed(0)}s ranges=[${bufferedRangesStr()}]`
+					);
+				}
+				return;
+			}
+			fail(e instanceof Error ? e : new Error(String(e)));
+		}
+	};
 
-  // stall recovery (event-driven, no timer)
-  //
-  // A `waiting`/`stalled` event means the playhead ran dry. Two
-  // mid-playback failure modes this rescues — both surfaced as the
-  // "playback dies after a while on Firefox, refresh fixes it" report:
-  //
-  //   1. A swallowed `QuotaExceededError` (see `drainQueue`) left a
-  //      chunk stuck in `appendQueue` with no pending `updateend` to
-  //      re-drive the drain — the feed wedges permanently. The
-  //      playhead has since advanced, so evicting played-out buffer
-  //      now frees space and the re-drain lands the append.
-  //   2. Firefox evicted a chunk AHEAD of the playhead under memory
-  //      pressure, punching a hole the player can't cross. If a
-  //      buffered range resumes just past `currentTime`, nudge across
-  //      the gap — the same trick hls.js applies as `nudgeOnVideoHole`.
-  //
-  // During normal startup buffering this is a harmless no-op: the
-  // queue drains as usual and the gap-jump loop finds no near-ahead
-  // range to skip to.
-  // Frozen-feed watchdog (single-shot, armed by a stall event only —
-  // user-approved timer exception). `onWaiting` handles wedged appends
-  // and buffer holes synchronously, but a feed frozen UPSTREAM — a
-  // half-dead connection that neither errors nor delivers (observed
-  // through Cloudflare on big files: fedMax frozen, queue empty, no
-  // pending op, no error) — has nothing event-driven left to poke it:
-  // UrlSource only retries REJECTED fetches, and every waiter is
-  // already in its ready state. Detection needs the one thing events
-  // can't express: "still frozen N seconds later". On a confirmed
-  // freeze we rebuild the Input (fresh connections — the old
-  // UrlSource's hung read can't be salvaged) and restart the pipeline
-  // at the playhead: the automated version of the manual play/pause
-  // nudge, position preserved.
-  const STALL_WATCHDOG_MS = 4_000;
-  let stallWatchdogId: ReturnType<typeof setTimeout> | null = null;
+	// stall recovery (event-driven, no timer)
+	//
+	// A `waiting`/`stalled` event means the playhead ran dry. Two
+	// mid-playback failure modes this rescues — both surfaced as the
+	// "playback dies after a while on Firefox, refresh fixes it" report:
+	//
+	//   1. A swallowed `QuotaExceededError` (see `drainQueue`) left a
+	//      chunk stuck in `appendQueue` with no pending `updateend` to
+	//      re-drive the drain — the feed wedges permanently. The
+	//      playhead has since advanced, so evicting played-out buffer
+	//      now frees space and the re-drain lands the append.
+	//   2. Firefox evicted a chunk AHEAD of the playhead under memory
+	//      pressure, punching a hole the player can't cross. If a
+	//      buffered range resumes just past `currentTime`, nudge across
+	//      the gap — the same trick hls.js applies as `nudgeOnVideoHole`.
+	//
+	// During normal startup buffering this is a harmless no-op: the
+	// queue drains as usual and the gap-jump loop finds no near-ahead
+	// range to skip to.
+	// Frozen-feed watchdog (single-shot, armed by a stall event only —
+	// user-approved timer exception). `onWaiting` handles wedged appends
+	// and buffer holes synchronously, but a feed frozen UPSTREAM — a
+	// half-dead connection that neither errors nor delivers (observed
+	// through Cloudflare on big files: fedMax frozen, queue empty, no
+	// pending op, no error) — has nothing event-driven left to poke it:
+	// UrlSource only retries REJECTED fetches, and every waiter is
+	// already in its ready state. Detection needs the one thing events
+	// can't express: "still frozen N seconds later". On a confirmed
+	// freeze we rebuild the Input (fresh connections — the old
+	// UrlSource's hung read can't be salvaged) and restart the pipeline
+	// at the playhead: the automated version of the manual play/pause
+	// nudge, position preserved.
+	const STALL_WATCHDOG_MS = 4_000;
+	let stallWatchdogId: ReturnType<typeof setTimeout> | null = null;
 
-  const onWaiting = () => {
-    if (disposed || !sourceBuffer) return;
-    const t = video.currentTime;
-    const wedged = sourceBuffer.updating;
-    // Arm the watchdog before any early-return below: the frozen-feed
-    // case is precisely the one where the synchronous recovery paths
-    // all no-op (playhead still inside a buffered range, queue empty).
-    // Fire-time checks make it a no-op when ANY progress happened.
-    if (!videoFeedEnded && stallWatchdogId == null) {
-      const snapT = t;
-      const snapFed = videoFedMax;
-      stallWatchdogId = setTimeout(() => {
-        stallWatchdogId = null;
-        if (disposed || videoFeedEnded || video.paused) return;
-        // ANY movement of either clock (including a user seek resetting
-        // them backwards) means something else is driving recovery.
-        if (Math.abs(video.currentTime - snapT) > 0.25 || videoFedMax !== snapFed) return;
-        console.warn(
-          `[iris-core] Tier B frozen feed: t=${snapT.toFixed(1)}s fedMax=${snapFed.toFixed(1)}s ` +
-            `unchanged after ${STALL_WATCHDOG_MS}ms — rebuilding input, restarting at playhead`,
-        );
-        try {
-          input?.dispose();
-        } catch {
-          /* idempotent */
-        }
-        input = makeInput();
-        void restartConversionFromSeek(video.currentTime);
-      }, STALL_WATCHDOG_MS);
-    }
-    // Diagnostic: a stall WITH a healthy forward buffer means the decoder
-    // choked (bad frame in this rip) — not starvation. A stall AT the
-    // buffered end with `videoFeedEnded` means the demuxer stopped feeding.
-    // `pendingOp=append updating=true` = the append wedged (FF bug 1120084).
-    console.warn(
-      `[iris-core] Tier B STALL t=${t.toFixed(1)}s ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
-        `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
-        `readyState=${video.readyState} netState=${video.networkState} ` +
-        `pendingOp=${pendingOp ?? "none"} updating=${sourceBuffer.updating} queue=${appendQueue.length} ` +
-        `err=${video.error ? `${video.error.code}:${video.error.message}` : "none"} ` +
-        `sink=${sinkChunks}chunks/${(sinkBytes / 1e6).toFixed(1)}MB park=${feedPark ?? "none"} ` +
-        // Separates "no data reached the SourceBuffer" from "data is there but
-        // the video decoder produces no frames" — the two look identical from
-        // a frozen picture, and the second one still plays audio.
-        `video=${video.videoWidth}x${video.videoHeight} ` +
-        `frames=${video.getVideoPlaybackQuality?.().totalVideoFrames ?? "n/a"}/` +
-        `${video.getVideoPlaybackQuality?.().droppedVideoFrames ?? "n/a"}dropped ` +
-        `ranges=[${bufferedRangesStr()}]`,
-    );
-    // RECOVERY for a wedged op: if we're starved (`waiting`) yet the SourceBuffer
-    // is still `updating` (no `updateend`/`error` ever fired — Firefox bug
-    // 1120084 on an open-GOP fragment boundary), the append/remove is hung.
-    // `abort()` is the spec-defined reset: it ends the running append/remove
-    // algorithm, clears `updating`, and resets the segment parser so the next
-    // `appendBuffer` lands. The half-parsed fragment is discarded → a gap we
-    // jump below. Without this the pipeline stays frozen until a reload.
-    if (wedged) {
-      try {
-        sourceBuffer.abort();
-        pendingOp = null;
-        console.warn("[iris-core] Tier B: aborted wedged SourceBuffer op (FF unwedge)");
-      } catch {
-        /* MediaSource not open — dispose path will clean up */
-      }
-    }
-    evictPlayedRange(playedKeep);
-    drainQueue();
-    if (isTimeBuffered(t)) return;
-    // Jump across a forward gap to the next buffered range. Tolerance is wide
-    // enough to clear a whole discarded fragment (Firefox fragments are ~5 s),
-    // since after an `abort()` unwedge the buffer resumes a fragment ahead.
-    for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
-      const start = sourceBuffer.buffered.start(i);
-      const end = sourceBuffer.buffered.end(i);
-      // Skip stranded zero-width ranges Firefox leaves behind after remove().
-      if (end - start < 0.05) continue;
-      if (start > t && start - t < 8) {
-        try {
-          video.currentTime = start + 0.01;
-        } catch {
-          /* swallow */
-        }
-        break;
-      }
-    }
-  };
-  video.addEventListener("waiting", onWaiting);
-  video.addEventListener("stalled", onWaiting);
+	const onWaiting = () => {
+		if (disposed || !sourceBuffer) return;
+		const t = video.currentTime;
+		const wedged = sourceBuffer.updating;
+		// Arm the watchdog before any early-return below: the frozen-feed
+		// case is precisely the one where the synchronous recovery paths
+		// all no-op (playhead still inside a buffered range, queue empty).
+		// Fire-time checks make it a no-op when ANY progress happened.
+		if (!videoFeedEnded && (stallWatchdogId === null || stallWatchdogId === undefined)) {
+			const snapT = t;
+			const snapFed = videoFedMax;
+			stallWatchdogId = setTimeout(() => {
+				stallWatchdogId = null;
+				if (disposed || videoFeedEnded || video.paused) return;
+				// ANY movement of either clock (including a user seek resetting
+				// them backwards) means something else is driving recovery.
+				if (Math.abs(video.currentTime - snapT) > 0.25 || videoFedMax !== snapFed) return;
+				console.warn(
+					`[iris-core] Tier B frozen feed: t=${snapT.toFixed(1)}s fedMax=${snapFed.toFixed(1)}s ` +
+						`unchanged after ${STALL_WATCHDOG_MS}ms — rebuilding input, restarting at playhead`
+				);
+				try {
+					input?.dispose();
+				} catch {
+					/* idempotent */
+				}
+				input = makeInput();
+				void restartConversionFromSeek(video.currentTime);
+			}, STALL_WATCHDOG_MS);
+		}
+		// Diagnostic: a stall WITH a healthy forward buffer means the decoder
+		// choked (bad frame in this rip) — not starvation. A stall AT the
+		// buffered end with `videoFeedEnded` means the demuxer stopped feeding.
+		// `pendingOp=append updating=true` = the append wedged (FF bug 1120084).
+		console.warn(
+			`[iris-core] Tier B STALL t=${t.toFixed(1)}s ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
+				`fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
+				`readyState=${video.readyState} netState=${video.networkState} ` +
+				`pendingOp=${pendingOp ?? 'none'} updating=${sourceBuffer.updating} queue=${appendQueue.length} ` +
+				`err=${video.error ? `${video.error.code}:${video.error.message}` : 'none'} ` +
+				`sink=${sinkChunks}chunks/${(sinkBytes / 1e6).toFixed(1)}MB park=${feedPark ?? 'none'} ` +
+				// Separates "no data reached the SourceBuffer" from "data is there but
+				// the video decoder produces no frames" — the two look identical from
+				// a frozen picture, and the second one still plays audio.
+				`video=${video.videoWidth}x${video.videoHeight} ` +
+				`frames=${video.getVideoPlaybackQuality?.().totalVideoFrames ?? 'n/a'}/` +
+				`${video.getVideoPlaybackQuality?.().droppedVideoFrames ?? 'n/a'}dropped ` +
+				`ranges=[${bufferedRangesStr()}]`
+		);
+		// RECOVERY for a wedged op: if we're starved (`waiting`) yet the SourceBuffer
+		// is still `updating` (no `updateend`/`error` ever fired — Firefox bug
+		// 1120084 on an open-GOP fragment boundary), the append/remove is hung.
+		// `abort()` is the spec-defined reset: it ends the running append/remove
+		// algorithm, clears `updating`, and resets the segment parser so the next
+		// `appendBuffer` lands. The half-parsed fragment is discarded → a gap we
+		// jump below. Without this the pipeline stays frozen until a reload.
+		if (wedged) {
+			try {
+				sourceBuffer.abort();
+				pendingOp = null;
+				console.warn('[iris-core] Tier B: aborted wedged SourceBuffer op (FF unwedge)');
+			} catch {
+				/* MediaSource not open — dispose path will clean up */
+			}
+		}
+		evictPlayedRange(playedKeep);
+		drainQueue();
+		if (isTimeBuffered(t)) return;
+		// Jump across a forward gap to the next buffered range. Tolerance is wide
+		// enough to clear a whole discarded fragment (Firefox fragments are ~5 s),
+		// since after an `abort()` unwedge the buffer resumes a fragment ahead.
+		for (let i = 0; i < sourceBuffer.buffered.length; i += 1) {
+			const start = sourceBuffer.buffered.start(i);
+			const end = sourceBuffer.buffered.end(i);
+			// Skip stranded zero-width ranges Firefox leaves behind after remove().
+			if (end - start < 0.05) continue;
+			if (start > t && start - t < 8) {
+				try {
+					video.currentTime = start + 0.01;
+				} catch {
+					/* swallow */
+				}
+				break;
+			}
+		}
+	};
+	video.addEventListener('waiting', onWaiting);
+	video.addEventListener('stalled', onWaiting);
 
-  // Re-drive the drain as the playhead advances. A swallowed
-  // QuotaExceededError leaves a chunk queued with no pending `updateend`,
-  // so the `updateend` pump goes silent — without this, recovery would
-  // wait for a full stall (`onWaiting`). Each `timeupdate` (~4 Hz while
-  // playing) evicts the freshly played-out buffer and retries the append,
-  // so a quota episode self-heals smoothly instead of wedging. No-op when
-  // the queue is empty (the healthy case).
-  const onTimeUpdate = () => {
-    if (disposed || !sourceBuffer) return;
-    // Telemetry every ~30 s of playback (gated on currentTime, not a timer):
-    // tells us whether resident memory is BOUNDED (buffer too big for the
-    // machine) or CLIMBING (a leak), and whether the byte budget engages.
-    if (video.currentTime - lastTelemetryT > 30) {
-      lastTelemetryT = video.currentTime;
-      const heap = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory
-        ?.usedJSHeapSize;
-      console.log(
-        `[iris-core] Tier B mem: ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
-          `fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
-          `resident≈${(residentBytesEstimate() / 1e6).toFixed(0)}MB window=${bufferAheadTarget.toFixed(0)}s ` +
-          `queue=${appendQueue.length} upd=${sourceBuffer.updating} op=${pendingOp ?? "none"} ` +
-          `ranges=[${bufferedRangesStr()}]` +
-          (heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : ""),
-      );
-    }
-    // ALWAYS trim the behind-buffer as the playhead advances — NOT only when
-    // there's a queue. If we gate this on `queue > 0`, then once the producer
-    // is blocked (byte budget full of un-evicted behind-buffer) the queue
-    // drains to empty, no more `updateend` fires, eviction never runs, the
-    // behind-buffer keeps growing, the byte budget stays full, the forward
-    // buffer starves → underrun/stall. Evicting here frees the budget so the
-    // producer can keep the forward buffer alive.
-    evictPlayedRange(playedKeep);
-    if (appendQueue.length > 0) drainQueue();
-    // Playback just advanced → the forward buffer shrank. Release any feed loop
-    // parked in `waitBufferRoom` so it tops the buffer back up to the target.
-    notifyBufferRoom();
-  };
-  video.addEventListener("timeupdate", onTimeUpdate);
+	// Re-drive the drain as the playhead advances. A swallowed
+	// QuotaExceededError leaves a chunk queued with no pending `updateend`,
+	// so the `updateend` pump goes silent — without this, recovery would
+	// wait for a full stall (`onWaiting`). Each `timeupdate` (~4 Hz while
+	// playing) evicts the freshly played-out buffer and retries the append,
+	// so a quota episode self-heals smoothly instead of wedging. No-op when
+	// the queue is empty (the healthy case).
+	const onTimeUpdate = () => {
+		if (disposed || !sourceBuffer) return;
+		// Telemetry every ~30 s of playback (gated on currentTime, not a timer):
+		// tells us whether resident memory is BOUNDED (buffer too big for the
+		// machine) or CLIMBING (a leak), and whether the byte budget engages.
+		if (video.currentTime - lastTelemetryT > 30) {
+			lastTelemetryT = video.currentTime;
+			const heap = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize;
+			console.log(
+				`[iris-core] Tier B mem: ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
+					`fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
+					`resident≈${(residentBytesEstimate() / 1e6).toFixed(0)}MB window=${bufferAheadTarget.toFixed(0)}s ` +
+					`queue=${appendQueue.length} upd=${sourceBuffer.updating} op=${pendingOp ?? 'none'} ` +
+					`ranges=[${bufferedRangesStr()}]` +
+					(heap ? ` jsHeap=${(heap / 1e6).toFixed(0)}MB` : '')
+			);
+		}
+		// ALWAYS trim the behind-buffer as the playhead advances — NOT only when
+		// there's a queue. If we gate this on `queue > 0`, then once the producer
+		// is blocked (byte budget full of un-evicted behind-buffer) the queue
+		// drains to empty, no more `updateend` fires, eviction never runs, the
+		// behind-buffer keeps growing, the byte budget stays full, the forward
+		// buffer starves → underrun/stall. Evicting here frees the budget so the
+		// producer can keep the forward buffer alive.
+		evictPlayedRange(playedKeep);
+		if (appendQueue.length > 0) drainQueue();
+		// Playback just advanced → the forward buffer shrank. Release any feed loop
+		// parked in `waitBufferRoom` so it tops the buffer back up to the target.
+		notifyBufferRoom();
+	};
+	video.addEventListener('timeupdate', onTimeUpdate);
 
-  /** Seek-restart via Mediabunny's **low-level** API instead of
-   *  `Conversion`. `Conversion` always forces a video re-encode when
-   *  `trim.start > firstTimestamp` (see `_processVideoTrack`), which
-   *  triggers an encoder probe → fails on Chrome for HEVC sources.
-   *
-   *  Bypassing `Conversion`:
-   *   - Video is fed packet-by-packet via `EncodedVideoPacketSource`,
-   *     iterating an `EncodedPacketSink` starting at the keyframe
-   *     before `seekStart`. Pure passthrough, no encoder needed.
-   *   - Audio is fed sample-by-sample via `AudioSampleSource`
-   *     (Mediabunny encodes them to AAC with WebCodecs.AudioEncoder)
-   *     OR packet-by-packet via `EncodedAudioPacketSource` for
-   *     browser-native source codecs. `AudioSampleSink` invokes our
-   *     registered libav decoder for E-AC-3/AC-3/FLAC. */
-  const restartConversionFromSeek = async (seekStart: number): Promise<void> => {
-    try {
-      await runManualPipeline(seekStart);
-    } catch (e) {
-      console.warn(
-        "[iris-core] Tier B: manual seek pipeline failed. " +
-          "Keeping current playback alive — rewind to a buffered range to resume.",
-        e,
-      );
-    }
-  };
+	/** Seek-restart via Mediabunny's **low-level** API instead of
+	 *  `Conversion`. `Conversion` always forces a video re-encode when
+	 *  `trim.start > firstTimestamp` (see `_processVideoTrack`), which
+	 *  triggers an encoder probe → fails on Chrome for HEVC sources.
+	 *
+	 *  Bypassing `Conversion`:
+	 *   - Video is fed packet-by-packet via `EncodedVideoPacketSource`,
+	 *     iterating an `EncodedPacketSink` starting at the keyframe
+	 *     before `seekStart`. Pure passthrough, no encoder needed.
+	 *   - Audio is fed sample-by-sample via `AudioSampleSource`
+	 *     (Mediabunny encodes them to AAC with WebCodecs.AudioEncoder)
+	 *     OR packet-by-packet via `EncodedAudioPacketSource` for
+	 *     browser-native source codecs. `AudioSampleSink` invokes our
+	 *     registered libav decoder for E-AC-3/AC-3/FLAC. */
+	const restartConversionFromSeek = async (seekStart: number): Promise<void> => {
+		try {
+			await runManualPipeline(seekStart);
+		} catch (e) {
+			console.warn(
+				'[iris-core] Tier B: manual seek pipeline failed. Keeping current playback alive — rewind to a buffered range to resume.',
+				e
+			);
+		}
+	};
 
-  /** Low-level pipeline that handles seek without going through
-   *  `Conversion`. See the comment on `restartConversionFromSeek`. */
-  const runManualPipeline = async (seekStart: number): Promise<void> => {
-    lastConversionStartWall = performance.now();
-    sinkChunks = 0;
-    sinkBytes = 0;
-    feedPark = null;
-    videoFedMax = seekStart;
-    audioFedMax = seekStart;
-    videoFeedEnded = false;
-    const prevConv = conversion;
-    const prevOutput = manualOutput;
-    const newGen = conversionGeneration + 1;
-    // `input` is typed `Input | null` (so `dispose()` can call its
-    // `dispose()` safely from early-throw paths before assignment).
-    // At this point it must be non-null — the caller is guaranteed
-    // to have reached past the assignment in `mountTierB`. Pin a
-    // local non-null binding so the rest of the body type-checks
-    // cleanly.
-    const liveInput = input;
-    if (!liveInput) {
-      throw new Error("Tier B: runManualPipeline called before input init");
-    }
+	/** Low-level pipeline that handles seek without going through
+	 *  `Conversion`. See the comment on `restartConversionFromSeek`. */
+	const runManualPipeline = async (seekStart: number): Promise<void> => {
+		lastConversionStartWall = performance.now();
+		sinkChunks = 0;
+		sinkBytes = 0;
+		feedPark = null;
+		videoFedMax = seekStart;
+		audioFedMax = seekStart;
+		videoFeedEnded = false;
+		const prevConv = conversion;
+		const prevOutput = manualOutput;
+		const newGen = conversionGeneration + 1;
+		// `input` is typed `Input | null` (so `dispose()` can call its
+		// `dispose()` safely from early-throw paths before assignment).
+		// At this point it must be non-null — the caller is guaranteed
+		// to have reached past the assignment in `mountTierB`. Pin a
+		// local non-null binding so the rest of the body type-checks
+		// cleanly.
+		const liveInput = input;
+		if (!liveInput) {
+			throw new Error('Tier B: runManualPipeline called before input init');
+		}
 
-    // **Critical ordering.** Mediabunny's `Output.start()` may emit
-    // the fMP4 init segment synchronously through the StreamTarget
-    // sink. The sink's `write` callback gates on `generation ===
-    // conversionGeneration` to drop stale chunks from cancelled
-    // pipelines. If we built the sink with `newGen` while
-    // `conversionGeneration` was still the old value, that init
-    // segment would be silently dropped — Firefox then receives
-    // media fragments with no preceding init and reports
-    // `media error 3` (decode error), non-deterministically
-    // depending on whether `start()` writes sync or async.
-    //
-    // To dodge that race we cancel the previous pipelines FIRST,
-    // bump `conversionGeneration` to `newGen`, and only THEN build
-    // the new Output. The cost is the loss of the previous
-    // "init-before-swap" safety property (if `newOutput.start()`
-    // throws we have no fallback) — acceptable because init
-    // failures here have always meant a hard demote anyway.
-    conversionGeneration = newGen;
-    try {
-      await prevConv?.cancel();
-    } catch {
-      /* canceled is expected */
-    }
-    try {
-      await prevOutput?.cancel();
-    } catch {
-      /* idempotent */
-    }
-    conversion = null;
-    manualOutput = null;
-    appendQueue.length = 0;
+		// **Critical ordering.** Mediabunny's `Output.start()` may emit
+		// the fMP4 init segment synchronously through the StreamTarget
+		// sink. The sink's `write` callback gates on `generation ===
+		// conversionGeneration` to drop stale chunks from cancelled
+		// pipelines. If we built the sink with `newGen` while
+		// `conversionGeneration` was still the old value, that init
+		// segment would be silently dropped — Firefox then receives
+		// media fragments with no preceding init and reports
+		// `media error 3` (decode error), non-deterministically
+		// depending on whether `start()` writes sync or async.
+		//
+		// To dodge that race we cancel the previous pipelines FIRST,
+		// bump `conversionGeneration` to `newGen`, and only THEN build
+		// the new Output. The cost is the loss of the previous
+		// "init-before-swap" safety property (if `newOutput.start()`
+		// throws we have no fallback) — acceptable because init
+		// failures here have always meant a hard demote anyway.
+		conversionGeneration = newGen;
+		try {
+			await prevConv?.cancel();
+		} catch {
+			/* canceled is expected */
+		}
+		try {
+			await prevOutput?.cancel();
+		} catch {
+			/* idempotent */
+		}
+		conversion = null;
+		manualOutput = null;
+		appendQueue.length = 0;
 
-    const sink = buildSink(newGen);
-    const newOutput = new Output({
-      format: new Mp4OutputFormat({
-        fastStart: "fragmented",
-        // 1 s fragments on BOTH browsers. We tried 5 s on Firefox (fewer
-        // non-coalescing range boundaries) but it made Firefox-macOS's
-        // VideoToolbox HARDWARE HEVC decoder throw `media error 3`
-        // (`AppleVTDecoder::OnDecodeError`): a 5 s fragment spans several
-        // open-GOP boundaries, and the per-GOP composition offsets our muxer
-        // patch carries (clamped monotonic DTS) make VT reject a frame. The
-        // Firefox STALL we were actually chasing was our own `remove()`
-        // wedging `updating=true` (see `evictPlayedRange`), now fixed by NOT
-        // evicting on FF — so the larger fragments were never the real lever.
-        // 1 s matches Chrome, which decodes the same stream cleanly.
-        minimumFragmentDuration: 1,
-      }),
-      target: new StreamTarget(sink),
-    });
-    relaxMediabunnyGopCheck(newOutput);
+		const sink = buildSink(newGen);
+		const newOutput = new Output({
+			format: new Mp4OutputFormat({
+				fastStart: 'fragmented',
+				// 1 s fragments on BOTH browsers. We tried 5 s on Firefox (fewer
+				// non-coalescing range boundaries) but it made Firefox-macOS's
+				// VideoToolbox HARDWARE HEVC decoder throw `media error 3`
+				// (`AppleVTDecoder::OnDecodeError`): a 5 s fragment spans several
+				// open-GOP boundaries, and the per-GOP composition offsets our muxer
+				// patch carries (clamped monotonic DTS) make VT reject a frame. The
+				// Firefox STALL we were actually chasing was our own `remove()`
+				// wedging `updating=true` (see `evictPlayedRange`), now fixed by NOT
+				// evicting on FF — so the larger fragments were never the real lever.
+				// 1 s matches Chrome, which decodes the same stream cleanly.
+				minimumFragmentDuration: 1
+			}),
+			target: new StreamTarget(sink)
+		});
+		relaxMediabunnyGopCheck(newOutput);
 
-    const videoTrack = await liveInput.getPrimaryVideoTrack();
-    if (!videoTrack) throw new Error("manual pipeline: no primary video track");
-    const sourceVideoCodec = await videoTrack.getCodec();
-    if (!sourceVideoCodec) throw new Error("manual pipeline: unknown video codec");
-    const videoSrc = new EncodedVideoPacketSource(sourceVideoCodec);
-    newOutput.addVideoTrack(videoSrc);
+		const videoTrack = await liveInput.getPrimaryVideoTrack();
+		if (!videoTrack) throw new Error('manual pipeline: no primary video track');
+		const sourceVideoCodec = await videoTrack.getCodec();
+		if (!sourceVideoCodec) throw new Error('manual pipeline: unknown video codec');
+		const videoSrc = new EncodedVideoPacketSource(sourceVideoCodec);
+		newOutput.addVideoTrack(videoSrc);
 
-    // Resolve the video start packet up front. `getKeyPacket(t)` returns null
-    // when `t` is BEFORE the track's first keyframe — which happens whenever
-    // the container's first video sample isn't at exactly 0 (a small start
-    // offset, e.g. a first IDR at 0.083s, common on remuxed BluRay rips). On
-    // the initial mount `seekStart` is 0, so that null used to abort the WHOLE
-    // video feed (`if (!startPacket) return`): the muxer never received a
-    // single video sample, `allTracksAreKnown()` stayed false, no fragment was
-    // ever emitted, and playback hung forever at t=0 with an empty SourceBuffer
-    // (audio decoded fine — it starts via the sample sink, not a key packet —
-    // which is why ONLY video stalled). A user seek to any t ≥ firstKeyframe
-    // landed on a real keyframe and "fixed" it. Fall back to the track's first
-    // keyframe so a non-zero start time just works.
-    const videoPacketSink = new EncodedPacketSink(videoTrack);
-    let videoStartPacket = await videoPacketSink.getKeyPacket(seekStart);
-    if (!videoStartPacket) {
-      videoStartPacket = await videoPacketSink.getFirstKeyPacket();
-    }
-    // Media time the playhead must land on. `getKeyPacket` returns the keyframe
-    // at/just BEFORE seekStart, so for a normal in-stream seek this stays
-    // `seekStart`. It exceeds `seekStart` ONLY in the start-offset fallback
-    // above (first keyframe after 0) — there we must anchor to it, else the
-    // playhead sits at 0 in an unbuffered gap and both Firefox and Chrome stall
-    // exactly as before the fix.
-    const playheadTarget =
-      videoStartPacket && videoStartPacket.timestamp > seekStart
-        ? videoStartPacket.timestamp
-        : seekStart;
+		// Resolve the video start packet up front. `getKeyPacket(t)` returns null
+		// when `t` is BEFORE the track's first keyframe — which happens whenever
+		// the container's first video sample isn't at exactly 0 (a small start
+		// offset, e.g. a first IDR at 0.083s, common on remuxed BluRay rips). On
+		// the initial mount `seekStart` is 0, so that null used to abort the WHOLE
+		// video feed (`if (!startPacket) return`): the muxer never received a
+		// single video sample, `allTracksAreKnown()` stayed false, no fragment was
+		// ever emitted, and playback hung forever at t=0 with an empty SourceBuffer
+		// (audio decoded fine — it starts via the sample sink, not a key packet —
+		// which is why ONLY video stalled). A user seek to any t ≥ firstKeyframe
+		// landed on a real keyframe and "fixed" it. Fall back to the track's first
+		// keyframe so a non-zero start time just works.
+		const videoPacketSink = new EncodedPacketSink(videoTrack);
+		let videoStartPacket = await videoPacketSink.getKeyPacket(seekStart);
+		if (!videoStartPacket) {
+			videoStartPacket = await videoPacketSink.getFirstKeyPacket();
+		}
+		// Media time the playhead must land on. `getKeyPacket` returns the keyframe
+		// at/just BEFORE seekStart, so for a normal in-stream seek this stays
+		// `seekStart`. It exceeds `seekStart` ONLY in the start-offset fallback
+		// above (first keyframe after 0) — there we must anchor to it, else the
+		// playhead sits at 0 in an unbuffered gap and both Firefox and Chrome stall
+		// exactly as before the fix.
+		const playheadTarget = videoStartPacket && videoStartPacket.timestamp > seekStart ? videoStartPacket.timestamp : seekStart;
 
-    // Audio starts where the VIDEO starts, not at `seekStart`. `getKeyPacket`
-    // lands on the keyframe at/before the seek target, and this file's x265
-    // encode is scene-cut keyed (median GOP 3.8 s, up to 13.8 s), so a seek can
-    // put the video start 8+ s before the audio start. mediabunny then pads the
-    // late track: the muxed audio track's declared duration comes out
-    // `gap` seconds longer than the video's (measured: 117.6 s vs 109.1 s for an
-    // 8.48 s gap; aligning the starts brings it to 109.2 s and cuts the emitted
-    // chunk count from 12 to 4). Firefox-MSE stalls on that stream with an empty
-    // buffered range and no error; Chrome and a t=0 mount (gap = 0) are fine.
-    // Decoding the extra lead-in costs a fraction of a second of E-AC-3.
-    const audioStart = videoStartPacket ? videoStartPacket.timestamp : seekStart;
-    // Re-seed the interleave baselines on the REAL start. They were set to
-    // `seekStart` before the keyframe was resolved, and the keyframe can sit
-    // seconds earlier — a baseline in the future makes `waitTrackBalance`
-    // believe a track is further along than it is (the log showed video parked
-    // at `ts=377.2 other=373.0` while the audio was really only at 363).
-    videoFedMax = audioStart;
-    audioFedMax = audioStart;
+		// Audio starts where the VIDEO starts, not at `seekStart`. `getKeyPacket`
+		// lands on the keyframe at/before the seek target, and this file's x265
+		// encode is scene-cut keyed (median GOP 3.8 s, up to 13.8 s), so a seek can
+		// put the video start 8+ s before the audio start. mediabunny then pads the
+		// late track: the muxed audio track's declared duration comes out
+		// `gap` seconds longer than the video's (measured: 117.6 s vs 109.1 s for an
+		// 8.48 s gap; aligning the starts brings it to 109.2 s and cuts the emitted
+		// chunk count from 12 to 4). Firefox-MSE stalls on that stream with an empty
+		// buffered range and no error; Chrome and a t=0 mount (gap = 0) are fine.
+		// Decoding the extra lead-in costs a fraction of a second of E-AC-3.
+		const audioStart = videoStartPacket ? videoStartPacket.timestamp : seekStart;
+		// Re-seed the interleave baselines on the REAL start. They were set to
+		// `seekStart` before the keyframe was resolved, and the keyframe can sit
+		// seconds earlier — a baseline in the future makes `waitTrackBalance`
+		// believe a track is further along than it is (the log showed video parked
+		// at `ts=377.2 other=373.0` while the audio was really only at 363).
+		videoFedMax = audioStart;
+		audioFedMax = audioStart;
 
-    const allAudio = await liveInput.getAudioTracks();
-    const audioTrack = allAudio[chosenAudioIdx] ?? null;
-    type AudioFeed =
-      | { kind: "passthrough"; source: EncodedAudioPacketSource }
-      | { kind: "transcode"; source: AudioSampleSource };
-    let audioFeed: AudioFeed | null = null;
-    if (audioTrack) {
-      if (audioNeedsTranscode) {
-        // Encoder probe ran earlier (outer scope, before MSE setup)
-        // so the MIME advertised in `addSourceBuffer` already names
-        // the right codec. Here we just hand the choice to
-        // Mediabunny.
-        if (!encoderChoice) {
-          throw new Error("Tier B: internal — audioNeedsTranscode but encoderChoice is null");
-        }
-        const srcChannels = await audioTrack.getNumberOfChannels();
-        const source = new AudioSampleSource({
-          codec: encoderChoice.codec,
-          // `new Quality(<number>)` means a 0..1 qualitative level, NOT
-          // a bitrate — the explicit `{ bitrate }` form is required.
-          quality: new Quality({ bitrate: encoderChoice.codec === "opus" ? 128_000 : 192_000 }),
-          ...(encoderChoice.channels !== srcChannels
-            ? { transform: { numberOfChannels: encoderChoice.channels } }
-            : {}),
-        });
-        newOutput.addAudioTrack(source);
-        audioFeed = { kind: "transcode", source };
-      } else {
-        const sourceAudioCodec = await audioTrack.getCodec();
-        if (sourceAudioCodec) {
-          const source = new EncodedAudioPacketSource(sourceAudioCodec);
-          newOutput.addAudioTrack(source);
-          audioFeed = { kind: "passthrough", source };
-        }
-      }
-    }
+		const allAudio = await liveInput.getAudioTracks();
+		const audioTrack = allAudio[chosenAudioIdx] ?? null;
+		type AudioFeed = { kind: 'passthrough'; source: EncodedAudioPacketSource } | { kind: 'transcode'; source: AudioSampleSource };
+		let audioFeed: AudioFeed | null = null;
+		if (audioTrack) {
+			if (audioNeedsTranscode) {
+				// Encoder probe ran earlier (outer scope, before MSE setup)
+				// so the MIME advertised in `addSourceBuffer` already names
+				// the right codec. Here we just hand the choice to
+				// Mediabunny.
+				if (!encoderChoice) {
+					throw new Error('Tier B: internal — audioNeedsTranscode but encoderChoice is null');
+				}
+				const srcChannels = await audioTrack.getNumberOfChannels();
+				const source = new AudioSampleSource({
+					codec: encoderChoice.codec,
+					// `new Quality(<number>)` means a 0..1 qualitative level, NOT
+					// a bitrate — the explicit `{ bitrate }` form is required.
+					quality: new Quality({ bitrate: encoderChoice.codec === 'opus' ? 128_000 : 192_000 }),
+					...(encoderChoice.channels !== srcChannels ? { transform: { numberOfChannels: encoderChoice.channels } } : {})
+				});
+				newOutput.addAudioTrack(source);
+				audioFeed = { kind: 'transcode', source };
+			} else {
+				const sourceAudioCodec = await audioTrack.getCodec();
+				if (sourceAudioCodec) {
+					const source = new EncodedAudioPacketSource(sourceAudioCodec);
+					newOutput.addAudioTrack(source);
+					audioFeed = { kind: 'passthrough', source };
+				}
+			}
+		}
 
-    // Pause the video before we touch the SourceBuffer. Firefox is
-    // strict about an active playhead crossing through an empty
-    // buffered range — it'll fire decode-error events and try to
-    // "recover" by re-seeking to whatever's left, which on a fresh
-    // remove(0,Inf) is "nothing", so it snaps to 0 and loops.
-    // Chrome tolerates this; Firefox doesn't. Remember the pre-
-    // seek play state and restore it after the playhead is
-    // re-anchored.
-    const wasPlaying = !video.paused;
-    try {
-      video.pause();
-    } catch {
-      /* idempotent */
-    }
+		// Pause the video before we touch the SourceBuffer. Firefox is
+		// strict about an active playhead crossing through an empty
+		// buffered range — it'll fire decode-error events and try to
+		// "recover" by re-seeking to whatever's left, which on a fresh
+		// remove(0,Inf) is "nothing", so it snaps to 0 and loops.
+		// Chrome tolerates this; Firefox doesn't. Remember the pre-
+		// seek play state and restore it after the playhead is
+		// re-anchored.
+		const wasPlaying = !video.paused;
+		try {
+			video.pause();
+		} catch {
+			/* idempotent */
+		}
 
-    // Firefox: touch the SourceBuffer with NEITHER `remove()` NOR
-    // `removeSourceBuffer()`. `evictPlayedRange` already documents why
-    // `remove()` is banned here — it wedges FF in `updating=true` forever with
-    // no `updateend`/`error` (bug 1120084), which is precisely why every seek
-    // stalled with `ranges=[empty]` while a t=0 mount played. Recycling the
-    // SourceBuffer instead is worse, not better: `removeSourceBuffer()` detaches
-    // the `TrackBuffersManager` out from under the live `MediaSourceTrackDemuxer`
-    // and the next seek dies with `media error 3` / "manager is detached".
-    //
-    // So on FF we leave the buffer alone. Mediabunny emits absolute media
-    // timestamps and `mode` is "segments", so the restart's fragments land as a
-    // NEW buffered range around the seek target; the stale range is left for
-    // Firefox's own eviction, which it does from the side furthest from the
-    // playhead (same reasoning as `evictPlayedRange`). Appends into an
-    // untouched SourceBuffer are the one path FF handles reliably — it is what
-    // steady-state playback does.
-    if (sourceBuffer && !firefox) {
-      await waitForUpdateEnd();
-      try {
-        sourceBuffer.remove(0, Number.POSITIVE_INFINITY);
-      } catch {
-        /* may already be empty */
-      }
-      await waitForUpdateEnd();
-      // Don't set timestampOffset — Mediabunny emits absolute media
-      // timestamps from the source, so SourceBuffer's default 0
-      // offset puts fragments at their natural place on the timeline.
-      try {
-        sourceBuffer.timestampOffset = 0;
-      } catch {
-        /* swallow */
-      }
-    }
+		// Firefox: touch the SourceBuffer with NEITHER `remove()` NOR
+		// `removeSourceBuffer()`. `evictPlayedRange` already documents why
+		// `remove()` is banned here — it wedges FF in `updating=true` forever with
+		// no `updateend`/`error` (bug 1120084), which is precisely why every seek
+		// stalled with `ranges=[empty]` while a t=0 mount played. Recycling the
+		// SourceBuffer instead is worse, not better: `removeSourceBuffer()` detaches
+		// the `TrackBuffersManager` out from under the live `MediaSourceTrackDemuxer`
+		// and the next seek dies with `media error 3` / "manager is detached".
+		//
+		// So on FF we leave the buffer alone. Mediabunny emits absolute media
+		// timestamps and `mode` is "segments", so the restart's fragments land as a
+		// NEW buffered range around the seek target; the stale range is left for
+		// Firefox's own eviction, which it does from the side furthest from the
+		// playhead (same reasoning as `evictPlayedRange`). Appends into an
+		// untouched SourceBuffer are the one path FF handles reliably — it is what
+		// steady-state playback does.
+		if (sourceBuffer && !firefox) {
+			await waitForUpdateEnd();
+			try {
+				sourceBuffer.remove(0, Number.POSITIVE_INFINITY);
+			} catch {
+				/* may already be empty */
+			}
+			await waitForUpdateEnd();
+			// Don't set timestampOffset — Mediabunny emits absolute media
+			// timestamps from the source, so SourceBuffer's default 0
+			// offset puts fragments at their natural place on the timeline.
+			try {
+				sourceBuffer.timestampOffset = 0;
+			} catch {
+				/* swallow */
+			}
+		}
 
-    // Now start the Output. This emits the fMP4 init segment
-    // through the sink; the sink's `generation === conversionGeneration`
-    // check now passes (we bumped `conversionGeneration` to `newGen`
-    // earlier), so the init lands in `appendQueue` and gets
-    // `appendBuffer`'d ahead of any media segments. Without this
-    // ordering the init was raced out of the queue and Firefox
-    // surfaced `media error 3` non-deterministically.
-    await newOutput.start();
-    manualOutput = newOutput;
+		// Now start the Output. This emits the fMP4 init segment
+		// through the sink; the sink's `generation === conversionGeneration`
+		// check now passes (we bumped `conversionGeneration` to `newGen`
+		// earlier), so the init lands in `appendQueue` and gets
+		// `appendBuffer`'d ahead of any media segments. Without this
+		// ordering the init was raced out of the queue and Firefox
+		// surfaced `media error 3` non-deterministically.
+		await newOutput.start();
+		manualOutput = newOutput;
 
-    // Re-anchor the playhead. The seek handler above intentionally
-    // does NOT touch `video.currentTime` for out-of-buffer scrubs —
-    // we do it here, AFTER the SourceBuffer has been cleared and
-    // the init segment has been pushed, so Firefox sees a
-    // coherent state from the next `appendBuffer` onward.
-    anchorPlayhead(playheadTarget);
+		// Re-anchor the playhead. The seek handler above intentionally
+		// does NOT touch `video.currentTime` for out-of-buffer scrubs —
+		// we do it here, AFTER the SourceBuffer has been cleared and
+		// the init segment has been pushed, so Firefox sees a
+		// coherent state from the next `appendBuffer` onward.
+		anchorPlayhead(playheadTarget);
 
-    // Resume playback (if we paused above) once the playhead is
-    // anchored. The video will buffer for a beat before frames
-    // arrive — `play()` is a Promise we don't await here, the
-    // browser handles the wait → autoplay transition naturally.
-    if (wasPlaying) {
-      void video.play().catch(() => undefined);
-    }
+		// Resume playback (if we paused above) once the playhead is
+		// anchored. The video will buffer for a beat before frames
+		// arrive — `play()` is a Promise we don't await here, the
+		// browser handles the wait → autoplay transition naturally.
+		if (wasPlaying) {
+			void video.play().catch(() => undefined);
+		}
 
-    // Pump video + audio concurrently.
-    const videoP = (async () => {
-      const startPacket = videoStartPacket;
-      if (!startPacket) return;
-      const decoderConfig = await videoTrack.getDecoderConfig();
-      let firstMeta = true;
-      // Gecko 154+ on macOS opens a coded frame group only on an IDR, and an
-      // open-GOP HEVC rip has one, at t=0. The splicer relabels the CRA this
-      // run starts on as a real IDR (header rewrite + POC shift for the rest
-      // of the run — see `hevc-cra-splice.ts`), so the hardware decoder keeps
-      // the file instead of the WASM transcode. Built per run: the shift is
-      // relative to this run's opening picture. A source it can't read throws
-      // `HevcSpliceUnsupported`, which fails the pipeline and demotes.
-      const splicer =
-        sourceVideoCodec === "hevc" && hevcMseNeedsIdrStart()
-          ? new HevcCraSplicer(descriptionBytes(decoderConfig?.description ?? undefined))
-          : null;
+		// Pump video + audio concurrently.
+		const videoP = (async () => {
+			const startPacket = videoStartPacket;
+			if (!startPacket) return;
+			const decoderConfig = await videoTrack.getDecoderConfig();
+			let firstMeta = true;
+			// Gecko 154+ on macOS opens a coded frame group only on an IDR, and an
+			// open-GOP HEVC rip has one, at t=0. The splicer relabels the CRA this
+			// run starts on as a real IDR (header rewrite + POC shift for the rest
+			// of the run — see `hevc-cra-splice.ts`), so the hardware decoder keeps
+			// the file instead of the WASM transcode. Built per run: the shift is
+			// relative to this run's opening picture. A source it can't read throws
+			// `HevcSpliceUnsupported`, which fails the pipeline and demotes.
+			const splicer =
+				sourceVideoCodec === 'hevc' && hevcMseNeedsIdrStart()
+					? new HevcCraSplicer(descriptionBytes(decoderConfig?.description ?? undefined))
+					: null;
 
-      // Feed every packet in decode order. We used to DROP open-GOP "stray"
-      // (PTS < keyframe) and "bridge" (PTS ≥ next keyframe) frames to dodge
-      // Mediabunny's MP4 muxer `assert(delta >= 0)` — but those are decode
-      // references for the open GOP, so dropping them stalled the browser
-      // decoder (readyState stuck, no error, on x265 open-GOP rips). The muxer
-      // is now patched (iris patch in `mediabunny/.../isobmff-muxer.js`) to
-      // clamp the decode timestamp monotonic across GOP boundaries and carry
-      // the difference in the signed `trun` composition offset — so we keep
-      // every frame and presentation is unchanged.
-      //
-      // ONE exception: the FIRST keyframe's own RASL leading pictures (open-GOP
-      // "Random Access Skipped Leading" — they decode after the CRA but present
-      // BEFORE it, `PTS < startPacket.timestamp`). After a seek/resume their
-      // references (the previous GOP) aren't buffered, so they're undecodable —
-      // the HEVC spec literally says to SKIP them at random access. Firefox-macOS
-      // VideoToolbox errors on them (`media error 3`, readyState=1 right after a
-      // resume) instead of dropping them like Chrome. We skip ONLY these: every
-      // later frame (this GOP's trailing pics, and all later GOPs incl. their
-      // own RASL) has `PTS ≥ startPacket.timestamp`, so this filter is scoped to
-      // the first GOP and never touches a valid mid-stream reference. (We can't
-      // use `appendWindowStart` — RASL decode AFTER the keyframe, so dropping
-      // them via the append window trips MSE's need-random-access-point and
-      // kills the whole GOP's trailing pics → a buffer hole → stall.)
-      for await (const packet of videoPacketSink.packets(startPacket)) {
-        if (disposed || newGen !== conversionGeneration) break;
-        if (packet.timestamp < startPacket.timestamp) continue;
-        // Don't race ahead of the audio feed (else the muxer hoards video).
-        await waitTrackBalance(packet.timestamp, () => audioFedMax);
-        if (disposed || newGen !== conversionGeneration) break;
-        // Absolute forward bound: don't out-run playback past the window.
-        await waitBufferRoom(packet.timestamp);
-        if (disposed || newGen !== conversionGeneration) break;
-        const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
-        await videoSrc.add(splicer ? splicePacket(splicer, packet) : packet, meta);
-        firstMeta = false;
-        if (packet.timestamp > videoFedMax) videoFedMax = packet.timestamp;
-        notifyTrackProgress();
-      }
-      await videoSrc.close();
-      // Video done — stop gating audio against a frozen videoFedMax.
-      videoFedMax = Number.POSITIVE_INFINITY;
-      notifyTrackProgress();
-      if (newGen === conversionGeneration && !disposed) {
-        videoFeedEnded = true;
-      }
-    })();
+			// Feed every packet in decode order. We used to DROP open-GOP "stray"
+			// (PTS < keyframe) and "bridge" (PTS ≥ next keyframe) frames to dodge
+			// Mediabunny's MP4 muxer `assert(delta >= 0)` — but those are decode
+			// references for the open GOP, so dropping them stalled the browser
+			// decoder (readyState stuck, no error, on x265 open-GOP rips). The muxer
+			// is now patched (iris patch in `mediabunny/.../isobmff-muxer.js`) to
+			// clamp the decode timestamp monotonic across GOP boundaries and carry
+			// the difference in the signed `trun` composition offset — so we keep
+			// every frame and presentation is unchanged.
+			//
+			// ONE exception: the FIRST keyframe's own RASL leading pictures (open-GOP
+			// "Random Access Skipped Leading" — they decode after the CRA but present
+			// BEFORE it, `PTS < startPacket.timestamp`). After a seek/resume their
+			// references (the previous GOP) aren't buffered, so they're undecodable —
+			// the HEVC spec literally says to SKIP them at random access. Firefox-macOS
+			// VideoToolbox errors on them (`media error 3`, readyState=1 right after a
+			// resume) instead of dropping them like Chrome. We skip ONLY these: every
+			// later frame (this GOP's trailing pics, and all later GOPs incl. their
+			// own RASL) has `PTS ≥ startPacket.timestamp`, so this filter is scoped to
+			// the first GOP and never touches a valid mid-stream reference. (We can't
+			// use `appendWindowStart` — RASL decode AFTER the keyframe, so dropping
+			// them via the append window trips MSE's need-random-access-point and
+			// kills the whole GOP's trailing pics → a buffer hole → stall.)
+			for await (const packet of videoPacketSink.packets(startPacket)) {
+				if (disposed || newGen !== conversionGeneration) break;
+				if (packet.timestamp < startPacket.timestamp) continue;
+				// Don't race ahead of the audio feed (else the muxer hoards video).
+				await waitTrackBalance(packet.timestamp, () => audioFedMax);
+				if (disposed || newGen !== conversionGeneration) break;
+				// Absolute forward bound: don't out-run playback past the window.
+				await waitBufferRoom(packet.timestamp);
+				if (disposed || newGen !== conversionGeneration) break;
+				const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
+				await videoSrc.add(splicer ? splicePacket(splicer, packet) : packet, meta);
+				firstMeta = false;
+				if (packet.timestamp > videoFedMax) videoFedMax = packet.timestamp;
+				notifyTrackProgress();
+			}
+			await videoSrc.close();
+			// Video done — stop gating audio against a frozen videoFedMax.
+			videoFedMax = Number.POSITIVE_INFINITY;
+			notifyTrackProgress();
+			if (newGen === conversionGeneration && !disposed) {
+				videoFeedEnded = true;
+			}
+		})();
 
-    // No audio track → never gate the video feed on audio.
-    if (!(audioTrack && audioFeed)) {
-      audioFedMax = Number.POSITIVE_INFINITY;
-      notifyTrackProgress();
-    }
-    const audioP =
-      audioTrack && audioFeed
-        ? (async () => {
-            if (audioFeed.kind === "passthrough") {
-              const packetSink = new EncodedPacketSink(audioTrack);
-              // Same start-offset guard as video: when the first audio packet
-              // isn't at exactly 0, `getKeyPacket(0)` returns null. Fall back to
-              // the first key packet so a non-zero start doesn't silently drop
-              // the whole (browser-native) audio track.
-              let startPacket = await packetSink.getKeyPacket(audioStart);
-              if (!startPacket) {
-                startPacket = await packetSink.getFirstKeyPacket();
-              }
-              if (!startPacket) {
-                await audioFeed.source.close();
-                audioFedMax = Number.POSITIVE_INFINITY;
-                notifyTrackProgress();
-                return;
-              }
-              const decoderConfig = await audioTrack.getDecoderConfig();
-              let firstMeta = true;
-              for await (const packet of packetSink.packets(startPacket)) {
-                if (disposed || newGen !== conversionGeneration) break;
-                // Don't race ahead of the video feed.
-                await waitTrackBalance(packet.timestamp, () => videoFedMax);
-                if (disposed || newGen !== conversionGeneration) break;
-                await waitBufferRoom(packet.timestamp);
-                if (disposed || newGen !== conversionGeneration) break;
-                const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
-                await audioFeed.source.add(packet, meta);
-                firstMeta = false;
-                if (packet.timestamp > audioFedMax) audioFedMax = packet.timestamp;
-                notifyTrackProgress();
-              }
-              await audioFeed.source.close();
-            } else {
-              // Transcode: AudioSampleSink uses our registered libav
-              // CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
-              // AudioSampleSource encodes them to AAC via WebCodecs.
+		// No audio track → never gate the video feed on audio.
+		if (!(audioTrack && audioFeed)) {
+			audioFedMax = Number.POSITIVE_INFINITY;
+			notifyTrackProgress();
+		}
+		const audioP =
+			audioTrack && audioFeed
+				? (async () => {
+						if (audioFeed.kind === 'passthrough') {
+							const packetSink = new EncodedPacketSink(audioTrack);
+							// Same start-offset guard as video: when the first audio packet
+							// isn't at exactly 0, `getKeyPacket(0)` returns null. Fall back to
+							// the first key packet so a non-zero start doesn't silently drop
+							// the whole (browser-native) audio track.
+							let startPacket = await packetSink.getKeyPacket(audioStart);
+							if (!startPacket) {
+								startPacket = await packetSink.getFirstKeyPacket();
+							}
+							if (!startPacket) {
+								await audioFeed.source.close();
+								audioFedMax = Number.POSITIVE_INFINITY;
+								notifyTrackProgress();
+								return;
+							}
+							const decoderConfig = await audioTrack.getDecoderConfig();
+							let firstMeta = true;
+							for await (const packet of packetSink.packets(startPacket)) {
+								if (disposed || newGen !== conversionGeneration) break;
+								// Don't race ahead of the video feed.
+								await waitTrackBalance(packet.timestamp, () => videoFedMax);
+								if (disposed || newGen !== conversionGeneration) break;
+								await waitBufferRoom(packet.timestamp);
+								if (disposed || newGen !== conversionGeneration) break;
+								const meta = firstMeta ? { decoderConfig: decoderConfig ?? undefined } : undefined;
+								await audioFeed.source.add(packet, meta);
+								firstMeta = false;
+								if (packet.timestamp > audioFedMax) audioFedMax = packet.timestamp;
+								notifyTrackProgress();
+							}
+							await audioFeed.source.close();
+						} else {
+							// Transcode: AudioSampleSink uses our registered libav
+							// CustomAudioDecoder to decode E-AC-3 → AudioSample (PCM).
+							// AudioSampleSource encodes them to AAC via WebCodecs.
 
-              const sampleSink = new AudioSampleSink(audioTrack);
-              try {
-                for await (const sample of sampleSink.samples(audioStart, Infinity)) {
-                  if (disposed || newGen !== conversionGeneration) {
-                    sample.close();
-                    break;
-                  }
-                  await waitTrackBalance(sample.timestamp, () => videoFedMax);
-                  if (disposed || newGen !== conversionGeneration) {
-                    sample.close();
-                    break;
-                  }
-                  await waitBufferRoom(sample.timestamp);
-                  if (disposed || newGen !== conversionGeneration) {
-                    sample.close();
-                    break;
-                  }
-                  await audioFeed.source.add(sample);
-                  if (sample.timestamp > audioFedMax) audioFedMax = sample.timestamp;
-                  notifyTrackProgress();
-                  sample.close();
-                }
-              } catch (e) {
-                // mediabunny swallows CustomAudioDecoder failures inside the
-                // sample iterator on some paths → the loop ends silently and we
-                // stall forever. Surface it so it propagates to the Promise.all
-                // catch → clean demote to Tier F instead of an eternal stall.
-                console.error("[iris-core] Tier B: audio transcode loop threw", e);
-                throw e;
-              }
-              await audioFeed.source.close();
-            }
-            // Audio done — stop gating video against a frozen audioFedMax.
-            audioFedMax = Number.POSITIVE_INFINITY;
-            notifyTrackProgress();
-          })()
-        : Promise.resolve();
+							const sampleSink = new AudioSampleSink(audioTrack);
+							try {
+								for await (const sample of sampleSink.samples(audioStart, Infinity)) {
+									if (disposed || newGen !== conversionGeneration) {
+										sample.close();
+										break;
+									}
+									await waitTrackBalance(sample.timestamp, () => videoFedMax);
+									if (disposed || newGen !== conversionGeneration) {
+										sample.close();
+										break;
+									}
+									await waitBufferRoom(sample.timestamp);
+									if (disposed || newGen !== conversionGeneration) {
+										sample.close();
+										break;
+									}
+									await audioFeed.source.add(sample);
+									if (sample.timestamp > audioFedMax) audioFedMax = sample.timestamp;
+									notifyTrackProgress();
+									sample.close();
+								}
+							} catch (e) {
+								// mediabunny swallows CustomAudioDecoder failures inside the
+								// sample iterator on some paths → the loop ends silently and we
+								// stall forever. Surface it so it propagates to the Promise.all
+								// catch → clean demote to Tier F instead of an eternal stall.
+								console.error('[iris-core] Tier B: audio transcode loop threw', e);
+								throw e;
+							}
+							await audioFeed.source.close();
+						}
+						// Audio done — stop gating video against a frozen audioFedMax.
+						audioFedMax = Number.POSITIVE_INFINITY;
+						notifyTrackProgress();
+					})()
+				: Promise.resolve();
 
-    void Promise.all([videoP, audioP])
-      .then(() => {
-        // Don't finalize a pipeline that was canceled (dispose / seek-restart
-        // bumped the generation). Calling `finalize()` on a canceled Output
-        // throws "Cannot finalize after canceling." — which the catch below
-        // used to mistake for a real fault and demote to Tier F on every
-        // episode switch.
-        if (disposed || newGen !== conversionGeneration) return;
-        return newOutput.finalize();
-      })
-      .catch((e: unknown) => {
-        if (disposed || newGen !== conversionGeneration) return;
-        // Match canceled / cancelling / "Cannot finalize after canceling".
-        if (e instanceof Error && /cancel/i.test(e.message)) return;
-        fail(e instanceof Error ? e : new Error(String(e)));
-      });
-  };
+		void Promise.all([videoP, audioP])
+			.then(() => {
+				// Don't finalize a pipeline that was canceled (dispose / seek-restart
+				// bumped the generation). Calling `finalize()` on a canceled Output
+				// throws "Cannot finalize after canceling." — which the catch below
+				// used to mistake for a real fault and demote to Tier F on every
+				// episode switch.
+				if (disposed || newGen !== conversionGeneration) return;
+				return newOutput.finalize();
+			})
+			.catch((e: unknown) => {
+				if (disposed || newGen !== conversionGeneration) return;
+				// Match canceled / cancelling / "Cannot finalize after canceling".
+				if (e instanceof Error && /cancel/i.test(e.message)) return;
+				fail(e instanceof Error ? e : new Error(String(e)));
+			});
+	};
 
-  /** Build a `WritableStream` sink for a fresh Output, scoped to a
-   *  particular conversion generation so writes from stale outputs
-   *  become no-ops once we bump the generation counter. */
-  function buildSink(generation: number): WritableStream<StreamTargetChunk> {
-    return new WritableStream<StreamTargetChunk>({
-      write: async (chunk) => {
-        if (disposed || generation !== conversionGeneration) return;
-        sinkChunks += 1;
-        sinkBytes += chunk.data.byteLength;
-        // Split an `ftyp`/`moov` init segment away from the media that follows
-        // it in the same chunk, so the SourceBuffer receives the init on its
-        // own — the shape every DASH/HLS player uses. Mediabunny hands us
-        // `moov` glued to the first `moof`+`mdat`, which some demuxers accept
-        // only when the media starts at zero.
-        const split = initSegmentSplit(chunk.data);
-        if (split) {
-          appendQueue.push(split[0], split[1]);
-        } else {
-          appendQueue.push(chunk.data);
-        }
-        drainQueue();
-        while (
-          !disposed &&
-          generation === conversionGeneration &&
-          // Stop feeding when either bound is hit: the (memory-aware, adaptive)
-          // seconds window or the in-flight queue cap.
-          (bufferedAheadSeconds() > bufferAheadTarget || appendQueue.length > MAX_QUEUED_CHUNKS)
-        ) {
-          await new Promise<void>((resolve) => {
-            if (!sourceBuffer) {
-              resolve();
-              return;
-            }
-            let settled = false;
-            const done = () => {
-              if (settled) return;
-              settled = true;
-              sourceBuffer?.removeEventListener("updateend", done);
-              clearTimeout(t);
-              resolve();
-            };
-            sourceBuffer.addEventListener("updateend", done, { once: true });
-            const t = setTimeout(done, 500);
-          });
-        }
-      },
-      close: () => {
-        if (disposed || generation !== conversionGeneration) return;
-        try {
-          if (mediaSource.readyState === "open") mediaSource.endOfStream();
-        } catch {
-          /* idempotent */
-        }
-      },
-      abort: (reason) => {
-        if (generation !== conversionGeneration) return;
-        fail(reason instanceof Error ? reason : new Error(String(reason)));
-      },
-    });
-  }
+	/** Build a `WritableStream` sink for a fresh Output, scoped to a
+	 *  particular conversion generation so writes from stale outputs
+	 *  become no-ops once we bump the generation counter. */
+	function buildSink(generation: number): WritableStream<StreamTargetChunk> {
+		return new WritableStream<StreamTargetChunk>({
+			write: async (chunk) => {
+				if (disposed || generation !== conversionGeneration) return;
+				sinkChunks += 1;
+				sinkBytes += chunk.data.byteLength;
+				// Split an `ftyp`/`moov` init segment away from the media that follows
+				// it in the same chunk, so the SourceBuffer receives the init on its
+				// own — the shape every DASH/HLS player uses. Mediabunny hands us
+				// `moov` glued to the first `moof`+`mdat`, which some demuxers accept
+				// only when the media starts at zero.
+				const split = initSegmentSplit(chunk.data);
+				if (split) {
+					appendQueue.push(split[0], split[1]);
+				} else {
+					appendQueue.push(chunk.data);
+				}
+				drainQueue();
+				while (
+					!disposed &&
+					generation === conversionGeneration &&
+					// Stop feeding when either bound is hit: the (memory-aware, adaptive)
+					// seconds window or the in-flight queue cap.
+					(bufferedAheadSeconds() > bufferAheadTarget || appendQueue.length > MAX_QUEUED_CHUNKS)
+				) {
+					await new Promise<void>((resolve) => {
+						if (!sourceBuffer) {
+							resolve();
+							return;
+						}
+						let settled = false;
+						const done = () => {
+							if (settled) return;
+							settled = true;
+							sourceBuffer?.removeEventListener('updateend', done);
+							clearTimeout(t);
+							resolve();
+						};
+						sourceBuffer.addEventListener('updateend', done, { once: true });
+						const t = setTimeout(done, 500);
+					});
+				}
+			},
+			close: () => {
+				if (disposed || generation !== conversionGeneration) return;
+				try {
+					if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+				} catch {
+					/* idempotent */
+				}
+			},
+			abort: (reason) => {
+				if (generation !== conversionGeneration) return;
+				fail(reason instanceof Error ? reason : new Error(String(reason)));
+			}
+		});
+	}
 
-  // Track when the tab was last hidden — pure diagnostics for `onErr`.
-  // Firefox/macOS can release the VideoToolbox HW decoder while the tab
-  // is backgrounded; the OLD approach pre-emptively re-initialised the
-  // whole decode pipeline on EVERY return >2 s hidden, which restarted
-  // playback on every tab switch for everyone (the decoder almost
-  // always survives). Recovery is now REACTIVE and lives in IrisPlayer:
-  // a decode error arriving shortly after a hidden→visible transition
-  // gets one silent same-tier remount at the playhead — zero cost when
-  // the decoder survived, one brief re-init in the rare case it died.
-  const onVisibility = () => {
-    if (document.hidden) hiddenAtWall = performance.now();
-  };
-  document.addEventListener("visibilitychange", onVisibility);
+	// Track when the tab was last hidden — pure diagnostics for `onErr`.
+	// Firefox/macOS can release the VideoToolbox HW decoder while the tab
+	// is backgrounded; the OLD approach pre-emptively re-initialised the
+	// whole decode pipeline on EVERY return >2 s hidden, which restarted
+	// playback on every tab switch for everyone (the decoder almost
+	// always survives). Recovery is now REACTIVE and lives in IrisPlayer:
+	// a decode error arriving shortly after a hidden→visible transition
+	// gets one silent same-tier remount at the playhead — zero cost when
+	// the decoder survived, one brief re-init in the rare case it died.
+	const onVisibility = () => {
+		if (document.hidden) hiddenAtWall = performance.now();
+	};
+	document.addEventListener('visibilitychange', onVisibility);
 
-  // Public handle
+	// Public handle
 
-  const dispose = async (): Promise<void> => {
-    if (disposed) return;
-    disposed = true;
-    if (stallWatchdogId != null) {
-      clearTimeout(stallWatchdogId);
-      stallWatchdogId = null;
-    }
-    // Release any feed loop parked in `waitTrackBalance` (ready() is now true
-    // via `disposed`); the loops then break on their generation check.
-    for (const w of trackWaiters) w();
-    trackWaiters.clear();
-    for (const w of bufferRoomWaiters) w();
-    bufferRoomWaiters.clear();
-    unbindVideo();
-    video.removeEventListener("error", onErr);
-    video.removeEventListener("waiting", onWaiting);
-    video.removeEventListener("stalled", onWaiting);
-    video.removeEventListener("timeupdate", onTimeUpdate);
-    document.removeEventListener("visibilitychange", onVisibility);
-    try {
-      await conversion?.cancel();
-    } catch {
-      /* canceled is expected */
-    }
-    try {
-      await manualOutput?.cancel();
-    } catch {
-      /* idempotent */
-    }
-    // CRITICAL: dispose the Mediabunny `Input` itself. Without this,
-    // the UrlSource keeps issuing HTTP range requests in the
-    // background, registered CustomAudioDecoders (our libav.js
-    // backend) keep emitting AudioSamples that get garbage-collected
-    // unclosed (the "AudioSample was garbage collected without first
-    // being closed" warning), and — most importantly on Firefox —
-    // the live decoders hold AppleVTDecoder / WebCodecs slots from
-    // the system pool. Firefox's pool is small enough that a zombie
-    // Tier-B Input is enough to starve Tier F's MSE → VT pipeline
-    // for video decoder instances, surfacing as
-    // `kVTVideoDecoderBadDataErr` on the very first segment append.
-    // Chrome's pool is generous enough to mask the leak, which is
-    // why this manifested as a "Firefox-only" bug for so long.
-    try {
-      input?.dispose();
-    } catch {
-      /* idempotent */
-    }
-    try {
-      if (mediaSource.readyState === "open") mediaSource.endOfStream();
-    } catch {
-      /* idempotent */
-    }
-    try {
-      video.pause();
-    } catch {
-      /* idempotent */
-    }
-    // Detach the element from the MediaSource before revoking the URL. Without
-    // this the `<video>` keeps `src="blob:…"` pointing at a torn-down
-    // MediaSource, and the NEXT engine mounted on the same element (Tier F
-    // after a demote) inherits a resource Firefox is still erroring on
-    // (`NS_ERROR_DOM_MEDIA_CANCELED`, "could not be decoded") — which showed up
-    // as hls.js looping forever on non-fatal `bufferFullError` because playback
-    // could never start to drain the buffer. `load()` is the spec-defined reset:
-    // it aborts the current resource selection and returns the element to
-    // NETWORK_EMPTY so the next tier gets a clean slate.
-    try {
-      video.removeAttribute("src");
-      video.load();
-    } catch {
-      /* idempotent */
-    }
-    URL.revokeObjectURL(objectUrl);
-  };
+	const dispose = async (): Promise<void> => {
+		if (disposed) return;
+		disposed = true;
+		if (stallWatchdogId !== null && stallWatchdogId !== undefined) {
+			clearTimeout(stallWatchdogId);
+			stallWatchdogId = null;
+		}
+		// Release any feed loop parked in `waitTrackBalance` (ready() is now true
+		// via `disposed`); the loops then break on their generation check.
+		for (const w of trackWaiters) w();
+		trackWaiters.clear();
+		for (const w of bufferRoomWaiters) w();
+		bufferRoomWaiters.clear();
+		unbindVideo();
+		video.removeEventListener('error', onErr);
+		video.removeEventListener('waiting', onWaiting);
+		video.removeEventListener('stalled', onWaiting);
+		video.removeEventListener('timeupdate', onTimeUpdate);
+		document.removeEventListener('visibilitychange', onVisibility);
+		try {
+			await conversion?.cancel();
+		} catch {
+			/* canceled is expected */
+		}
+		try {
+			await manualOutput?.cancel();
+		} catch {
+			/* idempotent */
+		}
+		// CRITICAL: dispose the Mediabunny `Input` itself. Without this,
+		// the UrlSource keeps issuing HTTP range requests in the
+		// background, registered CustomAudioDecoders (our libav.js
+		// backend) keep emitting AudioSamples that get garbage-collected
+		// unclosed (the "AudioSample was garbage collected without first
+		// being closed" warning), and — most importantly on Firefox —
+		// the live decoders hold AppleVTDecoder / WebCodecs slots from
+		// the system pool. Firefox's pool is small enough that a zombie
+		// Tier-B Input is enough to starve Tier F's MSE → VT pipeline
+		// for video decoder instances, surfacing as
+		// `kVTVideoDecoderBadDataErr` on the very first segment append.
+		// Chrome's pool is generous enough to mask the leak, which is
+		// why this manifested as a "Firefox-only" bug for so long.
+		try {
+			input?.dispose();
+		} catch {
+			/* idempotent */
+		}
+		try {
+			if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+		} catch {
+			/* idempotent */
+		}
+		try {
+			video.pause();
+		} catch {
+			/* idempotent */
+		}
+		// Detach the element from the MediaSource before revoking the URL. Without
+		// this the `<video>` keeps `src="blob:…"` pointing at a torn-down
+		// MediaSource, and the NEXT engine mounted on the same element (Tier F
+		// after a demote) inherits a resource Firefox is still erroring on
+		// (`NS_ERROR_DOM_MEDIA_CANCELED`, "could not be decoded") — which showed up
+		// as hls.js looping forever on non-fatal `bufferFullError` because playback
+		// could never start to drain the buffer. `load()` is the spec-defined reset:
+		// it aborts the current resource selection and returns the element to
+		// NETWORK_EMPTY so the next tier gets a clean slate.
+		try {
+			video.removeAttribute('src');
+			video.load();
+		} catch {
+			/* idempotent */
+		}
+		URL.revokeObjectURL(objectUrl);
+	};
 
-  const audioTracksFn = () => {
-    const defaultIdx = Math.max(
-      0,
-      manifest.audio.findIndex((x) => x.default),
-    );
-    const activeIdx = audioTrackIndex ?? defaultIdx;
-    return manifest.audio.map((a, i) => ({
-      id: String(i),
-      label: a.title ?? a.lang?.toUpperCase() ?? `Audio ${i + 1}`,
-      lang: a.lang ?? undefined,
-      active: i === activeIdx,
-    }));
-  };
+	const audioTracksFn = () => {
+		const defaultIdx = Math.max(
+			0,
+			manifest.audio.findIndex((x) => x.default)
+		);
+		const activeIdx = audioTrackIndex ?? defaultIdx;
+		return manifest.audio.map((a, i) => ({
+			id: String(i),
+			label: a.title ?? a.lang?.toUpperCase() ?? `Audio ${i + 1}`,
+			lang: a.lang ?? undefined,
+			active: i === activeIdx
+		}));
+	};
 
-  const baseHandle = videoBackedHandle(video, {
-    dispose,
-    nativeTrackMap,
-    audioTracks: audioTracksFn,
-    fallbackDuration: manifest.duration_s ?? null,
-  });
-  // Override seek so out-of-buffer scrubs trigger a conversion
-  // restart. In-buffer scrubs go through the native video element
-  // for instant playback.
-  const handle: EngineHandle = {
-    ...baseHandle,
-    // The adaptive buffer window, the feed's reach and the append queue are
-    // what a Tier B stall is always about; none of them is visible from the
-    // media element.
-    stats: () => [
-      ...(baseHandle.stats?.() ?? []),
-      [
-        "window",
-        `ahead ${bufferedAheadSeconds().toFixed(0)}s of ${bufferAheadTarget.toFixed(0)}s ` +
-          `· behind ${playedKeep.toFixed(0)}s · ~${(residentBytesEstimate() / 1e6).toFixed(0)}MB`,
-      ],
-      [
-        "feed",
-        `video to ${videoFedMax.toFixed(1)}s${videoFeedEnded ? " (ended)" : ""} · ` +
-          `audio to ${audioFedMax === Number.POSITIVE_INFINITY ? "end" : `${audioFedMax.toFixed(1)}s`}`,
-      ],
-      [
-        "append",
-        `${appendQueue.length} queued · ${pendingOp ?? "idle"}` +
-          `${sourceBuffer?.updating ? " · updating" : ""} · ${sinkChunks} chunks ` +
-          `(${(sinkBytes / 1e6).toFixed(1)}MB) from the muxer`,
-      ],
-      ["park", feedPark ?? "both feeds running"],
-      ["pipeline", `generation ${conversionGeneration}, ${mime}`],
-    ],
-    seek: (s: number) => {
-      const target = Math.max(0, s);
-      if (isTimeBuffered(target)) {
-        // In-buffer: native video seek is instant, do it now.
-        try {
-          video.currentTime = target;
-        } catch {
-          /* swallow */
-        }
-        return;
-      }
-      // Out-of-buffer scrub. **Don't** touch `video.currentTime`
-      // yet — Firefox handles the gap between "currentTime in
-      // unbuffered region" and "first new fragment appended" very
-      // poorly: it snap-resets the playhead to the start of the
-      // last buffered range (or 0 if we just removed it), fires a
-      // spurious decode error, and the resulting `<video error>`
-      // event cascades into a Tier B → F demote where hls.js then
-      // recover-loops. Chrome is forgiving here; Firefox is not.
-      //
-      // The manual pipeline (below) clears the SourceBuffer,
-      // re-anchors `timestampOffset`, starts pumping, and only
-      // THEN sets `video.currentTime = seekStart`. By that point
-      // the SourceBuffer's first new fragment is on its way and
-      // Firefox sees a coherent state (currentTime + buffered
-      // range matching). See `runManualPipeline`.
-      void restartConversionFromSeek(target);
-    },
-  };
+	const baseHandle = videoBackedHandle(video, {
+		dispose,
+		nativeTrackMap,
+		audioTracks: audioTracksFn,
+		fallbackDuration: manifest.duration_s ?? null
+	});
+	// Override seek so out-of-buffer scrubs trigger a conversion
+	// restart. In-buffer scrubs go through the native video element
+	// for instant playback.
+	const handle: EngineHandle = {
+		...baseHandle,
+		// The adaptive buffer window, the feed's reach and the append queue are
+		// what a Tier B stall is always about; none of them is visible from the
+		// media element.
+		stats: () => [
+			...(baseHandle.stats?.() ?? []),
+			[
+				'window',
+				`ahead ${bufferedAheadSeconds().toFixed(0)}s of ${bufferAheadTarget.toFixed(0)}s ` +
+					`· behind ${playedKeep.toFixed(0)}s · ~${(residentBytesEstimate() / 1e6).toFixed(0)}MB`
+			],
+			[
+				'feed',
+				`video to ${videoFedMax.toFixed(1)}s${videoFeedEnded ? ' (ended)' : ''} · ` +
+					`audio to ${audioFedMax === Number.POSITIVE_INFINITY ? 'end' : `${audioFedMax.toFixed(1)}s`}`
+			],
+			[
+				'append',
+				`${appendQueue.length} queued · ${pendingOp ?? 'idle'}` +
+					`${sourceBuffer?.updating ? ' · updating' : ''} · ${sinkChunks} chunks ` +
+					`(${(sinkBytes / 1e6).toFixed(1)}MB) from the muxer`
+			],
+			['park', feedPark ?? 'both feeds running'],
+			['pipeline', `generation ${conversionGeneration}, ${mime}`]
+		],
+		seek: (s: number) => {
+			const target = Math.max(0, s);
+			if (isTimeBuffered(target)) {
+				// In-buffer: native video seek is instant, do it now.
+				try {
+					video.currentTime = target;
+				} catch {
+					/* swallow */
+				}
+				return;
+			}
+			// Out-of-buffer scrub. **Don't** touch `video.currentTime`
+			// yet — Firefox handles the gap between "currentTime in
+			// unbuffered region" and "first new fragment appended" very
+			// poorly: it snap-resets the playhead to the start of the
+			// last buffered range (or 0 if we just removed it), fires a
+			// spurious decode error, and the resulting `<video error>`
+			// event cascades into a Tier B → F demote where hls.js then
+			// recover-loops. Chrome is forgiving here; Firefox is not.
+			//
+			// The manual pipeline (below) clears the SourceBuffer,
+			// re-anchors `timestampOffset`, starts pumping, and only
+			// THEN sets `video.currentTime = seekStart`. By that point
+			// the SourceBuffer's first new fragment is on its way and
+			// Firefox sees a coherent state (currentTime + buffered
+			// range matching). See `runManualPipeline`.
+			void restartConversionFromSeek(target);
+		}
+	};
 
-  // Initial MediaSource + SourceBuffer setup
+	// Initial MediaSource + SourceBuffer setup
 
-  await new Promise<void>((resolve, reject) => {
-    const onOpen = () => {
-      mediaSource.removeEventListener("sourceopen", onOpen);
-      mediaSource.removeEventListener("error", onMseErr);
-      resolve();
-    };
-    const onMseErr = () => {
-      mediaSource.removeEventListener("sourceopen", onOpen);
-      mediaSource.removeEventListener("error", onMseErr);
-      reject(new Error("MediaSource emitted error before opening"));
-    };
-    mediaSource.addEventListener("sourceopen", onOpen);
-    mediaSource.addEventListener("error", onMseErr);
-  });
+	await new Promise<void>((resolve, reject) => {
+		const onOpen = () => {
+			mediaSource.removeEventListener('sourceopen', onOpen);
+			mediaSource.removeEventListener('error', onMseErr);
+			resolve();
+		};
+		const onMseErr = () => {
+			mediaSource.removeEventListener('sourceopen', onOpen);
+			mediaSource.removeEventListener('error', onMseErr);
+			reject(new Error('MediaSource emitted error before opening'));
+		};
+		mediaSource.addEventListener('sourceopen', onOpen);
+		mediaSource.addEventListener('error', onMseErr);
+	});
 
-  // Mediabunny writes `hvc1` sample entries (parameter sets live in the sample
-  // entry, not in-band), which ffprobe confirms on its output. The manifest
-  // advertises the `hev1.…` flavour (`hevc_codec_string` in iris-media). The two
-  // are NOT interchangeable, and Firefox enforces the distinction: a
-  // SourceBuffer opened for `hev1` parses an `hvc1` init segment — tracks are
-  // discovered, `readyState` reaches HAVE_METADATA — and then silently drops
-  // every coded frame, so `buffered` stays empty with no error and no event.
-  // That is the "seek stalls on HEVC, plays on Chrome, AVC rips are fine"
-  // signature: `sink=6chunks/11.7MB queue=0 updating=false ranges=[empty]`.
-  // Chrome normalises the two brands, which is why it never showed.
-  const videoCodec = manifest.video[0]?.codec_string?.replace(/^hev1\./, "hvc1.");
-  // For transcoded audio, advertise whichever codec the
-  // AudioEncoder probe selected (AAC on Chrome, Opus on Firefox).
-  // For passthrough, use whatever the source already had.
-  const audioCodec = audioNeedsTranscode
-    ? (encoderChoice?.mp4Codec ?? "mp4a.40.2")
-    : chosenAudio?.codec_string;
-  const codecs = [videoCodec, audioCodec].filter((c): c is string => !!c).join(",");
-  const mime = codecs ? `video/mp4; codecs="${codecs}"` : "video/mp4";
-  if (!MediaSource.isTypeSupported(mime)) {
-    await dispose();
-    const err = new Error(`MIME not supported by MSE: ${mime}`);
-    fail(err);
-    throw err;
-  }
+	// Mediabunny writes `hvc1` sample entries (parameter sets live in the sample
+	// entry, not in-band), which ffprobe confirms on its output. The manifest
+	// advertises the `hev1.…` flavour (`hevc_codec_string` in iris-media). The two
+	// are NOT interchangeable, and Firefox enforces the distinction: a
+	// SourceBuffer opened for `hev1` parses an `hvc1` init segment — tracks are
+	// discovered, `readyState` reaches HAVE_METADATA — and then silently drops
+	// every coded frame, so `buffered` stays empty with no error and no event.
+	// That is the "seek stalls on HEVC, plays on Chrome, AVC rips are fine"
+	// signature: `sink=6chunks/11.7MB queue=0 updating=false ranges=[empty]`.
+	// Chrome normalises the two brands, which is why it never showed.
+	const videoCodec = manifest.video[0]?.codec_string?.replace(/^hev1\./, 'hvc1.');
+	// For transcoded audio, advertise whichever codec the
+	// AudioEncoder probe selected (AAC on Chrome, Opus on Firefox).
+	// For passthrough, use whatever the source already had.
+	const audioCodec = audioNeedsTranscode ? (encoderChoice?.mp4Codec ?? 'mp4a.40.2') : chosenAudio?.codec_string;
+	const codecs = [videoCodec, audioCodec].filter((c): c is string => !!c).join(',');
+	const mime = codecs ? `video/mp4; codecs="${codecs}"` : 'video/mp4';
+	if (!MediaSource.isTypeSupported(mime)) {
+		await dispose();
+		const err = new Error(`MIME not supported by MSE: ${mime}`);
+		fail(err);
+		throw err;
+	}
 
-  sourceBuffer = mediaSource.addSourceBuffer(mime);
-  sourceBuffer.mode = "segments";
+	sourceBuffer = mediaSource.addSourceBuffer(mime);
+	sourceBuffer.mode = 'segments';
 
-  // Anchor the timeline to the manifest's known duration. Setting
-  // this AFTER `addSourceBuffer` matches the order most browsers
-  // expect — some Chromium versions throw `InvalidStateError` if
-  // duration is set on an empty MediaSource with no source buffers.
-  // The `fallbackDuration` on the videoBackedHandle covers the
-  // chrome's display in the gap.
-  if (manifest.duration_s && manifest.duration_s > 0) {
-    try {
-      mediaSource.duration = manifest.duration_s;
-    } catch (e) {
-      console.warn("[iris-core] Tier B: failed to set MediaSource.duration", e);
-    }
-  }
+	// Anchor the timeline to the manifest's known duration. Setting
+	// this AFTER `addSourceBuffer` matches the order most browsers
+	// expect — some Chromium versions throw `InvalidStateError` if
+	// duration is set on an empty MediaSource with no source buffers.
+	// The `fallbackDuration` on the videoBackedHandle covers the
+	// chrome's display in the gap.
+	if (manifest.duration_s && manifest.duration_s > 0) {
+		try {
+			mediaSource.duration = manifest.duration_s;
+		} catch (e) {
+			console.warn('[iris-core] Tier B: failed to set MediaSource.duration', e);
+		}
+	}
 
-  sourceBuffer.addEventListener("updateend", () => {
-    pendingOp = null;
-    applyPendingAnchor();
-    evictPlayedRange(playedKeep);
-    // Grow the forward window + seek-back window back toward their ceilings
-    // once we've been quota-free for a while — restores deep buffering after a
-    // transient high-bitrate stretch ends.
-    if (video.currentTime - lastQuotaT > 10) {
-      if (playedKeep < behindCeiling) {
-        playedKeep = Math.min(behindCeiling, playedKeep + 2);
-      }
-      if (bufferAheadTarget < aheadCeiling) {
-        bufferAheadTarget = Math.min(aheadCeiling, bufferAheadTarget + 5);
-      }
-    }
-    drainQueue();
-    if (!opts.onReady) return;
-    if (sourceBuffer && sourceBuffer.buffered.length > 0) {
-      opts.onReady();
-      opts.onReady = undefined;
-    }
-  });
-  sourceBuffer.addEventListener("error", () => fail(new Error("SourceBuffer error")));
+	sourceBuffer.addEventListener('updateend', () => {
+		pendingOp = null;
+		applyPendingAnchor();
+		evictPlayedRange(playedKeep);
+		// Grow the forward window + seek-back window back toward their ceilings
+		// once we've been quota-free for a while — restores deep buffering after a
+		// transient high-bitrate stretch ends.
+		if (video.currentTime - lastQuotaT > 10) {
+			if (playedKeep < behindCeiling) {
+				playedKeep = Math.min(behindCeiling, playedKeep + 2);
+			}
+			if (bufferAheadTarget < aheadCeiling) {
+				bufferAheadTarget = Math.min(aheadCeiling, bufferAheadTarget + 5);
+			}
+		}
+		drainQueue();
+		if (!opts.onReady) return;
+		if (sourceBuffer && sourceBuffer.buffered.length > 0) {
+			opts.onReady();
+			opts.onReady = undefined;
+		}
+	});
+	sourceBuffer.addEventListener('error', () => fail(new Error('SourceBuffer error')));
 
-  // Spin up the first Conversion
+	// Spin up the first Conversion
 
-  // Input factory rather than a one-shot construction: the frozen-feed
-  // watchdog (see `onWaiting`) rebuilds the Input to get fresh HTTP
-  // connections when the live UrlSource is stuck on a half-dead read.
-  const makeInput = (): Input =>
-    new Input({
-      source: new UrlSource(streamUrl, {
-        // Treat a 5xx as a transient, retryable failure instead of a fatal
-        // pipeline error. When the user redeploys, in-flight /stream range
-        // requests come back 500/502/503/504. `fetch()` does NOT reject on
-        // a bad status, so Mediabunny's default retry (which only fires on
-        // a rejected `fetch()`) never kicks in — it throws immediately and
-        // the player demotes to Tier F. That's useless (the server is down
-        // for F too) and sticky (we stay on the worse tier after recovery).
-        // Throwing on 5xx converts it into a rejection that `getRetryDelay`
-        // then retries until the backend comes back: playback just pauses
-        // (buffer drains, `waiting` fires) and resumes on its own.
-        fetchFn: async (input, init) => {
-          const res = await fetch(input, init);
-          if (res.status >= 500) {
-            throw new Error(`iris-stream-transient-5xx ${res.status}`);
-          }
-          return res;
-        },
-        // Capped exponential backoff (~0.5,1,2,4,8,8,… s) covering a typical
-        // deploy/restart window, then give up so a genuinely broken stream
-        // still surfaces (and the WatchPage backstop probe can react). The
-        // default never gives up; we bound it to ~12 attempts (~70s).
-        getRetryDelay: (attempts) => (attempts >= 12 ? null : Math.min(8, 0.5 * 2 ** attempts)),
-        // Cap the source read-ahead cache (default 64 MiB). Stacked on the
-        // SourceBuffer budget this was the bulk of the ~160 MB resident that
-        // tanked memory; a local seedbox makes a small cache cheap.
-        maxCacheSize: SOURCE_CACHE_BYTES,
-      }),
-      formats: ALL_FORMATS,
-    });
-  input = makeInput();
-  try {
-    // Initial mount always goes through the manual pipeline. It:
-    //   1. Lets us drop open-GOP straggler B-frames that would
-    //      otherwise trip Mediabunny's `assert(delta >= 0)` in the
-    //      MP4 muxer's `processTimestamps` (very common on x265
-    //      sources, see the videoP loop comment for details).
-    //   2. Uses `EncodedPacketSink.getKeyPacket(seekStart)` to jump
-    //      via MKV Cues when `startPosition > 0`, avoiding the
-    //      hundreds-of-MB linear remux from byte 0 that `Conversion`
-    //      did on resume.
-    if (opts.startPosition > 0) {
-      // Anchor the playhead at startPosition. MSE only fires `canplay` once a
-      // buffered range covers the playhead — with currentTime stuck at 0 and
-      // buffered = [~startPosition, X], canplay would never come. On Firefox
-      // `anchorPlayhead` defers the actual assignment until the data is there
-      // (see its comment); the feed gate follows `effectivePlayhead()` in the
-      // meantime. Suppress `bindVideoCallbacks`' canplay-based initial seek
-      // either way so it doesn't fight us when data arrives.
-      anchorPlayhead(opts.startPosition);
-      initialSeek.done = true;
-    }
-    await runManualPipeline(opts.startPosition);
-  } catch (e) {
-    await dispose();
-    const err = e instanceof Error ? e : new Error(String(e));
-    fail(err);
-    throw err;
-  }
+	// Input factory rather than a one-shot construction: the frozen-feed
+	// watchdog (see `onWaiting`) rebuilds the Input to get fresh HTTP
+	// connections when the live UrlSource is stuck on a half-dead read.
+	const makeInput = (): Input =>
+		new Input({
+			source: new UrlSource(streamUrl, {
+				// Treat a 5xx as a transient, retryable failure instead of a fatal
+				// pipeline error. When the user redeploys, in-flight /stream range
+				// requests come back 500/502/503/504. `fetch()` does NOT reject on
+				// a bad status, so Mediabunny's default retry (which only fires on
+				// a rejected `fetch()`) never kicks in — it throws immediately and
+				// the player demotes to Tier F. That's useless (the server is down
+				// for F too) and sticky (we stay on the worse tier after recovery).
+				// Throwing on 5xx converts it into a rejection that `getRetryDelay`
+				// then retries until the backend comes back: playback just pauses
+				// (buffer drains, `waiting` fires) and resumes on its own.
+				fetchFn: async (url, init) => {
+					const res = await fetch(url, init);
+					if (res.status >= 500) {
+						throw new Error(`iris-stream-transient-5xx ${res.status}`);
+					}
+					return res;
+				},
+				// Capped exponential backoff (~0.5,1,2,4,8,8,… s) covering a typical
+				// deploy/restart window, then give up so a genuinely broken stream
+				// still surfaces (and the WatchPage backstop probe can react). The
+				// default never gives up; we bound it to ~12 attempts (~70s).
+				getRetryDelay: (attempts) => (attempts >= 12 ? null : Math.min(8, 0.5 * 2 ** attempts)),
+				// Cap the source read-ahead cache (default 64 MiB). Stacked on the
+				// SourceBuffer budget this was the bulk of the ~160 MB resident that
+				// tanked memory; a local seedbox makes a small cache cheap.
+				maxCacheSize: SOURCE_CACHE_BYTES
+			}),
+			formats: ALL_FORMATS
+		});
+	input = makeInput();
+	try {
+		// Initial mount always goes through the manual pipeline. It:
+		//   1. Lets us drop open-GOP straggler B-frames that would
+		//      otherwise trip Mediabunny's `assert(delta >= 0)` in the
+		//      MP4 muxer's `processTimestamps` (very common on x265
+		//      sources, see the videoP loop comment for details).
+		//   2. Uses `EncodedPacketSink.getKeyPacket(seekStart)` to jump
+		//      via MKV Cues when `startPosition > 0`, avoiding the
+		//      hundreds-of-MB linear remux from byte 0 that `Conversion`
+		//      did on resume.
+		if (opts.startPosition > 0) {
+			// Anchor the playhead at startPosition. MSE only fires `canplay` once a
+			// buffered range covers the playhead — with currentTime stuck at 0 and
+			// buffered = [~startPosition, X], canplay would never come. On Firefox
+			// `anchorPlayhead` defers the actual assignment until the data is there
+			// (see its comment); the feed gate follows `effectivePlayhead()` in the
+			// meantime. Suppress `bindVideoCallbacks`' canplay-based initial seek
+			// either way so it doesn't fight us when data arrives.
+			anchorPlayhead(opts.startPosition);
+			initialSeek.done = true;
+		}
+		await runManualPipeline(opts.startPosition);
+	} catch (e) {
+		await dispose();
+		const err = e instanceof Error ? e : new Error(String(e));
+		fail(err);
+		throw err;
+	}
 
-  return handle;
+	return handle;
 };

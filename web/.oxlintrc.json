@@ -1,36 +1,53 @@
 {
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y", "import", "promise"],
-  "categories": {
-    "correctness": "error"
-  },
-  "rules": {
-    // Automatic JSX runtime — React is never in scope on purpose.
-    "react-in-jsx-scope": "off",
-
-    // React Compiler diagnostics. The build runs plain @vitejs/plugin-react
-    // with no compiler, so these report on a transform we never apply; every
-    // hit in this repo was a deliberate, reviewed pattern (latest-ref writes,
-    // DOM mutation through a ref, `setState` to adjust state when a prop
-    // changes). Re-enable the whole group the day the compiler goes in.
-    "react/incompatible-library": "off",
-    "react/preserve-manual-memoization": "off",
-    "react/immutability": "off",
-    "react/refs": "off",
-    "react/set-state-in-effect": "off",
-
-    // Default depth 2 misses a label whose text sits in nested layout divs.
-    "jsx-a11y/label-has-associated-control": ["error", { "depth": 4 }]
-  },
-  "env": {
-    "builtin": true
-  },
-  "ignorePatterns": [
-    "dist/",
-    "node_modules/",
-    "public/hevcjs/",
-    "public/libass/",
-    "public/libavjs/",
-    "public/libpgs/"
-  ]
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"plugins": ["typescript", "unicorn", "oxc", "import", "vitest", "promise"],
+	"categories": {
+		"correctness": "error",
+		"suspicious": "error",
+		"perf": "error"
+	},
+	"rules": {
+		"eslint/no-unused-vars": [
+			"error",
+			{
+				"argsIgnorePattern": "^_",
+				"varsIgnorePattern": "^_"
+			}
+		],
+		"import/no-duplicates": "error",
+		"import/no-self-import": "error",
+		"import/first": "error",
+		"typescript/no-explicit-any": "error",
+		"typescript/consistent-type-imports": "error",
+		"typescript/no-non-null-asserted-optional-chain": "error",
+		"unicorn/prefer-node-protocol": "error",
+		"eslint/eqeqeq": "error",
+		"eslint/no-var": "error",
+		"eslint/prefer-const": "error",
+		"vitest/require-mock-type-parameters": "off",
+		"eslint/no-await-in-loop": "off",
+		"import/no-unassigned-import": "off",
+		"unicorn/prefer-add-event-listener": "off",
+		"unicorn/consistent-function-scoping": "off",
+		"eslint/no-underscore-dangle": "off",
+		"vitest/valid-expect": [
+			"error",
+			{
+				"maxArgs": 2
+			}
+		]
+	},
+	"overrides": [
+		{
+			// The engine's async loops stop on flags another callback flips across an `await`
+			// (`disposed`, `generation`), which the rule cannot see; its `postMessage` calls go
+			// to workers and worklets, which take no target origin.
+			"files": ["**/iris-core/src/**/*.ts"],
+			"rules": {
+				"eslint/no-unmodified-loop-condition": "off",
+				"unicorn/require-post-message-target-origin": "off"
+			}
+		}
+	],
+	"ignorePatterns": ["src/lib/paraglide/**", "build/**", ".svelte-kit/**", ".vitest/**", "coverage/**", "static/**"]
 }

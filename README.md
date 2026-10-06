@@ -1,11 +1,11 @@
 # Iris
 
-Self-hosted "micro-Netflix": aggregate searches across torrent trackers, stream the result inside a React video player, seed the rest, and reclaim disk space when it runs low.
+Self-hosted "micro-Netflix": aggregate searches across torrent trackers, stream the result inside a web video player, seed the rest, and reclaim disk space when it runs low.
 
 ## Stack
 
 - **Backend**: Rust 2024 workspace, Axum, SQLite (sqlx), librqbit, ffmpeg pipeline.
-- **Frontend**: React 19 + Vite + Tailwind 4 + shadcn/ui, served by bun.
+- **Frontend**: SvelteKit (Svelte 5 runes, adapter-static SPA) + bits-ui + TanStack Query, built with bun, served by the backend.
 - **Android TV**: Compose-for-TV + Media3/ExoPlayer (`android-tv/`), full feature
   parity with the web app, DTOs generated from the OpenAPI spec, self-hosted APK
   updates from the in-app Settings screen.

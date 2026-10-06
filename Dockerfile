@@ -70,13 +70,13 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 COPY packages/ ./packages/
 COPY web/ ./web/
 WORKDIR /app/web
-# Drop the iris-variant WASM into public/ so Vite copies it into dist.
-# (The npm-package libav.js wasm files in public/libavjs/ stay as the
+# Drop the iris-variant WASM into static/ so SvelteKit copies it into build.
+# (The npm-package libav.js wasm files in static/libavjs/ stay as the
 # fallback when the iris variant isn't present.)
-COPY --from=libav-builder /libav-iris.wasm public/libavjs/libav-6.10.9.0-iris.wasm.wasm
-COPY --from=libav-builder /libav-iris.wasm.mjs public/libavjs/libav-6.10.9.0-iris.wasm.mjs
-COPY --from=libav-builder /libav-iris.wasm.js public/libavjs/libav-6.10.9.0-iris.wasm.js
-# Per-deploy build id baked into the bundle + emitted to dist/version.json so
+COPY --from=libav-builder /libav-iris.wasm static/libavjs/libav-6.10.9.0-iris.wasm.wasm
+COPY --from=libav-builder /libav-iris.wasm.mjs static/libavjs/libav-6.10.9.0-iris.wasm.mjs
+COPY --from=libav-builder /libav-iris.wasm.js static/libavjs/libav-6.10.9.0-iris.wasm.js
+# Per-deploy build id baked into the bundle + emitted to _app/version.json so
 # already-open tabs can detect a redeploy and offer a reload. `.git` is excluded
 # from the build context, so Vite can't read the sha itself — pass it as a build
 # arg (e.g. `--build-arg IRIS_WEB_BUILD_ID=$(git rev-parse --short HEAD)`). If
@@ -184,7 +184,7 @@ RUN mkdir -p /srv/iris/web /srv/iris/config /data /data/downloads \
     && chown -R 1001:1001 /srv/iris /data
 
 COPY --from=rust-builder /iris /usr/local/bin/iris
-COPY --from=web-builder /app/web/dist /srv/iris/web
+COPY --from=web-builder /app/web/build /srv/iris/web
 COPY config/config.toml.example /srv/iris/config/config.toml.example
 COPY config/providers.toml.example /srv/iris/config/providers.toml.example
 

@@ -24,10 +24,10 @@
  * of. We now refuse to mount without PDT and say so.
  */
 
-import type Hls from "hls.js";
-import { ALL_FORMATS, AudioSampleSink, Input, UrlSource } from "mediabunny";
+import type Hls from 'hls.js';
+import { ALL_FORMATS, AudioSampleSink, Input, UrlSource } from 'mediabunny';
 
-import { ensureLibavAudioDecoderRegistered } from "./decode/libav-audio-decoder";
+import { ensureLibavAudioDecoderRegistered } from './decode/libav-audio-decoder';
 
 /** Minimum headroom: never schedule a buffer to start closer than this to
  *  "now" (WebAudio needs a beat of lead to start a source cleanly). */
@@ -46,7 +46,7 @@ const MAX_DRIFT_S = 0.12;
 const MAX_LOOKAHEAD_S = 4;
 
 export interface LiveAudioHandle {
-  dispose(): void;
+	dispose(): void;
 }
 
 /**
@@ -55,241 +55,232 @@ export interface LiveAudioHandle {
  * audio track. Never throws into the caller — audio is best-effort; a
  * failure just leaves the video silent.
  */
-export async function mountLiveAudio(
-  video: HTMLVideoElement,
-  hls: Hls,
-  masterUrl: string,
-): Promise<LiveAudioHandle> {
-  ensureLibavAudioDecoderRegistered();
+export async function mountLiveAudio(video: HTMLVideoElement, hls: Hls, masterUrl: string): Promise<LiveAudioHandle> {
+	ensureLibavAudioDecoderRegistered();
 
-  if (hls.latestLevelDetails && !hls.latestLevelDetails.hasProgramDateTime) {
-    console.warn(
-      "[live-audio] playlist carries no EXT-X-PROGRAM-DATE-TIME — cannot sync a sidecar, staying silent",
-    );
-    return { dispose: () => {} };
-  }
+	if (hls.latestLevelDetails && !hls.latestLevelDetails.hasProgramDateTime) {
+		console.warn('[live-audio] playlist carries no EXT-X-PROGRAM-DATE-TIME — cannot sync a sidecar, staying silent');
+		return { dispose: () => {} };
+	}
 
-  let disposed = false;
-  // Set once the throttle is wired; dispose() calls it so a parked decode
-  // loop unblocks (its guard then sees `disposed`) instead of leaking.
-  let releaseThrottle: (() => void) | null = null;
-  const input = new Input({
-    formats: ALL_FORMATS,
-    source: new UrlSource(masterUrl, { requestInit: { credentials: "include" } }),
-  });
-  const ctx = new AudioContext();
-  const gain = ctx.createGain();
-  gain.connect(ctx.destination);
-  const activeNodes = new Set<AudioBufferSourceNode>();
+	let disposed = false;
+	// Set once the throttle is wired; dispose() calls it so a parked decode
+	// loop unblocks (its guard then sees `disposed`) instead of leaking.
+	let releaseThrottle: (() => void) | null = null;
+	const input = new Input({
+		formats: ALL_FORMATS,
+		source: new UrlSource(masterUrl, { requestInit: { credentials: 'include' } })
+	});
+	const ctx = new AudioContext();
+	const gain = ctx.createGain();
+	gain.connect(ctx.destination);
+	const activeNodes = new Set<AudioBufferSourceNode>();
 
-  const dispose = () => {
-    if (disposed) return;
-    disposed = true;
-    releaseThrottle?.();
-    for (const n of activeNodes) {
-      try {
-        n.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
-    activeNodes.clear();
-    void input.dispose?.();
-    void ctx.close().catch(() => {});
-    resumeCleanup();
-  };
+	const dispose = () => {
+		if (disposed) return;
+		disposed = true;
+		releaseThrottle?.();
+		for (const n of activeNodes) {
+			try {
+				n.stop();
+			} catch {
+				/* already stopped */
+			}
+		}
+		activeNodes.clear();
+		void input.dispose?.();
+		void ctx.close().catch(() => {});
+		resumeCleanup();
+	};
 
-  // AudioContext often starts "suspended" without a user gesture. The
-  // channel navigation IS a gesture, so resume works; if not, resume on the
-  // next interaction (event-driven, no timers).
-  const resumeCtx = () => void ctx.resume().catch(() => {});
-  resumeCtx();
-  const onInteract = () => resumeCtx();
-  window.addEventListener("pointerdown", onInteract, { passive: true });
-  window.addEventListener("keydown", onInteract, { passive: true });
-  const resumeCleanup = () => {
-    window.removeEventListener("pointerdown", onInteract);
-    window.removeEventListener("keydown", onInteract);
-  };
+	// AudioContext often starts "suspended" without a user gesture. The
+	// channel navigation IS a gesture, so resume works; if not, resume on the
+	// next interaction (event-driven, no timers).
+	const resumeCtx = () => void ctx.resume().catch(() => {});
+	resumeCtx();
+	const onInteract = () => resumeCtx();
+	window.addEventListener('pointerdown', onInteract, { passive: true });
+	window.addEventListener('keydown', onInteract, { passive: true });
+	const resumeCleanup = () => {
+		window.removeEventListener('pointerdown', onInteract);
+		window.removeEventListener('keydown', onInteract);
+	};
 
-  // Follow the video's play state so audio pauses/resumes with it. Suspending
-  // the context freezes its clock, holding the scheduled buffers in place;
-  // on resume we force a re-anchor (the video may have jumped to the live
-  // edge after a stall).
-  let needAnchor = true;
-  const onPlaying = () => {
-    needAnchor = true;
-    void ctx.resume().catch(() => {});
-  };
-  const onStall = () => void ctx.suspend().catch(() => {});
-  video.addEventListener("playing", onPlaying);
-  video.addEventListener("pause", onStall);
-  video.addEventListener("waiting", onStall);
+	// Follow the video's play state so audio pauses/resumes with it. Suspending
+	// the context freezes its clock, holding the scheduled buffers in place;
+	// on resume we force a re-anchor (the video may have jumped to the live
+	// edge after a stall).
+	let needAnchor = true;
+	const onPlaying = () => {
+		needAnchor = true;
+		void ctx.resume().catch(() => {});
+	};
+	const onStall = () => void ctx.suspend().catch(() => {});
+	video.addEventListener('playing', onPlaying);
+	video.addEventListener('pause', onStall);
+	video.addEventListener('waiting', onStall);
 
-  const audioTrack = (await input.getAudioTracks())[0] ?? null;
-  if (!audioTrack || disposed) {
-    if (disposed) dispose();
-    return { dispose };
-  }
+	const audioTrack = (await input.getAudioTracks())[0] ?? null;
+	if (!audioTrack || disposed) {
+		if (disposed) dispose();
+		return { dispose };
+	}
 
-  // The sidecar only mounts when MSE created no audio buffer at all, so the
-  // `<video>` element is silent — no doubling possible. Mirror its
-  // volume/mute into our gain node instead, so the player's volume controls
-  // (which write to the element) drive the sidecar transparently.
-  const applyVolume = () => {
-    gain.gain.value = video.muted ? 0 : video.volume;
-  };
-  applyVolume();
-  video.addEventListener("volumechange", applyVolume);
+	// The sidecar only mounts when MSE created no audio buffer at all, so the
+	// `<video>` element is silent — no doubling possible. Mirror its
+	// volume/mute into our gain node instead, so the player's volume controls
+	// (which write to the element) drive the sidecar transparently.
+	const applyVolume = () => {
+		gain.gain.value = video.muted ? 0 : video.volume;
+	};
+	applyVolume();
+	video.addEventListener('volumechange', applyVolume);
 
-  // `playHead` is the context-clock time where the next buffer is booked. It
-  // only ever moves FORWARD (contiguous, dropped, or padded) — never
-  // rewound — so scheduled buffers can never overlap.
-  let playHead = 0;
+	// `playHead` is the context-clock time where the next buffer is booked. It
+	// only ever moves FORWARD (contiguous, dropped, or padded) — never
+	// rewound — so scheduled buffers can never overlap.
+	let playHead = 0;
 
-  // Throttle the decode loop when it runs too far ahead of playback, without
-  // a timer: park until a scheduled buffer finishes (buffers end ~every 20 ms
-  // during playback, so this paces the loop to real time; while the context
-  // is suspended nothing ends, which correctly blocks decoding).
-  const drainWaiters = new Set<() => void>();
-  const throttle = (): Promise<void> => {
-    if (disposed || playHead - ctx.currentTime <= MAX_LOOKAHEAD_S) return Promise.resolve();
-    return new Promise<void>((resolve) => drainWaiters.add(resolve));
-  };
-  const onDrain = () => {
-    for (const w of drainWaiters) w();
-    drainWaiters.clear();
-  };
-  releaseThrottle = onDrain;
+	// Throttle the decode loop when it runs too far ahead of playback, without
+	// a timer: park until a scheduled buffer finishes (buffers end ~every 20 ms
+	// during playback, so this paces the loop to real time; while the context
+	// is suspended nothing ends, which correctly blocks decoding).
+	const drainWaiters = new Set<() => void>();
+	const throttle = (): Promise<void> => {
+		if (disposed || playHead - ctx.currentTime <= MAX_LOOKAHEAD_S) return Promise.resolve();
+		return new Promise<void>((resolve) => drainWaiters.add(resolve));
+	};
+	const onDrain = () => {
+		for (const w of drainWaiters) w();
+		drainWaiters.clear();
+	};
+	releaseThrottle = onDrain;
 
-  /** Current video PDT (seconds) — the shared wall clock (from the stream's
-   *  PROGRAM-DATE-TIME). Null until hls.js is actually playing. */
-  const videoPdt = (): number | null => {
-    const d = hls.playingDate;
-    return d ? d.getTime() / 1000 : null;
-  };
+	/** Current video PDT (seconds) — the shared wall clock (from the stream's
+	 *  PROGRAM-DATE-TIME). Null until hls.js is actually playing. */
+	const videoPdt = (): number | null => {
+		const d = hls.playingDate;
+		return d ? d.getTime() / 1000 : null;
+	};
 
-  /** Resolve once the video is playing and exposes a PDT — event-driven, no
-   *  timers. We anchor the audio decode to THAT wall-clock position (the live
-   *  edge) rather than timestamp 0: starting at 0 would decode from the
-   *  oldest segment in the window, hammering already-expired segments (a
-   *  404 storm) and running permanently behind the video. */
-  const firstVideoPdt = await new Promise<number | null>((resolve) => {
-    const p = videoPdt();
-    if (p !== null) {
-      resolve(p);
-      return;
-    }
-    // Ticks observed while the video advances but exposes no PDT. The
-    // up-front `hasProgramDateTime` check catches this for a loaded
-    // playlist; this is the backstop for the race where details land after
-    // the mount. ~10 `timeupdate`s is a couple of seconds of playback.
-    const NO_PDT_TICKS = 10;
-    let ticks = 0;
-    const onTick = () => {
-      if (disposed) {
-        cleanup();
-        resolve(null);
-        return;
-      }
-      const v = videoPdt();
-      if (v !== null) {
-        cleanup();
-        resolve(v);
-        return;
-      }
-      ticks += 1;
-      if (ticks >= NO_PDT_TICKS && hls.latestLevelDetails?.hasProgramDateTime === false) {
-        console.warn("[live-audio] no PROGRAM-DATE-TIME after playback started — giving up");
-        cleanup();
-        resolve(null);
-      }
-    };
-    const cleanup = () => {
-      video.removeEventListener("timeupdate", onTick);
-      video.removeEventListener("playing", onTick);
-    };
-    video.addEventListener("timeupdate", onTick);
-    video.addEventListener("playing", onTick);
-  });
-  if (disposed || firstVideoPdt === null) {
-    dispose();
-    return { dispose };
-  }
+	/** Resolve once the video is playing and exposes a PDT — event-driven, no
+	 *  timers. We anchor the audio decode to THAT wall-clock position (the live
+	 *  edge) rather than timestamp 0: starting at 0 would decode from the
+	 *  oldest segment in the window, hammering already-expired segments (a
+	 *  404 storm) and running permanently behind the video. */
+	const firstVideoPdt = await new Promise<number | null>((resolve) => {
+		const p = videoPdt();
+		if (p !== null) {
+			resolve(p);
+			return;
+		}
+		// Ticks observed while the video advances but exposes no PDT. The
+		// up-front `hasProgramDateTime` check catches this for a loaded
+		// playlist; this is the backstop for the race where details land after
+		// the mount. ~10 `timeupdate`s is a couple of seconds of playback.
+		const NO_PDT_TICKS = 10;
+		let ticks = 0;
+		const onTick = () => {
+			if (disposed) {
+				cleanup();
+				resolve(null);
+				return;
+			}
+			const v = videoPdt();
+			if (v !== null) {
+				cleanup();
+				resolve(v);
+				return;
+			}
+			ticks += 1;
+			if (ticks >= NO_PDT_TICKS && hls.latestLevelDetails?.hasProgramDateTime === false) {
+				console.warn('[live-audio] no PROGRAM-DATE-TIME after playback started — giving up');
+				cleanup();
+				resolve(null);
+			}
+		};
+		const cleanup = () => {
+			video.removeEventListener('timeupdate', onTick);
+			video.removeEventListener('playing', onTick);
+		};
+		video.addEventListener('timeupdate', onTick);
+		video.addEventListener('playing', onTick);
+	});
+	if (disposed || firstVideoPdt === null) {
+		dispose();
+		return { dispose };
+	}
 
-  void (async () => {
-    try {
-      // Start a hair behind the live edge for a little decode headroom.
-      const startFrom = Math.max(0, firstVideoPdt - MIN_LEAD_S);
-      for await (const sample of new AudioSampleSink(audioTrack).samples(
-        startFrom,
-        Number.POSITIVE_INFINITY,
-      )) {
-        if (disposed) {
-          sample.close();
-          return;
-        }
-        await throttle(); // stay within MAX_LOOKAHEAD of playback
-        if (disposed) {
-          sample.close();
-          return;
-        }
-        try {
-          const pdt = videoPdt();
-          if (pdt === null) continue; // video not started yet — skip until it is
-          const samplePdt = sample.timestamp; // epoch seconds (from PDT)
-          const now = ctx.currentTime;
-          // Context-clock time at which this sample should be AUDIBLE so its
-          // PDT lines up with the video's current PDT.
-          const desired = now + (samplePdt - pdt);
+	void (async () => {
+		try {
+			// Start a hair behind the live edge for a little decode headroom.
+			const startFrom = Math.max(0, firstVideoPdt - MIN_LEAD_S);
+			for await (const sample of new AudioSampleSink(audioTrack).samples(startFrom, Number.POSITIVE_INFINITY)) {
+				if (disposed) {
+					sample.close();
+					return;
+				}
+				await throttle(); // stay within MAX_LOOKAHEAD of playback
+				if (disposed) {
+					sample.close();
+					return;
+				}
+				try {
+					const pdt = videoPdt();
+					if (pdt === null) continue; // video not started yet — skip until it is
+					const samplePdt = sample.timestamp; // epoch seconds (from PDT)
+					const now = ctx.currentTime;
+					// Context-clock time at which this sample should be AUDIBLE so its
+					// PDT lines up with the video's current PDT.
+					const desired = now + (samplePdt - pdt);
 
-          // (Re)anchor after a stall / on first buffer, or if the play head
-          // has fallen into the past (context ran while we had nothing).
-          if (needAnchor || playHead < now + MIN_LEAD_S) {
-            playHead = Math.max(desired, now + MIN_LEAD_S);
-            needAnchor = false;
-          }
+					// (Re)anchor after a stall / on first buffer, or if the play head
+					// has fallen into the past (context ran while we had nothing).
+					if (needAnchor || playHead < now + MIN_LEAD_S) {
+						playHead = Math.max(desired, now + MIN_LEAD_S);
+						needAnchor = false;
+					}
 
-          const drift = playHead - desired;
-          if (drift > MAX_DRIFT_S) {
-            // Audio is scheduled LATER than the video wants it (audio lagging)
-            // — drop this frame to catch up. Not advancing playHead shrinks
-            // the drift; a dropped ~32 ms frame is inaudible.
-            continue;
-          }
-          if (drift < -MAX_DRIFT_S) {
-            // Audio is scheduled EARLIER than the video (audio leading) — jump
-            // the play head forward to the video's position (a brief silent
-            // gap) rather than overlapping the previous buffer.
-            playHead = desired;
-          }
+					const drift = playHead - desired;
+					if (drift > MAX_DRIFT_S) {
+						// Audio is scheduled LATER than the video wants it (audio lagging)
+						// — drop this frame to catch up. Not advancing playHead shrinks
+						// the drift; a dropped ~32 ms frame is inaudible.
+						continue;
+					}
+					if (drift < -MAX_DRIFT_S) {
+						// Audio is scheduled EARLIER than the video (audio leading) — jump
+						// the play head forward to the video's position (a brief silent
+						// gap) rather than overlapping the previous buffer.
+						playHead = desired;
+					}
 
-          const node = ctx.createBufferSource();
-          node.buffer = sample.toAudioBuffer();
-          node.connect(gain);
-          node.addEventListener("ended", () => {
-            activeNodes.delete(node);
-            onDrain(); // a buffer finished — let the throttled loop proceed
-          });
-          activeNodes.add(node);
-          node.start(playHead);
-          playHead += sample.duration;
-        } finally {
-          sample.close();
-        }
-      }
-    } catch (e) {
-      if (!disposed) console.warn("[live-audio] decode/playback ended", e);
-    }
-  })();
+					const node = ctx.createBufferSource();
+					node.buffer = sample.toAudioBuffer();
+					node.connect(gain);
+					node.addEventListener('ended', () => {
+						activeNodes.delete(node);
+						onDrain(); // a buffer finished — let the throttled loop proceed
+					});
+					activeNodes.add(node);
+					node.start(playHead);
+					playHead += sample.duration;
+				} finally {
+					sample.close();
+				}
+			}
+		} catch (e) {
+			if (!disposed) console.warn('[live-audio] decode/playback ended', e);
+		}
+	})();
 
-  return {
-    dispose: () => {
-      video.removeEventListener("playing", onPlaying);
-      video.removeEventListener("pause", onStall);
-      video.removeEventListener("waiting", onStall);
-      video.removeEventListener("volumechange", applyVolume);
-      dispose();
-    },
-  };
+	return {
+		dispose: () => {
+			video.removeEventListener('playing', onPlaying);
+			video.removeEventListener('pause', onStall);
+			video.removeEventListener('waiting', onStall);
+			video.removeEventListener('volumechange', applyVolume);
+			dispose();
+		}
+	};
 }

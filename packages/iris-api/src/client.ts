@@ -1,43 +1,45 @@
-/// <reference path="./globals.d.ts" />
-import type { components } from "./api-types";
+import type { components } from './api-types';
+
+/** The web app's version, baked in by its Vite `define` (sent as `X-Iris-Client: web/<version>`). */
+declare const __IRIS_WEB_VERSION__: string;
 
 /** Wire types generated from the OpenAPI spec (`bun run gen-api`) — the Rust
  *  route handlers + serde types are the source of truth (see
  *  crates/iris-api/src/openapi.rs). Annotated groups re-export their schema
  *  under the existing names so call sites don't change; the rest stays
  *  hand-written until its endpoints are annotated in later waves. */
-export type User = components["schemas"]["UserResponse"];
+export type User = components['schemas']['UserResponse'];
 
 /** The longest name the server accepts (display names, passkey names), in bytes. */
 export const MAX_NAME = 64;
 
 export class ApiError extends Error {
-  status: number;
-  code: string;
-  constructor(status: number, code: string, message: string) {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
+	status: number;
+	code: string;
+	constructor(status: number, code: string, message: string) {
+		super(message);
+		this.status = status;
+		this.code = code;
+	}
 }
 
 /** Event fired when a refresh attempt failed and the user must be
  *  treated as logged out. The AuthProvider listens for this and flips
  *  the auth state to `anonymous` so the route guards send the user to
  *  /login instead of leaving stale React Query errors on screen. */
-export const AUTH_EXPIRED_EVENT = "iris:auth-expired";
+export const AUTH_EXPIRED_EVENT = 'iris:auth-expired';
 
 /** Event fired when any backend request answers HTTP 426 — the
  *  cached bundle is below the server's `MIN_WEB_VERSION`. App.tsx
  *  listens for it and renders a full-screen lock-out with a "Reload"
  *  action so the user pulls the freshly-deployed bundle. */
-export const CLIENT_OUTDATED_EVENT = "iris:client-outdated";
+export const CLIENT_OUTDATED_EVENT = 'iris:client-outdated';
 
 /** Bundle version baked at build time via Vite `define` — see
  *  `vite.config.ts`. Used in the `X-Iris-Client` header. */
 export const IRIS_WEB_VERSION: string = __IRIS_WEB_VERSION__;
 
-const NO_RETRY_PATHS = new Set(["/auth/refresh", "/auth/login", "/auth/register", "/auth/logout"]);
+const NO_RETRY_PATHS = new Set(['/auth/refresh', '/auth/login', '/auth/register', '/auth/logout']);
 
 /** Bound on the session bootstrap/rotation fetches. Browser fetch has no
  *  timeout, so a stalled connection (Cloudflare tunnel blip) used to pin the
@@ -46,16 +48,16 @@ const NO_RETRY_PATHS = new Set(["/auth/refresh", "/auth/login", "/auth/register"
 const AUTH_TIMEOUT_MS = 15_000;
 
 function clientHeaders(extra?: HeadersInit): HeadersInit {
-  // X-Iris-Client lands on every outbound API request so the server
-  // can log usage and (optionally) gate via `MIN_WEB_VERSION`. Cheap:
-  // ~30 bytes per request.
-  const base: Record<string, string> = {
-    "X-Iris-Client": `web/${IRIS_WEB_VERSION}`,
-  };
-  if (extra) {
-    return { ...base, ...(extra as Record<string, string>) };
-  }
-  return base;
+	// X-Iris-Client lands on every outbound API request so the server
+	// can log usage and (optionally) gate via `MIN_WEB_VERSION`. Cheap:
+	// ~30 bytes per request.
+	const base: Record<string, string> = {
+		'X-Iris-Client': `web/${IRIS_WEB_VERSION}`
+	};
+	if (extra) {
+		return { ...base, ...(extra as Record<string, string>) };
+	}
+	return base;
 }
 
 /** Outcome of a session refresh. `ok` carries the refreshed user; otherwise
@@ -78,354 +80,332 @@ let inFlightRefresh: Promise<RefreshOutcome> | null = null;
  *  `request()`'s 401-retry). Single-flight with everything else; returns
  *  whether the session is alive again. */
 export async function refreshSessionForFetch(): Promise<boolean> {
-  const outcome = await refreshSession();
-  return outcome.ok;
+	const outcome = await refreshSession();
+	return outcome.ok;
 }
 
 function refreshSession(): Promise<RefreshOutcome> {
-  if (inFlightRefresh) return inFlightRefresh;
-  const run = (async (): Promise<RefreshOutcome> => {
-    try {
-      const res = await fetch("/api/auth/refresh", {
-        method: "POST",
-        credentials: "include",
-        headers: clientHeaders(),
-        signal: AbortSignal.timeout(AUTH_TIMEOUT_MS),
-      });
-      if (res.ok) return { ok: true, user: (await res.json()) as User };
-      return { ok: false, status: res.status };
-    } catch {
-      return { ok: false, status: 0 }; // network error — not an auth failure
-    }
-  })();
-  inFlightRefresh = run;
-  // Release the singleton once settled so the next expiry refreshes anew;
-  // current awaiters already hold `run`.
-  void run.finally(() => {
-    if (inFlightRefresh === run) inFlightRefresh = null;
-  });
-  return run;
+	if (inFlightRefresh) return inFlightRefresh;
+	const run = (async (): Promise<RefreshOutcome> => {
+		try {
+			const res = await fetch('/api/auth/refresh', {
+				method: 'POST',
+				credentials: 'include',
+				headers: clientHeaders(),
+				signal: AbortSignal.timeout(AUTH_TIMEOUT_MS)
+			});
+			if (res.ok) return { ok: true, user: (await res.json()) as User };
+			return { ok: false, status: res.status };
+		} catch {
+			return { ok: false, status: 0 }; // network error — not an auth failure
+		}
+	})();
+	inFlightRefresh = run;
+	// Release the singleton once settled so the next expiry refreshes anew;
+	// current awaiters already hold `run`.
+	void run.finally(() => {
+		if (inFlightRefresh === run) inFlightRefresh = null;
+	});
+	return run;
 }
 
 type RequestOpts = {
-  timeoutMs?: number;
-  /** External cancellation (React Query's queryFn signal). Aborting tears the
-   *  connection down, which cancels the handler — and its upstream tracker
-   *  fan-out — server-side too. */
-  signal?: AbortSignal;
+	timeoutMs?: number;
+	/** External cancellation (React Query's queryFn signal). Aborting tears the
+	 *  connection down, which cancels the handler — and its upstream tracker
+	 *  fan-out — server-side too. */
+	signal?: AbortSignal;
 };
 
 function requestSignal(opts?: RequestOpts): AbortSignal | undefined {
-  const timeout = opts?.timeoutMs === undefined ? undefined : AbortSignal.timeout(opts.timeoutMs);
-  if (opts?.signal && timeout) return AbortSignal.any([opts.signal, timeout]);
-  return opts?.signal ?? timeout;
+	const timeout = opts?.timeoutMs === undefined ? undefined : AbortSignal.timeout(opts.timeoutMs);
+	if (opts?.signal && timeout) return AbortSignal.any([opts.signal, timeout]);
+	return opts?.signal ?? timeout;
 }
 
-async function request<T>(
-  method: string,
-  path: string,
-  body?: unknown,
-  opts?: RequestOpts,
-): Promise<T> {
-  const fire = () =>
-    fetch(`/api${path}`, {
-      method,
-      credentials: "include",
-      headers: clientHeaders(body ? { "Content-Type": "application/json" } : undefined),
-      body: body ? JSON.stringify(body) : undefined,
-      signal: requestSignal(opts),
-    });
-  let res = await fire();
-  // Transparent re-auth on expired access cookie. Without this any in-
-  // flight query that fires after the access cookie expires (but before
-  // the keep-alive timer rotates it) bubbles a 401 up to the component,
-  // which then renders the raw error message ("Unauthorized" / "Forbidden")
-  // instead of the actual content.
-  if (res.status === 401 && !NO_RETRY_PATHS.has(path)) {
-    const outcome = await refreshSession();
-    if (outcome.ok) {
-      res = await fire(); // retry once with the rotated cookie
-    } else if (outcome.status === 401 || outcome.status === 403) {
-      // The refresh token itself is dead — genuinely logged out. Bounce to
-      // login via a window event so api.ts stays unaware of the auth context's
-      // setState; AuthProvider wires the listener.
-      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
-    }
-    // 429 / 5xx / network (status 0): the session is still valid, so do NOT
-    // log out. The original 401 surfaces to the caller as a transient error;
-    // the next poll or the keep-alive recovers once the backend is reachable.
-  }
-  // 426 = the server has decided this cached bundle is below
-  // `MIN_WEB_VERSION`. Surface globally so App.tsx can lock the UI
-  // and prompt the user to reload; checked after the auth retry so
-  // a refresh-then-426 still surfaces.
-  if (res.status === 426) {
-    window.dispatchEvent(new Event(CLIENT_OUTDATED_EVENT));
-  }
-  if (res.status === 204) return undefined as T;
-  const data = res.headers.get("content-type")?.includes("application/json")
-    ? await res.json()
-    : await res.text();
-  if (!res.ok) {
-    const err = data as { error?: string; message?: string };
-    throw new ApiError(res.status, err?.error ?? "error", err?.message ?? res.statusText);
-  }
-  return data as T;
+async function request<T>(method: string, path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
+	const fire = () =>
+		fetch(`/api${path}`, {
+			method,
+			credentials: 'include',
+			headers: clientHeaders(body ? { 'Content-Type': 'application/json' } : undefined),
+			body: body ? JSON.stringify(body) : undefined,
+			signal: requestSignal(opts)
+		});
+	let res = await fire();
+	// Transparent re-auth on expired access cookie. Without this any in-
+	// flight query that fires after the access cookie expires (but before
+	// the keep-alive timer rotates it) bubbles a 401 up to the component,
+	// which then renders the raw error message ("Unauthorized" / "Forbidden")
+	// instead of the actual content.
+	if (res.status === 401 && !NO_RETRY_PATHS.has(path)) {
+		const outcome = await refreshSession();
+		if (outcome.ok) {
+			res = await fire(); // retry once with the rotated cookie
+		} else if (outcome.status === 401 || outcome.status === 403) {
+			// The refresh token itself is dead — genuinely logged out. Bounce to
+			// login via a window event so api.ts stays unaware of the auth context's
+			// setState; AuthProvider wires the listener.
+			window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+		}
+		// 429 / 5xx / network (status 0): the session is still valid, so do NOT
+		// log out. The original 401 surfaces to the caller as a transient error;
+		// the next poll or the keep-alive recovers once the backend is reachable.
+	}
+	// 426 = the server has decided this cached bundle is below
+	// `MIN_WEB_VERSION`. Surface globally so App.tsx can lock the UI
+	// and prompt the user to reload; checked after the auth retry so
+	// a refresh-then-426 still surfaces.
+	if (res.status === 426) {
+		window.dispatchEvent(new Event(CLIENT_OUTDATED_EVENT));
+	}
+	if (res.status === 204) return undefined as T;
+	const data = res.headers.get('content-type')?.includes('application/json') ? await res.json() : await res.text();
+	if (!res.ok) {
+		const err = data as { error?: string; message?: string };
+		throw new ApiError(res.status, err?.error ?? 'error', err?.message ?? res.statusText);
+	}
+	return data as T;
 }
 
 export const api = {
-  get: <T>(p: string) => request<T>("GET", p),
-  post: <T>(p: string, body?: unknown) => request<T>("POST", p, body),
-  put: <T>(p: string, body?: unknown) => request<T>("PUT", p, body),
-  patch: <T>(p: string, body?: unknown) => request<T>("PATCH", p, body),
-  delete: <T>(p: string) => request<T>("DELETE", p),
+	get: <T>(p: string) => request<T>('GET', p),
+	post: <T>(p: string, body?: unknown) => request<T>('POST', p, body),
+	put: <T>(p: string, body?: unknown) => request<T>('PUT', p, body),
+	patch: <T>(p: string, body?: unknown) => request<T>('PATCH', p, body),
+	delete: <T>(p: string) => request<T>('DELETE', p)
 };
 
-export type Invitation = components["schemas"]["InvitationView"];
+export type Invitation = components['schemas']['InvitationView'];
 
-export type CreatedInvitation = components["schemas"]["CreatedInvitation"];
+export type CreatedInvitation = components['schemas']['CreatedInvitation'];
 
 export const auth = {
-  // Timeout-bounded: only the AuthProvider bootstrap calls this, and it must
-  // fail fast on a stalled connection so the retry loop can take over.
-  me: () => request<User>("GET", "/me", undefined, { timeoutMs: AUTH_TIMEOUT_MS }),
-  login: (email: string, password: string) => api.post<User>("/auth/login", { email, password }),
-  register: (invite_token: string, email: string, password: string) =>
-    api.post<User>("/auth/register", { invite_token, email, password }),
-  // Shares the single-flight guard with the reactive 401 retry path, and
-  // throws a typed ApiError on failure so callers can tell a genuine auth
-  // death (401/403) from a transient one (429/5xx/network).
-  refresh: async (): Promise<User> => {
-    const outcome = await refreshSession();
-    if (outcome.ok) return outcome.user;
-    throw new ApiError(outcome.status, "refresh_failed", "session refresh failed");
-  },
-  logout: () => api.post<void>("/auth/logout"),
-  changePassword: (old_password: string, new_password: string) =>
-    api.post<void>("/me/password", { old_password, new_password }),
-  changeDisplayName: (display_name: string) => api.post<void>("/me/display-name", { display_name }),
+	// Timeout-bounded: only the AuthProvider bootstrap calls this, and it must
+	// fail fast on a stalled connection so the retry loop can take over.
+	me: () => request<User>('GET', '/me', undefined, { timeoutMs: AUTH_TIMEOUT_MS }),
+	login: (email: string, password: string) => api.post<User>('/auth/login', { email, password }),
+	register: (invite_token: string, email: string, password: string) => api.post<User>('/auth/register', { invite_token, email, password }),
+	// Shares the single-flight guard with the reactive 401 retry path, and
+	// throws a typed ApiError on failure so callers can tell a genuine auth
+	// death (401/403) from a transient one (429/5xx/network).
+	refresh: async (): Promise<User> => {
+		const outcome = await refreshSession();
+		if (outcome.ok) return outcome.user;
+		throw new ApiError(outcome.status, 'refresh_failed', 'session refresh failed');
+	},
+	logout: () => api.post<void>('/auth/logout'),
+	changePassword: (old_password: string, new_password: string) => api.post<void>('/me/password', { old_password, new_password }),
+	changeDisplayName: (display_name: string) => api.post<void>('/me/display-name', { display_name })
 };
 
-export type StorageStats = components["schemas"]["StorageStats"];
+export type StorageStats = components['schemas']['StorageStats'];
 
-export type GcEvictedEntry = components["schemas"]["EvictedEntry"];
+export type GcEvictedEntry = components['schemas']['EvictedEntry'];
 
-export type GcReport = components["schemas"]["GcReport"];
+export type GcReport = components['schemas']['GcReport'];
 
-export type UserView = components["schemas"]["UserView"];
+export type UserView = components['schemas']['UserView'];
 
-export type RemuxJobView = components["schemas"]["RemuxJobView"];
+export type RemuxJobView = components['schemas']['RemuxJobView'];
 
 /** A live "who's watching what" entry from `/admin/active-sessions`. */
-export type ActiveSession = components["schemas"]["ActiveSessionView"];
+export type ActiveSession = components['schemas']['ActiveSessionView'];
 
 /** A recent playback row from `/admin/watch-history` (all users). */
-export type WatchHistoryEntry = components["schemas"]["WatchHistoryView"];
+export type WatchHistoryEntry = components['schemas']['WatchHistoryView'];
 
 /** One persisted audit-log row — a sensitive action (deletion, password
  *  reset, admin-triggered GC) and who performed it. */
-export type AuditLogEntry = components["schemas"]["AuditLogView"];
+export type AuditLogEntry = components['schemas']['AuditLogView'];
 
 export const admin = {
-  listInvitations: () => api.get<Invitation[]>("/admin/invitations"),
-  createInvitation: (ttl_secs?: number) =>
-    api.post<CreatedInvitation>("/admin/invitations", { ttl_secs }),
-  revokeInvitation: (id: string) => api.delete<void>(`/admin/invitations/${id}`),
-  storage: () => api.get<StorageStats>("/admin/storage"),
-  triggerGc: () => api.post<GcReport>("/admin/gc"),
-  listUsers: () => api.get<UserView[]>("/admin/users"),
-  resetPassword: (userId: string, new_password: string) =>
-    api.post<void>(`/admin/users/${userId}/password`, { new_password }),
-  setDisplayName: (userId: string, display_name: string) =>
-    api.post<void>(`/admin/users/${userId}/display-name`, { display_name }),
-  /** Permanently remove an account. Their grabs stay in the shared
-   *  library (re-attributed to the caller); everything personal goes. */
-  deleteUser: (userId: string) => api.delete<void>(`/admin/users/${userId}`),
-  listRemux: () => api.get<RemuxJobView[]>("/admin/remux"),
-  wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${key}`),
-  activeSessions: () => api.get<ActiveSession[]>("/admin/active-sessions"),
-  watchHistory: (limit?: number) =>
-    api.get<WatchHistoryEntry[]>(`/admin/watch-history${limit ? `?limit=${limit}` : ""}`),
-  /** Full watch history for one user — admin drill-down equivalent of
-   *  `me.history()`. */
-  userHistory: (userId: string, limit?: number, offset?: number) =>
-    api.get<UserHistoryItem[]>(
-      `/admin/users/${userId}/history?${new URLSearchParams({
-        ...(limit ? { limit: String(limit) } : {}),
-        ...(offset ? { offset: String(offset) } : {}),
-      }).toString()}`,
-    ),
-  /** Persisted "who changed/deleted what" log — deletions, password resets,
-   *  admin-triggered GC. */
-  auditLog: (limit?: number, offset?: number) =>
-    api.get<AuditLogEntry[]>(
-      `/admin/audit-log?${new URLSearchParams({
-        ...(limit ? { limit: String(limit) } : {}),
-        ...(offset ? { offset: String(offset) } : {}),
-      }).toString()}`,
-    ),
+	listInvitations: () => api.get<Invitation[]>('/admin/invitations'),
+	createInvitation: (ttl_secs?: number) => api.post<CreatedInvitation>('/admin/invitations', { ttl_secs }),
+	revokeInvitation: (id: string) => api.delete<void>(`/admin/invitations/${id}`),
+	storage: () => api.get<StorageStats>('/admin/storage'),
+	triggerGc: () => api.post<GcReport>('/admin/gc'),
+	listUsers: () => api.get<UserView[]>('/admin/users'),
+	resetPassword: (userId: string, new_password: string) => api.post<void>(`/admin/users/${userId}/password`, { new_password }),
+	setDisplayName: (userId: string, display_name: string) => api.post<void>(`/admin/users/${userId}/display-name`, { display_name }),
+	/** Permanently remove an account. Their grabs stay in the shared
+	 *  library (re-attributed to the caller); everything personal goes. */
+	deleteUser: (userId: string) => api.delete<void>(`/admin/users/${userId}`),
+	listRemux: () => api.get<RemuxJobView[]>('/admin/remux'),
+	wipeRemux: (key: string) => api.delete<{ freed_bytes: number }>(`/admin/remux/${key}`),
+	activeSessions: () => api.get<ActiveSession[]>('/admin/active-sessions'),
+	watchHistory: (limit?: number) => api.get<WatchHistoryEntry[]>(`/admin/watch-history${limit ? `?limit=${limit}` : ''}`),
+	/** Full watch history for one user — admin drill-down equivalent of
+	 *  `me.history()`. */
+	userHistory: (userId: string, limit?: number, offset?: number) =>
+		api.get<UserHistoryItem[]>(
+			`/admin/users/${userId}/history?${new URLSearchParams({
+				...(limit ? { limit: String(limit) } : {}),
+				...(offset ? { offset: String(offset) } : {})
+			}).toString()}`
+		),
+	/** Persisted "who changed/deleted what" log — deletions, password resets,
+	 *  admin-triggered GC. */
+	auditLog: (limit?: number, offset?: number) =>
+		api.get<AuditLogEntry[]>(
+			`/admin/audit-log?${new URLSearchParams({
+				...(limit ? { limit: String(limit) } : {}),
+				...(offset ? { offset: String(offset) } : {})
+			}).toString()}`
+		)
 };
 
-export type DeviceView = components["schemas"]["DeviceView"];
+export type DeviceView = components['schemas']['DeviceView'];
 
 export const devices = {
-  list: () => api.get<DeviceView[]>("/me/devices"),
-  link: (code: string, label?: string) => api.post<void>("/me/devices", { code, label }),
-  revoke: (jti: string) => api.delete<void>(`/me/devices/${jti}`),
+	list: () => api.get<DeviceView[]>('/me/devices'),
+	link: (code: string, label?: string) => api.post<void>('/me/devices', { code, label }),
+	revoke: (jti: string) => api.delete<void>(`/me/devices/${jti}`)
 };
 
-export type SearchResult = components["schemas"]["SearchResult"];
-export type MediaKind = components["schemas"]["MediaKind"];
-export type SortField = components["schemas"]["SortField"];
-export type SortOrder = components["schemas"]["SortOrder"];
-export type ProviderResultMeta = components["schemas"]["ProviderResultMeta"];
-export type ParsedQueryInfo = components["schemas"]["ParsedQueryInfo"];
-export type LibraryMatch = components["schemas"]["LibraryMatch"];
+export type SearchResult = components['schemas']['SearchResult'];
+export type MediaKind = components['schemas']['MediaKind'];
+export type SortField = components['schemas']['SortField'];
+export type SortOrder = components['schemas']['SortOrder'];
+export type ProviderResultMeta = components['schemas']['ProviderResultMeta'];
+export type ParsedQueryInfo = components['schemas']['ParsedQueryInfo'];
+export type LibraryMatch = components['schemas']['LibraryMatch'];
 /** The `/api/search` response = `AggregatedResults` (flattened) + library
  *  matches. Kept under the name `AggregatedResults` for call-site stability;
  *  the Rust source type is `SearchResponse`. */
-export type AggregatedResults = components["schemas"]["SearchResponse"];
+export type AggregatedResults = components['schemas']['SearchResponse'];
 
 export type SearchOpts = {
-  page?: number;
-  limit?: number;
-  sort_by?: SortField;
-  order?: SortOrder;
-  kind?: MediaKind;
-  /** Only the releases of this TMDB title (Titles view → a title's releases). */
-  tmdb_id?: number;
+	page?: number;
+	limit?: number;
+	sort_by?: SortField;
+	order?: SortOrder;
+	kind?: MediaKind;
+	/** Only the releases of this TMDB title (Titles view → a title's releases). */
+	tmdb_id?: number;
 };
 
-export type TitleCard = components["schemas"]["TitleCard"];
+export type TitleCard = components['schemas']['TitleCard'];
 
 export const search = {
-  /** `signal` cancels a superseded search (next keystroke) so the tracker
-   *  fan-out stops server-side instead of running to completion. */
-  query: (q: string, opts: SearchOpts = {}, signal?: AbortSignal) => {
-    const qs = new URLSearchParams({ q });
-    if (opts.page) qs.set("page", String(opts.page));
-    if (opts.limit) qs.set("limit", String(opts.limit));
-    if (opts.sort_by) qs.set("sort_by", opts.sort_by);
-    if (opts.order) qs.set("order", opts.order);
-    if (opts.kind) qs.set("kind", opts.kind);
-    if (opts.tmdb_id) qs.set("tmdb_id", String(opts.tmdb_id));
-    return request<AggregatedResults>("GET", `/search?${qs}`, undefined, { signal });
-  },
-  /** What the query could mean on TMDB, library titles flagged (the Titles view). */
-  titles: (q: string, signal?: AbortSignal) =>
-    request<TitleCard[]>("GET", `/search/titles?${new URLSearchParams({ q })}`, undefined, {
-      signal,
-    }),
+	/** `signal` cancels a superseded search (next keystroke) so the tracker
+	 *  fan-out stops server-side instead of running to completion. */
+	query: (q: string, opts: SearchOpts = {}, signal?: AbortSignal) => {
+		const qs = new URLSearchParams({ q });
+		if (opts.page) qs.set('page', String(opts.page));
+		if (opts.limit) qs.set('limit', String(opts.limit));
+		if (opts.sort_by) qs.set('sort_by', opts.sort_by);
+		if (opts.order) qs.set('order', opts.order);
+		if (opts.kind) qs.set('kind', opts.kind);
+		if (opts.tmdb_id) qs.set('tmdb_id', String(opts.tmdb_id));
+		return request<AggregatedResults>('GET', `/search?${qs}`, undefined, { signal });
+	},
+	/** What the query could mean on TMDB, library titles flagged (the Titles view). */
+	titles: (q: string, signal?: AbortSignal) =>
+		request<TitleCard[]>('GET', `/search/titles?${new URLSearchParams({ q })}`, undefined, {
+			signal
+		})
 };
 
-export type TmdbMetadata = components["schemas"]["MediaMetadata"];
+export type TmdbMetadata = components['schemas']['MediaMetadata'];
 
-export type TmdbSuggestion = components["schemas"]["TmdbSuggestion"];
+export type TmdbSuggestion = components['schemas']['TmdbSuggestion'];
 
 export const metadata = {
-  /** TMDB id lookup. `kind` disambiguates the movie/tv namespaces (the
-   *  same numerical id can refer to two unrelated entries — pass the
-   *  collection / search-result kind to land on the right one). */
-  tmdb: (id: number, kind?: "movie" | "tv") =>
-    api.get<TmdbMetadata>(kind ? `/metadata/tmdb/${id}?kind=${kind}` : `/metadata/tmdb/${id}`),
-  /** Typeahead: TMDB multi-search proxied through the backend. Empty
-   *  array on missing config / network failure (best-effort). */
-  tmdbSearch: (q: string) =>
-    api.get<TmdbSuggestion[]>(`/metadata/tmdb/search?q=${encodeURIComponent(q)}`),
-  /** Resolve a raw release title to its single best TMDB match. Scored
-   *  server-side by kind + year (not popularity) and served from the
-   *  persistent 30d resolve cache — this is the poster path for search
-   *  results. `null` when nothing matched / TMDB unconfigured. Send the
-   *  untouched release name; the backend parses title/year/kind out of
-   *  it (one source of truth instead of a per-client SCENE parser). */
-  tmdbResolve: (title: string, kind?: MediaKind | null) =>
-    api.get<TmdbSuggestion | null>(
-      `/metadata/tmdb/resolve?title=${encodeURIComponent(title)}${kind ? `&kind=${kind}` : ""}`,
-    ),
+	/** TMDB id lookup. `kind` disambiguates the movie/tv namespaces (the
+	 *  same numerical id can refer to two unrelated entries — pass the
+	 *  collection / search-result kind to land on the right one). */
+	tmdb: (id: number, kind?: 'movie' | 'tv') => api.get<TmdbMetadata>(kind ? `/metadata/tmdb/${id}?kind=${kind}` : `/metadata/tmdb/${id}`),
+	/** Typeahead: TMDB multi-search proxied through the backend. Empty
+	 *  array on missing config / network failure (best-effort). */
+	tmdbSearch: (q: string) => api.get<TmdbSuggestion[]>(`/metadata/tmdb/search?q=${encodeURIComponent(q)}`),
+	/** Resolve a raw release title to its single best TMDB match. Scored
+	 *  server-side by kind + year (not popularity) and served from the
+	 *  persistent 30d resolve cache — this is the poster path for search
+	 *  results. `null` when nothing matched / TMDB unconfigured. Send the
+	 *  untouched release name; the backend parses title/year/kind out of
+	 *  it (one source of truth instead of a per-client SCENE parser). */
+	tmdbResolve: (title: string, kind?: MediaKind | null) =>
+		api.get<TmdbSuggestion | null>(`/metadata/tmdb/resolve?title=${encodeURIComponent(title)}${kind ? `&kind=${kind}` : ''}`)
 };
 
 // Torrent details (search result preview)
 
-export type AudioInfo = components["schemas"]["AudioInfo"];
-export type SubInfo = components["schemas"]["SubInfo"];
-export type VideoInfo = components["schemas"]["VideoInfo"];
-export type MediaInfoSummary = components["schemas"]["MediaInfoSummary"];
-export type DescriptionFormat = components["schemas"]["DescriptionFormat"];
-export type TorrentDetails = components["schemas"]["TorrentDetails"];
+export type AudioInfo = components['schemas']['AudioInfo'];
+export type SubInfo = components['schemas']['SubInfo'];
+export type VideoInfo = components['schemas']['VideoInfo'];
+export type MediaInfoSummary = components['schemas']['MediaInfoSummary'];
+export type DescriptionFormat = components['schemas']['DescriptionFormat'];
+export type TorrentDetails = components['schemas']['TorrentDetails'];
 
 export const searchDetails = {
-  get: (provider_id: string, external_id: string) =>
-    api.get<TorrentDetails>(
-      `/search/details?provider=${encodeURIComponent(provider_id)}&id=${encodeURIComponent(external_id)}`,
-    ),
+	get: (provider_id: string, external_id: string) =>
+		api.get<TorrentDetails>(`/search/details?provider=${encodeURIComponent(provider_id)}&id=${encodeURIComponent(external_id)}`)
 };
 
 /** Build a TMDB image URL. Sizes: w92, w154, w185, w342, w500, original. */
 export function tmdbImage(
-  path: string | null | undefined,
-  size: "w92" | "w154" | "w185" | "w342" | "w500" | "original" = "w185",
+	path: string | null | undefined,
+	size: 'w92' | 'w154' | 'w185' | 'w342' | 'w500' | 'original' = 'w185'
 ): string | null {
-  if (!path) return null;
-  return `https://image.tmdb.org/t/p/${size}${path}`;
+	if (!path) return null;
+	return `https://image.tmdb.org/t/p/${size}${path}`;
 }
 
-export type ProviderInfo = components["schemas"]["ProviderInfo"];
+export type ProviderInfo = components['schemas']['ProviderInfo'];
 
 export const providers = {
-  list: () => api.get<ProviderInfo[]>("/providers"),
+	list: () => api.get<ProviderInfo[]>('/providers')
 };
 
-export type ProgressView = components["schemas"]["ProgressView"];
+export type ProgressView = components['schemas']['ProgressView'];
 
 /** Per-user playback language preferences (cross-file / cross-device). Applied
  *  by matching the file's tracks: per-file saved index wins, else this, else
  *  the file default. `subtitle_language: "off"` = subtitles disabled; null =
  *  no preference. Volume is NOT here — it's persisted device-locally. */
-export type PlaybackPrefs = components["schemas"]["PlaybackPrefsResponse"];
+export type PlaybackPrefs = components['schemas']['PlaybackPrefsResponse'];
 
-export type ContinueWatchingItem = components["schemas"]["ContinueWatchingItem"];
+export type ContinueWatchingItem = components['schemas']['ContinueWatchingItem'];
 
 /** A row of the caller's full watch history (in-progress AND completed),
  *  including items whose source torrent has since been deleted —
  *  `deleted: true` means there's nothing left to resume. */
-export type HistoryItem = components["schemas"]["HistoryItem"];
+export type HistoryItem = components['schemas']['HistoryItem'];
 
 /** Admin per-user drill-down equivalent of {@link HistoryItem} — same
  *  shape, reached through `/admin/users/{id}/history` instead of the
  *  caller's own session. */
-export type UserHistoryItem = components["schemas"]["UserHistoryView"];
+export type UserHistoryItem = components['schemas']['UserHistoryView'];
 
-export type FileProgressEntry = components["schemas"]["FileProgressEntry"];
+export type FileProgressEntry = components['schemas']['FileProgressEntry'];
 
 export const progress = {
-  get: (infohash: string, idx: number) =>
-    api.get<ProgressView | null>(`/torrents/${infohash}/files/${idx}/progress`),
-  forTorrent: (infohash: string) => api.get<FileProgressEntry[]>(`/torrents/${infohash}/progress`),
-  put: (
-    infohash: string,
-    idx: number,
-    body: {
-      position_seconds: number;
-      duration_seconds?: number | null;
-      audio_track_idx?: number | null;
-      subtitle_track_idx?: number | null;
-      completed?: boolean;
-      /** Whether the player is actively playing (vs paused) at this
-       *  heartbeat. Feeds the admin "Now watching" presence state. */
-      playing?: boolean;
-      /** True when this save follows a deliberate user seek. Required for
-       *  a near-zero position to overwrite substantial stored progress —
-       *  without it the server's reset guard treats the save as an
-       *  error-recovery artifact and keeps the old position. */
-      seek?: boolean;
-    },
-  ) => api.put<void>(`/torrents/${infohash}/files/${idx}/progress`, body),
-  /** Remove this file from the caller's Continue Watching + history. */
-  remove: (infohash: string, idx: number) =>
-    api.delete<void>(`/torrents/${infohash}/files/${idx}/progress`),
-  /** Mark this file watched for the caller (also skips a "next up" tile). */
-  markWatched: (infohash: string, idx: number) =>
-    api.post<void>(`/torrents/${infohash}/files/${idx}/progress/complete`),
+	get: (infohash: string, idx: number) => api.get<ProgressView | null>(`/torrents/${infohash}/files/${idx}/progress`),
+	forTorrent: (infohash: string) => api.get<FileProgressEntry[]>(`/torrents/${infohash}/progress`),
+	put: (
+		infohash: string,
+		idx: number,
+		body: {
+			position_seconds: number;
+			duration_seconds?: number | null;
+			audio_track_idx?: number | null;
+			subtitle_track_idx?: number | null;
+			completed?: boolean;
+			/** Whether the player is actively playing (vs paused) at this
+			 *  heartbeat. Feeds the admin "Now watching" presence state. */
+			playing?: boolean;
+			/** True when this save follows a deliberate user seek. Required for
+			 *  a near-zero position to overwrite substantial stored progress —
+			 *  without it the server's reset guard treats the save as an
+			 *  error-recovery artifact and keeps the old position. */
+			seek?: boolean;
+		}
+	) => api.put<void>(`/torrents/${infohash}/files/${idx}/progress`, body),
+	/** Remove this file from the caller's Continue Watching + history. */
+	remove: (infohash: string, idx: number) => api.delete<void>(`/torrents/${infohash}/files/${idx}/progress`),
+	/** Mark this file watched for the caller (also skips a "next up" tile). */
+	markWatched: (infohash: string, idx: number) => api.post<void>(`/torrents/${infohash}/files/${idx}/progress/complete`)
 };
 
 /** Per-user recommendation preferences (Slice 1 of "For You"). The
@@ -433,222 +413,189 @@ export const progress = {
  *  ("french" / "english"), ordered most-preferred first; `genres`
  *  holds TMDB genre ids. `onboarding_completed` gates the first-login
  *  onboarding dialog. */
-export type Preferences = components["schemas"]["PreferencesResponse"];
+export type Preferences = components['schemas']['PreferencesResponse'];
 
 /** A recommendation candidate as rendered on a "For You" shelf. Shape is
  *  kept close to SearchResult / WatchlistItem so the same card renders it. */
-export type CatalogCard = components["schemas"]["CatalogCard"];
+export type CatalogCard = components['schemas']['CatalogCard'];
 
-export type ForYouShelf = components["schemas"]["Shelf"];
+export type ForYouShelf = components['schemas']['Shelf'];
 
-export type ForYouResponse = components["schemas"]["ForYou"];
+export type ForYouResponse = components['schemas']['ForYou'];
 
 /** One tile on the mood board (a curated mood + a taste-derived backdrop). */
-export type MoodTile = components["schemas"]["MoodTile"];
-export type MoodBoard = components["schemas"]["MoodBoard"];
-export type MoodResults = components["schemas"]["MoodResults"];
+export type MoodTile = components['schemas']['MoodTile'];
+export type MoodBoard = components['schemas']['MoodBoard'];
+export type MoodResults = components['schemas']['MoodResults'];
 export const me = {
-  /** `include_grabbable` opts into synthesised "next episode isn't on
-   *  disk yet" tiles (`grabbable: true`, empty infohash) — the web bundle
-   *  ships with the backend so it always opts in. */
-  continueWatching: () =>
-    api.get<ContinueWatchingItem[]>("/me/continue-watching?include_grabbable=true"),
-  /** Remove a tile from Continue Watching. For a TV series pass its
-   *  `collection_id` (hides the whole show until a newer episode plays);
-   *  for a movie / standalone pass `infohash` + `file_idx`. */
-  dismissContinueWatching: (body: {
-    collection_id?: string | null;
-    infohash?: string;
-    file_idx?: number;
-  }) => api.post<void>("/me/continue-watching/dismiss", body),
-  /** Per-user hide of a Gone entry (ghost collection via
-   *  `collection_id`, single release via `infohash`). History stays;
-   *  newer activity resurfaces it. */
-  dismissGone: (body: { collection_id?: string | null; infohash?: string }) =>
-    api.post<void>("/me/gone/dismiss", body),
-  /** Full watch history — in-progress AND completed, survives deletion of
-   *  the source torrent (see {@link HistoryItem}). */
-  history: (limit?: number, offset?: number) =>
-    api.get<HistoryItem[]>(
-      `/me/history?${new URLSearchParams({
-        ...(limit ? { limit: String(limit) } : {}),
-        ...(offset ? { offset: String(offset) } : {}),
-      }).toString()}`,
-    ),
-  watchlist: () => api.get<WatchlistItem[]>("/me/watchlist"),
-  /** Remove from MY Watchlist (auto-recreated on next grab/play). */
-  removeFromWatchlist: (normalized_name: string) =>
-    api.post<void>("/me/watchlist/remove", { normalized_name }),
-  preferences: () => api.get<Preferences>("/me/preferences"),
-  savePreferences: (body: Preferences) => api.put<Preferences>("/me/preferences", body),
-  /** The home blended "For You" shelf. */
-  forYou: () => api.get<ForYouResponse>("/me/for-you"),
-  /** The organized "For You" page (top picks + per-genre + anime sections). */
-  forYouPage: () => api.get<ForYouResponse>("/me/for-you/page"),
-  /** Hide a recommendation candidate from future shelves. */
-  dismissForYou: (catalog_id: string) => api.post<void>("/me/for-you/dismiss", { catalog_id }),
-  /** The mood board for a kind — TMDB genres ordered by the user's taste. */
-  moodBoard: (kind: MediaKind) => api.get<MoodBoard>(`/me/moods?kind=${kind}`),
-  /** Results for a genre — catalogue ∪ broad TMDB, recency-filtered, taste-ranked. */
-  moodResults: (id: string, kind: MediaKind) =>
-    api.get<MoodResults>(`/me/moods/${encodeURIComponent(id)}?kind=${kind}`),
-  /** The user's preferred audio + subtitle language (applied across episodes
-   *  / devices). */
-  playbackPreferences: () => api.get<PlaybackPrefs>("/me/playback-preferences"),
-  /** One series' choice when it has its own, else the account-wide one. */
-  seriesPlaybackPreferences: (collectionId: string) =>
-    api.get<PlaybackPrefs>(
-      `/me/playback-preferences?${new URLSearchParams({ collection_id: collectionId })}`,
-    ),
-  /** Save preferred audio + subtitle language (full current state); with
-   *  `collection_id`, as that series' own choice. */
-  savePlaybackPreferences: (body: {
-    audio_language?: string | null;
-    subtitle_language?: string | null;
-    collection_id?: string;
-  }) => api.put<void>("/me/playback-preferences", body),
-  /** The home page's "right now" line. */
-  summary: () => api.get<HomeSummary>("/me/summary"),
-  recentSearches: () => api.get<RecentSearch[]>("/me/recent-searches"),
-  recordSearch: (query: string) => api.post<void>("/me/recent-searches", { query }),
-  /** Forget one search, or all of them without `query`. */
-  forgetSearches: (query?: string) =>
-    api.delete<void>(
-      query ? `/me/recent-searches?${new URLSearchParams({ q: query })}` : "/me/recent-searches",
-    ),
+	/** `include_grabbable` opts into synthesised "next episode isn't on
+	 *  disk yet" tiles (`grabbable: true`, empty infohash) — the web bundle
+	 *  ships with the backend so it always opts in. */
+	continueWatching: () => api.get<ContinueWatchingItem[]>('/me/continue-watching?include_grabbable=true'),
+	/** Remove a tile from Continue Watching. For a TV series pass its
+	 *  `collection_id` (hides the whole show until a newer episode plays);
+	 *  for a movie / standalone pass `infohash` + `file_idx`. */
+	dismissContinueWatching: (body: { collection_id?: string | null; infohash?: string; file_idx?: number }) =>
+		api.post<void>('/me/continue-watching/dismiss', body),
+	/** Per-user hide of a Gone entry (ghost collection via
+	 *  `collection_id`, single release via `infohash`). History stays;
+	 *  newer activity resurfaces it. */
+	dismissGone: (body: { collection_id?: string | null; infohash?: string }) => api.post<void>('/me/gone/dismiss', body),
+	/** Full watch history — in-progress AND completed, survives deletion of
+	 *  the source torrent (see {@link HistoryItem}). */
+	history: (limit?: number, offset?: number) =>
+		api.get<HistoryItem[]>(
+			`/me/history?${new URLSearchParams({
+				...(limit ? { limit: String(limit) } : {}),
+				...(offset ? { offset: String(offset) } : {})
+			}).toString()}`
+		),
+	watchlist: () => api.get<WatchlistItem[]>('/me/watchlist'),
+	/** Remove from MY Watchlist (auto-recreated on next grab/play). */
+	removeFromWatchlist: (normalized_name: string) => api.post<void>('/me/watchlist/remove', { normalized_name }),
+	preferences: () => api.get<Preferences>('/me/preferences'),
+	savePreferences: (body: Preferences) => api.put<Preferences>('/me/preferences', body),
+	/** The home blended "For You" shelf. */
+	forYou: () => api.get<ForYouResponse>('/me/for-you'),
+	/** The organized "For You" page (top picks + per-genre + anime sections). */
+	forYouPage: () => api.get<ForYouResponse>('/me/for-you/page'),
+	/** Hide a recommendation candidate from future shelves. */
+	dismissForYou: (catalog_id: string) => api.post<void>('/me/for-you/dismiss', { catalog_id }),
+	/** The mood board for a kind — TMDB genres ordered by the user's taste. */
+	moodBoard: (kind: MediaKind) => api.get<MoodBoard>(`/me/moods?kind=${kind}`),
+	/** Results for a genre — catalogue ∪ broad TMDB, recency-filtered, taste-ranked. */
+	moodResults: (id: string, kind: MediaKind) => api.get<MoodResults>(`/me/moods/${encodeURIComponent(id)}?kind=${kind}`),
+	/** The user's preferred audio + subtitle language (applied across episodes
+	 *  / devices). */
+	playbackPreferences: () => api.get<PlaybackPrefs>('/me/playback-preferences'),
+	/** One series' choice when it has its own, else the account-wide one. */
+	seriesPlaybackPreferences: (collectionId: string) =>
+		api.get<PlaybackPrefs>(`/me/playback-preferences?${new URLSearchParams({ collection_id: collectionId })}`),
+	/** Save preferred audio + subtitle language (full current state); with
+	 *  `collection_id`, as that series' own choice. */
+	savePlaybackPreferences: (body: { audio_language?: string | null; subtitle_language?: string | null; collection_id?: string }) =>
+		api.put<void>('/me/playback-preferences', body),
+	/** The home page's "right now" line. */
+	summary: () => api.get<HomeSummary>('/me/summary'),
+	recentSearches: () => api.get<RecentSearch[]>('/me/recent-searches'),
+	recordSearch: (query: string) => api.post<void>('/me/recent-searches', { query }),
+	/** Forget one search, or all of them without `query`. */
+	forgetSearches: (query?: string) =>
+		api.delete<void>(query ? `/me/recent-searches?${new URLSearchParams({ q: query })}` : '/me/recent-searches')
 };
 
-export type HomeSummary = components["schemas"]["HomeSummary"];
-export type RecentSearch = components["schemas"]["RecentSearchView"];
+export type HomeSummary = components['schemas']['HomeSummary'];
+export type RecentSearch = components['schemas']['RecentSearchView'];
 
-export type FilePreview = components["schemas"]["TorrentFilePreview"];
-export type TorrentPreview = components["schemas"]["TorrentPreview"];
+export type FilePreview = components['schemas']['TorrentFilePreview'];
+export type TorrentPreview = components['schemas']['TorrentPreview'];
 
-export type FileEntry = components["schemas"]["FileEntry"];
-export type TorrentSnapshot = components["schemas"]["TorrentSnapshot"];
+export type FileEntry = components['schemas']['FileEntry'];
+export type TorrentSnapshot = components['schemas']['TorrentSnapshot'];
 
-export type TorrentView = components["schemas"]["TorrentView"];
+export type TorrentView = components['schemas']['TorrentView'];
 
-export type IngestResponse = components["schemas"]["IngestResponse"];
+export type IngestResponse = components['schemas']['IngestResponse'];
 
 export const torrents = {
-  preview: (provider_id: string, external_id: string) =>
-    api.post<TorrentPreview>("/torrents/preview", { provider_id, external_id }),
-  /** `allow_duplicate` consents to ingesting a movie whose collection
-   *  already holds a live copy — without it the server answers
-   *  `409 duplicate_in_library` and the UI must confirm with the user.
-   *  Explicit re-grabs of a known release (history, ghost-resume,
-   *  language variants) pass `true` directly. */
-  ingest: (
-    provider_id: string,
-    external_id: string,
-    tmdb_id?: number | null,
-    allow_duplicate?: boolean,
-  ) =>
-    api.post<IngestResponse>("/torrents", {
-      provider_id,
-      external_id,
-      tmdb_id,
-      allow_duplicate: allow_duplicate ?? false,
-    }),
-  list: () => api.get<TorrentView[]>("/torrents"),
-  get: (infohash: string) => api.get<TorrentView>(`/torrents/${infohash}`),
-  /** Re-ingest a GC-reclaimed release from its recorded provenance —
-   *  same release, same infohash, saved positions apply again. */
-  regrab: (infohash: string) => api.post<IngestResponse>(`/torrents/${infohash}/regrab`),
-  remove: (infohash: string) => api.delete<void>(`/torrents/${infohash}`),
-  /** Raw source download (range-supported). Browser saves to disk. */
-  downloadUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
-  streamUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
-  /**
-   * Universal playback URL — returns the HLS-CMAF master playlist.
-   * Both web (Vidstack via hls.js) and Android (Media3 HlsMediaSource)
-   * consume it the same way; multi-audio renditions are exposed via
-   * EXT-X-MEDIA in the manifest. First request to master.m3u8 blocks
-   * until ffmpeg has built enough of the cache; later asset fetches
-   * hit static files via byte-range.
-   */
-  playUrl: (infohash: string, idx: number) =>
-    `/api/torrents/${infohash}/files/${idx}/play/master.m3u8`,
-  /** Polled by the player UI before mounting `<video>`, surfaces the
-   *  download / remux progress so we can render a meaningful loader. */
-  playStatus: (infohash: string, idx: number) =>
-    api.get<PlayStatus>(`/torrents/${infohash}/files/${idx}/play/status`),
-  probe: (infohash: string, idx: number) =>
-    api.get<MediaProbe>(`/torrents/${infohash}/files/${idx}/probe`),
-  subtitleUrl: (infohash: string, idx: number, streamIdx: number) =>
-    `/api/torrents/${infohash}/files/${idx}/sub/${streamIdx}/track.vtt`,
+	preview: (provider_id: string, external_id: string) => api.post<TorrentPreview>('/torrents/preview', { provider_id, external_id }),
+	/** `allow_duplicate` consents to ingesting a movie whose collection
+	 *  already holds a live copy — without it the server answers
+	 *  `409 duplicate_in_library` and the UI must confirm with the user.
+	 *  Explicit re-grabs of a known release (history, ghost-resume,
+	 *  language variants) pass `true` directly. */
+	ingest: (provider_id: string, external_id: string, tmdb_id?: number | null, allow_duplicate?: boolean) =>
+		api.post<IngestResponse>('/torrents', {
+			provider_id,
+			external_id,
+			tmdb_id,
+			allow_duplicate: allow_duplicate ?? false
+		}),
+	list: () => api.get<TorrentView[]>('/torrents'),
+	get: (infohash: string) => api.get<TorrentView>(`/torrents/${infohash}`),
+	/** Re-ingest a GC-reclaimed release from its recorded provenance —
+	 *  same release, same infohash, saved positions apply again. */
+	regrab: (infohash: string) => api.post<IngestResponse>(`/torrents/${infohash}/regrab`),
+	remove: (infohash: string) => api.delete<void>(`/torrents/${infohash}`),
+	/** Raw source download (range-supported). Browser saves to disk. */
+	downloadUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
+	streamUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
+	/**
+	 * Universal playback URL — returns the HLS-CMAF master playlist.
+	 * Both web (Vidstack via hls.js) and Android (Media3 HlsMediaSource)
+	 * consume it the same way; multi-audio renditions are exposed via
+	 * EXT-X-MEDIA in the manifest. First request to master.m3u8 blocks
+	 * until ffmpeg has built enough of the cache; later asset fetches
+	 * hit static files via byte-range.
+	 */
+	playUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/play/master.m3u8`,
+	/** Polled by the player UI before mounting `<video>`, surfaces the
+	 *  download / remux progress so we can render a meaningful loader. */
+	playStatus: (infohash: string, idx: number) => api.get<PlayStatus>(`/torrents/${infohash}/files/${idx}/play/status`),
+	probe: (infohash: string, idx: number) => api.get<MediaProbe>(`/torrents/${infohash}/files/${idx}/probe`),
+	subtitleUrl: (infohash: string, idx: number, streamIdx: number) => `/api/torrents/${infohash}/files/${idx}/sub/${streamIdx}/track.vtt`
 };
 
-export type MediaProbe = components["schemas"]["MediaProbe"];
-export type VideoStream = components["schemas"]["VideoStream"];
-export type AudioStream = components["schemas"]["AudioStream"];
-export type PlayStatus = components["schemas"]["PlayStatus"];
-export type SubtitleStream = components["schemas"]["SubtitleStream"];
+export type MediaProbe = components['schemas']['MediaProbe'];
+export type VideoStream = components['schemas']['VideoStream'];
+export type AudioStream = components['schemas']['AudioStream'];
+export type PlayStatus = components['schemas']['PlayStatus'];
+export type SubtitleStream = components['schemas']['SubtitleStream'];
 
 // Discovery: featured carousels (torr9 /featured/{movies,series}, etc.)
 
-export type FeaturedResponse = components["schemas"]["FeaturedResponse"];
+export type FeaturedResponse = components['schemas']['FeaturedResponse'];
 
 /** One entry of TMDB's genre taxonomy (merged movie+TV, deduped). The
  *  `id` is what we persist in a user's `genres` preference. */
-export type GenreOption = components["schemas"]["GenreOption"];
+export type GenreOption = components['schemas']['GenreOption'];
 
-export type GenresResponse = components["schemas"]["GenresResponse"];
+export type GenresResponse = components['schemas']['GenresResponse'];
 
 /** A user-selectable language: `value` is the backend `Language` wire
  *  token ("french"/"english"), `label` the display string. Served by the
  *  backend so adding a language needs no client redeploy. */
-export type LanguageOption = components["schemas"]["LanguageOption"];
+export type LanguageOption = components['schemas']['LanguageOption'];
 
-export type LanguagesResponse = components["schemas"]["LanguagesResponse"];
+export type LanguagesResponse = components['schemas']['LanguagesResponse'];
 
 export const discover = {
-  featured: () => api.get<FeaturedResponse>("/discover/featured"),
-  /** Merged movie + TV genre taxonomy — feeds the onboarding picker.
-   *  Note: served at the top-level `/api/genres`, not under /discover. */
-  genres: () => api.get<GenresResponse>("/genres"),
-  /** Server-driven selectable languages for onboarding. Top-level
-   *  `/api/languages`. */
-  languages: () => api.get<LanguagesResponse>("/languages"),
+	featured: () => api.get<FeaturedResponse>('/discover/featured'),
+	/** Merged movie + TV genre taxonomy — feeds the onboarding picker.
+	 *  Note: served at the top-level `/api/genres`, not under /discover. */
+	genres: () => api.get<GenresResponse>('/genres'),
+	/** Server-driven selectable languages for onboarding. Top-level
+	 *  `/api/languages`. */
+	languages: () => api.get<LanguagesResponse>('/languages')
 };
 
 // Library — collections (default) or raw torrents (toggle)
 
-export type CollectionListItem = components["schemas"]["CollectionListItem"];
-export type LibraryResponse = components["schemas"]["LibraryResponse"];
-export type CollectionEpisodeEntry = components["schemas"]["EpisodeEntry"];
-export type SeasonPackEntry = components["schemas"]["SeasonPackEntry"];
-export type AvailableEpisodeEntry = components["schemas"]["AvailableEpisodeEntry"];
+export type CollectionListItem = components['schemas']['CollectionListItem'];
+export type LibraryResponse = components['schemas']['LibraryResponse'];
+export type CollectionEpisodeEntry = components['schemas']['EpisodeEntry'];
+export type SeasonPackEntry = components['schemas']['SeasonPackEntry'];
+export type AvailableEpisodeEntry = components['schemas']['AvailableEpisodeEntry'];
 /** A reclaimed release with indexer provenance — re-ingestable via
  *  {@link torrents.ingest}; carries the caller's watch state. */
-export type GoneReleaseEntry = components["schemas"]["GoneReleaseEntry"];
+export type GoneReleaseEntry = components['schemas']['GoneReleaseEntry'];
 /** Ghost twin of {@link CollectionEpisodeEntry} — reclaimed (S, E)
  *  rows with the caller's watch state. */
-export type GoneEpisodeEntry = components["schemas"]["GoneEpisodeEntry"];
-export type CollectionDetail = components["schemas"]["CollectionDetail"];
+export type GoneEpisodeEntry = components['schemas']['GoneEpisodeEntry'];
+export type CollectionDetail = components['schemas']['CollectionDetail'];
 
 export const library = {
-  list: (view: "collections" | "torrents" = "collections") =>
-    api.get<LibraryResponse>(`/library?view=${view}`),
-  collection: (id: string) => api.get<CollectionDetail>(`/library/collections/${id}`),
-  /** Grab a specific (season, episode) for a TV collection. Idempotent —
-   *  returns `already_grabbed: true` if the episode is already on disk
-   *  under any infohash. When `language` is set, the server picks
-   *  strictly from that language slot in the cache (no cross-language
-   *  fallback) — used when the user clicked an FR / EN badge. */
-  grabCollectionEpisode: (
-    id: string,
-    season: number,
-    episode: number,
-    language?: string | null,
-  ) => {
-    const qs = language ? `?language=${encodeURIComponent(language)}` : "";
-    return api.post<GrabEpisodeResponse>(
-      `/library/collections/${id}/grab/${season}/${episode}${qs}`,
-      {},
-    );
-  },
+	list: (view: 'collections' | 'torrents' = 'collections') => api.get<LibraryResponse>(`/library?view=${view}`),
+	collection: (id: string) => api.get<CollectionDetail>(`/library/collections/${id}`),
+	/** Grab a specific (season, episode) for a TV collection. Idempotent —
+	 *  returns `already_grabbed: true` if the episode is already on disk
+	 *  under any infohash. When `language` is set, the server picks
+	 *  strictly from that language slot in the cache (no cross-language
+	 *  fallback) — used when the user clicked an FR / EN badge. */
+	grabCollectionEpisode: (id: string, season: number, episode: number, language?: string | null) => {
+		const qs = language ? `?language=${encodeURIComponent(language)}` : '';
+		return api.post<GrabEpisodeResponse>(`/library/collections/${id}/grab/${season}/${episode}${qs}`, {});
+	}
 };
 
 // Series follows (Watchlist + Series detail page)
@@ -658,70 +605,63 @@ export const library = {
 /// rows (auto-created on grab). `id` is the collection id when one
 /// already exists for this normalised name, otherwise the follow
 /// row's own id (used as a routing token for `/collection/:id`).
-export type WatchlistItem = components["schemas"]["WatchlistItem"];
+export type WatchlistItem = components['schemas']['WatchlistItem'];
 
-export type FollowSummary = components["schemas"]["FollowSummary"];
+export type FollowSummary = components['schemas']['FollowSummary'];
 
-export type EpisodeStatus = components["schemas"]["EpisodeStatus"];
+export type EpisodeStatus = components['schemas']['EpisodeStatus'];
 
-export type EpisodeItem = components["schemas"]["EpisodeItem"];
+export type EpisodeItem = components['schemas']['EpisodeItem'];
 
-export type EpisodesResponse = components["schemas"]["EpisodesResponse"];
+export type EpisodesResponse = components['schemas']['EpisodesResponse'];
 
-export type EpisodePoint = components["schemas"]["EpisodePoint"];
+export type EpisodePoint = components['schemas']['EpisodePoint'];
 
-export type EpisodeContext = components["schemas"]["EpisodeContext"];
+export type EpisodeContext = components['schemas']['EpisodeContext'];
 
-export type GrabEpisodeResponse = components["schemas"]["GrabResponse"];
+export type GrabEpisodeResponse = components['schemas']['GrabResponse'];
 
 export const follows = {
-  list: () => api.get<FollowSummary[]>("/me/follows"),
-  add: (name: string, tmdb_id?: number | null) =>
-    api.post<FollowSummary>("/me/follows", { name, tmdb_id: tmdb_id ?? null }),
-  remove: (id: string) => api.delete<void>(`/me/follows/${id}`),
-  /** Pass `season` to filter; omit for the full set. */
-  episodes: (id: string, season?: number) =>
-    api.get<EpisodesResponse>(
-      season != null ? `/me/follows/${id}/episodes?season=${season}` : `/me/follows/${id}/episodes`,
-    ),
-  grabEpisode: (id: string, season: number, episode: number) =>
-    api.post<GrabEpisodeResponse>(`/me/follows/${id}/episodes/${season}/${episode}/grab`),
-  /** Fetch context for the file currently playing — drives the
-   *  "Watch next?" modal at episode end. */
-  episodeContext: (infohash: string, file_idx: number) =>
-    api.get<EpisodeContext>(
-      `/me/follows/episode-context?infohash=${encodeURIComponent(infohash)}&file_idx=${file_idx}`,
-    ),
+	list: () => api.get<FollowSummary[]>('/me/follows'),
+	add: (name: string, tmdb_id?: number | null) => api.post<FollowSummary>('/me/follows', { name, tmdb_id: tmdb_id ?? null }),
+	remove: (id: string) => api.delete<void>(`/me/follows/${id}`),
+	/** Pass `season` to filter; omit for the full set. */
+	episodes: (id: string, season?: number) =>
+		api.get<EpisodesResponse>(
+			season !== null && season !== undefined ? `/me/follows/${id}/episodes?season=${season}` : `/me/follows/${id}/episodes`
+		),
+	grabEpisode: (id: string, season: number, episode: number) =>
+		api.post<GrabEpisodeResponse>(`/me/follows/${id}/episodes/${season}/${episode}/grab`),
+	/** Fetch context for the file currently playing — drives the
+	 *  "Watch next?" modal at episode end. */
+	episodeContext: (infohash: string, file_idx: number) =>
+		api.get<EpisodeContext>(`/me/follows/episode-context?infohash=${encodeURIComponent(infohash)}&file_idx=${file_idx}`)
 };
 
 // Live TV: per-country IPTV channels + now/next guide, played through the
 // backend's signed HLS proxy (see crates/iris-api/src/live_tv).
 
-export type LiveCountry = components["schemas"]["LiveCountry"];
-export type LiveCountriesResponse = components["schemas"]["LiveCountriesResponse"];
-export type LiveChannel = components["schemas"]["LiveChannel"];
-export type LiveChannelsResponse = components["schemas"]["LiveChannelsResponse"];
-export type LiveProgramme = components["schemas"]["LiveProgramme"];
-export type LiveNowNext = components["schemas"]["LiveNowNext"];
-export type LiveEpgNowResponse = components["schemas"]["LiveEpgNowResponse"];
-export type LiveSearchResponse = components["schemas"]["LiveSearchResponse"];
-export type LiveSearchResult = components["schemas"]["LiveSearchResult"];
+export type LiveCountry = components['schemas']['LiveCountry'];
+export type LiveCountriesResponse = components['schemas']['LiveCountriesResponse'];
+export type LiveChannel = components['schemas']['LiveChannel'];
+export type LiveChannelsResponse = components['schemas']['LiveChannelsResponse'];
+export type LiveProgramme = components['schemas']['LiveProgramme'];
+export type LiveNowNext = components['schemas']['LiveNowNext'];
+export type LiveEpgNowResponse = components['schemas']['LiveEpgNowResponse'];
+export type LiveSearchResponse = components['schemas']['LiveSearchResponse'];
+export type LiveSearchResult = components['schemas']['LiveSearchResult'];
 
 export const livetv = {
-  countries: () => api.get<LiveCountriesResponse>("/livetv/countries"),
-  /** Cross-country channel search (server-side, diacritics-insensitive). */
-  search: (q: string) => api.get<LiveSearchResponse>(`/livetv/search?q=${encodeURIComponent(q)}`),
-  channels: (country: string) =>
-    api.get<LiveChannelsResponse>(`/livetv/${encodeURIComponent(country)}/channels`),
-  epgNow: (country: string) =>
-    api.get<LiveEpgNowResponse>(`/livetv/${encodeURIComponent(country)}/epg/now`),
-  /** HLS master playlist for a channel — hand to hls.js / native HLS. */
-  masterUrl: (country: string, channelId: string) =>
-    `/api/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/master.m3u8`,
-  /** The served stream is unplayable client-side: the backend cools the
-   *  active source down and elects the next feed. */
-  reportPlaybackError: (country: string, channelId: string) =>
-    api.post<void>(
-      `/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/playback-error`,
-    ),
+	countries: () => api.get<LiveCountriesResponse>('/livetv/countries'),
+	/** Cross-country channel search (server-side, diacritics-insensitive). */
+	search: (q: string) => api.get<LiveSearchResponse>(`/livetv/search?q=${encodeURIComponent(q)}`),
+	channels: (country: string) => api.get<LiveChannelsResponse>(`/livetv/${encodeURIComponent(country)}/channels`),
+	epgNow: (country: string) => api.get<LiveEpgNowResponse>(`/livetv/${encodeURIComponent(country)}/epg/now`),
+	/** HLS master playlist for a channel — hand to hls.js / native HLS. */
+	masterUrl: (country: string, channelId: string) =>
+		`/api/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/master.m3u8`,
+	/** The served stream is unplayable client-side: the backend cools the
+	 *  active source down and elects the next feed. */
+	reportPlaybackError: (country: string, channelId: string) =>
+		api.post<void>(`/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/playback-error`)
 };

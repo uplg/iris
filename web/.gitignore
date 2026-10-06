@@ -1,33 +1,11 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
 node_modules
-dist
-dist-ssr
-*.local
-
-# Vendored static assets — regenerated from node_modules by `bun run sync-vendor`
-# (predev/prebuild). Never committed, so a committed copy can't drift from the
-# installed package version. See packages/iris-core/sync-vendor.mjs.
-public/libass/
-public/hevcjs/
-public/libpgs/
-public/libavjs/
-
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+build
+.svelte-kit
+.vitest
+coverage
+# Vendored WASM workers, regenerated from node_modules by `bun run sync-vendor`
+# (packages/iris-core/sync-vendor.mjs): never committed, so never stale.
+static/libass/
+static/hevcjs/
+static/libpgs/
+static/libavjs/

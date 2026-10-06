@@ -2,7 +2,8 @@ target/
 node_modules/
 web/node_modules/
 packages/*/node_modules/
-web/dist/
+web/build/
+web/.svelte-kit/
 .git/
 .idea/
 .vscode/

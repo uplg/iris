@@ -1,6 +1,6 @@
 name: CI
 
-# Gate (clippy + rustfmt + cargo-deny) on every push to main and PR. Pushing a
+# Gate (clippy + rustfmt + cargo-deny, and the web app's check + tests + build) on every push to main and PR. Pushing a
 # semver tag (e.g. `0.9.0`) additionally publishes a GitHub release with notes
 # pulled from CHANGELOG.md (the APK is attached to that release by hand). Tags
 # are bare semver — no `v` prefix — matching the existing release history.
@@ -37,6 +37,29 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+  web:
+    name: web check + test + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Browsers for the component tests
+        working-directory: web
+        run: bunx playwright install --with-deps chromium
+      - name: Check
+        working-directory: web
+        run: bun run check
+      - name: Test
+        working-directory: web
+        run: bun run test
+      - name: Build
+        working-directory: web
+        run: bun run build
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
@@ -48,7 +71,7 @@ jobs:
   # attached to the release by hand afterwards (built locally with `just apk`).
   release:
     name: release
-    needs: [gate, deny]
+    needs: [gate, web, deny]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:

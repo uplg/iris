@@ -9,202 +9,203 @@
  * frames without crushing the highlights.
  */
 
-import type { VideoRenderer, VideoRendererOptions } from "./renderer-factory";
+import type { VideoRenderer, VideoRendererOptions } from './renderer-factory';
 
 type WebGpuNavigator = Navigator & { gpu: GPU };
 
 export async function mountWebGpuRenderer(opts: VideoRendererOptions): Promise<VideoRenderer> {
-  const nav = navigator as WebGpuNavigator;
-  if (!nav.gpu) throw new Error("WebGPU API not available");
+	const nav = navigator as WebGpuNavigator;
+	if (!nav.gpu) throw new Error('WebGPU API not available');
 
-  const adapter = await nav.gpu.requestAdapter();
-  if (!adapter) throw new Error("WebGPU adapter request returned null");
-  const device = await adapter.requestDevice();
+	const adapter = await nav.gpu.requestAdapter();
+	if (!adapter) throw new Error('WebGPU adapter request returned null');
+	const device = await adapter.requestDevice();
 
-  // HDR detection: Chrome 129+ exposes extended-range canvases. The
-  // `colorSpace` field can be set to `'display-p3'` or `'rec2100-hlg'`.
-  // For Phase 2-polish we keep the canvas in linear sRGB; the shader
-  // performs PQ/HLG → linear → BT.709 → sRGB display-encoded output.
-  // HDR-aware canvas configuration lands as a follow-up once we have
-  // a reliable HDR-source detection (frame's color space metadata).
-  const canvas = document.createElement("canvas");
-  canvas.className = "h-full w-full object-contain bg-black";
-  opts.container.appendChild(canvas);
-  const context = canvas.getContext("webgpu");
-  if (!context) {
-    throw new Error("Failed to get WebGPU canvas context");
-  }
-  const presentationFormat = nav.gpu.getPreferredCanvasFormat();
-  context.configure({
-    device,
-    format: presentationFormat,
-    alphaMode: "opaque",
-  });
+	// HDR detection: Chrome 129+ exposes extended-range canvases. The
+	// `colorSpace` field can be set to `'display-p3'` or `'rec2100-hlg'`.
+	// For Phase 2-polish we keep the canvas in linear sRGB; the shader
+	// performs PQ/HLG → linear → BT.709 → sRGB display-encoded output.
+	// HDR-aware canvas configuration lands as a follow-up once we have
+	// a reliable HDR-source detection (frame's color space metadata).
+	const canvas = document.createElement('canvas');
+	canvas.className = 'h-full w-full object-contain bg-black';
+	opts.container.appendChild(canvas);
+	const context = canvas.getContext('webgpu');
+	if (!context) {
+		throw new Error('Failed to get WebGPU canvas context');
+	}
+	const presentationFormat = nav.gpu.getPreferredCanvasFormat();
+	context.configure({
+		device,
+		format: presentationFormat,
+		alphaMode: 'opaque'
+	});
 
-  const sampler = device.createSampler({
-    magFilter: "linear",
-    minFilter: "linear",
-  });
+	const sampler = device.createSampler({
+		magFilter: 'linear',
+		minFilter: 'linear'
+	});
 
-  const shaderModule = device.createShaderModule({ code: SHADER });
-  const pipeline = device.createRenderPipeline({
-    layout: "auto",
-    vertex: {
-      module: shaderModule,
-      entryPoint: "vs_main",
-    },
-    fragment: {
-      module: shaderModule,
-      entryPoint: "fs_main",
-      targets: [{ format: presentationFormat }],
-    },
-    primitive: { topology: "triangle-list" },
-  });
+	const shaderModule = device.createShaderModule({ code: SHADER });
+	const pipeline = device.createRenderPipeline({
+		layout: 'auto',
+		vertex: {
+			module: shaderModule,
+			entryPoint: 'vs_main'
+		},
+		fragment: {
+			module: shaderModule,
+			entryPoint: 'fs_main',
+			targets: [{ format: presentationFormat }]
+		},
+		primitive: { topology: 'triangle-list' }
+	});
 
-  // Uniform buffer carries the tone-mapping mode flag.
-  // 0 = SDR passthrough, 1 = PQ→SDR (ACES), 2 = HLG→SDR.
-  const uniformBuffer = device.createBuffer({
-    size: 16,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
+	// Uniform buffer carries the tone-mapping mode flag.
+	// 0 = SDR passthrough, 1 = PQ→SDR (ACES), 2 = HLG→SDR.
+	const uniformBuffer = device.createBuffer({
+		size: 16,
+		usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+	});
 
-  // Bind groups can't include external textures statically; we build a
-  // fresh group per frame from the imported texture. The sampler +
-  // uniform buffer are stable.
+	// Bind groups can't include external textures statically; we build a
+	// fresh group per frame from the imported texture. The sampler +
+	// uniform buffer are stable.
 
-  let intrinsic: { width: number; height: number } | null = null;
-  const queue: VideoFrame[] = [];
-  let lastDrawn = 0;
-  let disposed = false;
+	let intrinsic: { width: number; height: number } | null = null;
+	const queue: VideoFrame[] = [];
+	let lastDrawn = 0;
+	let disposed = false;
 
-  device.lost.then((info) => {
-    // Expected on `dispose()` (we call device.destroy()). Anything
-    // else (driver crash, page hidden long enough that the GPU
-    // process reaped us, …) is rare; bump to warn there.
-    if (disposed || info.reason === "destroyed") {
-      console.debug("[iris-core] WebGPU device released:", info.reason);
-    } else {
-      console.warn("[iris-core] WebGPU device lost:", info.reason, info.message);
-    }
-  });
+	void (async () => {
+		const info = await device.lost;
+		// Expected on `dispose()` (we call device.destroy()). Anything
+		// else (driver crash, page hidden long enough that the GPU
+		// process reaped us, …) is rare; bump to warn there.
+		if (disposed || info.reason === 'destroyed') {
+			console.debug('[iris-core] WebGPU device released:', info.reason);
+		} else {
+			console.warn('[iris-core] WebGPU device lost:', info.reason, info.message);
+		}
+	})();
 
-  const draw = (frame: VideoFrame): void => {
-    if (disposed) {
-      frame.close();
-      return;
-    }
-    if (!intrinsic) {
-      intrinsic = { width: frame.displayWidth, height: frame.displayHeight };
-      canvas.width = intrinsic.width;
-      canvas.height = intrinsic.height;
-    }
-    // Pick a tone-map mode from the frame's color space metadata.
-    // `colorSpace.transfer` follows the IEC 61966-2-1 / ITU-R BT
-    // identifiers; `smpte2084` = PQ, `arib-std-b67` = HLG. TS's
-    // lib.dom.d.ts narrows the enum; the runtime value is the
-    // canonical W3C string regardless, so we string-compare via
-    // `as string`.
-    const transfer = frame.colorSpace.transfer as string | null;
-    let mode = 0;
-    if (transfer === "smpte2084") mode = 1;
-    else if (transfer === "arib-std-b67") mode = 2;
-    device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([mode, 0, 0, 0]));
+	const draw = (frame: VideoFrame): void => {
+		if (disposed) {
+			frame.close();
+			return;
+		}
+		if (!intrinsic) {
+			intrinsic = { width: frame.displayWidth, height: frame.displayHeight };
+			canvas.width = intrinsic.width;
+			canvas.height = intrinsic.height;
+		}
+		// Pick a tone-map mode from the frame's color space metadata.
+		// `colorSpace.transfer` follows the IEC 61966-2-1 / ITU-R BT
+		// identifiers; `smpte2084` = PQ, `arib-std-b67` = HLG. TS's
+		// lib.dom.d.ts narrows the enum; the runtime value is the
+		// canonical W3C string regardless, so we string-compare via
+		// `as string`.
+		const transfer = frame.colorSpace.transfer as string | null;
+		let mode = 0;
+		if (transfer === 'smpte2084') mode = 1;
+		else if (transfer === 'arib-std-b67') mode = 2;
+		device.queue.writeBuffer(uniformBuffer, 0, new Uint32Array([mode, 0, 0, 0]));
 
-    let externalTexture: GPUExternalTexture;
-    try {
-      externalTexture = device.importExternalTexture({ source: frame });
-    } catch (e) {
-      frame.close();
-      opts.onError?.(e instanceof Error ? e : new Error(String(e)));
-      return;
-    }
+		let externalTexture: GPUExternalTexture;
+		try {
+			externalTexture = device.importExternalTexture({ source: frame });
+		} catch (e) {
+			frame.close();
+			opts.onError?.(e instanceof Error ? e : new Error(String(e)));
+			return;
+		}
 
-    const bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: sampler },
-        { binding: 1, resource: externalTexture },
-        { binding: 2, resource: { buffer: uniformBuffer } },
-      ],
-    });
+		const bindGroup = device.createBindGroup({
+			layout: pipeline.getBindGroupLayout(0),
+			entries: [
+				{ binding: 0, resource: sampler },
+				{ binding: 1, resource: externalTexture },
+				{ binding: 2, resource: { buffer: uniformBuffer } }
+			]
+		});
 
-    const encoder = device.createCommandEncoder();
-    const pass = encoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: context.getCurrentTexture().createView(),
-          loadOp: "clear",
-          storeOp: "store",
-          clearValue: { r: 0, g: 0, b: 0, a: 1 },
-        },
-      ],
-    });
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.draw(6);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+		const encoder = device.createCommandEncoder();
+		const pass = encoder.beginRenderPass({
+			colorAttachments: [
+				{
+					view: context.getCurrentTexture().createView(),
+					loadOp: 'clear',
+					storeOp: 'store',
+					clearValue: { r: 0, g: 0, b: 0, a: 1 }
+				}
+			]
+		});
+		pass.setPipeline(pipeline);
+		pass.setBindGroup(0, bindGroup);
+		pass.draw(6);
+		pass.end();
+		device.queue.submit([encoder.finish()]);
 
-    frame.close();
-  };
+		frame.close();
+	};
 
-  const enqueue = (frame: VideoFrame): void => {
-    if (disposed) {
-      frame.close();
-      return;
-    }
-    queue.push(frame);
-    while (queue.length > 32) {
-      const dropped = queue.shift();
-      dropped?.close();
-    }
-  };
+	const enqueue = (frame: VideoFrame): void => {
+		if (disposed) {
+			frame.close();
+			return;
+		}
+		queue.push(frame);
+		while (queue.length > 32) {
+			const dropped = queue.shift();
+			dropped?.close();
+		}
+	};
 
-  const tick = (): void => {
-    if (disposed) return;
-    const now = opts.clockSeconds();
-    while (queue.length > 0) {
-      const head = queue[0];
-      if (!head) break;
-      const headTs = head.timestamp / 1_000_000;
-      if (headTs > now + 0.001) break;
-      const lateBy = (now - headTs) * 1000;
-      if (lateBy > 80 && queue.length > 1) {
-        const dropped = queue.shift();
-        dropped?.close();
-        continue;
-      }
-      const drawn = queue.shift();
-      if (drawn) {
-        lastDrawn = drawn.timestamp / 1_000_000;
-        draw(drawn);
-      }
-      break;
-    }
-    if (!disposed) requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
+	const tick = (): void => {
+		if (disposed) return;
+		const now = opts.clockSeconds();
+		while (queue.length > 0) {
+			const head = queue[0];
+			if (!head) break;
+			const headTs = head.timestamp / 1_000_000;
+			if (headTs > now + 0.001) break;
+			const lateBy = (now - headTs) * 1000;
+			if (lateBy > 80 && queue.length > 1) {
+				const dropped = queue.shift();
+				dropped?.close();
+				continue;
+			}
+			const drawn = queue.shift();
+			if (drawn) {
+				lastDrawn = drawn.timestamp / 1_000_000;
+				draw(drawn);
+			}
+			break;
+		}
+		if (!disposed) requestAnimationFrame(tick);
+	};
+	requestAnimationFrame(tick);
 
-  return {
-    enqueue,
-    queueDepth: () => queue.length,
-    lastDrawnTs: () => lastDrawn,
-    intrinsicSize: () => intrinsic,
-    canvas,
-    isHardwareAccelerated: () => true,
-    dispose: () => {
-      if (disposed) return;
-      disposed = true;
-      for (const f of queue) f.close();
-      queue.length = 0;
-      try {
-        device.destroy();
-      } catch {
-        /* idempotent */
-      }
-      if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
-    },
-  };
+	return {
+		enqueue,
+		queueDepth: () => queue.length,
+		lastDrawnTs: () => lastDrawn,
+		intrinsicSize: () => intrinsic,
+		canvas,
+		isHardwareAccelerated: () => true,
+		dispose: () => {
+			if (disposed) return;
+			disposed = true;
+			for (const f of queue) f.close();
+			queue.length = 0;
+			try {
+				device.destroy();
+			} catch {
+				/* idempotent */
+			}
+			if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
+		}
+	};
 }
 
 /**

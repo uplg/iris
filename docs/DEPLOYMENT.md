@@ -248,10 +248,10 @@ make deploy ARGS="--profile cloudflared"   # rebuilds iris:dev, stamps the build
 ```
 
 `make deploy` injects `IRIS_WEB_BUILD_ID=$(git rev-parse --short HEAD)` as a
-Docker build arg. The web build bakes it into the bundle **and** writes it to
-`dist/version.json` (served `no-cache`), so browser tabs already open on the
-old bundle poll it, see the mismatch, and show a non-blocking "new version —
-reload" banner. `.git` is excluded from the Docker build context, so Vite
+Docker build arg. The web build bakes it into SvelteKit's version **and**
+writes it to `_app/version.json` (served `no-cache`), so browser tabs already
+open on the old bundle poll it, see the mismatch, and reload at the next
+navigation or when the tab is seen again (never while typing). `.git` is excluded from the Docker build context, so Vite
 can't read the sha itself — it has to come from the host like this.
 
 No `make`? The raw equivalent is:

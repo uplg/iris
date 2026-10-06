@@ -16,7 +16,7 @@
  * force a different language onto the viewer.
  */
 
-import type { SubtitleTrack } from "../manifest-client";
+import type { SubtitleTrack } from '../manifest-client';
 
 /**
  * ISO 639-2 (bibliographic and terminologic) to 639-1 for the languages
@@ -25,86 +25,83 @@ import type { SubtitleTrack } from "../manifest-client";
  * `fre` / `fra` / `fr` all mean French, across releases of one series.
  */
 const ISO_639_2_TO_1: Record<string, string> = {
-  fre: "fr",
-  fra: "fr",
-  eng: "en",
-  ger: "de",
-  deu: "de",
-  spa: "es",
-  ita: "it",
-  por: "pt",
-  dut: "nl",
-  nld: "nl",
-  jpn: "ja",
-  kor: "ko",
-  chi: "zh",
-  zho: "zh",
-  rus: "ru",
-  ara: "ar",
-  pol: "pl",
-  tur: "tr",
-  swe: "sv",
-  nor: "no",
-  dan: "da",
-  fin: "fi",
-  cze: "cs",
-  ces: "cs",
-  gre: "el",
-  ell: "el",
-  hun: "hu",
-  rum: "ro",
-  ron: "ro",
-  ukr: "uk",
-  heb: "he",
-  hin: "hi",
-  tha: "th",
-  vie: "vi",
-  ind: "id",
-  may: "ms",
-  msa: "ms",
-  per: "fa",
-  fas: "fa",
-  cat: "ca",
-  baq: "eu",
-  eus: "eu",
-  glg: "gl",
-  slo: "sk",
-  slk: "sk",
-  slv: "sl",
-  hrv: "hr",
-  srp: "sr",
-  bul: "bg",
-  lit: "lt",
-  lav: "lv",
-  est: "et",
-  ice: "is",
-  isl: "is",
-  tgl: "tl",
-  fil: "tl",
+	fre: 'fr',
+	fra: 'fr',
+	eng: 'en',
+	ger: 'de',
+	deu: 'de',
+	spa: 'es',
+	ita: 'it',
+	por: 'pt',
+	dut: 'nl',
+	nld: 'nl',
+	jpn: 'ja',
+	kor: 'ko',
+	chi: 'zh',
+	zho: 'zh',
+	rus: 'ru',
+	ara: 'ar',
+	pol: 'pl',
+	tur: 'tr',
+	swe: 'sv',
+	nor: 'no',
+	dan: 'da',
+	fin: 'fi',
+	cze: 'cs',
+	ces: 'cs',
+	gre: 'el',
+	ell: 'el',
+	hun: 'hu',
+	rum: 'ro',
+	ron: 'ro',
+	ukr: 'uk',
+	heb: 'he',
+	hin: 'hi',
+	tha: 'th',
+	vie: 'vi',
+	ind: 'id',
+	may: 'ms',
+	msa: 'ms',
+	per: 'fa',
+	fas: 'fa',
+	cat: 'ca',
+	baq: 'eu',
+	eus: 'eu',
+	glg: 'gl',
+	slo: 'sk',
+	slk: 'sk',
+	slv: 'sl',
+	hrv: 'hr',
+	srp: 'sr',
+	bul: 'bg',
+	lit: 'lt',
+	lav: 'lv',
+	est: 'et',
+	ice: 'is',
+	isl: 'is',
+	tgl: 'tl',
+	fil: 'tl'
 };
 
 /** `null` for absent / unknown (`und`) tags. */
 export function normalizeLang(code: string | null | undefined): string | null {
-  if (!code) return null;
-  const base = code.trim().toLowerCase().split(/[-_]/)[0] ?? "";
-  if (!base || base === "und") return null;
-  return ISO_639_2_TO_1[base] ?? base;
+	if (!code) return null;
+	const base = code.trim().toLowerCase().split(/[-_]/)[0] ?? '';
+	if (!base || base === 'und') return null;
+	return ISO_639_2_TO_1[base] ?? base;
 }
 
 const SDH_TITLE = /\b(sdh|cc|hearing|malentendant|sourds?)\b/i;
 
 function isSdh(track: SubtitleTrack): boolean {
-  return SDH_TITLE.test(track.title ?? "");
+	return SDH_TITLE.test(track.title ?? '');
 }
 
-export function pickPreferredSubtitle(
-  tracks: readonly SubtitleTrack[],
-  preferredLang: string | null | undefined,
-): SubtitleTrack | null {
-  const want = normalizeLang(preferredLang);
-  if (!want) return null;
-  const inLang = tracks.filter((t) => normalizeLang(t.lang) === want);
-  if (inLang.length === 0) return null;
-  const rank = (t: SubtitleTrack) => (t.forced ? 2 : isSdh(t) ? 1 : 0);
-  return inLang.reduce((best, t) => (rank(t) < rank(best) ? t : best));
+export function pickPreferredSubtitle(tracks: readonly SubtitleTrack[], preferredLang: string | null | undefined): SubtitleTrack | null {
+	const want = normalizeLang(preferredLang);
+	if (!want) return null;
+	const inLang = tracks.filter((t) => normalizeLang(t.lang) === want);
+	if (inLang.length === 0) return null;
+	const rank = (t: SubtitleTrack) => (t.forced ? 2 : isSdh(t) ? 1 : 0);
+	return inLang.reduce((best, t) => (rank(t) < rank(best) ? t : best));
 }

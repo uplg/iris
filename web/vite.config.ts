@@ -1,72 +1,82 @@
-import path from "node:path";
-import { readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
-import { defineConfig, type Plugin } from "vite";
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
+import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import adapter from '@sveltejs/adapter-static';
+import { sveltekit } from '@sveltejs/kit/vite';
+import { playwright } from '@vitest/browser-playwright';
+import { defineConfig } from 'vitest/config';
 
-// Bake the package.json `version` field into the bundle so the runtime
-// `X-Iris-Client: web/X.Y.Z` header reflects exactly what shipped. Read
-// at config-load time so the value freezes per build.
-const pkg = JSON.parse(readFileSync(path.resolve(__dirname, "package.json"), "utf-8"));
+// The version the `X-Iris-Client: web/<version>` header carries (@iris/api).
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
-// A build identity that changes on EVERY deploy — not just version bumps,
-// since deploys often ship the same `version`. Resolution order:
-//   1. `IRIS_WEB_BUILD_ID` env (the Docker build passes the git sha here),
-//   2. the local git short hash (dev checkouts),
-//   3. a build timestamp (Docker excludes `.git`, so this is the fallback —
-//      still unique per build, so every deploy is detected).
-// Combined with the version for readability, e.g. `0.4.0+a1b2c3d`.
-function resolveBuildId(version: string): string {
-  const explicit = process.env.IRIS_WEB_BUILD_ID?.trim();
-  if (explicit) return `${version}+${explicit}`;
-  try {
-    const sha = execSync("git rev-parse --short HEAD", {
-      cwd: __dirname,
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim();
-    if (sha) return `${version}+${sha}`;
-  } catch {
-    /* not a git checkout (e.g. the Docker build) — fall through to a timestamp */
-  }
-  return `${version}+${Date.now().toString(36)}`;
-}
-const buildId = resolveBuildId(pkg.version);
-
-// Emit `dist/version.json` carrying the build id. It lives at the dist root
-// (NOT under `/assets/`), so the backend serves it `no-cache, must-revalidate`
-// — the frontend polls it to detect a deploy and offer a reload.
-function emitVersionJson(): Plugin {
-  return {
-    name: "iris-emit-version-json",
-    generateBundle() {
-      this.emitFile({
-        type: "asset",
-        fileName: "version.json",
-        source: `${JSON.stringify({ buildId, version: pkg.version })}\n`,
-      });
-    },
-  };
+// The deploy's identity (`1.5.0+a1b2c3d`), so an open tab notices a redeploy of the same version:
+// the Docker build passes the sha (its context has no .git), a checkout reads it, else the time.
+function buildId(): string {
+	const given = process.env.IRIS_WEB_BUILD_ID?.trim();
+	if (given) return `${pkg.version}+${given}`;
+	try {
+		return `${pkg.version}+${execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+			.toString()
+			.trim()}`;
+	} catch {
+		return `${pkg.version}+${Date.now().toString(36)}`;
+	}
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), emitVersionJson()],
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "src"),
-    },
-  },
-  define: {
-    __IRIS_WEB_VERSION__: JSON.stringify(pkg.version),
-    __IRIS_BUILD_ID__: JSON.stringify(buildId),
-  },
-  server: {
-    proxy: {
-      // IRIS_API_PROXY lets a dev session target a backend on another port
-      // (e.g. when docker already owns 8080).
-      "/api": process.env.IRIS_API_PROXY ?? "http://localhost:8080",
-    },
-  },
+	plugins: [
+		sveltekit({
+			compilerOptions: {
+				// runes everywhere except in libraries
+				runes: ({ filename }) => (filename.split(/[/\\]/).includes('node_modules') ? undefined : true)
+			},
+			// a pure SPA: the Rust backend serves build/ and falls back to index.html
+			adapter: adapter({ fallback: 'index.html' }),
+			// a deploy is noticed within a minute, taken at the next harmless moment
+			// (+layout.svelte: a navigation, or the app seen again)
+			version: { name: buildId(), pollInterval: 60_000 },
+			serviceWorker: { register: false }
+		})
+	],
+	define: {
+		__IRIS_WEB_VERSION__: JSON.stringify(pkg.version)
+	},
+	// pre-bundled up front: a test that imports it first otherwise races Vite's on-the-fly
+	// optimisation and fails once on a cold cache
+	optimizeDeps: { include: ['axe-core'] },
+	// hls.js (~580 kB) is the largest engine chunk, loaded only when Tier F plays
+	build: { chunkSizeWarningLimit: 600 },
+	test: {
+		expect: { requireAssertions: true },
+		restoreMocks: true,
+		unstubGlobals: true,
+		projects: [
+			{
+				// components and rune modules: a real browser, as they run
+				extends: true,
+				test: {
+					name: 'browser',
+					include: ['src/**/*.svelte.test.ts'],
+					setupFiles: ['src/test-setup.ts'],
+					browser: { enabled: true, provider: playwright(), headless: true, instances: [{ browser: 'chromium' }] }
+				}
+			},
+			{
+				// plain modules: Node
+				extends: true,
+				test: {
+					name: 'node',
+					environment: 'node',
+					// the shared packages' plain modules are tested here too
+					include: ['src/**/*.test.ts', '../packages/*/src/**/*.test.ts'],
+					exclude: ['src/**/*.svelte.test.ts']
+				}
+			}
+		]
+	},
+	server: {
+		proxy: {
+			// IRIS_API_PROXY targets a backend on another port (docker owning 8080)
+			'/api': process.env.IRIS_API_PROXY ?? 'http://localhost:8080'
+		}
+	}
 });

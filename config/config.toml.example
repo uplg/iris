@@ -3,7 +3,7 @@ providers_file = "./config/providers.toml"
 [server]
 bind = "0.0.0.0:8080"
 public_url = "http://localhost:8080"
-# web_dist = "/srv/iris/web"  # path to React build output (set in production)
+# web_dist = "/srv/iris/web"  # path to the web build (web/build; set in production)
 
 [storage]
 data_dir = "./data"

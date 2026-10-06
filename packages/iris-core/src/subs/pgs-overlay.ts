@@ -12,70 +12,70 @@
  * the same `PgsRenderer` code path.
  */
 
-const WORKER_URL = "/libpgs/libpgs.worker.js";
+const WORKER_URL = '/libpgs/libpgs.worker.js';
 
 export type PgsOverlayOptions = {
-  host: HTMLElement;
-  subUrl: string;
-  getCurrentTime: () => number;
-  /** Native `<video>` element to bind to. When omitted, we run a rAF
-   *  loop that calls `renderAtTimestamp(getCurrentTime())`. */
-  video?: HTMLVideoElement;
+	host: HTMLElement;
+	subUrl: string;
+	getCurrentTime: () => number;
+	/** Native `<video>` element to bind to. When omitted, we run a rAF
+	 *  loop that calls `renderAtTimestamp(getCurrentTime())`. */
+	video?: HTMLVideoElement;
 };
 
 export type PgsOverlayHandle = {
-  /** Hot-reload from a new URL without remounting the renderer.
-   *  Mirrors the ASS overlay so the parent's torrent-progress
-   *  watcher can swap both kinds uniformly. */
-  setUrl: (url: string) => void;
-  dispose: () => void;
+	/** Hot-reload from a new URL without remounting the renderer.
+	 *  Mirrors the ASS overlay so the parent's torrent-progress
+	 *  watcher can swap both kinds uniformly. */
+	setUrl: (url: string) => void;
+	dispose: () => void;
 };
 
 export async function mountPgsOverlay(opts: PgsOverlayOptions): Promise<PgsOverlayHandle> {
-  // libpgs is ~60 KB gzipped; deferring its load shaves it off the
-  // initial bundle for users who never enable a PGS sub.
-  const { PgsRenderer } = await import("libpgs");
-  const canvas = document.createElement("canvas");
-  canvas.className = "pointer-events-none absolute inset-0 h-full w-full";
-  opts.host.appendChild(canvas);
+	// libpgs is ~60 KB gzipped; deferring its load shaves it off the
+	// initial bundle for users who never enable a PGS sub.
+	const { PgsRenderer } = await import('libpgs');
+	const canvas = document.createElement('canvas');
+	canvas.className = 'pointer-events-none absolute inset-0 h-full w-full';
+	opts.host.appendChild(canvas);
 
-  const renderer = new PgsRenderer({
-    canvas,
-    workerUrl: WORKER_URL,
-    video: opts.video,
-    aspectRatio: "contain",
-  });
-  renderer.loadFromUrl(opts.subUrl);
+	const renderer = new PgsRenderer({
+		canvas,
+		workerUrl: WORKER_URL,
+		video: opts.video,
+		aspectRatio: 'contain'
+	});
+	renderer.loadFromUrl(opts.subUrl);
 
-  let rafId: number | null = null;
-  if (!opts.video) {
-    const tick = () => {
-      try {
-        renderer.renderAtTimestamp(opts.getCurrentTime());
-      } catch {
-        /* ignore */
-      }
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-  }
+	let rafId: number | null = null;
+	if (!opts.video) {
+		const tick = () => {
+			try {
+				renderer.renderAtTimestamp(opts.getCurrentTime());
+			} catch {
+				/* ignore */
+			}
+			rafId = requestAnimationFrame(tick);
+		};
+		rafId = requestAnimationFrame(tick);
+	}
 
-  return {
-    setUrl: (url: string) => {
-      try {
-        renderer.loadFromUrl(url);
-      } catch (e) {
-        console.warn("[iris-core:libpgs] loadFromUrl failed", e);
-      }
-    },
-    dispose: () => {
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      try {
-        renderer.dispose();
-      } catch {
-        /* idempotent */
-      }
-      if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
-    },
-  };
+	return {
+		setUrl: (url: string) => {
+			try {
+				renderer.loadFromUrl(url);
+			} catch (e) {
+				console.warn('[iris-core:libpgs] loadFromUrl failed', e);
+			}
+		},
+		dispose: () => {
+			if (rafId !== null) cancelAnimationFrame(rafId);
+			try {
+				renderer.dispose();
+			} catch {
+				/* idempotent */
+			}
+			if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
+		}
+	};
 }

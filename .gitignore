@@ -2,7 +2,8 @@
 /node_modules
 /packages/*/node_modules
 /web/node_modules
-/web/dist
+/web/build
+/web/.svelte-kit
 /web/.vite
 /web/data/
 /data
