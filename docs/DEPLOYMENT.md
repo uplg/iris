@@ -305,6 +305,42 @@ find /backup -name 'iris-db-*.db' -mtime +14 -delete
 (Use `cron` directly or copy the snippet into a systemd timer — either
 works fine for once-a-day.)
 
+### TMDB trust re-evaluation (`tmdb-trust`)
+
+Since migration 0044, a collection's TMDB id (poster, synopsis, titles) is
+written only when a trusted signal backs it: the tracker's own id agreeing
+with a strict SCENE match, a strict SCENE match alone (exact normalised
+title or original title, same kind, same year — ±1 for movies), or a
+tracker id alone whose kind and year check out. Collections that existed
+before keep their old id and behaviour (`tmdb_trust` NULL) until this
+one-off tool re-evaluates them. It never runs on its own.
+
+Run it on a **local copy** of the prod DB first; the dry run (default)
+writes nothing except the strict-resolution cache and the migration:
+
+```bash
+docker exec iris-iris-1 sqlite3 /data/iris.db ".backup '/data/iris.db.copy'"
+docker cp iris-iris-1:/data/iris.db.copy ./iris-copy.db
+IRIS_TMDB__API_KEY=… cargo run -p iris-api --bin tmdb-trust -- --db ./iris-copy.db
+```
+
+The report lists every collection under `KEEP` (trusted, same id),
+`CHANGE` (trusted, other id: old → new with titles), `LOSE` (no trusted
+signal: the cover goes), `NONE` (no cover before or after) and `SKIPPED`
+(admin-set, or TMDB unreachable — re-run), with the reason per row.
+
+Once the report looks right, stop the server (`docker compose stop iris`)
+and apply it to the prod DB file:
+
+```bash
+cargo run -p iris-api --bin tmdb-trust -- --db /path/to/iris.db --apply
+```
+
+`--apply` stores the trusted ids with their `tmdb_trust`, clears the
+untrusted ones and flushes the negative and fuzzy entries of
+`tmdb_resolve_cache`. Re-running it is safe; rows TMDB couldn't be asked
+about stay untouched.
+
 ---
 
 ## 9. Troubleshooting
