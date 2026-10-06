@@ -81,9 +81,9 @@ pub async fn revoke_for_user(
     Ok(res.rows_affected() == 1)
 }
 
-/// Device label / kind / `expires_at` attached to an active refresh token,
-/// or `None` if the jti is unknown / revoked / expired. Used by `/auth/refresh`
-/// to carry the device tagging forward when rotating the token — without
+/// Device label / kind / `expires_at` of the refresh token [`mark_rotated`]
+/// just retired. Used by `/auth/refresh` to carry the device tagging forward
+/// when rotating the token — without
 /// this, paired-device rows lose their `device_kind` after the first
 /// rotation and the account-page listing (which filters on
 /// `device_kind IS NOT NULL`) shows "no paired devices yet".
@@ -92,27 +92,6 @@ pub struct ActiveDeviceInfo {
     pub device_label: Option<String>,
     pub device_kind: Option<String>,
     pub expires_at: DateTime<Utc>,
-}
-
-pub async fn get_active_device_info(
-    pool: &SqlitePool,
-    jti: Uuid,
-) -> Result<Option<ActiveDeviceInfo>, sqlx::Error> {
-    let row: Option<(Option<String>, Option<String>, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT device_label, device_kind, expires_at FROM refresh_tokens \
-         WHERE jti = ?1 AND revoked_at IS NULL AND expires_at > ?2",
-    )
-    .bind(jti)
-    .bind(Utc::now())
-    .fetch_optional(pool)
-    .await?;
-    Ok(
-        row.map(|(device_label, device_kind, expires_at)| ActiveDeviceInfo {
-            device_label,
-            device_kind,
-            expires_at,
-        }),
-    )
 }
 
 pub async fn is_active(pool: &SqlitePool, jti: Uuid) -> Result<bool, sqlx::Error> {
@@ -300,12 +279,6 @@ mod tests {
         mark_rotated(&pool, rotated).await.unwrap();
 
         // No longer active for the normal refresh lookup …
-        assert!(
-            get_active_device_info(&pool, rotated)
-                .await
-                .unwrap()
-                .is_none()
-        );
         assert!(!is_active(&pool, rotated).await.unwrap());
 
         // … but a straggler within the grace window recovers it, carrying the
@@ -345,12 +318,7 @@ mod tests {
         .await
         .unwrap();
         revoke(&pool, revoked).await.unwrap();
-        assert!(
-            get_active_device_info(&pool, revoked)
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(!is_active(&pool, revoked).await.unwrap());
         assert!(
             recently_rotated(&pool, revoked, 60)
                 .await

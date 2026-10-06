@@ -162,7 +162,7 @@
             }
           },
           "400": {
-            "description": "TTL too short (min 60s)"
+            "description": "TTL too short (min 60 s) or too long (max 1 year)"
           },
           "403": {
             "description": "Caller is not an admin"

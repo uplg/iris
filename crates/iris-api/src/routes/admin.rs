@@ -632,6 +632,10 @@ pub(crate) struct CreateInvitationRequest {
     ttl_secs: Option<i64>,
 }
 
+/// Past this, `Duration::seconds` and the expiry addition would overflow
+/// (and panic) long before any useful horizon.
+const MAX_INVITATION_TTL_SECS: i64 = 366 * 24 * 3600;
+
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct CreatedInvitation {
     id: Uuid,
@@ -646,7 +650,7 @@ pub(crate) struct CreatedInvitation {
     request_body = CreateInvitationRequest,
     responses(
         (status = 200, description = "Created invitation with its one-time plaintext token", body = CreatedInvitation),
-        (status = 400, description = "TTL too short (min 60s)"),
+        (status = 400, description = "TTL too short (min 60 s) or too long (max 1 year)"),
         (status = 403, description = "Caller is not an admin"),
     ),
     tag = "admin",
@@ -659,6 +663,9 @@ pub(crate) async fn create_invitation(
     let ttl = req.ttl_secs.unwrap_or(state.cfg().auth.invitation_ttl_secs);
     if ttl < 60 {
         return Err(ApiError::BadRequest("ttl too short".into()));
+    }
+    if ttl > MAX_INVITATION_TTL_SECS {
+        return Err(ApiError::BadRequest("ttl too long (max 1 year)".into()));
     }
     let expires_at = Utc::now() + Duration::seconds(ttl);
     let token = new_invitation_token();

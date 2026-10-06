@@ -35,8 +35,10 @@ use crate::error::{ApiError, ApiResult};
 pub const CEREMONY_TTL: Duration = Duration::from_mins(5);
 /// Ceremonies in flight at most; the oldest goes first.
 const CEREMONY_CAP: usize = 1_000;
-/// Ceremonies in flight per address at most; its oldest goes first.
-const CEREMONIES_PER_ADDRESS: usize = 20;
+/// Ceremonies in flight per address at most; its oldest goes first. A
+/// household shares one address behind Cloudflare and every open login page
+/// keeps a conditional (autofill) ceremony pending.
+const CEREMONIES_PER_ADDRESS: usize = 100;
 
 /// Values kept server-side for a short while, each taken at most once.
 struct Ceremonies<T> {
