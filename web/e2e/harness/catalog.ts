@@ -12,6 +12,8 @@ export const CATALOG = {
 	noAudio: { file: 'Bench.Foxtrot.2006.360p.WEB.H264.NoAudio-IRIS.mp4', duration: 40 },
 	ass: { file: 'Bench.Golf.2007.360p.WEB.H264.AAC.ASS-IRIS.mkv', duration: 60 },
 	pgs: { file: 'Bench.Hotel.2008.360p.WEB.H264.AAC.PGS-IRIS.mkv', duration: 60 },
+	srtMkv: { file: 'Bench.November.2014.360p.WEB.H264.AAC.SRT-IRIS.mkv', duration: 60 },
+	srtMp4: { file: 'Bench.Oscar.2015.360p.WEB.H264.AAC.SRT-IRIS.mp4', duration: 60 },
 	h264Eac3: { file: 'Bench.India.2009.360p.WEB.H264.EAC3-IRIS.mkv', duration: 60 },
 	heavy: { file: 'Bench.Juliet.2010.720p.WEB.H264.AAC-IRIS.mp4', duration: 120 },
 	sync: { file: 'Bench.Lima.2012.360p.WEB.H264.AAC.Sync-IRIS.mp4', duration: 60 },
