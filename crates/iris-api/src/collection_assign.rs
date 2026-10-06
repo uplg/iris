@@ -557,9 +557,20 @@ fn consensus_identity<'a, I>(names: I) -> Option<filename::Parsed>
 where
     I: Iterator<Item = &'a str>,
 {
+    consensus_identity_by(names, filename::parse)
+}
+
+/// [`consensus_identity`] under a given parser (the parse dry run compares two).
+pub(crate) fn consensus_identity_by<'a, I>(
+    names: I,
+    parse: fn(&str) -> Option<filename::Parsed>,
+) -> Option<filename::Parsed>
+where
+    I: Iterator<Item = &'a str>,
+{
     let mut best: Option<(String, filename::Parsed)> = None;
     for name in names {
-        let Some(p) = filename::parse(name) else {
+        let Some(p) = parse(name) else {
             continue;
         };
         if !is_structural(&p) {

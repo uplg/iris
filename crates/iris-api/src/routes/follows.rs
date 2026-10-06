@@ -67,7 +67,7 @@ pub(crate) fn follow_identity(name: &str) -> (String, String) {
     let release_like = |p: &iris_media::filename::Parsed| {
         p.season.is_some() || p.episode.is_some() || !name.contains(char::is_whitespace)
     };
-    let title = iris_media::filename::parse(&format!("{name}.mkv"))
+    let title = iris_media::filename::parse_stem(name)
         .filter(release_like)
         .map(|p| p.title)
         .filter(|t| !series_key(t).is_empty())

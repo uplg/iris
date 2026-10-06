@@ -11,6 +11,7 @@ pub mod maintenance;
 pub mod middleware;
 pub mod observability;
 pub mod openapi;
+pub mod parse_audit;
 pub mod passkeys;
 pub mod passwords;
 pub mod presence;
