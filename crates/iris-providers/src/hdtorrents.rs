@@ -52,7 +52,7 @@ use crate::SearchProvider;
 use crate::cache::{DetailsCache, FifoCache};
 use crate::nfo;
 use crate::util::{
-    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, KindCategories, extract_year, field_or_env, field_str,
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, KindCategories, base_url, extract_year, field_or_env,
     parse_size, scene_query,
 };
 
@@ -126,9 +126,7 @@ pub struct HdTorrents {
 
 impl HdTorrents {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let mut base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("hdtorrents base_url invalid: {e}")))?;
+        let mut base_url = base_url(entry, "hdtorrents")?;
         // Relative joins below assume a trailing slash ("login.php" vs
         // replacing the last path segment).
         if !base_url.path().ends_with('/') {

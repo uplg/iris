@@ -46,7 +46,7 @@ use crate::SearchProvider;
 use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::torznab::TorznabProvider;
-use crate::util::{DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, join_category};
+use crate::util::{DEFAULT_USER_AGENT, base_url, extract_year, field_or_env, join_category};
 
 /// Featured shelves are editorial — refreshes are slow. 30 min keeps
 /// the home page cheap without going stale on c411's daily cadence.
@@ -70,9 +70,7 @@ struct CachedFeatured {
 
 impl C411 {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("c411 base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "c411")?;
         // Same key c411 uses for the Torznab endpoint also authenticates
         // the JSON `/api/*` routes when sent as a Bearer token — that's
         // how the SPA wires through to authenticated users without

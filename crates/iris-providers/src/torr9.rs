@@ -28,7 +28,7 @@ use iris_core::search::{
 use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::util::{
-    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, join_category,
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, base_url, extract_year, field_or_env, join_category,
     parse_rfc2822, scene_query,
 };
 use quick_xml::Reader;
@@ -80,9 +80,7 @@ struct CachedFeatured {
 
 impl Torr9 {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("torr9 base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "torr9")?;
         let username = field_or_env(entry, "username")?;
         let password = field_or_env(entry, "password")?;
         // Optional: only the RSS rolling-window feeds need it. Any failure

@@ -47,7 +47,7 @@ use crate::SearchProvider;
 use crate::cache::FifoCache;
 use crate::nfo;
 use crate::util::{
-    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, scene_query,
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, base_url, extract_year, field_or_env, scene_query,
 };
 
 const DEFAULT_API_PATH: &str = "/api";
@@ -73,9 +73,7 @@ pub struct Unit3dProvider {
 
 impl Unit3dProvider {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("unit3d base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "unit3d")?;
         // UNIT3D names the auth parameter `api_token` in their JSON
         // API; we keep the config field name `api_key` for symmetry
         // with the Torznab / c411 providers — the value is the same

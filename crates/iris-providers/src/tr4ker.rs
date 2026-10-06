@@ -43,7 +43,7 @@ use crate::SearchProvider;
 use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::torznab::TorznabProvider;
-use crate::util::{DEFAULT_USER_AGENT, field_or_env, field_str, join_category};
+use crate::util::{DEFAULT_USER_AGENT, base_url, field_or_env, join_category};
 
 pub struct Tr4ker {
     id: String,
@@ -56,9 +56,7 @@ pub struct Tr4ker {
 
 impl Tr4ker {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("tr4ker base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "tr4ker")?;
         let api_key = field_or_env(entry, "api_key")?;
         // The REST detail route only authenticates via header (the
         // `apikey=` query param is a Torznab-endpoint-only affordance).

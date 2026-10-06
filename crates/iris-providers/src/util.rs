@@ -48,6 +48,12 @@ pub(crate) fn optional_field_or_env(
     }
 }
 
+/// The entry's required `base_url`, parsed; `provider` names it in errors.
+pub(crate) fn base_url(entry: &ProviderEntry, provider: &str) -> Result<url::Url, Error> {
+    url::Url::parse(field_str(entry, "base_url")?)
+        .map_err(|e| Error::Provider(format!("{provider} base_url invalid: {e}")))
+}
+
 pub(crate) fn field_str<'a>(entry: &'a ProviderEntry, key: &str) -> Result<&'a str, Error> {
     entry
         .fields

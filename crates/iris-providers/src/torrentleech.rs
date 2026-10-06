@@ -68,7 +68,7 @@ use crate::SearchProvider;
 use crate::cache::{DetailsCache, FifoCache};
 use crate::nfo;
 use crate::util::{
-    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, KindCategories, extract_year, field_or_env, field_str,
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, KindCategories, base_url, extract_year, field_or_env,
     optional_field_or_env, parse_size, scene_query,
 };
 
@@ -141,9 +141,7 @@ pub struct TorrentLeech {
 
 impl TorrentLeech {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("torrentleech base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "torrentleech")?;
         let username = field_or_env(entry, "username")?;
         let password = field_or_env(entry, "password")?;
         let rss_key = field_or_env(entry, "rss_key")?;

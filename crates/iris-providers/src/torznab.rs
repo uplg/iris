@@ -63,7 +63,7 @@ use url::Url;
 use crate::SearchProvider;
 use crate::cache::FifoCache;
 use crate::util::{
-    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, parse_rfc2822,
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, base_url, extract_year, field_or_env, parse_rfc2822,
 };
 
 const DEFAULT_API_PATH: &str = "/api";
@@ -180,9 +180,7 @@ fn plan_search(
 
 impl TorznabProvider {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url_str = field_str(entry, "base_url")?;
-        let base_url = Url::parse(base_url_str)
-            .map_err(|e| Error::Provider(format!("torznab base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "torznab")?;
         let api_key = field_or_env(entry, "api_key")?;
         let api_path = entry
             .fields

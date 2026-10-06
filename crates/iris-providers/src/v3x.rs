@@ -50,7 +50,7 @@ use crate::SearchProvider;
 use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::torznab::TorznabProvider;
-use crate::util::{field_or_env, field_str, optional_field_or_env};
+use crate::util::{base_url, field_or_env, optional_field_or_env};
 
 const SITE: &str = "https://v3x.club";
 
@@ -77,8 +77,7 @@ struct Session {
 
 impl V3x {
     pub fn from_config(entry: &ProviderEntry) -> Result<Arc<Self>> {
-        let base_url = Url::parse(field_str(entry, "base_url")?)
-            .map_err(|e| Error::Provider(format!("v3x base_url invalid: {e}")))?;
+        let base_url = base_url(entry, "v3x")?;
         let download_endpoint = base_url
             .join("/torznab/download")
             .map_err(|e| Error::Provider(format!("v3x download endpoint: {e}")))?;
