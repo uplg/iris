@@ -3910,6 +3910,13 @@
               "last_seen_at"
             ],
             "properties": {
+              "browser": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A web client's browser and system (« Firefox · macOS »). Additive."
+              },
               "client": {
                 "type": [
                   "string",
@@ -3980,7 +3987,7 @@
               },
               "state": {
                 "type": "string",
-                "description": "`\"playing\"` / `\"paused\"`."
+                "description": "`\"playing\"` / `\"paused\"` / `\"buffering\"` (additive: older readers\ntreat an unknown word as playing)."
               },
               "tmdb_id": {
                 "type": [
@@ -7352,6 +7359,13 @@
               "null"
             ],
             "format": "int64"
+          },
+          "buffering": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The player is waiting for data (buffering, seeking) while meant to\nplay. Additive: clients that never say so read as playing/paused."
           },
           "completed": {
             "type": "boolean"

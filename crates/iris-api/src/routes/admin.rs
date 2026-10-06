@@ -68,12 +68,16 @@ pub(crate) struct ActiveSessionView {
     kind: Option<MediaKind>,
     position_seconds: f64,
     duration_seconds: Option<f64>,
-    /// `"playing"` / `"paused"`.
+    /// `"playing"` / `"paused"` / `"buffering"` (additive: older readers
+    /// treat an unknown word as playing).
     state: &'static str,
     /// `"web"` / `"tv"` when the client identified itself, else null.
     client: Option<&'static str>,
     /// Semver of that client (the `version` half of `X-Iris-Client`).
     client_version: Option<String>,
+    /// A web client's browser and system (« Firefox · macOS »). Additive.
+    #[serde(default)]
+    browser: Option<String>,
     started_at: chrono::DateTime<Utc>,
     last_seen_at: chrono::DateTime<Utc>,
     /// TMDB poster path once `tmdb_verified`. Additive.
@@ -218,6 +222,7 @@ pub(crate) async fn active_sessions(
             state: s.state.as_str(),
             client: s.client.map(crate::client_version::ClientKind::as_str),
             client_version: s.client_version,
+            browser: s.browser,
             started_at: s.started_at,
             last_seen_at: s.last_seen_at,
             poster_path,
@@ -1398,6 +1403,7 @@ mod tests {
                 state: crate::presence::PlaybackState::Playing,
                 client: None,
                 client_version: None,
+                browser: None,
             })
             .await;
         let (status, now) = get(&app, "/api/admin/active-sessions", &admin).await;

@@ -28,6 +28,8 @@ pub const SESSION_TTL: Duration = Duration::from_secs(45);
 pub enum PlaybackState {
     Playing,
     Paused,
+    /// Meant to play, waiting for data (buffering, seeking).
+    Buffering,
 }
 
 impl PlaybackState {
@@ -35,6 +37,7 @@ impl PlaybackState {
         match self {
             Self::Playing => "playing",
             Self::Paused => "paused",
+            Self::Buffering => "buffering",
         }
     }
 }
@@ -54,6 +57,9 @@ pub struct LiveSession {
     /// half of `X-Iris-Client: kind/version`). `None` for legacy clients
     /// that don't stamp the header.
     pub client_version: Option<String>,
+    /// The browser and system of a web client (« Firefox · macOS »), read
+    /// from its User-Agent; `None` for the TV app or an unknown agent.
+    pub browser: Option<String>,
     /// When this user started the *current* `(infohash, file_idx)`. Reset
     /// when they switch titles, preserved across heartbeats of the same one.
     pub started_at: DateTime<Utc>,
@@ -73,6 +79,42 @@ pub struct Heartbeat {
     pub state: PlaybackState,
     pub client: Option<ClientKind>,
     pub client_version: Option<String>,
+    pub browser: Option<String>,
+}
+
+/// A browser and its system as people name them, from a User-Agent:
+/// « Firefox · macOS », « Safari · iPadOS ». `None` when neither is known.
+pub fn browser_of(agent: &str) -> Option<String> {
+    // the order matters: Edge and Opera say Chrome too, Chrome says Safari
+    let browser = [
+        ("Edg/", "Edge"),
+        ("OPR/", "Opera"),
+        ("Firefox/", "Firefox"),
+        ("FxiOS/", "Firefox"),
+        ("CriOS/", "Chrome"),
+        ("Chrome/", "Chrome"),
+        ("Safari/", "Safari"),
+    ]
+    .into_iter()
+    .find(|(token, _)| agent.contains(token))
+    .map(|(_, name)| name);
+    let system = [
+        ("iPad", "iPadOS"),
+        ("iPhone", "iOS"),
+        ("Android", "Android"),
+        ("Windows", "Windows"),
+        ("Mac OS X", "macOS"),
+        ("CrOS", "ChromeOS"),
+        ("Linux", "Linux"),
+    ]
+    .into_iter()
+    .find(|(token, _)| agent.contains(token))
+    .map(|(_, name)| name);
+    match (browser, system) {
+        (Some(b), Some(s)) => Some(format!("{b} · {s}")),
+        (Some(one), None) | (None, Some(one)) => Some(one.to_owned()),
+        (None, None) => None,
+    }
 }
 
 #[derive(Clone)]
@@ -112,6 +154,9 @@ impl Presence {
                 if hb.client_version.is_some() {
                     s.client_version = hb.client_version;
                 }
+                if hb.browser.is_some() {
+                    s.browser = hb.browser;
+                }
                 s.last_seen_at = now_utc;
                 s.last_seen = now;
             }
@@ -127,6 +172,7 @@ impl Presence {
                         state: hb.state,
                         client: hb.client,
                         client_version: hb.client_version,
+                        browser: hb.browser,
                         started_at: now_utc,
                         last_seen_at: now_utc,
                         last_seen: now,
@@ -174,6 +220,7 @@ mod tests {
             state: PlaybackState::Playing,
             client: Some(ClientKind::Web),
             client_version: Some("0.3.0".to_owned()),
+            browser: None,
         }
     }
 
@@ -228,5 +275,39 @@ mod tests {
         let stale = now.checked_sub(Duration::from_mins(1)).unwrap();
         assert!(is_live(fresh, now, SESSION_TTL));
         assert!(!is_live(stale, now, SESSION_TTL));
+    }
+
+    #[test]
+    fn a_browser_and_its_system_in_words() {
+        let firefox =
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 15.6; rv:154.0) Gecko/20100101 Firefox/154.0";
+        assert_eq!(browser_of(firefox).as_deref(), Some("Firefox · macOS"));
+        let edge = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36 Edg/140.0";
+        assert_eq!(browser_of(edge).as_deref(), Some("Edge · Windows"));
+        let ipad = "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+        assert_eq!(browser_of(ipad).as_deref(), Some("Safari · iPadOS"));
+        let chrome = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
+        assert_eq!(browser_of(chrome).as_deref(), Some("Chrome · Linux"));
+        assert_eq!(browser_of("curl/8.0"), None);
+    }
+
+    #[tokio::test]
+    async fn a_buffering_heartbeat_says_so() {
+        let p = Presence::new();
+        let u = Uuid::new_v4();
+        p.touch(Heartbeat {
+            state: PlaybackState::Buffering,
+            browser: Some("Firefox · macOS".to_owned()),
+            ..hb(u, "ab", 0, 10.0)
+        })
+        .await;
+        let now = p.snapshot().await;
+        assert_eq!(now[0].state.as_str(), "buffering");
+        assert_eq!(now[0].browser.as_deref(), Some("Firefox · macOS"));
+        // a later heartbeat that does not say its browser keeps the one known
+        p.touch(hb(u, "ab", 0, 12.0)).await;
+        let later = p.snapshot().await;
+        assert_eq!(later[0].state.as_str(), "playing");
+        assert_eq!(later[0].browser.as_deref(), Some("Firefox · macOS"));
     }
 }
