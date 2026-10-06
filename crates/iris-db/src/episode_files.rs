@@ -211,8 +211,8 @@ pub async fn count_owned_in_season(
     season: i64,
 ) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM episode_files \
-         WHERE collection_id = ?1 AND season = ?2 \
+        "SELECT COUNT(DISTINCT episode) FROM episode_files \
+         WHERE collection_id = ?1 AND season = ?2 AND episode > 0 \
            AND EXISTS (SELECT 1 FROM torrents t \
                        WHERE t.infohash = episode_files.infohash AND t.deleted_at IS NULL)",
     )

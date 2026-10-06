@@ -8,6 +8,7 @@ import {
 	mergeEpisodesAbsolute,
 	nameLanguage,
 	qualityWords,
+	seasonHolds,
 	seasonsOf
 } from './merge.ts';
 
@@ -77,6 +78,16 @@ describe('seasons', () => {
 		expect(seasons.map((s) => s.season)).toEqual([0, 1, 2]);
 		expect(seasons[2].items).toEqual([]);
 		expect(firstSeason(seasons)).toBe(1);
+	});
+
+	it('never says « 0 episodes » for a season of packs alone', () => {
+		const onDisk = [disk(1, 1, 'english'), disk(4, 0, 'english')];
+		const seasons = seasonsOf(
+			mergeEpisodes(onDisk),
+			[{ season: 3, found_at: '', indexer_provider: 'c411', indexer_torrent_id: 'p' }],
+			onDisk
+		);
+		expect(seasons.map((s) => `${s.season}: ${seasonHolds(s)}`)).toEqual(['1: 1 episode', '3: season pack', '4: season pack on disk']);
 	});
 });
 

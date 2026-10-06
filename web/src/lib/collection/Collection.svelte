@@ -112,6 +112,8 @@
 			<div class="below">
 				{#if hasEpisodes}
 					<Episodes collection={c} {rows} {torrents} />
+					<!-- a pack the parser never split (episode 0) plays from its files -->
+					{#if c.episodes.some((e) => e.episode === 0)}<RawFiles collection={c} />{/if}
 				{:else if !(c.kind === 'movie' && c.torrents.length > 1)}
 					<RawFiles collection={c} />
 				{/if}

@@ -112,7 +112,7 @@ export function matchTarget(m: LibraryMatch): { href: string; action: string; fa
 	const facts =
 		typeof m.season_episode_count === 'number' && typeof m.episode_season === 'number'
 			? `Season ${m.episode_season}: ${plural(m.season_episode_count, 'episode')} on disk`
-			: m.kind === 'tv'
+			: m.kind === 'tv' && m.episode_count > 0
 				? `${plural(m.episode_count, 'episode')} on disk`
 				: m.torrent_count > 1
 					? `${plural(m.torrent_count, 'release')} on disk`

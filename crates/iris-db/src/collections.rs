@@ -469,6 +469,29 @@ pub async fn create_standalone(
     get(pool, id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
+/// A collection's episodes on disk: distinct (season, episode) of its live
+/// releases. Not every `episode_files` row: two releases of one episode are one
+/// episode, a reclaimed release keeps its rows (the ghost list), and episode 0
+/// is the season-pack sentinel, no episode. A macro so it stays a literal
+/// inside `concat!` (sqlx 0.9 only takes `&'static str`).
+macro_rules! episode_count_column {
+    () => {
+        "(SELECT COUNT(DISTINCT ef.season || ':' || ef.episode) FROM episode_files ef \
+          WHERE ef.collection_id = c.id AND ef.episode > 0 \
+            AND EXISTS (SELECT 1 FROM torrents te \
+                        WHERE te.infohash = ef.infohash AND te.deleted_at IS NULL)) AS episode_count"
+    };
+}
+
+/// [`episode_count_column`] for a reclaimed collection: its releases are all
+/// gone, so their episodes count (what it held before the GC).
+macro_rules! ghost_episode_count_column {
+    () => {
+        "(SELECT COUNT(DISTINCT ef.season || ':' || ef.episode) FROM episode_files ef \
+          WHERE ef.collection_id = c.id AND ef.episode > 0) AS episode_count"
+    };
+}
+
 /// Aggregate row for the library list — collection metadata + summary
 /// stats joined from `torrents` and `episode_files`. Used by
 /// `GET /api/library?view=collections`.
@@ -591,13 +614,13 @@ pub async fn search_summaries(
         .replace('%', "\\%")
         .replace('_', "\\_");
     sqlx::query_as::<_, CollectionSummary>(
-        "SELECT \
+        concat!("SELECT \
             c.id, \
             c.tmdb_id AS tmdb_id, \
             c.display_title, c.kind, c.is_anime, c.created_at, \
             COUNT(DISTINCT t.id) AS torrent_count, \
             COALESCE(SUM(t.total_size_bytes), 0) AS total_size_bytes, \
-            (SELECT COUNT(*) FROM episode_files ef WHERE ef.collection_id = c.id) AS episode_count, \
+            ", episode_count_column!(), ", \
             (SELECT t2.infohash FROM torrents t2 \
              WHERE t2.collection_id = c.id AND t2.deleted_at IS NULL \
              ORDER BY COALESCE(t2.last_played_at, t2.added_at) DESC LIMIT 1) AS representative_infohash \
@@ -608,7 +631,7 @@ pub async fn search_summaries(
          HAVING torrent_count > 0 \
          ORDER BY (c.parsed_title_normalized = ?2) DESC, \
                   MAX(t.last_played_at) DESC NULLS LAST, c.created_at DESC \
-         LIMIT ?3",
+         LIMIT ?3"),
     )
     .bind(&escaped)
     .bind(needle)
@@ -624,13 +647,13 @@ pub async fn list_summaries(pool: &SqlitePool) -> Result<Vec<CollectionSummary>,
     // shows no poster until its id is stamped (prewarm / verify / backfill), which
     // is the correct trade vs. rendering a wrong poster from a stray torrent id.
     sqlx::query_as::<_, CollectionSummary>(
-        "SELECT \
+        concat!("SELECT \
             c.id, \
             c.tmdb_id AS tmdb_id, \
             c.display_title, c.kind, c.is_anime, c.created_at, \
             COUNT(DISTINCT t.id) AS torrent_count, \
             COALESCE(SUM(t.total_size_bytes), 0) AS total_size_bytes, \
-            (SELECT COUNT(*) FROM episode_files ef WHERE ef.collection_id = c.id) AS episode_count, \
+            ", episode_count_column!(), ", \
             (SELECT t2.infohash FROM torrents t2 \
              WHERE t2.collection_id = c.id AND t2.deleted_at IS NULL \
              ORDER BY COALESCE(t2.last_played_at, t2.added_at) DESC LIMIT 1) AS representative_infohash \
@@ -638,7 +661,7 @@ pub async fn list_summaries(pool: &SqlitePool) -> Result<Vec<CollectionSummary>,
          LEFT JOIN torrents t ON t.collection_id = c.id AND t.deleted_at IS NULL \
          GROUP BY c.id \
          HAVING torrent_count > 0 \
-         ORDER BY MAX(t.last_played_at) DESC NULLS LAST, c.created_at DESC",
+         ORDER BY MAX(t.last_played_at) DESC NULLS LAST, c.created_at DESC"),
     )
     .fetch_all(pool)
     .await
@@ -657,14 +680,16 @@ pub async fn list_ghost_summaries_for_user(
     user_id: iris_core::ids::UserId,
 ) -> Result<Vec<CollectionSummary>, sqlx::Error> {
     let user: Uuid = user_id.into();
-    sqlx::query_as::<_, CollectionSummary>(
+    sqlx::query_as::<_, CollectionSummary>(concat!(
         "SELECT \
             c.id, \
             c.tmdb_id AS tmdb_id, \
             c.display_title, c.kind, c.is_anime, c.created_at, \
             0 AS torrent_count, \
             0 AS total_size_bytes, \
-            (SELECT COUNT(*) FROM episode_files ef WHERE ef.collection_id = c.id) AS episode_count, \
+            ",
+        ghost_episode_count_column!(),
+        ", \
             NULL AS representative_infohash \
          FROM collections c \
          WHERE NOT EXISTS ( \
@@ -683,8 +708,8 @@ pub async fn list_ghost_summaries_for_user(
                                        WHERE p3.user_id = ?1 AND pt3.collection_id = c.id)) \
          ORDER BY (SELECT MAX(p2.last_watched_at) FROM playback_progress p2 \
                    JOIN torrents pt2 ON pt2.infohash = p2.infohash \
-                   WHERE p2.user_id = ?1 AND pt2.collection_id = c.id) DESC",
-    )
+                   WHERE p2.user_id = ?1 AND pt2.collection_id = c.id) DESC"
+    ))
     .bind(user)
     .fetch_all(pool)
     .await
@@ -723,6 +748,91 @@ mod tests {
             .fetch_one(pool)
             .await
             .expect("count episode_files")
+    }
+
+    /// The library's "N episodes" counts episodes, not rows: one per (season,
+    /// episode) of the live releases, never the season-pack sentinel.
+    #[tokio::test]
+    async fn summary_counts_distinct_episodes_on_disk() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let col = find_or_create(&pool, "severance", "Severance", Kind::Tv, false)
+            .await
+            .unwrap();
+        let mut hashes = Vec::new();
+        for name in [
+            "Severance.S01.FRENCH",
+            "Severance.S01.MULTi",
+            "Severance.S02E01",
+        ] {
+            let t = crate::torrents::upsert(
+                &pool,
+                crate::torrents::NewTorrent {
+                    infohash: Uuid::new_v4().to_string(),
+                    name: name.into(),
+                    total_size_bytes: 1_000,
+                    source_provider: None,
+                    source_external_id: None,
+                    tracker_tmdb_id: None,
+                    added_by: user,
+                },
+            )
+            .await
+            .unwrap();
+            crate::torrents::set_collection(&pool, &t.infohash, Some(col.id))
+                .await
+                .unwrap();
+            hashes.push(t.infohash);
+        }
+        let file = |infohash: &str, season: i64, episode: i64, file_idx: i64| {
+            crate::episode_files::UpsertEpisodeFile {
+                collection_id: col.id,
+                season,
+                episode,
+                infohash: infohash.into(),
+                file_idx,
+                derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                absolute_episode: None,
+            }
+        };
+        for e in [1, 2] {
+            crate::episode_files::upsert(&pool, file(&hashes[0], 1, e, e - 1))
+                .await
+                .unwrap();
+            crate::episode_files::upsert(&pool, file(&hashes[1], 1, e, e - 1))
+                .await
+                .unwrap();
+        }
+        crate::episode_files::upsert(&pool, file(&hashes[1], 1, 0, 9))
+            .await
+            .unwrap();
+        crate::episode_files::upsert(&pool, file(&hashes[2], 2, 1, 0))
+            .await
+            .unwrap();
+        let count = |pool: SqlitePool| async move {
+            list_summaries(&pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|s| s.id == col.id)
+                .unwrap()
+                .episode_count
+        };
+        assert_eq!(count(pool.clone()).await, 3);
+        assert_eq!(
+            crate::episode_files::count_owned_in_season(&pool, col.id, 1)
+                .await
+                .unwrap(),
+            2
+        );
+        // A reclaimed release's episode is no longer on disk.
+        sqlx::query("UPDATE torrents SET deleted_at = ?1 WHERE infohash = ?2")
+            .bind(Utc::now())
+            .bind(&hashes[2])
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count(pool.clone()).await, 2);
     }
 
     #[tokio::test]

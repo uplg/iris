@@ -149,7 +149,7 @@ fun watchlistCard(item: WatchlistItem, downloading: Double?): CardModel {
 
 fun libraryCard(item: CollectionListItem, downloading: Double?): CardModel {
     val kind = kindLabel(item.kind, item.isAnime == true)
-    val size = if (item.kind == MediaKind.tv) plural(item.episodeCount, "episode") else formatSize(item.totalSizeBytes)
+    val size = if (item.kind == MediaKind.tv && item.episodeCount > 0) plural(item.episodeCount, "episode") else formatSize(item.totalSizeBytes)
     val (status, tone) = when {
         item.ghost == true -> "No longer on disk" to StatusTone.Warn
         downloading != null -> "Downloading · ${percent(downloading)}" to StatusTone.Muted

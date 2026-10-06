@@ -7,25 +7,20 @@
 	import Tabs from '#lib/components/Tabs.svelte';
 	import EpisodeList from './EpisodeList.svelte';
 	import SeasonPack from './SeasonPack.svelte';
-	import { firstSeason, ownedEp, seasonName, seasonsOf, watchedEp, type Episode } from './merge.ts';
+	import { firstSeason, ownedEp, seasonHolds, seasonName, seasonsOf, type Episode } from './merge.ts';
 
 	let { collection: c, rows, torrents }: { collection: CollectionDetail; rows: Episode[]; torrents: Map<string, TorrentView> } = $props();
 	const id = $props.id();
 
 	const absolute = $derived(c.numbering === 'absolute');
 	const flat = $derived(absolute ? rows : []);
-	const seasons = $derived(absolute ? [] : seasonsOf(rows, c.season_packs));
+	const seasons = $derived(absolute ? [] : seasonsOf(rows, c.season_packs, c.episodes));
 
 	let chosen = $state<string | null>(null);
 	const active = $derived(chosen && seasons.some((s) => `s${s.season}` === chosen) ? chosen : `s${firstSeason(seasons)}`);
 	const current = $derived(seasons.find((s) => `s${s.season}` === active));
 
-	const tabs = $derived(
-		seasons.map((s) => {
-			const all = s.items.length > 0 && s.items.every(watchedEp);
-			return { value: `s${s.season}`, label: `${seasonName(s.season)} · ${all ? 'watched' : plural(s.items.length, 'episode')}` };
-		})
-	);
+	const tabs = $derived(seasons.map((s) => ({ value: `s${s.season}`, label: `${seasonName(s.season)} · ${seasonHolds(s)}` })));
 	const fact = (items: Episode[]) => `${plural(items.length, 'episode')} · ${items.filter(ownedEp).length} on disk`;
 </script>
 
@@ -65,6 +60,8 @@
 		{/each}
 		{#if s.items.length}
 			{#key n}<EpisodeList collectionId={c.id} episodes={s.items} {torrents} />{/key}
+		{:else if s.packOnDisk}
+			<p class="hint">The season pack is on disk. Its episodes are not known one by one yet: play it from its files below.</p>
 		{:else}
 			<p class="hint">No single episode is available on its own yet. The season pack above brings every episode in one go.</p>
 		{/if}

@@ -358,7 +358,7 @@ fun collectionPage(
     val series = c.kind == MediaKind.tv
     val absolute = c.numbering == "absolute"
     val rows = episodesOf(c)
-    val seasons = if (absolute) emptyList() else seasonsOf(rows, c.seasonPacks.orEmpty())
+    val seasons = if (absolute) emptyList() else seasonsOf(rows, c.seasonPacks.orEmpty(), c.episodes)
     val season = chosenSeason?.takeIf { s -> seasons.any { it.season == s } } ?: firstSeason(seasons)
     val current = seasons.firstOrNull { it.season == season }
     val shown = if (absolute) rows else current?.items.orEmpty()
@@ -406,6 +406,8 @@ fun collectionPage(
             !showEpisodes -> null
             absolute && rows.isEmpty() -> "No episode found yet for this series."
             !absolute && seasons.isEmpty() -> "No episode found yet for this series."
+            current != null && current.items.isEmpty() && current.packOnDisk ->
+                "The season pack is on disk. Its episodes are not known one by one yet: play it from its files below."
             current != null && current.items.isEmpty() ->
                 "No single episode is available on its own yet. The season pack above brings every episode in one go."
             else -> null
@@ -443,7 +445,8 @@ fun collectionPage(
                 )
             }
         },
-        showFiles = !showEpisodes && !(c.kind == MediaKind.movie && c.torrents.size > 1),
+        // A pack the parser never split (episode 0) plays from its files.
+        showFiles = (!showEpisodes && !(c.kind == MediaKind.movie && c.torrents.size > 1)) || c.episodes.any { it.episode == 0L },
     )
 }
 
