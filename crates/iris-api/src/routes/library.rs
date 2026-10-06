@@ -630,10 +630,7 @@ pub(crate) async fn collection_detail(
     // visit, last watch in the collection). Never engaged → None →
     // the badge counts nothing.
     let user_last_visited = follow.as_ref().and_then(|f| f.last_visited_at);
-    let user_engaged_at = match (user_last_visited, user_last_watched) {
-        (Some(v), Some(w)) => Some(v.max(w)),
-        (v, w) => v.or(w),
-    };
+    let user_engaged_at = engaged_at(user_last_visited, user_last_watched);
 
     let (episodes, available_episodes, season_packs, has_new_since_last_visit) =
         if collection.is_tv() {
@@ -1254,6 +1251,16 @@ pub(crate) async fn mark_title_unwatched(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
+/// When a user last engaged with a series — the later of their last visit
+/// and their last watch; `None` when they never did. The "new" badge
+/// counts episodes found after it.
+pub(crate) fn engaged_at(
+    last_visited: Option<chrono::DateTime<chrono::Utc>>,
+    last_watched: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    last_visited.max(last_watched)
+}
+
 /// The collection `id`, or 404.
 async fn collection_or_404(
     state: &AppState,
@@ -1262,4 +1269,22 @@ async fn collection_or_404(
     iris_db::collections::get(state.db(), id)
         .await?
         .ok_or(ApiError::NotFound)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, Utc};
+
+    use super::engaged_at;
+
+    #[test]
+    fn engaged_at_is_the_later_of_visit_and_watch() {
+        let visit = Utc::now();
+        let watch = visit + Duration::hours(1);
+        assert_eq!(engaged_at(Some(visit), Some(watch)), Some(watch));
+        assert_eq!(engaged_at(Some(watch), Some(visit)), Some(watch));
+        assert_eq!(engaged_at(Some(visit), None), Some(visit));
+        assert_eq!(engaged_at(None, Some(watch)), Some(watch));
+        assert_eq!(engaged_at(None, None), None);
+    }
 }

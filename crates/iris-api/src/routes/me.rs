@@ -304,10 +304,7 @@ async fn watchlist_item(
         iris_db::playback::last_watched_in_collection(state.db(), user_id, collection_id)
             .await
             .unwrap_or(None);
-    let engaged_at = match (f.last_visited_at, last_watched) {
-        (Some(v), Some(w)) => Some(v.max(w)),
-        (v, w) => v.or(w),
-    };
+    let engaged_at = library::engaged_at(f.last_visited_at, last_watched);
     let new_count = iris_db::available_episodes::count_new_for_series(
         state.db(),
         &f.normalized_name,
