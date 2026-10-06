@@ -52,6 +52,7 @@ impl From<LiveTvError> for ApiError {
             LiveTvError::UnknownCountry | LiveTvError::UnknownChannel => ApiError::NotFound,
             LiveTvError::BadProxyRequest => ApiError::BadRequest("invalid proxy request".into()),
             LiveTvError::Upstream(msg) => ApiError::Upstream(msg),
+            LiveTvError::Encrypted => ApiError::LiveEncrypted,
         }
     }
 }
@@ -82,6 +83,8 @@ pub(crate) struct LiveChannelsResponse {
     pub channels: Vec<LiveChannel>,
 }
 
+// The flags are independent wire fields old clients already parse.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct LiveChannel {
     /// Stable slug, unique within a country. Play via
@@ -106,6 +109,10 @@ pub(crate) struct LiveChannel {
     /// now. Sent only when true.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unreachable: bool,
+    /// Every feed is DRM-locked by its broadcaster (Apple, Google or
+    /// Microsoft DRM): no Iris client can play it. Sent only when true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -223,6 +230,7 @@ pub(crate) async fn live_channels(
                 not_24_7: c.not_24_7,
                 tnt_number: c.tnt_number,
                 unreachable: snap.unreachable(i),
+                encrypted: snap.encrypted(i),
             })
             .collect(),
     }))
@@ -267,6 +275,7 @@ pub(crate) async fn live_epg_now(
     responses(
         (status = 200, description = "HLS master playlist with every URI rewritten to the signed proxy", body = String, content_type = "application/vnd.apple.mpegurl"),
         (status = 404, description = "Unknown country / channel"),
+        (status = 409, description = "`live_encrypted`: every source is DRM-locked by its broadcaster"),
         (status = 502, description = "Every upstream source for the channel is down"),
     ),
     tag = "live-tv",
@@ -504,6 +513,9 @@ pub(crate) async fn live_proxy(
     // same rewrite treatment as the master itself.
     if is_playlist {
         let body = crate::live_tv::read_playlist(resp).await?;
+        if let Some(scheme) = proxy::drm_scheme(&body) {
+            return Err(svc.note_encrypted(&params.c, scheme).await.into());
+        }
         let rewritten = proxy::rewrite_playlist(&body, &final_url, &params.c, svc.signer());
         return playlist_response(rewritten);
     }

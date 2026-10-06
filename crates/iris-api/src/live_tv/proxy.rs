@@ -192,9 +192,114 @@ pub fn is_playlist(url: &Url, content_type: Option<&str>) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("m3u8") || e.eq_ignore_ascii_case("m3u"))
 }
 
+/// The DRM a playlist's content is locked with, named for the logs; `None`
+/// when it plays in the clear or under plain `AES-128` (whose http(s) key the
+/// proxy fetches like a segment). Apple, Google and Microsoft DRM licences
+/// are only granted to the broadcaster's own player, so no Iris client can
+/// ever decrypt such a feed.
+pub fn drm_scheme(playlist: &str) -> Option<&'static str> {
+    playlist.lines().find_map(|line| {
+        let attrs = line
+            .trim()
+            .strip_prefix("#EXT-X-KEY:")
+            .or_else(|| line.trim().strip_prefix("#EXT-X-SESSION-KEY:"))?;
+        key_drm(&tag_attrs(attrs))
+    })
+}
+
+fn key_drm(attrs: &[(&str, &str)]) -> Option<&'static str> {
+    let get = |name: &str| {
+        attrs
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| *v)
+    };
+    let method = get("METHOD").unwrap_or("NONE").to_ascii_uppercase();
+    if method == "NONE" {
+        return None;
+    }
+    let format = get("KEYFORMAT").unwrap_or("identity").to_ascii_lowercase();
+    let uri = get("URI").unwrap_or("");
+    if format == "com.apple.streamingkeydelivery" || uri.starts_with("skd:") {
+        return Some("FairPlay");
+    }
+    if format == "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" || format == "com.widevine" {
+        return Some("Widevine");
+    }
+    if format == "com.microsoft.playready"
+        || format == "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"
+    {
+        return Some("PlayReady");
+    }
+    if uri.starts_with("data:") && data_uri_has_pssh(uri) {
+        return Some("CENC");
+    }
+    match method.as_str() {
+        "SAMPLE-AES" | "SAMPLE-AES-CTR" | "SAMPLE-AES-CENC" | "ISO-23001-7" => Some("SAMPLE-AES"),
+        _ => None,
+    }
+}
+
+/// A `data:` key URI carrying a `pssh` box (the CENC licence request seed).
+fn data_uri_has_pssh(uri: &str) -> bool {
+    let Some((meta, payload)) = uri.split_once(',') else {
+        return false;
+    };
+    let bytes = if meta.ends_with(";base64") {
+        base64::engine::general_purpose::STANDARD
+            .decode(payload.trim())
+            .unwrap_or_default()
+    } else {
+        payload.as_bytes().to_vec()
+    };
+    bytes.windows(4).any(|w| w == b"pssh")
+}
+
+/// `KEY=value,KEY="quoted, value"` attribute list of an HLS tag.
+fn tag_attrs(list: &str) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    let mut rest = list.trim();
+    while !rest.is_empty() {
+        let Some((key, after)) = rest.split_once('=') else {
+            break;
+        };
+        let (value, tail) = if let Some(quoted) = after.strip_prefix('"') {
+            match quoted.split_once('"') {
+                Some((v, tail)) => (v, tail),
+                None => (quoted, ""),
+            }
+        } else {
+            after.split_once(',').map_or((after, ""), |(v, t)| (v, t))
+        };
+        out.push((key.trim(), value));
+        rest = tail.trim_start_matches(',').trim_start();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const RTE_MEDIA: &str = "#EXTM3U\n#EXT-X-VERSION:5\n## Created with Unified Streaming Platform  (version=1.15.9-31871)\n#EXT-X-MEDIA-SEQUENCE:466487497\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-TARGETDURATION:6\n#EXT-X-PROGRAM-DATE-TIME:2026-10-06T18:39:45.880000Z\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://df163382-1ddd-fdd5-bec9-822c1ec0f052\",KEYFORMAT=\"com.apple.streamingkeydelivery\",KEYFORMATVERSIONS=\"1\"\n#EXTINF:3.84, no desc\nchannel1-video=144960-466487497.ts\n";
+
+    #[test]
+    fn drm_is_told_from_plain_aes() {
+        assert_eq!(drm_scheme(RTE_MEDIA), Some("FairPlay"));
+        let widevine = "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"data:text/plain;base64,AAAAW3Bzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAADsIARIQ\",KEYFORMAT=\"urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed\",KEYFORMATVERSIONS=\"1\"\n#EXTINF:4,\na.m4s\n";
+        assert_eq!(drm_scheme(widevine), Some("Widevine"));
+        let playready = "#EXTM3U\n#EXT-X-SESSION-KEY:METHOD=SAMPLE-AES,URI=\"data:text/plain;charset=UTF-16;base64,AAA=\",KEYFORMAT=\"com.microsoft.playready\"\n";
+        assert_eq!(drm_scheme(playready), Some("PlayReady"));
+        let pssh_only = "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES-CTR,URI=\"data:text/plain;base64,AAAAW3Bzc2gAAAAA\"\n";
+        assert_eq!(drm_scheme(pssh_only), Some("CENC"));
+        let sample_aes = "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"https://k.example/key\"\n";
+        assert_eq!(drm_scheme(sample_aes), Some("SAMPLE-AES"));
+        let aes = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"https://k.example/key?a=1,b=2\",IV=0x0123\n#EXTINF:6,\ns.ts\n";
+        assert_eq!(drm_scheme(aes), None);
+        let cleared = "#EXTM3U\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:6,\ns.ts\n";
+        assert_eq!(drm_scheme(cleared), None);
+        assert_eq!(drm_scheme("#EXTM3U\n#EXTINF:6,\ns.ts\n"), None);
+    }
 
     fn signer() -> Signer {
         Signer::new("test-secret")
