@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.data.RecordSearchRequest
 import studio.kahn.iris.tv.data.GrabOutcome
 import studio.kahn.iris.tv.data.grabRelease
 import studio.kahn.iris.tv.ui.formatSize
@@ -120,6 +121,9 @@ import studio.kahn.iris.tv.ui.theme.irisAmbient
 import studio.kahn.iris.tv.ui.components.touchClick
 import kotlin.math.sqrt
 
+/** How many of the account's recent searches the empty state offers. */
+private const val RECENT_SEARCHES_SHOWN = 5
+
 private const val PAGE_SIZE = 30
 
 private enum class KindFilter(val label: String, val apiKind: String?) {
@@ -229,30 +233,20 @@ fun SearchScreen(
     // duplicate_in_library): (hit, server message) → ConfirmDialog whose
     // CONFIRM retries the grab with allowDuplicate.
     var dupPrompt by remember { mutableStateOf<Pair<SearchResult, String>?>(null) }
-    // Memoised TMDB lookup results keyed by extracted SCENE title. We
-    // resolve the poster from the *release name* (after stripping year /
-    // SxxExx / quality / language tokens) instead of trusting the
-    // indexer's per-result `tmdb_id`, which torr9 frequently mistags
-    // (Silicon Valley releases pointed at "The Burning Bed", etc.). One
-    // entry per unique cleaned title — all S01/S02/etc. releases of
-    // Silicon Valley share a single network call.
-    // Keyed by `(cleaned title, result.kind)` rather than title alone:
-    // a Movies-vs-Series mismatch on the same SCENE name (e.g. a film and
-    // a series sharing a slug) used to share one cache entry, so the
-    // wrong poster carried over to half the rows. Mirrors the web's
-    // `["tmdb-by-title", cleaned, result.kind ?? "any"]` query key.
-
-    // The device's last few submitted searches — one-click chips on the
-    // empty state, so a remote user re-runs yesterday's search without
-    // fighting the on-screen keyboard.
-    val recentSearches by container.prefsStore.recentSearches
-        .collectAsState(initial = emptyList())
-    // Every submitted search (typed, voice, deep-link, suggestion pick)
-    // funnels through `submittedQuery`, so one hook records them all.
+    // The account's last searches (server-side, shared with the web): one-
+    // click chips on the empty state, so a remote user re-runs yesterday's
+    // search without fighting the on-screen keyboard. Every submitted
+    // search (typed, voice, deep-link, suggestion pick) funnels through
+    // `submittedQuery`, so one hook records them all, then re-reads.
+    var recentSearches by remember { mutableStateOf<List<String>>(emptyList()) }
     LaunchedEffect(submittedQuery) {
-        if (submittedQuery.length >= 2) {
-            container.prefsStore.addRecentSearch(submittedQuery)
+        val url = container.sessionStore.serverUrl.first() ?: return@LaunchedEffect
+        val api = container.apiFor(url)
+        if (submittedQuery.trim().length >= 2) {
+            runCatching { api.recordSearch(RecordSearchRequest(query = submittedQuery.trim())) }
         }
+        runCatching { api.recentSearches() }
+            .onSuccess { list -> recentSearches = list.map { it.query }.take(RECENT_SEARCHES_SHOWN) }
     }
 
     // Live TMDB typeahead (mirrors the web's suggestion dropdown): fires

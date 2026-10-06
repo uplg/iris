@@ -316,6 +316,13 @@ interface IrisApi {
     @GET("api/me/watchlist")
     suspend fun watchlist(): List<WatchlistItem>
 
+    /** The account's last searches, newest first (shared with the web). */
+    @GET("api/me/recent-searches")
+    suspend fun recentSearches(): List<RecentSearchView>
+
+    @POST("api/me/recent-searches")
+    suspend fun recordSearch(@Body body: RecordSearchRequest)
+
     /** Grab a specific (season, episode) by collection id. With
      *  `language` set, the server picks strictly from that
      *  language slot — no cross-language fallback. Used when the
