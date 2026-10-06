@@ -1,7 +1,7 @@
 // An episode row's state in words, with a tone (never color alone): what the person can do
 // with it now, from what is on disk, how far they watched, and what the indexer offers.
 
-import type { FileProgressEntry, TorrentView } from '@iris/api/client';
+import type { TorrentView } from '@iris/api/client';
 import { duration, percent, plural, timeLeft } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
 import { languageWord, listWords, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
@@ -19,7 +19,6 @@ export interface RowState {
 
 export interface Lookup {
 	torrent: (infohash: string) => TorrentView | undefined;
-	progress: (infohash: string, idx: number) => FileProgressEntry | undefined;
 }
 
 /** « done in about 6 min », or why it is not moving. */
@@ -41,8 +40,8 @@ export function rowState(ep: Episode, look: Lookup): RowState {
 	if (disk.length) {
 		const first = disk[0];
 		const t = look.torrent(first.infohash);
-		const p = look.progress(first.infohash, first.file_idx);
-		const length = p?.duration_seconds && p.duration_seconds > 0 ? p.duration_seconds : null;
+		const length = first.duration_seconds && first.duration_seconds > 0 ? first.duration_seconds : null;
+		const at = first.position_seconds ?? 0;
 		if (t && downloading(t)) {
 			return {
 				tone: t.state === 'error' ? 'warn' : 'busy',
@@ -50,11 +49,10 @@ export function rowState(ep: Episode, look: Lookup): RowState {
 				verb: 'Play while downloading'
 			};
 		}
-		if (first.watched || p?.completed)
-			return { tone: 'ok', text: length ? `Watched · ${duration(length)}` : 'Watched', verb: 'Watch again' };
-		if (p && p.position_seconds > 0) {
-			const left = length ? ` · ${timeLeft(length - p.position_seconds)}` : '';
-			return { tone: 'info', text: `In progress${left}`, progress: length ? p.position_seconds / length : undefined, verb: 'Resume' };
+		if (first.watched) return { tone: 'ok', text: length ? `Watched · ${duration(length)}` : 'Watched', verb: 'Watch again' };
+		if (at > 0) {
+			const left = length ? ` · ${timeLeft(length - at)}` : '';
+			return { tone: 'info', text: `In progress${left}`, progress: length ? at / length : undefined, verb: 'Resume' };
 		}
 		return { tone: 'ok', text: length ? `On disk · ${duration(length)}` : 'On disk', verb: 'Play' };
 	}

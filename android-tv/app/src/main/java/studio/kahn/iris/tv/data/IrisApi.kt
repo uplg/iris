@@ -283,7 +283,7 @@ interface IrisApi {
     @POST("api/me/display-name")
     suspend fun changeDisplayName(@Body body: ChangeDisplayNameRequest)
 
-    /** 401 when [ChangePasswordRequest.oldPassword] is wrong, 400 when the new one is refused. Signs every device out. */
+    /** 400 when [ChangePasswordRequest.oldPassword] is wrong or the new one is refused. On 204 every session is over, this one included. */
     @POST("api/me/password")
     suspend fun changePassword(@Body body: ChangePasswordRequest)
 

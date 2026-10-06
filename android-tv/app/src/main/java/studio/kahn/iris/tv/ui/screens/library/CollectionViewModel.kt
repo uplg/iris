@@ -8,8 +8,6 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -28,7 +26,6 @@ import studio.kahn.iris.tv.data.CollectionDetail
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.CreateFollowRequest
 import studio.kahn.iris.tv.data.DismissGoneRequest
-import studio.kahn.iris.tv.data.FileProgressEntry
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
@@ -154,7 +151,6 @@ class CollectionViewModel(private val container: AppContainer, private val colle
     }
     private val meta = MutableStateFlow<MediaMetadata?>(null)
     private val watching = MutableStateFlow<List<ContinueWatchingItem>>(emptyList())
-    private val progress = MutableStateFlow<Map<String, List<FileProgressEntry>>>(emptyMap())
     private val prefs = LiveRead({ _: PlaybackPrefsResponse? -> 10 * 60_000L }) {
         container.api().seriesPlaybackPreferences(collectionId)
     }
@@ -171,14 +167,14 @@ class CollectionViewModel(private val container: AppContainer, private val colle
     // Built off the main thread: a long series (1000+ rows) every few seconds while it downloads.
     val state: StateFlow<CollectionUiState> = combine(
         detail.state,
-        combine(meta, watching, progress, ::Triple),
+        combine(meta, watching, ::Pair),
         prefs.state,
         season,
         actions.state,
-    ) { d, (m, cw, p), pr, chosen, a ->
+    ) { d, (m, cw), pr, chosen, a ->
         val series = d.valueOrNull?.kind == MediaKind.tv
         CollectionUiState(
-            page = d.map { collectionPage(it, m, cw, p, chosen) },
+            page = d.map { collectionPage(it, m, cw, chosen) },
             languages = if (series) pr.map { languagesUi(it, d.valueOrNull, m) } else null,
             busy = a.busy,
             notice = a.notice,
@@ -218,8 +214,6 @@ class CollectionViewModel(private val container: AppContainer, private val colle
                         }
                     }
                 }
-                val known = progress.value.keys
-                if (c.torrents.any { it.infohash !in known }) launch { readProgress(c) }
             }
         }
     }
@@ -239,14 +233,6 @@ class CollectionViewModel(private val container: AppContainer, private val colle
 
     private suspend fun readSides() {
         bestEffort { container.api().continueWatching() }?.let { watching.value = it }
-        detail.value?.let { readProgress(it) }
-    }
-
-    private suspend fun readProgress(c: CollectionDetail) = coroutineScope {
-        val api = container.api()
-        // A failed read stays out of the map, so it is read again (never taken for "nothing played").
-        val reads = c.torrents.map { t -> async { bestEffort { api.torrentProgress(t.infohash) }?.let { t.infohash to it } } }
-        progress.value = reads.awaitAll().filterNotNull().toMap()
     }
 
     private suspend fun refreshAll() = coroutineScope {
@@ -361,7 +347,6 @@ fun collectionPage(
     c: CollectionDetail,
     m: MediaMetadata?,
     watching: List<ContinueWatchingItem>,
-    progress: Map<String, List<FileProgressEntry>>,
     chosenSeason: Long?,
     now: Instant = Instant.now(),
 ): CollectionPage {
@@ -373,7 +358,6 @@ fun collectionPage(
     val current = seasons.firstOrNull { it.season == season }
     val shown = if (absolute) rows else current?.items.orEmpty()
     val torrents = c.torrents.associateBy { it.infohash }
-    val progressOf = progress.mapValues { (_, v) -> v.associateBy { it.fileIdx.toInt() } }
     val resume = resumeOf(c, watching)
     val watched = watching.groupBy { it.infohash }.mapValues { (_, v) -> v.associateBy { it.fileIdx.toInt() } }
     val eyebrow = listOfNotNull(
@@ -411,7 +395,7 @@ fun collectionPage(
                 language = p.language,
             )
         },
-        episodes = shown.map { ep -> episodeRow(ep, torrents::get) { ih, idx -> progressOf[ih]?.get(idx) } },
+        episodes = shown.map { ep -> episodeRow(ep, torrents::get) },
         opening = if (shown.size > 40) openingIndex(shown) else 0,
         emptyEpisodes = when {
             !showEpisodes -> null
@@ -463,9 +447,8 @@ private val AIRED = java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy", j
 private fun episodeRow(
     ep: Episode,
     torrent: (String) -> studio.kahn.iris.tv.data.TorrentView?,
-    progress: (String, Int) -> FileProgressEntry?,
 ): EpisodeRowUi {
-    val state = rowState(ep, torrent, progress)
+    val state = rowState(ep, torrent)
     val offers = offersByLanguage(ep)
     val gone = ep.variants.filterIsInstance<Variant.Gone>()
     val aired = ep.info?.airDate?.let { runCatching { java.time.LocalDate.parse(it).format(AIRED) }.getOrNull() }

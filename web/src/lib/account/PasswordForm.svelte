@@ -1,9 +1,10 @@
 <script lang="ts">
 	// Changing my password: the current one, then the new one (8 characters or more), each
 	// shown on demand, pasted and filled by password managers. A wrong current password is said
-	// under it, a short new one under it; the server then signs every device out (this one
-	// included), which the outcome says.
+	// under it, a short new one under it; the server then signs every device out, this one
+	// included (its cookies cleared), so this one goes to the door, which says why.
 	import { ApiError, auth } from '@iris/api/client';
+	import { errorText } from '#lib/errors.ts';
 	import { session } from '#lib/session.svelte.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
@@ -17,6 +18,17 @@
 	let show = $state({ current: false, next: false });
 	let errors = $state({ current: '', next: '' });
 	const inputs: { current?: HTMLInputElement; next?: HTMLInputElement } = $state({});
+
+	const CHANGED = 'Your password is changed. Sign in again with the new one.';
+
+	/** The field a refusal is about. Both answer 400 `bad_request`; only the server's words
+	 * tell the wrong current password from the policy's refusal of the new one. */
+	function refusedField(err: unknown): 'current' | 'next' | undefined {
+		if (!(err instanceof ApiError) || err.status !== 400) return undefined;
+		if (/current password/i.test(err.message)) return 'current';
+		if (/too short/i.test(err.message)) return 'next';
+		return undefined;
+	}
 
 	function fail(field: 'current' | 'next', text: string) {
 		errors[field] = text;
@@ -32,16 +44,15 @@
 			() => auth.changePassword(current, next),
 			() => {
 				current = next = '';
-				ui.toast('Password changed. Your devices, this one included, will ask you to sign in again with it.');
+				ui.say(CHANGED);
+				session.revoked(CHANGED);
 			},
 			'change',
 			{
-				// a wrong current password answers 401; a policy refusal 400
 				refused: (err) => {
-					if (!(err instanceof ApiError)) return false;
-					if (err.status === 401) fail('current', 'This is not your current password.');
-					else if (err.status === 400) fail('next', `Use at least ${MIN} characters.`);
-					else return false;
+					const field = refusedField(err);
+					if (!field) return false;
+					fail(field, errorText(err));
 					return true;
 				},
 				field: () => inputs.current

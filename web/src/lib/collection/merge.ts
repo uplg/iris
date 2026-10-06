@@ -13,7 +13,16 @@ import type {
 } from '@iris/api/client';
 import { episodeCode, isVideo, languageLabel } from '@iris/api/format';
 
-export type Downloaded = { status: 'downloaded'; language: string | null; infohash: string; file_idx: number; watched: boolean };
+export type Downloaded = {
+	status: 'downloaded';
+	language: string | null;
+	infohash: string;
+	file_idx: number;
+	watched: boolean;
+	/** The person's place in it and its length, as the server last saved them (null: not started). */
+	position_seconds: number | null;
+	duration_seconds: number | null;
+};
 export type Available = {
 	status: 'available';
 	language: string | null;
@@ -68,7 +77,9 @@ const downloaded = (d: CollectionEpisodeEntry): Downloaded => ({
 	language: d.language ?? null,
 	infohash: d.infohash,
 	file_idx: d.file_idx,
-	watched: d.watched
+	watched: d.watched,
+	position_seconds: d.position_seconds ?? null,
+	duration_seconds: d.duration_seconds ?? null
 });
 
 const gone = (g: GoneEpisodeEntry): Gone => ({

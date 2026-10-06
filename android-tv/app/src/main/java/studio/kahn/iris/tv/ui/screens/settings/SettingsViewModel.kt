@@ -131,6 +131,19 @@ object Busy {
 
 const val PASSWORD_MIN = 8
 
+/**
+ * A refused password change, said under its field. Both refusals answer 400 `bad_request`:
+ * only the server's words tell a wrong current password from a refused new one.
+ */
+fun passwordRefusal(e: UiError): DialogError? {
+    if (e.status != 400) return null
+    return when {
+        e.message.contains("current password", ignoreCase = true) -> DialogError(e.message)
+        e.message.contains("too short", ignoreCase = true) -> DialogError(e.message, DialogField.Second)
+        else -> null
+    }
+}
+
 /** Settings and the account (the web's /account, minus what a TV can't do). */
 class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     private val mutable = MutableStateFlow(SettingsUiState())
@@ -384,16 +397,13 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             Busy.PASSWORD,
             SettingsSection.Password,
             inDialog = true,
-            refused = { e ->
-                when (e.status) {
-                    401 -> DialogError("This is not your current password.")
-                    400 -> DialogError("Use at least $PASSWORD_MIN characters.", DialogField.Second)
-                    else -> null
-                }
-            },
+            refused = ::passwordRefusal,
         ) { api ->
             api.changePassword(ChangePasswordRequest(newPassword = next, oldPassword = current))
-            "Password changed. Every device signs out, this TV too: it asks to be paired again soon."
+            // The server ended every session, this one included: forgotten here, then pairing.
+            container.sessionStore.clear()
+            mutable.update { it.copy(signedOut = true) }
+            null
         }
     }
 

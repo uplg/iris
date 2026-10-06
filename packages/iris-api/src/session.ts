@@ -7,7 +7,11 @@
 
 import { ApiError, AUTH_EXPIRED_EVENT, auth, type User } from './client';
 
-export type SessionState = { status: 'loading'; retrying: boolean } | { status: 'signed_out' } | { status: 'signed_in'; user: User };
+/** `notice`, when the server ended the session for a reason the door says (a password change). */
+export type SessionState =
+	| { status: 'loading'; retrying: boolean }
+	| { status: 'signed_out'; notice?: string }
+	| { status: 'signed_in'; user: User };
 
 const KEEP_ALIVE_MS = 25 * 60_000;
 const FIRST_RETRY_MS = 2_000;
@@ -59,6 +63,12 @@ export class Session {
 	async logout() {
 		await auth.logout();
 		this.#set({ status: 'signed_out' });
+	}
+
+	/** The server already ended this session (a password change revokes every one and clears
+	 * the cookies): signed out here, nothing sent, `notice` said at the door. */
+	revoked(notice: string) {
+		this.#set({ status: 'signed_out', notice });
 	}
 
 	async #bootstrap(delayMs: number) {

@@ -15,6 +15,7 @@ import org.junit.Test
 import studio.kahn.iris.tv.data.DeviceView
 import studio.kahn.iris.tv.data.PreferencesResponse
 import studio.kahn.iris.tv.ui.state.Loadable
+import studio.kahn.iris.tv.ui.state.UiError
 
 class SettingsWordsTest {
     private val paris = ZoneId.of("Europe/Paris")
@@ -68,5 +69,16 @@ class SettingsWordsTest {
         val edited = clean.copy(draft = clean.draft!!.copy(genres = clean.draft.genres.toggled(35L)))
         assertTrue(edited.recoDirty)
         assertFalse(edited.copy(draft = edited.draft!!.copy(genres = edited.draft.genres.toggled(35L))).recoDirty)
+    }
+
+    @Test
+    fun aRefusedPasswordChangeIsSaidUnderItsField() {
+        val wrong = UiError("bad request: This is not your current password.", "bad_request", 400)
+        assertEquals(DialogError(wrong.message, DialogField.First), passwordRefusal(wrong))
+        val short = UiError("bad request: password too short (min 8 chars)", "bad_request", 400)
+        assertEquals(DialogError(short.message, DialogField.Second), passwordRefusal(short))
+        // anything else is the generic answer: a dead session is not a wrong password
+        assertNull(passwordRefusal(UiError("This TV is signed out. Pair it again from Settings.", "unauthorized", 401)))
+        assertNull(passwordRefusal(UiError("bad request: something else", "bad_request", 400)))
     }
 }

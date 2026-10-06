@@ -8,6 +8,9 @@ import { json } from '#lib/test/fetch.ts';
 import '../../styles/app.css';
 import { authenticator, leonard, noContent, passkey, registerRoutes } from './testing.ts';
 import AccountPage from './AccountPage.svelte';
+import SignIn from '#lib/components/SignIn.svelte';
+import { queryClient } from '#lib/query.ts';
+import { KEYS } from '#lib/queries.ts';
 
 // the current route, as SvelteKit would say it
 const route = vi.hoisted(() => ({ url: new URL('http://iris.test/account'), state: {}, params: {} }));
@@ -124,15 +127,32 @@ describe('account page', () => {
 	});
 
 	it('a wrong current password is said under it, with the focus on it', async () => {
-		const api = site({ 'POST /me/password': json({ error: 'unauthorized', message: 'unauthorized' }, 401), 'POST /auth/refresh': leonard });
+		const api = site({
+			'POST /me/password': json({ error: 'bad_request', message: 'bad request: This is not your current password.' }, 400)
+		});
 		await render(AccountPage);
 		await page.getByLabelText('Current password', { exact: true }).fill('nope');
 		await page.getByLabelText('New password', { exact: true }).fill('long enough');
 		await page.getByRole('button', { name: 'Change my password' }).click();
 		const current = page.getByLabelText('Current password', { exact: true });
-		await expect.element(current).toHaveAccessibleDescription('This is not your current password.');
+		await expect.element(current).toHaveAccessibleDescription('bad request: This is not your current password.');
 		await expect.element(current).toHaveFocus();
 		expect(api.sent('POST', '/me/password')[0].body).toEqual({ old_password: 'nope', new_password: 'long enough' });
+		expect(api.sent('POST', '/auth/refresh')).toEqual([]);
+		expect(session.state.status).toBe('signed_in');
+		expect(ui.toasts).toEqual([]);
+	});
+
+	it('the server’s refusal of the new password is said under it', async () => {
+		site({ 'POST /me/password': json({ error: 'bad_request', message: 'bad request: password too short (min 8 chars)' }, 400) });
+		await render(AccountPage);
+		await page.getByLabelText('Current password', { exact: true }).fill('old secret');
+		await page.getByLabelText('New password', { exact: true }).fill('long enough');
+		await page.getByRole('button', { name: 'Change my password' }).click();
+		const next = page.getByLabelText('New password', { exact: true });
+		await expect.element(next).toHaveAccessibleDescription('At least 8 characters. bad request: password too short (min 8 chars)');
+		await expect.element(next).toHaveFocus();
+		await expect.element(page.getByLabelText('Current password', { exact: true })).not.toHaveAttribute('aria-invalid');
 		expect(ui.toasts).toEqual([]);
 	});
 
@@ -151,17 +171,23 @@ describe('account page', () => {
 		await expect.element(page.getByLabelText('New password', { exact: true })).toHaveAttribute('autocomplete', 'new-password');
 	});
 
-	it('changes the password, and says every device signs in again', async () => {
+	it('changes the password, then signs this browser out, its answers forgotten, the door saying why', async () => {
 		const api = site({ 'POST /me/password': noContent() });
+		queryClient.setQueryData(KEYS.watchlist, []);
 		await render(AccountPage);
 		await page.getByLabelText('Current password', { exact: true }).fill('old secret');
 		await page.getByLabelText('New password', { exact: true }).fill('new secret!');
 		await page.getByRole('button', { name: 'Change my password' }).click();
 		await expect
-			.poll(() => ui.toasts.map((t) => t.text))
-			.toContain('Password changed. Your devices, this one included, will ask you to sign in again with it.');
+			.poll(() => session.state)
+			.toEqual({ status: 'signed_out', notice: 'Your password is changed. Sign in again with the new one.' });
 		expect(api.sent('POST', '/me/password')).toHaveLength(1);
-		await expect.element(page.getByLabelText('Current password', { exact: true })).toHaveValue('');
+		// the server already ended the session and cleared its cookies: nothing more is sent
+		expect(api.sent('POST', '/auth/logout')).toEqual([]);
+		expect(queryClient.getQueryData(KEYS.watchlist)).toBeUndefined();
+		expect(ui.polite).toBe('Your password is changed. Sign in again with the new one.');
+		await render(SignIn);
+		await expect.element(page.getByText('Your password is changed. Sign in again with the new one.')).toBeVisible();
 	});
 
 	it('pairs a TV by its code: the list is read again until the TV is in, no timer of ours', async () => {
