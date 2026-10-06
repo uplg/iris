@@ -1,7 +1,8 @@
 <script lang="ts" generics="T">
-	// A filter: its name, then its choices as pills, the chosen one pressed (`aria-pressed`, and
-	// drawn filled: never color alone). Each pill may carry a count (what the loaded page holds).
-	import Icon from '#lib/components/Icon.svelte';
+	// One choice among a few, as pills: a radio group (one Tab stop, arrows between them), the
+	// chosen pill filled and ticked, never color alone. A pill may carry a count (what the
+	// loaded page holds).
+	import Icon from './Icon.svelte';
 
 	interface Props {
 		legend: string;
@@ -10,33 +11,29 @@
 		onchange: (v: T) => void;
 	}
 	let { legend, options, value, onchange }: Props = $props();
+	const id = $props.id();
 </script>
 
-<fieldset class="pills">
+<fieldset class="pill-choice">
 	<legend>{legend}</legend>
 	<div class="row">
-		{#each options as o (o.value ?? '')}
-			<button
-				type="button"
-				class={['pill-btn', o.value === value && 'on']}
-				aria-pressed={o.value === value}
-				onclick={() => onchange(o.value)}
-			>
-				{#if o.value === value}<Icon name="check" size={16} />{/if}{o.label}
+		{#each options as o, i (i)}
+			{@const on = o.value === value}
+			<label class="pill-btn">
+				<input class="sr-only" type="radio" name={id} value={i} checked={on} onchange={() => onchange(o.value)} />
+				{#if on}<Icon name="check" size={16} />{/if}{o.label}
 				{#if o.count !== undefined}<span class="count">{o.count}</span>{/if}
-			</button>
+			</label>
 		{/each}
 	</div>
 </fieldset>
 
 <style>
-	.pills {
+	.pill-choice {
 		border: 0;
 		margin: 0;
 		padding: 0;
 		min-width: 0;
-		display: grid;
-		gap: var(--s-2);
 	}
 	legend {
 		font: var(--t-field-label);
@@ -50,6 +47,10 @@
 	}
 	.pill-btn {
 		min-height: var(--control-h);
+	}
+	.pill-btn:has(:focus-visible) {
+		outline: var(--focus-ring);
+		outline-offset: var(--focus-offset);
 	}
 	.count {
 		font: var(--t-tiny);

@@ -90,16 +90,15 @@ describe('SearchScreen', () => {
 		);
 		await render(SearchScreen);
 		const audio = screen.getByRole('group', { name: 'Audio' });
-		await expect.element(audio.getByRole('button', { name: 'French (VF) 1' })).toBeVisible();
-		await audio.getByRole('button', { name: 'French (VF) 1' }).click();
-		await expect.element(audio.getByRole('button', { name: 'French (VF) 1' })).toHaveAttribute('aria-pressed', 'true');
+		await expect.element(audio.getByText(/French \(VF\)/)).toBeVisible();
+		await audio.getByText(/French \(VF\)/).click();
+		await expect.element(audio.getByRole('radio', { name: 'French (VF) 1' })).toBeChecked();
 		await expect.element(screen.getByText('Severance.S02.FRENCH.1080p.WEB-GRP')).toBeVisible();
 		await expect.element(screen.getByText('Severance.S02.MULTi.1080p.WEB.H265-GRP')).not.toBeInTheDocument();
 
-		await screen.getByRole('group', { name: 'Type' }).getByRole('button', { name: 'Series' }).click();
-		await expect
-			.element(screen.getByRole('group', { name: 'Type' }).getByRole('button', { name: 'Series' }))
-			.toHaveAttribute('aria-pressed', 'true');
+		const type = screen.getByRole('group', { name: 'Type' });
+		await type.getByText('Series', { exact: true }).click();
+		await expect.element(type.getByRole('radio', { name: 'Series' })).toBeChecked();
 		await vi.waitFor(() => expect(searches(api).at(-1)?.path).toContain('kind=tv'));
 	});
 

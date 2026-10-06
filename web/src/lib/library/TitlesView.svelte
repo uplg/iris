@@ -12,6 +12,7 @@
 	import Loaded from '#lib/components/Loaded.svelte';
 	import PosterCard from '#lib/components/PosterCard.svelte';
 	import Select from '#lib/components/Select.svelte';
+	import PillChoice from '#lib/components/PillChoice.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import {
 		LIBRARY_SORT_KEY,
@@ -104,34 +105,9 @@
 					{#if query}<button class="btn ghost" onclick={() => ((query = ''), void refocus(`#${id}-search`))}>Clear</button>{/if}
 				</div>
 			</div>
-			<fieldset>
-				<legend>Type</legend>
-				<div class="pills">
-					{#each TYPES as o (o.value)}
-						<label class="pill-btn"
-							><input class="sr-only" type="radio" name="{id}-type" value={o.value} bind:group={type} />{o.label}</label
-						>
-					{/each}
-				</div>
-			</fieldset>
+			<PillChoice legend="Type" options={TYPES} value={type} onchange={(v) => (type = v)} />
 			{#if shows.length > 1}
-				<fieldset>
-					<legend>Show</legend>
-					<div class="pills">
-						{#each shows as o (o.value)}
-							<label class="pill-btn"
-								><input
-									class="sr-only"
-									type="radio"
-									name="{id}-show"
-									value={o.value}
-									checked={showing === o.value}
-									onchange={() => (show = o.value)}
-								/>{o.label}</label
-							>
-						{/each}
-					</div>
-				</fieldset>
+				<PillChoice legend="Show" options={shows} value={showing} onchange={(v) => (show = v)} />
 			{/if}
 			<div class="sort">
 				<Select label="Sort" value={sort} options={SORTS} onchange={setSort} />
@@ -205,29 +181,6 @@
 	}
 	.search-row .btn {
 		min-height: var(--control-h);
-	}
-	fieldset {
-		margin: 0;
-		padding: 0;
-		border: 0;
-		min-width: 0;
-	}
-	legend {
-		padding: 0;
-		margin-bottom: var(--s-2);
-		font: var(--t-field-label);
-	}
-	.pills {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--s-2);
-	}
-	.pill-btn {
-		min-height: var(--control-h);
-	}
-	.pill-btn:has(:focus-visible) {
-		outline: var(--focus-ring);
-		outline-offset: var(--focus-offset);
 	}
 	.sort {
 		flex: 0 1 14rem;

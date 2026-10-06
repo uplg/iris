@@ -210,7 +210,9 @@ describe('Collection', () => {
 		await expect.element(panel.getByText('Your usual choice, from your account.')).toBeVisible();
 		await panel.getByRole('button', { name: 'Change languages' }).click();
 		const sheet = page.getByRole('dialog', { name: 'Languages for Severance' });
-		await sheet.getByRole('group', { name: 'Audio' }).getByRole('radio', { name: 'French' }).click();
+		const audio = sheet.getByRole('group', { name: 'Audio' });
+		await audio.getByText('French', { exact: true }).click();
+		await expect.element(audio.getByRole('radio', { name: 'French' })).toBeChecked();
 		await sheet.getByRole('button', { name: 'Save for this series' }).click();
 		await vi.waitFor(() => expect(api.sent('PUT', '/me/playback-preferences')).toHaveLength(1));
 		expect(api.sent('PUT', '/me/playback-preferences')[0].body).toEqual({

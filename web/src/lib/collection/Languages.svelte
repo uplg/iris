@@ -12,6 +12,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import Sheet from '#lib/components/Sheet.svelte';
 	import StatusRow from '#lib/components/StatusRow.svelte';
+	import PillChoice from '#lib/components/PillChoice.svelte';
 	import { languageName } from './lang.ts';
 	import { KEYS, read } from '#lib/queries.ts';
 
@@ -101,28 +102,25 @@
 	{draft}
 >
 	<form class="form" onsubmit={save}>
-		<fieldset>
-			<legend>Audio</legend>
-			<div class="choices">
-				<label class="pill-btn"><input type="radio" name="audio" value="" bind:group={draft.current.audio} />Each file’s own default</label>
-				{#each audioOptions as code (code)}
-					<label class="pill-btn"
-						><input type="radio" name="audio" value={code} bind:group={draft.current.audio} />{languageName(code)}</label
-					>
-				{/each}
-			</div>
-		</fieldset>
-		<fieldset>
-			<legend>Subtitles</legend>
-			<div class="choices">
-				<label class="pill-btn"><input type="radio" name="subs" value="" bind:group={draft.current.subs} />Each file’s own default</label>
-				<label class="pill-btn"><input type="radio" name="subs" value="off" bind:group={draft.current.subs} />Off</label>
-				{#each subOptions as code (code)}
-					<label class="pill-btn"><input type="radio" name="subs" value={code} bind:group={draft.current.subs} />{languageName(code)}</label
-					>
-				{/each}
-			</div>
-		</fieldset>
+		<PillChoice
+			legend="Audio"
+			options={[
+				{ value: '', label: 'Each file’s own default' },
+				...audioOptions.map((code) => ({ value: code, label: languageName(code) }))
+			]}
+			value={draft.current.audio}
+			onchange={(v) => (draft.current.audio = v)}
+		/>
+		<PillChoice
+			legend="Subtitles"
+			options={[
+				{ value: '', label: 'Each file’s own default' },
+				{ value: 'off', label: 'Off' },
+				...subOptions.map((code) => ({ value: code, label: languageName(code) }))
+			]}
+			value={draft.current.subs}
+			onchange={(v) => (draft.current.subs = v)}
+		/>
 		<p class="form-error" role="alert">{g.error}</p>
 		<div class="actions end">
 			<button type="button" class="btn" onclick={close}>Cancel</button>
@@ -144,25 +142,5 @@
 	.form {
 		display: grid;
 		gap: var(--s-5);
-	}
-	fieldset {
-		border: 0;
-		margin: 0;
-		padding: 0;
-		display: grid;
-		gap: var(--s-2);
-	}
-	legend {
-		font: var(--t-field-label);
-		padding: 0;
-		margin-bottom: var(--s-2);
-	}
-	.choices {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--s-2);
-	}
-	.choices .pill-btn {
-		min-height: var(--control-h);
 	}
 </style>

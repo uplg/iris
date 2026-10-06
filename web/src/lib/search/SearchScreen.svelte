@@ -16,13 +16,13 @@
 	import Loaded from '#lib/components/Loaded.svelte';
 	import PageHead from '#lib/components/PageHead.svelte';
 	import ToggleGroup from '#lib/components/ToggleGroup.svelte';
+	import PillChoice from '#lib/components/PillChoice.svelte';
 	import { rememberSearch } from './cache.ts';
 	import { KEYS } from '#lib/queries.ts';
 	import { KINDS, SORT_MODES, readSearch, searchHref, searchOpts, type SearchState, type SortMode } from './params.ts';
 	import { failedTrackers, releaseKey, releasesByTitle, summary } from './release.ts';
 	import { VIEWS, keptView, type ResultsView } from './view.ts';
 	import LibraryMatches from './LibraryMatches.svelte';
-	import PillGroup from './PillGroup.svelte';
 	import RecentSearches from './RecentSearches.svelte';
 	import ReleaseCard from './ReleaseCard.svelte';
 	import ReleaseRow from './ReleaseRow.svelte';
@@ -212,10 +212,10 @@
 	<RecentSearches onsearch={submit} back={() => input} />
 
 	<div class="filters">
-		<PillGroup legend="Type" options={KINDS} value={s.kind} onchange={setKind} />
-		<PillGroup legend="Sort" options={SORT_MODES} value={s.sort} onchange={setSort} />
+		<PillChoice legend="Type" options={KINDS} value={s.kind} onchange={setKind} />
+		<PillChoice legend="Sort" options={SORT_MODES} value={s.sort} onchange={setSort} />
 		{#if rows.length || s.lang}
-			<PillGroup legend="Audio" options={audioOptions} value={s.lang} onchange={setLang} />
+			<PillChoice legend="Audio" options={audioOptions} value={s.lang} onchange={setLang} />
 		{/if}
 	</div>
 
