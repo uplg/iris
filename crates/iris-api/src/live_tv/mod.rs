@@ -575,17 +575,16 @@ struct ServiceInner {
 /// A cached logo — the bytes + content-type on success, or just the forwarded
 /// status on failure (so the negative result also short-circuits refetching).
 struct CachedLogo {
-    status: u16,
-    content_type: String,
-    bytes: Vec<u8>,
+    logo: LogoResponse,
     fetched_at: Instant,
 }
 
 impl CachedLogo {
     fn is_fresh(&self, now: Instant) -> bool {
-        let ttl = if self.status == 200 {
+        let status = self.logo.status;
+        let ttl = if status == 200 {
             LOGO_CACHE_TTL
-        } else if logo_status_retryable(self.status) {
+        } else if logo_status_retryable(status) {
             LOGO_RETRY_TTL
         } else {
             LOGO_NEG_TTL
@@ -596,10 +595,21 @@ impl CachedLogo {
 
 /// Served logo — bytes + content-type on success, or the upstream error status
 /// to forward (empty body → the client's letter-tile fallback).
+#[derive(Clone)]
 pub struct LogoResponse {
     pub status: u16,
     pub content_type: String,
-    pub bytes: Vec<u8>,
+    pub bytes: axum::body::Bytes,
+}
+
+impl LogoResponse {
+    fn failed(status: u16) -> Self {
+        Self {
+            status,
+            content_type: String::new(),
+            bytes: axum::body::Bytes::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1723,73 +1733,49 @@ impl LiveTvService {
         // card's letter-tile fallback), rather than a 502 that spams the error
         // log for a purely cosmetic asset. A transport error is cached as a
         // 502 so we don't retry it on every tile this minute.
-        let cached = match self.inner.logo_http.get(upstream).send().await {
-            Ok(resp) => {
+        let logo = match self.inner.logo_http.get(upstream).send().await {
+            Ok(resp) if resp.status().is_success() => {
                 let status = resp.status().as_u16();
-                if resp.status().is_success() {
-                    let content_type = resp
-                        .headers()
-                        .get(reqwest::header::CONTENT_TYPE)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("image/png")
-                        .to_string();
-                    match read_capped(resp, LOGO_FETCH_MAX_BYTES).await {
-                        Ok(bytes) if bytes.len() <= LOGO_MAX_BYTES => CachedLogo {
+                let content_type = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("image/png")
+                    .to_string();
+                match read_capped(resp, LOGO_FETCH_MAX_BYTES).await {
+                    Ok(bytes) => {
+                        let logo = LogoResponse {
                             status,
                             content_type,
-                            bytes,
-                            fetched_at: now,
-                        },
+                            bytes: bytes.into(),
+                        };
                         // Oversized — serve once, don't cache the blob.
-                        Ok(bytes) => {
-                            return Ok(LogoResponse {
-                                status,
-                                content_type,
-                                bytes,
-                            });
+                        if logo.bytes.len() > LOGO_MAX_BYTES {
+                            return Ok(logo);
                         }
-                        Err(_) => CachedLogo {
-                            status: 502,
-                            content_type: String::new(),
-                            bytes: Vec::new(),
-                            fetched_at: now,
-                        },
+                        logo
                     }
-                } else {
-                    CachedLogo {
-                        status,
-                        content_type: String::new(),
-                        bytes: Vec::new(),
-                        fetched_at: now,
-                    }
+                    Err(_) => LogoResponse::failed(502),
                 }
             }
-            Err(_) => CachedLogo {
-                status: 502,
-                content_type: String::new(),
-                bytes: Vec::new(),
+            Ok(resp) => LogoResponse::failed(resp.status().as_u16()),
+            Err(_) => LogoResponse::failed(502),
+        };
+        self.store_logo(
+            key,
+            Arc::new(CachedLogo {
+                logo: logo.clone(),
                 fetched_at: now,
-            },
-        };
-
-        let response = LogoResponse {
-            status: cached.status,
-            content_type: cached.content_type.clone(),
-            bytes: cached.bytes.clone(),
-        };
-        self.store_logo(key, Arc::new(cached));
-        Ok(response)
+            }),
+        );
+        Ok(logo)
     }
 
     /// Return a fresh cached logo for `key`, if any.
     fn cached_logo(&self, key: &str, now: Instant) -> Option<LogoResponse> {
         let cache = self.inner.logo_cache.read().ok()?;
         let entry = cache.get(key)?;
-        entry.is_fresh(now).then(|| LogoResponse {
-            status: entry.status,
-            content_type: entry.content_type.clone(),
-            bytes: entry.bytes.clone(),
-        })
+        entry.is_fresh(now).then(|| entry.logo.clone())
     }
 
     /// Insert a cached logo, wholesale-clearing if the cache got too big.
@@ -3125,6 +3111,63 @@ https://a/x.m3u8
         assert!(svc.countries().await.is_err());
         assert!(svc.countries().await.is_err());
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn logos_and_their_misses_are_served_from_the_cache() {
+        use axum::routing::get;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let app = axum::Router::new()
+            .route(
+                "/logo.png",
+                get(move || {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    async { ([(http::header::CONTENT_TYPE, "image/png")], vec![1u8, 2, 3]) }
+                }),
+            )
+            .route(
+                "/gone.png",
+                get(|| async { axum::http::StatusCode::NOT_FOUND }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let fetch = |path: &str| {
+            let signed = svc.logo_proxy_url(&format!("http://{addr}{path}")).unwrap();
+            let query = Url::parse(&format!("http://iris{signed}")).unwrap();
+            let param = |k: &str| {
+                query
+                    .query_pairs()
+                    .find(|(n, _)| n == k)
+                    .map(|(_, v)| v.into_owned())
+                    .unwrap()
+            };
+            let (u, s) = (param("u"), param("s"));
+            let svc = svc.clone();
+            async move { svc.fetch_logo(&u, &s).await.unwrap() }
+        };
+        for _ in 0..3 {
+            let logo = fetch("/logo.png").await;
+            assert_eq!(
+                (logo.status, logo.content_type.as_str()),
+                (200, "image/png")
+            );
+            assert_eq!(&logo.bytes[..], &[1, 2, 3]);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let miss = fetch("/gone.png").await;
+        assert_eq!(miss.status, 404);
+        assert!(miss.bytes.is_empty());
+        assert!(
+            svc.inner
+                .logo_cache
+                .read()
+                .unwrap()
+                .values()
+                .any(|c| c.logo.status == 404)
+        );
     }
 
     #[tokio::test]
