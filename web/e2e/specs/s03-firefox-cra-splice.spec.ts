@@ -18,8 +18,10 @@ async function resumeAndSeek(page: Page, state: BenchState, logs: Console, clip:
 
 	await stage(page).press('ArrowLeft');
 	await stage(page).press('ArrowLeft');
+	// Firefox defers the element's seek until the restarted feed covers the target (the chrome
+	// shows the target meanwhile): the element lands there once the first fragment is in
+	await expect.poll(async () => (await videoState(page))?.currentTime ?? 99, { timeout: 30_000 }).toBeLessThan(28);
 	const back = (await videoState(page))!.currentTime;
-	expect(back).toBeLessThan(28);
 	await expect.poll(async () => (await videoState(page))?.currentTime ?? 0, { timeout: 30_000 }).toBeGreaterThan(back + 3);
 	const v = (await videoState(page))!;
 	expect(v.error, 'media error').toBeNull();

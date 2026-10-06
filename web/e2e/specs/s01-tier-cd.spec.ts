@@ -132,6 +132,34 @@ test('tier C: 5.1 keeps the centre channel in both ears, at 48 kHz', { tag: ['@c
 	expect(peak.right, 'centre (dialogue) missing on the right').toBeGreaterThan(0.05);
 });
 
+for (const tier of ['B', 'C'] as const) {
+	test(`tier ${tier}: E-AC-3 decodes through libav.js, with sound`, { tag: ['@chrome'] }, async ({ page, state, logs }) => {
+		test.skip(!state.libavIris, 'the Iris libav.js variant is not built here (Dockerfile libav-builder stage; IRIS_E2E_LIBAV_DIR)');
+		await openWatch(page, state, 'h264Eac3', { tier });
+		await play(page);
+		await waitForTime(page, 3);
+		const rate = await measureRate(page, 10_000);
+		console.log(`[measure] E-AC-3 tier ${tier}: ${rate.rate.toFixed(2)}x`);
+		expect(logs.has(/libav decode init: codec=eac3/), 'E-AC-3 did not go through libav.js').toBe(true);
+		expect(logs.matching(/libav\.js worker unavailable|variant not found/)).toEqual([]);
+		expect(rate.rate).toBeGreaterThan(0.85);
+		if (tier === 'C') {
+			// Web Audio: the bench's tap hears it
+			const peak = await peakAudio(page, 3000);
+			console.log(`[measure] E-AC-3 tier C: L ${peak.left.toFixed(3)} R ${peak.right.toFixed(3)} @ ${peak.sampleRate} Hz`);
+			expect(peak.left).toBeGreaterThan(0.05);
+			expect(peak.right).toBeGreaterThan(0.05);
+		} else {
+			const bytes = await page.evaluate(
+				() =>
+					(document.querySelector('.video-host video') as HTMLVideoElement & { webkitAudioDecodedByteCount: number })
+						.webkitAudioDecodedByteCount
+			);
+			expect(bytes, 'no audio decoded by the element').toBeGreaterThan(0);
+		}
+	});
+}
+
 test('tier C: mono reaches both ears', { tag: ['@chrome'] }, async ({ page, state }) => {
 	await openWatch(page, state, 'mono', { tier: 'C' });
 	await play(page);
