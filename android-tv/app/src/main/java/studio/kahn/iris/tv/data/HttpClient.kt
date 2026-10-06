@@ -6,6 +6,7 @@ import java.io.File
 import okhttp3.Authenticator
 import okhttp3.Cache
 import okhttp3.ConnectionPool
+import okhttp3.CookieJar
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -67,6 +68,7 @@ fun buildOkHttpClient(
             val request = chain.request().newBuilder()
                 .header(IRIS_CAPS_HEADER, capsHeaderValue)
                 .header(IRIS_CLIENT_HEADER, clientHeaderValue)
+                .tag(SentAtRefresh::class.java, SentAtRefresh(authenticator.generation))
                 .build()
             val response = chain.proceed(request)
             if (response.code == HTTP_UPGRADE_REQUIRED) {
@@ -74,11 +76,9 @@ fun buildOkHttpClient(
             }
             response
         }
-        .addInterceptor(
-            HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BASIC
-            }
-        )
+        .apply {
+            if (BuildConfig.DEBUG) addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
+        }
         .build()
     authenticator.bind(client)
     return client
@@ -130,6 +130,22 @@ fun deriveMediaOkHttpClient(api: OkHttpClient): OkHttpClient =
         .build()
 
 /**
+ * The client of the APK and its version sidecar, which live on another host than the Iris
+ * server: no session cookie, no refresh, no Iris headers, no HTTP cache. No call timeout (a
+ * 50 MB body on a slow link takes minutes); the read timeout bounds a stalled transfer.
+ */
+fun buildUpdateOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
+    .cookieJar(CookieJar.NO_COOKIES)
+    .authenticator(Authenticator.NONE)
+    .connectTimeout(15, TimeUnit.SECONDS)
+    .readTimeout(30, TimeUnit.SECONDS)
+    .callTimeout(0, TimeUnit.MILLISECONDS)
+    .build()
+
+/** The refresh generation when a request left: its 401 is older than any refresh since. */
+private class SentAtRefresh(val generation: Int)
+
+/**
  * OkHttp [Authenticator] that transparently refreshes the access cookie when
  * the server replies 401. The refresh request flows through the same client
  * (so the cookie jar is updated atomically), but we short-circuit on auth
@@ -148,6 +164,8 @@ class IrisAuthenticator(private val sessionStore: SessionStore) : Authenticator 
     // refresh (a redundant refresh rotates the token again and can 401 the
     // stragglers that are still mid-flight on the previous token).
     @Volatile private var refreshGeneration = 0
+
+    val generation: Int get() = refreshGeneration
 
     /** Wired by [buildOkHttpClient] once the client itself exists. */
     fun bind(client: OkHttpClient) {
@@ -168,7 +186,9 @@ class IrisAuthenticator(private val sessionStore: SessionStore) : Authenticator 
         // tried once, give up to avoid infinite retries.
         if (response.priorResponse != null) return null
 
-        val genAtEntry = refreshGeneration
+        // The generation the request was SENT under: a refresh that landed while it was in
+        // flight already rotated the cookie it carried.
+        val genAtEntry = response.request.tag(SentAtRefresh::class.java)?.generation ?: refreshGeneration
         // Serialize concurrent 401s through one refresh. The OLD code used a
         // non-blocking flag and replayed the other threads IMMEDIATELY — they
         // re-sent the still-expired access token before the refresh landed,

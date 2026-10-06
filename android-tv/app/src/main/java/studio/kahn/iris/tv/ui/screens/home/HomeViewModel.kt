@@ -176,7 +176,7 @@ class HomeViewModel(
 
     init {
         viewModelScope.launch {
-            val latest = AppUpdater.fetchLatestVersion(container.okHttpClient)
+            val latest = AppUpdater.fetchLatestVersion(container.updateOkHttpClient)
             val available = AppUpdater.versionStatus(BuildConfig.VERSION_NAME, latest) is AppUpdater.VersionStatus.UpdateAvailable
             data.update { it.copy(updateAvailable = available) }
         }
