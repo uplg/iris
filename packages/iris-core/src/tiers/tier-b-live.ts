@@ -59,6 +59,7 @@ import { endStream, openMediaSource, releaseVideo } from '../mse/media-source';
 import { relaxMediabunnyGopCheck } from '../mse/output';
 import { bufferedAhead, evictionSpan, forwardGapTarget } from '../mse/ranges';
 import { irisUrlSource } from '../stream-fetch';
+import { nalLengthSize, packetHasIdr } from '../decode/h264-idr';
 
 /** How far behind the playlist's end we aim the first keyframe. */
 const LIVE_EDGE_BACKOFF_S = 12;
@@ -85,36 +86,6 @@ const WEDGE_APPEND_LIMIT = 16;
 /** Key packets to walk while hunting a true IDR anchor. At broadcast IDR
  *  cadence (~1-4 s) this covers the whole live window and then some. */
 const IDR_HUNT_LIMIT = 24;
-
-/** NAL length-prefix size from the avcC description (defaults to 4). */
-function nalLengthSize(description: BufferSource | undefined): number {
-	if (!description) return 4;
-	const bytes =
-		description instanceof ArrayBuffer
-			? new Uint8Array(description)
-			: new Uint8Array(description.buffer, description.byteOffset, description.byteLength);
-	// avcC: [0]=version [1]=profile [2]=compat [3]=level [4]=0xFC|lengthSizeMinusOne
-	if (bytes.length < 5 || bytes[0] !== 1) return 4;
-	return (bytes[4]! & 0x03) + 1;
-}
-
-/** True when the AVCC sample contains an IDR slice (NAL type 5). Broadcast
- *  TNT mostly emits open-GOP recovery-point I-frames — the fMP4 marks them
- *  as sync samples, but starting a strict decoder (VideoToolbox) on one is
- *  an illegal random access and it hard-fails instantly. Only a real IDR
- *  (fresh DPB) is a safe anchor. */
-function packetHasIdr(data: Uint8Array, lengthSize: number): boolean {
-	let o = 0;
-	while (o + lengthSize < data.length) {
-		let len = 0;
-		for (let i = 0; i < lengthSize; i += 1) len = (len << 8) | data[o + i]!;
-		o += lengthSize;
-		if (len <= 0 || o + len > data.length) break;
-		if ((data[o]! & 0x1f) === 5) return true;
-		o += len;
-	}
-	return false;
-}
 
 export const mountTierBLive: EngineMount = async (opts) => {
 	const { container, streamUrl } = opts;
