@@ -22,7 +22,7 @@
 import {
 	ALL_FORMATS,
 	AudioSampleSink,
-	AudioSampleSource,
+	type AudioSampleSource,
 	type Conversion,
 	EncodedAudioPacketSource,
 	EncodedPacketSink,
@@ -30,16 +30,17 @@ import {
 	Input,
 	Mp4OutputFormat,
 	Output,
-	Quality,
 	StreamTarget,
 	type StreamTargetChunk,
 	UrlSource
 } from 'mediabunny';
 
-import { hevcMseNeedsIdrStart, isMobileLike } from '../caps';
+import { hevcMseNeedsIdrStart, isFirefox, isMobileLike } from '../caps';
+import { pickAudioEncoder, transcodeSampleSource, type AudioEncoderChoice } from '../decode/audio-plan';
 import { HevcCraSplicer, descriptionBytes, splicePacket } from '../decode/hevc-cra-splice';
 import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
 import { appendNativeTrack, bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
+import { relaxMediabunnyGopCheck } from '../mse/output';
 
 // Live SourceBuffer window
 //
@@ -109,11 +110,6 @@ const SOURCE_CACHE_BYTES = 64 * 1024 * 1024;
  *  data. Mobile budgets (tighter still) always win when both apply. */
 const AHEAD_BYTES_BUDGET_FIREFOX = 48 * 1024 * 1024;
 
-/** Match Firefox-proper + Firefox-derived (LibreWolf, Waterfox, …). */
-function isFirefox(): boolean {
-	return typeof navigator !== 'undefined' && /Firefox\/\d+/.test(navigator.userAgent);
-}
-
 /** Floors so a very high-bitrate file can't shrink the forward window to
  *  the point of constant rebuffering. The media is served by-range from
  *  the seedbox (already on disk, low latency), so a small forward window
@@ -125,120 +121,6 @@ const MIN_BEHIND_SECONDS = 3;
  *  far faster than transcoded audio; uncapped, the muxer holds minutes of the
  *  faster track in RAM waiting to interleave. */
 const TRACK_LEAD_CAP = 4;
-
-/** Result of probing `WebCodecs.AudioEncoder`: which target codec
- *  works at what channel count for the given source. Returns null
- *  when neither AAC nor Opus encoding works (caller fails the
- *  Tier B mount and demotes to F).
- *
- *  We probe in priority order:
- *    1. **AAC** — broadest device / receiver compat. Chrome accepts
- *       up to 5.1ch + the `format: 'aac'` field Mediabunny requires
- *       for AAC-in-MP4. Firefox doesn't support AAC-in-MP4 encoding
- *       at all (its WebCodecs AudioEncoder only emits ADTS).
- *    2. **Opus** — Firefox's fallback. 2ch only (browser Opus
- *       encoders are practically stereo-capped). MSE-in-MP4 accepts
- *       `audio/mp4; codecs="opus"` on Chrome + Firefox since ~2020.
- *
- *  Critical: the AAC probe MUST pass `aac: { format: 'aac' }` to
- *  match Mediabunny's own internal config. Firefox returns
- *  `supported: true` on the bare query and then rejects the encoder
- *  once `format` is set — probing without `format` would green-
- *  light Tier B on Firefox and we'd waste a full mount cycle. */
-export type AudioEncoderChoice =
-	| { codec: 'aac'; channels: number; mp4Codec: 'mp4a.40.2' }
-	| { codec: 'opus'; channels: number; mp4Codec: 'opus' };
-
-const encoderProbeCache = new Map<string, AudioEncoderChoice | null>();
-
-export async function pickAudioEncoder(srcChannels: number, sampleRate: number): Promise<AudioEncoderChoice | null> {
-	if (typeof globalThis.AudioEncoder === 'undefined') return null;
-	const key = `${srcChannels}/${sampleRate}`;
-	const cached = encoderProbeCache.get(key);
-	if (cached !== undefined) return cached;
-
-	// Pass 1 — AAC at descending channel counts (prefer source layout).
-	const aacCandidates = Array.from(new Set([srcChannels, 6, 2].filter((n) => n > 0 && n <= srcChannels)));
-	for (const n of aacCandidates) {
-		try {
-			const r = await AudioEncoder.isConfigSupported({
-				codec: 'mp4a.40.2',
-				sampleRate,
-				numberOfChannels: n,
-				bitrate: 192_000,
-				aac: { format: 'aac' }
-			} as AudioEncoderConfig);
-			if (r.supported) {
-				const choice: AudioEncoderChoice = {
-					codec: 'aac',
-					channels: n,
-					mp4Codec: 'mp4a.40.2'
-				};
-				console.log(`[iris-core] Tier B: AudioEncoder → AAC ${n}ch @ ${sampleRate}Hz (source: ${srcChannels}ch)`);
-				encoderProbeCache.set(key, choice);
-				return choice;
-			}
-		} catch {
-			/* keep walking */
-		}
-	}
-
-	// Pass 2 — Opus 2ch (Firefox fallback). 128 kbps is around the
-	// transparency point for music; speech-heavy content sounds fine
-	// well below that, so this is conservative.
-	try {
-		const r = await AudioEncoder.isConfigSupported({
-			codec: 'opus',
-			sampleRate,
-			numberOfChannels: 2,
-			bitrate: 128_000,
-			opus: { format: 'opus' }
-		} as AudioEncoderConfig);
-		if (r.supported) {
-			const choice: AudioEncoderChoice = {
-				codec: 'opus',
-				channels: 2,
-				mp4Codec: 'opus'
-			};
-			console.log(`[iris-core] Tier B: AudioEncoder → Opus 2ch @ ${sampleRate}Hz (source: ${srcChannels}ch, AAC unavailable)`);
-			encoderProbeCache.set(key, choice);
-			return choice;
-		}
-	} catch {
-		/* fall through */
-	}
-
-	console.warn(`[iris-core] Tier B: no encodable audio codec @ ${sampleRate}Hz (source: ${srcChannels}ch)`);
-	encoderProbeCache.set(key, null);
-	return null;
-}
-
-/** Mediabunny's MP4 muxer validates that every packet's PTS is ≥ the
- *  max PTS of the previous GOP. That assumption breaks for open-GOP
- *  / deep B-frame video (x265, AV1 with `--b-pyramid normal`, anything
- *  exported by HandBrake with a tight RD), where a new GOP's keyframe
- *  legitimately presents 1 frame before the previous GOP's last
- *  B-frame. The muxer's per-sample PTS/CTS book-keeping handles this
- *  fine, so the only fix needed is to swallow the "previous GOP" error
- *  thrown by the validator. We patch the validator on each Output we
- *  build (the muxer is on `output._muxer`). */
-export function relaxMediabunnyGopCheck(output: Output): void {
-	const m = (
-		output as unknown as {
-			_muxer?: { validateTimestamp?: (track: unknown, ts: number, isKey: boolean) => void };
-		}
-	)._muxer;
-	if (!m || typeof m.validateTimestamp !== 'function') return;
-	const original = m.validateTimestamp.bind(m);
-	m.validateTimestamp = (track, ts, isKey) => {
-		try {
-			original(track, ts, isKey);
-		} catch (e) {
-			if (e instanceof Error && /previous GOP/i.test(e.message)) return;
-			throw e;
-		}
-	};
-}
 
 /** Hard cap on undrained append chunks held in RAM. When the drain stalls
  *  (a swallowed QuotaExceededError on a VBR bitrate spike, where the
@@ -1058,14 +940,7 @@ export const mountTierB: EngineMount = async (opts) => {
 				if (!encoderChoice) {
 					throw new Error('Tier B: internal — audioNeedsTranscode but encoderChoice is null');
 				}
-				const srcChannels = await audioTrack.getNumberOfChannels();
-				const source = new AudioSampleSource({
-					codec: encoderChoice.codec,
-					// `new Quality(<number>)` means a 0..1 qualitative level, NOT
-					// a bitrate — the explicit `{ bitrate }` form is required.
-					quality: new Quality({ bitrate: encoderChoice.codec === 'opus' ? 128_000 : 192_000 }),
-					...(encoderChoice.channels !== srcChannels ? { transform: { numberOfChannels: encoderChoice.channels } } : {})
-				});
+				const source = transcodeSampleSource(encoderChoice, await audioTrack.getNumberOfChannels());
 				newOutput.addAudioTrack(source);
 				audioFeed = { kind: 'transcode', source };
 			} else {

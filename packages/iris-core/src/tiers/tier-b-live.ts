@@ -39,22 +39,22 @@
 import {
 	ALL_FORMATS,
 	AudioSampleSink,
-	AudioSampleSource,
+	type AudioSampleSource,
 	EncodedAudioPacketSource,
 	EncodedPacketSink,
 	EncodedVideoPacketSource,
 	Input,
 	Mp4OutputFormat,
 	Output,
-	Quality,
 	StreamTarget,
 	type StreamTargetChunk,
 	UrlSource
 } from 'mediabunny';
 
-import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
+import { isFirefox } from '../caps';
+import { planAudioTrack, transcodeSampleSource, type AudioPlan } from '../decode/audio-plan';
 import { bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
-import { pickAudioEncoder, relaxMediabunnyGopCheck } from './tier-b-mse';
+import { relaxMediabunnyGopCheck } from '../mse/output';
 
 /** How far behind the playlist's end we aim the first keyframe. */
 const LIVE_EDGE_BACKOFF_S = 12;
@@ -76,15 +76,9 @@ const RESTART_WINDOW_MS = 90_000;
  *  ≈ several seconds of media landing with zero playback progress. */
 const WEDGE_APPEND_LIMIT = 16;
 
-/** Codecs MSE plays inside fMP4 without help — passthrough, no re-encode. */
-const MSE_NATIVE_AUDIO = new Set(['aac', 'opus', 'mp3']);
 /** Key packets to walk while hunting a true IDR anchor. At broadcast IDR
  *  cadence (~1-4 s) this covers the whole live window and then some. */
 const IDR_HUNT_LIMIT = 24;
-
-function isFirefox(): boolean {
-	return typeof navigator !== 'undefined' && /Firefox\/\d+/.test(navigator.userAgent);
-}
 
 /** NAL length-prefix size from the avcC description (defaults to 4). */
 function nalLengthSize(description: BufferSource | undefined): number {
@@ -412,11 +406,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
 
 	let mime = '';
 	let videoDecoderConfigCodec = '';
-	type AudioPlan =
-		| { kind: 'passthrough'; mp4Codec: string }
-		| { kind: 'transcode'; mp4Codec: string; targetCodec: 'aac' | 'opus'; channels: number }
-		| null;
-	let audioPlan: AudioPlan = null;
+	let audioPlan: AudioPlan | null = null;
 
 	/** (Re)create the MediaSource + SourceBuffer on the `<video>`, wire the
 	 *  per-cycle listeners, then anchor at the live edge and spawn the feed
@@ -643,14 +633,10 @@ export const mountTierBLive: EngineMount = async (opts) => {
 		let audioFeed: AudioFeed | null = null;
 		if (audioTrack && audioPlan) {
 			if (audioPlan.kind === 'transcode') {
-				const srcChannels = await audioTrack.getNumberOfChannels();
-				const source = new AudioSampleSource({
-					codec: audioPlan.targetCodec,
-					// `new Quality(<number>)` means a 0..1 qualitative level, NOT
-					// a bitrate — the explicit `{ bitrate }` form is required.
-					quality: new Quality({ bitrate: audioPlan.targetCodec === 'opus' ? 128_000 : 192_000 }),
-					...(audioPlan.channels !== srcChannels ? { transform: { numberOfChannels: audioPlan.channels } } : {})
-				});
+				const source = transcodeSampleSource(
+					{ codec: audioPlan.targetCodec, channels: audioPlan.channels },
+					await audioTrack.getNumberOfChannels()
+				);
 				newOutput.addAudioTrack(source);
 				audioFeed = { kind: 'transcode', source };
 			} else {
@@ -832,26 +818,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
 
 		const audioTrack = (await input.getAudioTracks())[0] ?? null;
 		const audioCodec = audioTrack ? await audioTrack.getCodec() : null;
-		if (audioTrack && audioCodec) {
-			if (MSE_NATIVE_AUDIO.has(audioCodec)) {
-				const cfg = await audioTrack.getDecoderConfig();
-				audioPlan = { kind: 'passthrough', mp4Codec: cfg?.codec ?? 'mp4a.40.2' };
-			} else if (libavCanDecode(audioCodec)) {
-				ensureLibavAudioDecoderRegistered();
-				const channels = await audioTrack.getNumberOfChannels();
-				const sampleRate = await audioTrack.getSampleRate();
-				const choice = await pickAudioEncoder(channels, sampleRate);
-				if (!choice) throw new Error(`live: cannot re-encode ${audioCodec} in this browser`);
-				audioPlan = {
-					kind: 'transcode',
-					mp4Codec: choice.mp4Codec,
-					targetCodec: choice.codec,
-					channels: choice.channels
-				};
-			} else {
-				console.warn(`[iris-core] live: audio codec ${audioCodec} undecodable — video only`);
-			}
-		}
+		audioPlan = audioTrack ? await planAudioTrack(audioTrack, 'live') : null;
 
 		const codecs = [videoDecoderConfigCodec, audioPlan?.mp4Codec].filter(Boolean).join(',');
 		mime = `video/mp4; codecs="${codecs}"`;

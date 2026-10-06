@@ -8,6 +8,7 @@
  */
 
 import type { components } from '@iris/api/api-types';
+import { isHevc } from './codec';
 import { capsHeader, hevcMseNeedsIdrStart, isMobileLike, mseSupportsType, probeCapabilities } from './caps';
 import { libavCanDecode } from './decode/libav-audio-decoder';
 import { cheapProbeVideoCodec } from './decode/webcodecs-probe';
@@ -149,7 +150,7 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
 	// `hev1.*` on these builds — `isTypeSupported` says yes and the demuxer then
 	// drops the frames — so A could otherwise win and fail later.
 	const hevcPrimary = manifest.video[0];
-	if (hevcPrimary && /hevc|hev1|hvc1|h265|x265/i.test(hevcPrimary.codec) && hevcMseNeedsIdrStart()) {
+	if (hevcPrimary && isHevc(hevcPrimary.codec) && hevcMseNeedsIdrStart()) {
 		console.log(
 			`[iris-core] Tier B (CRA splice): codec=${hevcPrimary.codec} ` +
 				`${hevcPrimary.width ?? '?'}x${hevcPrimary.height ?? '?'} ua=${navigator.userAgent}`
@@ -197,7 +198,7 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
 	// 1920x960, `VideoDecoder` likewise, and MSE accepts `avc1.640028` with both
 	// `opus` and `mp4a.40.2`. Mobile stays excluded by the gate far above (the
 	// WASM transcoder is the heap-heavy engine that trips mobile OOM).
-	if (primary && /hevc|hev1|hvc1|h265|x265/i.test(primary.codec) && (primary.height ?? 0) <= 1080) {
+	if (primary && isHevc(primary.codec) && (primary.height ?? 0) <= 1080) {
 		if (typeof VideoEncoder !== 'undefined') {
 			console.log(
 				`[iris-core] Tier E (no native decode): codec=${primary.codec} ` +

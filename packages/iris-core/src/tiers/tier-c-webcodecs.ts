@@ -16,6 +16,7 @@
 
 import { ALL_FORMATS, Input, UrlSource, type InputAudioTrack, type InputVideoTrack } from 'mediabunny';
 
+import { isHevc } from '../codec';
 import { startAudioPipeline, type AudioPipelineHandle } from '../decode/audio-pipeline';
 import { startVideoPipeline, type VideoPipelineHandle } from '../decode/video-pipeline';
 import { probeVideoTrack } from '../decode/webcodecs-probe';
@@ -67,7 +68,7 @@ export const mountTierC: EngineMount = async (opts) => {
 	const renderer: VideoRenderer = await mountRenderer({
 		container,
 		clockSeconds: () => scheduler.currentMediaTimeSeconds(),
-		hdr: probe.config.codec?.startsWith('hev1') || probe.config.codec?.startsWith('hvc1') ? 'auto' : 'sdr',
+		hdr: isHevc(probe.config.codec) ? 'auto' : 'sdr',
 		onError
 	});
 

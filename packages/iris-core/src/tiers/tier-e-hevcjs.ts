@@ -28,14 +28,13 @@
 import {
 	ALL_FORMATS,
 	AudioSampleSink,
-	AudioSampleSource,
+	type AudioSampleSource,
 	EncodedPacket,
 	EncodedPacketSink,
 	EncodedVideoPacketSource,
 	Input,
 	Mp4OutputFormat,
 	Output,
-	Quality,
 	type StreamTargetChunk,
 	StreamTarget,
 	UrlSource,
@@ -44,7 +43,8 @@ import {
 
 import { appendNativeTrack, bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
 import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
-import { pickAudioEncoder, relaxMediabunnyGopCheck } from './tier-b-mse';
+import { pickAudioEncoder, transcodeSampleSource } from '../decode/audio-plan';
+import { relaxMediabunnyGopCheck } from '../mse/output';
 
 /** `subscribeSegmentStat` from `@hevcjs/core`, captured on first load. The lib
  *  publishes one stat per transcoded segment, `speedX` being media-seconds
@@ -658,14 +658,7 @@ export const mountTierE: EngineMount = async (opts) => {
 				target: new StreamTarget(sinkFor(audioLane, gen))
 			});
 			if (audioNeedsTranscode && encoderChoice) {
-				const srcChannels = await audioTrack.getNumberOfChannels();
-				audioSrc = new AudioSampleSource({
-					codec: encoderChoice.codec,
-					// `new Quality(<number>)` is a 0..1 level, not a bitrate — the
-					// explicit `{ bitrate }` form is the one that means bits per second.
-					quality: new Quality({ bitrate: encoderChoice.codec === 'opus' ? 128_000 : 192_000 }),
-					...(encoderChoice.channels !== srcChannels ? { transform: { numberOfChannels: encoderChoice.channels } } : {})
-				});
+				audioSrc = transcodeSampleSource(encoderChoice, await audioTrack.getNumberOfChannels());
 				aOut.addAudioTrack(audioSrc);
 			} else {
 				const { EncodedAudioPacketSource } = await import('mediabunny');

@@ -54,10 +54,10 @@ import {
 } from 'mediabunny';
 
 import { refreshSessionForFetch } from '@iris/api/client';
-import { ensureLibavAudioDecoderRegistered, libavCanDecode } from '../decode/libav-audio-decoder';
+import { encoderBitrate, planAudioTrack, type AudioPlan } from '../decode/audio-plan';
 import { configWithFreshDescription } from '../decode/webcodecs-probe';
 import { bindVideoCallbacks, videoBackedHandle, type EngineHandle, type EngineMount } from '../engine';
-import { pickAudioEncoder, relaxMediabunnyGopCheck } from './tier-b-mse';
+import { relaxMediabunnyGopCheck } from '../mse/output';
 
 /** How far behind the playlist's end we aim the first keyframe. */
 const LIVE_EDGE_BACKOFF_S = 12;
@@ -96,9 +96,6 @@ const RESET_BUDGET = 12;
 const RESET_WINDOW_MS = 60_000;
 /** Pacing poll interval — tier C's established backpressure pattern. */
 const PACE_MS = 100;
-
-/** Codecs MSE plays inside fMP4 without help — audio passthrough. */
-const MSE_NATIVE_AUDIO = new Set(['aac', 'opus', 'mp3']);
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -313,30 +310,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 
 		const audioTrack = (await input.getAudioTracks())[0] ?? null;
 		const audioCodec = audioTrack ? await audioTrack.getCodec() : null;
-		type AudioPlan =
-			| { kind: 'passthrough'; mp4Codec: string }
-			| { kind: 'transcode'; mp4Codec: string; targetCodec: 'aac' | 'opus'; channels: number };
-		let audioPlan: AudioPlan | null = null;
-		if (audioTrack && audioCodec) {
-			if (MSE_NATIVE_AUDIO.has(audioCodec)) {
-				const cfg = await audioTrack.getDecoderConfig();
-				audioPlan = { kind: 'passthrough', mp4Codec: cfg?.codec ?? 'mp4a.40.2' };
-			} else if (libavCanDecode(audioCodec)) {
-				ensureLibavAudioDecoderRegistered();
-				const channels = await audioTrack.getNumberOfChannels();
-				const sampleRate = await audioTrack.getSampleRate();
-				const choice = await pickAudioEncoder(channels, sampleRate);
-				if (!choice) throw new Error(`live: cannot re-encode ${audioCodec} in this browser`);
-				audioPlan = {
-					kind: 'transcode',
-					mp4Codec: choice.mp4Codec,
-					targetCodec: choice.codec,
-					channels: choice.channels
-				};
-			} else {
-				console.warn(`[iris-core] live-c: audio codec ${audioCodec} undecodable — video only`);
-			}
-		}
+		const audioPlan: AudioPlan | null = audioTrack ? await planAudioTrack(audioTrack, 'live-c') : null;
 
 		// Anchor near the live edge from playlist metadata (never the client
 		// clock); wait out fresh sessions' thin window. skipLiveWait is
@@ -552,7 +526,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 						codec: targetCodec === 'aac' ? 'mp4a.40.2' : 'opus',
 						sampleRate: srcRate,
 						numberOfChannels: srcChannels,
-						bitrate: targetCodec === 'opus' ? 128_000 : 192_000,
+						bitrate: encoderBitrate(targetCodec),
 						...(targetCodec === 'aac' ? { aac: { format: 'aac' } } : { opus: { format: 'opus' } })
 					} as AudioEncoderConfig);
 

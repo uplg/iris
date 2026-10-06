@@ -185,7 +185,11 @@ export function isWindowsChromium(): boolean {
 	return ua.includes('Windows') && /Chrome|Chromium|Edg\//.test(ua) && !/Firefox/.test(ua);
 }
 
-/** Test-only hook to reset the memoised result. */
+/** Firefox proper and its derivatives (LibreWolf, Waterfox, Zen…). */
+export function isFirefox(): boolean {
+	return typeof navigator !== 'undefined' && /Firefox\/\d+/.test(navigator.userAgent);
+}
+
 /**
  * True when this engine will refuse to open an MSE coded frame group on an
  * HEVC CRA picture — i.e. Firefox-family on macOS from Gecko 154.
@@ -217,6 +221,7 @@ export function hevcMseNeedsIdrStart(): boolean {
 	return rv ? Number(rv[1]) >= 154 : false;
 }
 
+/** Test-only hook to reset the memoised result. */
 export function __resetCapsCacheForTests(): void {
 	cached = null;
 	cachedHeader = null;
