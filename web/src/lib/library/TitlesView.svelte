@@ -26,6 +26,7 @@
 		type TypeFilter
 	} from './model.ts';
 	import { collectionsOf, read, refreshLibrary, torrentsOf } from '#lib/queries.ts';
+	import { resumeOf } from '#lib/watched.ts';
 
 	const id = $props.id();
 	const collections = createQuery(() => read.collections());
@@ -137,6 +138,7 @@
 						art={tmdbImage(c.poster_path, 'w342')}
 						meta={titleMeta(c)}
 						status={titleStatus(c, activity.get(c.id))}
+						progress={resumeOf(c.watch)?.share ?? undefined}
 						actions={c.ghost ? ghostActions : undefined}
 					/>
 					{#snippet ghostActions()}

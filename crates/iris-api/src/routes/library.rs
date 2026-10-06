@@ -374,6 +374,9 @@ pub(crate) struct CollectionDetail {
     /// `None` for a title with no SCENE identity. Additive.
     #[serde(default)]
     normalized_name: Option<String>,
+    /// The caller's progress in this title. Additive.
+    #[serde(default)]
+    watch: Option<TitleWatch>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -613,11 +616,18 @@ pub(crate) async fn collection_detail(
     };
     let artwork = collection_artwork(&state, collection.tmdb_id, &collection.kind);
     // Gone view first — its languages count as "owned" coverage below.
-    let (follow, user_last_watched, (poster_path, backdrop_path), (gone_releases, gone_episodes)) = tokio::join!(
+    let (
+        follow,
+        user_last_watched,
+        (poster_path, backdrop_path),
+        (gone_releases, gone_episodes),
+        watch,
+    ) = tokio::join!(
         follow,
         last_watched,
         artwork,
-        build_gone_view(&state, id, user.id)
+        build_gone_view(&state, id, user.id),
+        title_watch(&state, user.id, id)
     );
 
     // "X new" cutoff = the user's last ENGAGEMENT: max(last page
@@ -685,6 +695,7 @@ pub(crate) async fn collection_detail(
         episode_info,
         on_watchlist,
         normalized_name: collection.parsed_title_normalized,
+        watch,
     }))
 }
 

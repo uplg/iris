@@ -4492,6 +4492,17 @@
               "$ref": "#/components/schemas/TorrentView"
             },
             "description": "All torrents attached to this collection."
+          },
+          "watch": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TitleWatch",
+                "description": "The caller's progress in this title. Additive."
+              }
+            ]
           }
         }
       },

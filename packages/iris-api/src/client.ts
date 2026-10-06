@@ -270,6 +270,8 @@ export type SortOrder = components['schemas']['SortOrder'];
 export type ProviderResultMeta = components['schemas']['ProviderResultMeta'];
 export type ParsedQueryInfo = components['schemas']['ParsedQueryInfo'];
 export type LibraryMatch = components['schemas']['LibraryMatch'];
+/** Where the person is in a title: the file watched last, episodes finished. */
+export type TitleWatch = components['schemas']['TitleWatch'];
 /** The `/api/search` response = `AggregatedResults` (flattened) + library
  *  matches. Kept under the name `AggregatedResults` for call-site stability;
  *  the Rust source type is `SearchResponse`. */
@@ -337,10 +339,12 @@ export type VideoInfo = components['schemas']['VideoInfo'];
 export type MediaInfoSummary = components['schemas']['MediaInfoSummary'];
 export type DescriptionFormat = components['schemas']['DescriptionFormat'];
 export type TorrentDetails = components['schemas']['TorrentDetails'];
+/** A release page: the tracker's details plus Iris' match, poster and copy on disk. */
+export type ReleaseDetails = components['schemas']['ReleaseDetails'];
 
 export const searchDetails = {
 	get: (provider_id: string, external_id: string) =>
-		api.get<TorrentDetails>(`/search/details?provider=${encodeURIComponent(provider_id)}&id=${encodeURIComponent(external_id)}`)
+		api.get<ReleaseDetails>(`/search/details?provider=${encodeURIComponent(provider_id)}&id=${encodeURIComponent(external_id)}`)
 };
 
 /** Build a TMDB image URL. Sizes: w92, w154, w185, w342, w500, original. */
@@ -587,6 +591,9 @@ export type CollectionDetail = components['schemas']['CollectionDetail'];
 export const library = {
 	list: (view: 'collections' | 'torrents' = 'collections') => api.get<LibraryResponse>(`/library?view=${view}`),
 	collection: (id: string) => api.get<CollectionDetail>(`/library/collections/${id}`),
+	/** Every file of the title watched, or the person's progress on it forgotten. */
+	markWatched: (id: string) => api.post<void>(`/library/collections/${id}/watched`),
+	markUnwatched: (id: string) => api.delete<void>(`/library/collections/${id}/watched`),
 	/** Grab a specific (season, episode) for a TV collection. Idempotent —
 	 *  returns `already_grabbed: true` if the episode is already on disk
 	 *  under any infohash. When `language` is set, the server picks

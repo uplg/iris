@@ -63,6 +63,8 @@ function series(over: Partial<CollectionDetail> = {}): CollectionDetail {
 		display_title: 'Severance',
 		tmdb_id: 95396,
 		numbering: 'seasonal',
+		on_watchlist: true,
+		normalized_name: 'severance',
 		poster_path: '/poster.jpg',
 		backdrop_path: '/backdrop.jpg',
 		torrents: [
@@ -92,8 +94,9 @@ function series(over: Partial<CollectionDetail> = {}): CollectionDetail {
 	};
 }
 
-function backend(c: CollectionDetail = series()) {
+function backend(c: CollectionDetail = series(), extra: Parameters<typeof stubApi>[0] = {}) {
 	return stubApi({
+		...extra,
 		[`GET /library/collections/${c.id}`]: () => c,
 		'/torrents/t1/progress': [],
 		'/torrents/t3/progress': [],
@@ -152,6 +155,17 @@ describe('Collection', () => {
 		await expect.element(page.getByRole('link', { name: 'Resume S2:E2 at 32:10' })).toHaveAttribute('href', '/watch/t2/1');
 		await expect.element(page.getByRole('button', { name: 'On your watchlist' })).toHaveAttribute('aria-pressed', 'true');
 		await expect.element(page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: 'Library' })).toBeVisible();
+	});
+
+	it('marks the whole title watched, then reads it again', async () => {
+		const api = backend(series(), { 'POST /library/collections/c1/watched': null });
+		await render(Collection, { id: 'c1' });
+		const watched = page.getByRole('button', { name: 'Watched' });
+		await expect.element(watched).toHaveAttribute('aria-pressed', 'false');
+		const before = reads(api);
+		await watched.click();
+		await vi.waitFor(() => expect(api.sent('POST', '/library/collections/c1/watched')).toHaveLength(1));
+		await vi.waitFor(() => expect(reads(api)).toBeGreaterThan(before));
 	});
 
 	it('names each season by what is left, and says each episode’s state in words', async () => {

@@ -3,8 +3,9 @@
 // can deliver it. Every search surface (grid, list, details) reads these, never its own.
 
 import type { LibraryMatch, ProviderResultMeta, SearchResult } from '@iris/api/client';
-import { episodeCode, formatRelative, formatSize, kindWord, languageLabel, plural, prettySceneName } from '@iris/api/format';
+import { episodeCode, formatRelative, formatSize, kindWord, languageLabel, plural, prettySceneName, timeLeft } from '@iris/api/format';
 import { watchHref } from '#lib/paths.ts';
+import { resumeOf } from '#lib/watched.ts';
 
 /** A season or an episode as people say it; episode 0 is the parser's whole-season mark. */
 export function partWords(season: number | null | undefined, episode: number | null | undefined, name = ''): string | null {
@@ -92,11 +93,20 @@ export function ownedFile(r: SearchResult): { infohash: string; idx: number } | 
 
 /** A library match: where it leads (the exact episode asked, else its collection) and what it holds. */
 export function matchTarget(m: LibraryMatch): { href: string; action: string; facts: string } {
+	const resume = resumeOf(m.watch);
 	if (m.episode_infohash && typeof m.episode_file_idx === 'number') {
+		const code = episodeCode(m.episode_season, m.episode_number) ?? '';
 		return {
 			href: watchHref(m.episode_infohash, m.episode_file_idx),
-			action: `Play ${episodeCode(m.episode_season, m.episode_number) ?? ''}`.trim(),
-			facts: 'The episode you asked for is on disk'
+			action: `${resume ? 'Resume' : 'Play'} ${code}`.trim(),
+			facts: resume && resume.left !== null ? timeLeft(resume.left) : 'The episode you asked for is on disk'
+		};
+	}
+	if (resume) {
+		return {
+			href: watchHref(resume.infohash, resume.fileIdx),
+			action: `Resume ${resume.code ?? ''}`.trim(),
+			facts: resume.left !== null ? timeLeft(resume.left) : 'In progress'
 		};
 	}
 	const facts =

@@ -6,6 +6,7 @@ import type { CollectionListItem, ContinueWatchingItem, HomeSummary, TorrentView
 import { STORAGE } from '#lib/storage.ts';
 import { duration, episodeCode, formatSize, percent, plural, prettySceneName, speed, VIDEO_RE } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
+import { watchWords } from '#lib/watched.ts';
 
 /** The page's views, remembered per browser. */
 export type View = 'titles' | 'downloads';
@@ -84,6 +85,9 @@ export function titleStatus(c: CollectionListItem, a: Activity | undefined): { t
 		if (a.trouble) return { tone: 'warn', text: `Download stuck · ${pct}` };
 		return { tone: 'busy', text: what ? `Downloading ${what} · ${pct}` : `Downloading · ${pct}` };
 	}
+	const watch = watchWords(c.watch, c.kind, c.episode_count);
+	if (watch === 'Watched') return { tone: 'info', text: watch };
+	if (watch?.startsWith('In progress')) return { tone: 'ok', text: watch };
 	if (c.kind === 'tv' && c.episode_count > 0) return { tone: 'ok', text: `${plural(c.episode_count, 'episode')} on disk` };
 	if (c.torrent_count > 1) return { tone: 'ok', text: `${plural(c.torrent_count, 'release')} on disk` };
 	return { tone: 'ok', text: 'On disk' };

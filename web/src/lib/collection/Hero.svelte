@@ -1,13 +1,14 @@
 <script lang="ts">
 	// The title: what it is (kind, year, genres), the one h1, its facts in words (seasons,
 	// episodes, rating, releases on disk), the languages and picture of what is on disk, its
-	// story, then what to do: resume where the person stopped (or start), and keep it on the
-	// watchlist (a series).
-	import { createQuery } from '@tanstack/svelte-query';
-	import { follows, me, type CollectionDetail, type ContinueWatchingItem, type TmdbMetadata } from '@iris/api/client';
+	// story, then what to do: resume where the person stopped (or start), keep it on the
+	// watchlist (a series), mark it watched or not.
+	import { follows, library, me, type CollectionDetail, type ContinueWatchingItem, type TmdbMetadata } from '@iris/api/client';
 	import { clock, duration, plural } from '@iris/api/format';
 	import { queryClient } from '#lib/query.ts';
-	import { KEYS, read } from '#lib/queries.ts';
+	import { KEYS } from '#lib/queries.ts';
+	import { allWatched } from '#lib/watched.ts';
+	import { refetchCollection } from './actions.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
@@ -59,24 +60,34 @@
 	const target = $derived(resume ? { infohash: resume.infohash, idx: resume.file_idx } : firstPlayable(c));
 	const label = $derived(playLabel(c, resume, clock));
 
-	const list = createQuery(
-		() => ({ ...read.watchlist(), enabled: series }),
-		() => queryClient
-	);
-	const entry = $derived(list.data?.find((w) => w.id === c.id));
-	const listed = $derived(!!entry);
+	const listed = $derived(c.on_watchlist ?? false);
+	const watched = $derived(allWatched(c.watch, c.kind, c.episodes.length));
 
 	function toggle() {
+		const was = listed;
 		void g.run(
 			async () => {
-				if (entry) await me.removeFromWatchlist(entry.normalized_name);
-				else await follows.add(c.display_title, c.tmdb_id ?? null);
+				if (was && c.normalized_name) await me.removeFromWatchlist(c.normalized_name);
+				else if (!was) await follows.add(c.display_title, c.tmdb_id ?? null);
 			},
 			async () => {
-				await queryClient.invalidateQueries({ queryKey: KEYS.watchlist });
-				ui.say(entry ? `${c.display_title} is no longer on your watchlist.` : `${c.display_title} is on your watchlist.`);
+				void queryClient.invalidateQueries({ queryKey: KEYS.watchlist });
+				await refetchCollection(c.id);
+				ui.say(was ? `${c.display_title} is no longer on your watchlist.` : `${c.display_title} is on your watchlist.`);
 			},
 			'watchlist'
+		);
+	}
+
+	function toggleWatched() {
+		const was = watched;
+		void g.run(
+			() => (was ? library.markUnwatched(c.id) : library.markWatched(c.id)),
+			async () => {
+				await refetchCollection(c.id);
+				ui.say(was ? `${c.display_title} is marked as not watched.` : `${c.display_title} is marked as watched.`);
+			},
+			'watched'
 		);
 	}
 </script>
@@ -100,12 +111,16 @@
 			<button
 				class="btn big"
 				aria-pressed={listed}
-				{...pending(g.is('watchlist') || list.isPending)}
-				onclick={() => !list.isPending && toggle()}
+				{...pending(g.is('watchlist'))}
+				disabled={listed && !c.normalized_name}
+				onclick={toggle}
 			>
 				<Icon name={listed ? 'check' : 'bookmark'} busy={g.is('watchlist')} />On your watchlist
 			</button>
 		{/if}
+		<button class="btn big" aria-pressed={watched} {...pending(g.is('watched'))} onclick={toggleWatched}>
+			<Icon name={watched ? 'circle-check' : 'circle'} busy={g.is('watched')} />Watched
+		</button>
 	</div>
 </div>
 

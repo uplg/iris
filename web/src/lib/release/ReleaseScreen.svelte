@@ -1,8 +1,8 @@
 <script lang="ts">
 	// A release, before grabbing it: what title and part it is, its main action (download and
 	// play, or play from disk when it is already there), what the swarm and the technical sheet
-	// say, the file to play, and the tracker's own notes. The search knew some of it (seeders,
-	// poster, its title, whether it is on disk: cache.ts); the torrent and the tracker say the rest.
+	// say, the file to play, and the tracker's own notes. The details answer carries the title,
+	// poster and copy on disk, so the page stands alone; a search hit (cache.ts) fills in first.
 	import { goto } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { follows, searchDetails, tmdbImage, torrents } from '@iris/api/client';
@@ -51,17 +51,25 @@
 	const d = $derived(details.data ?? null);
 	const name = $derived(p?.name ?? d?.title ?? hit?.title ?? '');
 	const mark = $derived(sceneMark(name));
-	const title = $derived(hit?.title_match?.title ?? (name ? prettySceneName(name) : 'Release'));
-	const tmdbId = $derived(hit?.title_match?.tmdb_id ?? hit?.tmdb_id ?? null);
-	const kind = $derived(hit?.title_match?.kind ?? hit?.kind ?? (mark ? 'tv' : null));
-	const year = $derived(hit?.title_match?.year ?? hit?.year ?? null);
+	const matched = $derived(d?.title_match ?? hit?.title_match ?? null);
+	const title = $derived(matched?.title ?? (name ? prettySceneName(name) : 'Release'));
+	const tmdbId = $derived(matched?.tmdb_id ?? hit?.tmdb_id ?? null);
+	const kind = $derived(matched?.kind ?? hit?.kind ?? (mark ? 'tv' : null));
+	const year = $derived(matched?.year ?? hit?.year ?? null);
 	const part = $derived(partWords(hit?.parsed_season ?? mark?.season, hit?.parsed_episode ?? mark?.episode, name));
 	const heading = $derived([title, part ?? (kind === 'movie' ? year : null)].filter(Boolean).join(' · '));
-	const poster = $derived(hit?.poster_url ?? tmdbImage(hit?.title_match?.poster_path, 'w342'));
+	const poster = $derived(hit?.poster_url ?? d?.poster_url ?? tmdbImage(matched?.poster_path, 'w342'));
 
 	const seeders = $derived(d?.seeders ?? hit?.seeders ?? null);
 	const dead = $derived(isDead(seeders));
-	const owned = $derived(hit ? ownedFile(hit) : null);
+	// the server knows the copy on disk; a search hit can still name the file of a pack
+	const owned = $derived(
+		d?.library_infohash && typeof d.library_file_idx === 'number'
+			? { infohash: d.library_infohash, idx: d.library_file_idx }
+			: hit
+				? ownedFile(hit)
+				: null
+	);
 	const archive = $derived(p !== null && !p.streamable);
 	const files = $derived(p ? sortFiles(p.files) : []);
 	const videos = $derived(files.filter((f) => f.is_video && !isSample(f.path)));
