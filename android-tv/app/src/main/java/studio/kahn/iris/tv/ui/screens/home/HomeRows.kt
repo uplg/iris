@@ -172,7 +172,7 @@ fun HomeCard(
     }
 }
 
-/** A row heading: the title in Fraunces, a muted fact beside it, an optional "See all". */
+/** A row heading: the title ([IrisType.section]), a muted fact beside it, an optional "See all". */
 @Composable
 fun RowHead(title: String, meta: String?, onSeeAll: (() -> Unit)?, modifier: Modifier = Modifier) {
     Row(

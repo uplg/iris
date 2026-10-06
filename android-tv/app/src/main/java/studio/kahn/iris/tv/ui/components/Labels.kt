@@ -57,7 +57,7 @@ fun Eyebrow(
 }
 
 /**
- * A row or section heading in Fraunces ([IrisType.section], 32 px), with an
+ * A row or section heading ([IrisType.section], 32 px), with an
  * optional muted [meta] beside it on the same baseline ("24 found · 3 trackers
  * answered"). Announced as a heading.
  */

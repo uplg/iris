@@ -77,7 +77,7 @@ fun PosterCard(
 ) {
     ArtCard(
         aspect = POSTER_ASPECT,
-        fallbackTitle = IrisType.group.copy(fontSize = 12.sp, lineHeight = 14.sp),
+        fallbackTitle = IrisType.artTitle.copy(fontSize = 12.sp, lineHeight = 14.sp),
         title = title,
         imageUrl = imageUrl,
         onClick = onClick,
@@ -114,7 +114,7 @@ fun StillCard(
 ) {
     ArtCard(
         aspect = STILL_ASPECT,
-        fallbackTitle = IrisType.group.copy(fontSize = 15.sp, lineHeight = 17.sp),
+        fallbackTitle = IrisType.artTitle.copy(fontSize = 15.sp, lineHeight = 17.sp),
         title = title,
         imageUrl = imageUrl,
         onClick = onClick,
@@ -184,7 +184,7 @@ private fun ArtCard(
 }
 
 /**
- * Artwork with its fallback: the fill and the [title] in Fraunces are drawn
+ * Artwork with its fallback: the fill and the [title] in Fraunces ([IrisType.artTitle]) are drawn
  * first, the image on top once decoded. Use it directly for a non-focusable
  * poster (a page's aside, the getting-ready screen); [width] lets Coil
  * decode at that size. [showTitle] false for a mini poster beside a row.
@@ -200,7 +200,7 @@ fun Artwork(
     kind: String? = null,
     badge: String? = null,
     framed: Boolean = true,
-    titleStyle: TextStyle = IrisType.panel,
+    titleStyle: TextStyle = IrisType.artTitle,
     showTitle: Boolean = true,
     dimmed: Boolean = false,
 ) {
@@ -255,7 +255,7 @@ fun Artwork(
         if (badge != null) {
             Text(
                 badge,
-                style = IrisType.metaSmall.copy(fontSize = 7.5.sp),
+                style = IrisType.metaSmall.copy(fontSize = 9.sp),
                 color = IrisColor.ink,
                 maxLines = 1,
                 modifier = Modifier

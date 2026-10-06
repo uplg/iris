@@ -57,7 +57,7 @@ import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 
 /**
- * The right-hand sheet (TVPlayerTracks): [title] in Fraunces, then [content]
+ * The right-hand sheet (TVPlayerTracks): [title] ([IrisType.panel]), then [content]
  * (typically [PanelLabel]s and [PanelOption]s), scrolling when long, and an
  * optional muted [footer] at the bottom. Back closes it ([onDismiss]), so
  * does a tap beside it on a phone. The D-pad cannot leave it while it is

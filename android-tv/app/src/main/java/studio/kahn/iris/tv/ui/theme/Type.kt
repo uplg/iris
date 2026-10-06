@@ -11,12 +11,15 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Typography as TvTypography
 import studio.kahn.iris.tv.R
 
-/** Fraunces: display and titles (web `--font-display`). */
-val Fraunces = FontFamily(
-    Font(R.font.fraunces_regular, FontWeight.Normal),
-    Font(R.font.fraunces_medium, FontWeight.Medium),
-    Font(R.font.fraunces_semibold, FontWeight.SemiBold),
-)
+/*
+ * Fraunces (web `--font-display`), one static cut per optical size: Compose can't drive the
+ * variable `opsz` axis below API 26, and the web lets the browser pick it from the size (a
+ * board px is 1/2 sp). The high-contrast 72 for the hero, the sturdier 48 for page and
+ * title names. Below 20 sp a serif reads poorly from the couch, worse in a sentence with
+ * figures (a dialog title), so those headings are set in Cal Sans 2 instead: see [heading].
+ */
+private val FrauncesDisplay = FontFamily(Font(R.font.fraunces_opsz72_medium, FontWeight.Medium))
+private val FrauncesTitle = FontFamily(Font(R.font.fraunces_opsz48_medium, FontWeight.Medium))
 
 /** Cal Sans 2: every text that is not a title (web `--font-text`). */
 val CalSans = FontFamily(
@@ -40,7 +43,7 @@ private val tight = LineHeightStyle(
 )
 
 private fun display(size: TextUnit, line: TextUnit) = TextStyle(
-    fontFamily = Fraunces,
+    fontFamily = if (size.value >= 36f) FrauncesDisplay else FrauncesTitle,
     fontWeight = FontWeight.Medium,
     fontSize = size,
     lineHeight = line,
@@ -62,6 +65,8 @@ private fun text(
     lineHeightStyle = tight,
 )
 
+private fun heading(size: TextUnit, line: TextUnit) = text(size, line, FontWeight.SemiBold)
+
 /**
  * The type scale of the TV boards. Boards are 1920x1080 px = 960x540 dp, so
  * every size here is the board's px / 2 (named after where the board uses it).
@@ -80,19 +85,21 @@ object IrisType {
     val page = display(24.sp, 28.sp)
     /** 40 px: the title in the player's top bar. */
     val stageTitle = display(20.sp, 22.sp)
+    /** A title drawn in place of missing artwork (the fallback tile): Fraunces, like a poster's lettering. */
+    val artTitle = display(18.sp, 21.sp)
     /** 36 px: a side panel's or a section's large heading. */
-    val panel = display(18.sp, 22.sp)
+    val panel = heading(18.sp, 22.sp)
     /** 32 px: a row or section heading. */
-    val section = display(16.sp, 20.sp)
+    val section = heading(16.sp, 20.sp)
     /** 28 px: a heading inside a framed group. */
-    val group = display(14.sp, 17.sp)
+    val group = heading(14.sp, 17.sp)
 
     /** 24/32 px: body text, a fact's value. */
     val body = text(12.sp, 16.sp)
     /** 24 px semibold: a card's title line. */
     val bodyStrong = text(12.sp, 16.sp, FontWeight.SemiBold)
-    /** 21/30 px: long text in a framed panel (release notes). */
-    val reading = text(10.5.sp, 15.sp)
+    /** Long text in a framed panel (release notes): 12 sp, the floor for reading at a distance (board 21 px). */
+    val reading = text(12.sp, 17.sp)
     /** 26 px medium: a large action's label. */
     val action = text(13.sp, 13.sp, FontWeight.Medium)
     /** 24 px medium: a tab, a regular action, a side-panel option. */
@@ -103,16 +110,16 @@ object IrisType {
     val meta = text(11.sp, 14.sp, FontWeight.Medium, tabular = true)
     /** 26/34 px medium, tabular: the larger meta line under a hero title. */
     val metaLarge = text(13.sp, 17.sp, FontWeight.Medium, tabular = true)
-    /** 18/24 px medium, tabular: the smallest meta (grid card facts). */
-    val metaSmall = text(9.sp, 12.sp, FontWeight.Medium, tabular = true)
+    /** The smallest meta (grid card facts), medium, tabular: 10 sp floor (board 18 px). */
+    val metaSmall = text(10.sp, 13.sp, FontWeight.Medium, tabular = true)
     /** 26 px medium, tabular: the player's clock figures. */
     val figure = text(13.sp, 13.sp, FontWeight.Medium, tabular = true)
     /** 20 px medium, uppercase at call site via [Eyebrow]: a kicker above a title. */
     val eyebrow = text(10.sp, 12.sp, FontWeight.Medium).copy(letterSpacing = 0.06.em)
     /** 20 px medium: a chip's words. */
     val chip = text(10.sp, 10.sp, FontWeight.Medium)
-    /** 18 px semibold: a key cap. */
-    val key = text(9.sp, 9.sp, FontWeight.SemiBold)
+    /** A key cap, semibold: 10 sp floor (board 18 px). */
+    val key = text(10.sp, 10.sp, FontWeight.SemiBold)
     /** 20 px: a release or file name. */
     val mono = TextStyle(fontFamily = FontMono, fontSize = 10.sp, lineHeight = 13.sp)
     /** 34 px Borel: the "Iris" wordmark. */
