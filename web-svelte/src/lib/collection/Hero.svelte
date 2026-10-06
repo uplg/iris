@@ -1,0 +1,159 @@
+<script lang="ts">
+	// The title: what it is (kind, year, genres), the one h1, its facts in words (seasons,
+	// episodes, rating, releases on disk), the languages and picture of what is on disk, its
+	// story, then what to do: resume where the person stopped (or start), and keep it on the
+	// watchlist (a series).
+	import { createQuery } from '@tanstack/svelte-query';
+	import { follows, me, type CollectionDetail, type ContinueWatchingItem, type TmdbMetadata } from '@iris/api/client';
+	import { clock, duration } from '@iris/api/format';
+	import { queryClient } from '#lib/query.ts';
+	import { Gesture, pending } from '#lib/gesture.svelte.ts';
+	import { ui } from '#lib/ui.svelte.ts';
+	import Icon from '#lib/components/Icon.svelte';
+	import {
+		audioChip,
+		count,
+		firstPlayable,
+		mergeEpisodes,
+		mergeEpisodesAbsolute,
+		nameLanguage,
+		playLabel,
+		qualityWords,
+		watchHref
+	} from './merge.ts';
+
+	interface Props {
+		collection: CollectionDetail;
+		meta: TmdbMetadata | undefined;
+		resume: ContinueWatchingItem | null;
+	}
+	let { collection: c, meta, resume }: Props = $props();
+	const g = new Gesture();
+
+	const series = $derived(c.kind === 'tv');
+	const eyebrow = $derived(
+		[series ? 'Series' : 'Movie', meta?.year, meta?.genres.length ? meta.genres.slice(0, 3).join(', ') : null].filter(Boolean).join(' · ')
+	);
+
+	const rows = $derived(
+		series
+			? c.numbering === 'absolute'
+				? mergeEpisodesAbsolute(c.episodes, c.available_episodes, c.gone_episodes)
+				: mergeEpisodes(c.episodes, c.available_episodes, c.gone_episodes)
+			: []
+	);
+	const facts = $derived.by(() => {
+		const out: string[] = [];
+		if (series) {
+			const seasons = new Set(rows.filter((r) => r.absolute === null && r.season > 0).map((r) => r.season)).size;
+			if (seasons && c.numbering !== 'absolute') out.push(count(seasons, 'season'));
+			if (rows.length) out.push(count(rows.length, 'episode'));
+		} else if (meta?.runtime_minutes) out.push(duration(meta.runtime_minutes * 60));
+		if ((meta?.vote_score ?? 0) > 0) out.push(`TMDB ${((meta?.vote_score ?? 0) * 10).toFixed(1)}`);
+		out.push(`${count(c.torrents.length, 'release')} on disk`);
+		return out.join(' · ');
+	});
+
+	const chips = $derived.by(() => {
+		const tags = series ? c.episodes.map((e) => e.language) : c.torrents.map((t) => nameLanguage(t.name ?? ''));
+		const audio = [...new Set(tags.filter((t): t is string => !!t))]
+			.map((t) => audioChip(t, meta?.original_language))
+			.filter((t): t is string => !!t);
+		const picture = c.torrents.map((t) => qualityWords(t.name ?? '')).filter((q): q is string => !!q);
+		return [...new Set([...audio, ...picture])];
+	});
+	const fresh = $derived(c.has_new_since_last_visit ?? 0);
+
+	const target = $derived(resume ? { infohash: resume.infohash, idx: resume.file_idx } : firstPlayable(c));
+	const label = $derived(playLabel(c, resume, clock));
+
+	const list = createQuery(
+		() => ({ queryKey: ['watchlist'], queryFn: me.watchlist, enabled: series }),
+		() => queryClient
+	);
+	const entry = $derived(list.data?.find((w) => w.id === c.id));
+	const listed = $derived(!!entry);
+
+	function toggle() {
+		void g.run(
+			async () => {
+				if (entry) await me.removeFromWatchlist(entry.normalized_name);
+				else await follows.add(c.display_title, c.tmdb_id ?? null);
+			},
+			async () => {
+				await queryClient.invalidateQueries({ queryKey: ['watchlist'] });
+				ui.say(entry ? `${c.display_title} is no longer on your watchlist.` : `${c.display_title} is on your watchlist.`);
+			},
+			'watchlist'
+		);
+	}
+</script>
+
+<div class="hero-text">
+	<p class="eyebrow">{eyebrow}</p>
+	<h1 tabindex="-1">{c.display_title}</h1>
+	<p class="facts">{facts}</p>
+	{#if chips.length || fresh > 0}
+		<ul class="plain-list chips" aria-label="Languages and picture">
+			{#if fresh > 0}<li class="chip accent">{count(fresh, 'new episode')} since your last visit</li>{/if}
+			{#each chips as chip (chip)}<li class="chip">{chip}</li>{/each}
+		</ul>
+	{/if}
+	{#if meta?.overview}<p class="overview">{meta.overview}</p>{/if}
+	<div class="actions">
+		{#if target}
+			<a class="btn primary big" href={watchHref(target.infohash, target.idx)}><Icon name="play" />{label}</a>
+		{/if}
+		{#if series}
+			<button
+				class="btn big"
+				aria-pressed={listed}
+				{...pending(g.is('watchlist') || list.isPending)}
+				onclick={() => !list.isPending && toggle()}
+			>
+				<Icon name={listed ? 'check' : 'bookmark'} busy={g.is('watchlist')} />On your watchlist
+			</button>
+		{/if}
+	</div>
+</div>
+
+<style>
+	.hero-text {
+		flex: 1 1 20rem;
+		max-width: var(--measure);
+		min-width: 0;
+		display: grid;
+		gap: var(--s-3);
+		align-content: start;
+	}
+	h1 {
+		font-family: var(--font-display);
+		font-size: clamp(2.07rem, 1.77rem + 1.52vw, 3.55rem);
+		line-height: 1.05;
+		overflow-wrap: anywhere;
+	}
+	.facts {
+		margin: 0;
+		font: var(--t-secondary);
+		font-variant-numeric: tabular-nums;
+		color: var(--ink-muted);
+	}
+	.chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--s-2);
+	}
+	.chip {
+		white-space: normal;
+	}
+	.overview {
+		margin: 0;
+	}
+	.actions {
+		margin-top: var(--s-2);
+	}
+	.big {
+		min-height: var(--control-h);
+		padding-inline: var(--s-4);
+	}
+</style>
