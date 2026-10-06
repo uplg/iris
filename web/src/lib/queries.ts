@@ -9,6 +9,7 @@ import {
 	library,
 	me,
 	metadata,
+	progress,
 	torrents,
 	type CollectionListItem,
 	type LibraryResponse,
@@ -22,6 +23,7 @@ export const KEYS = {
 	collections: ['library', 'collections'],
 	torrents: ['library', 'torrents'],
 	collection: (id: string) => ['collection', id] as const,
+	progressAll: ['torrent-progress'],
 	progress: (infohash: string) => ['torrent-progress', infohash] as const,
 	torrent: (infohash: string) => ['torrent', infohash] as const,
 	episodeContext: (infohash: string, fileIdx: number) => ['episode-context', infohash, fileIdx] as const,
@@ -75,6 +77,15 @@ export const read = {
 		queryKey: KEYS.summary,
 		queryFn: me.summary,
 		refetchInterval: (q: { state: { data?: { downloading: number } } }) => ((q.state.data?.downloading ?? 0) > 0 ? FAST : SLOW)
+	}),
+	/** The person's positions in a release's files. Read once per release (episode rows of one
+	 * release share it), not again on each return to the tab: it changes only by watching, and
+	 * the watch page polls it while it plays. */
+	progress: (infohash: string) => ({
+		queryKey: KEYS.progress(infohash),
+		queryFn: () => progress.forTorrent(infohash),
+		staleTime: 5 * 60_000,
+		refetchOnWindowFocus: false
 	}),
 	/** One release, live: quick while it fetches data, slow once it only shares. */
 	torrent: (infohash: string) => ({

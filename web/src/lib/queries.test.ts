@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TorrentView } from '@iris/api/client';
+import { refetchCollection } from '#lib/collection/actions.ts';
 import { queryClient } from '#lib/query.ts';
 import { FAST, KEYS, playbackPrefsSaved, read, SLOW } from './queries.ts';
 
@@ -35,5 +36,19 @@ describe('one release, live', () => {
 		expect(interval({ finished: false, progress_pct: 40, state: 'live' })).toBe(FAST);
 		expect(interval({ finished: true, progress_pct: 100, state: 'live' })).toBe(SLOW);
 		expect(interval({ finished: false, progress_pct: 40, state: 'paused' })).toBe(SLOW);
+	});
+});
+
+describe('a release’s positions', () => {
+	afterEach(() => queryClient.clear());
+
+	it('are read once per release, not again on each return to the tab', () => {
+		expect(read.progress('ih')).toMatchObject({ queryKey: KEYS.progress('ih'), refetchOnWindowFocus: false });
+	});
+
+	it('are read again after a gesture on the title', async () => {
+		queryClient.setQueryData(KEYS.progress('ih'), []);
+		await refetchCollection('c1');
+		expect(invalidated(KEYS.progress('ih'))).toBe(true);
 	});
 });

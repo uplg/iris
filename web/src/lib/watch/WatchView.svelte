@@ -119,11 +119,7 @@
 		gcTime: 0
 	}));
 	const prefsQ = createQuery(() => ({ ...read.playbackPrefs(collectionId ?? null), enabled: !!data }));
-	const torrentProgressQ = createQuery(() => ({
-		queryKey: KEYS.progress(infohash),
-		queryFn: () => progressApi.forTorrent(infohash),
-		refetchInterval: 10_000
-	}));
+	const torrentProgressQ = createQuery(() => ({ ...read.progress(infohash), refetchInterval: 10_000 }));
 	const collectionQ = createQuery(() => ({
 		queryKey: KEYS.collection(collectionId ?? ''),
 		queryFn: () => library.collection(collectionId!),

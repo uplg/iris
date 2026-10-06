@@ -7,5 +7,6 @@ import { KEYS, refreshLibrary } from '#lib/queries.ts';
 
 export async function refetchCollection(id: string): Promise<void> {
 	void refreshLibrary();
+	void queryClient.invalidateQueries({ queryKey: KEYS.progressAll });
 	await queryClient.invalidateQueries({ queryKey: KEYS.collection(id) });
 }
