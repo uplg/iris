@@ -12,6 +12,7 @@ import type {
 	TorrentView
 } from '@iris/api/client';
 import { episodeCode, isVideo, languageLabel, plural } from '@iris/api/format';
+import { isResumable } from '#lib/watched.ts';
 
 export type Downloaded = {
 	status: 'downloaded';
@@ -300,7 +301,7 @@ export function resumeOf(c: CollectionDetail, items: ContinueWatchingItem[] | un
 export function playLabel(c: CollectionDetail, resume: ContinueWatchingItem | null, clock: (s: number) => string): string {
 	if (resume) {
 		const code = episodeCode(resume.season, resume.episode);
-		if (resume.next_up || resume.position_seconds <= 0) return code ? `Play ${code}` : 'Play';
+		if (resume.next_up || !isResumable(resume.position_seconds)) return code ? `Play ${code}` : 'Play';
 		return code ? `Resume ${code} at ${clock(resume.position_seconds)}` : `Resume at ${clock(resume.position_seconds)}`;
 	}
 	const first = firstPlayable(c);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TorrentView } from '@iris/api/client';
-import { downloadsByCollection, languagesLine, rightNow, secondsLeft, watched } from './data.ts';
+import { downloadsByCollection, languagesLine, rightNow, secondsLeft } from './data.ts';
 
 describe('home words', () => {
 	it('"Right now": only what is happening, in words', () => {
@@ -29,9 +29,8 @@ describe('home words', () => {
 		expect([...m]).toEqual([['a', 50]]);
 	});
 
-	it('time left and share watched only when the length is known', () => {
+	it('time left only when the length is known', () => {
 		expect(secondsLeft({ position_seconds: 1930, duration_seconds: 3300 })).toBe(1370);
-		expect(watched({ position_seconds: 1650, duration_seconds: 3300 })).toBe(0.5);
 		expect(secondsLeft({ position_seconds: 10, duration_seconds: null })).toBeNull();
 	});
 

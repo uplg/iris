@@ -119,6 +119,7 @@ describe('progress', () => {
 		expect(isNearEnd(95, 100)).toBe(true);
 		expect(isNearEnd(94, 100)).toBe(false);
 		expect(heartbeatDue(4, 0)).toBe(false);
+		expect(resumeFrom({ position_seconds: 5, completed: false, last_watched_at: '' })).toBe(5);
 		expect(heartbeatDue(8, 0)).toBe(true);
 		expect(heartbeatDue(14, 8)).toBe(false);
 		expect(heartbeatDue(15.5, 8)).toBe(true);

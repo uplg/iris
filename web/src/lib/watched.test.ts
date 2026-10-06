@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TitleWatch } from '@iris/api/client';
-import { allWatched, resumeOf, watchWords } from './watched.ts';
+import { allWatched, isResumable, resumeOf, watchedShare, watchWords } from './watched.ts';
 
 const watch = (w: Partial<TitleWatch> = {}): TitleWatch => ({
 	infohash: 'aa',
@@ -16,6 +16,21 @@ const watch = (w: Partial<TitleWatch> = {}): TitleWatch => ({
 });
 
 describe('watched', () => {
+	it('the share watched, bounded; unknown without a length; whole once finished', () => {
+		expect(watchedShare(50, 100)).toBe(0.5);
+		expect(watchedShare(150, 100)).toBe(1);
+		expect(watchedShare(5, null)).toBeNull();
+		expect(watchedShare(5, 0)).toBeNull();
+		expect(watchedShare(0, null, true)).toBe(1);
+	});
+
+	it('resumable from 5 s on, the one threshold for resume, the hero and the saves', () => {
+		expect(isResumable(4.9)).toBe(false);
+		expect(isResumable(5)).toBe(true);
+		expect(resumeOf(watch({ position_seconds: 4 }))).toBeNull();
+		expect(resumeOf(watch({ position_seconds: 5 }))?.code).toBe('S1:E7');
+	});
+
 	it('resumes a file left mid-way, with what is left', () => {
 		expect(resumeOf(watch())).toEqual({ infohash: 'aa', fileIdx: 3, code: 'S1:E7', left: 1800, share: 0.25 });
 		expect(resumeOf(watch({ position_seconds: 2 }))).toBeNull();

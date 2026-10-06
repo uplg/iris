@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fileName, onDay, plural, since } from '@iris/api/format';
-import { playName, progressShort, progressWords, watchedShare, whatWatched } from './words.ts';
+import { playName, progressShort, progressWords, whatWatched } from './words.ts';
 
 const now = new Date(2026, 9, 6, 15, 0).getTime();
 
@@ -21,13 +21,6 @@ describe('progress in words', () => {
 		expect(progressWords(0, 3000)).toBe('Not started');
 		expect(progressWords(1930, 3300)).toBe('58% watched, stopped at 32:10');
 		expect(progressWords(65, null)).toBe('Stopped at 1:05');
-	});
-
-	it('the share for a bar, bounded', () => {
-		expect(watchedShare(50, 100)).toBe(0.5);
-		expect(watchedShare(150, 100)).toBe(1);
-		expect(watchedShare(5, null)).toBe(0);
-		expect(watchedShare(0, 100, true)).toBe(1);
 	});
 
 	it('how long a session has lasted', () => {

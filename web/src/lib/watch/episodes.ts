@@ -4,6 +4,7 @@
 
 import type { AvailableEpisodeEntry, CollectionEpisodeEntry, FileEntry, FileProgressEntry } from '@iris/api/client';
 import { episodeCode, fileName, formatSize, prettySceneName } from '@iris/api/format';
+import { watchedShare } from '#lib/watched.ts';
 
 export interface SideRow {
 	key: string;
@@ -24,7 +25,8 @@ export interface SideRow {
 }
 
 export function watchedPctOf(p?: FileProgressEntry): number | null {
-	return p && p.duration_seconds && p.duration_seconds > 0 ? Math.min(100, (p.position_seconds / p.duration_seconds) * 100) : null;
+	const share = p ? watchedShare(p.position_seconds, p.duration_seconds) : null;
+	return share === null ? null : share * 100;
 }
 
 const known = (l: string | null | undefined): l is string => !!l && l !== 'unknown';

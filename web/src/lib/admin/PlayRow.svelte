@@ -7,7 +7,8 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import Meter from '#lib/components/Meter.svelte';
 	import TitlePoster from '#lib/history/TitlePoster.svelte';
-	import { playName, progressShort, watchedShare } from '#lib/history/words.ts';
+	import { playName, progressShort } from '#lib/history/words.ts';
+	import { watchedShare } from '#lib/watched.ts';
 	import { personHref } from '#lib/paths.ts';
 
 	interface Props {
@@ -45,7 +46,7 @@
 					play.completed
 				)}
 			</span>
-			{#if !play.completed}<Meter thin share={watchedShare(play.position_seconds, play.duration_seconds)} />{/if}
+			{#if !play.completed}<Meter thin share={watchedShare(play.position_seconds, play.duration_seconds) ?? 0} />{/if}
 		</span>
 	</div>
 	<time class="when" datetime={play.last_watched_at}

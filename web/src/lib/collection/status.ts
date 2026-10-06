@@ -5,6 +5,7 @@ import type { TorrentView } from '@iris/api/client';
 import { duration, percent, plural, timeLeft } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
 import { etaSeconds, isFetching } from '#lib/torrent.ts';
+import { watchedShare } from '#lib/watched.ts';
 import { languageWord, listWords, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
 
 /** What the row's first downloaded release does when pressed. */
@@ -51,7 +52,7 @@ export function rowState(ep: Episode, look: Lookup): RowState {
 		if (first.watched) return { tone: 'ok', text: length ? `Watched · ${duration(length)}` : 'Watched', verb: 'Watch again' };
 		if (at > 0) {
 			const left = length ? ` · ${timeLeft(length - at)}` : '';
-			return { tone: 'info', text: `In progress${left}`, progress: length ? at / length : undefined, verb: 'Resume' };
+			return { tone: 'info', text: `In progress${left}`, progress: watchedShare(at, length) ?? undefined, verb: 'Resume' };
 		}
 		return { tone: 'ok', text: length ? `On disk · ${duration(length)}` : 'On disk', verb: 'Play' };
 	}

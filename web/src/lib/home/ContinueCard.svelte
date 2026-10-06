@@ -9,7 +9,8 @@
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { sectionHeading } from '#lib/focus.ts';
 	import CardMenu, { type MenuItem } from './CardMenu.svelte';
-	import { secondsLeft, watched } from './data.ts';
+	import { secondsLeft } from './data.ts';
+	import { isResumable, watchedShare } from '#lib/watched.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import { getAndPlay, markWatched, nextName, removeTile, tileHref, tileKey } from './continue.ts';
 
@@ -21,7 +22,7 @@
 	const title = $derived(md.data?.title ?? prettySceneName(item.torrent_name));
 	const code = $derived(episodeCode(item.season, item.episode));
 	const left = $derived(secondsLeft(item));
-	const share = $derived(watched(item));
+	const share = $derived(watchedShare(item.position_seconds, item.duration_seconds));
 	const status = $derived.by(() => {
 		if (item.grabbable) return { tone: 'available' as const, text: `Up next · ${nextName(item)} · Not downloaded` };
 		if (item.next_up) return { tone: 'info' as const, text: 'Up next' };

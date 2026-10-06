@@ -6,7 +6,7 @@ import type { CollectionListItem, ContinueWatchingItem, TorrentView } from '@iri
 import { STORAGE } from '#lib/storage.ts';
 import { duration, episodeCode, fileName, formatSize, percent, plural, prettySceneName, speed, VIDEO_RE } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
-import { watchWords } from '#lib/watched.ts';
+import { watchedShare, watchWords } from '#lib/watched.ts';
 import { etaSeconds, isComplete, PHASE_WORDS, phaseOf } from '#lib/torrent.ts';
 
 /** The page's views, remembered per browser. */
@@ -192,8 +192,8 @@ export function deleteDescription(t: TorrentView): string {
 export function watchState(w: ContinueWatchingItem | undefined): { pct: number | null; done: boolean } {
 	if (!w) return { pct: null, done: false };
 	if (w.completed) return { pct: 100, done: true };
-	const d = w.duration_seconds ?? 0;
-	return { pct: d > 0 ? Math.min(100, (w.position_seconds / d) * 100) : null, done: false };
+	const share = watchedShare(w.position_seconds, w.duration_seconds);
+	return { pct: share === null ? null : share * 100, done: false };
 }
 
 export function releaseTitle(t: TorrentView, c: CollectionListItem | undefined): string {

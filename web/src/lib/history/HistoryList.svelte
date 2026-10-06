@@ -10,7 +10,8 @@
 	import TitlePoster from './TitlePoster.svelte';
 	import { canRestore, itemKey, type Group, type Item } from './groups.ts';
 	import { ago } from '@iris/api/format';
-	import { progressWords, watchedShare, whatWatched } from './words.ts';
+	import { progressWords, whatWatched } from './words.ts';
+	import { watchedShare } from '#lib/watched.ts';
 	import { watchHref } from '#lib/paths.ts';
 
 	interface Props {
@@ -49,7 +50,7 @@
 				{#if it.deleted}<span class="chip"><Icon name="ban" size={12} />Gone from disk</span>{/if}
 			</span>
 			<span class="meta">{facts(it)}</span>
-			<Meter share={watchedShare(it.position_seconds, it.duration_seconds, it.completed)} --meter-max="16rem" />
+			<Meter share={watchedShare(it.position_seconds, it.duration_seconds, it.completed) ?? 0} --meter-max="16rem" />
 		</div>
 		{#if onrestore && canRestore(it)}
 			<button

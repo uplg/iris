@@ -15,7 +15,8 @@
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Meter from '#lib/components/Meter.svelte';
 	import TitlePoster from '#lib/history/TitlePoster.svelte';
-	import { playName, watchedShare } from '#lib/history/words.ts';
+	import { playName } from '#lib/history/words.ts';
+	import { watchedShare } from '#lib/watched.ts';
 	import { personHref, watchHref } from '#lib/paths.ts';
 	import { liveState, olderThan, type LiveState } from './model.ts';
 	import { sessionsQuery } from './queries.ts';
@@ -73,7 +74,7 @@
 								<span class="at">{position(s)}</span>
 								{#if left(s)}<span class="muted">{left(s)}</span>{/if}
 							</p>
-							<Meter share={watchedShare(s.position_seconds, s.duration_seconds)} />
+							<Meter share={watchedShare(s.position_seconds, s.duration_seconds) ?? 0} />
 						</div>
 						<p class="quiet">{app(s)}</p>
 						{#if old}<p class="old"><Icon name="circle-alert" size={14} />Older than {IRIS_WEB_VERSION}, the current release</p>{/if}

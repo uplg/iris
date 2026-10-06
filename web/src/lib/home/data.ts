@@ -39,11 +39,6 @@ export function secondsLeft(it: Pick<ContinueWatchingItem, 'duration_seconds' | 
 	return known(it.duration_seconds) && it.duration_seconds > 0 ? Math.max(0, it.duration_seconds - it.position_seconds) : null;
 }
 
-/** Watched so far, 0 to 1, when the length is known. */
-export function watched(it: Pick<ContinueWatchingItem, 'duration_seconds' | 'position_seconds'>): number | null {
-	return known(it.duration_seconds) && it.duration_seconds > 0 ? Math.min(1, it.position_seconds / it.duration_seconds) : null;
-}
-
 /** The languages a play will use, when the account (or the title) chose them. */
 export function languagesLine(p: PlaybackPrefs | undefined, kind: MediaKind | null | undefined): string | null {
 	if (!p) return null;
