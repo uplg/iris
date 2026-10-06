@@ -5,6 +5,7 @@ export const STORAGE = {
 	libraryView: 'iris-library-view',
 	librarySort: 'iris-library-sort',
 	searchView: 'iris-search-view',
+	adminView: 'iris-admin-view',
 	/** Kept under the React app's names, so a browser keeps its volume and theater across the switch. */
 	volume: 'iris:volume',
 	theater: 'iris:theater'

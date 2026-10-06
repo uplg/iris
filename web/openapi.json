@@ -62,6 +62,25 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "One action (`user.delete`) or a family of them (`user`: every `user.*`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actor_id",
+            "in": "query",
+            "description": "Only what this person did.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
         "responses": {
@@ -622,11 +641,40 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Pagination offset (defaults to 0).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "description": "Only this person's plays.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Only series (`tv`) or only films (`movie`).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MediaKind"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Recent playback across all users",
+            "description": "The household's plays, newest first",
             "content": {
               "application/json": {
                 "schema": {
@@ -3843,114 +3891,129 @@
   "components": {
     "schemas": {
       "ActiveSessionView": {
-        "type": "object",
-        "description": "One live \"who's watching what\" row for `GET /admin/active-sessions`.",
-        "required": [
-          "user_id",
-          "display_name",
-          "infohash",
-          "file_idx",
-          "tmdb_verified",
-          "position_seconds",
-          "state",
-          "started_at",
-          "last_seen_at"
-        ],
-        "properties": {
-          "client": {
-            "type": [
-              "string",
-              "null"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PlayTitle",
+            "description": "What plays, in words (additive): its title, episode and year."
+          },
+          {
+            "type": "object",
+            "required": [
+              "user_id",
+              "display_name",
+              "infohash",
+              "file_idx",
+              "tmdb_verified",
+              "position_seconds",
+              "state",
+              "started_at",
+              "last_seen_at"
             ],
-            "description": "`\"web\"` / `\"tv\"` when the client identified itself, else null."
-          },
-          "client_version": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Semver of that client (the `version` half of `X-Iris-Client`)."
-          },
-          "display_name": {
-            "type": "string"
-          },
-          "duration_seconds": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double"
-          },
-          "file_idx": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "file_path": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "On-disk path of the exact file being watched. For season packs this\nis the only way to tell WHICH episode — the torrent name is the whole\npack. `None` when the torrent snapshot isn't live (evicted)."
-          },
-          "infohash": {
-            "type": "string"
-          },
-          "kind": {
-            "oneOf": [
-              {
-                "type": "null"
+            "properties": {
+              "browser": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A web client's browser and system (« Firefox · macOS »). Additive."
               },
-              {
-                "$ref": "#/components/schemas/MediaKind",
-                "description": "`\"movie\"` / `\"tv\"` collection hint for the TMDB poster lookup."
+              "client": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "`\"web\"` / `\"tv\"` when the client identified itself, else null."
+              },
+              "client_version": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Semver of that client (the `version` half of `X-Iris-Client`)."
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "duration_seconds": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "file_idx": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "file_path": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "On-disk path of the exact file being watched. For season packs this\nis the only way to tell WHICH episode — the torrent name is the whole\npack. `None` when the torrent snapshot isn't live (evicted)."
+              },
+              "infohash": {
+                "type": "string"
+              },
+              "kind": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MediaKind",
+                    "description": "`\"movie\"` / `\"tv\"` collection hint for the TMDB poster lookup."
+                  }
+                ]
+              },
+              "last_seen_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "position_seconds": {
+                "type": "number",
+                "format": "double"
+              },
+              "poster_path": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "TMDB poster path once `tmdb_verified`. Additive."
+              },
+              "started_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "state": {
+                "type": "string",
+                "description": "`\"playing\"` / `\"paused\"` / `\"buffering\"` (additive: older readers\ntreat an unknown word as playing)."
+              },
+              "tmdb_id": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "COALESCE(collection, torrent) tmdb id — only trust it for posters\nwhen `tmdb_verified` (mirrors the watch shelves)."
+              },
+              "tmdb_verified": {
+                "type": "boolean"
+              },
+              "torrent_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user_id": {
+                "type": "string",
+                "format": "uuid"
               }
-            ]
-          },
-          "last_seen_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "position_seconds": {
-            "type": "number",
-            "format": "double"
-          },
-          "poster_path": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "TMDB poster path once `tmdb_verified`. Additive."
-          },
-          "started_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "state": {
-            "type": "string",
-            "description": "`\"playing\"` / `\"paused\"`."
-          },
-          "tmdb_id": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "COALESCE(collection, torrent) tmdb id — only trust it for posters\nwhen `tmdb_verified` (mirrors the watch shelves)."
-          },
-          "tmdb_verified": {
-            "type": "boolean"
-          },
-          "torrent_name": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "user_id": {
-            "type": "string",
-            "format": "uuid"
+            }
           }
-        }
+        ],
+        "description": "One live \"who's watching what\" row for `GET /admin/active-sessions`."
       },
       "AggregatedResults": {
         "type": "object",
@@ -7028,6 +7091,65 @@
           }
         }
       },
+      "PlayTitle": {
+        "type": "object",
+        "description": "What a play is, in words, for the admin's rows (additive fields of\n[`ActiveSessionView`] and [`WatchHistoryView`]): the collection's title,\nthe episode of the exact file, and — once the TMDB match is verified —\nthe episode's name and the year.",
+        "properties": {
+          "absolute_episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Absolute episode number for fleuve anime (render \"Episode N\")."
+          },
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The parent collection: its page, and the person's other plays of it."
+          },
+          "collection_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The collection's clean display title (never the release name)."
+          },
+          "episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "episode_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB's name of the episode, verified matches only."
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The title's year: TMDB's once verified, else a film release's own.",
+            "minimum": 0
+          }
+        }
+      },
       "PlaybackErrorBody": {
         "type": "object",
         "description": "Playback-error report sent by clients when a decode tier fails.\nEchoes the legacy HLS URL as the fallback and pre-warms the server-\nside ffmpeg + shaka remux in the background so the client's next\nrequest to `/play/master.m3u8` lands on a hot cache.",
@@ -7237,6 +7359,13 @@
               "null"
             ],
             "format": "int64"
+          },
+          "buffering": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The player is waiting for data (buffering, seeking) while meant to\nplay. Additive: clients that never say so read as playing/paused."
           },
           "completed": {
             "type": "boolean"
@@ -9233,6 +9362,19 @@
           },
           "is_admin": {
             "type": "boolean"
+          },
+          "last_played_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Their latest play, `None` when they never played anything. Additive."
+          },
+          "plays": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many files they played (each once, however often resumed). Additive."
           }
         }
       },
@@ -9534,90 +9676,102 @@
         }
       },
       "WatchHistoryView": {
-        "type": "object",
-        "description": "One row for `GET /admin/watch-history` — recent playback across all users.",
-        "required": [
-          "user_id",
-          "display_name",
-          "infohash",
-          "file_idx",
-          "torrent_name",
-          "tmdb_verified",
-          "position_seconds",
-          "completed",
-          "last_watched_at"
-        ],
-        "properties": {
-          "completed": {
-            "type": "boolean"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PlayTitle",
+            "description": "What was played, in words (additive): its title, episode and year."
           },
-          "display_name": {
-            "type": "string"
-          },
-          "duration_seconds": {
-            "type": [
-              "number",
-              "null"
+          {
+            "type": "object",
+            "required": [
+              "user_id",
+              "display_name",
+              "infohash",
+              "file_idx",
+              "torrent_name",
+              "tmdb_verified",
+              "position_seconds",
+              "completed",
+              "last_watched_at"
             ],
-            "format": "double"
-          },
-          "file_idx": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "file_path": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "On-disk path of the watched file (episode within a season pack)."
-          },
-          "infohash": {
-            "type": "string"
-          },
-          "kind": {
-            "oneOf": [
-              {
-                "type": "null"
+            "properties": {
+              "completed": {
+                "type": "boolean"
               },
-              {
-                "$ref": "#/components/schemas/MediaKind"
+              "deleted": {
+                "type": "boolean",
+                "description": "The release was reclaimed from disk (its play stays). Additive."
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "duration_seconds": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "file_idx": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "file_path": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "On-disk path of the watched file (episode within a season pack)."
+              },
+              "infohash": {
+                "type": "string"
+              },
+              "kind": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MediaKind"
+                  }
+                ]
+              },
+              "last_watched_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "position_seconds": {
+                "type": "number",
+                "format": "double"
+              },
+              "poster_path": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "TMDB poster path once `tmdb_verified`. Additive."
+              },
+              "tmdb_id": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "tmdb_verified": {
+                "type": "boolean"
+              },
+              "torrent_name": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string",
+                "format": "uuid"
               }
-            ]
-          },
-          "last_watched_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "position_seconds": {
-            "type": "number",
-            "format": "double"
-          },
-          "poster_path": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "TMDB poster path once `tmdb_verified`. Additive."
-          },
-          "tmdb_id": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64"
-          },
-          "tmdb_verified": {
-            "type": "boolean"
-          },
-          "torrent_name": {
-            "type": "string"
-          },
-          "user_id": {
-            "type": "string",
-            "format": "uuid"
+            }
           }
-        }
+        ],
+        "description": "One row for `GET /admin/watch-history` — the household's plays, newest\nfirst, reclaimed releases included (`deleted`)."
       },
       "WatchlistItem": {
         "type": "object",

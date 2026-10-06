@@ -478,6 +478,7 @@
 							postSeekHint(manifest, t);
 						}}
 						onPause={(t) => saver.pause(t)}
+						onBusyChange={(b) => saver.busy(b)}
 						onEnded={() => {
 							nearEnd = true;
 							saver.ended();

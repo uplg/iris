@@ -1,5 +1,6 @@
 // Where the person is in a file, kept on the server: a heartbeat every 7 s of playback, one on
-// pause, one at the end, and a last one (a beacon) when the page goes away. The audio and
+// pause, one when the player starts or stops buffering (the admin's « Now watching » says
+// so), one at the end, and a last one (a beacon) when the page goes away. The audio and
 // subtitle picks ride along, restored from the saved progress first so the first heartbeat
 // never clobbers them with nothing.
 
@@ -33,6 +34,7 @@ export class ProgressSaver {
 	audioIdx: number | null = null;
 	subtitleIdx: number | null = null;
 	#restored = false;
+	#buffering = false;
 
 	constructor(
 		readonly infohash: string,
@@ -70,6 +72,24 @@ export class ProgressSaver {
 			completed: isWatched(t, this.duration),
 			playing: true,
 			seek: this.#consumeSeek()
+		});
+	}
+
+	/** The player starts or stops making the person wait: said once per change, never for a
+	 * file not started yet (nothing to say where it is). */
+	busy(b: boolean) {
+		if (b === this.#buffering) return;
+		this.#buffering = b;
+		const t = this.lastTime;
+		if (t <= 0) return;
+		this.#send({
+			position_seconds: t,
+			duration_seconds: this.duration,
+			audio_track_idx: this.audioIdx,
+			subtitle_track_idx: this.subtitleIdx,
+			completed: false,
+			playing: true,
+			buffering: b
 		});
 	}
 

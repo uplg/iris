@@ -12,7 +12,6 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::routes::extract::{AdminUser, Infohash, Path};
-use crate::routes::library::verified_poster;
 use crate::routes::me::{HistoryItem, history_items};
 use crate::routes::{PageQuery, page_limit};
 use crate::state::AppState;
@@ -69,17 +68,96 @@ pub(crate) struct ActiveSessionView {
     kind: Option<MediaKind>,
     position_seconds: f64,
     duration_seconds: Option<f64>,
-    /// `"playing"` / `"paused"`.
+    /// `"playing"` / `"paused"` / `"buffering"` (additive: older readers
+    /// treat an unknown word as playing).
     state: &'static str,
     /// `"web"` / `"tv"` when the client identified itself, else null.
     client: Option<&'static str>,
     /// Semver of that client (the `version` half of `X-Iris-Client`).
     client_version: Option<String>,
+    /// A web client's browser and system (« Firefox · macOS »). Additive.
+    #[serde(default)]
+    browser: Option<String>,
     started_at: chrono::DateTime<Utc>,
     last_seen_at: chrono::DateTime<Utc>,
     /// TMDB poster path once `tmdb_verified`. Additive.
     #[serde(default)]
     poster_path: Option<String>,
+    /// What plays, in words (additive): its title, episode and year.
+    #[serde(flatten)]
+    title: PlayTitle,
+}
+
+/// What a play is, in words, for the admin's rows (additive fields of
+/// [`ActiveSessionView`] and [`WatchHistoryView`]): the collection's title,
+/// the episode of the exact file, and — once the TMDB match is verified —
+/// the episode's name and the year.
+#[derive(Debug, Default, Serialize, ToSchema)]
+pub(crate) struct PlayTitle {
+    /// The parent collection: its page, and the person's other plays of it.
+    #[serde(default)]
+    collection_id: Option<Uuid>,
+    /// The collection's clean display title (never the release name).
+    #[serde(default)]
+    collection_title: Option<String>,
+    #[serde(default)]
+    season: Option<i64>,
+    #[serde(default)]
+    episode: Option<i64>,
+    /// Absolute episode number for fleuve anime (render "Episode N").
+    #[serde(default)]
+    absolute_episode: Option<i64>,
+    /// TMDB's name of the episode, verified matches only.
+    #[serde(default)]
+    episode_title: Option<String>,
+    /// The title's year: TMDB's once verified, else a film release's own.
+    #[serde(default)]
+    year: Option<u32>,
+}
+
+/// The episode coordinates and collection of one play, as both rows carry them.
+struct PlayKey<'a> {
+    torrent_name: &'a str,
+    tmdb_id: Option<i64>,
+    tmdb_verified: bool,
+    kind: Option<&'a str>,
+    collection_id: Option<Uuid>,
+    collection_title: Option<String>,
+    season: Option<i64>,
+    episode: Option<i64>,
+    absolute_episode: Option<i64>,
+}
+
+/// A play's words and its poster (`None` unless the match is verified).
+async fn play_title(state: &AppState, k: PlayKey<'_>) -> (PlayTitle, Option<String>) {
+    let facts = crate::routes::library::watch_facts(
+        state,
+        k.tmdb_id,
+        k.tmdb_verified,
+        k.kind,
+        k.season,
+        k.episode,
+    )
+    .await;
+    // a film's release names its year; a series' names the year of a season
+    let year = facts.year.or_else(|| {
+        (k.kind == Some("movie"))
+            .then(|| iris_media::filename::parse(k.torrent_name).and_then(|p| p.year))
+            .flatten()
+            .map(u32::from)
+    });
+    (
+        PlayTitle {
+            collection_id: k.collection_id,
+            collection_title: k.collection_title,
+            season: k.season,
+            episode: k.episode,
+            absolute_episode: k.absolute_episode,
+            episode_title: facts.episode_title,
+            year,
+        },
+        facts.poster_path,
+    )
 }
 
 #[utoipa::path(
@@ -105,15 +183,27 @@ pub(crate) async fn active_sessions(
             iris_db::users::find_by_id(state.db(), iris_core::ids::UserId::from(s.user_id))
                 .await?
                 .map_or_else(|| "unknown".to_owned(), |u| u.display_name);
-        let card = iris_db::playback::session_card(state.db(), &s.infohash).await?;
-        let kind = card.as_ref().and_then(|c| c.kind.as_deref());
-        let poster_path = verified_poster(
-            &state,
-            card.as_ref().and_then(|c| c.tmdb_id),
-            card.as_ref().is_some_and(|c| c.tmdb_verified),
-            kind,
-        )
-        .await;
+        let card = iris_db::playback::session_card(state.db(), &s.infohash, s.file_idx).await?;
+        let (title, poster_path) = match &card {
+            Some(c) => {
+                play_title(
+                    &state,
+                    PlayKey {
+                        torrent_name: &c.torrent_name,
+                        tmdb_id: c.tmdb_id,
+                        tmdb_verified: c.tmdb_verified,
+                        kind: c.kind.as_deref(),
+                        collection_id: c.collection_id,
+                        collection_title: c.collection_title.clone(),
+                        season: c.season,
+                        episode: c.episode,
+                        absolute_episode: c.absolute_episode,
+                    },
+                )
+                .await
+            }
+            None => (PlayTitle::default(), None),
+        };
         out.push(ActiveSessionView {
             user_id: s.user_id,
             display_name,
@@ -123,21 +213,27 @@ pub(crate) async fn active_sessions(
             torrent_name: card.as_ref().map(|c| c.torrent_name.clone()),
             tmdb_id: card.as_ref().and_then(|c| c.tmdb_id),
             tmdb_verified: card.as_ref().is_some_and(|c| c.tmdb_verified),
-            kind: kind.and_then(MediaKind::from_wire),
+            kind: card
+                .as_ref()
+                .and_then(|c| c.kind.as_deref())
+                .and_then(MediaKind::from_wire),
             position_seconds: s.position_seconds,
             duration_seconds: s.duration_seconds,
             state: s.state.as_str(),
             client: s.client.map(crate::client_version::ClientKind::as_str),
             client_version: s.client_version,
+            browser: s.browser,
             started_at: s.started_at,
             last_seen_at: s.last_seen_at,
             poster_path,
+            title,
         });
     }
     Ok(Json(out))
 }
 
-/// One row for `GET /admin/watch-history` — recent playback across all users.
+/// One row for `GET /admin/watch-history` — the household's plays, newest
+/// first, reclaimed releases included (`deleted`).
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct WatchHistoryView {
     user_id: Uuid,
@@ -157,6 +253,12 @@ pub(crate) struct WatchHistoryView {
     /// TMDB poster path once `tmdb_verified`. Additive.
     #[serde(default)]
     poster_path: Option<String>,
+    /// The release was reclaimed from disk (its play stays). Additive.
+    #[serde(default)]
+    deleted: bool,
+    /// What was played, in words (additive): its title, episode and year.
+    #[serde(flatten)]
+    title: PlayTitle,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -164,6 +266,12 @@ pub(crate) struct WatchHistoryView {
 pub(crate) struct WatchHistoryQuery {
     /// Max rows to return (clamped 1..=200, defaults to 50).
     limit: Option<i64>,
+    /// Pagination offset (defaults to 0).
+    offset: Option<i64>,
+    /// Only this person's plays.
+    user_id: Option<Uuid>,
+    /// Only series (`tv`) or only films (`movie`).
+    kind: Option<MediaKind>,
 }
 
 #[utoipa::path(
@@ -172,7 +280,7 @@ pub(crate) struct WatchHistoryQuery {
     operation_id = "list_watch_history",
     params(WatchHistoryQuery),
     responses(
-        (status = 200, description = "Recent playback across all users", body = [WatchHistoryView]),
+        (status = 200, description = "The household's plays, newest first", body = [WatchHistoryView]),
         (status = 403, description = "Caller is not an admin"),
     ),
     tag = "admin",
@@ -182,15 +290,39 @@ pub(crate) async fn watch_history(
     _admin: AdminUser,
     axum::extract::Query(q): axum::extract::Query<WatchHistoryQuery>,
 ) -> ApiResult<Json<Vec<WatchHistoryView>>> {
-    let rows = iris_db::playback::recent_activity(state.db(), page_limit(q.limit)).await?;
+    let filter = iris_db::playback::HistoryFilter {
+        user: q.user_id.map(iris_core::ids::UserId::from),
+        kind: q.kind.map(MediaKind::as_wire),
+    };
+    let rows = iris_db::playback::household_history(
+        state.db(),
+        filter,
+        page_limit(q.limit),
+        q.offset.unwrap_or(0).max(0),
+    )
+    .await?;
     let state = &state;
     Ok(Json(
-        crate::fanout::map_ordered(rows, |r| async move {
+        crate::fanout::map_ordered(rows, |h| async move {
+            let r = h.row;
+            let (title, poster_path) = play_title(
+                state,
+                PlayKey {
+                    torrent_name: &r.torrent_name,
+                    tmdb_id: r.tmdb_id,
+                    tmdb_verified: r.tmdb_verified,
+                    kind: r.kind.as_deref(),
+                    collection_id: r.collection_id,
+                    collection_title: r.collection_title,
+                    season: r.season,
+                    episode: r.episode,
+                    absolute_episode: r.absolute_episode,
+                },
+            )
+            .await;
             WatchHistoryView {
-                poster_path: verified_poster(state, r.tmdb_id, r.tmdb_verified, r.kind.as_deref())
-                    .await,
-                user_id: r.user_id,
-                display_name: r.display_name,
+                user_id: h.user_id,
+                display_name: h.display_name,
                 file_path: state.engine().file_name(&r.infohash, r.file_idx),
                 infohash: r.infohash,
                 file_idx: r.file_idx,
@@ -202,6 +334,9 @@ pub(crate) async fn watch_history(
                 duration_seconds: r.duration_seconds,
                 completed: r.completed,
                 last_watched_at: r.last_watched_at,
+                poster_path,
+                deleted: r.deleted,
+                title,
             }
         })
         .await,
@@ -306,6 +441,12 @@ pub(crate) struct UserView {
     display_name: String,
     is_admin: bool,
     created_at: chrono::DateTime<Utc>,
+    /// Their latest play, `None` when they never played anything. Additive.
+    #[serde(default)]
+    last_played_at: Option<chrono::DateTime<Utc>>,
+    /// How many files they played (each once, however often resumed). Additive.
+    #[serde(default)]
+    plays: i64,
 }
 
 #[utoipa::path(
@@ -323,15 +464,27 @@ pub(crate) async fn list_users(
     _admin: AdminUser,
 ) -> ApiResult<Json<Vec<UserView>>> {
     let users = iris_db::users::list(state.db()).await?;
+    let activity: std::collections::HashMap<Uuid, iris_db::playback::UserActivityRow> =
+        iris_db::playback::activity_by_user(state.db())
+            .await?
+            .into_iter()
+            .map(|a| (a.user_id, a))
+            .collect();
     Ok(Json(
         users
             .into_iter()
-            .map(|u| UserView {
-                id: u.id.into(),
-                email: u.email,
-                display_name: u.display_name,
-                is_admin: u.is_admin,
-                created_at: u.created_at,
+            .map(|u| {
+                let id: Uuid = u.id.into();
+                let seen = activity.get(&id);
+                UserView {
+                    id,
+                    email: u.email,
+                    display_name: u.display_name,
+                    is_admin: u.is_admin,
+                    created_at: u.created_at,
+                    last_played_at: seen.map(|a| a.last_played_at),
+                    plays: seen.map_or(0, |a| a.plays),
+                }
             })
             .collect(),
     ))
@@ -959,11 +1112,24 @@ pub(crate) struct AuditLogView {
     created_at: chrono::DateTime<Utc>,
 }
 
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct AuditLogQuery {
+    /// Max rows to return (clamped 1..=200, defaults to 50).
+    limit: Option<i64>,
+    /// Pagination offset (defaults to 0).
+    offset: Option<i64>,
+    /// One action (`user.delete`) or a family of them (`user`: every `user.*`).
+    action: Option<String>,
+    /// Only what this person did.
+    actor_id: Option<Uuid>,
+}
+
 #[utoipa::path(
     get,
     path = "/api/admin/audit-log",
     operation_id = "list_audit_log",
-    params(PageQuery),
+    params(AuditLogQuery),
     responses(
         (status = 200, description = "Audited actions, newest first", body = [AuditLogView]),
         (status = 403, description = "Caller is not an admin"),
@@ -973,9 +1139,19 @@ pub(crate) struct AuditLogView {
 pub(crate) async fn audit_log(
     State(state): State<AppState>,
     _admin: AdminUser,
-    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+    axum::extract::Query(q): axum::extract::Query<AuditLogQuery>,
 ) -> ApiResult<Json<Vec<AuditLogView>>> {
-    let rows = iris_db::audit::list(state.db(), page.limit(), page.offset()).await?;
+    let filter = iris_db::audit::AuditFilter {
+        action: q.action.as_deref().filter(|a| !a.is_empty()),
+        actor: q.actor_id.map(iris_core::ids::UserId::from),
+    };
+    let rows = iris_db::audit::list_filtered(
+        state.db(),
+        filter,
+        page_limit(q.limit),
+        q.offset.unwrap_or(0).max(0),
+    )
+    .await?;
     Ok(Json(
         rows.into_iter()
             .map(|r| AuditLogView {
@@ -990,4 +1166,255 @@ pub(crate) async fn audit_log(
             })
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use iris_core::ids::UserId;
+    use iris_db::collections::Kind;
+    use iris_db::test_support::{make_named_user, migrated_pool};
+    use iris_providers::ProviderRegistry;
+    use serde_json::Value;
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    use crate::state::AppState;
+
+    async fn get(app: &axum::Router, path: &str, token: &str) -> (StatusCode, Value) {
+        let req = Request::builder()
+            .uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    async fn torrent(
+        pool: &sqlx::SqlitePool,
+        owner: UserId,
+        name: &str,
+    ) -> iris_db::torrents::TorrentRow {
+        iris_db::torrents::upsert(
+            pool,
+            iris_db::torrents::NewTorrent {
+                infohash: Uuid::new_v4().simple().to_string(),
+                name: name.to_owned(),
+                total_size_bytes: 1_000,
+                source_provider: None,
+                source_external_id: None,
+                tracker_tmdb_id: None,
+                added_by: owner,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn play(pool: &sqlx::SqlitePool, user: UserId, infohash: &str, completed: bool) {
+        iris_db::playback::upsert(
+            pool,
+            iris_db::playback::UpsertProgress {
+                user_id: user,
+                infohash: infohash.to_owned(),
+                file_idx: 0,
+                position_seconds: 600.0,
+                duration_seconds: Some(3_000.0),
+                audio_track_idx: None,
+                subtitle_track_idx: None,
+                completed,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Ana watched an episode of Severance, Bo finished Dune (since reclaimed
+    /// from disk); the admin watched nothing.
+    async fn household() -> (AppState, axum::Router, String, String, UserId, UserId) {
+        let pool = migrated_pool().await;
+        let admin = make_named_user(&pool, "Admin").await;
+        let ana = make_named_user(&pool, "Ana").await;
+        let bo = make_named_user(&pool, "Bo").await;
+        let show = iris_db::collections::create_standalone(&pool, "Severance", Kind::Tv)
+            .await
+            .unwrap();
+        let film = iris_db::collections::create_standalone(&pool, "Dune", Kind::Movie)
+            .await
+            .unwrap();
+        let ep = torrent(&pool, ana, "Severance.S02E04.1080p.WEB.H264-GROUP").await;
+        iris_db::torrents::set_collection(&pool, &ep.infohash, Some(show.id))
+            .await
+            .unwrap();
+        iris_db::episode_files::upsert(
+            &pool,
+            iris_db::episode_files::UpsertEpisodeFile {
+                collection_id: show.id,
+                season: 2,
+                episode: 4,
+                infohash: ep.infohash.clone(),
+                file_idx: 0,
+                derived_from: iris_db::episode_files::DerivedFrom::SceneParse,
+                absolute_episode: None,
+            },
+        )
+        .await
+        .unwrap();
+        let movie = torrent(&pool, bo, "Dune.2021.2160p.UHD.BluRay.x265-GROUP").await;
+        iris_db::torrents::set_collection(&pool, &movie.infohash, Some(film.id))
+            .await
+            .unwrap();
+        play(&pool, bo, &movie.infohash, true).await;
+        play(&pool, ana, &ep.infohash, false).await;
+        iris_db::torrents::soft_delete(&pool, iris_core::ids::TorrentId::from(movie.id))
+            .await
+            .unwrap();
+        let state = AppState::for_tests(pool, ProviderRegistry::from_entries(&[]).unwrap()).await;
+        let admin_token = state.jwt().issue_access(admin, true).unwrap();
+        let member_token = state.jwt().issue_access(ana, false).unwrap();
+        let app = crate::app::build_router(state.clone());
+        (state, app, admin_token, member_token, ana, bo)
+    }
+
+    #[tokio::test]
+    async fn watch_history_names_each_play_and_filters_by_person_and_kind() {
+        let (_state, app, admin, member, ana, bo) = household().await;
+        let (status, _) = get(&app, "/api/admin/watch-history", &member).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (status, all) = get(&app, "/api/admin/watch-history", &admin).await;
+        assert_eq!(status, StatusCode::OK);
+        let all = all.as_array().unwrap();
+        assert_eq!(all.len(), 2, "a reclaimed release keeps its play");
+        let sev = all.iter().find(|r| r["display_name"] == "Ana").unwrap();
+        assert_eq!(sev["collection_title"], "Severance");
+        assert_eq!(
+            (sev["season"].as_i64(), sev["episode"].as_i64()),
+            (Some(2), Some(4))
+        );
+        assert_eq!(
+            sev["year"],
+            Value::Null,
+            "a series' release names no title year"
+        );
+        assert_eq!(sev["poster_path"], Value::Null, "unverified: no poster");
+        assert_eq!(sev["deleted"], false);
+        let dune = all.iter().find(|r| r["display_name"] == "Bo").unwrap();
+        assert_eq!(dune["collection_title"], "Dune");
+        assert_eq!(dune["year"], 2021);
+        assert_eq!(dune["deleted"], true);
+        assert_eq!(dune["completed"], true);
+
+        let (_, page) = get(&app, "/api/admin/watch-history?limit=1&offset=1", &admin).await;
+        assert_eq!(page.as_array().unwrap().len(), 1);
+        assert_eq!(
+            page[0]["display_name"], "Bo",
+            "newest first: Bo's play is the older"
+        );
+
+        let (_, anas) = get(
+            &app,
+            &format!("/api/admin/watch-history?user_id={}", Uuid::from(ana)),
+            &admin,
+        )
+        .await;
+        assert_eq!(anas.as_array().unwrap().len(), 1);
+        assert_eq!(anas[0]["collection_title"], "Severance");
+        let (_, films) = get(&app, "/api/admin/watch-history?kind=movie", &admin).await;
+        assert_eq!(films.as_array().unwrap().len(), 1);
+        assert_eq!(films[0]["user_id"], Uuid::from(bo).to_string());
+        let (status, _) = get(&app, "/api/admin/watch-history?kind=opera", &admin).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn users_say_when_each_person_last_played() {
+        let (_state, app, admin, _, _, _) = household().await;
+        let (status, users) = get(&app, "/api/admin/users", &admin).await;
+        assert_eq!(status, StatusCode::OK);
+        let by = |name: &str| {
+            users
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|u| u["display_name"] == name)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(by("Admin")["last_played_at"], Value::Null);
+        assert_eq!(by("Admin")["plays"], 0);
+        assert!(by("Ana")["last_played_at"].is_string());
+        assert_eq!(by("Bo")["plays"], 1);
+    }
+
+    #[tokio::test]
+    async fn the_audit_log_filters_by_action_family_and_actor() {
+        let (state, app, admin, _, ana, bo) = household().await;
+        for (actor, action) in [
+            (ana, "torrent.delete"),
+            (bo, "user.password_change"),
+            (bo, "torrent.delete"),
+        ] {
+            crate::routes::audit(&state, actor, action, "x", None, None).await;
+        }
+        let (_, torrents) = get(&app, "/api/admin/audit-log?action=torrent", &admin).await;
+        assert_eq!(torrents.as_array().unwrap().len(), 2);
+        let (_, bos) = get(
+            &app,
+            &format!(
+                "/api/admin/audit-log?action=torrent.delete&actor_id={}",
+                Uuid::from(bo)
+            ),
+            &admin,
+        )
+        .await;
+        assert_eq!(bos.as_array().unwrap().len(), 1);
+        assert_eq!(bos[0]["actor_display_name"], "Bo");
+        let (_, everything) = get(&app, "/api/admin/audit-log?action=&limit=2", &admin).await;
+        assert_eq!(
+            everything.as_array().unwrap().len(),
+            2,
+            "an empty action is no filter"
+        );
+    }
+
+    #[tokio::test]
+    async fn now_watching_names_the_title_and_episode() {
+        let (state, app, admin, _, ana, _) = household().await;
+        let (_, plays) = get(&app, "/api/admin/watch-history?kind=tv", &admin).await;
+        let infohash = plays[0]["infohash"].as_str().unwrap().to_owned();
+        state
+            .presence()
+            .touch(crate::presence::Heartbeat {
+                user_id: ana.into(),
+                infohash,
+                file_idx: 0,
+                position_seconds: 120.0,
+                duration_seconds: Some(3_000.0),
+                state: crate::presence::PlaybackState::Playing,
+                client: None,
+                client_version: None,
+                browser: None,
+            })
+            .await;
+        let (status, now) = get(&app, "/api/admin/active-sessions", &admin).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(now.as_array().unwrap().len(), 1);
+        assert_eq!(now[0]["display_name"], "Ana");
+        assert_eq!(now[0]["collection_title"], "Severance");
+        assert_eq!(
+            (now[0]["season"].as_i64(), now[0]["episode"].as_i64()),
+            (Some(2), Some(4))
+        );
+        assert_eq!(now[0]["state"], "playing");
+    }
 }

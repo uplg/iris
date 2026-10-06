@@ -549,90 +549,83 @@ pub async fn watched_tmdb_ids(pool: &SqlitePool, user_id: UserId) -> Result<Vec<
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-/// One row of cross-user recent playback activity for the admin view.
-/// Mirrors [`ContinueWatchingRow`] but spans every user (joined with
-/// `users` for the display name) and keeps completed items so the admin
-/// sees finished watches too.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct RecentActivityRow {
-    pub user_id: Uuid,
-    pub display_name: String,
-    pub infohash: String,
-    pub torrent_name: String,
-    pub tmdb_id: Option<i64>,
-    pub tmdb_verified: bool,
-    pub file_idx: i64,
-    pub position_seconds: f64,
-    pub duration_seconds: Option<f64>,
-    pub last_watched_at: DateTime<Utc>,
-    pub completed: bool,
-    pub kind: Option<String>,
-}
-
-/// Poster/title metadata for a single torrent, resolved with the same
-/// `COALESCE(collection, torrent)` tmdb precedence as the watch shelves.
-/// Used to decorate live presence sessions in the admin view.
+/// What a live presence session is playing, resolved with the same
+/// `COALESCE(collection, torrent)` tmdb precedence as the watch shelves:
+/// the release, its collection's title and the episode of the exact file.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct SessionCardRow {
     pub torrent_name: String,
     pub tmdb_id: Option<i64>,
     pub tmdb_verified: bool,
     pub kind: Option<String>,
+    pub collection_id: Option<Uuid>,
+    pub collection_title: Option<String>,
+    pub season: Option<i64>,
+    pub episode: Option<i64>,
+    pub absolute_episode: Option<i64>,
 }
 
 pub async fn session_card(
     pool: &SqlitePool,
     infohash: &str,
+    file_idx: i64,
 ) -> Result<Option<SessionCardRow>, sqlx::Error> {
     sqlx::query_as::<_, SessionCardRow>(concat!(
         "SELECT t.name as torrent_name, \
             c.tmdb_id as tmdb_id, \
             ",
         tmdb_verified_sql!("t", "c"),
-        " AS tmdb_verified, c.kind as kind \
+        " AS tmdb_verified, c.kind as kind, \
+            t.collection_id as collection_id, c.display_title as collection_title, \
+            ef.season as season, ef.episode as episode, \
+            ef.absolute_episode as absolute_episode \
          FROM torrents t \
          LEFT JOIN collections c ON c.id = t.collection_id \
+         LEFT JOIN episode_files ef ON ef.infohash = t.infohash AND ef.file_idx = ?2 \
          WHERE t.infohash = ?1 AND t.deleted_at IS NULL"
     ))
     .bind(infohash)
+    .bind(file_idx)
     .fetch_optional(pool)
     .await
 }
 
-/// Most-recent playback activity across all users, newest first. Powers the
-/// admin "Recent activity" list.
-pub async fn recent_activity(
-    pool: &SqlitePool,
-    limit: i64,
-) -> Result<Vec<RecentActivityRow>, sqlx::Error> {
-    sqlx::query_as::<_, RecentActivityRow>(concat!(
-        "SELECT p.user_id, u.display_name, p.infohash, t.name as torrent_name, \
-            c.tmdb_id as tmdb_id, \
-            ",
-        tmdb_verified_sql!("t", "c"),
-        " AS tmdb_verified, p.file_idx, \
-            p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
-            c.kind as kind \
-         FROM playback_progress p \
-         JOIN users u ON u.id = p.user_id \
-         JOIN torrents t ON t.infohash = p.infohash AND t.deleted_at IS NULL \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         ORDER BY p.last_watched_at DESC \
-         LIMIT ?1"
-    ))
-    .bind(limit)
-    .fetch_all(pool)
-    .await
+/// The columns and joins of a watch-history row ([`HistoryRow`]), shared by
+/// one user's history and the household's.
+macro_rules! history_sql {
+    ($cols:literal, $joins:literal, $tail:literal) => {
+        concat!(
+            "SELECT ",
+            $cols,
+            "p.infohash, t.name as torrent_name, c.tmdb_id as tmdb_id, ",
+            tmdb_verified_sql!("t", "c"),
+            " AS tmdb_verified, p.file_idx, \
+                p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
+                c.kind as kind, (t.deleted_at IS NOT NULL) as deleted, \
+                t.collection_id as collection_id, c.display_title as collection_title, \
+                ef.season as season, ef.episode as episode, \
+                ef.absolute_episode as absolute_episode, \
+                t.source_provider as source_provider, \
+                t.source_external_id as source_external_id \
+             FROM playback_progress p \
+             JOIN torrents t ON t.infohash = p.infohash ",
+            $joins,
+            " LEFT JOIN collections c ON c.id = t.collection_id \
+             LEFT JOIN episode_files ef \
+                ON ef.infohash = p.infohash AND ef.file_idx = p.file_idx ",
+            $tail
+        )
+    };
 }
 
 /// One row of a user's complete watch history — in-progress AND completed,
 /// including items whose source torrent has since been soft-deleted
-/// (`deleted = true`). Unlike [`continue_watching`] / [`recent_activity`],
-/// which both `JOIN torrents t ON … AND t.deleted_at IS NULL` and so drop a
-/// row the moment its torrent is GC'd or admin-removed, this query keeps
-/// every row — a deletion (disk-reclaim, admin cleanup) must never erase
-/// "what did I watch and how far did I get" (`torrents` rows are only ever
-/// soft-deleted, so `t.name` / `c.tmdb_id` stay resolvable).
+/// (`deleted = true`). Unlike [`continue_watching`], which joins
+/// `torrents t ON … AND t.deleted_at IS NULL` and so drops a row the moment
+/// its torrent is GC'd or admin-removed, this keeps every row — a deletion
+/// (disk-reclaim, admin cleanup) must never erase "what did I watch and how
+/// far did I get" (`torrents` rows are only ever soft-deleted, so `t.name` /
+/// `c.tmdb_id` stay resolvable).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct HistoryRow {
     pub infohash: String,
@@ -680,31 +673,78 @@ pub async fn user_history(
     offset: i64,
 ) -> Result<Vec<HistoryRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
-    sqlx::query_as::<_, HistoryRow>(concat!(
-        "SELECT p.infohash, t.name as torrent_name, \
-            c.tmdb_id as tmdb_id, \
-            ",
-        tmdb_verified_sql!("t", "c"),
-        " AS tmdb_verified, p.file_idx, \
-            p.position_seconds, p.duration_seconds, p.last_watched_at, p.completed, \
-            c.kind as kind, (t.deleted_at IS NOT NULL) as deleted, \
-            t.collection_id as collection_id, c.display_title as collection_title, \
-            ef.season as season, ef.episode as episode, \
-            ef.absolute_episode as absolute_episode, \
-            t.source_provider as source_provider, \
-            t.source_external_id as source_external_id \
-         FROM playback_progress p \
-         JOIN torrents t ON t.infohash = p.infohash \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         LEFT JOIN episode_files ef \
-            ON ef.infohash = p.infohash AND ef.file_idx = p.file_idx \
-         WHERE p.user_id = ?1 \
+    sqlx::query_as::<_, HistoryRow>(history_sql!(
+        "",
+        "",
+        "WHERE p.user_id = ?1 \
          ORDER BY p.last_watched_at DESC \
          LIMIT ?2 OFFSET ?3"
     ))
     .bind(user)
     .bind(limit)
     .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+/// One play of the household's history (the admin's): who, then the same
+/// row as one person's own history.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct HouseholdHistoryRow {
+    pub user_id: Uuid,
+    pub display_name: String,
+    #[sqlx(flatten)]
+    pub row: HistoryRow,
+}
+
+/// Which plays of the household's history: one person's, one kind's.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HistoryFilter<'a> {
+    pub user: Option<UserId>,
+    /// The collection's `kind` (`"tv"` / `"movie"`): a play with no
+    /// collection has no kind, so it is left out once a kind is asked for.
+    pub kind: Option<&'a str>,
+}
+
+/// Everyone's plays, newest first, paginated — reclaimed releases included
+/// (`deleted`), like one person's history.
+pub async fn household_history(
+    pool: &SqlitePool,
+    filter: HistoryFilter<'_>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<HouseholdHistoryRow>, sqlx::Error> {
+    let user: Option<Uuid> = filter.user.map(Into::into);
+    sqlx::query_as::<_, HouseholdHistoryRow>(history_sql!(
+        "p.user_id, u.display_name, ",
+        "JOIN users u ON u.id = p.user_id",
+        "WHERE (?1 IS NULL OR p.user_id = ?1) AND (?2 IS NULL OR c.kind = ?2) \
+         ORDER BY p.last_watched_at DESC \
+         LIMIT ?3 OFFSET ?4"
+    ))
+    .bind(user)
+    .bind(filter.kind)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+/// How much one person watches: their latest play and how many files they
+/// played (each file once, however often it was resumed).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct UserActivityRow {
+    pub user_id: Uuid,
+    pub last_played_at: DateTime<Utc>,
+    pub plays: i64,
+}
+
+/// Everyone who played anything: their latest play and how many.
+pub async fn activity_by_user(pool: &SqlitePool) -> Result<Vec<UserActivityRow>, sqlx::Error> {
+    sqlx::query_as::<_, UserActivityRow>(
+        "SELECT user_id, MAX(last_watched_at) as last_played_at, COUNT(*) as plays \
+         FROM playback_progress GROUP BY user_id",
+    )
     .fetch_all(pool)
     .await
 }
@@ -1404,6 +1444,144 @@ mod tests {
         assert_eq!(user_history(&pool, user_b, 10, 0).await.unwrap().len(), 1);
         assert_eq!(user_history(&pool, user_a, 2, 0).await.unwrap().len(), 2);
         assert_eq!(user_history(&pool, user_a, 2, 2).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn household_history_spans_everyone_and_filters_by_person_and_kind() {
+        let pool = migrated_pool().await;
+        let ana = crate::test_support::make_named_user(&pool, "Ana").await;
+        let bo = crate::test_support::make_named_user(&pool, "Bo").await;
+        let show =
+            crate::collections::create_standalone(&pool, "Severance", crate::collections::Kind::Tv)
+                .await
+                .unwrap();
+        let film =
+            crate::collections::create_standalone(&pool, "Dune", crate::collections::Kind::Movie)
+                .await
+                .unwrap();
+        let ep = make_torrent(&pool, ana, "Severance.S02E04.1080p").await;
+        crate::torrents::set_collection(&pool, &ep.infohash, Some(show.id))
+            .await
+            .unwrap();
+        crate::episode_files::upsert(
+            &pool,
+            crate::episode_files::UpsertEpisodeFile {
+                collection_id: show.id,
+                season: 2,
+                episode: 4,
+                infohash: ep.infohash.clone(),
+                file_idx: 0,
+                derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                absolute_episode: None,
+            },
+        )
+        .await
+        .unwrap();
+        let movie = make_torrent(&pool, bo, "Dune.2021.2160p").await;
+        crate::torrents::set_collection(&pool, &movie.infohash, Some(film.id))
+            .await
+            .unwrap();
+        let loose = make_torrent(&pool, bo, "Home.Video").await;
+        upsert(&pool, progress(ana, ep.infohash.clone(), false))
+            .await
+            .unwrap();
+        upsert(&pool, progress(bo, movie.infohash.clone(), true))
+            .await
+            .unwrap();
+        upsert(&pool, progress(bo, loose.infohash.clone(), false))
+            .await
+            .unwrap();
+        // a reclaimed release keeps its play
+        crate::torrents::soft_delete(&pool, iris_core::ids::TorrentId::from(movie.id))
+            .await
+            .unwrap();
+
+        let all = household_history(&pool, HistoryFilter::default(), 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3);
+        let sev = all.iter().find(|r| r.row.infohash == ep.infohash).unwrap();
+        assert_eq!(sev.display_name, "Ana");
+        assert_eq!(sev.row.collection_title.as_deref(), Some("Severance"));
+        assert_eq!((sev.row.season, sev.row.episode), (Some(2), Some(4)));
+        assert!(
+            all.iter()
+                .any(|r| r.row.infohash == movie.infohash && r.row.deleted)
+        );
+
+        let bos = HistoryFilter {
+            user: Some(bo),
+            kind: None,
+        };
+        assert_eq!(household_history(&pool, bos, 10, 0).await.unwrap().len(), 2);
+        assert_eq!(household_history(&pool, bos, 1, 1).await.unwrap().len(), 1);
+        let films = HistoryFilter {
+            user: None,
+            kind: Some("movie"),
+        };
+        let got = household_history(&pool, films, 10, 0).await.unwrap();
+        assert_eq!(got.len(), 1, "a play with no collection has no kind");
+        assert_eq!(got[0].row.infohash, movie.infohash);
+        let anas_films = HistoryFilter {
+            user: Some(ana),
+            kind: Some("movie"),
+        };
+        assert!(
+            household_history(&pool, anas_films, 10, 0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut activity = activity_by_user(&pool).await.unwrap();
+        activity.sort_by_key(|a| a.plays);
+        assert_eq!(activity.len(), 2);
+        assert_eq!((activity[0].user_id, activity[0].plays), (ana.into(), 1));
+        assert_eq!((activity[1].user_id, activity[1].plays), (bo.into(), 2));
+    }
+
+    #[tokio::test]
+    async fn session_card_names_the_title_and_the_episode_of_the_file() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let show =
+            crate::collections::create_standalone(&pool, "Severance", crate::collections::Kind::Tv)
+                .await
+                .unwrap();
+        let pack = make_torrent(&pool, user, "Severance.S02.1080p").await;
+        crate::torrents::set_collection(&pool, &pack.infohash, Some(show.id))
+            .await
+            .unwrap();
+        crate::episode_files::upsert(
+            &pool,
+            crate::episode_files::UpsertEpisodeFile {
+                collection_id: show.id,
+                season: 2,
+                episode: 7,
+                infohash: pack.infohash.clone(),
+                file_idx: 6,
+                derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                absolute_episode: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let card = session_card(&pool, &pack.infohash, 6)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(card.collection_title.as_deref(), Some("Severance"));
+        assert_eq!((card.season, card.episode), (Some(2), Some(7)));
+        let other = session_card(&pool, &pack.infohash, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (other.season, other.episode),
+            (None, None),
+            "another file of the pack"
+        );
     }
 
     #[tokio::test]

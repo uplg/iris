@@ -184,6 +184,10 @@ pub struct ProgressUpdate {
     /// playing anyway) default to `Playing`.
     #[serde(default)]
     pub playing: Option<bool>,
+    /// The player is waiting for data (buffering, seeking) while meant to
+    /// play. Additive: clients that never say so read as playing/paused.
+    #[serde(default)]
+    pub buffering: Option<bool>,
     /// True when this update follows a deliberate user seek. Lets the
     /// reset guard below distinguish "user restarted the film from 0"
     /// (persist it) from "player error-recovered at position 0" (must
@@ -290,11 +294,21 @@ pub(crate) async fn put_progress(
             .and_then(crate::client_version::ClientVersion::parse);
         let client = parsed.as_ref().map(|c| c.kind);
         let client_version = parsed.as_ref().map(|c| c.version.to_string());
-        let play_state = if body.playing.unwrap_or(true) {
-            crate::presence::PlaybackState::Playing
-        } else {
+        let play_state = if !body.playing.unwrap_or(true) {
             crate::presence::PlaybackState::Paused
+        } else if body.buffering.unwrap_or(false) {
+            crate::presence::PlaybackState::Buffering
+        } else {
+            crate::presence::PlaybackState::Playing
         };
+        let browser = (client == Some(crate::client_version::ClientKind::Web))
+            .then(|| {
+                headers
+                    .get(axum::http::header::USER_AGENT)
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(crate::presence::browser_of)
+            })
+            .flatten();
         state
             .presence()
             .touch(crate::presence::Heartbeat {
@@ -306,6 +320,7 @@ pub(crate) async fn put_progress(
                 state: play_state,
                 client,
                 client_version,
+                browser,
             })
             .await;
     }

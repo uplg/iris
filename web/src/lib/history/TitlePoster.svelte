@@ -9,18 +9,28 @@
 		posterPath: string | null | undefined;
 		title: string;
 		gone?: boolean;
+		/** In a dense list: the thumbnail size. */
+		small?: boolean;
 	}
-	let { posterPath, title, gone = false }: Props = $props();
+	let { posterPath, title, gone = false, small = false }: Props = $props();
 </script>
 
-<div class="mini" class:gone>
-	<Poster src={tmdbImage(posterPath, 'w185')} {title} />
+<div class="mini" class:gone class:small>
+	<Poster src={tmdbImage(posterPath, small ? 'w92' : 'w185')} {title} />
 </div>
 
 <style>
 	.mini {
 		width: var(--poster-mini);
 		flex: none;
+	}
+	.small {
+		width: var(--poster-thumb);
+	}
+	.small :global(.fallback) {
+		justify-content: center;
+		align-items: center;
+		padding: 0;
 	}
 	.mini :global(.fallback span) {
 		display: none;

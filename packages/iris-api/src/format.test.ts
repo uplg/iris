@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+	ago,
 	clock,
 	clockTime,
+	dayHeading,
 	duration,
 	episodeCode,
 	fileName,
@@ -12,6 +14,7 @@ import {
 	plural,
 	prettySceneName,
 	timeLeft,
+	until,
 	when
 } from './format';
 
@@ -79,5 +82,33 @@ describe('times and names, said one way', () => {
 		expect(isVideo('a.m2ts')).toBe(true);
 		expect(isVideo('a.srt')).toBe(false);
 		expect(prettySceneName('Mercato.2025.FRENCH.1080p.WEB.H265-BOUBA.m2ts')).not.toContain('m2ts');
+	});
+});
+
+describe('moments in a list', () => {
+	const now = new Date(2026, 9, 6, 15, 0).getTime();
+	const at = (d: number, h: number, m = 0) => new Date(2026, 9, d, h, m).getTime();
+
+	it('a recent moment to the minute, then by its day', () => {
+		expect(ago(now - 20_000, now)).toBe('just now');
+		expect(ago(now - 12 * 60_000, now)).toBe('12 min ago');
+		expect(ago(at(6, 9, 5), now)).toBe('today at 09:05');
+		expect(ago(at(5, 21, 4), now)).toBe('yesterday at 21:04');
+		expect(ago(at(1, 12), now)).toBe('on Thursday');
+	});
+
+	it('a day heading: today, yesterday, else the whole date', () => {
+		expect(dayHeading(at(6, 9), now)).toBe('Today');
+		expect(dayHeading(at(5, 23), now)).toBe('Yesterday');
+		expect(dayHeading(at(3, 12), now)).toBe('Saturday 3 October');
+		expect(dayHeading(new Date(2025, 11, 31, 12).getTime(), now)).toBe('Wednesday 31 December 2025');
+	});
+
+	it('how long until a moment', () => {
+		expect(until(now + 20 * 60_000, now)).toBe('in 20 min');
+		expect(until(now + 5 * 3600_000, now)).toBe('in 5 h');
+		expect(until(at(7, 10), now)).toBe('tomorrow at 10:00');
+		expect(until(at(9, 15), now)).toBe('in 3 days');
+		expect(until(now - 1, now)).toBe('now');
 	});
 });

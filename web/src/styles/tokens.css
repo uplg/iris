@@ -172,6 +172,7 @@
 	--poster-w: 11rem; /* a 2:3 poster card in a row */
 	--still-w: 19rem; /* a 16:9 still (continue watching) in a row */
 	--poster-mini: 72px; /* a poster beside a release row */
+	--poster-thumb: 40px; /* a poster in a dense list (a play of the admin's history) */
 	/* the player is a dark stage in both themes (stage-* pairs: header ratios) */
 	--stage: #0e1218;
 	--stage-raised: #1f2b36;

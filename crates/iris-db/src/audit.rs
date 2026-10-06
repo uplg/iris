@@ -60,20 +60,45 @@ pub async fn list(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<AuditLogRow>, sqlx::Error> {
+    list_filtered(pool, AuditFilter::default(), limit, offset).await
+}
+
+/// Which entries of the log: one action or a family of them, one actor's.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AuditFilter<'a> {
+    /// An exact action (`user.delete`) or its family, the part before the
+    /// dot (`user` matches every `user.*`).
+    pub action: Option<&'a str>,
+    pub actor: Option<UserId>,
+}
+
+pub async fn list_filtered(
+    pool: &SqlitePool,
+    filter: AuditFilter<'_>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AuditLogRow>, sqlx::Error> {
+    let actor: Option<Uuid> = filter.actor.map(Into::into);
     // LEFT JOIN: audit rows outlive their actor's account (migration 0036
     // dropped the FK for exactly that), so a deleted user's actions keep
-    // showing up under a placeholder name instead of vanishing.
+    // showing up under a placeholder name instead of vanishing. The family
+    // match is a prefix compare, not LIKE: an action's `_` is no wildcard.
     sqlx::query_as::<_, AuditLogRow>(
         "SELECT a.id, a.actor_id, \
             COALESCE(u.display_name, 'deleted user') as actor_display_name, a.action, \
             a.resource_type, a.resource_id, a.details, a.created_at \
          FROM audit_log a \
          LEFT JOIN users u ON u.id = a.actor_id \
+         WHERE (?3 IS NULL OR a.action = ?3 \
+                OR substr(a.action, 1, length(?3) + 1) = ?3 || '.') \
+           AND (?4 IS NULL OR a.actor_id = ?4) \
          ORDER BY a.created_at DESC \
          LIMIT ?1 OFFSET ?2",
     )
     .bind(limit)
     .bind(offset)
+    .bind(filter.action)
+    .bind(actor)
     .fetch_all(pool)
     .await
 }
@@ -138,5 +163,56 @@ mod tests {
         assert_eq!(list(&pool, 2, 0).await.unwrap().len(), 2);
         assert_eq!(list(&pool, 2, 4).await.unwrap().len(), 1);
         assert_eq!(list(&pool, 50, 0).await.unwrap().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn list_filters_by_action_family_and_actor() {
+        let pool = migrated_pool().await;
+        let ana = make_named_user(&pool, "Ana").await;
+        let bo = make_named_user(&pool, "Bo").await;
+        for (actor, action) in [
+            (ana, "user.delete"),
+            (ana, "user.password_reset"),
+            (bo, "torrent.delete"),
+            (bo, "userland.oddity"),
+        ] {
+            record(&pool, actor, action, "x", None, None).await.unwrap();
+        }
+        let actions = |filter| {
+            let pool = pool.clone();
+            async move {
+                let mut got: Vec<String> = list_filtered(&pool, filter, 50, 0)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|r| r.action)
+                    .collect();
+                got.sort();
+                got
+            }
+        };
+        let family = AuditFilter {
+            action: Some("user"),
+            actor: None,
+        };
+        assert_eq!(
+            actions(family).await,
+            ["user.delete", "user.password_reset"]
+        );
+        let exact = AuditFilter {
+            action: Some("user.delete"),
+            actor: None,
+        };
+        assert_eq!(actions(exact).await, ["user.delete"]);
+        let bos = AuditFilter {
+            action: None,
+            actor: Some(bo),
+        };
+        assert_eq!(actions(bos).await, ["torrent.delete", "userland.oddity"]);
+        let none = AuditFilter {
+            action: Some("torrent"),
+            actor: Some(ana),
+        };
+        assert_eq!(actions(none).await, Vec::<String>::new());
     }
 }
