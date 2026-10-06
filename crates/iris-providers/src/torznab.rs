@@ -655,7 +655,7 @@ impl RawItem {
                 self.languages.push(value.to_ascii_lowercase());
             }
             "infohash" if !value.is_empty() => {
-                self.infohash = Some(value.to_ascii_lowercase());
+                self.infohash = crate::util::normalize_infohash(value);
             }
             "tmdbid" | "tmdb" => {
                 if let Ok(n) = value.parse()

@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::search::{MediaKind, SearchQuery};
@@ -186,11 +188,89 @@ where
         .map_err(|e| Error::Provider(format!("page parse task: {e}")))
 }
 
+/// Normalise an `info_hash` string into a canonical 40-char lowercase
+/// hex SHA-1. Returns `None` on any unrecognised shape so a rogue
+/// value can't poison downstream identity comparisons.
+///
+/// Two encodings observed in the wild:
+///   * 40 hex chars — the canonical form (`/api/torrents/{id}`,
+///     mainline `UNIT3D` search rows). Pass-through.
+///   * 80 hex chars — `/api/torrents/filter` ships the infohash
+///     hex-encoded a SECOND time: each of the 40 hex chars is
+///     interpreted as a raw byte and re-hex-encoded, doubling the
+///     length. Decode the outer layer, verify the inner is itself
+///     a clean 40-char hex string.
+///   * 32 base32 chars — the BEP 9 magnet `xt` alternative some Torznab
+///     indexers echo in the `infohash` attr. Decoded to hex.
+pub(crate) fn normalize_infohash(raw: &str) -> Option<String> {
+    let s = raw.trim().to_ascii_lowercase();
+    if iris_core::ids::is_infohash_hex(&s) {
+        return Some(s);
+    }
+    if s.len() == 80 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let mut inner = String::with_capacity(40);
+        for chunk in s.as_bytes().as_chunks::<2>().0 {
+            let hi = (chunk[0] as char).to_digit(16)?;
+            let lo = (chunk[1] as char).to_digit(16)?;
+            let byte = u8::try_from((hi << 4) | lo).ok()?;
+            // Each decoded byte must itself be an ASCII hex digit —
+            // otherwise this isn't the double-encoded form and emitting
+            // it as an "infohash" would feed librqbit garbage.
+            if !byte.is_ascii_hexdigit() {
+                return None;
+            }
+            inner.push(byte as char);
+        }
+        return Some(inner);
+    }
+    if s.len() == 32 {
+        return base32_infohash(&s);
+    }
+    None
+}
+
+fn base32_infohash(s: &str) -> Option<String> {
+    let mut bits: u64 = 0;
+    let mut nbits = 0u32;
+    let mut out = String::with_capacity(40);
+    for c in s.bytes() {
+        let v = match c {
+            b'a'..=b'z' => c - b'a',
+            b'2'..=b'7' => c - b'2' + 26,
+            _ => return None,
+        };
+        bits = (bits << 5) | u64::from(v);
+        nbits += 5;
+        if nbits >= 8 {
+            nbits -= 8;
+            let byte = (bits >> nbits) & 0xff;
+            let _ = write!(out, "{byte:02x}");
+        }
+    }
+    (out.len() == 40).then_some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use iris_core::search::SearchQuery;
 
-    use super::{extract_year, join_category, scene_query};
+    use super::{extract_year, join_category, normalize_infohash, scene_query};
+
+    #[test]
+    fn infohash_accepts_hex_and_base32_and_rejects_the_rest() {
+        let hex = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a";
+        assert_eq!(
+            normalize_infohash(&hex.to_ascii_uppercase()).as_deref(),
+            Some(hex)
+        );
+        assert_eq!(
+            normalize_infohash("YEX6DQDLXISUVHOJ6UM3GNNKPQJWPKEK").as_deref(),
+            Some(hex)
+        );
+        assert_eq!(normalize_infohash(&"a".repeat(64)), None);
+        assert_eq!(normalize_infohash("YEX6DQDLXISUVHOJ6UM3GNNKPQJWPKE1"), None);
+        assert_eq!(normalize_infohash("not a hash"), None);
+    }
 
     fn parsed(title: Option<&str>, season: Option<u32>, episode: Option<u32>) -> SearchQuery {
         SearchQuery {

@@ -549,42 +549,6 @@ struct TorrentAttributes {
     meta: Option<MetaBlock>,
 }
 
-/// Normalise an `info_hash` string into a canonical 40-char lowercase
-/// hex SHA-1. Returns `None` on any unrecognised shape so a rogue
-/// value can't poison downstream identity comparisons.
-///
-/// Two encodings observed in the wild:
-///   * 40 hex chars — the canonical form (`/api/torrents/{id}`,
-///     mainline `UNIT3D` search rows). Pass-through.
-///   * 80 hex chars — `/api/torrents/filter` ships the infohash
-///     hex-encoded a SECOND time: each of the 40 hex chars is
-///     interpreted as a raw byte and re-hex-encoded, doubling the
-///     length. Decode the outer layer, verify the inner is itself
-///     a clean 40-char hex string.
-fn normalize_infohash(raw: &str) -> Option<String> {
-    let s = raw.trim().to_ascii_lowercase();
-    if iris_core::ids::is_infohash_hex(&s) {
-        return Some(s);
-    }
-    if s.len() == 80 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
-        let mut inner = String::with_capacity(40);
-        for chunk in s.as_bytes().as_chunks::<2>().0 {
-            let hi = (chunk[0] as char).to_digit(16)?;
-            let lo = (chunk[1] as char).to_digit(16)?;
-            let byte = u8::try_from((hi << 4) | lo).ok()?;
-            // Each decoded byte must itself be an ASCII hex digit —
-            // otherwise this isn't the double-encoded form and emitting
-            // it as an "infohash" would feed librqbit garbage.
-            if !byte.is_ascii_hexdigit() {
-                return None;
-            }
-            inner.push(byte as char);
-        }
-        return Some(inner);
-    }
-    None
-}
-
 /// Accept a JSON number, a numeric string, or null — normalise to
 /// `Option<u64>` with zero / non-positive treated as "no id". Used
 /// for `tmdb_id` because `UNIT3D` forks disagree on the encoding
@@ -695,7 +659,10 @@ impl TorrentEnvelope {
         // `info_hash` lowercase per BEP-9 / typical librqbit usage.
         // `UNIT3D` already emits it lowercase, but be defensive — and
         // some endpoints double-encode (see `normalize_infohash`).
-        let infohash = attrs.info_hash.as_deref().and_then(normalize_infohash);
+        let infohash = attrs
+            .info_hash
+            .as_deref()
+            .and_then(crate::util::normalize_infohash);
 
         // Freeleech: anything below 100 % still charges the user
         // some download credit, so we only flag true at full.
@@ -1396,21 +1363,27 @@ mod tests {
             write!(&mut outer, "{b:02x}").unwrap();
         }
         assert_eq!(outer.len(), 80);
-        assert_eq!(super::normalize_infohash(&outer).as_deref(), Some(inner));
+        assert_eq!(
+            crate::util::normalize_infohash(&outer).as_deref(),
+            Some(inner)
+        );
         // 40-char canonical form survives the trip unchanged.
-        assert_eq!(super::normalize_infohash(inner).as_deref(), Some(inner));
+        assert_eq!(
+            crate::util::normalize_infohash(inner).as_deref(),
+            Some(inner)
+        );
         // Mixed case → lowercased.
         assert_eq!(
-            super::normalize_infohash("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").as_deref(),
+            crate::util::normalize_infohash("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").as_deref(),
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         );
         // 80-char hex that doesn't decode into hex-ascii bytes → reject
         // rather than emit garbage (e.g., a random hex blob whose bytes
         // happen to land outside `[0-9a-f]`).
         let bogus = "ff".repeat(40); // decodes to 40 × 0xff — not ASCII hex digits.
-        assert_eq!(super::normalize_infohash(&bogus), None);
+        assert_eq!(crate::util::normalize_infohash(&bogus), None);
         // Wrong length entirely.
-        assert_eq!(super::normalize_infohash("deadbeef"), None);
+        assert_eq!(crate::util::normalize_infohash("deadbeef"), None);
     }
 
     #[test]

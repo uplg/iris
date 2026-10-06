@@ -310,7 +310,10 @@ impl RawItem {
             size_bytes: self.size.as_deref().and_then(parse_size),
             seeders: self.seeders,
             leechers: self.leechers,
-            infohash: self.infohash.map(|h| h.to_ascii_lowercase()),
+            infohash: self
+                .infohash
+                .as_deref()
+                .and_then(crate::util::normalize_infohash),
             magnet: None,
             category: self.category,
             tags: Vec::new(),
