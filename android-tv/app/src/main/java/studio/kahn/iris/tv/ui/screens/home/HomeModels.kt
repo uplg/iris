@@ -106,7 +106,7 @@ fun continueCard(item: ContinueWatchingItem, md: MediaMetadata?): CardModel {
     val menu = buildList {
         if (item.grabbable) add(CardAction.GetAndPlay) else add(CardAction.Play)
         if (isResuming(item)) add(CardAction.StartOver)
-        if (item.collectionId != null) add(CardAction.OpenSeries)
+        if (item.collectionId != null && item.kind == MediaKind.tv) add(CardAction.OpenSeries)
         if (!item.grabbable) add(CardAction.MarkWatched)
         add(CardAction.RemoveFromContinue)
     }
@@ -221,7 +221,7 @@ fun resumeHero(item: ContinueWatchingItem, md: MediaMetadata?, prefs: PlaybackPr
     }
     val actions = buildList {
         add(primary)
-        if (item.collectionId != null) add(HeroButton(HeroAction.AllEpisodes, "All episodes"))
+        if (item.collectionId != null && item.kind == MediaKind.tv) add(HeroButton(HeroAction.AllEpisodes, "All episodes"))
         if (resuming) add(HeroButton(HeroAction.StartOver, "Start over", "Starting over…", "over:$key"))
     }
     return HeroModel(

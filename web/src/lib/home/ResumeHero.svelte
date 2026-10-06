@@ -1,7 +1,8 @@
 <script lang="ts">
 	// The first thing to resume: where it stopped, what is left, the one button that plays it
-	// from there, the series' episodes, starting over; and the languages the play will use. A
-	// tile whose file is not on disk gets it first, then plays it while it downloads.
+	// from there, the series' episodes (a film has none), starting over; and the languages the
+	// play will use. A tile whose file is not on disk gets it first, then plays it while it
+	// downloads.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { tmdbImage, type ContinueWatchingItem } from '@iris/api/client';
 	import { clock, duration, kindLabel, percent, prettySceneName, timeLeft } from '@iris/api/format';
@@ -64,7 +65,7 @@
 				><Icon name="play" />{item.kind === 'tv' ? `Play ${nextName(item)}` : 'Play'}</a
 			>
 		{/if}
-		{#if item.collection_id}
+		{#if item.collection_id && item.kind === 'tv'}
 			<a class="btn" href="/collection/{item.collection_id}"><Icon name="list" />All episodes</a>
 		{/if}
 		{#if resuming}
