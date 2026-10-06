@@ -92,8 +92,10 @@ export function clock(sec: number | null | undefined): string {
 export function duration(sec: number): string {
 	const total = Math.max(0, Math.round(sec));
 	if (total < 60) return `${total} s`;
-	const h = Math.floor(total / 3600);
-	const m = Math.round((total % 3600) / 60);
+	// the minutes rounded first, so 59 min 30 s is "1 h", never "60 min"
+	const minutes = Math.round(total / 60);
+	const h = Math.floor(minutes / 60);
+	const m = minutes % 60;
 	if (h === 0) return `${m} min`;
 	return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }

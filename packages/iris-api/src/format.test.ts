@@ -14,6 +14,11 @@ describe('format', () => {
 		expect(duration(55 * 60)).toBe('55 min');
 		expect(duration(72 * 60)).toBe('1 h 12 min');
 		expect(duration(2 * 3600)).toBe('2 h');
+		// rounded on the whole minutes: never "60 min"
+		expect(duration(3570)).toBe('1 h');
+		expect(duration(7170)).toBe('2 h');
+		expect(duration(3629)).toBe('1 h');
+		expect(duration(3631)).toBe('1 h 1 min');
 		expect(timeLeft(23 * 60)).toBe('23 min left');
 	});
 
