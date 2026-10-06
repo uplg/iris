@@ -340,7 +340,7 @@
 	const episodeTitle = $derived(episodeContextQ.data?.current?.name ?? null);
 	const subheading = $derived(
 		currentEpisode
-			? [episodeCode(currentEpisode.season, currentEpisode.episode), episodeTitle].filter(Boolean).join(' · ')
+			? [episodeCode(currentEpisode.season, currentEpisode.episode, 'long'), episodeTitle].filter(Boolean).join(' · ')
 			: isTv
 				? null
 				: name !== heading

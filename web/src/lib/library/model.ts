@@ -4,7 +4,18 @@
 
 import type { CollectionListItem, ContinueWatchingItem, TorrentView } from '@iris/api/client';
 import { STORAGE } from '#lib/storage.ts';
-import { duration, episodeCode, fileName, formatSize, percent, plural, prettySceneName, speed, VIDEO_RE } from '@iris/api/format';
+import {
+	duration,
+	episodeCode,
+	fileName,
+	sceneEpisode,
+	formatSize,
+	percent,
+	plural,
+	prettySceneName,
+	speed,
+	VIDEO_RE
+} from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
 import { watchedShare, watchWords } from '#lib/watched.ts';
 import { etaSeconds, isComplete, PHASE_WORDS, phaseOf } from '#lib/torrent.ts';
@@ -64,12 +75,10 @@ export function bytesPct(list: TorrentView[]): number {
 	return total > 0 ? (list.reduce((s, t) => s + t.progress_bytes, 0) / total) * 100 : 0;
 }
 
-/** The season or episode a release carries (`S4`, `S4:E2`), when its name says it. */
+/** The season or episode a release carries (`Season 4`, `S4:E2`), when its name says it. */
 export function seasonOf(name: string | null | undefined): string | null {
-	const m = /(?:^|[^a-z0-9])s(\d{1,2})(?:e(\d{1,3}))?(?![a-z0-9])/i.exec(name ?? '');
-	if (!m) return null;
-	const code = episodeCode(Number(m[1]), m[2] ? Number(m[2]) : null);
-	return code?.startsWith('Season') ? `S${m[1].replace(/^0/, '')}` : code;
+	const m = sceneEpisode(name);
+	return m ? episodeCode(m.season, m.episode) : null;
 }
 
 /** A title's line of facts: « Series · 4.2 GB ». */

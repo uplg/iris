@@ -5,7 +5,7 @@
 	// downloads.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { tmdbImage, type ContinueWatchingItem } from '@iris/api/client';
-	import { clock, duration, kindLabel, percent, prettySceneName, timeLeft } from '@iris/api/format';
+	import { clock, duration, episodeCode, kindLabel, percent, prettySceneName, timeLeft } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import Progress from '#lib/components/Progress.svelte';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
@@ -29,11 +29,7 @@
 	const resuming = $derived(!item.grabbable && !item.next_up && isResumable(item.position_seconds));
 	const meta = $derived(
 		item.kind === 'tv' && item.season !== null && item.season !== undefined
-			? [
-					`Season ${item.season}`,
-					item.episode !== null && item.episode !== undefined ? `Episode ${item.episode}` : null,
-					item.duration_seconds ? duration(item.duration_seconds) : null
-				]
+			? [episodeCode(item.season, item.episode, 'long'), item.duration_seconds ? duration(item.duration_seconds) : null]
 			: [md.data?.year ? String(md.data.year) : null, kindLabel(item.kind), item.duration_seconds ? duration(item.duration_seconds) : null]
 	);
 	const getting = $derived(g.is(`get:${tileKey(item)}`));

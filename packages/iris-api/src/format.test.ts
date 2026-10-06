@@ -13,6 +13,7 @@ import {
 	percent,
 	plural,
 	prettySceneName,
+	sceneEpisode,
 	timeLeft,
 	until
 } from './format';
@@ -51,6 +52,23 @@ describe('format', () => {
 		expect(episodeCode(2, 0)).toBe('Season 2');
 		expect(episodeCode(null, 19)).toBe('E19');
 		expect(episodeCode(null, null)).toBeNull();
+	});
+
+	it('writes an episode the long way only when asked (a hero, a page heading)', () => {
+		expect(episodeCode(2, 4, 'long')).toBe('Season 2 · Episode 4');
+		expect(episodeCode(2, 0, 'long')).toBe('Season 2');
+		expect(episodeCode(null, 19, 'long')).toBe('Episode 19');
+	});
+
+	it('reads one season and episode mark from a name, the same digits everywhere', () => {
+		expect(sceneEpisode('Show.S01E02.1080p.mkv')).toEqual({ season: 1, episode: 2 });
+		expect(sceneEpisode('dir/Show.S01.E02.mkv')).toEqual({ season: 1, episode: 2 });
+		expect(sceneEpisode('Show_S01E02_1080p')).toEqual({ season: 1, episode: 2 });
+		expect(sceneEpisode('One.Piece.S01E1100.mkv')).toEqual({ season: 1, episode: 1100 });
+		expect(sceneEpisode('Show.S02.MULTi')).toEqual({ season: 2, episode: 0 });
+		expect(sceneEpisode('Movie.2006.1080p')).toBeNull();
+		expect(sceneEpisode('Sonic.Mania.1080p')).toBeNull();
+		expect(sceneEpisode(null)).toBeNull();
 	});
 
 	it('names language tags, jargon kept in brackets', () => {

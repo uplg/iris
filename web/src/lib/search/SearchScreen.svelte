@@ -7,7 +7,7 @@
 	import { page } from '$app/state';
 	import { createInfiniteQuery, createQuery } from '@tanstack/svelte-query';
 	import { me, search, type AggregatedResults, type MediaKind, type SearchResult, type TmdbSuggestion } from '@iris/api/client';
-	import { LANGUAGE_TAGS, languageLabel, plural, type LanguageTag } from '@iris/api/format';
+	import { episodeCode, LANGUAGE_TAGS, languageLabel, plural, type LanguageTag } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { refocus } from '#lib/focus.ts';
@@ -207,9 +207,11 @@
 	{#if tooShort}<p class="form-error">Type at least 2 characters.</p>{/if}
 	{#if parsed && s.q}
 		<p class="hint" id="{id}-parsed">
-			Showing results for <strong>{parsed.title}</strong>{#if typeof parsed.season === 'number'}{' · '}{parsed.episode
-					? `Season ${parsed.season}, episode ${parsed.episode}`
-					: `Season ${parsed.season}`}{/if}{#if typeof parsed.year === 'number'}{' · '}{parsed.year}{/if}.
+			Showing results for <strong>{parsed.title}</strong>{#if typeof parsed.season === 'number'}{' · '}{episodeCode(
+					parsed.season,
+					parsed.episode,
+					'long'
+				)}{/if}{#if typeof parsed.year === 'number'}{' · '}{parsed.year}{/if}.
 		</p>
 	{/if}
 

@@ -84,11 +84,29 @@ export function timeLeft(sec: number): string {
 	return `${duration(sec)} left`;
 }
 
-/** An episode's code, the way the cards write it: `S2:E4`; a season alone: `Season 2`. */
-export function episodeCode(season: number | null | undefined, episode: number | null | undefined): string | null {
-	if (season === null || season === undefined) return episode === null || episode === undefined ? null : `E${episode}`;
-	if (episode === null || episode === undefined || episode === 0) return `Season ${season}`;
-	return `S${season}:E${episode}`;
+/** An episode, two ways: `short` in rows, cards and lists (`S2:E4`, `E19`), `long` only in a
+ * hero or a page heading (`Season 2 · Episode 4`, `Episode 19`). A season alone (episode 0 is
+ * the parsers' whole-season mark) is `Season 2` either way. */
+export function episodeCode(
+	season: number | null | undefined,
+	episode: number | null | undefined,
+	style: 'short' | 'long' = 'short'
+): string | null {
+	const hasEpisode = episode !== null && episode !== undefined;
+	if (season === null || season === undefined) {
+		if (!hasEpisode) return null;
+		return style === 'long' ? `Episode ${episode}` : `E${episode}`;
+	}
+	if (!hasEpisode || episode === 0) return `Season ${season}`;
+	return style === 'long' ? `Season ${season} · Episode ${episode}` : `S${season}:E${episode}`;
+}
+
+/** The season and episode a release or file name carries: `S01E02`, `S1E2`, `S01.E02`,
+ * `Show_S01E02_1080p`; a season alone (`S02`) is episode 0. Seasons take 1 or 2 digits,
+ * episodes up to 4 (long anime runs); the mark stands apart from letters and digits. */
+export function sceneEpisode(name: string | null | undefined): { season: number; episode: number } | null {
+	const m = /(?:^|[^a-z0-9])s(\d{1,2})(?:[._ -]*e(\d{1,4}))?(?![a-z0-9])/i.exec(fileName(name) ?? '');
+	return m ? { season: Number(m[1]), episode: m[2] ? Number(m[2]) : 0 } : null;
 }
 
 /** The file extensions a player can open. */

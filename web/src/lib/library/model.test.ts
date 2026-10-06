@@ -74,11 +74,12 @@ describe('titles', () => {
 		expect(titleStatus(movie, undefined).text).toBe('On disk');
 		expect(titleStatus(ghost, undefined).text).toBe('No longer on disk');
 		const activity = activityByCollection([downloading]);
-		expect(titleStatus(series, activity.get('c-1'))).toEqual({ tone: 'busy', text: 'Downloading S4 · 42%' });
+		expect(titleStatus(series, activity.get('c-1'))).toEqual({ tone: 'busy', text: 'Downloading Season 4 · 42%' });
 	});
 
 	it('the season or episode a release carries', () => {
-		expect(seasonOf('Show.S04.1080p')).toBe('S4');
+		expect(seasonOf('Show.S04.1080p')).toBe('Season 4');
+		expect(seasonOf('Show_S02E07_1080p')).toBe('S2:E7');
 		expect(seasonOf('Show.S02E07.1080p')).toBe('S2:E7');
 		expect(seasonOf('Movie.2021.1080p')).toBeNull();
 	});

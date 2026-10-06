@@ -1,7 +1,7 @@
 // What a watch is, said in words the same way on History and Admin: how far someone got,
 // what exactly they watched (days and lengths: `@iris/api/format`).
 
-import { clock, duration, episodeCode, fileName, percent, prettySceneName } from '@iris/api/format';
+import { clock, duration, episodeCode, fileName, percent, prettySceneName, sceneEpisode } from '@iris/api/format';
 import { watchedShare } from '#lib/watched.ts';
 
 /** How far a watch went: « Watched to the end », « 42% watched, stopped at 32:10 »,
@@ -51,11 +51,11 @@ export function playName(it: {
 	const raw = fileName(it.file_path) ?? it.torrent_name ?? '';
 	const title = it.collection_title ?? (raw ? prettySceneName(it.torrent_name ?? raw) : 'Something unnamed');
 	// a file of a pack the library could not place still names its episode
-	const named = /\bS(\d{1,2})E(\d{1,3})\b/i.exec(raw);
+	const named = sceneEpisode(raw);
 	const code =
 		typeof it.absolute_episode === 'number'
 			? `Episode ${it.absolute_episode}`
-			: (episodeCode(it.season, it.episode) ?? (named ? episodeCode(Number(named[1]), Number(named[2])) : null));
+			: (episodeCode(it.season, it.episode) ?? (named && named.episode > 0 ? episodeCode(named.season, named.episode) : null));
 	if (code) return { title, detail: [code, it.episode_title].filter(Boolean).join(' · ') };
 	if (it.kind === 'movie') return { title, detail: typeof it.year === 'number' ? `Film · ${it.year}` : 'Film' };
 	return { title, detail: null };

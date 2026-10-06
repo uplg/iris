@@ -6,7 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { follows, searchDetails, tmdbImage, torrents } from '@iris/api/client';
-	import { fileName, ago, formatSize, kindWord, languageLabel, plural, prettySceneName } from '@iris/api/format';
+	import { ago, fileName, formatSize, kindWord, languageLabel, plural, prettySceneName, sceneEpisode } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { KEYS, read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -19,7 +19,7 @@
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import StatusRow from '#lib/components/StatusRow.svelte';
 	import { backToResults, findRelease } from '#lib/search/cache.ts';
-	import { DEAD, isDead, ownedFile, partWords, sceneMark, seedersWords } from '#lib/search/release.ts';
+	import { DEAD, isDead, ownedFile, partWords, seedersWords } from '#lib/search/release.ts';
 	import Description from './Description.svelte';
 	import { isSample, playWords, sortFiles, autoFile } from './files.ts';
 	import { Grab, type GrabTarget } from './grab.svelte.ts';
@@ -50,7 +50,7 @@
 	const p = $derived(preview.data ?? null);
 	const d = $derived(details.data ?? null);
 	const name = $derived(p?.name ?? d?.title ?? hit?.title ?? '');
-	const mark = $derived(sceneMark(name));
+	const mark = $derived(sceneEpisode(name));
 	const matched = $derived(d?.title_match ?? hit?.title_match ?? null);
 	const title = $derived(matched?.title ?? (name ? prettySceneName(name) : 'Release'));
 	const tmdbId = $derived(matched?.tmdb_id ?? hit?.tmdb_id ?? null);
