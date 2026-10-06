@@ -59,6 +59,20 @@ object SeekAcceleration {
     }
 }
 
+/** What a playback error leads to. */
+enum class ErrorStep { Retry, Remux, Say }
+
+/**
+ * A transient error re-prepares while retries are left; a codec / container one moves the
+ * direct stream onto the server's remux, once. The server's own streams (remux, transcode) have
+ * nowhere left to go: their error is said, or the player would sit on it in silence.
+ */
+fun errorStep(transient: Boolean, retriesLeft: Boolean, remuxable: Boolean, route: PlayRoute): ErrorStep = when {
+    transient && retriesLeft -> ErrorStep.Retry
+    remuxable && route == PlayRoute.Direct -> ErrorStep.Remux
+    else -> ErrorStep.Say
+}
+
 /** A position the player's way: `32:10`, `1:02:03`. */
 fun clockText(ms: Long): String = clock(ms.coerceAtLeast(0) / 1_000.0)
 

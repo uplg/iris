@@ -25,9 +25,13 @@ data class LanguageChoices(
         UpdatePlaybackPrefs(audioLanguage = audio, subtitleLanguage = subtitles, collectionId = collectionId)
 
     companion object {
+        /**
+         * A server older than per-title choices leaves `for_collection` out: it ignores
+         * `collection_id` and overwrites the account's both fields, so its scope is the account.
+         */
         fun of(p: PlaybackPrefsResponse?, collectionId: UUID?): LanguageChoices = when {
             p == null -> LanguageChoices(collectionId)
-            collectionId == null -> LanguageChoices(null, p.audioLanguage, p.subtitleLanguage)
+            collectionId == null || !p.perTitle -> LanguageChoices(null, p.audioLanguage, p.subtitleLanguage)
             else -> LanguageChoices(
                 collectionId,
                 audio = p.audioLanguage.takeIf { p.audioForCollection == true },
@@ -36,3 +40,6 @@ data class LanguageChoices(
         }
     }
 }
+
+/** The server keeps a choice per title (it says whether this one has its own). */
+val PlaybackPrefsResponse.perTitle: Boolean get() = forCollection != null

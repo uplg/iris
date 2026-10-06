@@ -410,7 +410,7 @@ private fun TitlePage(
         ConfirmDialog(
             eyebrow = "Delete a release of ${p.title}",
             title = "Delete ${row.release}?",
-            body = "It leaves the disk for everyone in the house. Watch history is kept. ${row.deleteBody}",
+            body = "${row.deleteBody} Watch history is kept.",
             confirmLabel = "Delete release",
             onConfirm = {
                 deleting = null

@@ -112,6 +112,8 @@ object IrisType {
     val metaLarge = text(13.sp, 17.sp, FontWeight.Medium, tabular = true)
     /** The smallest meta (grid card facts), medium, tabular: 10 sp floor (board 18 px). */
     val metaSmall = text(10.sp, 13.sp, FontWeight.Medium, tabular = true)
+    /** 40 px medium, tabular: a figure beside a [stageTitle] (a channel's number). */
+    val stageFigure = text(20.sp, 22.sp, FontWeight.Medium, tabular = true)
     /** 26 px medium, tabular: the player's clock figures. */
     val figure = text(13.sp, 13.sp, FontWeight.Medium, tabular = true)
     /** 20 px medium, uppercase at call site via [Eyebrow]: a kicker above a title. */

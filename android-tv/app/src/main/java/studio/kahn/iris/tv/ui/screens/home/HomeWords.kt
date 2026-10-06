@@ -4,7 +4,6 @@ import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
-import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.ui.format.episodeCode
 import studio.kahn.iris.tv.ui.format.formatSize
@@ -46,9 +45,6 @@ fun downloadsByCollection(list: List<TorrentView>): Map<String, Double> {
     return sums.mapValues { (_, s) -> if (s.second > 0) s.first * 100.0 / s.second else 0.0 }
 }
 
-/** A release still fetching data (web `moving`): polls go quick while one does. */
-fun isMoving(t: TorrentView): Boolean =
-    !t.finished && t.progressPct < 100 && (t.state == TorrentState.live || t.state == TorrentState.initializing)
 
 /** Seconds left to watch, when the length is known. */
 fun secondsLeft(item: ContinueWatchingItem): Double? =

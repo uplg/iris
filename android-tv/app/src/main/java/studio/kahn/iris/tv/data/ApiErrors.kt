@@ -20,9 +20,23 @@ private val envelopeJson = Json {
     coerceInputValues = true
 }
 
-/** Parsed Iris error envelope, or null when the body isn't one. */
+/**
+ * Parsed Iris error envelope, or null when the body isn't one. Peeks: the body stays readable,
+ * so a caller that branches on the code and rethrows still lets `toUiError` say the message.
+ */
 fun HttpException.irisError(): ApiErrorEnvelope? = runCatching {
-    response()?.errorBody()?.string()?.let {
+    response()?.errorBody()?.source()?.peek()?.readUtf8()?.let {
         envelopeJson.decodeFromString<ApiErrorEnvelope>(it)
     }
 }.getOrNull()
+
+/**
+ * [read], or [absent] when the server has no such endpoint (404): one older than this app. Only
+ * for reads whose path names no resource, where a 404 can mean nothing else.
+ */
+suspend fun <T> absentAs(absent: T, read: suspend () -> T): T =
+    try {
+        read()
+    } catch (e: HttpException) {
+        if (e.code() == 404) absent else throw e
+    }

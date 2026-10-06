@@ -12,6 +12,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.MainActivity
 
@@ -39,9 +41,16 @@ class ChannelsService(private val context: Context) {
 
     private data class Program(val title: String, val description: String?, val posterUri: String?, val deepLink: String, val type: Int)
 
-    suspend fun sync(container: AppContainer) {
+    // The launch's sync and the one on leaving can overlap: two clear-then-insert passes
+    // interleaved would leave the row doubled.
+    private val syncing = Mutex()
+
+    suspend fun sync(container: AppContainer) = syncing.withLock {
         withContext(Dispatchers.IO) {
-            val url = container.sessionStore.serverUrl.first() ?: return@withContext
+            // Signed in only: a pairing in progress has a server and no cookies yet.
+            val session = container.sessionStore.session.first()
+            if (session == null || session.cookies.isEmpty()) return@withContext
+            val url = session.serverUrl
             val api: IrisApi = container.apiFor(url)
             val library = async { bestEffort { api.listTorrents() }.orEmpty() }
             val cw = async { bestEffort { api.continueWatching() }.orEmpty() }

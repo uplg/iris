@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.absentAs
 import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.LibraryMatch
@@ -62,6 +63,17 @@ data class SearchPage(
         )
     }
 }
+
+/** A server older than this app has no titles lookup (404): said so, with the views that still work. */
+internal fun titlesSaid(read: Loadable<List<TitleCard>>): Loadable<List<TitleCard>> =
+    if (read is Loadable.Failed && read.error.status == 404) {
+        Loadable.Failed(read.error.copy(message = TITLES_ABSENT))
+    } else {
+        read
+    }
+
+internal const val TITLES_ABSENT =
+    "The Iris server is older than this app and can't look up titles yet. Grid and List show every release the trackers find."
 
 /** Everything the search screen draws; what it derives is computed once per state. */
 @Immutable
@@ -274,7 +286,7 @@ class SearchViewModel(
     fun loadRecent() {
         recentJob?.cancel()
         recentJob = viewModelScope.launch {
-            val next = load(mutable.value.recent) { container.api().recentSearches() }
+            val next = load(mutable.value.recent) { absentAs(emptyList()) { container.api().recentSearches() } }
             mutable.update { it.copy(recent = next) }
         }
     }
@@ -290,7 +302,7 @@ class SearchViewModel(
             } catch (e: Exception) {
                 e.toUiError()
             }
-            val next = load(mutable.value.recent) { container.api().recentSearches() }
+            val next = load(mutable.value.recent) { absentAs(emptyList()) { container.api().recentSearches() } }
             mutable.update { it.copy(recent = next, forgetting = null, forgetError = error) }
         }
     }
@@ -312,7 +324,7 @@ class SearchViewModel(
             return
         }
         mutable.update { it.copy(titles = Loadable.Loading) }
-        val next = load(Loadable.Loading) { container.api().searchTitles(q) }
+        val next = titlesSaid(load(Loadable.Loading) { container.api().searchTitles(q) })
         next.valueOrNull?.let(SearchMemory::keepTitles)
         mutable.update { it.copy(titles = next) }
     }

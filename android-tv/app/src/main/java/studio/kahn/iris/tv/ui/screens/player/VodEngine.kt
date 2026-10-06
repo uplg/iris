@@ -391,6 +391,8 @@ fun VodEngine(
         val retryWindowMs = 30_000L
         var retryCount = 0
         var firstRetryAt = 0L
+        // Goes with this player: a rebuilt one (the remux) must not see the old one's re-prepare.
+        var pendingRetry: Job? = null
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 val (message, transient) = humanizePlaybackError(error)
@@ -400,22 +402,23 @@ fun VodEngine(
                     firstRetryAt = now
                     retryCount = 0
                 }
-                if (transient && retryCount < maxRetries) {
-                    retryCount++
-                    Log.i("iris-core", "auto-retry #$retryCount after transient error")
-                    scope.launch {
-                        delay(1_500L * retryCount)
-                        bestEffort { player.prepare() }
+                when (errorStep(transient, retryCount < maxRetries, isRemuxableError(error), route)) {
+                    ErrorStep.Retry -> {
+                        retryCount++
+                        Log.i("iris-core", "auto-retry #$retryCount after transient error")
+                        pendingRetry?.cancel()
+                        pendingRetry = scope.launch {
+                            delay(1_500L * retryCount)
+                            bestEffort { player.prepare() }
+                        }
                     }
-                    return
+                    ErrorStep.Remux -> {
+                        Log.i("iris-core", "switching to server-side HLS remux after ${error.errorCodeName}")
+                        fallbackResumeMs = player.currentPosition.coerceAtLeast(0L)
+                        useRemuxFallback = true
+                    }
+                    ErrorStep.Say -> out.error = message
                 }
-                if (!useRemuxFallback && isRemuxableError(error)) {
-                    Log.i("iris-core", "switching to server-side HLS remux after ${error.errorCodeName}")
-                    fallbackResumeMs = player.currentPosition.coerceAtLeast(0L)
-                    useRemuxFallback = true
-                    return
-                }
-                out.error = message
             }
 
             override fun onRenderedFirstFrame() {
@@ -527,7 +530,10 @@ fun VodEngine(
             }
         }
         player.addListener(listener)
-        onDispose { player.removeListener(listener) }
+        onDispose {
+            pendingRetry?.cancel()
+            player.removeListener(listener)
+        }
     }
 
     // The progress tick (1 s) feeds the heartbeat; the last save, the

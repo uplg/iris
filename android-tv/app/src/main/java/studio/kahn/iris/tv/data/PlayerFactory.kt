@@ -2,6 +2,7 @@ package studio.kahn.iris.tv.data
 
 import android.content.Context
 import android.os.Handler
+import androidx.core.net.toUri
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -400,7 +401,7 @@ fun webVttSubtitle(
     label: String?,
     forced: Boolean,
 ): MediaItem.SubtitleConfiguration =
-    MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(url))
+    MediaItem.SubtitleConfiguration.Builder(url.toUri())
         .setMimeType(MimeTypes.TEXT_VTT)
         .setLanguage(language)
         .setLabel(label ?: language ?: "Subtitles")

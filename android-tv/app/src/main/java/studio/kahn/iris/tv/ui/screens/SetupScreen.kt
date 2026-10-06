@@ -114,7 +114,7 @@ fun SetupContent(
                 verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
             ) {
                 IrisWordmark(fontSize = 26.sp)
-                Text("Sign in with email and password", style = IrisType.title, color = IrisColor.ink)
+                Text("Sign in with email and password", style = IrisType.panel, color = IrisColor.ink)
                 Text(
                     "The password is typed on the TV. Pairing with a code shown here avoids it.",
                     style = IrisType.body,

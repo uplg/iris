@@ -139,7 +139,7 @@ private fun PairingForm(
     // keyboard before the person asked for it.
     LaunchedEffect(Unit) { runCatching { generateFocus.requestFocus() } }
 
-    Text("Pair this TV with your Iris account", style = IrisType.title, color = IrisColor.ink)
+    Text("Pair this TV with your Iris account", style = IrisType.panel, color = IrisColor.ink)
     Text(
         "Iris shows a code here; you confirm it on your phone or computer. No password is typed on the TV.",
         style = IrisType.body,

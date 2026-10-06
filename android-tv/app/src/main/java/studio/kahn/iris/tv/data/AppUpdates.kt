@@ -49,6 +49,8 @@ fun updateNotice(state: UpdateState): UpdateNotice? {
     return UpdateNotice(latest, state.installed, state.progress)
 }
 
+internal const val NO_INSTALLER = "this TV has no installer to open the downloaded update"
+
 /**
  * The one in-app update of the process ([AppUpdater]): read by the header's badge, the home's
  * notice, Settings → App update and the update lock, so a download started on one is the
@@ -80,10 +82,12 @@ class AppUpdates(
     fun download() {
         if (download?.isActive == true) return
         if (!AppUpdater.canInstallPackages(context)) {
-            AppUpdater.openInstallPermissionSettings(context)
-            mutable.update {
-                it.copy(progress = AppUpdater.Progress.Failed("Allow “Install unknown apps” for Iris TV in the page that opened, then try again."))
+            val words = if (AppUpdater.openInstallPermissionSettings(context)) {
+                "Allow “Install unknown apps” for Iris TV in the page that opened, then try again."
+            } else {
+                "Allow “Install unknown apps” for Iris TV in the TV’s Settings (Apps, then Security), then try again."
             }
+            mutable.update { it.copy(progress = AppUpdater.Progress.Failed(words)) }
             return
         }
         mutable.update { it.copy(progress = AppUpdater.Progress.Connecting) }
@@ -95,7 +99,9 @@ class AppUpdates(
     /** Hands the downloaded APK to the system installer (again, when it was dismissed). */
     fun install() {
         val file = (mutable.value.progress as? AppUpdater.Progress.Ready)?.file ?: return
-        AppUpdater.requestInstall(context, file)
+        if (!AppUpdater.requestInstall(context, file)) {
+            mutable.update { it.copy(progress = AppUpdater.Progress.Failed(NO_INSTALLER)) }
+        }
     }
 
     fun cancel() {

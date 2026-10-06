@@ -34,6 +34,7 @@
     <application
         android:name=".IrisApp"
         android:allowBackup="false"
+        android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:banner="@drawable/banner"
         android:icon="@drawable/ic_launcher"

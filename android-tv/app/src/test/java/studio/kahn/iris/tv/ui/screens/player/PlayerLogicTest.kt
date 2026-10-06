@@ -10,6 +10,22 @@ import studio.kahn.iris.tv.data.EpisodePoint
 import studio.kahn.iris.tv.data.EpisodeStatus
 import studio.kahn.iris.tv.ui.format.episodeCode
 
+class ErrorStepTest {
+    @Test
+    fun aDecoderErrorOnTheServersOwnStreamIsSaidNotRemuxedAgain() {
+        // The transcode's URL is the remux's: "falling back" kept the same dead player, silent.
+        assertEquals(ErrorStep.Say, errorStep(transient = false, retriesLeft = true, remuxable = true, route = PlayRoute.ServerTranscode))
+        assertEquals(ErrorStep.Say, errorStep(transient = false, retriesLeft = true, remuxable = true, route = PlayRoute.ServerRemux))
+        assertEquals(ErrorStep.Remux, errorStep(transient = false, retriesLeft = true, remuxable = true, route = PlayRoute.Direct))
+    }
+
+    @Test
+    fun aNetworkBlipRetriesWhileRetriesAreLeft() {
+        assertEquals(ErrorStep.Retry, errorStep(transient = true, retriesLeft = true, remuxable = false, route = PlayRoute.ServerRemux))
+        assertEquals(ErrorStep.Say, errorStep(transient = true, retriesLeft = false, remuxable = false, route = PlayRoute.Direct))
+    }
+}
+
 class SeekAccelerationTest {
     @Test
     fun aPressMovesTenSeconds() {

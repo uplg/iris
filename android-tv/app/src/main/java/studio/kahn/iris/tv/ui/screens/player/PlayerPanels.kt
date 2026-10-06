@@ -28,7 +28,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
-import java.util.Locale
 import java.util.UUID
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.ui.components.ActionButton
@@ -46,6 +45,7 @@ import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.Spinner
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.format.percent
 import studio.kahn.iris.tv.ui.format.thisTitle
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
@@ -156,7 +156,7 @@ private fun EpisodeRow(row: SideRow, busy: Boolean, onClick: () -> Unit, modifie
     val facts = buildList {
         if (row.secondary.isNotEmpty()) add(if (row.mono) row.secondary else LanguageWords.of(row.secondary) ?: row.secondary)
         if (row.watched) add("Watched")
-        if (row.started) add(String.format(Locale.ROOT, "%d %% watched", row.watchedPct?.toInt() ?: 0))
+        if (row.started) add("${percent(row.watchedPct ?: 0.0)} watched")
         if (row.active) add("Now playing")
         if (row.grab != null) add(if (busy) "Grabbing…" else "Not downloaded yet")
     }.joinToString(" · ")

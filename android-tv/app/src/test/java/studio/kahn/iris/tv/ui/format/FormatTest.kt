@@ -41,6 +41,8 @@ class FormatTest {
         assertEquals("55 min", duration(55 * 60.0))
         assertEquals("1 h 12 min", duration(72 * 60.0))
         assertEquals("2 h", duration(7_200.0))
+        assertEquals("1 h", duration(3_599.0))
+        assertEquals("2 h", duration(7_170.0))
         assertEquals("23 min left", timeLeft(23 * 60.0))
     }
 
