@@ -1,0 +1,54 @@
+// The plate drawn behind a channel logo, picked from the logo's own pixels: black ink vanishes
+// on a dark plate, white ink on a light one, so a dark logo gets a light well, a light logo a
+// dark one, a colorful one a neutral grey. Logos come through the backend proxy (same origin:
+// the canvas is never tainted). Cosmetic: any oddity falls back to neutral.
+
+export type LogoTone = 'light' | 'neutral' | 'dark';
+
+/** One analysis per logo: a grid shows hundreds and the guide refetches. */
+const cache = new Map<string, LogoTone | Promise<LogoTone>>();
+
+const SAMPLE = 24;
+const ALPHA_CUTOFF = 25;
+
+function analyze(url: string): Promise<LogoTone> {
+	return new Promise((resolve) => {
+		const img = new Image();
+		img.onload = () => {
+			try {
+				const canvas = document.createElement('canvas');
+				canvas.width = SAMPLE;
+				canvas.height = SAMPLE;
+				const ctx = canvas.getContext('2d');
+				if (!ctx) return resolve('neutral');
+				ctx.drawImage(img, 0, 0, SAMPLE, SAMPLE);
+				const { data } = ctx.getImageData(0, 0, SAMPLE, SAMPLE);
+				let luma = 0;
+				let count = 0;
+				for (let i = 0; i < data.length; i += 4) {
+					if (data[i + 3] < ALPHA_CUTOFF) continue;
+					luma += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+					count += 1;
+				}
+				if (count === 0) return resolve('neutral');
+				const mean = luma / count / 255;
+				resolve(mean < 0.38 ? 'light' : mean > 0.62 ? 'dark' : 'neutral');
+			} catch {
+				resolve('neutral');
+			}
+		};
+		img.onerror = () => resolve('neutral');
+		img.src = url;
+	});
+}
+
+export function logoTone(url: string): LogoTone | Promise<LogoTone> {
+	const hit = cache.get(url);
+	if (hit !== undefined) return hit;
+	const pending = analyze(url).then((tone) => {
+		cache.set(url, tone);
+		return tone;
+	});
+	cache.set(url, pending);
+	return pending;
+}
