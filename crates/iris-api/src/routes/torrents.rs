@@ -916,6 +916,13 @@ fn build_remux_plan(
 /// movie TMDB has metadata for.
 const TMDB_RUNTIME_TOLERANCE: f64 = 0.15;
 
+/// The lookup hint for a collection's `tmdb_id`: TMDB's movie and TV ids are
+/// separate namespaces, so the same number can be a film and a series. An
+/// unknown kind gives no hint (movie first, then TV).
+fn tmdb_kind_hint(collection_kind: Option<&str>) -> Option<crate::tmdb::TmdbKind> {
+    collection_kind.and_then(crate::tmdb::TmdbKind::from_wire)
+}
+
 /// Confirm or reject the torrent's *collection* `tmdb_id` by matching its
 /// declared runtime against the file's probed duration. Idempotent: once
 /// verified, never re-checked. No-op when the collection has no id yet or the
@@ -938,7 +945,10 @@ async fn verify_tmdb_match(state: &AppState, infohash: &str, probed_duration_sec
     let Ok(tmdb_id_u64) = u64::try_from(tmdb_id) else {
         return;
     };
-    let Some(meta) = tmdb.lookup(tmdb_id_u64).await else {
+    let Some(meta) = tmdb
+        .lookup_with_kind(tmdb_id_u64, tmdb_kind_hint(row.kind.as_deref()))
+        .await
+    else {
         return;
     };
     let Some(tmdb_minutes) = meta.runtime_minutes.filter(|m| *m > 0) else {
@@ -2566,6 +2576,20 @@ pub(crate) async fn torrent_or_404(
     iris_db::torrents::find_by_infohash(state.db(), infohash)
         .await?
         .ok_or(ApiError::NotFound)
+}
+
+#[cfg(test)]
+mod tmdb_verify_tests {
+    use super::tmdb_kind_hint;
+    use crate::tmdb::TmdbKind;
+
+    #[test]
+    fn runtime_check_looks_the_id_up_in_the_collection_kind() {
+        assert_eq!(tmdb_kind_hint(Some("tv")), Some(TmdbKind::Tv));
+        assert_eq!(tmdb_kind_hint(Some("movie")), Some(TmdbKind::Movie));
+        assert_eq!(tmdb_kind_hint(Some("anime")), None);
+        assert_eq!(tmdb_kind_hint(None), None);
+    }
 }
 
 #[cfg(test)]
