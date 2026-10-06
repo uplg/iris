@@ -9,7 +9,8 @@ import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.ui.components.Step
 import studio.kahn.iris.tv.ui.components.StepState
-import studio.kahn.iris.tv.ui.formatSpeed
+import studio.kahn.iris.tv.ui.format.formatSpeed
+import studio.kahn.iris.tv.ui.format.percent
 
 /** Where reading the file (`/probe`) stands. */
 @Immutable
@@ -69,7 +70,6 @@ fun isDeadSwarm(t: TorrentView, probeError: String?): Boolean {
         age > Duration.ofMinutes(2)
 }
 
-private fun percent(pct: Double): String = String.format(Locale.ROOT, "%d %%", pct.coerceIn(0.0, 100.0).roundToInt())
 
 private fun peers(n: Int): String = if (n == 1) "1 peer" else "$n peers"
 
@@ -88,7 +88,7 @@ fun readiness(i: ReadyInput): Readiness {
         t != null && isDeadSwarm(t, probeError) -> ReadyProblem(
             title = "Nobody is sharing this release",
             detail = "The tracker advertised seeders, but none of them answered. Iris has " +
-                "${percent(t.progressPct)} of the file and no way to get the rest.",
+                "${percent(t.progressPct.coerceIn(0.0, 100.0))} of the file and no way to get the rest.",
             deadSwarm = true,
         )
         t?.state == TorrentState.error -> ReadyProblem(
@@ -124,7 +124,7 @@ fun readiness(i: ReadyInput): Readiness {
         add(
             Raw(
                 "Downloaded the first minutes", "Downloading the first minutes", "Download the first minutes",
-                detail = t?.let { "${percent(pct)} · ${formatSpeed(it.downloadSpeedBps)}" },
+                detail = t?.let { "${percent(pct.coerceIn(0.0, 100.0))} · ${formatSpeed(it.downloadSpeedBps)}" },
                 progress = (pct / 100.0).toFloat().coerceIn(0f, 1f),
                 met = onDisk,
             ),
@@ -141,8 +141,8 @@ fun readiness(i: ReadyInput): Readiness {
             val s = i.playStatus
             val fraction = s?.progress?.coerceIn(0.0, 0.99)
             val (doing, detail) = when (s?.reason) {
-                "downloading" -> "Downloading on the server" to fraction?.let { percent(it * 100.0) }
-                "remuxing" -> "Preparing the stream on the server" to fraction?.let { percent(it * 100.0) }
+                "downloading" -> "Downloading on the server" to fraction?.let { percent((it * 100.0).coerceIn(0.0, 100.0)) }
+                "remuxing" -> "Preparing the stream on the server" to fraction?.let { percent((it * 100.0).coerceIn(0.0, 100.0)) }
                 else -> "Preparing the stream on the server" to (if (s == null) "Starting" else "Almost there")
             }
             add(
@@ -210,12 +210,12 @@ private fun hdrWord(hdr: String): String? = when (hdr.lowercase(Locale.ROOT)) {
 
 /**
  * The quiet facts line in the top bar: "Playing from disk · 1080p HEVC ·
- * plays directly", or "Playing while it downloads, 42 %".
+ * plays directly", or "Playing while it downloads, 42%".
  */
 fun factsLine(t: TorrentView?, picture: String?): String {
     val parts = mutableListOf<String>()
     if (t != null) {
-        parts += if (t.finished) "Playing from disk" else "Playing while it downloads, ${percent(t.progressPct)}"
+        parts += if (t.finished) "Playing from disk" else "Playing while it downloads, ${percent(t.progressPct.coerceIn(0.0, 100.0))}"
     }
     if (picture != null) parts += picture
     return parts.joinToString(" · ")

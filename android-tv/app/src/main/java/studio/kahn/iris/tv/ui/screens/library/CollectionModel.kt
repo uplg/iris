@@ -15,7 +15,14 @@ import studio.kahn.iris.tv.data.SeasonPackEntry
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.isVideoPath
-import studio.kahn.iris.tv.ui.formatSize
+import studio.kahn.iris.tv.ui.format.clock
+import studio.kahn.iris.tv.ui.format.duration
+import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.format.percent
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.format.recentTime
+import studio.kahn.iris.tv.ui.format.timeLeft
 
 // A title's episodes as one row each, whatever holds them (on disk, offered, reclaimed), and
 // what the page says about them: web `lib/collection/merge.ts` and `status.ts`.

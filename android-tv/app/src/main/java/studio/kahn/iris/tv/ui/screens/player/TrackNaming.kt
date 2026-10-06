@@ -1,46 +1,8 @@
 package studio.kahn.iris.tv.ui.screens.player
 
 import java.util.Locale
-
-/**
- * A language as people say it, from a track tag or a preference code: the
- * web's `languageName` (`fr`, `fre`, `fr-FR` → "French"; an unknown code in
- * capitals; absent or `und` → null). Always English, whatever the device
- * locale.
- */
-object LanguageNames {
-    private val iso6392To1 = mapOf(
-        "fre" to "fr", "fra" to "fr", "eng" to "en", "ger" to "de", "deu" to "de",
-        "spa" to "es", "ita" to "it", "por" to "pt", "dut" to "nl", "nld" to "nl",
-        "jpn" to "ja", "kor" to "ko", "chi" to "zh", "zho" to "zh", "rus" to "ru",
-        "ara" to "ar", "pol" to "pl", "tur" to "tr", "swe" to "sv", "nor" to "no",
-        "dan" to "da", "fin" to "fi", "cze" to "cs", "ces" to "cs", "gre" to "el",
-        "ell" to "el", "hun" to "hu", "rum" to "ro", "ron" to "ro", "ukr" to "uk",
-        "heb" to "he", "hin" to "hi", "tha" to "th", "vie" to "vi", "ind" to "id",
-        "may" to "ms", "msa" to "ms", "per" to "fa", "fas" to "fa", "cat" to "ca",
-        "baq" to "eu", "eus" to "eu", "glg" to "gl", "slo" to "sk", "slk" to "sk",
-        "slv" to "sl", "hrv" to "hr", "srp" to "sr", "bul" to "bg", "lit" to "lt",
-        "lav" to "lv", "est" to "et", "ice" to "is", "isl" to "is", "tgl" to "tl",
-        "fil" to "tl",
-    )
-
-    /** `null` for absent / unknown (`und`) tags; `fre`, `fra` and `fr` all become `fr`. */
-    fun normalize(code: String?): String? {
-        val base = code?.trim()?.lowercase(Locale.ROOT)?.split('-', '_')?.firstOrNull().orEmpty()
-        if (base.isEmpty() || base == "und") return null
-        return iso6392To1[base] ?: base
-    }
-
-    fun of(code: String?): String? {
-        val norm = normalize(code) ?: return null
-        val name = runCatching { Locale.forLanguageTag(norm).getDisplayLanguage(Locale.ENGLISH) }.getOrNull()
-        return if (name.isNullOrBlank() || name.equals(norm, ignoreCase = true)) {
-            norm.uppercase(Locale.ROOT)
-        } else {
-            name.replaceFirstChar { it.titlecase(Locale.ENGLISH) }
-        }
-    }
-}
+import studio.kahn.iris.tv.ui.format.languageName
+import studio.kahn.iris.tv.ui.format.normalizeLanguage
 
 /** What naming an audio track needs, from the probe or, failing that, Media3's format. */
 data class AudioTrackInfo(
@@ -85,9 +47,9 @@ object TrackNaming {
     }
 
     private fun audioBase(a: AudioTrackInfo, index: Int): String {
-        val lang = LanguageNames.of(a.language)
+        val lang = languageName(a.language)
         val title = a.title.orEmpty()
-        val variant = if (LanguageNames.normalize(a.language) == "fr") {
+        val variant = if (normalizeLanguage(a.language) == "fr") {
             frenchVariant.find(title)?.groupValues?.get(1)?.uppercase(Locale.ROOT)
         } else {
             null
@@ -106,7 +68,7 @@ object TrackNaming {
     }
 
     private fun subtitleBase(s: SubtitleTrackInfo, index: Int): String {
-        val lang = LanguageNames.of(s.language)
+        val lang = languageName(s.language)
         val title = s.title.orEmpty()
         var name = lang ?: title.trim().ifEmpty { "Subtitles ${index + 1}" }
         when {
@@ -157,11 +119,11 @@ object TrackNaming {
 
     /** The bottom bar's summary: "English audio · English subtitles (SDH)", "French audio · No subtitles". */
     fun summary(audio: AudioTrackInfo?, subtitle: SubtitleTrackInfo?): String {
-        val audioWords = audio?.let { LanguageNames.of(it.language) }?.let { "$it audio" }
+        val audioWords = audio?.let { languageName(it.language) }?.let { "$it audio" }
         val subWords = when {
             subtitle == null -> "No subtitles"
             else -> {
-                val lang = LanguageNames.of(subtitle.language) ?: "Other"
+                val lang = languageName(subtitle.language) ?: "Other"
                 if (isSdh(subtitle.title)) "$lang subtitles (SDH)" else "$lang subtitles"
             }
         }

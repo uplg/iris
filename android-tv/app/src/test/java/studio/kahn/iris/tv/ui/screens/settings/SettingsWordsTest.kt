@@ -9,32 +9,20 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
 import studio.kahn.iris.tv.data.DeviceView
 import studio.kahn.iris.tv.data.PreferencesResponse
 import studio.kahn.iris.tv.ui.state.Loadable
 
-/** Robolectric: the language codes go through Media3, which reads android.text. */
-@RunWith(RobolectricTestRunner::class)
 class SettingsWordsTest {
     private val paris = ZoneId.of("Europe/Paris")
     private val now = ZonedDateTime.of(2026, 10, 6, 14, 0, 0, 0, paris)
 
     @Test
-    fun daysAreSaidAsTheWebSaysThem() {
-        assertEquals("today at 09:05", onDay(now.withHour(9).withMinute(5), now))
-        assertEquals("yesterday at 21:04", onDay(now.minusDays(1).withHour(21).withMinute(4), now))
-        assertEquals("tomorrow at 08:00", onDay(now.plusDays(1).withHour(8), now))
-        assertEquals("on Friday", onDay(now.minusDays(4), now))
-        assertEquals("on 2 Sept", onDay(now.withMonth(9).withDayOfMonth(2), now))
-        assertEquals("on 2 Oct 2025", onDay(now.minusYears(1).withDayOfMonth(2), now))
-    }
-
-    @Test
-    fun aMomentElsewhereIsSaidInTheTvsZone() {
-        val utcLateEvening = ZonedDateTime.of(2026, 10, 5, 23, 30, 0, 0, ZoneId.of("UTC"))
-        assertEquals("today at 01:30", onDay(utcLateEvening, now))
+    fun aDeviceSaysWhenItWasPairedAndUntilWhen() {
+        val paired = OffsetDateTime.parse("2026-10-06T09:05:00+02:00")
+        val until = OffsetDateTime.parse("2026-11-05T09:05:00+01:00")
+        val device = DeviceView(until, paired, UUID.randomUUID(), "android-tv", null)
+        assertEquals("Paired today at 09:05 · Signed in until 5 Nov", device.facts(now))
     }
 
     @Test
@@ -55,8 +43,6 @@ class SettingsWordsTest {
         assertEquals("fr", languageChoice("fr-FR"))
         assertEquals(SUBTITLES_OFF, languageChoice("off"))
         assertNull(languageChoice(null))
-        assertEquals("French", languageName("fr"))
-        assertEquals("Japanese", languageName("ja"))
         assertEquals("The file’s own", audioWords(null))
         assertEquals("No subtitles", subtitleWords(SUBTITLES_OFF))
         assertEquals(COMMON_LANGUAGES, languageOptions("fr"))

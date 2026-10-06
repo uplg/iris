@@ -115,7 +115,6 @@ import studio.kahn.iris.tv.ui.screens.search.label
 import studio.kahn.iris.tv.ui.screens.search.languageLabel
 import studio.kahn.iris.tv.ui.screens.search.pageWords
 import studio.kahn.iris.tv.ui.screens.search.parsedWords
-import studio.kahn.iris.tv.ui.screens.search.plural
 import studio.kahn.iris.tv.ui.screens.search.recentWhen
 import studio.kahn.iris.tv.ui.screens.search.releaseKey
 import studio.kahn.iris.tv.ui.screens.search.releaseRows
@@ -130,6 +129,7 @@ import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.plural
 
 /** What the search screen can ask for; the defaults do nothing (screenshots). */
 @Immutable

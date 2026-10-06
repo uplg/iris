@@ -71,7 +71,6 @@ import studio.kahn.iris.tv.ui.screens.home.HomeRow
 import studio.kahn.iris.tv.ui.screens.home.HomeUiState
 import studio.kahn.iris.tv.ui.screens.home.HomeViewModel
 import studio.kahn.iris.tv.ui.screens.home.Notice
-import studio.kahn.iris.tv.ui.screens.home.plural
 import studio.kahn.iris.tv.ui.screens.home.rememberCardFocus
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
@@ -80,6 +79,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.plural
 
 /**
  * Home (TV.dc.html, web `routes/+page.svelte`): what to watch now (resume the last thing,

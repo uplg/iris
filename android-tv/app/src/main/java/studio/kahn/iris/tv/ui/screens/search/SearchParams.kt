@@ -11,6 +11,7 @@ import studio.kahn.iris.tv.data.ProviderResultMeta
 import studio.kahn.iris.tv.data.SearchResponse
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.SearchViewMode
+import studio.kahn.iris.tv.ui.format.plural
 
 /** What a search asks the trackers for, as web `search/params.ts` writes it. */
 enum class SearchKind(val label: String, val apiKind: String?) {

@@ -45,7 +45,6 @@ import studio.kahn.iris.tv.ui.components.Spinner
 import studio.kahn.iris.tv.ui.components.StaleNotice
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
-import studio.kahn.iris.tv.ui.formatSize
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
@@ -53,6 +52,7 @@ import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.formatSize
 
 /** Every action Settings offers, so the stateless body takes one parameter for them. */
 @Immutable

@@ -16,6 +16,7 @@ import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
 import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.kindWord
 
 /** What the title's aside shows: the card picked, else what its first release knows. */
 @Immutable

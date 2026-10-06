@@ -95,9 +95,7 @@ import studio.kahn.iris.tv.ui.screens.library.Tone
 import studio.kahn.iris.tv.ui.screens.library.ToneLine
 import studio.kahn.iris.tv.ui.screens.library.audioWords
 import studio.kahn.iris.tv.ui.screens.library.busyKey
-import studio.kahn.iris.tv.ui.screens.library.languageName
 import studio.kahn.iris.tv.ui.screens.library.neighbourOf
-import studio.kahn.iris.tv.ui.screens.library.plural
 import studio.kahn.iris.tv.ui.screens.library.subtitleWords
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
@@ -107,6 +105,8 @@ import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.languageName
+import studio.kahn.iris.tv.ui.format.plural
 
 /** Everything a title's page hands back. */
 @Immutable

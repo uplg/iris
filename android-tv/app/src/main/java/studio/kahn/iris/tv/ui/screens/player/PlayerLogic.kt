@@ -4,6 +4,8 @@ import java.util.Locale
 import kotlin.math.abs
 import studio.kahn.iris.tv.data.EpisodePoint
 import studio.kahn.iris.tv.data.EpisodeStatus
+import studio.kahn.iris.tv.ui.format.clock
+import studio.kahn.iris.tv.ui.format.episodeCode
 
 /** Watched once past 90 % (the credits), for movies and episodes alike; the web's rule too. */
 const val WATCHED_FRACTION = 0.90
@@ -57,24 +59,11 @@ object SeekAcceleration {
 }
 
 /** A position the player's way: `32:10`, `1:02:03`. */
-fun clockText(ms: Long): String {
-    val total = (ms.coerceAtLeast(0) / 1_000)
-    val h = total / 3_600
-    val m = (total % 3_600) / 60
-    val s = total % 60
-    return if (h > 0) {
-        String.format(Locale.ROOT, "%d:%02d:%02d", h, m, s)
-    } else {
-        String.format(Locale.ROOT, "%d:%02d", m, s)
-    }
-}
+fun clockText(ms: Long): String = clock(ms.coerceAtLeast(0) / 1_000.0)
 
 /** The time left, with a real minus sign: `−22:50`. */
 fun remainingText(positionMs: Long, durationMs: Long): String =
     "−" + clockText(abs(durationMs - positionMs))
-
-/** `S2:E4`, the web's episode code. */
-fun episodeCode(season: Long, episode: Long): String = "S$season:E$episode"
 
 /** A release or file name made readable: no extension, dots and underscores as spaces. */
 fun prettyName(raw: String?): String? = raw

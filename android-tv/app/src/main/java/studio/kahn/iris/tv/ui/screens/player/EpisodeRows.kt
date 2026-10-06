@@ -5,7 +5,8 @@ import studio.kahn.iris.tv.data.AvailableEpisodeEntry
 import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.FileEntry
 import studio.kahn.iris.tv.data.FileProgressEntry
-import studio.kahn.iris.tv.ui.formatSize
+import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.formatSize
 
 /** One row of the episodes side panel: an episode (whichever file holds it) or a file of the torrent. */
 @Immutable

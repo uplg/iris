@@ -19,7 +19,6 @@ import studio.kahn.iris.tv.ui.screens.player.ChromeMode
 import studio.kahn.iris.tv.ui.screens.player.ChromeState
 import studio.kahn.iris.tv.ui.screens.player.GettingReadyContent
 import studio.kahn.iris.tv.ui.screens.player.GettingReadyUi
-import studio.kahn.iris.tv.ui.screens.player.LanguageNames
 import studio.kahn.iris.tv.ui.screens.player.PlayerChrome
 import studio.kahn.iris.tv.ui.screens.player.ProbePhase
 import studio.kahn.iris.tv.ui.screens.player.ReadyInput
@@ -34,6 +33,7 @@ import studio.kahn.iris.tv.ui.screens.player.playWords
 import studio.kahn.iris.tv.ui.screens.player.readiness
 import studio.kahn.iris.tv.ui.state.irisViewModel
 import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.format.languageName
 
 /**
  * One file, watched: getting ready (each step in words, until the first
@@ -147,7 +147,7 @@ private fun startLanguages(setup: WatchSetup): String? {
             ?.let { pref -> SubtitlePick.preferredOrdinal(probe.subtitle, pref)?.let { probe.subtitle[it].language } }
         else -> probe.subtitle.firstOrNull { it.index == saved }?.language
     }
-    val audio = LanguageNames.of(audioLang)?.let { "$it audio" } ?: return null
-    val subs = LanguageNames.of(subLang)?.let { "$it subtitles" } ?: "no subtitles"
+    val audio = languageName(audioLang)?.let { "$it audio" } ?: return null
+    val subs = languageName(subLang)?.let { "$it subtitles" } ?: "no subtitles"
     return "$audio, $subs"
 }

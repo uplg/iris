@@ -24,12 +24,15 @@ import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.WatchlistItem
 import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.data.tmdbPosterUrl
-import studio.kahn.iris.tv.ui.formatSize
-import studio.kahn.iris.tv.ui.formatSpeed
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.format.formatSpeed
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.format.timeLeft
 
 /** The library's two views (web: Titles / Downloads and seeding). */
 enum class LibraryView(val label: String) {

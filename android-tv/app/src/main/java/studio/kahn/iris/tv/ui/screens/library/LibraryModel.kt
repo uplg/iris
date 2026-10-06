@@ -9,8 +9,14 @@ import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
-import studio.kahn.iris.tv.ui.formatSize
-import studio.kahn.iris.tv.ui.formatSpeed
+import studio.kahn.iris.tv.ui.format.duration
+import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.format.formatSpeed
+import studio.kahn.iris.tv.ui.format.percent
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.format.prettySceneName
+import studio.kahn.iris.tv.ui.format.recentTime
 
 // The library's facts in words, as the web's `lib/library/model.ts` says them.
 

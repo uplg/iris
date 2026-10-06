@@ -63,6 +63,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.kindWord
 
 /**
  * One release as a list row (TVSearchList, TVTitleReleases): what it is in

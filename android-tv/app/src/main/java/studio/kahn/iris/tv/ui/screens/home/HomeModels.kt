@@ -14,7 +14,15 @@ import studio.kahn.iris.tv.data.WatchlistItem
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.components.StatusTone
-import studio.kahn.iris.tv.ui.formatSize
+import studio.kahn.iris.tv.ui.format.clock
+import studio.kahn.iris.tv.ui.format.duration
+import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.format.kindLabel
+import studio.kahn.iris.tv.ui.format.percent
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.format.prettySceneName
+import studio.kahn.iris.tv.ui.format.timeLeft
 
 /** What a card leads to: OK does [CardModel.primary], hold OK (a long press) lists [CardModel.menu]. */
 enum class CardAction(val label: String, val busyLabel: String = "$label…") {

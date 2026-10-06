@@ -1,24 +1,12 @@
 package studio.kahn.iris.tv.ui.screens.player
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 /** The web's rules (`web/src/lib/player/tracks.test.ts`), on the TV. */
 class TrackNamingTest {
     private val english = AudioTrackInfo("eng", "Original", 6, "eac3")
     private val frenchVf = AudioTrackInfo("fre", "VFF", 6, "ac3")
-
-    @Test
-    fun languagesInEnglishWhateverTheTag() {
-        assertEquals("French", LanguageNames.of("fre"))
-        assertEquals("French", LanguageNames.of("fra"))
-        assertEquals("French", LanguageNames.of("fr-FR"))
-        assertEquals("German", LanguageNames.of("ger"))
-        assertNull(LanguageNames.of("und"))
-        assertNull(LanguageNames.of(null))
-        assertEquals("fr", LanguageNames.normalize("FRE"))
-    }
 
     @Test
     fun namesAudioUnambiguously() {

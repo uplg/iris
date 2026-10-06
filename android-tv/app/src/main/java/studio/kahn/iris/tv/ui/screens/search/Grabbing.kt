@@ -15,8 +15,8 @@ import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.TitleCard
 import studio.kahn.iris.tv.data.grabRelease
-import studio.kahn.iris.tv.ui.formatSize
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.formatSize
 
 /** The signed-in server's API, or the signed-out sentence. */
 internal suspend fun AppContainer.api(): IrisApi =

@@ -61,7 +61,6 @@ import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.focusRing
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.ui.formatSize
 import studio.kahn.iris.tv.ui.screens.search.FollowState
 import studio.kahn.iris.tv.ui.screens.search.GrabAsk
 import studio.kahn.iris.tv.ui.screens.search.GrabRefusal
@@ -78,6 +77,7 @@ import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.formatSize
 
 /** What the release page can ask for; the defaults do nothing (screenshots). */
 @Immutable

@@ -20,21 +20,11 @@ import studio.kahn.iris.tv.data.VideoInfo
 
 class ReleaseWordsTest {
     @Test
-    fun sceneNamesCleanedForDisplay() {
-        assertEquals("Mercato (2025)", prettySceneName("Mercato.2025.FRENCH.1080p.WEB.H265-BOUBA.mkv"))
-        assertEquals("Spider-Man Far From Home (2019)", prettySceneName("Spider-Man.Far.From.Home.2019.1080p"))
-        assertEquals("Severance", prettySceneName("Severance.S02.MULTi.1080p"))
-        assertEquals("1080p WEB", prettySceneName("1080p.WEB"))
-    }
-
-    @Test
     fun partsAndCodes() {
         assertEquals("Season 2, complete", partWords(2, 0))
         assertEquals("S2:E7", partWords(2, 7))
         assertEquals("Complete series", partWords(null, null, "Show.INTEGRALE.1080p"))
         assertNull(partWords(null, null, "Movie.2006.1080p"))
-        assertEquals("Season 2", episodeCode(2, null))
-        assertEquals("E5", episodeCode(null, 5))
     }
 
     @Test
@@ -77,16 +67,6 @@ class ReleaseWordsTest {
     }
 
     @Test
-    fun relativeTimesAsTheWebSaysThem() {
-        val now = Instant.parse("2026-10-06T12:00:00Z")
-        fun ago(days: Long) = OffsetDateTime.ofInstant(now.minusSeconds(days * 86_400), ZoneOffset.UTC)
-        assertEquals("today", formatRelative(ago(0), now))
-        assertEquals("3d ago", formatRelative(ago(3), now))
-        assertEquals("2mo ago", formatRelative(ago(65), now))
-        assertEquals("1y ago", formatRelative(ago(400), now))
-    }
-
-    @Test
     fun technicalSheetInWords() {
         val mi = MediaInfoSummary(
             video = VideoInfo(codec = "AVC", resolution = "1920x1080", fps = 25f, durationSecs = 4320),
@@ -97,8 +77,6 @@ class ReleaseWordsTest {
         assertEquals("English (Dolby Atmos, 7.1), Unknown language (AAC, stereo)", audioWords(mi))
         assertEquals("French (PGS, forced), English (for the deaf and hard of hearing)", subtitleWords(mi))
         assertNull(videoWords(null))
-        assertEquals("45 s", durationWords(45))
-        assertEquals("2 h", durationWords(7200))
     }
 
     @Test

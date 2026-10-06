@@ -30,11 +30,14 @@ import studio.kahn.iris.tv.data.ResolveBody
 import studio.kahn.iris.tv.data.UpdatePlaybackPrefs
 import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.data.tmdbPosterUrl
-import studio.kahn.iris.tv.ui.formatSize
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.duration
+import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.format.languageName
+import studio.kahn.iris.tv.ui.format.recentTime
 
 /** One episode row, its words already said. */
 @Immutable

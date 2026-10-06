@@ -89,7 +89,7 @@ fun SectionTitle(
 /**
  * A share bar, 0..1 (watched part, downloaded part). Decorative: hidden from
  * accessibility, so always put the value in words beside it ("23 min left",
- * "64 %").
+ * "64%").
  */
 @Composable
 fun Meter(
