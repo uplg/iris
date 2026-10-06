@@ -7,14 +7,14 @@
 	import Tabs from '#lib/components/Tabs.svelte';
 	import EpisodeList from './EpisodeList.svelte';
 	import SeasonPack from './SeasonPack.svelte';
-	import { firstSeason, mergeEpisodes, mergeEpisodesAbsolute, ownedEp, seasonName, seasonsOf, watchedEp, type Episode } from './merge.ts';
+	import { firstSeason, ownedEp, seasonName, seasonsOf, watchedEp, type Episode } from './merge.ts';
 
-	let { collection: c, torrents }: { collection: CollectionDetail; torrents: Map<string, TorrentView> } = $props();
+	let { collection: c, rows, torrents }: { collection: CollectionDetail; rows: Episode[]; torrents: Map<string, TorrentView> } = $props();
 	const id = $props.id();
 
 	const absolute = $derived(c.numbering === 'absolute');
-	const flat = $derived(absolute ? mergeEpisodesAbsolute(c.episodes, c.available_episodes, c.gone_episodes) : []);
-	const seasons = $derived(absolute ? [] : seasonsOf(mergeEpisodes(c.episodes, c.available_episodes, c.gone_episodes), c.season_packs));
+	const flat = $derived(absolute ? rows : []);
+	const seasons = $derived(absolute ? [] : seasonsOf(rows, c.season_packs));
 
 	let chosen = $state<string | null>(null);
 	const active = $derived(chosen && seasons.some((s) => `s${s.season}` === chosen) ? chosen : `s${firstSeason(seasons)}`);

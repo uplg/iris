@@ -291,6 +291,6 @@ describe('Collection', () => {
 			})
 		);
 		await render(Collection, { id: 'm1' });
-		await vi.waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/watch/mv/2', { replaceState: true }));
+		await vi.waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/watch/mv/2', { replace: true }));
 	});
 });

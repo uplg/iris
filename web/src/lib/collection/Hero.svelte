@@ -12,15 +12,17 @@
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
-	import { audioChip, firstPlayable, mergeEpisodes, mergeEpisodesAbsolute, nameLanguage, playLabel, qualityWords } from './merge.ts';
+	import { audioChip, firstPlayable, nameLanguage, playLabel, qualityWords, type Episode } from './merge.ts';
 	import { watchHref } from '#lib/paths.ts';
 
 	interface Props {
 		collection: CollectionDetail;
 		meta: TmdbMetadata | undefined;
 		resume: ContinueWatchingItem | null;
+		/** The series' rows (`episodesOf`), merged once by the page. */
+		rows: Episode[];
 	}
-	let { collection: c, meta, resume }: Props = $props();
+	let { collection: c, meta, resume, rows }: Props = $props();
 	const g = new Gesture();
 
 	const series = $derived(c.kind === 'tv');
@@ -28,13 +30,6 @@
 		[series ? 'Series' : 'Movie', meta?.year, meta?.genres.length ? meta.genres.slice(0, 3).join(', ') : null].filter(Boolean).join(' · ')
 	);
 
-	const rows = $derived(
-		series
-			? c.numbering === 'absolute'
-				? mergeEpisodesAbsolute(c.episodes, c.available_episodes, c.gone_episodes)
-				: mergeEpisodes(c.episodes, c.available_episodes, c.gone_episodes)
-			: []
-	);
 	const facts = $derived.by(() => {
 		const out: string[] = [];
 		if (series) {

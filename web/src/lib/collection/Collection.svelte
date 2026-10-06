@@ -18,7 +18,7 @@
 	import Languages from './Languages.svelte';
 	import OnDisk from './OnDisk.svelte';
 	import RawFiles from './RawFiles.svelte';
-	import { mainVideo, resumeOf } from './merge.ts';
+	import { episodesOf, mainVideo, resumeOf } from './merge.ts';
 	import { releaseCodes } from './lang.ts';
 	import { watchHref } from '#lib/paths.ts';
 
@@ -48,10 +48,11 @@
 		const f = only ? mainVideo(only) : undefined;
 		if (only && f) {
 			leaving = true;
-			void goto(watchHref(only.infohash, f.index), { replaceState: true });
+			void goto(watchHref(only.infohash, f.index), { replace: true });
 		}
 	});
 
+	const rows = $derived(c ? episodesOf(c) : []);
 	const torrents = $derived(new Map<string, TorrentView>((c?.torrents ?? []).map((t) => [t.infohash, t])));
 	const series = $derived(c?.kind === 'tv');
 	// a ghost series (everything reclaimed) still shows its episodes, not the files
@@ -68,7 +69,7 @@
 		)
 	);
 	let noBackdrop = $state(false);
-	const backdrop = $derived(c?.backdrop_path ? `https://image.tmdb.org/t/p/w1280${c.backdrop_path}` : null);
+	const backdrop = $derived(tmdbImage(c?.backdrop_path, 'w1280'));
 </script>
 
 <svelte:head><title>{pageTitle(c?.display_title ?? 'Library')}</title></svelte:head>
@@ -94,14 +95,14 @@
 						alt=""
 						width="1280"
 						height="720"
-						loading="lazy"
+						fetchpriority="high"
 						decoding="async"
 						onerror={() => (noBackdrop = true)}
 					/>
 				{/if}
 				<div class="top">
 					<div class="poster"><Poster src={tmdbImage(c.poster_path, 'w342')} title={c.display_title} eager /></div>
-					<Hero collection={c} meta={info.data} resume={resumeOf(c, watching.data)} />
+					<Hero collection={c} meta={info.data} resume={resumeOf(c, watching.data)} {rows} />
 					<aside class="side" aria-label="Releases and languages">
 						<OnDisk collection={c} />
 						{#if series}<Languages collectionId={c.id} title={c.display_title} {known} />{/if}
@@ -110,7 +111,7 @@
 			</div>
 			<div class="below">
 				{#if hasEpisodes}
-					<Episodes collection={c} {torrents} />
+					<Episodes collection={c} {rows} {torrents} />
 				{:else if !(c.kind === 'movie' && c.torrents.length > 1)}
 					<RawFiles collection={c} />
 				{/if}
