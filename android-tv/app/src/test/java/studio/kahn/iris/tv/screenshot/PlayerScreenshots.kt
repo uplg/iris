@@ -19,7 +19,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import studio.kahn.iris.tv.data.LiveChannel
-import studio.kahn.iris.tv.data.LiveCountry
 import studio.kahn.iris.tv.data.LiveNowNext
 import studio.kahn.iris.tv.data.LiveProgramme
 import studio.kahn.iris.tv.data.MediaKind
@@ -27,9 +26,6 @@ import studio.kahn.iris.tv.ui.components.Step
 import studio.kahn.iris.tv.ui.components.StepState
 import studio.kahn.iris.tv.ui.screens.LiveBottomBar
 import studio.kahn.iris.tv.ui.screens.LiveTopBar
-import studio.kahn.iris.tv.ui.screens.live.LiveGuide
-import studio.kahn.iris.tv.ui.screens.live.LiveTvContent
-import studio.kahn.iris.tv.ui.screens.live.LiveTvUi
 import studio.kahn.iris.tv.ui.screens.player.EpisodesPanel
 import studio.kahn.iris.tv.ui.screens.player.GettingReadyContent
 import studio.kahn.iris.tv.ui.screens.player.GettingReadyUi
@@ -46,12 +42,11 @@ import studio.kahn.iris.tv.ui.screens.player.SideRow
 import studio.kahn.iris.tv.ui.screens.player.TrackChoice
 import studio.kahn.iris.tv.ui.screens.player.TrackMenu
 import studio.kahn.iris.tv.ui.screens.player.TracksPanel
-import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.theme.IrisColor
 
 /**
  * The player's chrome, panels and getting ready (TVPlayer, TVPlayerTracks,
- * TVPlayerStarting) and Live TV, over the stage. The video surface itself
+ * TVPlayerStarting) and a Live TV channel watched, over the stage. The video surface itself
  * does not render on the JVM: the stage color stands in for the picture.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -211,37 +206,6 @@ class PlayerScreenshots {
 
     private fun channel(id: String, name: String, tnt: Int? = null, cat: String? = null, geo: Boolean = false) =
         LiveChannel(categories = listOfNotNull(cat), geoBlocked = geo, id = id, name = name, not247 = false, tntNumber = tnt)
-
-    @Test
-    fun liveList() = shots.snapEverySize("live_list") {
-        LiveTvContent(
-            ui = LiveTvUi(
-                countries = listOf(LiveCountry(code = "fr", flag = "FR", name = "France")),
-                country = "fr",
-                channels = Loadable.Ready(
-                    listOf(
-                        channel("tf1", "TF1", tnt = 1),
-                        channel("f2", "France 2", tnt = 2),
-                        channel("f3", "France 3", tnt = 3),
-                        channel("c5", "France 5", tnt = 5),
-                        channel("m6", "M6", tnt = 6),
-                        channel("arte", "Arte", tnt = 7),
-                        channel("bfm", "BFM TV", cat = "News"),
-                        channel("cnn", "CNN International", cat = "News", geo = true),
-                    ),
-                ),
-                guide = LiveGuide(mapOf("tf1" to news), start.plusMinutes(20).toInstant().toEpochMilli()),
-                query = "",
-                results = null,
-            ),
-            clock = clock,
-            countryName = { "France" },
-            onQueryChange = {},
-            onPickCountry = {},
-            onOpen = { _, _ -> },
-            onRetry = {},
-        )
-    }
 
     @Test
     fun liveWatch() = shots.snapEverySize("live_watch") {

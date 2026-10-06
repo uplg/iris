@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import type { LiveChannel } from '@iris/api/client';
-import ChannelTile from './ChannelTile.svelte';
+import ChannelRow from './ChannelRow.svelte';
 import { knownTone, readTone } from './logo-tone.ts';
 
 /** A plain square logo of one colour, as a data URL. */
@@ -35,7 +35,7 @@ describe('a logo’s plate', () => {
 		const spy = vi.spyOn(window, 'Image');
 		const url = logo('#fff');
 		const channel = { id: 'c1', name: 'Arte', logo_url: url } as LiveChannel;
-		const { container } = await render(ChannelTile, { channel, country: 'fr', at: Date.now() });
+		const { container } = await render(ChannelRow, { channel, country: 'fr', at: Date.now() });
 		const img = container.querySelector('img')!;
 		expect(img.getAttribute('loading')).toBe('lazy');
 		await expect.poll(() => container.querySelector('.well')?.classList.contains('dark')).toBe(true);

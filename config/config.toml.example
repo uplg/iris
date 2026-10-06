@@ -99,6 +99,8 @@ default_country = "fr"
 # Where playlists / the country catalogue come from ({code} = country code).
 # playlist_url_template = "https://iptv-org.github.io/iptv/countries/{code}.m3u"
 # countries_url = "https://iptv-org.github.io/api/countries.json"
+# Every country's playlist in one file: how many channels each country has.
+# country_index_url = "https://iptv-org.github.io/iptv/index.country.m3u"
 # Gzipped XMLTV guides per country, for the now/next overlay. Countries
 # without an entry simply show no programme info.
 # [live_tv.epg_urls]

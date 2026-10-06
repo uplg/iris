@@ -70,6 +70,10 @@ pub(crate) struct LiveCountry {
     pub name: String,
     /// Emoji flag.
     pub flag: String,
+    /// Channels the country carries; absent when not known up front. A
+    /// country with none is left out of the list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_count: Option<u32>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -98,6 +102,10 @@ pub(crate) struct LiveChannel {
     /// French TNT number (Arcom) — set only for `fr` national networks;
     /// drives the pinned "TNT" section.
     pub tnt_number: Option<u16>,
+    /// Every feed failed its last check: the channel will likely not play
+    /// now. Sent only when true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unreachable: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -148,7 +156,7 @@ pub(crate) struct LiveProxyParams {
     get,
     path = "/api/livetv/countries",
     operation_id = "live_tv_countries",
-    responses((status = 200, description = "Countries available in the live TV catalogue", body = LiveCountriesResponse)),
+    responses((status = 200, description = "Countries with channels to watch, in name order", body = LiveCountriesResponse)),
     tag = "live-tv",
 )]
 pub(crate) async fn live_countries(
@@ -156,15 +164,16 @@ pub(crate) async fn live_countries(
     _user: AuthUser,
 ) -> ApiResult<Json<LiveCountriesResponse>> {
     let svc = service(&state)?;
-    let countries = svc.countries().await?;
+    let countries = svc.picker().await?;
     Ok(Json(LiveCountriesResponse {
         default_country: svc.default_country().to_string(),
         countries: countries
-            .iter()
-            .map(|c| LiveCountry {
-                code: c.code.clone(),
-                name: c.name.clone(),
-                flag: c.flag.clone(),
+            .into_iter()
+            .map(|(c, count)| LiveCountry {
+                code: c.code,
+                name: c.name,
+                flag: c.flag,
+                channel_count: count.map(|n| u32::try_from(n).unwrap_or(u32::MAX)),
             })
             .collect(),
     }))
@@ -176,7 +185,7 @@ pub(crate) async fn live_countries(
     operation_id = "live_tv_channels",
     params(("country" = String, Path, description = "ISO 3166-1 alpha-2 country code")),
     responses(
-        (status = 200, description = "Channels for the country — TNT-pinned first (fr), then grouped by category", body = LiveChannelsResponse),
+        (status = 200, description = "Channels for the country — TNT-pinned first (fr), then grouped by category; empty for a country without any", body = LiveChannelsResponse),
         (status = 404, description = "Unknown country / live TV disabled"),
         (status = 502, description = "Upstream playlist unavailable"),
     ),
@@ -194,7 +203,8 @@ pub(crate) async fn live_channels(
         channels: snap
             .channels
             .iter()
-            .map(|c| LiveChannel {
+            .enumerate()
+            .map(|(i, c)| LiveChannel {
                 id: c.id.clone(),
                 name: c.name.clone(),
                 // Same-origin signed proxy URL: no hotlink CORS noise, and
@@ -212,6 +222,7 @@ pub(crate) async fn live_channels(
                 geo_blocked: c.geo_blocked,
                 not_24_7: c.not_24_7,
                 tnt_number: c.tnt_number,
+                unreachable: snap.unreachable(i),
             })
             .collect(),
     }))

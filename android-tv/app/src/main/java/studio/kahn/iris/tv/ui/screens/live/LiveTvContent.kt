@@ -10,14 +10,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -30,16 +33,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,19 +74,20 @@ import studio.kahn.iris.tv.ui.components.FocusColors
 import studio.kahn.iris.tv.ui.components.FocusSurface
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.Meter
+import studio.kahn.iris.tv.ui.components.PanelLabel
 import studio.kahn.iris.tv.ui.components.PanelOptions
+import studio.kahn.iris.tv.ui.components.Pill
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.SidePanel
-import studio.kahn.iris.tv.ui.components.StatusLine
-import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.TextInput
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.format.timeLeft
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
-import studio.kahn.iris.tv.ui.format.plural
 
 /** What the channel list draws. */
 @Immutable
@@ -87,9 +98,11 @@ data class LiveTvUi(
     val guide: LiveGuide,
     val query: String,
     val results: Loadable<LiveResults>?,
+    /** The household's usual countries, first in the picker. */
+    val usual: List<LiveCountry> = emptyList(),
 )
 
-/** A channel tile, wherever it comes from (a country's list, a search hit). */
+/** A channel line, wherever it comes from (a country's list, a search hit). */
 @Immutable
 data class ChannelTileUi(
     val country: String,
@@ -98,11 +111,15 @@ data class ChannelTileUi(
     val countryLabel: String? = null,
 )
 
+private const val ALL = "all"
+
 /**
- * Live TV (web `/live`): the page title, a channel search across every
- * country, the country (a side panel to change it), then the country's
- * channels, the numbered TNT ones first, then by category, each with what is
- * on now and how far into it. Opening a channel plays it.
+ * Live TV (web `/live`), as a guide: the page title, a channel search across
+ * every country, the country (a side panel to change it: the usual ones first,
+ * then every country by name, each with its channel count, a field to narrow
+ * it), then the country's channels: a category filter, the numbered TNT ones
+ * first, then by category, each with what is on now (how far, how long left)
+ * and next. A channel that will likely not play says why and steps back.
  */
 @Composable
 fun LiveTvContent(
@@ -115,11 +132,13 @@ fun LiveTvContent(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
     focusedOnce: MutableState<Boolean> = remember { mutableStateOf(false) },
+    initiallyPicking: Boolean = false,
 ) {
     val layout = IrisLayout.current
-    var picking by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf(initiallyPicking) }
+    val current = ui.countries.firstOrNull { it.code == ui.country }
     Box(modifier.fillMaxSize().background(IrisColor.ground)) {
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(IrisSpace.s5)) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = layout.safeHorizontal),
                 horizontalArrangement = Arrangement.spacedBy(IrisSpace.s4),
@@ -131,13 +150,12 @@ fun LiveTvContent(
                 TextInput(
                     value = ui.query,
                     onValueChange = onQueryChange,
-                    label = "Search channels, every country",
+                    label = "Search every country",
                     leadingIcon = Icons.Rounded.Search,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { keyboard?.hide() }),
                     modifier = Modifier.width(minOf(260.dp, layout.width * 0.32f)),
                 )
-                val current = ui.countries.firstOrNull { it.code == ui.country }
                 ActionButton(
                     text = current?.let { "${it.flag} ${it.name}" } ?: ui.country?.uppercase() ?: "Country",
                     onClick = { picking = true },
@@ -152,23 +170,68 @@ fun LiveTvContent(
                 if (results != null) {
                     SearchResults(results, countryName, focusedOnce, onOpen, onRetry)
                 } else {
-                    CountryChannels(ui, clock, focusedOnce, onOpen, onRetry)
+                    CountryChannels(ui, current?.name ?: ui.country?.uppercase().orEmpty(), clock, focusedOnce, onOpen, onRetry)
                 }
             }
         }
         if (picking) {
-            SidePanel(title = "Country", onDismiss = { picking = false }) {
-                PanelOptions(
-                    options = ui.countries,
-                    selected = ui.countries.firstOrNull { it.code == ui.country },
-                    onSelect = {
-                        picking = false
-                        onPickCountry(it.code)
-                    },
-                    label = { "${it.flag} ${it.name}" },
-                    focusOnOpen = true,
-                )
+            CountryPanel(
+                countries = ui.countries,
+                usual = ui.usual,
+                selected = current,
+                onDismiss = { picking = false },
+                onPick = {
+                    picking = false
+                    onPickCountry(it.code)
+                },
+            )
+        }
+    }
+}
+
+/**
+ * The country picker: the household's usual countries, then every other one
+ * by name, each with how many channels it carries; typing narrows the list
+ * (the remote's keyboard, or a phone's). Opens on the country shown.
+ */
+@Composable
+private fun CountryPanel(
+    countries: List<LiveCountry>,
+    usual: List<LiveCountry>,
+    selected: LiveCountry?,
+    onDismiss: () -> Unit,
+    onPick: (LiveCountry) -> Unit,
+) {
+    var typed by remember { mutableStateOf("") }
+    val byName = remember(countries) { countries.sortedBy { it.name } }
+    SidePanel(title = "Country", onDismiss = onDismiss) {
+        TextInput(
+            value = typed,
+            onValueChange = { typed = it },
+            label = "Type a country",
+            leadingIcon = Icons.Rounded.Search,
+            modifier = Modifier.fillMaxWidth().padding(bottom = IrisSpace.s2),
+        )
+        if (typed.isNotBlank()) {
+            val matches = findCountries(byName, typed)
+            if (matches.isEmpty()) {
+                Text("No country matches “${typed.trim()}”.", style = IrisType.meta, color = IrisColor.inkMuted, modifier = Modifier.padding(10.dp))
             }
+            PanelOptions(options = matches, selected = selected, onSelect = onPick, label = ::countryLabel)
+        } else {
+            val first = usual.map { it.code }.toSet()
+            if (usual.isNotEmpty()) {
+                PanelLabel("Your countries")
+                PanelOptions(options = usual, selected = selected, onSelect = onPick, label = ::countryLabel, focusOnOpen = true)
+            }
+            PanelLabel("All countries")
+            PanelOptions(
+                options = byName.filter { it.code !in first },
+                selected = selected,
+                onSelect = onPick,
+                label = ::countryLabel,
+                focusOnOpen = usual.isEmpty(),
+            )
         }
     }
 }
@@ -176,6 +239,7 @@ fun LiveTvContent(
 @Composable
 private fun CountryChannels(
     ui: LiveTvUi,
+    name: String,
     clock: (OffsetDateTime) -> String,
     focusedOnce: MutableState<Boolean>,
     onOpen: (String, String) -> Unit,
@@ -188,13 +252,71 @@ private fun CountryChannels(
             val channels = state.valueOrNull.orEmpty()
             val country = ui.country.orEmpty()
             if (channels.isEmpty()) {
-                EmptyState("No channels for this country", body = "Pick another country, or search every country by name.")
+                EmptyState(
+                    "No channels for this country yet",
+                    body = "Pick another country, or search every country by a channel’s name.",
+                )
             } else {
-                val sections = remember(channels) {
-                    channelSections(channels).map { s -> s.title to s.channels.map { ChannelTileUi(country, it) } }
+                var category by rememberSaveable(country) { mutableStateOf(ALL) }
+                val sections = remember(channels) { channelSections(channels) }
+                val filtered = if (sections.any { it.key == category }) category else ALL
+                val shown = remember(sections, filtered, country) {
+                    sections.filter { filtered == ALL || it.key == filtered }
+                        .map { s -> s.title to s.channels.map { ChannelTileUi(country, it) } }
                 }
-                ChannelGrid(sections, ui.guide, clock, focusedOnce, onOpen)
+                val guided = ui.guide.entries.isNotEmpty()
+                ChannelGrid(
+                    sections = shown,
+                    guide = ui.guide,
+                    clock = clock,
+                    focusedOnce = focusedOnce,
+                    onOpen = onOpen,
+                    compact = !guided,
+                    head = {
+                        item(key = "title", span = { GridItemSpan(maxLineSpan) }) {
+                            SectionTitle("Channels in $name", meta = plural(channels.size, "channel"))
+                        }
+                        if (sections.size > 1) {
+                            item(key = "filter", span = { GridItemSpan(maxLineSpan) }) {
+                                CategoryFilter(sections, channels.size, filtered) { category = it }
+                            }
+                        }
+                        if (!guided && ui.guide.readAtMs > 0L) {
+                            item(key = "noguide", span = { GridItemSpan(maxLineSpan) }) {
+                                Text(
+                                    "No programme guide for this country: channels show without what is on.",
+                                    style = IrisType.meta,
+                                    color = IrisColor.inkMuted,
+                                )
+                            }
+                        }
+                    },
+                )
             }
+        }
+    }
+}
+
+/** One category at a time (web: the "Show" pills): a radio group that scrolls sideways. */
+@Composable
+private fun CategoryFilter(sections: List<ChannelSection>, total: Int, selected: String, onSelect: (String) -> Unit) {
+    val options = listOf(Triple(ALL, "All", total)) + sections.map { Triple(it.key, it.title, it.channels.size) }
+    LazyRow(
+        Modifier
+            .fillMaxWidth()
+            .selectableGroup()
+            .focusRestorer()
+            .focusGroup(),
+        horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2),
+        contentPadding = PaddingValues(vertical = IrisSpace.s1),
+    ) {
+        items(options, key = { it.first }) { (key, title, count) ->
+            Pill(
+                text = "$title  $count",
+                selected = key == selected,
+                onClick = { onSelect(key) },
+                role = Role.RadioButton,
+            )
         }
     }
 }
@@ -208,12 +330,12 @@ private fun SearchResults(
     onRetry: () -> Unit,
 ) {
     when (results) {
-        Loadable.Loading -> LoadingState(label = "Searching…")
+        Loadable.Loading -> LoadingState(label = "Searching every country…")
         is Loadable.Failed -> ErrorState(results.error.message, onRetry, title = "The search failed")
         is Loadable.Ready, is Loadable.Stale -> {
             val r = results.valueOrNull ?: return
             if (r.byCountry.isEmpty()) {
-                EmptyState("No channel matches “${r.query}”")
+                EmptyState("No channel matches “${r.query}”, in any country")
             } else {
                 val sections = remember(r) {
                     r.byCountry.map { (code, hits) ->
@@ -229,12 +351,27 @@ private fun SearchResults(
                                     logoOrigin = hit.logoOrigin,
                                     logoUrl = hit.logoUrl,
                                 ),
-                                countryLabel = countryName(code),
                             )
                         }
                     }
                 }
-                ChannelGrid(sections, LiveGuide(), { "" }, focusedOnce, onOpen)
+                val total = r.byCountry.sumOf { it.second.size }
+                ChannelGrid(
+                    sections = sections,
+                    guide = LiveGuide(),
+                    clock = { "" },
+                    focusedOnce = focusedOnce,
+                    onOpen = onOpen,
+                    compact = true,
+                    head = {
+                        item(key = "title", span = { GridItemSpan(maxLineSpan) }) {
+                            SectionTitle(
+                                "Channels matching “${r.query}” in every country",
+                                meta = "${plural(total, "channel")} in ${plural(r.byCountry.size, "country", "countries")}",
+                            )
+                        }
+                    },
+                )
             }
         }
     }
@@ -247,6 +384,8 @@ private fun ChannelGrid(
     clock: (OffsetDateTime) -> String,
     focusedOnce: MutableState<Boolean>,
     onOpen: (String, String) -> Unit,
+    compact: Boolean,
+    head: LazyGridScope.() -> Unit,
 ) {
     val layout = IrisLayout.current
     // The first channel takes the focus once, after it is placed (a bare
@@ -254,7 +393,7 @@ private fun ChannelGrid(
     // results must not steal it from the search field.
     val first = remember { FocusRequester() }
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(150.dp),
+        columns = GridCells.Adaptive(if (compact) 200.dp else 270.dp),
         modifier = Modifier
             .fillMaxSize()
             .focusRestorer(first)
@@ -265,11 +404,12 @@ private fun ChannelGrid(
             top = IrisSpace.s1,
             bottom = layout.safeVertical,
         ),
-        horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
-        verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
+        horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+        verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
     ) {
+        head()
         sections.forEachIndexed { si, (title, tiles) ->
-            sectionHeader(title, tiles.size, first = si == 0)
+            sectionHeader(title, tiles.size)
             itemsIndexed(tiles, key = { _, t -> "${t.country}:$title:${t.channel.id}" }) { i, tile ->
                 val isFirst = si == 0 && i == 0
                 ChannelCard(
@@ -277,6 +417,7 @@ private fun ChannelGrid(
                     nowNext = guide.entries[tile.channel.id],
                     nowMs = guide.readAtMs,
                     clock = clock,
+                    guided = guide.entries.isNotEmpty(),
                     onClick = { onOpen(tile.country, tile.channel.id) },
                     modifier = if (isFirst) {
                         Modifier
@@ -296,20 +437,16 @@ private fun ChannelGrid(
     }
 }
 
-private fun LazyGridScope.sectionHeader(title: String, count: Int, first: Boolean) {
+private fun LazyGridScope.sectionHeader(title: String, count: Int) {
     item(key = "head:$title", span = { GridItemSpan(maxLineSpan) }) {
-        SectionTitle(
-            title,
-            meta = plural(count, "channel"),
-            modifier = Modifier.padding(top = if (first) 0.dp else IrisSpace.s5),
-        )
+        SectionTitle(title, meta = count.toString(), style = IrisType.group, modifier = Modifier.padding(top = IrisSpace.s3))
     }
 }
 
 /**
- * A channel: its logo on a plate that suits it (a dark logo on a light plate
- * and the reverse), the TNT number, the name, what is on now with how far
- * into it, or why it may not play.
+ * A channel as a guide line: its logo on a plate that suits it, the TNT
+ * number, the name, what is on now (how far, how long left) and next; or why
+ * it may not play, in words, the line set back.
  */
 @Composable
 fun ChannelCard(
@@ -319,36 +456,74 @@ fun ChannelCard(
     clock: (OffsetDateTime) -> String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    guided: Boolean = false,
 ) {
     val channel = tile.channel
+    val dim = dimmed(channel)
+    val notice = channelNotice(channel)
     FocusSurface(
         onClick = onClick,
         modifier = modifier.fillMaxWidth(),
         shape = IrisShape.card,
-        colors = FocusColors.Row,
-        contentAlignment = Alignment.TopStart,
+        colors = if (dim) FocusColors.Row.copy(container = IrisColor.ground) else FocusColors.Row,
+        contentAlignment = Alignment.CenterStart,
     ) { _ ->
-        Column(Modifier.fillMaxWidth().padding(IrisSpace.s3), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
-            LogoWell(channel)
-            Text(channel.name, style = IrisType.bodyStrong, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            val now = nowNext?.now
-            when {
-                now != null -> {
-                    Text(nowWords(now, clock), style = IrisType.metaSmall, color = IrisColor.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val progress = programmeProgress(now.start, now.stop, nowMs)
-                    if (progress != null) Meter(progress, height = 2.dp, track = IrisColor.line)
+        Row(
+            Modifier.fillMaxWidth().padding(IrisSpace.s3),
+            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LogoWell(channel, dim)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2), verticalAlignment = Alignment.CenterVertically) {
+                    channel.tntNumber?.let { Chip(it.toString(), size = ChipSize.Small) }
+                    Text(
+                        channel.name,
+                        style = IrisType.bodyStrong,
+                        color = if (dim) IrisColor.inkMuted else IrisColor.ink,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-                tile.countryLabel != null -> Text(tile.countryLabel, style = IrisType.metaSmall, color = IrisColor.inkMuted, maxLines = 1)
-                channel.geoBlocked -> StatusLine("May be blocked in your country", tone = StatusTone.Warn, style = IrisType.metaSmall)
-                channel.not247 -> Text("Not on all day", style = IrisType.metaSmall, color = IrisColor.inkMuted, maxLines = 1)
-                else -> Text(" ", style = IrisType.metaSmall)
+                val now = nowNext?.now
+                val next = nowNext?.next
+                if (now != null) {
+                    Text(
+                        now.title,
+                        style = IrisType.body,
+                        color = IrisColor.ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.semantics { contentDescription = "Now: ${now.title}" },
+                    )
+                    val progress = programmeProgress(now.start, now.stop, nowMs)
+                    val leftS = (now.stop.toInstant().toEpochMilli() - nowMs).coerceAtLeast(0L) / 1000.0
+                    val until = clock(now.stop)
+                    // the next programme's time already says when this one ends
+                    val left = when {
+                        progress == null -> if (until.isNotEmpty()) "Until $until" else ""
+                        next != null -> timeLeft(leftS)
+                        until.isNotEmpty() -> "Until $until, ${timeLeft(leftS)}"
+                        else -> timeLeft(leftS)
+                    }
+                    if (left.isNotEmpty()) Text(left, style = IrisType.metaSmall, color = IrisColor.inkMuted, maxLines = 1)
+                    if (progress != null) Meter(progress, height = 2.dp, track = IrisColor.line)
+                    if (next != null) {
+                        Text(nextWords(next, clock), style = IrisType.metaSmall, color = IrisColor.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                } else if (guided && notice == null) {
+                    Text("No guide for this channel", style = IrisType.metaSmall, color = IrisColor.inkMuted, maxLines = 1)
+                }
+                if (notice != null) Text(notice, style = IrisType.metaSmall, color = IrisColor.inkMuted, maxLines = 1)
             }
         }
     }
 }
 
+private val grey = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
+
 @Composable
-private fun LogoWell(channel: LiveChannel) {
+private fun LogoWell(channel: LiveChannel, dim: Boolean) {
     // The signed proxy first, then the logo's origin (logo hosts rate-limit the
     // server's datacenter IP while this device's is fine), then the initial.
     val candidates = remember(channel.logoUrl, channel.logoOrigin) {
@@ -359,8 +534,8 @@ private fun LogoWell(channel: LiveChannel) {
     var tone by remember(logo) { mutableStateOf(logo?.let { logoToneCache[it] } ?: LogoTone.Neutral) }
     Box(
         Modifier
-            .fillMaxWidth()
-            .height(44.dp)
+            .size(width = 72.dp, height = 44.dp)
+            .alpha(if (dim) 0.55f else 1f)
             .clip(IrisShape.key)
             .background(if (logo != null) tone.plate else IrisColor.art),
         contentAlignment = Alignment.Center,
@@ -373,7 +548,8 @@ private fun LogoWell(channel: LiveChannel) {
                     .allowHardware(logoToneCache.containsKey(logo)).build(),
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().padding(IrisSpace.s2),
+                colorFilter = if (dim) grey else null,
+                modifier = Modifier.fillMaxSize().padding(IrisSpace.s1),
                 onError = { index++ },
                 onSuccess = { state ->
                     tone = logoToneCache.getOrPut(logo) {
@@ -383,10 +559,6 @@ private fun LogoWell(channel: LiveChannel) {
             )
         } else {
             Text(channel.name.take(1).uppercase(), style = IrisType.group, color = IrisColor.artInk)
-        }
-        val number = channel.tntNumber
-        if (number != null) {
-            Chip(number.toString(), Modifier.align(Alignment.TopStart).padding(IrisSpace.s1), size = ChipSize.Small)
         }
     }
 }

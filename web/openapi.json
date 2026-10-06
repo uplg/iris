@@ -1195,7 +1195,7 @@
         "operationId": "live_tv_countries",
         "responses": {
           "200": {
-            "description": "Countries available in the live TV catalogue",
+            "description": "Countries with channels to watch, in name order",
             "content": {
               "application/json": {
                 "schema": {
@@ -1355,7 +1355,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Channels for the country — TNT-pinned first (fr), then grouped by category",
+            "description": "Channels for the country — TNT-pinned first (fr), then grouped by category; empty for a country without any",
             "content": {
               "application/json": {
                 "schema": {
@@ -6334,6 +6334,10 @@
             "format": "int32",
             "description": "French TNT number (Arcom) — set only for `fr` national networks;\ndrives the pinned \"TNT\" section.",
             "minimum": 0
+          },
+          "unreachable": {
+            "type": "boolean",
+            "description": "Every feed failed its last check: the channel will likely not play\nnow. Sent only when true."
           }
         }
       },
@@ -6382,6 +6386,15 @@
           "flag"
         ],
         "properties": {
+          "channel_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Channels the country carries; absent when not known up front. A\ncountry with none is left out of the list.",
+            "minimum": 0
+          },
           "code": {
             "type": "string",
             "description": "ISO 3166-1 alpha-2, lowercase."

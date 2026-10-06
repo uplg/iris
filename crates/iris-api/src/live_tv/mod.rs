@@ -144,6 +144,57 @@ fn lowercase<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error>
     String::deserialize(d).map(|s| s.to_lowercase())
 }
 
+/// Channels per country NAME (iptv-org's `index.country.m3u` groups by the
+/// `countries.json` name, not the code).
+type ChannelCounts = HashMap<String, usize>;
+
+/// Channels per `group-title` of the all-countries playlist, deduped exactly
+/// like a country list is ([`channels::build_channels`]), so a count matches
+/// what the country then shows before extra playlists merge in.
+fn channel_counts(entries: Vec<m3u::M3uEntry>) -> ChannelCounts {
+    let mut groups: HashMap<String, Vec<m3u::M3uEntry>> = HashMap::new();
+    for e in entries {
+        if let Some(g) = e.attrs.get("group-title").filter(|g| !g.is_empty()) {
+            groups.entry(g.clone()).or_default().push(e);
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(name, entries)| {
+            let n = channels::build_channels(&[entries], None).len();
+            (name, n)
+        })
+        .collect()
+}
+
+/// The picker: only countries with something to watch, each with its count.
+/// A loaded country's own list is the exact count; otherwise the index. A
+/// country with extra playlists or Vavoo groups configured stays even when the
+/// index misses it (its count is unknown until loaded). Without any index
+/// (upstream down) every country stays, count unknown — a picker that hides
+/// everything would be worse than one that offers an empty country.
+fn picker_entries(
+    countries: &[Country],
+    counts: Option<&ChannelCounts>,
+    loaded: &HashMap<String, usize>,
+    configured: &HashSet<&str>,
+) -> Vec<(Country, Option<usize>)> {
+    countries
+        .iter()
+        .filter_map(|c| {
+            let count = loaded
+                .get(&c.code)
+                .copied()
+                .or_else(|| counts.map(|m| m.get(&c.name).copied().unwrap_or(0)));
+            match count {
+                Some(0) if configured.contains(c.code.as_str()) => Some((c.clone(), None)),
+                Some(0) => None,
+                count => Some((c.clone(), count)),
+            }
+        })
+        .collect()
+}
+
 /// Alternate feeds per lowercase channel id (`"m6.fr"`), from iptv-org's
 /// stream database.
 type StreamsDb = HashMap<String, Vec<channels::StreamSource>>;
@@ -314,6 +365,15 @@ impl CountrySnapshot {
     fn channel_index(&self, id: &str) -> Option<usize> {
         self.channels.iter().position(|c| c.id == id)
     }
+
+    /// Every feed of channel `i` failed its last check (the probe, a zap) and
+    /// is cooling down: it may come back, but it will likely not play now.
+    pub fn unreachable(&self, i: usize) -> bool {
+        let now = epoch_ms();
+        self.health
+            .get(i)
+            .is_some_and(|h| !h.is_empty() && h.iter().all(|s| s.in_cooldown(now)))
+    }
 }
 
 struct ServiceInner {
@@ -321,6 +381,8 @@ struct ServiceInner {
     http: reqwest::Client,
     signer: proxy::Signer,
     countries: RwLock<Option<(Arc<Vec<Country>>, Instant)>>,
+    /// Channels per country, sizing the picker (see [`channel_counts`]).
+    channel_counts: RefreshCell<ChannelCounts>,
     snapshots: RwLock<HashMap<String, Arc<CountrySnapshot>>>,
     /// Programme guide per country.
     epg: RwLock<HashMap<String, Arc<RefreshCell<epg::EpgIndex>>>>,
@@ -426,6 +488,7 @@ impl LiveTvService {
                 cfg,
                 http,
                 countries: RwLock::new(None),
+                channel_counts: RefreshCell::default(),
                 snapshots: RwLock::new(HashMap::new()),
                 epg: RwLock::new(HashMap::new()),
                 streams_db: RefreshCell::default(),
@@ -469,6 +532,61 @@ impl LiveTvService {
         let fetched = Arc::new(fetched);
         *self.inner.countries.write().expect("poisoned") = Some((fetched.clone(), Instant::now()));
         Ok(fetched)
+    }
+
+    /// The countries worth offering, with their channel counts (see
+    /// [`picker_entries`]).
+    pub async fn picker(&self) -> Result<Vec<(Country, Option<usize>)>, LiveTvError> {
+        let countries = self.countries().await?;
+        let counts = self.channel_counts(Duration::MAX).await;
+        let loaded: HashMap<String, usize> = self
+            .inner
+            .snapshots
+            .read()
+            .expect("poisoned")
+            .iter()
+            .map(|(code, s)| (code.clone(), s.channels.len()))
+            .collect();
+        let cfg = &self.inner.cfg;
+        let mut configured: HashSet<&str> =
+            cfg.extra_playlists.keys().map(String::as_str).collect();
+        if cfg.vavoo_enabled {
+            configured.extend(cfg.vavoo_countries.keys().map(String::as_str));
+        }
+        Ok(picker_entries(
+            &countries,
+            counts.as_deref(),
+            &loaded,
+            &configured,
+        ))
+    }
+
+    async fn channel_counts(&self, ttl: Duration) -> Option<Arc<ChannelCounts>> {
+        self.inner
+            .channel_counts
+            .get(ttl, FAILED_LOAD_RETRY, || async {
+                let resp = self
+                    .inner
+                    .http
+                    .get(&self.inner.cfg.country_index_url)
+                    .send()
+                    .await
+                    .and_then(reqwest::Response::error_for_status)
+                    .inspect_err(
+                        |e| tracing::warn!(error = %e, "live tv country index fetch failed"),
+                    )
+                    .ok()?;
+                let body = read_capped(resp, MAX_JSON_BYTES)
+                    .await
+                    .inspect_err(
+                        |e| tracing::warn!(error = %e, "live tv country index read failed"),
+                    )
+                    .ok()?;
+                let counts = channel_counts(m3u::parse(&String::from_utf8_lossy(&body)));
+                tracing::info!(countries = counts.len(), "live tv country index loaded");
+                Some(counts)
+            })
+            .await
     }
 
     /// Channel list for a country, fetching its playlist on first access.
@@ -518,11 +636,16 @@ impl LiveTvService {
 
         let mut playlists = Vec::new();
         for (i, url) in urls.iter().enumerate() {
+            if i == 0 {
+                // iptv-org publishes no playlist for a country without streams:
+                // that country is empty, not an error.
+                if let Some(body) = self.fetch_primary_playlist(url).await? {
+                    playlists.push(m3u::parse(&body));
+                }
+                continue;
+            }
             match self.fetch_text(url, PLAYLIST_TIMEOUT).await {
                 Ok((body, _)) => playlists.push(m3u::parse(&body)),
-                // The primary playlist failing is fatal (probably an unknown
-                // country → 404); a missing extra playlist just logs.
-                Err(e) if i == 0 => return Err(e),
                 Err(e) => {
                     tracing::warn!(url, error = %e, "live tv extra playlist fetch failed");
                 }
@@ -553,7 +676,8 @@ impl LiveTvService {
         let tnt = (country == "fr").then_some(&self.inner.cfg.tnt_overrides);
         let mut built = channels::build_channels(&playlists, tnt);
         if built.is_empty() {
-            return Err(LiveTvError::Upstream("playlist has no channels".into()));
+            tracing::info!(country, "live tv country has no channels");
+            return Ok(self.build_snapshot(built));
         }
         // Graft the alternate feeds from iptv-org's database — the playlist
         // carries a single feed per channel; the database has them all.
@@ -723,6 +847,23 @@ impl LiveTvService {
         }
         tracing::info!(channels = map.len(), "live tv streams db loaded");
         Some(map)
+    }
+
+    /// A country's iptv-org playlist; `None` when iptv-org has none (404).
+    async fn fetch_primary_playlist(&self, url: &str) -> Result<Option<String>, LiveTvError> {
+        let resp = self
+            .inner
+            .http
+            .get(url)
+            .timeout(PLAYLIST_TIMEOUT)
+            .send()
+            .await
+            .map_err(upstream_err)?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let resp = resp.error_for_status().map_err(upstream_err)?;
+        Ok(Some(read_playlist(resp).await?))
     }
 
     async fn fetch_text(&self, url: &str, timeout: Duration) -> Result<(String, Url), LiveTvError> {
@@ -1730,6 +1871,7 @@ impl LiveTvService {
         {
             let svc = self.clone();
             tokio::spawn(async move {
+                svc.channel_counts(Duration::MAX).await;
                 svc.search_index(Duration::MAX).await;
             });
         }
@@ -1826,6 +1968,11 @@ impl LiveTvService {
         };
         for country in stale_countries {
             match self.fetch_country(&country).await {
+                // A playlist gone empty for a round is an upstream hiccup more
+                // often than a country losing every channel.
+                Ok(snap) if snap.channels.is_empty() => {
+                    tracing::warn!(country, "live tv playlist refresh came back empty");
+                }
                 Ok(snap) => {
                     let snap = Arc::new(snap);
                     self.inner
@@ -1860,6 +2007,7 @@ impl LiveTvService {
         // a no-op while it's within its TTL and rebuilds it once past it, so a
         // search never pays the cold cost after the boot warm.
         self.search_index(playlist_ttl).await;
+        self.channel_counts(playlist_ttl).await;
     }
 }
 
@@ -2080,6 +2228,88 @@ mod tests {
             fr.iter().any(|(_, id)| *id == "disneychannel"),
             "Disney Channel FR (Vavoo-only) must be searchable"
         );
+    }
+
+    #[test]
+    fn a_channel_is_unreachable_only_when_every_feed_cools_down() {
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let snap = svc.build_snapshot(vec![channel_with(&["http://u/1", "http://u/2"])]);
+        snap.health[0][0].mark_failure(epoch_ms());
+        assert!(!snap.unreachable(0), "one feed left");
+        snap.health[0][1].mark_failure(epoch_ms());
+        assert!(snap.unreachable(0));
+        assert!(!snap.unreachable(1), "no such channel");
+    }
+
+    fn country(code: &str, name: &str) -> Country {
+        Country {
+            code: code.into(),
+            name: name.into(),
+            flag: String::new(),
+        }
+    }
+
+    #[test]
+    fn channel_counts_group_by_country_and_dedupe_variants() {
+        let body = r#"#EXTM3U
+#EXTINF:-1 tvg-id="TF1.fr@HD" group-title="France",TF1 (1080p)
+https://a/tf1-hd.m3u8
+#EXTINF:-1 tvg-id="TF1.fr@SD" group-title="France",TF1 (576p)
+https://a/tf1-sd.m3u8
+#EXTINF:-1 tvg-id="France2.fr@SD" group-title="France",France 2
+https://a/f2.m3u8
+#EXTINF:-1 tvg-id="TF1.fr@HD" group-title="Belgium",TF1 (1080p)
+https://a/tf1-hd.m3u8
+#EXTINF:-1 tvg-id="X.int" group-title="",Nowhere
+https://a/x.m3u8
+"#;
+        let counts = channel_counts(m3u::parse(body));
+        assert_eq!(counts.get("France"), Some(&2), "TF1 HD + SD is one channel");
+        assert_eq!(
+            counts.get("Belgium"),
+            Some(&1),
+            "a channel counts in every country it airs in"
+        );
+        assert_eq!(counts.len(), 2, "no group, no country");
+    }
+
+    #[test]
+    fn picker_offers_only_countries_with_channels() {
+        let countries = [
+            country("fr", "France"),
+            country("aq", "Antarctica"),
+            country("be", "Belgium"),
+            country("ie", "Ireland"),
+            country("de", "Germany"),
+        ];
+        let counts: ChannelCounts =
+            [("France".to_string(), 40), ("Belgium".to_string(), 12)].into();
+        let loaded: HashMap<String, usize> = [("fr".to_string(), 52), ("de".to_string(), 0)].into();
+        let configured: HashSet<&str> = ["ie"].into();
+        let picked: Vec<(String, Option<usize>)> =
+            picker_entries(&countries, Some(&counts), &loaded, &configured)
+                .into_iter()
+                .map(|(c, n)| (c.code, n))
+                .collect();
+        assert_eq!(
+            picked,
+            [
+                ("fr".to_string(), Some(52)),
+                ("be".to_string(), Some(12)),
+                ("ie".to_string(), None),
+            ],
+            "a loaded list is the exact count, an empty country is left out, a configured one stays"
+        );
+    }
+
+    #[test]
+    fn picker_without_an_index_keeps_every_country() {
+        let countries = [country("fr", "France"), country("aq", "Antarctica")];
+        let loaded: HashMap<String, usize> = [("fr".to_string(), 52)].into();
+        let picked = picker_entries(&countries, None, &loaded, &HashSet::new());
+        assert_eq!(picked.len(), 2);
+        assert_eq!(picked[0].1, Some(52));
+        assert_eq!(picked[1].1, None);
     }
 
     #[test]
