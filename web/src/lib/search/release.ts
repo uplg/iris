@@ -49,7 +49,7 @@ export function codecWord(codec: string | null | undefined): string | null {
 
 export function seedersWords(n: number | null | undefined): string | null {
 	if (typeof n !== 'number') return null;
-	return n === 1 ? '1 seeder' : `${n.toLocaleString('en')} seeders`;
+	return plural(n, 'seeder');
 }
 
 /** A confirmed empty swarm: its pieces would never all arrive. Unknown is not dead. */

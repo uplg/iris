@@ -136,9 +136,9 @@ export function thisTitle(kind: string | null | undefined): string {
 	return kind === 'movie' ? 'this film' : 'this series';
 }
 
-/** A count with its noun: `1 download`, `3 downloads`. */
+/** A count with its noun: `1 download`, `3 downloads`, `1,204 seeders`. */
 export function plural(n: number, one: string, many = `${one}s`): string {
-	return `${n} ${n === 1 ? one : many}`;
+	return `${n.toLocaleString('en')} ${n === 1 ? one : many}`;
 }
 
 /** A share as people read it: `42%`. */

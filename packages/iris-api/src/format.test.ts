@@ -43,6 +43,7 @@ describe('format', () => {
 		expect(plural(1, 'download')).toBe('1 download');
 		expect(plural(3, 'download')).toBe('3 downloads');
 		expect(plural(2, 'series', 'series')).toBe('2 series');
+		expect(plural(1204, 'seeder')).toBe('1,204 seeders');
 	});
 
 	it('writes episode codes the way the cards do', () => {

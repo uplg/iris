@@ -5,6 +5,7 @@
 	import { goto } from '$app/navigation';
 	import { library, type SeasonPackEntry } from '@iris/api/client';
 	import { formatSize } from '@iris/api/format';
+	import { seedersWords } from '#lib/search/release.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { refocus, sectionHeading } from '#lib/focus.ts';
@@ -22,7 +23,7 @@
 		[
 			pack.language ? audioChip(pack.language) : null,
 			pack.quality,
-			typeof pack.seeders === 'number' ? `${pack.seeders} seeders` : null,
+			seedersWords(pack.seeders),
 			typeof pack.size_bytes === 'number' ? formatSize(pack.size_bytes) : null,
 			`via ${pack.indexer_provider}`
 		]

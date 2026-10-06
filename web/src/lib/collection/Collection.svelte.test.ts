@@ -197,6 +197,21 @@ describe('Collection', () => {
 		expect(api.calls.filter((c) => c.path.endsWith('/progress'))).toEqual([]);
 	});
 
+	it('counts an offer’s seeders with the right noun', async () => {
+		backend(
+			series({
+				available_episodes: [
+					{ ...offer(2, 5, 'english', 'o1'), seeders: 1 },
+					{ ...offer(2, 5, 'french', 'o2'), seeders: 1204 }
+				]
+			})
+		);
+		await render(Collection, { id: 'c1' });
+		await page.getByRole('tab', { name: 'Season 2 · 5 episodes' }).click();
+		const panel = page.getByRole('tabpanel', { name: 'Season 2 · 5 episodes' });
+		await expect.element(panel.getByText(/· 1 seeder ·.*· 1,204 seeders ·/)).toBeVisible();
+	});
+
 	it('grabs an episode in the chosen language, reads the collection again, then plays it', async () => {
 		const api = backend();
 		await render(Collection, { id: 'c1' });
