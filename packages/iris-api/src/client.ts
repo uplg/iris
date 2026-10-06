@@ -125,7 +125,9 @@ function requestSignal(opts?: RequestOpts): AbortSignal | undefined {
 	return opts?.signal ?? timeout;
 }
 
-async function request<T>(method: string, path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
+/** One call to the API, as the server answered it: the client's header, one transparent
+ *  refresh on an expired access cookie, and the 426 lock-out said. */
+async function send(method: string, path: string, body?: unknown, opts?: RequestOpts): Promise<Response> {
 	const fire = () =>
 		fetch(`/api${path}`, {
 			method,
@@ -146,22 +148,25 @@ async function request<T>(method: string, path: string, body?: unknown, opts?: R
 		if (outcome.ok) {
 			res = await fire(); // retry once with the rotated cookie
 		} else if (outcome.status === 401 || outcome.status === 403) {
-			// The refresh token itself is dead — genuinely logged out. Bounce to
-			// login via a window event so api.ts stays unaware of the auth context's
-			// setState; AuthProvider wires the listener.
+			// The refresh token itself is dead: genuinely signed out. Said through a
+			// window event so the client stays unaware of the session, which listens.
 			window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
 		}
 		// 429 / 5xx / network (status 0): the session is still valid, so do NOT
 		// log out. The original 401 surfaces to the caller as a transient error;
 		// the next poll or the keep-alive recovers once the backend is reachable.
 	}
-	// 426 = the server has decided this cached bundle is below
-	// `MIN_WEB_VERSION`. Surface globally so App.tsx can lock the UI
-	// and prompt the user to reload; checked after the auth retry so
-	// a refresh-then-426 still surfaces.
+	// 426 = the server has decided this cached bundle is below `MIN_WEB_VERSION`.
+	// Said globally so the app locks and offers a reload; checked after the auth
+	// retry so a refresh-then-426 still surfaces.
 	if (res.status === 426) {
 		window.dispatchEvent(new Event(CLIENT_OUTDATED_EVENT));
 	}
+	return res;
+}
+
+async function request<T>(method: string, path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
+	const res = await send(method, path, body, opts);
 	if (res.status === 204) return undefined as T;
 	const data = res.headers.get('content-type')?.includes('application/json') ? await res.json() : await res.text();
 	if (!res.ok) {
@@ -678,6 +683,13 @@ export const livetv = {
 	/** HLS master playlist for a channel — hand to hls.js / native HLS. */
 	masterUrl: (country: string, channelId: string) =>
 		`/api/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/master.m3u8`,
+	/** GET the master playlist for its headers: which source the backend elected, and how
+	 *  many it has (the GET also warms the election server-side). */
+	masterHeaders: async (country: string, channelId: string): Promise<Headers> => {
+		const res = await send('GET', `/livetv/${encodeURIComponent(country)}/channels/${encodeURIComponent(channelId)}/master.m3u8`);
+		if (!res.ok) throw new ApiError(res.status, 'error', `master fetch failed (${res.status})`);
+		return res.headers;
+	},
 	/** The served stream is unplayable client-side: the backend cools the
 	 *  active source down and elects the next feed. */
 	reportPlaybackError: (country: string, channelId: string) =>

@@ -26,17 +26,19 @@
 
 	const probeQ = createQuery(() => ({
 		queryKey: ['livetv', 'probe', country, channelId, attempt],
+		// through the client: an expired access cookie refreshes instead of failing the channel
 		queryFn: async () => {
-			const res = await fetch(masterUrl, { credentials: 'include' });
-			if (!res.ok) throw new Error(`master fetch failed (${res.status})`);
+			const headers = await livetv.masterHeaders(country, channelId);
 			return {
-				tier: liveTier(res.headers.get('x-iris-live-upstream'), typeof globalThis.VideoDecoder !== 'undefined'),
-				sources: sourceCount(res.headers.get('x-iris-live-sources'))
+				tier: liveTier(headers.get('x-iris-live-upstream'), typeof globalThis.VideoDecoder !== 'undefined'),
+				sources: sourceCount(headers.get('x-iris-live-sources'))
 			};
 		},
 		staleTime: 0,
 		gcTime: 0,
-		retry: 1
+		retry: 1,
+		// a return to the tab must not ask again: it would re-warm the election mid-watch
+		refetchOnWindowFocus: false
 	}));
 
 	function rotate(reason: string) {
