@@ -1,6 +1,7 @@
 // Scenario 11: Zen, the household's Gecko, driven over WebDriver BiDi (lib/zen.ts). Tier E
 // (hevc.js) on its own H.264 encoder, or the demotion to F when it has none; tier B's CRA
 // splice on HEVC open GOP: a resume and a seek back start on CRA keyframes, no media error 3.
+import { installAvSync, readAvSync, startAvSync, syncStats } from '../lib/avsync.ts';
 import { probeHevcjsEncoder } from '../lib/probes.ts';
 import { expect, test, zenKey, zenPlay, zenUntil, zenVideo, zenWatch, type Zen } from '../lib/zen.ts';
 
@@ -63,3 +64,23 @@ test('tier B CRA splice: resume and seek back start on CRA keyframes', { tag: ['
 	expect(v.mozHasAudio, 'no audio reached the element').toBe(true);
 	expect(r).toBeGreaterThan(0.85);
 });
+
+// the s14 measurement (lib/avsync.ts), on Zen's element tiers
+for (const tier of ['A', 'B', 'E', 'F']) {
+	test(`A/V sync, tier ${tier}: picture and sound within 45 ms`, { tag: ['@zen'] }, async ({ zen }, info) => {
+		await zen.page.evaluateOnNewDocument(installAvSync);
+		await zenWatch(zen, 'sync', { tier });
+		await zenPlay(zen);
+		await new Promise((r) => setTimeout(r, 4000));
+		const mode = await zen.page.evaluate(startAvSync);
+		await new Promise((r) => setTimeout(r, 30_000));
+		const s = syncStats(await zen.page.evaluate(readAvSync));
+		const line = `A/V zen tier ${tier} (${mode}): median ${s.median.toFixed(1)} ms, p90 |${s.p90abs.toFixed(1)}| ms, max |${s.maxAbs.toFixed(1)}| ms over ${s.pairs} beeps`;
+		console.log(`[measure] ${line}\n[offsets] ${s.offsets.map((o) => o.toFixed(0)).join(' ')}`);
+		await info.attach('avsync', { body: line, contentType: 'text/plain' });
+		expect(zen.logs.matching(new RegExp(`tier ${tier} → `)), 'the tier was demoted').toEqual([]);
+		expect(s.pairs).toBeGreaterThanOrEqual(12);
+		expect(Math.abs(s.median)).toBeLessThan(45);
+		expect(s.p90abs).toBeLessThan(60);
+	});
+}

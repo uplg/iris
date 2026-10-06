@@ -127,6 +127,21 @@ for ep in 01 02; do
 		"${x264[@]}" -metadata:s:a:0 language=eng -c:a aac -b:a 128k -ar 48000 -movflags +faststart
 done
 
+# Scenario 14 (A/V sync): 60 fps black with a white flash on the first two frames of every
+# second, and a 1 kHz beep starting on the same instant (silence otherwise: a sharp onset).
+# A one-minute clip, and a 30-minute one for the opt-in drift run.
+sync_clip() {
+	local name="$1" secs="$2"
+	# shellcheck disable=SC2046
+	make "$name" \
+		-f lavfi -i "color=c=black:s=640x360:r=60:d=${secs},format=yuv420p,drawbox=c=white:t=fill:enable='lt(mod(n\,60)\,2)'" \
+		-f lavfi -i "aevalsrc=exprs=if(lt(mod(t\,1)\,0.08)\,0.6*sin(2*PI*1000*t)\,0)|if(lt(mod(t\,1)\,0.08)\,0.6*sin(2*PI*1000*t)\,0):s=48000:c=stereo:d=${secs}" \
+		-c:v libx264 -preset veryfast -profile:v high -pix_fmt yuv420p -g 120 -keyint_min 120 -sc_threshold 0 \
+		-metadata:s:a:0 language=eng -c:a aac -b:a 128k -ar 48000 -movflags +faststart
+}
+sync_clip Bench.Lima.2012.360p.WEB.H264.AAC.Sync-IRIS.mp4 60
+sync_clip Bench.Mike.2013.360p.WEB.H264.AAC.Sync-IRIS.mp4 1800
+
 # Scenario 5: the loop the local live HLS source plays (the harness runs ffmpeg on it).
 # shellcheck disable=SC2046
 make live-loop.ts $(video 640x360 20) $(stereo48 20) "${x264[@]}" -c:a aac -b:a 128k -ar 48000 -f mpegts
