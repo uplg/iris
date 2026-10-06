@@ -4,34 +4,16 @@
 // "Play" (L14); playback holds at real time.
 import type { Page } from '@playwright/test';
 import { expect, openWatch, pauseButton, playButton, stage, test, videoState } from '../lib/bench.ts';
+import { probeHevcjsEncoder } from '../lib/probes.ts';
 
-/** hevc.js re-encodes to H.264 with WebCodecs in a worker: probed there with its own config
- * (a real encode, `isConfigSupported` alone says yes on builds that then refuse to configure). */
+/** hevc.js re-encodes to H.264 with WebCodecs in a worker: probed there with its own config. */
 async function needsH264Encoder(page: Page) {
-	test.skip(
-		!(await h264EncoderWorks(page)),
-		'no working H.264 VideoEncoder in this browser build (Playwright Firefox ships no OpenH264); manual on Zen'
-	);
+	test.skip(!(await h264EncoderWorks(page)), 'no working H.264 VideoEncoder in this browser build (Zen runs it: s11)');
 }
 
 async function h264EncoderWorks(page: Page): Promise<boolean> {
 	await page.goto('/');
-	return page.evaluate(
-		() =>
-			new Promise<boolean>((resolve) => {
-				const src = `
-					const enc = new VideoEncoder({ output: () => { postMessage(true); }, error: () => postMessage(false) });
-					try {
-						enc.configure({ codec: 'avc1.640028', width: 1280, height: 720, bitrate: 2e6, framerate: 24,
-							hardwareAcceleration: 'no-preference', latencyMode: 'realtime', avc: { format: 'avc' } });
-						const f = new VideoFrame(new Uint8Array(1280 * 720 * 1.5), { format: 'I420', codedWidth: 1280, codedHeight: 720, timestamp: 0 });
-						enc.encode(f, { keyFrame: true }); f.close(); enc.flush().catch(() => postMessage(false));
-					} catch { postMessage(false); }`;
-				const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
-				w.onmessage = (e) => resolve(e.data === true);
-				w.onerror = () => resolve(false);
-			})
-	);
+	return page.evaluate(probeHevcjsEncoder);
 }
 
 /** The page's MediaSource as it was before any script ran, to tell a leaked intercept. */
@@ -80,7 +62,17 @@ test(
 	'no working H.264 encoder: tier E fails through the error path and Tier F plays',
 	{ tag: ['@firefox', '@chrome'] },
 	async ({ page, state, logs }) => {
-		test.skip(await h264EncoderWorks(page), 'this browser encodes H.264: the encoder failure is not reachable here');
+		// the encoder hevc.js asks for is refused, like Gecko refused realtime H.264 before our
+		// patch: configure() fails asynchronously, every encode() after throws
+		await page.route('**/hevcjs/transcode-worker.js', async (route) => {
+			const res = await route.fetch();
+			const body = (await res.text()).replace(
+				'hardwareAcceleration: "no-preference",',
+				'hardwareAcceleration: "no-preference", scalabilityMode: "L9T9",'
+			);
+			expect(body, 'the worker no longer has the encoder config this test breaks').toContain('L9T9');
+			await route.fulfill({ response: res, body });
+		});
 		await page.addInitScript(rememberNativeMse);
 		await openWatch(page, state, 'hevcAac', { tier: 'E' });
 		const t0 = Date.now();
@@ -88,9 +80,10 @@ test(
 		if (await playButton(page).isVisible()) await playButton(page).click();
 		await expect.poll(() => logs.has(/tier E → F/), { timeout: 30_000, message: 'no demotion to F' }).toBe(true);
 		console.log(`[measure] tier E encoder failure → F after ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-		await stage(page).hover();
-		if (await playButton(page).isVisible()) await playButton(page).click();
-		await expect.poll(async () => (await videoState(page))?.currentTime ?? 0, { timeout: 90_000 }).toBeGreaterThan(3);
+		// Play was pressed during the hold: Tier F carries the intent, no second press
+		await expect
+			.poll(async () => (await videoState(page))?.currentTime ?? 0, { timeout: 30_000, message: 'Tier F came back paused' })
+			.toBeGreaterThan(3);
 		const a = (await videoState(page))!.currentTime;
 		await page.waitForTimeout(4000);
 		expect((await videoState(page))!.currentTime).toBeGreaterThan(a + 2);
