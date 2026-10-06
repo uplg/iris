@@ -17,6 +17,7 @@
 	const owned = $derived(ownedFile(r));
 	const dead = $derived(isDead(r.seeders));
 	const grab = new Grab((href) => goto(href));
+	let grabButton = $state<HTMLElement>();
 	const target = $derived<GrabTarget>({ provider: r.provider_id, id: r.external_id, tmdbId: r.title_match?.tmdb_id ?? r.tmdb_id });
 </script>
 
@@ -32,13 +33,14 @@
 		</span>
 		<span class="facts">{factsLine(r)}</span>
 		{#if dead && !owned}<span class="dead" id="{id}-dead"><Icon name="triangle-alert" size={14} />{DEAD}</span>{/if}
-		<GrabNotice {grab} {target} />
+		<GrabNotice {grab} {target} back={() => grabButton} />
 	</div>
 	<div class="end">
 		{#if owned}
 			<a class="btn primary act" href={watchHref(owned.infohash, owned.idx)}><Icon name="play" />Play from disk</a>
 		{:else}
 			<button
+				bind:this={grabButton}
 				class="btn primary act"
 				{...pending(grab.busy)}
 				{...unavailable(dead && `${id}-dead`)}

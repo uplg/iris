@@ -28,7 +28,7 @@ import type Hls from 'hls.js';
 import { ALL_FORMATS, AudioSampleSink, Input } from 'mediabunny';
 
 import { ensureLibavAudioDecoderRegistered } from './decode/libav-audio-decoder';
-import { irisUrlSource } from './stream-fetch';
+import { irisUrlSource } from './stream-source';
 
 /** Minimum headroom: never schedule a buffer to start closer than this to
  *  "now" (WebAudio needs a beat of lead to start a source cleanly). */

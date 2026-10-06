@@ -4,6 +4,7 @@
 	// stays greyed and labelled, and you can hide it from your own library.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { me, tmdbImage, type CollectionListItem } from '@iris/api/client';
+	import { plural } from '@iris/api/format';
 	import { loadable } from '#lib/query.ts';
 	import { stored, text } from '#lib/stored.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -117,9 +118,7 @@
 
 		<div class="count">
 			<p role="status" class="hint">
-				{shown.length === all.length
-					? `${all.length} ${all.length === 1 ? 'title' : 'titles'}`
-					: `Showing ${shown.length} of ${all.length} titles`}
+				{shown.length === all.length ? plural(all.length, 'title') : `Showing ${shown.length} of ${all.length} titles`}
 			</p>
 			{#if filtered}<button class="link-btn" onclick={clear}>Clear filters</button>{/if}
 		</div>

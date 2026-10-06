@@ -2,7 +2,7 @@
 	// Every release on the server, by what it is doing: downloading, needing a hand (stalled, an
 	// error, paused by its tracker's policy), seeding. Found by name, hash or who added it.
 	import type { CollectionListItem, ContinueWatchingItem, TorrentView } from '@iris/api/client';
-	import { speed } from '@iris/api/format';
+	import { plural, speed } from '@iris/api/format';
 	import { loadable } from '#lib/query.ts';
 	import { refocus } from '#lib/focus.ts';
 	import Loaded from '#lib/components/Loaded.svelte';
@@ -48,7 +48,7 @@
 	const up = $derived(all.reduce((s, t) => s + t.upload_speed_bps, 0));
 
 	function fact(g: GroupId, items: TorrentView[]): string {
-		const n = `${items.length} ${items.length === 1 ? 'release' : 'releases'}`;
+		const n = plural(items.length, 'release');
 		if (g === 'downloading') return `${n} · ${speed(items.reduce((s, t) => s + t.download_speed_bps, 0))} down`;
 		if (g === 'seeding') return `${n} · ${speed(items.reduce((s, t) => s + t.upload_speed_bps, 0))} up`;
 		return n;
@@ -87,9 +87,7 @@
 				<span id="{id}-filter-hint" class="hint">By title, release name, hash or who added it</span>
 			</div>
 			<p role="status" class="hint count">
-				{shown.length === all.length
-					? `${all.length} ${all.length === 1 ? 'release' : 'releases'}`
-					: `Showing ${shown.length} of ${all.length} releases`}
+				{shown.length === all.length ? plural(all.length, 'release') : `Showing ${shown.length} of ${all.length} releases`}
 			</p>
 		</div>
 

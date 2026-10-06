@@ -1,6 +1,6 @@
 // Times the way a screen reader should say them: « 32 minutes 10 seconds of 55 minutes ».
 
-const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+import { plural } from '@iris/api/format';
 
 /** A position or a length in words, to the second. */
 export function spokenTime(sec: number): string {
@@ -9,9 +9,9 @@ export function spokenTime(sec: number): string {
 	const m = Math.floor((total % 3600) / 60);
 	const s = total % 60;
 	const parts: string[] = [];
-	if (h) parts.push(unit(h, 'hour'));
-	if (m) parts.push(unit(m, 'minute'));
-	if (s || parts.length === 0) parts.push(unit(s, 'second'));
+	if (h) parts.push(plural(h, 'hour'));
+	if (m) parts.push(plural(m, 'minute'));
+	if (s || parts.length === 0) parts.push(plural(s, 'second'));
 	return parts.join(' ');
 }
 

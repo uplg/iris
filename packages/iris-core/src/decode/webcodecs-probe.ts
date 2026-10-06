@@ -37,29 +37,6 @@ export type WebCodecsProbeResult = {
 	codec: string;
 };
 
-/** Cheap synchronous-ish probe used by `pickTier`. Just calls
- *  `VideoDecoder.isConfigSupported`. "Supported" here only means
- *  "worth trying"; the real test runs at mount time. */
-export async function cheapProbeVideoCodec(codec: string): Promise<{
-	supportedHardware: boolean;
-	supportedAny: boolean;
-}> {
-	if (typeof globalThis.VideoDecoder === 'undefined') {
-		return { supportedHardware: false, supportedAny: false };
-	}
-	const baseConfig: VideoDecoderConfig = { codec };
-	const hw = await VideoDecoder.isConfigSupported({
-		...baseConfig,
-		hardwareAcceleration: 'prefer-hardware'
-	}).catch(() => ({ supported: false }) as VideoDecoderSupport);
-	if (hw.supported) return { supportedHardware: true, supportedAny: true };
-	const sw = await VideoDecoder.isConfigSupported({
-		...baseConfig,
-		hardwareAcceleration: 'prefer-software'
-	}).catch(() => ({ supported: false }) as VideoDecoderSupport);
-	return { supportedHardware: false, supportedAny: sw.supported ?? false };
-}
-
 const CACHE_PREFIX = 'iris-core.wc-probe.v3.';
 /** Failures before a codec is skipped without a test. */
 const FAILS_TO_SKIP = 2;

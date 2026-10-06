@@ -3,7 +3,17 @@
 // can deliver it. Every search surface (grid, list, details) reads these, never its own.
 
 import type { LibraryMatch, ProviderResultMeta, SearchResult } from '@iris/api/client';
-import { episodeCode, formatRelative, formatSize, kindWord, languageLabel, plural, prettySceneName, timeLeft } from '@iris/api/format';
+import {
+	episodeCode,
+	fileName,
+	formatRelative,
+	formatSize,
+	kindWord,
+	languageLabel,
+	plural,
+	prettySceneName,
+	timeLeft
+} from '@iris/api/format';
 import { watchHref } from '#lib/paths.ts';
 import { resumeOf } from '#lib/watched.ts';
 
@@ -16,7 +26,7 @@ export function partWords(season: number | null | undefined, episode: number | n
 
 /** `S01E02`, `S1E2`, `S01.E02` in a release or file name; a season alone (`S02`) is episode 0. */
 export function sceneMark(name: string): { season: number; episode: number } | null {
-	const base = name.split('/').pop() ?? name;
+	const base = fileName(name);
 	const se = /\bS(\d{1,4})[._ -]*E(\d{1,4})\b/i.exec(base);
 	if (se) return { season: Number(se[1]), episode: Number(se[2]) };
 	const s = /\bS(\d{1,2})\b/i.exec(base);
@@ -49,7 +59,7 @@ export function codecWord(codec: string | null | undefined): string | null {
 
 export function seedersWords(n: number | null | undefined): string | null {
 	if (typeof n !== 'number') return null;
-	return n === 1 ? '1 seeder' : `${n.toLocaleString('en')} seeders`;
+	return plural(n, 'seeder');
 }
 
 /** A confirmed empty swarm: its pieces would never all arrive. Unknown is not dead. */
@@ -137,9 +147,9 @@ export const failedTrackers = (meta: readonly ProviderResultMeta[]) => meta.filt
 export function summary(matches: number, releases: number, meta: readonly ProviderResultMeta[]): string {
 	const answered = meta.filter((p) => !p.error).length;
 	const parts: string[] = [];
-	if (matches) parts.push(`${matches} ${matches === 1 ? 'match' : 'matches'} in your library`);
-	const rel = `${releases} ${releases === 1 ? 'release' : 'releases'}`;
-	parts.push(answered ? `${rel} from ${answered} ${answered === 1 ? 'tracker' : 'trackers'}` : rel);
+	if (matches) parts.push(`${plural(matches, 'match', 'matches')} in your library`);
+	const rel = plural(releases, 'release');
+	parts.push(answered ? `${rel} from ${plural(answered, 'tracker')}` : rel);
 	const failed = failedTrackers(meta).map((p) => p.id);
 	if (failed.length) parts.push(`${failed.join(', ')} did not answer`);
 	return parts.join(' · ');

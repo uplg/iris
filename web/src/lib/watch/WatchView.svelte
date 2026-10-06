@@ -11,15 +11,25 @@
 	import { Dialog } from 'bits-ui';
 	import { untrack } from 'svelte';
 	import { afterNavigate, goto } from '$app/navigation';
-	import { ApiError, follows, library, me, progress as progressApi, torrents, type TorrentView } from '@iris/api/client';
-	import { duration as lengthWords, episodeCode, fileName, formatSize, isVideo, percent, prettySceneName, speed } from '@iris/api/format';
+	import { follows, library, progress as progressApi, torrents, type TorrentView } from '@iris/api/client';
+	import {
+		duration as lengthWords,
+		episodeCode,
+		fileName,
+		formatSize,
+		isVideo,
+		percent,
+		plural,
+		prettySceneName,
+		speed
+	} from '@iris/api/format';
 	import { hevcMseNeedsIdrStart } from '@iris/core/caps';
 	import { irisFetch } from '@iris/core/stream-fetch';
 	import { fetchManifest, ManifestNotReadyError, pickTier, postSeekHint, rawStreamUrl, type DecodeTier } from '@iris/core/manifest-client';
 	import Icon from '#lib/components/Icon.svelte';
 	import Progress from '#lib/components/Progress.svelte';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
-	import { errorText } from '#lib/errors.ts';
+	import { errorText, isGone } from '#lib/errors.ts';
 	import { stored, text as words } from '#lib/stored.ts';
 	import { pageTitle } from '#lib/title.ts';
 	import { KEYS, read, refreshLibrary } from '#lib/queries.ts';
@@ -84,7 +94,7 @@
 	const isTv = $derived(!!collectionId && data?.kind === 'tv');
 
 	const playStatusQ = createQuery(() => ({
-		queryKey: ['play-status', infohash, fileIdx],
+		queryKey: KEYS.playStatus(infohash, fileIdx),
 		queryFn: () => torrents.playStatus(infohash, fileIdx),
 		refetchInterval: (q) => playStatusInterval(q.state.data),
 		retry: 8,
@@ -95,7 +105,7 @@
 	// yet on disk » until it is there; polled on that answer past the retry budget, so a slow
 	// swarm self-heals instead of needing a reload
 	const probeQ = createQuery(() => ({
-		queryKey: ['probe', infohash, fileIdx],
+		queryKey: KEYS.probe(infohash, fileIdx),
 		queryFn: () => torrents.probe(infohash, fileIdx),
 		retry: (count: number, e: Error) => notOnDisk(e) && count < 30,
 		retryDelay: 2000,
@@ -122,11 +132,7 @@
 	}));
 	const prefsQ = createQuery(() => ({ ...read.playbackPrefs(collectionId ?? null), enabled: !!data }));
 	const torrentProgressQ = createQuery(() => ({ ...read.progress(infohash), refetchInterval: 10_000 }));
-	const collectionQ = createQuery(() => ({
-		queryKey: KEYS.collection(collectionId ?? ''),
-		queryFn: () => library.collection(collectionId!),
-		enabled: isTv
-	}));
+	const collectionQ = createQuery(() => ({ ...read.collection(collectionId ?? ''), enabled: isTv }));
 	const episodeContextQ = createQuery(() => read.episodeContext(infohash, fileIdx));
 
 	// tier: picked from the manifest, `?tier=` pins it; a demoted tier never comes back
@@ -270,8 +276,8 @@
 			() => {
 				regrabbed = true;
 				void qc.invalidateQueries({ queryKey: KEYS.torrent(infohash) });
-				void qc.invalidateQueries({ queryKey: ['play-status', infohash, fileIdx] });
-				void qc.invalidateQueries({ queryKey: ['probe', infohash, fileIdx] });
+				void qc.invalidateQueries({ queryKey: KEYS.playStatus(infohash, fileIdx) });
+				void qc.invalidateQueries({ queryKey: KEYS.probe(infohash, fileIdx) });
 			},
 			'regrab',
 			{ inline: true }
@@ -386,7 +392,7 @@
 			: null
 	);
 	const notice = $derived(outage ? 'Iris is not answering. Reconnecting…' : playerError ? `The player stopped: ${playerError}` : null);
-	const gone = $derived(torrentQ.error instanceof ApiError && torrentQ.error.status === 404);
+	const gone = $derived(isGone(torrentQ.error));
 
 	const STATE_WORDS: Record<TorrentView['state'], string> = {
 		initializing: 'Starting',
@@ -520,7 +526,7 @@
 					<p class="hint line">
 						<span>Down {speed(data.download_speed_bps)}</span>
 						<span>Up {speed(data.upload_speed_bps)}</span>
-						<span>{data.peers} peer{data.peers === 1 ? '' : 's'}</span>
+						<span>{plural(data.peers, 'peer')}</span>
 						{#if probeQ.data?.video[0]}
 							{@const v = probeQ.data.video[0]}
 							<span>{v.codec.toUpperCase()}{v.width && v.height ? ` ${v.width}×${v.height}` : ''}</span>
@@ -582,9 +588,10 @@
 								{...pending(prepare.is())}
 								onclick={() => {
 									const ep = nextEp;
-									if (!ep?.follow_id) return;
+									const followId = ep?.follow_id;
+									if (!ep || !followId) return;
 									void prepare.run(
-										() => follows.grabEpisode(ep.follow_id!, ep.season, ep.episode),
+										() => follows.grabEpisode(followId, ep.season, ep.episode),
 										() => {
 											nextDismissed = true;
 											nextDialog = false;

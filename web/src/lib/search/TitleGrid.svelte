@@ -5,7 +5,7 @@
 	import type { TitleCard } from '@iris/api/client';
 	import PosterCard from '#lib/components/PosterCard.svelte';
 	import type { Tone } from '#lib/components/StatusLine.svelte';
-	import { kindWord } from '@iris/api/format';
+	import { kindWord, plural } from '@iris/api/format';
 
 	interface Props {
 		titles: readonly TitleCard[];
@@ -16,7 +16,7 @@
 
 	function status(t: TitleCard): { tone: Tone; text: string } | undefined {
 		const n = counts.get(t.tmdb_id) ?? 0;
-		const releases = n ? `${n} ${n === 1 ? 'release' : 'releases'}` : '';
+		const releases = n ? plural(n, 'release') : '';
 		if (t.collection_id) return { tone: 'ok', text: releases ? `In your library · ${releases}` : 'In your library' };
 		return releases ? { tone: 'available', text: releases } : undefined;
 	}

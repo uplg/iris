@@ -10,14 +10,15 @@
 	import { ui } from '#lib/ui.svelte.ts';
 	import { refocus, sectionHeading } from '#lib/focus.ts';
 	import { KEYS } from '#lib/queries.ts';
-	import { kindLabel, plural } from '@iris/api/format';
+	import { kindLabel } from '@iris/api/format';
+	import { seedersWords } from '#lib/search/release.ts';
 
 	let { card }: { card: CatalogCard } = $props();
 	const g = new Gesture();
 	let button = $state<HTMLButtonElement>();
 
 	const meta = $derived(
-		[kindLabel(card.kind, card.is_anime), card.year ? String(card.year) : null, card.seeders ? plural(card.seeders, 'seeder') : null]
+		[kindLabel(card.kind, card.is_anime), card.year ? String(card.year) : null, card.seeders ? seedersWords(card.seeders) : null]
 			.filter(Boolean)
 			.join(' · ')
 	);

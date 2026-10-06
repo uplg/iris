@@ -6,7 +6,8 @@
 
 import { AudioSampleSource, Quality, type InputAudioTrack } from 'mediabunny';
 
-import { ensureLibavAudioDecoderRegistered, libavCanDecode } from './libav-audio-decoder';
+import { ensureLibavAudioDecoderRegistered } from './libav-audio-decoder';
+import { libavCanDecode } from './libav-codecs';
 
 /** Codecs MSE plays inside fMP4 without help: passthrough, no re-encode. */
 export const MSE_NATIVE_AUDIO: ReadonlySet<string> = new Set(['aac', 'opus', 'mp3']);

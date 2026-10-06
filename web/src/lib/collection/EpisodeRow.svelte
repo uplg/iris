@@ -7,6 +7,7 @@
 	import { library, me, type TorrentView } from '@iris/api/client';
 	import { fetchAgain } from '#lib/regrab.ts';
 	import { formatSize } from '@iris/api/format';
+	import { seedersWords } from '#lib/search/release.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { refocus, sectionHeading } from '#lib/focus.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -50,7 +51,7 @@
 		[
 			languageWord(o.language) ?? 'Unknown language',
 			o.quality,
-			o.seeders !== null ? `${o.seeders} seeders` : null,
+			seedersWords(o.seeders),
 			o.size_bytes !== null ? formatSize(o.size_bytes) : null
 		]
 			.filter(Boolean)

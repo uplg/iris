@@ -23,11 +23,15 @@ export const KEYS = {
 	library: ['library'],
 	collections: ['library', 'collections'],
 	torrents: ['library', 'torrents'],
+	collectionAll: ['collection'],
 	collection: (id: string) => ['collection', id] as const,
 	progressAll: ['torrent-progress'],
 	progress: (infohash: string) => ['torrent-progress', infohash] as const,
+	torrentAll: ['torrent'],
 	torrent: (infohash: string) => ['torrent', infohash] as const,
 	episodeContext: (infohash: string, fileIdx: number) => ['episode-context', infohash, fileIdx] as const,
+	playStatus: (infohash: string, fileIdx: number) => ['play-status', infohash, fileIdx] as const,
+	probe: (infohash: string, fileIdx: number) => ['probe', infohash, fileIdx] as const,
 	summary: ['me', 'summary'],
 	continueWatching: ['continue-watching'],
 	watchlist: ['watchlist'],
@@ -78,6 +82,7 @@ export const read = {
 		queryFn: () => library.list('torrents'),
 		refetchInterval: (q: { state: { data?: LibraryResponse } }) => (somethingMoves(q.state.data) ? FAST : SLOW)
 	}),
+	collection: (id: string) => ({ queryKey: KEYS.collection(id), queryFn: () => library.collection(id) }),
 	summary: () => ({
 		queryKey: KEYS.summary,
 		queryFn: meApi.summary,
@@ -146,10 +151,11 @@ export const read = {
 	}
 };
 
-/** After a release is deleted, paused or a title hidden: what shows it is read again. */
+/** After a release is deleted, paused, grabbed or a title hidden: what shows it is read again,
+ * its title's page and its own included (only what is on screen is asked at once). */
 export const refreshLibrary = () =>
 	Promise.all(
-		[KEYS.library, KEYS.summary, KEYS.continueWatching, KEYS.history, KEYS.watchlist].map((queryKey) =>
+		[KEYS.library, KEYS.collectionAll, KEYS.torrentAll, KEYS.summary, KEYS.continueWatching, KEYS.history, KEYS.watchlist].map((queryKey) =>
 			queryClient.invalidateQueries({ queryKey })
 		)
 	);

@@ -25,7 +25,7 @@ import { startVideoPipeline, type VideoPipelineHandle } from '../decode/video-pi
 import { probeVideoTrack } from '../decode/webcodecs-probe';
 import { createAudioScheduler, type AudioScheduler } from '../audio/audio-scheduler';
 import { WallClock } from '../audio/wall-clock';
-import { irisUrlSource, VOD_RETRY } from '../stream-fetch';
+import { irisUrlSource, VOD_RETRY } from '../stream-source';
 import { mountRenderer, type VideoRenderer } from '../render/renderer-factory';
 import { defaultAudioIndex, manifestAudioTracks, type EngineAudioTrack, type EngineHandle, type EngineMount } from '../engine';
 
@@ -47,30 +47,32 @@ export const mountTierC: EngineMount = async (opts) => {
 		}
 	};
 
-	const videoTrack = (await input.getPrimaryVideoTrack()) ?? null;
-	if (!videoTrack) {
-		await disposeInput();
-		throw new Error('Tier C: no primary video track');
-	}
-	const probe = await probeVideoTrack(videoTrack);
-	if (!probe || !probe.decodes) {
-		await disposeInput();
-		throw new Error('Tier C probe: decoder rejected the keyframe');
-	}
+	// any step that throws (a read error, the AudioContext refused) disposes the input and its
+	// read cache before the mount fails
+	const open = async () => {
+		const videoTrack = (await input.getPrimaryVideoTrack()) ?? null;
+		if (!videoTrack) throw new Error('Tier C: no primary video track');
+		const probe = await probeVideoTrack(videoTrack);
+		if (!probe || !probe.decodes) throw new Error('Tier C probe: decoder rejected the keyframe');
 
-	// Pick the audio track. The chrome's audio picker writes
-	// `audioTrackIndex` (= position in `manifest.audio`); we walk
-	// Mediabunny's input.getAudioTracks() and take that index.
-	// Defaults to the primary track when no index is supplied.
-	const allAudio = await input.getAudioTracks();
-	const audioTrack =
-		audioTrackIndex !== null && audioTrackIndex !== undefined && audioTrackIndex >= 0 && audioTrackIndex < allAudio.length
-			? (allAudio[audioTrackIndex] ?? null)
-			: ((await input.getPrimaryAudioTrack()) ?? null);
-	const audioConfig = audioTrack ? await audioTrack.getDecoderConfig() : null;
+		// Pick the audio track. The chrome's audio picker writes
+		// `audioTrackIndex` (= position in `manifest.audio`); we walk
+		// Mediabunny's input.getAudioTracks() and take that index.
+		// Defaults to the primary track when no index is supplied.
+		const allAudio = await input.getAudioTracks();
+		const audioTrack =
+			audioTrackIndex !== null && audioTrackIndex !== undefined && audioTrackIndex >= 0 && audioTrackIndex < allAudio.length
+				? (allAudio[audioTrackIndex] ?? null)
+				: ((await input.getPrimaryAudioTrack()) ?? null);
+		const audioConfig = audioTrack ? await audioTrack.getDecoderConfig() : null;
+		const scheduler: AudioScheduler = await createAudioScheduler({ sampleRate: audioConfig?.sampleRate });
+		return { videoTrack, probe, audioTrack, audioConfig, scheduler };
+	};
+	const { videoTrack, probe, audioTrack, audioConfig, scheduler } = await open().catch(async (e: unknown) => {
+		await disposeInput();
+		throw e;
+	});
 	const hasAudio = !!(audioTrack && audioConfig);
-
-	const scheduler: AudioScheduler = await createAudioScheduler({ sampleRate: audioConfig?.sampleRate });
 	const wall = new WallClock(() => performance.now());
 
 	let currentSeekTarget = startPosition;

@@ -2,7 +2,7 @@
 // from the torrent snapshot, the probe, the saved position and (Tier F) the server's remux.
 
 import type { PlayStatus, TorrentView } from '@iris/api/client';
-import { percent, speed } from '@iris/api/format';
+import { percent, plural, speed } from '@iris/api/format';
 import { notOnDisk } from './tier.ts';
 
 export type StepState = 'done' | 'current' | 'waiting';
@@ -39,7 +39,7 @@ export interface ReadyInput {
 }
 
 const clamp = (n: number, hi = 100) => Math.min(hi, Math.max(0, n));
-const peers = (n: number) => `${n} peer${n === 1 ? '' : 's'}`;
+const peers = (n: number) => plural(n, 'peer');
 
 /**
  * Nobody is sharing it. The backend says so (`/probe` spends 30 s trying, then answers « no

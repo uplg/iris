@@ -6,7 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { follows, searchDetails, tmdbImage, torrents } from '@iris/api/client';
-	import { fileName, formatRelative, formatSize, kindWord, languageLabel, prettySceneName } from '@iris/api/format';
+	import { fileName, formatRelative, formatSize, kindWord, languageLabel, plural, prettySceneName } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { KEYS, read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -79,6 +79,7 @@
 	const reason = $derived(dead ? `${uid}-dead` : archive ? `${uid}-archive` : undefined);
 
 	const grab = new Grab((href) => goto(href));
+	let grabButton = $state<HTMLElement>();
 	const target = $derived<GrabTarget>({ provider, id, tmdbId, preview: p, fileIdx: chosen });
 
 	const tagChips = $derived(
@@ -91,11 +92,12 @@
 		].filter((c): c is string => !!c)
 	);
 
+	const leechers = $derived(d?.leechers ?? hit?.leechers);
 	const swarm = $derived(
 		[
 			seedersWords(seeders),
-			typeof (d?.leechers ?? hit?.leechers) === 'number' ? `${d?.leechers ?? hit?.leechers} leechers` : null,
-			typeof d?.times_completed === 'number' ? `${d.times_completed.toLocaleString('en')} downloads` : null
+			typeof leechers === 'number' ? plural(leechers, 'leecher') : null,
+			typeof d?.times_completed === 'number' ? plural(d.times_completed, 'download') : null
 		]
 			.filter(Boolean)
 			.join(' · ')
@@ -106,7 +108,7 @@
 		const who = d?.uploader ?? hit?.uploader;
 		return [when, who ? `by ${who}` : null].filter(Boolean).join(' ');
 	});
-	const filesFact = $derived(p ? `${p.files.length} ${p.files.length === 1 ? 'file' : 'files'} · ${formatSize(p.total_size_bytes)}` : '');
+	const filesFact = $derived(p ? `${plural(p.files.length, 'file')} · ${formatSize(p.total_size_bytes)}` : '');
 
 	const isTv = $derived(kind === 'tv');
 	const followed = createQuery(
@@ -122,7 +124,7 @@
 		return follow.run(
 			() => follows.add(title, tmdbId),
 			async () => {
-				await queryClient.invalidateQueries({ queryKey: KEYS.follows });
+				await Promise.all([KEYS.follows, KEYS.watchlist, KEYS.summary].map((queryKey) => queryClient.invalidateQueries({ queryKey })));
 				ui.toast(`You follow ${title}. New episodes show on your home page.`);
 			}
 		);
@@ -172,11 +174,11 @@
 
 			<div class="actions">
 				{#if owned}
-					<button class="btn big" {...pending(grab.busy)} {...unavailable(reason)} onclick={play}>
+					<button bind:this={grabButton} class="btn big" {...pending(grab.busy)} {...unavailable(reason)} onclick={play}>
 						<Icon name="download" busy={grab.busy} />Download anyway
 					</button>
 				{:else}
-					<button class="btn primary big" {...pending(grab.busy)} {...unavailable(reason)} onclick={play}>
+					<button bind:this={grabButton} class="btn primary big" {...pending(grab.busy)} {...unavailable(reason)} onclick={play}>
 						<Icon name="download" busy={grab.busy} />{p ? playWords(p.files, chosen) : 'Download and play'}
 					</button>
 				{/if}
@@ -193,7 +195,7 @@
 			{#if !owned && !reason}
 				<p class="hint">Playback starts once the first minutes are on disk; the rest keeps downloading while you watch.</p>
 			{/if}
-			<GrabNotice {grab} {target} />
+			<GrabNotice {grab} {target} back={() => grabButton} />
 
 			<dl class="facts">
 				{#if swarm}<StatusRow label="Swarm" value={swarm} warn={dead} />{/if}

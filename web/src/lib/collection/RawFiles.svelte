@@ -3,15 +3,13 @@
 	// identity, a pack the parser never split, a movie copy with no clear main file. The server
 	// already orders them (SCENE-aware), so they are listed as they come.
 	import type { CollectionDetail } from '@iris/api/client';
-	import { formatSize, isVideo } from '@iris/api/format';
+	import { fileName, formatSize, isVideo } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import { watchHref } from '#lib/paths.ts';
 
 	let { collection: c }: { collection: CollectionDetail } = $props();
 	const id = $props.id();
-	const files = $derived(
-		c.torrents.flatMap((t) => t.files.filter((f) => isVideo(f.path)).map((f) => ({ t, f, name: f.path.split('/').pop() ?? f.path })))
-	);
+	const files = $derived(c.torrents.flatMap((t) => t.files.filter((f) => isVideo(f.path)).map((f) => ({ t, f, name: fileName(f.path) }))));
 </script>
 
 <section class="files" aria-labelledby="{id}-title">
