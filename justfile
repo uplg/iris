@@ -64,18 +64,23 @@ rehearsal db mode="local":
     fi
     docker image inspect iris-sqlite >/dev/null 2>&1 ||
       printf 'FROM alpine:3\nRUN apk add --no-cache sqlite\nENTRYPOINT ["sqlite3"]\n' | docker build -q -t iris-sqlite - >/dev/null
-    docker rm -f iris-rehearsal >/dev/null 2>&1 || true
+    # a clean stop: librqbit and SQLite save their state (rm -f alone is a SIGKILL)
+    docker stop -t 30 iris-rehearsal >/dev/null 2>&1 || true
+    docker rm iris-rehearsal >/dev/null 2>&1 || true
+    # one secret for the rehearsal's life, so a restart keeps everyone signed in
+    secret_file=~/iris-prod-rehearsal/jwt-secret
+    [ -s "$secret_file" ] || { mkdir -p ~/iris-prod-rehearsal; openssl rand -base64 48 > "$secret_file"; }
     if ! docker volume inspect $vol >/dev/null 2>&1; then
-      sqlite3 "$src" "PRAGMA quick_check;" | grep -qx ok
-      docker volume create $vol >/dev/null
-      docker run --rm -v "$(dirname "$src"):/in:ro" -v $vol:/data alpine:3 \
-        sh -c "cp /in/$(basename "$src") /data/iris.db && chown -R 1001:1001 /data 2>/dev/null; true"
-    fi
-    # No librqbit/ persistence is ever copied: the engine boots with zero torrents,
-    # so nothing announces to a tracker. Library rows stay in the DB.
-    if docker run --rm -v $vol:/data alpine:3 sh -c '[ -n "$(ls -A /data/librqbit 2>/dev/null)" ]'; then
-      echo "refusing: /data/librqbit is not empty (a torrent would announce)" >&2
-      exit 1
+        sqlite3 "$src" "PRAGMA quick_check;" | grep -qx ok
+        docker volume create $vol >/dev/null
+        docker run --rm -v "$(dirname "$src"):/in:ro" -v $vol:/data alpine:3 \
+          sh -c "cp /in/$(basename "$src") /data/iris.db && chown -R 1001:1001 /data 2>/dev/null; true"
+        # No librqbit/ persistence is ever copied: the engine boots with zero torrents, so
+        # nothing announces to a tracker. A torrent grabbed later from the UI is the tester's.
+        if docker run --rm -v $vol:/data alpine:3 sh -c '[ -n "$(ls -A /data/librqbit 2>/dev/null)" ]'; then
+          echo "refusing: /data/librqbit is not empty on a fresh copy (a torrent would announce)" >&2
+          exit 1
+        fi
     fi
     docker run -d --name iris-rehearsal \
       --env-file "$repo/.env" \
@@ -85,7 +90,7 @@ rehearsal db mode="local":
       -e IRIS_SERVER__PUBLIC_URL="$public" \
       -e IRIS_STORAGE__DATA_DIR=/data \
       -e IRIS_STORAGE__DOWNLOAD_DIR=/data/downloads \
-      -e IRIS_AUTH__JWT_SECRET="$(openssl rand -base64 48)" \
+      -e IRIS_AUTH__JWT_SECRET="$(cat "$secret_file")" \
       -e RUST_LOG=info,iris_api=debug,tower_http=info,html5ever=error \
       -v "$repo/config:/srv/iris/config:ro" \
       -v $vol:/data \
