@@ -503,7 +503,7 @@ struct ServiceInner {
     cfg: iris_config::LiveTvConfig,
     http: reqwest::Client,
     signer: proxy::Signer,
-    countries: RwLock<Option<(Arc<Vec<Country>>, Instant)>>,
+    countries: RefreshCell<Vec<Country>>,
     /// Channels per country, sizing the picker (see [`channel_counts`]).
     channel_counts: RefreshCell<ChannelCounts>,
     snapshots: RwLock<HashMap<String, Arc<CountrySnapshot>>>,
@@ -622,7 +622,7 @@ impl LiveTvService {
                 signer: proxy::Signer::new(jwt_secret),
                 cfg,
                 http,
-                countries: RwLock::new(None),
+                countries: RefreshCell::default(),
                 channel_counts: RefreshCell::default(),
                 snapshots: RwLock::new(HashMap::new()),
                 epg: RwLock::new(HashMap::new()),
@@ -652,23 +652,27 @@ impl LiveTvService {
 
     /// Country picker catalogue, cached for a day.
     pub async fn countries(&self) -> Result<Arc<Vec<Country>>, LiveTvError> {
-        if let Some((cached, at)) = self.inner.countries.read().expect("poisoned").clone()
-            && at.elapsed() < Duration::from_hours(24)
-        {
-            return Ok(cached);
-        }
-        let fetched = self
-            .inner
-            .http
-            .get(&self.inner.cfg.countries_url)
-            .send()
+        self.inner
+            .countries
+            .get(Duration::from_hours(24), FAILED_LOAD_RETRY, || async {
+                let loaded = async {
+                    let resp = self
+                        .inner
+                        .http
+                        .get(&self.inner.cfg.countries_url)
+                        .send()
+                        .await
+                        .and_then(reqwest::Response::error_for_status)
+                        .map_err(upstream_err)?;
+                    read_json::<Vec<Country>>(resp).await
+                }
+                .await;
+                loaded
+                    .inspect_err(|e| tracing::warn!(error = %e, "live tv countries fetch failed"))
+                    .ok()
+            })
             .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(upstream_err)?;
-        let fetched: Vec<Country> = read_json(fetched).await?;
-        let fetched = Arc::new(fetched);
-        *self.inner.countries.write().expect("poisoned") = Some((fetched.clone(), Instant::now()));
-        Ok(fetched)
+            .ok_or_else(|| LiveTvError::Upstream("country catalogue unavailable".into()))
     }
 
     /// The countries worth offering, with their channel counts (see
@@ -3128,6 +3132,31 @@ https://a/x.m3u8
             svc.note_encrypted("ie:c", "FairPlay").await,
             Some(LiveTvError::Encrypted)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_failed_country_catalogue_is_not_refetched_per_request() {
+        use axum::routing::get;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let app = axum::Router::new().route(
+            "/countries.json",
+            get(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async { axum::http::StatusCode::BAD_GATEWAY }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let cfg = iris_config::LiveTvConfig {
+            countries_url: format!("http://{addr}/countries.json"),
+            ..Default::default()
+        };
+        let svc = LiveTvService::new(cfg, "test-secret").unwrap();
+        assert!(svc.countries().await.is_err());
+        assert!(svc.countries().await.is_err());
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 
     #[test]
