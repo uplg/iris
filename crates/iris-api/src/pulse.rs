@@ -362,13 +362,12 @@ async fn join_batch(deps: &Deps) -> usize {
             return 0;
         }
     };
-    let catalog_ids: HashSet<String> = deps.providers.catalog_ids().into_iter().collect();
     let mut joined = 0;
     for (i, target) in queue.iter().take(JOIN_BUDGET).enumerate() {
         if i > 0 {
             tokio::time::sleep(JOIN_SPACING).await;
         }
-        let found = join_one(deps, &catalog_ids, target).await;
+        let found = join_one(deps, target).await;
         joined += usize::from(found);
         if let Err(e) =
             iris_db::pulse::record_check(&deps.pool, target.tmdb_id, target.kind.as_wire(), found)
@@ -382,7 +381,7 @@ async fn join_batch(deps: &Deps) -> usize {
 
 /// Search the trackers for one listed title and upsert its best verified
 /// release. `true` when a row was written.
-async fn join_one(deps: &Deps, catalog_ids: &HashSet<String>, target: &Target) -> bool {
+async fn join_one(deps: &Deps, target: &Target) -> bool {
     let tk = TmdbKind::from(target.kind);
     let Ok(id) = u64::try_from(target.tmdb_id) else {
         return false;
@@ -404,14 +403,13 @@ async fn join_one(deps: &Deps, catalog_ids: &HashSet<String>, target: &Target) -
     for title in &titles {
         let agg = deps
             .providers
-            .search_all(&search_query(title, target.kind, meta.year))
+            .search_catalog(&search_query(title, target.kind, meta.year))
             .await;
         let mut candidates: Vec<(SearchResult, Language)> = agg
             .results
             .into_iter()
             .filter(|r| {
-                catalog_ids.contains(&r.provider_id)
-                    && r.is_probably_video()
+                r.is_probably_video()
                     && r.seeders != Some(0)
                     && release_matches(&r.title, &keys, target.kind, meta.year)
             })

@@ -244,10 +244,25 @@ impl ProviderRegistry {
     /// milliseconds. Stragglers degrade to the same per-provider error
     /// entry as any other failure.
     pub async fn search_all(&self, q: &SearchQuery) -> AggregatedResults {
+        self.search_where(q, |_| true).await
+    }
+
+    /// [`Self::search_all`] over the catalogue providers only (see
+    /// [`ProviderPolicy::catalog`]): what the discovery schedulers keep, so
+    /// a search-only tracker isn't queried for results they would drop.
+    pub async fn search_catalog(&self, q: &SearchQuery) -> AggregatedResults {
+        self.search_where(q, |id| self.policy(id).catalog).await
+    }
+
+    async fn search_where(
+        &self,
+        q: &SearchQuery,
+        include: impl Fn(&str) -> bool,
+    ) -> AggregatedResults {
         use futures::stream::{FuturesUnordered, StreamExt};
 
         let mut futs = FuturesUnordered::new();
-        for (id, p) in self.providers.iter() {
+        for (id, p) in self.providers.iter().filter(|(id, _)| include(id)) {
             let p = p.clone();
             let id = id.clone();
             let q = q.clone();
@@ -390,6 +405,32 @@ mod policy_tests {
         ];
         let registry = super::ProviderRegistry::from_entries(&entries).expect("registry");
         assert_eq!(registry.ids(), vec!["nyaa".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn catalog_search_skips_search_only_providers() {
+        let dead = "base_url = \"http://127.0.0.1:1\"\n";
+        let entries = [
+            entry(&format!("id = \"shelf\"\nkind = \"nyaa\"\n{dead}")),
+            entry(&format!(
+                "id = \"search_only\"\nkind = \"nyaa\"\ncatalog = false\n{dead}"
+            )),
+        ];
+        let registry = super::ProviderRegistry::from_entries(&entries).expect("registry");
+        let q = iris_core::search::SearchQuery {
+            q: "x".into(),
+            ..Default::default()
+        };
+        let asked = |agg: super::AggregatedResults| {
+            let mut ids: Vec<String> = agg.providers.into_iter().map(|m| m.id).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(asked(registry.search_catalog(&q).await), ["shelf"]);
+        assert_eq!(
+            asked(registry.search_all(&q).await),
+            ["search_only", "shelf"]
+        );
     }
 
     #[test]
