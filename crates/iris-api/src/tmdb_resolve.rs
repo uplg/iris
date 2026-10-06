@@ -41,20 +41,14 @@ pub async fn resolve_release_name(
     tmdb: &TmdbClient,
     release_name: &str,
     kind_hint: Option<TmdbKind>,
-) -> Option<ResolvedTitle> {
+) -> Option<TmdbSuggestion> {
     let parsed = iris_media::filename::parse(release_name)?;
     let cleaned = iris_media::filename::series_key(&parsed.title);
     if cleaned.len() < 2 {
         tracing::debug!(release_name, parsed_title = %parsed.title, "tmdb_resolve: cleaned title too short");
         return None;
     }
-    let resolved_kind = kind_hint.or_else(|| {
-        if parsed.is_tv() {
-            Some(TmdbKind::Tv)
-        } else {
-            Some(TmdbKind::Movie)
-        }
-    });
+    let resolved_kind = kind_hint.or(Some(parsed_kind(&parsed)));
     let result = resolve_cleaned(
         pool,
         tmdb,
@@ -89,8 +83,8 @@ pub async fn resolve_cleaned(
     cleaned: &str,
     kind_hint: Option<TmdbKind>,
     year_hint: Option<u32>,
-) -> Option<ResolvedTitle> {
-    let kind_str = kind_hint.map(kind_to_str);
+) -> Option<TmdbSuggestion> {
+    let kind_str = kind_hint.map(TmdbKind::as_wire);
     let max_age = Duration::days(MAX_AGE_DAYS);
     // Year-scoped cache key. Two same-title titles of different years
     // (Dune 1984 vs 2021, Midnight 2021 vs 2024) resolve to *different*
@@ -104,7 +98,7 @@ pub async fn resolve_cleaned(
     };
 
     if let Ok(Some(hit)) = tmdb_cache::get(pool, &cache_key, kind_str, max_age).await {
-        return ResolvedTitle::from_entry(&hit, kind_hint);
+        return from_entry(&hit, kind_hint);
     }
 
     // TMDB unreachable: answer nothing and cache nothing, so the next
@@ -126,14 +120,7 @@ pub async fn resolve_cleaned(
     if let Err(e) = tmdb_cache::put(pool, &cache_key, kind_str, &entry).await {
         tracing::warn!(error = %e, cleaned, "tmdb_resolve_cache put failed");
     }
-    top.map(|t| ResolvedTitle {
-        tmdb_id: t.tmdb_id,
-        kind: t.kind,
-        title: t.title,
-        year: t.year,
-        poster_path: t.poster_path,
-        overview: t.overview,
-    })
+    top
 }
 
 /// Candidate list for `(query, kind, year)`. Prefers TMDB's typed
@@ -168,29 +155,26 @@ pub(crate) async fn search_candidates(
     tmdb.multi_search(query).await
 }
 
-#[derive(Debug, Clone)]
-pub struct ResolvedTitle {
-    pub tmdb_id: u64,
-    pub kind: TmdbKind,
-    pub title: String,
-    pub year: Option<u32>,
-    pub poster_path: Option<String>,
-    pub overview: Option<String>,
+/// The TMDB kind a SCENE-parsed release name implies.
+pub(crate) fn parsed_kind(parsed: &iris_media::filename::Parsed) -> TmdbKind {
+    if parsed.is_tv() {
+        TmdbKind::Tv
+    } else {
+        TmdbKind::Movie
+    }
 }
 
-impl ResolvedTitle {
-    fn from_entry(entry: &ResolveEntry, kind_hint: Option<TmdbKind>) -> Option<Self> {
-        let id_i64 = entry.tmdb_id?;
-        let tmdb_id = u64::try_from(id_i64).ok()?;
-        Some(Self {
-            tmdb_id,
-            kind: kind_hint.unwrap_or(TmdbKind::Movie),
-            title: entry.title.clone().unwrap_or_default(),
-            year: entry.year.and_then(|y| u32::try_from(y).ok()),
-            poster_path: entry.poster_path.clone(),
-            overview: entry.overview.clone(),
-        })
-    }
+fn from_entry(entry: &ResolveEntry, kind_hint: Option<TmdbKind>) -> Option<TmdbSuggestion> {
+    let id_i64 = entry.tmdb_id?;
+    let tmdb_id = u64::try_from(id_i64).ok()?;
+    Some(TmdbSuggestion {
+        tmdb_id,
+        kind: kind_hint.unwrap_or(TmdbKind::Movie),
+        title: entry.title.clone().unwrap_or_default(),
+        year: entry.year.and_then(|y| u32::try_from(y).ok()),
+        poster_path: entry.poster_path.clone(),
+        overview: entry.overview.clone(),
+    })
 }
 
 pub(crate) fn pick_best(
@@ -208,10 +192,8 @@ pub(crate) fn pick_best(
     // the wrong poster has already been written. Better to return None
     // and let the user see no poster than show a confidently wrong one.
     if let Some(kh) = kind_hint {
-        let kind_match: Vec<&TmdbSuggestion> = suggestions
-            .iter()
-            .filter(|s| same_kind(s.kind, kh))
-            .collect();
+        let kind_match: Vec<&TmdbSuggestion> =
+            suggestions.iter().filter(|s| s.kind == kh).collect();
         if kind_match.is_empty() {
             tracing::debug!(
                 kind = ?kh,
@@ -242,18 +224,4 @@ pub(crate) fn pick_best(
         return Some(s.clone());
     }
     suggestions.first().cloned()
-}
-
-fn same_kind(a: TmdbKind, b: TmdbKind) -> bool {
-    matches!(
-        (a, b),
-        (TmdbKind::Movie, TmdbKind::Movie) | (TmdbKind::Tv, TmdbKind::Tv)
-    )
-}
-
-fn kind_to_str(k: TmdbKind) -> &'static str {
-    match k {
-        TmdbKind::Movie => "movie",
-        TmdbKind::Tv => "tv",
-    }
 }

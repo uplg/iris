@@ -799,6 +799,18 @@ pub(crate) struct TmdbDiagnoseSuggestion {
     poster_path: Option<String>,
 }
 
+impl From<crate::tmdb::TmdbSuggestion> for TmdbDiagnoseSuggestion {
+    fn from(s: crate::tmdb::TmdbSuggestion) -> Self {
+        Self {
+            kind: s.kind.as_wire().to_owned(),
+            tmdb_id: s.tmdb_id,
+            title: s.title,
+            year: s.year,
+            poster_path: s.poster_path,
+        }
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/api/admin/tmdb/diagnose/{infohash}",
@@ -839,39 +851,18 @@ pub(crate) async fn diagnose_tmdb(
         && cleaned.len() >= 2
     {
         let raw = tmdb.multi_search(&cleaned).await.unwrap_or_default();
-        for s in &raw {
-            suggestions.push(TmdbDiagnoseSuggestion {
-                kind: format!("{:?}", s.kind).to_ascii_lowercase(),
-                tmdb_id: s.tmdb_id,
-                title: s.title.clone(),
-                year: s.year,
-                poster_path: s.poster_path.clone(),
-            });
-        }
+        suggestions.extend(raw.into_iter().map(TmdbDiagnoseSuggestion::from));
         // Re-run resolution end-to-end so the dump reflects what the
         // backfill / ingestion path would actually pick today.
-        let kind_hint = if p.is_tv() {
-            Some(crate::tmdb::TmdbKind::Tv)
-        } else {
-            Some(crate::tmdb::TmdbKind::Movie)
-        };
-        if let Some(r) = crate::tmdb_resolve::resolve_cleaned(
+        picked = crate::tmdb_resolve::resolve_cleaned(
             state.db(),
             tmdb,
             &cleaned,
-            kind_hint,
+            Some(crate::tmdb_resolve::parsed_kind(p)),
             p.year.map(u32::from),
         )
         .await
-        {
-            picked = Some(TmdbDiagnoseSuggestion {
-                kind: format!("{:?}", r.kind).to_ascii_lowercase(),
-                tmdb_id: r.tmdb_id,
-                title: r.title,
-                year: r.year,
-                poster_path: r.poster_path,
-            });
-        }
+        .map(TmdbDiagnoseSuggestion::from);
     }
 
     Ok(Json(TmdbDiagnose {

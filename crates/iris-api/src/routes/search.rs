@@ -224,7 +224,7 @@ async fn match_titles(state: &AppState, results: &mut [iris_core::search::Search
     }
 }
 
-fn title_match_of(m: crate::tmdb_resolve::ResolvedTitle) -> iris_core::search::TitleMatch {
+fn title_match_of(m: crate::tmdb::TmdbSuggestion) -> iris_core::search::TitleMatch {
     iris_core::search::TitleMatch {
         tmdb_id: m.tmdb_id,
         kind: m.kind.into(),
