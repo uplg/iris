@@ -217,9 +217,14 @@ fun WatchScreen(
 
     // Live torrent state — drives the "Downloading …" step in the loading
     // overlay so the user sees real bytes / speed while the source is
-    // still being pulled. Polls every 2s for as long as the screen lives.
+    // still being pulled. Polls every 2s until the player is ready and the
+    // torrent known; playback itself needs only its name and file size.
     LaunchedEffect(infohash) {
         while (true) {
+            if (probe != null && torrent != null) {
+                delay(2_000)
+                continue
+            }
             val url = container.sessionStore.serverUrl.first() ?: run {
                 delay(2_000); continue
             }
@@ -271,7 +276,8 @@ fun WatchScreen(
                 infohash = infohash,
                 fileIdx = fileIdx,
                 probe = probe!!,
-                torrent = torrent,
+                torrentName = torrent?.name,
+                fileSizeBytes = torrent?.files?.firstOrNull { it.index.toInt() == fileIdx }?.sizeBytes ?: 0L,
                 startPositionSec = resumePositionSec,
                 initialAudioIdx = savedAudioIdx,
                 initialSubIdx = savedSubIdx,
@@ -330,7 +336,8 @@ private fun ReadyPlayer(
     infohash: String,
     fileIdx: Int,
     probe: MediaProbe,
-    torrent: TorrentView?,
+    torrentName: String?,
+    fileSizeBytes: Long,
     startPositionSec: Double,
     initialAudioIdx: Int?,
     initialSubIdx: Int?,
@@ -547,8 +554,8 @@ private fun ReadyPlayer(
         }
     }
 
-    val title by remember(torrent?.name, currentEpisode) {
-        mutableStateOf(buildPlaybackTitle(torrent?.name, currentEpisode))
+    val title = remember(torrentName, currentEpisode) {
+        buildPlaybackTitle(torrentName, currentEpisode)
     }
 
     // `preferPlatformAv1` only matters on the direct-play path — the
@@ -741,9 +748,6 @@ private fun ReadyPlayer(
     // Byte offset is a linear approximation from playhead × file_size /
     // duration; the server's `prefetch_range` widens the priority bias
     // around it, so an off-by-a-few-MB estimate is fine.
-    val fileSizeBytes: Long = remember(torrent, fileIdx) {
-        torrent?.files?.firstOrNull { it.index == fileIdx }?.sizeBytes ?: 0L
-    }
     // Latched on every user seek, consumed by the next progress save. The
     // server's reset guard refuses a near-zero position over substantial
     // stored progress unless the save carries `seek = true` (mirror of the
