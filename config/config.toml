@@ -34,8 +34,9 @@ email = "admin@iris.local"
 password = "admin12345"
 
 [live_tv.tuner]
-# AIR 7310T (tunerd) direct tuner access
-enabled = true
+# AIR 7310T (tunerd) direct tuner access. Off: experimental and unfinished;
+# the channels come from iptv-org, the extra playlists and Vavoo meanwhile.
+enabled = false
 base_url = "http://192.168.2.1:8554"
 # Channel ids hydrated at boot and kept warm (instant joins with a full
 # playlist window). Each id pins its WHOLE MUX: every sibling channel on
