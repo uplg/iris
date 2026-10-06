@@ -573,7 +573,7 @@ pub(crate) async fn episode_context(
 
     let mut current = current;
     let (mut next, mut prev) = (next, prev);
-    if let Some(c) = collection.as_ref().filter(|c| c.kind == "tv") {
+    if let Some(c) = collection.as_ref().filter(|c| c.is_tv()) {
         name_episodes(
             &state,
             c.tmdb_id,
@@ -763,7 +763,7 @@ async fn resolve_followish(
         });
     }
     if let Ok(Some(c)) = iris_db::collections::get(state.db(), id).await
-        && c.kind == "tv"
+        && c.is_tv()
         && let Some(norm) = c.parsed_title_normalized
     {
         return Some(FollowishIdentity {

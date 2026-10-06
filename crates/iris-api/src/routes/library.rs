@@ -640,7 +640,7 @@ pub(crate) async fn collection_detail(
     };
 
     let (episodes, available_episodes, season_packs, has_new_since_last_visit) =
-        if collection.kind == "tv" {
+        if collection.is_tv() {
             build_tv_episode_view(
                 &state,
                 &collection,
@@ -1166,7 +1166,7 @@ pub(crate) async fn grab_collection_episode(
     let collection = iris_db::collections::get(state.db(), id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    if collection.kind != "tv" {
+    if !collection.is_tv() {
         return Err(ApiError::BadRequest(
             "grab only valid for TV collections".into(),
         ));

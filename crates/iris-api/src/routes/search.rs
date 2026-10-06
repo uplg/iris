@@ -325,11 +325,9 @@ async fn library_matches_for(
             return Vec::new();
         }
     };
-    let wanted = summaries.into_iter().filter(|c| match q.kind {
-        Some(MediaKind::Movie) => c.kind == "movie",
-        Some(MediaKind::Tv) => c.kind == "tv",
-        None => true,
-    });
+    let wanted = summaries
+        .into_iter()
+        .filter(|c| q.kind.is_none_or(|k| c.kind == k.as_wire()));
     crate::fanout::map_ordered(wanted, |c| library_match(state, q, c, user_id))
         .await
         .into_iter()

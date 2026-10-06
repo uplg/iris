@@ -64,18 +64,12 @@ pub struct CollectionRow {
     pub anilist_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    Tv,
-    Movie,
-}
+/// A collection's kind; the `kind` column holds its wire form.
+pub use iris_core::search::MediaKind as Kind;
 
-impl Kind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Kind::Tv => "tv",
-            Kind::Movie => "movie",
-        }
+impl CollectionRow {
+    pub fn is_tv(&self) -> bool {
+        self.kind == Kind::Tv.as_wire()
     }
 }
 
@@ -110,7 +104,7 @@ pub async fn find_by_parsed_title(
          WHERE parsed_title_normalized = ?1 AND kind = ?2"
     ))
     .bind(normalized)
-    .bind(kind.as_str())
+    .bind(kind.as_wire())
     .fetch_optional(pool)
     .await
 }
@@ -169,7 +163,7 @@ pub async fn find_or_create(
     .bind(id)
     .bind(normalized)
     .bind(display_title)
-    .bind(kind.as_str())
+    .bind(kind.as_wire())
     .bind(now)
     .bind(is_anime)
     .execute(pool)
@@ -242,7 +236,7 @@ pub async fn clear_tmdb_id(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Erro
 /// TV-row in the library.
 pub async fn set_kind(pool: &SqlitePool, id: Uuid, kind: Kind) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE collections SET kind = ?1 WHERE id = ?2")
-        .bind(kind.as_str())
+        .bind(kind.as_wire())
         .bind(id)
         .execute(pool)
         .await?;
@@ -335,7 +329,7 @@ pub async fn create_standalone(
     )
     .bind(id)
     .bind(display_title)
-    .bind(kind.as_str())
+    .bind(kind.as_wire())
     .bind(now)
     .execute(pool)
     .await?;

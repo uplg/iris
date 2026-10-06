@@ -136,7 +136,7 @@ pub async fn scan_collection(
     let Some(collection) = iris_db::collections::get(pool, collection_id).await? else {
         return Ok(());
     };
-    if collection.kind != "tv" {
+    if !collection.is_tv() {
         return Ok(());
     }
     check_one(pool, providers, &collection).await?;

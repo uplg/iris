@@ -247,11 +247,7 @@ async fn affinity(
         iris_db::catalog::recent_watched_titles(state.db(), user_id, HISTORY_TITLES).await?;
     let lookups = watched.iter().filter_map(|w| {
         let id = u64::try_from(w.tmdb_id).ok()?;
-        let kind = if w.kind == "tv" {
-            TmdbKind::Tv
-        } else {
-            TmdbKind::Movie
-        };
+        let kind = TmdbKind::from_wire(&w.kind).unwrap_or(TmdbKind::Movie);
         Some(tmdb.lookup_with_kind(id, Some(kind)))
     });
     let metas = futures::future::join_all(lookups).await;
