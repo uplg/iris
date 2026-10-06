@@ -5,7 +5,8 @@
 	import Meter from '#lib/components/Meter.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { library, me, torrents as torrentsApi, type TorrentView } from '@iris/api/client';
+	import { library, me, type TorrentView } from '@iris/api/client';
+	import { fetchAgain } from '#lib/regrab.ts';
 	import { formatSize } from '@iris/api/format';
 	import { queryClient } from '#lib/query.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
@@ -89,9 +90,8 @@
 	}
 
 	function again(v: Gone) {
-		// the same release, on purpose: the duplicate guard does not apply
 		void g.run(
-			() => torrentsApi.ingest(v.source_provider, v.source_external_id, null, true),
+			() => fetchAgain(v.infohash),
 			async () => {
 				await refetchCollection(collectionId);
 				await goto(watchHref(v.infohash, v.file_idx));

@@ -31,11 +31,12 @@ describe('history page', () => {
 		await expect.element(page.getByText('Nothing watched yet.')).toBeVisible();
 	});
 
-	it('downloads a gone release again by name, then plays it where it stopped', async () => {
-		const api = stubApi({ 'GET /me/history?limit=200': [gone], 'POST /torrents': { infohash: 'm1' } }, { poster_path: null });
+	it('downloads a gone release again, then plays it where it stopped', async () => {
+		const api = stubApi({ 'GET /me/history?limit=200': [gone], 'POST /torrents/m1/regrab': { infohash: 'm1' } }, { poster_path: null });
 		await render(HistoryPage);
 		await page.getByRole('button', { name: 'Download Dune again' }).click();
 		await expect.poll(() => nav.goto.mock.calls.at(-1)?.[0]).toBe('/watch/m1/2');
-		expect(api.sent('POST', '/torrents')[0].body).toEqual({ provider_id: 'c411', external_id: '42', tmdb_id: 7, allow_duplicate: true });
+		// from the provenance the server recorded: the same release, the same files
+		expect(api.sent('POST', '/torrents/m1/regrab')).toHaveLength(1);
 	});
 });

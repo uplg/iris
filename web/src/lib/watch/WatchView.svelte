@@ -29,6 +29,7 @@
 	import EpisodesPanel from './EpisodesPanel.svelte';
 	import GettingReady from './GettingReady.svelte';
 	import { isTheaterKey } from './keys.ts';
+	import { fetchAgain } from '#lib/regrab.ts';
 	import { listsEpisodes, retrySearchQuery, sideRows, type SideRow } from './episodes.ts';
 	import { factsLine } from './facts.ts';
 	import { keptForText, PlaybackChoices } from './prefs.ts';
@@ -264,7 +265,7 @@
 	let regrabbed = $state(false);
 	function regrab() {
 		return g.run(
-			() => torrents.regrab(infohash),
+			() => fetchAgain(infohash),
 			() => {
 				regrabbed = true;
 				void qc.invalidateQueries({ queryKey: KEYS.torrent(infohash) });
