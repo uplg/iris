@@ -233,12 +233,14 @@ fn spawn_background_jobs(
             tmdb.clone(),
             app_state.providers().clone(),
             app_state.cfg().discovery.clone(),
+            app_state.anilist().cloned(),
         );
         pulse::spawn(
             pool.clone(),
             tmdb.clone(),
             app_state.providers().clone(),
             &app_state.cfg().discovery,
+            app_state.anilist().cloned(),
         );
     }
 

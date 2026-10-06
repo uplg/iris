@@ -74,7 +74,9 @@ impl AppState {
         // Keyless public GraphQL client — used to enrich anime
         // collections with an AniList id (poster / recommendations) and
         // to corroborate the offline anime classifier. Best-effort: a
-        // build failure just disables the enrichment.
+        // build failure just disables the enrichment. The one instance:
+        // the schedulers get clones, so its 2 s throttle covers every
+        // AniList request the process makes.
         let anilist = match AniListClient::new() {
             Ok(client) => Some(client),
             Err(e) => {

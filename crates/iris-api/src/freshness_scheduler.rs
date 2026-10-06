@@ -55,17 +55,9 @@ pub fn spawn(
     tmdb: TmdbClient,
     providers: ProviderRegistry,
     cfg: DiscoveryConfig,
+    anilist: Option<AniListClient>,
 ) {
     let providers = Arc::new(providers);
-    // Keyless AniList client for anime correlation (precise poster + the
-    // anime dedup identity). Absence just disables the anime category.
-    let anilist = match AniListClient::new() {
-        Ok(c) => Some(c),
-        Err(e) => {
-            tracing::warn!(error = %e, "anilist init failed; anime correlation disabled");
-            None
-        }
-    };
     tokio::spawn(async move {
         // One slice per (provider, kind); a full pass over `slices` is a cycle.
         // `catalog_ids()`, not `ids()`: a provider can declare itself

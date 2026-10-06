@@ -174,6 +174,7 @@ pub fn spawn(
     tmdb: TmdbClient,
     providers: ProviderRegistry,
     cfg: &DiscoveryConfig,
+    anilist: Option<AniListClient>,
 ) {
     if providers.catalog_ids().is_empty() {
         tracing::info!("pulse scheduler: no catalogue providers; not starting");
@@ -181,9 +182,6 @@ pub fn spawn(
     }
     let simkl = SimklClient::new()
         .inspect_err(|e| tracing::warn!(error = %e, "simkl init failed; pulse runs on TMDB only"))
-        .ok();
-    let anilist = AniListClient::new()
-        .inspect_err(|e| tracing::warn!(error = %e, "anilist init failed; pulse anime stays plain"))
         .ok();
     let deps = Deps {
         pool,
