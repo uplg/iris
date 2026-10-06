@@ -25,6 +25,9 @@ export default defineConfig({
 	define: {
 		__IRIS_WEB_VERSION__: JSON.stringify(pkg.version)
 	},
+	// pre-bundled up front: a test that imports it first otherwise races Vite's on-the-fly
+	// optimisation and fails once on a cold cache
+	optimizeDeps: { include: ['axe-core'] },
 	test: {
 		expect: { requireAssertions: true },
 		restoreMocks: true,
