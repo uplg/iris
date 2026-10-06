@@ -116,7 +116,7 @@ pub(crate) async fn admin_set(
         },
         "provider",
         Some(&id),
-        None,
+        Some(&id),
     )
     .await;
     find().map(Json).ok_or(ApiError::NotFound)
