@@ -221,17 +221,10 @@ async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> Follo
 /// runtime probe matched). Returns None when no verified
 /// collection joins to this normalised name.
 async fn trusted_tmdb_id(pool: &iris_db::SqlitePool, normalized_name: &str) -> Option<i64> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT tmdb_id FROM collections \
-         WHERE parsed_title_normalized = ?1 AND kind = 'tv' AND tmdb_id IS NOT NULL \
-         ORDER BY created_at LIMIT 1",
-    )
-    .bind(normalized_name)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    row.map(|(t,)| t)
+    iris_db::collections::first_tv_tmdb_id(pool, normalized_name)
+        .await
+        .ok()
+        .flatten()
 }
 
 // DELETE /api/me/follows/:id

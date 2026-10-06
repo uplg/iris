@@ -205,6 +205,14 @@ pub async fn list_active_infohashes(pool: &SqlitePool) -> Result<Vec<String>, sq
     Ok(rows.into_iter().map(|(h,)| h).collect())
 }
 
+/// How many torrents are still on disk (not soft-deleted).
+pub async fn count_active(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM torrents WHERE deleted_at IS NULL")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
 /// Distinct TMDB ids currently in the library (not soft-deleted), from each
 /// torrent's parent collection — the authoritative id. The torrent's own
 /// `tmdb_id` is never consulted. Used to exclude already-owned titles from the
@@ -500,6 +508,7 @@ mod tests {
             }
         }
         assert_eq!(lifetime_bytes(&pool).await.unwrap(), (350, 300));
+        assert_eq!(count_active(&pool).await.unwrap(), 1);
     }
 
     /// Re-grabbing an evicted torrent must reset `finished_at`: the payload

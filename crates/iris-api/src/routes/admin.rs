@@ -552,10 +552,9 @@ pub(crate) async fn storage_stats(
     let used = iris_torrent::gc::dir_size(&cfg.download_dir)
         .await
         .unwrap_or(0);
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM torrents WHERE deleted_at IS NULL")
-        .fetch_one(state.db())
+    let count = iris_db::torrents::count_active(state.db())
         .await
-        .unwrap_or((0,));
+        .unwrap_or(0);
     let (total_uploaded_bytes, total_downloaded_bytes) =
         iris_db::torrents::lifetime_bytes(state.db())
             .await
@@ -567,7 +566,7 @@ pub(crate) async fn storage_stats(
         target_bytes: max * u64::from(cfg.cleanup_target_pct) / 100,
         threshold_pct: cfg.cleanup_threshold_pct,
         target_pct: cfg.cleanup_target_pct,
-        torrent_count: count.0,
+        torrent_count: count,
         total_uploaded_bytes,
         total_downloaded_bytes,
     }))
