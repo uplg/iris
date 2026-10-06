@@ -396,19 +396,9 @@ mod tests {
         }
     }
 
-    async fn migrated_pool() -> iris_db::SqlitePool {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
-        iris_db::migrate::run(&pool).await.expect("run migrations");
-        pool
-    }
-
     #[tokio::test]
     async fn register_then_sign_in_with_the_same_device() {
-        let db = migrated_pool().await;
+        let db = iris_db::test_support::migrated_pool().await;
         let user = iris_db::users::create(
             &db,
             iris_db::users::NewUser {

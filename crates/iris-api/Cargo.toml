@@ -67,5 +67,6 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+iris-db = { workspace = true, features = ["test-support"] }
 passkey = { workspace = true }
 async-trait = { workspace = true }

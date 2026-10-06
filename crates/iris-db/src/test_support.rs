@@ -1,3 +1,5 @@
+//! Test fixtures: a migrated in-memory pool and users.
+
 use std::str::FromStr;
 
 use chrono::Utc;
@@ -9,6 +11,9 @@ use uuid::Uuid;
 /// Single-connection in-memory pool (every query hits the same DB), migrated
 /// through the latest schema, foreign keys ON like `pool::connect` so the
 /// cascades under test are the prod ones.
+///
+/// # Panics
+/// When the in-memory database can't be opened or migrated.
 pub async fn migrated_pool() -> SqlitePool {
     let opts = SqliteConnectOptions::from_str("sqlite::memory:")
         .expect("parse sqlite url")
@@ -22,10 +27,14 @@ pub async fn migrated_pool() -> SqlitePool {
     pool
 }
 
+/// # Panics
+/// When the insert fails.
 pub async fn make_user(pool: &SqlitePool) -> UserId {
     make_named_user(pool, "T").await
 }
 
+/// # Panics
+/// When the insert fails.
 pub async fn make_named_user(pool: &SqlitePool, display_name: &str) -> UserId {
     let id = Uuid::new_v4();
     sqlx::query(
