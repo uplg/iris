@@ -200,6 +200,38 @@ export function onDay(iso: string | number, now = Date.now()): string {
 	return `on ${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })}`;
 }
 
+/** A recent moment to the minute, older ones by their day: « just now », « 12 min ago »,
+ * then as {@link onDay} (« yesterday at 21:04 », « on Monday »). */
+export function ago(iso: string | number, now = Date.now()): string {
+	const secs = (now - new Date(iso).getTime()) / 1000;
+	if (secs >= 0 && secs < 60) return 'just now';
+	if (secs >= 0 && secs < 3600) return `${Math.floor(secs / 60)} min ago`;
+	return onDay(iso, now);
+}
+
+/** A day's heading in a list by day: « Today », « Yesterday », « Saturday 4 October »
+ * (with its year when not this one). */
+export function dayHeading(iso: string | number, now = Date.now()): string {
+	const d = new Date(iso);
+	const days = Math.round((midnight(d.getTime()) - midnight(now)) / DAY_MS);
+	if (days === 0) return 'Today';
+	if (days === -1) return 'Yesterday';
+	const sameYear = d.getFullYear() === new Date(now).getFullYear();
+	const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', ...(sameYear ? {} : { year: 'numeric' }) });
+	return `${d.toLocaleDateString('en-GB', { weekday: 'long' })} ${date}`;
+}
+
+/** How long until `iso`: « in 3 days », « tomorrow at 10:00 », « in 5 h »; « now » once past. */
+export function until(iso: string | number, now = Date.now()): string {
+	const secs = (new Date(iso).getTime() - now) / 1000;
+	if (secs <= 0) return 'now';
+	if (secs < 3600) return `in ${Math.max(1, Math.round(secs / 60))} min`;
+	if (secs < 12 * 3600) return `in ${Math.round(secs / 3600)} h`;
+	const days = Math.round((midnight(new Date(iso).getTime()) - midnight(now)) / DAY_MS);
+	if (days <= 1) return onDay(iso, now);
+	return `in ${days} days`;
+}
+
 /** How long since `iso`: « for 12 min », « for 1 h 5 min », « for under a minute ». */
 export function since(iso: string, now = Date.now()): string {
 	const secs = Math.max(0, (now - new Date(iso).getTime()) / 1000);

@@ -250,7 +250,9 @@ export const admin = {
 	/** Turn a tracker on or off without a restart; answers its new state. */
 	setProviderEnabled: (id: string, enabled: boolean) => api.put<ProviderStatus>(`/admin/providers/${seg(id)}`, { enabled }),
 	activeSessions: () => api.get<ActiveSession[]>('/admin/active-sessions'),
-	watchHistory: (limit?: number) => api.get<WatchHistoryEntry[]>(`/admin/watch-history${limit ? `?limit=${limit}` : ''}`),
+	/** The household's plays, newest first: one page of them, one person's or one kind's. */
+	watchHistory: (q: WatchHistoryFilter & { limit?: number; offset?: number } = {}) =>
+		api.get<WatchHistoryEntry[]>(`/admin/watch-history${queryString(q)}`),
 	/** Full watch history for one user — admin drill-down equivalent of
 	 *  `me.history()`. */
 	userHistory: (userId: string, limit?: number, offset?: number) =>
@@ -262,14 +264,28 @@ export const admin = {
 		),
 	/** Persisted "who changed/deleted what" log — deletions, password resets,
 	 *  admin-triggered GC. */
-	auditLog: (limit?: number, offset?: number) =>
-		api.get<AuditLogEntry[]>(
-			`/admin/audit-log?${new URLSearchParams({
-				...(limit ? { limit: String(limit) } : {}),
-				...(offset ? { offset: String(offset) } : {})
-			}).toString()}`
-		)
+	auditLog: (q: AuditLogFilter & { limit?: number; offset?: number } = {}) => api.get<AuditLogEntry[]>(`/admin/audit-log${queryString(q)}`)
 };
+
+/** Which plays of the household's history (`admin.watchHistory`). */
+export type WatchHistoryFilter = {
+	user_id?: string;
+	kind?: MediaKind;
+};
+
+/** Which entries of the audit log: an action (`user.delete`) or its family (`user`), an actor. */
+export type AuditLogFilter = {
+	action?: string;
+	actor_id?: string;
+};
+
+/** `?a=1&b=x` from the values given (nothing for none: no `?`). */
+function queryString(q: Record<string, string | number | undefined>): string {
+	const params = new URLSearchParams();
+	for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== '' && v !== 0) params.set(k, String(v));
+	const s = params.toString();
+	return s ? `?${s}` : '';
+}
 
 export type DeviceView = components['schemas']['DeviceView'];
 
@@ -409,6 +425,8 @@ export type ProgressBody = {
 	/** Whether the player is actively playing (vs paused) at this
 	 *  heartbeat. Feeds the admin "Now watching" presence state. */
 	playing?: boolean;
+	/** Meant to play but waiting for data (buffering, seeking): « Buffering » in « Now watching ». */
+	buffering?: boolean;
 	/** True when this save follows a deliberate user seek. Required for
 	 *  a near-zero position to overwrite substantial stored progress —
 	 *  without it the server's reset guard treats the save as an

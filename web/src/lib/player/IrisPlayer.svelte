@@ -59,6 +59,8 @@
 		onDurationChange?: (seconds: number) => void;
 		onSeeking?: (seconds: number) => void;
 		onPause?: (seconds: number) => void;
+		/** The player starts or stops making the person wait (buffering, seeking). */
+		onBusyChange?: (busy: boolean) => void;
 		onEnded?: () => void;
 		onError: (message: string) => void;
 		onAudioTrackChange?: (index: number) => void;
@@ -150,11 +152,15 @@
 						props.onTimeUpdate?.(t);
 					},
 					onBusyChange: (b) => {
-						if (!cancelled) media.busy = b;
+						if (cancelled) return;
+						media.busy = b;
+						props.onBusyChange?.(b);
 					},
 					// canvas tiers have no element for `onBusyChange`: ready clears the spinner
 					onReady: () => {
-						if (!cancelled) media.busy = false;
+						if (cancelled) return;
+						media.busy = false;
+						props.onBusyChange?.(false);
 					},
 					onDurationChange: (d) => {
 						if (cancelled) return;

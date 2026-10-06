@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fileName, onDay, plural, since } from '@iris/api/format';
-import { progressWords, watchedShare, whatWatched } from './words.ts';
+import { playName, progressShort, progressWords, watchedShare, whatWatched } from './words.ts';
 
 const now = new Date(2026, 9, 6, 15, 0).getTime();
 
@@ -51,5 +51,34 @@ describe('what was watched', () => {
 		expect(plural(1, 'title')).toBe('1 title');
 		expect(plural(3, 'title')).toBe('3 titles');
 		expect(plural(2, 'entry', 'entries')).toBe('2 entries');
+	});
+});
+
+describe('a play, named as people name it', () => {
+	it('the title and its episode, never the release name when the title is known', () => {
+		const ep = { collection_title: 'Severance', torrent_name: 'Severance.S02.1080p.WEB-GRP', kind: 'tv', season: 2, episode: 4 };
+		expect(playName({ ...ep, episode_title: 'Woe’s Hollow' })).toEqual({ title: 'Severance', detail: 'S2:E4 · Woe’s Hollow' });
+		expect(playName(ep)).toEqual({ title: 'Severance', detail: 'S2:E4' });
+		expect(playName({ collection_title: 'One Piece', kind: 'tv', absolute_episode: 1156, season: 21, episode: 3 }).detail).toBe(
+			'Episode 1156'
+		);
+		expect(playName({ collection_title: 'Dune', kind: 'movie', year: 2021 })).toEqual({ title: 'Dune', detail: 'Film · 2021' });
+		expect(playName({ collection_title: 'Dune', kind: 'movie' }).detail).toBe('Film');
+	});
+
+	it('no title: the release name cleaned up; a pack file still names its episode', () => {
+		expect(playName({ torrent_name: 'Mercato.2025.FRENCH.1080p.WEB.H265-BOUBA' }).title).toBe('Mercato (2025)');
+		expect(playName({ torrent_name: 'Show.S01.1080p', file_path: 'Show.S01/Show.S01E03.1080p.mkv' })).toEqual({
+			title: 'Show',
+			detail: 'S1:E3'
+		});
+		expect(playName({}).title).toBe('Something unnamed');
+	});
+
+	it('how far, short', () => {
+		expect(progressShort(10, 100, true)).toBe('Finished');
+		expect(progressShort(20, 3000)).toBe('Just started');
+		expect(progressShort(42 * 60, 130 * 60)).toBe('42 min of 2 h 10 min');
+		expect(progressShort(1930, null)).toBe('Stopped at 32:10');
 	});
 });
