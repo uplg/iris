@@ -227,7 +227,13 @@ fun IrisRoot(
                     onPickFile = { infohash, fileIdx ->
                         navController.navigate(Routes.Watch(infohash, fileIdx))
                     },
-                    onOpenCollection = { collectionId -> navController.navigate(Routes.Collection(collectionId)) },
+                    onOpenCollection = { collectionId ->
+                        // Reached from that title's page: back to it, not a second copy on the stack.
+                        val from = navController.previousBackStackEntry
+                        val cameFrom = from?.destination?.hasRoute<Routes.Collection>() == true &&
+                            from.toRoute<Routes.Collection>().collectionId == collectionId
+                        if (cameFrom) navController.popBackStack() else navController.navigate(Routes.Collection(collectionId))
+                    },
                     onBack = { navController.popBackStack() },
                 )
             }

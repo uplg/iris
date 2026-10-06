@@ -55,11 +55,12 @@ class FocusReturn internal constructor(last: String?) {
      * Asks focus back on [key] once the screen has settled (the next frame): else on the items
      * after it in [among] (the list as it was with [key] in it), then those before it, nearest
      * first, else on the fallback of [rememberFocusReturn]. [leaving]: the item is about to go
-     * (the server is removing it), so its neighbours come first.
+     * (the server is removing it), so its neighbours come first; the last one leaving goes to
+     * the fallback, never to itself (focus would vanish with it).
      */
     fun returnTo(key: String, among: List<String> = emptyList(), leaving: Boolean = false) {
         val near = neighboursOf(among, key)
-        pending = if (leaving) near + key else listOf(key) + near
+        pending = if (leaving) near else listOf(key) + near
     }
 
     internal fun take(): List<String>? = pending.also { pending = null }

@@ -1,10 +1,13 @@
 package studio.kahn.iris.tv.ui.screens.library
 
 import androidx.compose.runtime.Immutable
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -16,11 +19,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
+import studio.kahn.iris.tv.data.libraryCollections
+import studio.kahn.iris.tv.data.libraryTorrents
+import studio.kahn.iris.tv.ui.state.BusyActions
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.DismissGoneRequest
 import studio.kahn.iris.tv.data.HomeSummary
-import studio.kahn.iris.tv.data.LibraryResponse
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.WatchlistItem
@@ -29,7 +34,6 @@ import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
-import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.format.IN_PROGRESS
 import studio.kahn.iris.tv.ui.format.allWatched
 import studio.kahn.iris.tv.ui.format.markedWatchedWords
@@ -132,8 +136,6 @@ private data class Controls(
     val view: LibraryView,
     val filters: TitleFilters,
     val releaseQuery: String,
-    val busy: Set<String>,
-    val notice: Notice?,
 )
 
 private fun List<TorrentView>.anyMoving() = any(::moving)
@@ -144,13 +146,17 @@ private fun List<TorrentView>.anyMoving() = any(::moving)
  * Reads poll only while the screen is started ([pollWhileStarted]), quick while a download
  * moves; every action waits for the server and reads again before showing a change.
  */
-class LibraryViewModel(private val container: AppContainer, initialView: LibraryView?) : ViewModel() {
+class LibraryViewModel(
+    private val container: AppContainer,
+    initialView: LibraryView?,
+    private val saved: SavedStateHandle,
+) : ViewModel() {
     private val torrents = LiveRead({ t: Torrents? -> if (t?.items?.anyMoving() == true) FAST_MS else SLOW_MS }) {
-        val v = (container.api().library("torrents") as LibraryResponse.TorrentsWrapper).value
+        val v = container.api().libraryTorrents()
         Torrents(v.items, v.totalUploadedBytes, v.totalDownloadedBytes)
     }
     private val collections = LiveRead({ _: List<CollectionListItem>? -> if (torrents.value?.items?.anyMoving() == true) 10_000L else 60_000L }) {
-        (container.api().library("collections") as LibraryResponse.CollectionsWrapper).value.items
+        container.api().libraryCollections().items
     }
     private val summary = LiveRead({ s: HomeSummary? -> if ((s?.downloading ?: 0) > 0) FAST_MS else SLOW_MS }) {
         container.api().homeSummary()
@@ -158,12 +164,34 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
     private val watching = LiveRead({ _: List<ContinueWatchingItem>? -> 60_000L }) { container.api().continueWatching() }
     private val watchlist = LiveRead({ _: List<WatchlistItem>? -> 5 * 60_000L }) { container.api().watchlist() }
 
+    // The filters, the release search and the title opened last survive the process being
+    // killed under the player.
     private val controls = MutableStateFlow(
-        Controls(initialView ?: LibraryView.Titles, TitleFilters(), "", emptySet(), null),
+        Controls(
+            view = saved.get<String>(K_VIEW)?.let { v -> LibraryView.entries.firstOrNull { it.name == v } } ?: initialView ?: LibraryView.Titles,
+            filters = TitleFilters(
+                query = saved.get<String>(K_QUERY).orEmpty(),
+                type = saved.get<String>(K_TYPE)?.let { t -> TypeFilter.entries.firstOrNull { it.name == t } } ?: TypeFilter.All,
+                show = saved.get<String>(K_SHOW)?.let { t -> ShowFilter.entries.firstOrNull { it.name == t } } ?: ShowFilter.All,
+                sort = saved.get<String>(K_SORT)?.let { t -> Sort.entries.firstOrNull { it.name == t } } ?: Sort.Recent,
+            ),
+            releaseQuery = saved.get<String>(K_RELEASE_QUERY).orEmpty(),
+        ),
     )
-    private var chosen = false
+    private val actions = BusyActions(viewModelScope)
+    private var chosen = saved.contains(K_VIEW)
 
     init {
+        viewModelScope.launch {
+            controls.collect { c ->
+                if (chosen) saved[K_VIEW] = c.view.name
+                saved[K_QUERY] = c.filters.query
+                saved[K_TYPE] = c.filters.type.name
+                saved[K_SHOW] = c.filters.show.name
+                saved[K_SORT] = c.filters.sort.name
+                saved[K_RELEASE_QUERY] = c.releaseQuery
+            }
+        }
         if (initialView == null) {
             viewModelScope.launch {
                 val kept = container.prefsStore.libraryView.first()
@@ -174,14 +202,19 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
     }
 
     /** The title opened last: coming back lands on it. */
-    var lastOpened: String? = null
+    var lastOpened: String?
+        get() = saved[K_LAST_OPENED]
+        set(value) {
+            saved[K_LAST_OPENED] = value
+        }
 
+    // Only the view shown is built, off the main thread (every 3 s while a download moves).
     val state: StateFlow<LibraryUiState> = combine(
-        controls,
+        combine(controls, actions.state, ::Pair),
         collections.state,
         torrents.state,
         combine(summary.state, watching.state, watchlist.state, ::Triple),
-    ) { c, cols, tors, (sum, cw, wl) ->
+    ) { (c, a), cols, tors, (sum, cw, wl) ->
         val torrentList = tors.valueOrNull?.items.orEmpty()
         val counts = cols.valueOrNull?.let(::titleCounts)
         LibraryUiState(
@@ -189,12 +222,16 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
             facts = libraryFacts(counts, sum.valueOrNull),
             filters = c.filters,
             releaseQuery = c.releaseQuery,
-            titles = cols.map { titlesUi(it, torrentList, wl.valueOrNull.orEmpty(), c.filters) },
-            downloads = tors.map { downloadsUi(it, cols.valueOrNull.orEmpty(), cw.valueOrNull.orEmpty(), c.releaseQuery) },
-            busy = c.busy,
-            notice = c.notice,
+            titles = if (c.view == LibraryView.Titles) cols.map { titlesUi(it, torrentList, wl.valueOrNull.orEmpty(), c.filters) } else Loadable.Loading,
+            downloads = if (c.view == LibraryView.Downloads) {
+                tors.map { downloadsUi(it, cols.valueOrNull.orEmpty(), cw.valueOrNull.orEmpty(), c.releaseQuery) }
+            } else {
+                Loadable.Loading
+            },
+            busy = a.busy,
+            notice = a.notice,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), LibraryUiState(view = controls.value.view))
+    }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), LibraryUiState(view = controls.value.view))
 
     /** Polls every read; run by the screen only while it is started. */
     suspend fun pollWhileStarted() = coroutineScope {
@@ -212,7 +249,8 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
     /** The view chosen, kept on this device for the next visit. */
     fun choose(view: LibraryView) {
         chosen = true
-        controls.update { it.copy(view = view, notice = null) }
+        controls.update { it.copy(view = view) }
+        actions.say(null)
         viewModelScope.launch { container.prefsStore.setLibraryView(view.name) }
     }
 
@@ -259,17 +297,20 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
     }
 
     private fun act(key: String, done: String, block: suspend CoroutineScope.() -> Unit) {
-        if (key in controls.value.busy) return
-        controls.update { it.copy(busy = it.busy + key, notice = null) }
-        viewModelScope.launch {
-            val notice = try {
-                coroutineScope { block() }
-                Notice(done, failed = false)
-            } catch (e: Exception) {
-                Notice(e.toUiError().message, failed = true)
-            }
-            controls.update { it.copy(busy = it.busy - key, notice = notice) }
+        actions.runSaying(key) {
+            block()
+            done
         }
+    }
+
+    private companion object {
+        const val K_VIEW = "library_view"
+        const val K_QUERY = "library_query"
+        const val K_TYPE = "library_type"
+        const val K_SHOW = "library_show"
+        const val K_SORT = "library_sort"
+        const val K_RELEASE_QUERY = "library_release_query"
+        const val K_LAST_OPENED = "library_last_opened"
     }
 }
 

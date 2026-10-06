@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -14,13 +16,14 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
 import studio.kahn.iris.tv.ui.format.audioChoiceWords
 import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
+import studio.kahn.iris.tv.data.TmdbMetadataCache
+import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.CollectionDetail
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.CreateFollowRequest
@@ -37,7 +40,6 @@ import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
-import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.format.allWatched
 import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.formatSize
@@ -46,6 +48,7 @@ import studio.kahn.iris.tv.ui.format.markedWatchedWords
 import studio.kahn.iris.tv.ui.format.recentTime
 import studio.kahn.iris.tv.ui.components.Notice
 import studio.kahn.iris.tv.ui.state.LiveRead
+import studio.kahn.iris.tv.ui.state.BusyActions
 import studio.kahn.iris.tv.ui.state.FAST_MS
 
 /** One episode row, its words already said. */
@@ -137,12 +140,6 @@ data class CollectionUiState(
 @Immutable
 data class PlayEvent(val infohash: String, val fileIdx: Int, val replace: Boolean)
 
-@Immutable
-private data class CollectionControls(
-    val season: Long? = null,
-    val busy: Set<String> = emptySet(),
-    val notice: Notice? = null,
-)
 
 /**
  * A title of the library (web `/collection/[id]`): its head, the episodes of a series (season
@@ -161,29 +158,32 @@ class CollectionViewModel(private val container: AppContainer, private val colle
     private val prefs = LiveRead({ _: PlaybackPrefsResponse? -> 10 * 60_000L }) {
         container.api().seriesPlaybackPreferences(collectionId)
     }
-    private val controls = MutableStateFlow(CollectionControls())
+    private val season = MutableStateFlow<Long?>(null)
+    private val actions = BusyActions(viewModelScope)
     private val play = MutableStateFlow<PlayEvent?>(null)
     val playEvents: StateFlow<PlayEvent?> = play
     /** The episode row pressed last: coming back from the player lands on it. */
     var lastRow: String? = null
     private var decided = false
-    private var metaFor: Long? = null
-    private var prefsAsked = false
+    private var metaAsking = false
+    private var prefsAsking = false
 
+    // Built off the main thread: a long series (1000+ rows) every few seconds while it downloads.
     val state: StateFlow<CollectionUiState> = combine(
         detail.state,
         combine(meta, watching, progress, ::Triple),
         prefs.state,
-        controls,
-    ) { d, (m, cw, p), pr, c ->
+        season,
+        actions.state,
+    ) { d, (m, cw, p), pr, chosen, a ->
         val series = d.valueOrNull?.kind == MediaKind.tv
         CollectionUiState(
-            page = d.map { collectionPage(it, m, cw, p, c.season) },
+            page = d.map { collectionPage(it, m, cw, p, chosen) },
             languages = if (series) pr.map { languagesUi(it, d.valueOrNull, m) } else null,
-            busy = c.busy,
-            notice = c.notice,
+            busy = a.busy,
+            notice = a.notice,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), CollectionUiState())
+    }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), CollectionUiState())
 
     /** Reads while the screen is started; the side reads follow each change of the title. */
     suspend fun pollWhileStarted() = coroutineScope {
@@ -196,14 +196,27 @@ class CollectionViewModel(private val container: AppContainer, private val colle
                     decided = true
                     straightToPlayer(c)?.let { play.value = PlayEvent(it.infohash, it.fileIdx, replace = true) }
                 }
-                if (c.kind == MediaKind.tv && !prefsAsked) {
-                    prefsAsked = true
-                    launch { prefs.refresh() }
+                // Until they are in: a failed or cut read is asked again on the next change or start.
+                if (c.kind == MediaKind.tv && prefs.state.value !is Loadable.Ready && !prefsAsking) {
+                    prefsAsking = true
+                    launch {
+                        try {
+                            prefs.refresh()
+                        } finally {
+                            prefsAsking = false
+                        }
+                    }
                 }
                 val tmdb = c.tmdbId
-                if (tmdb != null && tmdb != metaFor) {
-                    metaFor = tmdb
-                    launch { meta.value = runCatching { container.api().tmdbMetadata(tmdb, c.kind.value) }.getOrNull() }
+                if (tmdb != null && meta.value == null && !metaAsking) {
+                    metaAsking = true
+                    launch {
+                        try {
+                            meta.value = TmdbMetadataCache.get(container.api(), tmdb, c.kind.value)
+                        } finally {
+                            metaAsking = false
+                        }
+                    }
                 }
                 val known = progress.value.keys
                 if (c.torrents.any { it.infohash !in known }) launch { readProgress(c) }
@@ -211,23 +224,29 @@ class CollectionViewModel(private val container: AppContainer, private val colle
         }
     }
 
-    fun retry() = detail.poke()
+    fun retry() {
+        detail.poke()
+        if (detail.value?.kind == MediaKind.tv) viewModelScope.launch { prefs.refresh() }
+    }
 
-    fun chooseSeason(season: Long) = controls.update { it.copy(season = season) }
+    fun chooseSeason(season: Long) {
+        this.season.value = season
+    }
 
     fun consumePlay() {
         play.value = null
     }
 
     private suspend fun readSides() {
-        watching.value = runCatching { container.api().continueWatching() }.getOrDefault(watching.value)
+        bestEffort { container.api().continueWatching() }?.let { watching.value = it }
         detail.value?.let { readProgress(it) }
     }
 
     private suspend fun readProgress(c: CollectionDetail) = coroutineScope {
         val api = container.api()
-        val reads = c.torrents.map { t -> async { t.infohash to runCatching { api.torrentProgress(t.infohash) }.getOrDefault(emptyList()) } }
-        progress.value = reads.awaitAll().toMap()
+        // A failed read stays out of the map, so it is read again (never taken for "nothing played").
+        val reads = c.torrents.map { t -> async { bestEffort { api.torrentProgress(t.infohash) }?.let { t.infohash to it } } }
+        progress.value = reads.awaitAll().filterNotNull().toMap()
     }
 
     private suspend fun refreshAll() = coroutineScope {
@@ -324,20 +343,7 @@ class CollectionViewModel(private val container: AppContainer, private val colle
     }
 
     private fun act(key: String, onSuccess: (() -> Unit)?, block: suspend CoroutineScope.() -> String?) {
-        if (key in controls.value.busy) return
-        controls.update { it.copy(busy = it.busy + key, notice = null) }
-        viewModelScope.launch {
-            var ok = false
-            val notice = try {
-                val said = coroutineScope { block() }
-                ok = true
-                said?.let { Notice(it, failed = false) }
-            } catch (e: Exception) {
-                Notice(e.toUiError().message, failed = true)
-            }
-            controls.update { it.copy(busy = it.busy - key, notice = notice) }
-            if (ok) onSuccess?.invoke()
-        }
+        actions.runSaying(key, onSuccess, block)
     }
 }
 
@@ -398,7 +404,7 @@ fun collectionPage(
         seasonFact = shown.takeIf { it.isNotEmpty() }?.let(::episodesFact),
         packs = current?.packs.orEmpty().map { p ->
             PackUi(
-                key = "${p.season}-${p.language ?: "_"}-${p.indexerTorrentId}",
+                key = "${p.season}-${p.language ?: "_"}-${p.indexerProvider}-${p.indexerTorrentId}",
                 title = "${seasonName(p.season)}: the full season is available in one release",
                 facts = packFacts(p),
                 season = p.season,

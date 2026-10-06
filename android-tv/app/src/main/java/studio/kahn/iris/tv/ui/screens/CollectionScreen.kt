@@ -90,6 +90,8 @@ import studio.kahn.iris.tv.ui.screens.library.EpisodeAction
 import studio.kahn.iris.tv.ui.screens.library.EpisodeRowUi
 import studio.kahn.iris.tv.ui.screens.library.FileUi
 import studio.kahn.iris.tv.ui.components.rememberFocusReturn
+import studio.kahn.iris.tv.ui.components.focusReturn
+import androidx.compose.runtime.withFrameNanos
 import studio.kahn.iris.tv.ui.screens.library.GoneUi
 import studio.kahn.iris.tv.ui.screens.library.LanguagesUi
 import studio.kahn.iris.tv.ui.screens.library.PackUi
@@ -257,6 +259,13 @@ private fun TitlePage(
 
     LaunchedEffect(Unit) {
         val index = p.episodes.indexOfFirst { it.key == focusKey }
+        val left = keys.last
+        if (left != null && !left.startsWith("ep:")) {
+            // Back from a release's files or the player: the row left, when it is in sight.
+            snapshotFlow { list.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
+            withFrameNanos { }
+            if (keys.focusLast()) return@LaunchedEffect
+        }
         if (focusKey != null && index >= 0) {
             val item = episodesStart + index
             if (list.layoutInfo.visibleItemsInfo.none { it.index == item }) list.scrollToItem(item)
@@ -267,7 +276,13 @@ private fun TitlePage(
             runCatching { playFocus.requestFocus() }
         }
     }
-    BackHandler(enabled = sheet == null && deleting == null) {
+    // A languages sheet with nothing to show is not open (it draws nothing).
+    val sheetShown = when (sheet) {
+        null -> false
+        Sheet.Languages -> state.languages?.valueOrNull != null
+        is Sheet.Episode -> true
+    }
+    BackHandler(enabled = !sheetShown && deleting == null) {
         if (atPlay && list.firstVisibleItemIndex == 0) {
             actions.onBack()
         } else {
@@ -309,8 +324,8 @@ private fun TitlePage(
             }
             if (p.showEpisodes) {
                 item(key = "episodes") { EpisodesHead(p, actions.onSeason) }
-                items(p.packs, key = { "pack:${it.key}" }) { pack -> PackBlock(pack, state.busy, actions.onPack) }
-                items(p.episodes, key = { "ep:${it.key}" }) { row ->
+                items(p.packs, key = { "pack:${it.key}" }, contentType = { "pack" }) { pack -> PackBlock(pack, state.busy, actions.onPack) }
+                items(p.episodes, key = { "ep:${it.key}" }, contentType = { "episode" }) { row ->
                     EpisodeCard(
                         row = row,
                         busy = row.actions.any { it.busyKey() in state.busy },
@@ -327,12 +342,12 @@ private fun TitlePage(
             item(key = "on-disk") {
                 SectionTitle("On disk", meta = plural(p.onDisk.size, "release"), modifier = Modifier.padding(top = IrisSpace.s7))
             }
-            items(p.onDisk, key = { "disk:${it.infohash}" }) { row ->
+            items(p.onDisk, key = { "disk:${it.infohash}" }, contentType = { "disk" }) { row ->
                 ReleaseItem(
                     row,
                     actions.onRelease.copy(onDelete = { deleting = it }),
                     state.busy,
-                    Modifier.focusRequester(keys.requester("disk:${row.infohash}")),
+                    Modifier.focusReturn(keys, "disk:${row.infohash}"),
                     showTitle = false,
                 )
             }
@@ -347,14 +362,16 @@ private fun TitlePage(
             }
             if (p.showFiles) {
                 item(key = "files") { SectionTitle("Files", modifier = Modifier.padding(top = IrisSpace.s7)) }
-                items(p.files, key = { "file:${it.key}" }) { f -> FileCard(f) { actions.onPlay(f.infohash, f.fileIdx) } }
+                items(p.files, key = { "file:${it.key}" }, contentType = { "file" }) { f ->
+                    FileCard(f, Modifier.focusReturn(keys, "file:${f.key}")) { actions.onPlay(f.infohash, f.fileIdx) }
+                }
                 if (p.files.isEmpty()) item(key = "no-files") { Hint("No video file is on disk for this title.") }
             }
             if (p.gone.isNotEmpty()) {
                 item(key = "gone") {
                     SectionTitle("Previously on disk", meta = plural(p.gone.size, "release"), modifier = Modifier.padding(top = IrisSpace.s7))
                 }
-                items(p.gone, key = { "gone:${it.infohash}" }) { g -> GoneRow(g, state.busy, actions) }
+                items(p.gone, key = { "gone:${it.infohash}" }, contentType = { "gone" }) { g -> GoneRow(g, state.busy, actions) }
                 item(key = "gone-hint") { Hint("Hiding a release takes it off this page for you only. Your history is kept.") }
             }
         }
@@ -588,8 +605,8 @@ private fun EpisodeCard(
 }
 
 @Composable
-private fun FileCard(f: FileUi, onClick: () -> Unit) {
-    RowCard(onClick = onClick) { _ ->
+private fun FileCard(f: FileUi, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    RowCard(onClick = onClick, modifier = modifier) { _ ->
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
             Text(f.name, style = IrisType.mono, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(f.facts, style = IrisType.meta, color = IrisColor.inkMuted)
@@ -648,7 +665,7 @@ private fun LanguagesBlock(langs: Loadable<LanguagesUi>, onChange: () -> Unit) {
                 Hint(if (l.forCollection) "Chosen for this series." else "Your usual choice, from your account.")
             }
         }
-        ActionButton("Change languages", onChange, icon = Icons.Rounded.Language, style = ActionStyle.Secondary, size = ActionSize.Small)
+        ActionButton("Change languages", onChange, icon = Icons.Rounded.Language, style = ActionStyle.Secondary, size = ActionSize.Small, enabled = langs.valueOrNull != null)
     }
 }
 
