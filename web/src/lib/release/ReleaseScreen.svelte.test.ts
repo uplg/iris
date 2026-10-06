@@ -99,6 +99,17 @@ describe('ReleaseScreen', () => {
 		expect(api.sent('POST', '/torrents')).toHaveLength(1);
 	});
 
+	it('over 50 GB, cancelled: nothing downloads and the focus goes back to the grab button', async () => {
+		const api = backend({ 'POST /torrents/preview': preview({ total_size_bytes: 62 * GB }) });
+		await show();
+		const grab = screen.getByRole('button', { name: 'Download and play' });
+		await grab.click();
+		await screen.getByRole('button', { name: 'Cancel' }).click();
+		await expect.element(screen.getByText('Do you really want all of it?', { exact: false })).not.toBeInTheDocument();
+		await expect.element(grab).toHaveFocus();
+		expect(api.sent('POST', '/torrents')).toHaveLength(0);
+	});
+
 	it('already in the library (409): asks before another copy, then sends allow_duplicate', async () => {
 		const api = backend({
 			'POST /torrents': (c: { body: { allow_duplicate: boolean } }) =>

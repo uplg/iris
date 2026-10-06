@@ -79,6 +79,7 @@
 	const reason = $derived(dead ? `${uid}-dead` : archive ? `${uid}-archive` : undefined);
 
 	const grab = new Grab((href) => goto(href));
+	let grabButton = $state<HTMLElement>();
 	const target = $derived<GrabTarget>({ provider, id, tmdbId, preview: p, fileIdx: chosen });
 
 	const tagChips = $derived(
@@ -173,11 +174,11 @@
 
 			<div class="actions">
 				{#if owned}
-					<button class="btn big" {...pending(grab.busy)} {...unavailable(reason)} onclick={play}>
+					<button bind:this={grabButton} class="btn big" {...pending(grab.busy)} {...unavailable(reason)} onclick={play}>
 						<Icon name="download" busy={grab.busy} />Download anyway
 					</button>
 				{:else}
-					<button class="btn primary big" {...pending(grab.busy)} {...unavailable(reason)} onclick={play}>
+					<button bind:this={grabButton} class="btn primary big" {...pending(grab.busy)} {...unavailable(reason)} onclick={play}>
 						<Icon name="download" busy={grab.busy} />{p ? playWords(p.files, chosen) : 'Download and play'}
 					</button>
 				{/if}
@@ -194,7 +195,7 @@
 			{#if !owned && !reason}
 				<p class="hint">Playback starts once the first minutes are on disk; the rest keeps downloading while you watch.</p>
 			{/if}
-			<GrabNotice {grab} {target} />
+			<GrabNotice {grab} {target} back={() => grabButton} />
 
 			<dl class="facts">
 				{#if swarm}<StatusRow label="Swarm" value={swarm} warn={dead} />{/if}
