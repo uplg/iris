@@ -313,6 +313,7 @@ pub struct Dlive {
     /// through the page budget after a restart took over an hour.
     embeds: RwLock<HashMap<Key, (Embed, i64)>>,
     state_file: OnceLock<PathBuf>,
+    saves: Arc<Saves>,
     pending_embeds: Mutex<HashSet<Key>>,
     /// dlive ids of the channels zapped to, with when: the warm-up's second
     /// priority, after the allow-list.
@@ -353,6 +354,7 @@ impl Dlive {
             edge_generation: AtomicU64::new(0),
             embeds: RwLock::new(HashMap::new()),
             state_file: OnceLock::new(),
+            saves: Arc::default(),
             pending_embeds: Mutex::new(HashSet::new()),
             opened: Mutex::new(HashMap::new()),
             resolved: RwLock::new(HashMap::new()),
@@ -657,6 +659,9 @@ impl Dlive {
         let Some(file) = self.state_file.get().cloned() else {
             return;
         };
+        // Taken before the snapshot: a later number always holds every
+        // change an earlier one does.
+        let seq = self.saves.next.fetch_add(1, Ordering::Relaxed) + 1;
         let snapshot = Persisted {
             edge: self.edge.read().expect("poisoned").clone(),
             embeds: self
@@ -675,8 +680,9 @@ impl Dlive {
                 })
                 .collect(),
         };
+        let saves = self.saves.clone();
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = write_atomically(&file, &snapshot) {
+            if let Err(e) = saves.write(&file, &snapshot, seq) {
                 tracing::warn!(error = %e, "dlive state not saved");
             }
         });
@@ -701,7 +707,8 @@ impl Dlive {
     /// A known embed and whether it is past `embed_cache_hours`. A stale one
     /// still serves (the codes rarely move) while a refresh is queued.
     fn embed(&self, key: Key) -> Option<(Embed, bool)> {
-        let ttl = i64::try_from(self.cfg.embed_cache_hours.max(1) * 3600).unwrap_or(i64::MAX);
+        let ttl = i64::try_from(self.cfg.embed_cache_hours.max(1).saturating_mul(3600))
+            .unwrap_or(i64::MAX);
         let now = epoch_s();
         self.embeds
             .read()
@@ -1172,6 +1179,32 @@ struct PersistedEmbed {
     /// `None`: the channel is not on this player.
     url: Option<String>,
     at: i64,
+}
+
+/// Ordering of the state-file writes, each on its own blocking thread: one
+/// at a time (they share the temporary file), and never one older than the
+/// file already holds.
+#[derive(Default)]
+struct Saves {
+    next: AtomicU64,
+    written: Mutex<u64>,
+}
+
+impl Saves {
+    /// Write `state` as save number `seq`; `false` when a newer one already
+    /// landed.
+    fn write(&self, file: &Path, state: &Persisted, seq: u64) -> std::io::Result<bool> {
+        let mut written = self
+            .written
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *written >= seq {
+            return Ok(false);
+        }
+        write_atomically(file, state)?;
+        *written = seq;
+        Ok(true)
+    }
 }
 
 fn write_atomically(file: &Path, state: &Persisted) -> std::io::Result<()> {

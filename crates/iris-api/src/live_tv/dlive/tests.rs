@@ -910,6 +910,48 @@ async fn scraped_embeds_and_the_edge_survive_a_restart() {
 }
 
 #[test]
+fn concurrent_saves_keep_the_newest_state_whole() {
+    let dir = scratch_dir("saves");
+    let file = dir.join("dlive.json");
+    let state = |n: u32| Persisted {
+        edge: None,
+        embeds: (0..n)
+            .map(|id| PersistedEmbed {
+                id,
+                player: 2,
+                url: Some(format!("https://embed.example/e/{id}")),
+                at: 0,
+            })
+            .collect(),
+    };
+    let saves = Arc::new(Saves::default());
+    let threads: Vec<_> = (1..=16u64)
+        .map(|seq| {
+            let (saves, file) = (saves.clone(), file.clone());
+            std::thread::spawn(move || {
+                saves
+                    .write(&file, &state(u32::try_from(seq).unwrap() * 50), seq)
+                    .unwrap()
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    let read: Persisted = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(
+        read.embeds.len(),
+        16 * 50,
+        "the newest save is the one kept"
+    );
+    assert!(
+        !saves.write(&file, &state(1), 3).unwrap(),
+        "an older save never overwrites a newer one"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_stale_embed_still_serves_and_asks_for_a_refresh() {
     let dlive = Dlive::new(
         config("http://127.0.0.1:9".into()).dlive,
@@ -928,6 +970,22 @@ fn a_stale_embed_still_serves_and_asks_for_a_refresh() {
         matches!(dlive.embed((469, 2)), Some((Embed::Found(_), true))),
         "yet it still serves"
     );
+}
+
+#[test]
+fn a_huge_embed_cache_setting_means_forever() {
+    let mut cfg = config("http://127.0.0.1:9".into()).dlive;
+    cfg.embed_cache_hours = u64::MAX;
+    let dlive = Dlive::new(cfg, reqwest::Client::new());
+    dlive
+        .embeds
+        .write()
+        .unwrap()
+        .insert((469, 2), (Embed::Absent, 0));
+    assert!(matches!(
+        dlive.embed((469, 2)),
+        Some((Embed::Absent, false))
+    ));
 }
 
 #[test]
