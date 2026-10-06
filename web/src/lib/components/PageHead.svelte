@@ -4,7 +4,7 @@
 	// under it, and its actions on the right (docs/ux.md « Layout »).
 	import type { Snippet } from 'svelte';
 	import { pageTitle } from '#lib/title.ts';
-	import Icon from './Icon.svelte';
+	import BackLink from './BackLink.svelte';
 
 	interface Props {
 		title: string;
@@ -23,7 +23,7 @@
 <svelte:head><title>{pageTitle(title)}</title></svelte:head>
 
 {#if back}
-	<a class="back link-btn quiet" href="/"><Icon name="arrow-left" />Home</a>
+	<BackLink href="/" label="Home" />
 {/if}
 <div class="page-head" class:quiet={hidden}>
 	<h1 tabindex="-1" class:sr-only={hidden}>{title}</h1>
@@ -32,13 +32,6 @@
 </div>
 
 <style>
-	.back {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--s-2);
-		min-height: var(--control-h);
-		margin-top: var(--s-3);
-	}
 	/* a title not drawn: only the breathing space under the header stays */
 	.page-head.quiet {
 		padding-block: var(--s-4) 0;

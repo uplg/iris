@@ -3,6 +3,7 @@
 	// then what they watched, the same rows as the household's history, read only (nothing is
 	// downloaded again from here).
 	import { createQuery } from '@tanstack/svelte-query';
+	import BackLink from '#lib/components/BackLink.svelte';
 	import { ago, plural } from '@iris/api/format';
 	import { queryClient } from '#lib/query.ts';
 	import Icon from '#lib/components/Icon.svelte';
@@ -33,7 +34,7 @@
 	);
 </script>
 
-<a class="back link-btn quiet" href="/admin"><Icon name="arrow-left" />Admin</a>
+<BackLink href="/admin" label="Admin" />
 <PageHead title={who?.display_name ?? 'A person'}>
 	{#snippet sub()}{facts ?? (gone ? 'This account no longer exists.' : 'Loading…')}{/snippet}
 </PageHead>
@@ -56,12 +57,5 @@
 		align-items: center;
 		gap: var(--s-2);
 		margin: calc(-1 * var(--s-2)) 0 var(--s-5);
-	}
-	.back {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--s-2);
-		min-height: var(--control-h);
-		margin-top: var(--s-3);
 	}
 </style>

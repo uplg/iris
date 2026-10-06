@@ -3,6 +3,7 @@
 	// Each card says its state in words. A ghost (every release reclaimed, but you watched it)
 	// stays greyed and labelled, and you can hide it from your own library.
 	import { createQuery } from '@tanstack/svelte-query';
+	import FindField from '#lib/components/FindField.svelte';
 	import { me, tmdbImage, type CollectionListItem } from '@iris/api/client';
 	import { plural } from '@iris/api/format';
 	import { loadable } from '#lib/query.ts';
@@ -100,13 +101,7 @@
 		skeletons={3}
 	>
 		<div class="filters">
-			<div class="field search">
-				<label for="{id}-search">Find a title</label>
-				<div class="search-row">
-					<input id="{id}-search" type="search" bind:value={query} autocomplete="off" spellcheck="false" />
-					{#if query}<button class="btn ghost" onclick={() => ((query = ''), void refocus(`#${id}-search`))}>Clear</button>{/if}
-				</div>
-			</div>
+			<FindField id="{id}-search" label="Find a title" bind:value={query} />
 			<PillChoice legend="Type" options={TYPES} value={type} onchange={(v) => (type = v)} />
 			{#if shows.length > 1}
 				<PillChoice legend="Show" options={shows} value={showing} onchange={(v) => (show = v)} />
@@ -168,20 +163,6 @@
 		align-items: flex-end;
 		gap: var(--s-4);
 		margin-bottom: var(--s-4);
-	}
-	.search {
-		flex: 1 1 16rem;
-	}
-	.search-row {
-		display: flex;
-		gap: var(--s-2);
-	}
-	.search-row input {
-		flex: 1;
-		min-width: 0;
-	}
-	.search-row .btn {
-		min-height: var(--control-h);
 	}
 	.sort {
 		flex: 0 1 14rem;

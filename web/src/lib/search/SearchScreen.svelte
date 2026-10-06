@@ -4,6 +4,7 @@
 	// and narrowed to an audio language among what is loaded. The address carries the search
 	// (params.ts): a reload or a shared link replays it.
 	import { replaceState } from '$app/navigation';
+	import BackLink from '#lib/components/BackLink.svelte';
 	import { page } from '$app/state';
 	import { createInfiniteQuery, createQuery } from '@tanstack/svelte-query';
 	import { me, search, type AggregatedResults, type MediaKind, type SearchResult, type TmdbSuggestion } from '@iris/api/client';
@@ -247,7 +248,7 @@
 					<ToggleGroup type="single" label="Show as" hideLabel options={VIEWS} value={effective} onchange={setView} />
 				</div>
 				{#if s.title !== null}
-					<a class="link-btn back" href={searchHref({ ...s, lang: null, title: null })}><Icon name="arrow-left" size={16} />All titles</a>
+					<BackLink href={searchHref({ ...s, lang: null, title: null })} label="All titles" />
 				{/if}
 
 				{#if effective === 'titles'}
@@ -329,13 +330,6 @@
 	}
 	.results-head :global(.choices) {
 		min-width: min(18rem, 100%);
-	}
-	.back {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--s-1);
-		min-height: var(--control-h);
-		justify-self: start;
 	}
 	.more {
 		justify-self: center;

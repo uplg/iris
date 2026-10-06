@@ -4,6 +4,7 @@
 	// say, the file to play, and the tracker's own notes. The details answer carries the title,
 	// poster and copy on disk, so the page stands alone; a search hit (cache.ts) fills in first.
 	import { goto } from '$app/navigation';
+	import BackLink from '#lib/components/BackLink.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { follows, searchDetails, tmdbImage, torrents } from '@iris/api/client';
 	import { ago, fileName, formatSize, kindWord, languageLabel, plural, prettySceneName, sceneEpisode } from '@iris/api/format';
@@ -136,7 +137,7 @@
 	}
 </script>
 
-<a class="link-btn quiet back" href={back}><Icon name="arrow-left" />Back to results</a>
+<BackLink href={back} label="Back to results" />
 
 <article class="release" aria-labelledby="{uid}-h">
 	<div class="art"><Poster src={poster} {title} eager /></div>
@@ -251,13 +252,6 @@
 </article>
 
 <style>
-	.back {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--s-2);
-		min-height: var(--control-h);
-		margin-top: var(--s-3);
-	}
 	.release {
 		display: grid;
 		gap: var(--s-5);
