@@ -7,22 +7,35 @@ const LIFTED_LINE = -4;
 
 const lifted = new WeakSet<VTTCue>();
 
-function place(cue: TextTrackCue, lift: boolean) {
-	if (typeof VTTCue === 'undefined' || !(cue instanceof VTTCue)) return;
+/** Moves the cue; true when it did. */
+function place(cue: TextTrackCue, lift: boolean): boolean {
+	if (typeof VTTCue === 'undefined' || !(cue instanceof VTTCue)) return false;
 	if (lift) {
-		if (cue.line !== 'auto' || lifted.has(cue)) return;
+		if (cue.line !== 'auto' || lifted.has(cue)) return false;
 		lifted.add(cue);
 		cue.line = LIFTED_LINE;
-	} else if (lifted.has(cue)) {
-		lifted.delete(cue);
-		cue.line = 'auto';
+		return true;
 	}
+	if (!lifted.has(cue)) return false;
+	lifted.delete(cue);
+	cue.line = 'auto';
+	return true;
 }
 
 function placeAll(track: TextTrack, lift: boolean) {
 	const cues = track.cues;
 	if (!cues) return;
-	for (let i = 0; i < cues.length; i += 1) place(cues[i], lift);
+	const moved: TextTrackCue[] = [];
+	for (let i = 0; i < cues.length; i += 1) if (place(cues[i], lift)) moved.push(cues[i]);
+	// Chromium lays a showing cue out once, on entry: one moved while on screen stays where it
+	// was until it is added again
+	const active = track.activeCues;
+	if (!active || track.mode !== 'showing') return;
+	for (const cue of moved) {
+		if (!Array.prototype.includes.call(active, cue)) continue;
+		track.removeCue(cue);
+		track.addCue(cue);
+	}
 }
 
 /** Keeps the showing tracks' cues lifted (or not) as cues load and change; returns the detach,
