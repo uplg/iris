@@ -137,7 +137,13 @@ pub fn rewrite_playlist(body: &str, base: &Url, channel_key: &str, signer: &Sign
 /// Drop the `CODECS="…"` attribute from an `#EXT-X-STREAM-INF` line (with
 /// whichever comma glued it to its neighbours).
 fn strip_codecs_attr(line: &str) -> String {
-    let Some(start) = line.find("CODECS=\"") else {
+    // Only where `CODECS` starts an attribute: `SUPPLEMENTAL-CODECS` (Dolby
+    // Vision masters) ends with the same bytes.
+    let Some(start) = line
+        .match_indices("CODECS=\"")
+        .map(|(at, _)| at)
+        .find(|&at| at > 0 && matches!(line.as_bytes()[at - 1], b':' | b','))
+    else {
         return line.to_string();
     };
     let val_start = start + 8;
@@ -181,10 +187,7 @@ fn rewrite_uri_attr(line: &str, base: &Url, channel_key: &str, signer: &Signer) 
 /// Whether a proxied response body is itself a playlist that must be
 /// re-rewritten (media playlists reached through the master).
 pub fn is_playlist(url: &Url, content_type: Option<&str>) -> bool {
-    if content_type.is_some_and(|ct| {
-        let ct = ct.to_ascii_lowercase();
-        ct.contains("mpegurl") || ct.contains("application/x-mpegurl")
-    }) {
+    if content_type.is_some_and(|ct| ct.to_ascii_lowercase().contains("mpegurl")) {
         return true;
     }
     std::path::Path::new(url.path())
@@ -425,6 +428,17 @@ mod tests {
         );
         assert_eq!(
             strip_codecs_attr("#EXT-X-STREAM-INF:BANDWIDTH=1"),
+            "#EXT-X-STREAM-INF:BANDWIDTH=1"
+        );
+        assert_eq!(
+            strip_codecs_attr(
+                "#EXT-X-STREAM-INF:BANDWIDTH=1,SUPPLEMENTAL-CODECS=\"dvh1.08.07/db4h\",CODECS=\"hvc1.2.4.L153\",RESOLUTION=3840x2160"
+            ),
+            "#EXT-X-STREAM-INF:BANDWIDTH=1,SUPPLEMENTAL-CODECS=\"dvh1.08.07/db4h\",RESOLUTION=3840x2160",
+            "SUPPLEMENTAL-CODECS is not CODECS"
+        );
+        assert_eq!(
+            strip_codecs_attr("#EXT-X-STREAM-INF:CODECS=\"avc1\",BANDWIDTH=1"),
             "#EXT-X-STREAM-INF:BANDWIDTH=1"
         );
     }
