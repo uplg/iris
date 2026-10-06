@@ -36,7 +36,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use thiserror::Error;
 use tokio::io::AsyncBufReadExt;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::{Mutex, Notify};
 
 #[derive(Debug, Error)]
@@ -1302,10 +1302,6 @@ async fn drain_stderr_to_log(stderr: tokio::process::ChildStderr, log_path: Path
         }
     }
 }
-
-// Suppress dead-code warnings on Child while we don't surface a kill API.
-#[allow(dead_code)]
-fn _silence_child_unused(_: &Child) {}
 
 /// `-vf` chain for a `VideoMode::Transcode` re-encode: a never-upscale 1080p
 /// cap, so a CPU-only encoder isn't handed a 4K source it can't keep ahead of

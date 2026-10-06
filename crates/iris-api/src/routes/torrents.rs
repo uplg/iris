@@ -2093,8 +2093,8 @@ pub(crate) async fn stream_file(
         let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
         let mime = mime_for_filename(&path.to_string_lossy());
         let method = req.method().clone();
-        let range = req.headers().get(header::RANGE).cloned();
-        return serve_file_with_range(&path, &mime, method, range, 0).await;
+        let range = byte_range(req.headers());
+        return serve_file_with_range(&path, &mime, method, range).await;
     }
 
     let stream = state
@@ -2109,7 +2109,7 @@ pub(crate) async fn stream_file(
     let mime = guess_mime(&infohash, idx, state.engine());
     let total = stream.file_size();
     let mut reader = stream.into_reader();
-    let range = req.headers().get(header::RANGE).cloned();
+    let range = byte_range(req.headers());
     let head_only = req.method() == Method::HEAD;
 
     if let Some(rh) = range.as_ref() {
@@ -2256,11 +2256,8 @@ pub(crate) async fn play_asset(
 
     let mime = guess_hls_mime(&asset);
     let method = req.method().clone();
-    let range = req.headers().get(header::RANGE).cloned();
-    // expected_total = 0 → use actual file size; HLS players ask only for
-    // ranges already advertised in the playlist, no need to lie about
-    // the total like the old single-file progressive setup did.
-    let mut resp = serve_file_with_range(&asset_path, mime, method, range, 0).await?;
+    let range = byte_range(req.headers());
+    let mut resp = serve_file_with_range(&asset_path, mime, method, range).await?;
     // Cache policy. Playlists MUST NOT be cached — in EVENT mode the
     // master + variant playlists are rewritten as ffmpeg appends new
     // segments, and a cached stale master broke us once already
@@ -2304,58 +2301,24 @@ fn guess_hls_mime(asset: &str) -> &'static str {
 /// Used for both the raw source (`/stream`) and the cached fMP4
 /// (`/play`). Read-ahead is implicit through [`tokio::fs::File`] +
 /// [`ReaderStream`].
-///
-/// `expected_total` lets the caller advertise a `Content-Length` /
-/// `Content-Range` total larger than what's currently on disk — needed
-/// for the cached fMP4 path where ffmpeg keeps appending while we
-/// serve. Pass `0` to fall back to the actual file size (used by the
-/// raw-source `/stream` route, which always serves complete files).
 async fn serve_file_with_range(
     path: &std::path::Path,
     mime: &str,
     method: Method,
     range: Option<HeaderValue>,
-    expected_total: u64,
 ) -> ApiResult<Response> {
     let mut file = tokio::fs::File::open(path)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("open {}: {e}", path.display())))?;
-    let actual = file
+    let total = file
         .metadata()
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("stat {}: {e}", path.display())))?
         .len();
-    // Advertise the larger of the estimate and the actual size — the
-    // browser uses this for the timeline, so reporting the partial size
-    // would freeze the seekable region at the moment-of-first-request.
-    let total = expected_total.max(actual);
     let head_only = method == Method::HEAD;
 
     if let Some(rh) = range.as_ref() {
-        if let Some((start, end)) = parse_range(rh, total) {
-            // If the requested range starts past what's currently on disk
-            // (typical when the player resumes at a saved time deep into
-            // a still-encoding file), long-poll for ffmpeg to catch up
-            // rather than 416-ing — the browser treats an immediate 416
-            // on the initial GET as a fatal media error.
-            //
-            // Cap the wait at 60s so we never hold the connection longer
-            // than typical fetch timeouts. If ffmpeg can't catch up in
-            // time the client is told via 416 and can retry; meanwhile
-            // playback from earlier positions continues to work.
-            let mut actual = actual;
-            if start >= actual {
-                actual = wait_for_size(path, start + 1, std::time::Duration::from_mins(1))
-                    .await
-                    .unwrap_or(actual);
-            }
-            if start >= actual {
-                return Ok(range_not_satisfiable("range past current EOF", total));
-            }
-            // Clip the response to what's actually written. The player
-            // will issue a follow-up range for the remaining bytes once
-            // ffmpeg has written more.
-            let effective_end = end.min(actual - 1);
+        if let Some((start, effective_end)) = parse_range(rh, total) {
             let len = effective_end - start + 1;
             if head_only {
                 return Ok(build_headers(
@@ -2432,27 +2395,13 @@ fn build_headers(
     builder
 }
 
-/// Poll `path` until its size is at least `min_size` or `timeout` elapses.
-/// Returns the latest observed size (which may still be below `min_size`
-/// if the wait timed out — caller decides what to do then). Used to let
-/// byte-range requests for forward seeks long-poll while ffmpeg is still
-/// writing the cache file.
-async fn wait_for_size(
-    path: &std::path::Path,
-    min_size: u64,
-    timeout: std::time::Duration,
-) -> std::io::Result<u64> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        let size = tokio::fs::metadata(path).await?.len();
-        if size >= min_size {
-            return Ok(size);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Ok(size);
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    }
+/// The request's `Range` header, when it is in bytes. RFC 9110: a range in
+/// another unit is ignored (a full 200), not refused with a 416.
+fn byte_range(headers: &HeaderMap) -> Option<HeaderValue> {
+    headers
+        .get(header::RANGE)
+        .filter(|rh| rh.to_str().is_ok_and(|s| s.starts_with("bytes=")))
+        .cloned()
 }
 
 fn parse_range(value: &HeaderValue, total: u64) -> Option<(u64, u64)> {
@@ -2711,6 +2660,35 @@ pub(crate) async fn torrent_or_404(
     iris_db::torrents::find_by_infohash(state.db(), infohash)
         .await?
         .ok_or(ApiError::NotFound)
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::{byte_range, parse_range};
+    use http::{HeaderMap, HeaderValue, header};
+
+    fn headers(range: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(header::RANGE, HeaderValue::from_str(range).unwrap());
+        h
+    }
+
+    #[test]
+    fn a_non_byte_range_is_ignored() {
+        assert!(byte_range(&headers("items=0-9")).is_none());
+        assert!(byte_range(&HeaderMap::new()).is_none());
+        let bytes = byte_range(&headers("bytes=0-9")).unwrap();
+        assert_eq!(parse_range(&bytes, 100), Some((0, 9)));
+    }
+
+    #[test]
+    fn byte_ranges_clamp_to_the_file() {
+        let r = |s| HeaderValue::from_static(s);
+        assert_eq!(parse_range(&r("bytes=90-200"), 100), Some((90, 99)));
+        assert_eq!(parse_range(&r("bytes=-10"), 100), Some((90, 99)));
+        assert_eq!(parse_range(&r("bytes=100-"), 100), None);
+        assert_eq!(parse_range(&r("bytes=-0"), 100), None);
+    }
 }
 
 #[cfg(test)]

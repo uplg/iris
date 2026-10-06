@@ -173,14 +173,6 @@ impl ProbeCache {
         }
         Ok(probe)
     }
-
-    pub async fn invalidate(&self, infohash: &str) {
-        let prefix = format!("{infohash}:");
-        self.inner
-            .write()
-            .await
-            .retain(|k, _| !k.starts_with(&prefix));
-    }
 }
 
 pub async fn probe_file(path: &Path) -> Result<MediaProbe, ProbeError> {
